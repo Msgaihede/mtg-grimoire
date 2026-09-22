@@ -2299,6 +2299,84 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     deck editor's docked panel at its `MIN_PANEL_WIDTH_PX` floor of **206** — a self-explaining
     label would be paid for in that column at every width.
 
+- **`Exactly` is a sixth chip in the colour group that is not a sixth colour** (2026-09-22, with
+  strict colour matching). Every colour filter in the app reads `color_identity` as a *subset* —
+  `RW` answers mono-R, mono-W, RW and every colourless card, because a colourless card fits in
+  any deck — and this chip switches the same row to exact-set equality, so `RW` answers the RW
+  cards alone. The axis does not move: the group is still `aria-label="Color identity"`, and one
+  chip row reading two different columns depending on a toggle is a control that lies.
+  - **It is drawn only once a colour is picked, and clearing the last colour turns it off.**
+    Three things buy that, in descending order of how much they matter. Strict with nothing picked
+    filters nothing — the backend's arm sits inside its own `nonblank` guard — so an always-drawn
+    chip would be a dead control. A flag surviving an empty colour row would be **state with no
+    control on screen**, invisible and still in the React Query key. And it would be a sixth chip
+    competing for the deck panel's 206px floor, which is the width this group's `flex-wrap` exists
+    for. What it costs is a reflow on the first colour press, which is the cheaper failure.
+  - **It is deliberately not in `activeFilterCount`, and that is the decision the chip depends
+    on.** That number captions `Reset all` and answers *how much would pressing this change*.
+    Strict modifies the colour filter rather than being one, so counting it would move the caption
+    when nothing new was filtered — a badge reading `Filters · 2` over one narrowed axis. The same
+    omission is in each hook's `unfiltered` guard, for the same reason: the `Unplayable` entry
+    directly above is where those two numbers first disagreed about one value, and this is the
+    second case.
+  - **It rides the stated-filter strip as a word inside the colour chip, never a chip of its
+    own.** The strip is one entry per *kind*, so a second chip would put two entries under a badge
+    still counting one. `Colour: exactly White, Blue` is the filter said out loud, and the `×`
+    clears the flag alongside the colours — otherwise clearing the statement leaves the flag
+    behind with nothing on screen to see it by.
+  - **It carries no facet count, and that is a refusal rather than an omission.** `colorDisabled`
+    greys a chip whose count is `0` **or equals `total`**, and that second arm exists because
+    loose colours *broaden*. Strict asks the opposite question, so a count answered by the loose
+    facets would be the one number on this row describing a different search from the one the
+    press makes. [search-faceting.md](search-faceting.md) has the rest, including the two
+    `apply_colors` call sites that decide whether the neighbouring counts are computed under the
+    active mode at all.
+  - **The label is repeated into the `title`**, which reads `Exactly — cards whose colour
+    identity is exactly these colours` and flips its second half when the chip is off.
+    `ToggleChip` sets `aria-label={title ?? …}`, so a `title` **replaces** the visible label in
+    the accessible name rather than joining it — a sentence that never said the word "Exactly"
+    would be a label-in-name failure (WCAG 2.5.3) on a chip whose whole visible text is that word.
+- **The `Type` tray cell is the rarity cell's greying rule one dimension along, and it is the only
+  cell in the tray that is a bare wrapping flow at every width** (2026-09-22). Eight
+  `ToggleChip`s — Creature, Planeswalker, Instant,
+  Sorcery, Artifact, Enchantment, Battle, Land — OR within the group and AND with everything else,
+  each greyed by `optionDisabled` against `facets.types` and each carrying `facetTitle`'s
+  `Creature — N printings` name, exactly as the four rarity gems do. **A card with two types is
+  under both chips**: the filter asks *does this card have this type*, not which bucket it is in,
+  and Dryad Arbor is the card that rule is written for — `autoCategory.ts` files it under Land
+  alone, and a reader pressing `Creature` who could not find it has been told a falsehood.
+  - **`CARD_TYPES` is the reading order and `cardtypes.rs`' `TYPE_KEYS` is the matching order, and
+    they are two constants on purpose.** Creature first and Land last is how every decklist reads;
+    alphabetical is what a frozen bit position has to be, because those positions are stored data.
+    One constant cannot be both, and this repo already carries `autoCategory.ts` and
+    `deckBuckets.ts` as a pair that disagree about Land for the same shape of reason.
+  - **`flex flex-wrap` at every width, and no grid at any of them — which is where the shipped
+    control diverges from the plan, deliberately.** The plan sketched the rarity cell's shape,
+    `grid-cols-2 @min-[640px]/fb:grid-cols-4`; the implementation refused it, because eight words
+    are not four gems. Every other multi-chip cell in this tray opens on a grid and unfolds to a
+    flex row at 640 (rarity two columns, condition three), and both can, because their labels are
+    short. At the panel's 206px floor the type cell's content box is ~161px against
+    `Planeswalker`'s own ~112px of min-content, so a two-column grid would give each chip ~78px —
+    and a grid item cannot shrink below its min-content any more than a flex item can. The cell
+    would hang out of the panel and put a horizontal scrollbar across the whole deck builder,
+    which is the *narrowest surface that draws it* rule this page states twice. `flex-wrap` makes
+    the group's min-content one chip, so it breaks onto as many lines as it needs and is unchanged
+    in the wide bars where four-across already fitted; the chips carry `flex-1` so a short line
+    still fills. **Neither pixel figure has been driven in the shipped window** — they are the
+    reasoning the class was chosen from, and the container sweep above has not been re-run against
+    a tray carrying this cell. jsdom applies no container query and lays nothing out, so none of
+    it can go red in the suite either.
+  - **It is in all four trays and in none of the printings bar.** `SEARCH_TRAY` carries it (the
+    search page, Tags, and the three docked panels), and so do `COLLECTION_TRAY` in both its
+    callers and `WISHLIST_TRAY`. `PrintingsFilterBar` gets nothing, because every printing of one
+    card shares a type line. The surface members are **optional** (`types?`/`toggleType?`) where
+    `colorsStrict`/`toggleColorsStrict` are required, so a surface that cannot answer the question
+    draws no cell rather than a control that does nothing — `FilterTray`'s `drawn` record already
+    enforces that, and the required half is what puts `Exactly` on every mounted surface at once
+    (`grep -rn '<FilterBar' src --include=*.tsx` is what answers how many that is; the design spec
+    said eight and the JSX sites are six, because `CardSearchBody` is one component behind several
+    docked panels — which is exactly why this page does not write the number down).
+
 ## The theory mark, and the four things a photograph settled
 
 Added 2026-08-20 with `TheoryMatchMark` — the mark a deck card wears on the **Live** list when the

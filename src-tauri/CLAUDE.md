@@ -173,15 +173,37 @@ both plus the frontend.
   which is one above a deck's group
   holding only copies its live list claims at `(card_id, finish)`, itself one above a
   condition learning to say nothing —
-  `CORPUS_SCHEMA_VERSION` **4** since 2026-09-15 (`sets.printed_size`, for the home page's set
-  completion, on the same shape gate as the two below it), deliberately
+  `CORPUS_SCHEMA_VERSION` **5** since 2026-09-22 (`cards.type_mask`, the eight-bit card-type
+  column the type chips filter on), deliberately
   incomparable and **not to be subtracted from the other**: a user version is "what has been done
   to rows that exist nowhere else", a corpus version is "is this file's shape what this build
   expects". The corpus number stood at 1 from the split until the combo feed's four prose columns
-  landed, which is the corpus ladder's first rung ever; **2 is that one and 3 is
-  `cards.produced_mana`** (2026-09-10) — **and *both* are gated on the table's shape rather than
-  on this number**, for a reason that catches every fresh install and is written up under
-  *Commander Spellbook* below and under the `produced_mana` bullet beside it.
+  landed, which is the corpus ladder's first rung ever; **2 is that one, 3 is
+  `cards.produced_mana`** (2026-09-10), **4 is `sets.printed_size`** (2026-09-15, for the home
+  page's set completion) **and 5 is `cards.type_mask`** (2026-09-22) — **and every one of them is
+  gated on the table's shape rather than on this number**, for a reason that catches every fresh
+  install and is written up under *Commander Spellbook* below and under the `produced_mana`
+  bullet beside it. **Rung 5 is the first of them that also backfills**, and that difference is
+  not a matter of thoroughness: `produced_mana` and `printed_size` leave every existing row NULL
+  because their data is not in the database at all, while a `type_line` is — and `type_mask` is
+  `NOT NULL DEFAULT 0`, so a rung that added the column and stopped would leave every card masked
+  to *no type* and the new filter answering an empty wall until the next sync. It is also the
+  first corpus rung to touch `CARDS_INDEXES`, and it **`DROP`s `idx_cards_collapse` before
+  replaying the list**, because every statement in that list is `IF NOT EXISTS` and a widened
+  definition over an existing name is a silent no-op on exactly the machines that need it.
+  **And it is why `CARDS_INDEXES_V20` exists, which is the one exception to "every index on
+  `cards` goes in `CARDS_INDEXES`" above.** The frozen single-file ladder creates no collapse
+  index at v7 and drops it at v10, so **v20 is the rung that creates it** — through
+  `cards_indexes_sql`, against a `main.cards` that will never carry `type_mask`, because that
+  column arrives after the split from the corpus rung. Pointing v20 at the widened head list
+  therefore fails `CREATE INDEX … no such column: type_mask` on **every fresh install and every
+  conversion**, since `split::convert` walks that same ladder — measured at 105 of 245 `schema`
+  tests red before the split was made. So v20 replays a frozen `CARDS_INDEXES_V20`, head minus
+  that one column, and `cards_indexes_sql_from` takes the list as an argument. It is
+  `FORMAT_SPECS_SEED` / `FORMAT_SPECS_SEED_V5`'s shape and exists for the same reason: **a frozen
+  rung may not name a column a later rung adds.** Nothing is lost by the narrower list — every
+  ladder-walked file gets the widened index moments later from `add_type_mask`, because the rung
+  is owed on precisely the `cards` that ladder just built.
   This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
   **v18** for two whole rungs, then **v20** for two more, then **v23** for one and **v24** for

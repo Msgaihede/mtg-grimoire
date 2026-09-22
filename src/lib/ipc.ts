@@ -272,8 +272,23 @@ export interface SearchRequest {
   text?: string;
   /** A `legalities` key (`"modern"`, `"vintage"`, …). `restricted` counts as playable. */
   format?: string;
-  /** Colour identity, e.g. `"WU"`; `"C"` means colourless only. Subset semantics. */
+  /**
+   * Colour identity, e.g. `"WU"`; `"C"` means colourless only.
+   *
+   * **Subset semantics unless {@link colorsStrict} says otherwise** — the default reads these
+   * letters as a ceiling, so `"WU"` answers mono-W, mono-U, WU and the colourless cards alike.
+   * That is the Commander question ("what may go in this deck"); strict is the other one
+   * ("what *is* this colour pair"), and the letters are the same on both.
+   */
   colors?: string;
+  /**
+   * Read {@link colors} as an **exact** identity rather than a subset: `"RW"` answers the RW
+   * cards alone, not mono-R, mono-W, or the colourless cards that fit in any deck.
+   *
+   * Degenerate for `"C"`, which already means colourless-only in both modes. A `true` with no
+   * {@link colors} filters nothing — the chip is not drawn until a colour is picked.
+   */
+  colorsStrict?: boolean;
   setCode?: string;
   /**
    * Every printing of one oracle card — the card, not the cardboard. Absent means unset,
@@ -310,6 +325,14 @@ export interface SearchRequest {
    * `rarities: Option<Vec<String>>`.
    */
   rarities?: string[];
+  /**
+   * Card-type chips — `Artifact`/`Battle`/`Creature`/`Enchantment`/`Instant`/`Land`/
+   * `Planeswalker`/`Sorcery`. ORed with each other, ANDed with every other filter.
+   *
+   * **"Does this card have this type", not "which bucket is it in".** Dryad Arbor
+   * (`Land Creature — Forest Dryad`) answers both `Land` and `Creature`.
+   */
+  types?: string[];
   /**
    * The price band, at {@link marketplace}. Inclusive at both ends, either half usable alone.
    *
@@ -601,8 +624,14 @@ export interface SearchResponse {
 export interface FacetResponse {
   /**
    * Keyed `W`/`U`/`B`/`R`/`G`/`C`, and **the size of the result set after toggling that
-   * chip** rather than a count of cards carrying that colour. Colours are subset semantics,
-   * so pressing one with another already on *broadens*; compare against {@link total}.
+   * chip** rather than a count of cards carrying that colour. Compare against {@link total}.
+   *
+   * **Which direction a press moves in depends on {@link SearchRequest.colorsStrict}, which is
+   * why the number is "after the press" rather than "cards carrying this".** Loose, colours are
+   * subset semantics and pressing one with another already on *broadens*; strict, the same
+   * press *narrows*. The count is computed under whichever mode the request carried, so the
+   * rule that reads it — greying when a press would not change the result set — holds either
+   * way without knowing which mode it is in.
    */
   colors: Record<string, number>;
   /** Keyed `"0"`–`"8"`, `8` meaning eight-or-more. Plain counts. */
@@ -632,6 +661,15 @@ export interface FacetResponse {
    * vocabulary rather than a partition of the result set.
    */
   rarities: Record<string, number>;
+  /**
+   * Keyed by card type. Plain counts, and all eight are sent on every ready response, zeros
+   * included.
+   *
+   * **These do not sum to {@link total} and do not bound it** — the eight overlap (a card can
+   * be Artifact and Creature) and the corpus holds types no chip offers. The same reading
+   * {@link rarities} needs.
+   */
+  types: Record<string, number>;
   /**
    * Keyed by set code. Plain counts, and **every code in the corpus arrives, zeros
    * included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
@@ -956,8 +994,26 @@ export interface CardFilters {
    *  stored, because a wish may have no card row to index. */
   text?: string;
   format?: string;
-  /** Colour identity, e.g. `"WU"`; `"C"` means colourless only. Subset semantics. */
+  /**
+   * Colour identity, e.g. `"WU"`; `"C"` means colourless only.
+   *
+   * **Subset semantics unless {@link colorsStrict} says otherwise** — see
+   * {@link SearchRequest.colors}, which is the same field on the same control. The default
+   * reads these letters as a ceiling; strict reads them as the whole identity.
+   */
   colors?: string;
+  /**
+   * Read {@link colors} as an **exact** identity rather than a subset: `"RW"` answers the RW
+   * cards alone, not mono-R, mono-W, or the colourless cards that fit in any deck.
+   *
+   * Degenerate for `"C"`, which already means colourless-only in both modes. A `true` with no
+   * {@link colors} filters nothing — the chip is not drawn until a colour is picked.
+   *
+   * Declared here as well as on {@link SearchRequest} because `filters::push_card_filters`
+   * emits it for all three lists, exactly as {@link oracleId} below is. Rust:
+   * `colors_strict: Option<bool>`.
+   */
+  colorsStrict?: boolean;
   setCode?: string;
   /**
    * Narrow to every printing of one oracle card — the card, not the cardboard.
@@ -986,6 +1042,18 @@ export interface CardFilters {
    *  it for all three lists, exactly as {@link oracleId} above is. Rust:
    *  `rarities: Option<Vec<String>>`. */
   rarities?: string[];
+  /**
+   * Card-type chips — `Artifact`/`Battle`/`Creature`/`Enchantment`/`Instant`/`Land`/
+   * `Planeswalker`/`Sorcery`. ORed with each other, ANDed with every other filter.
+   *
+   * **"Does this card have this type", not "which bucket is it in".** Dryad Arbor
+   * (`Land Creature — Forest Dryad`) answers both `Land` and `Creature`.
+   *
+   * Declared here as well as on {@link SearchRequest} for {@link rarities}' reason:
+   * `filters::push_card_filters` emits it for all three lists, so a binder or a wishlist can
+   * be narrowed to a type without a second filter path. Rust: `types: Option<Vec<String>>`.
+   */
+  types?: string[];
   /** Omitted means true in the search and false in the collection: a search offers cards to
    *  own, a collection lists cards that are owned. */
   paperOnly?: boolean;

@@ -330,6 +330,12 @@ fn write_batch(db: &Mutex<Connection>, batch: &mut Vec<CardRow>) -> Result<(), I
                 // under 63 entries, which `the_key_list_fits_in_a_u64` fences and 23 keys
                 // is nowhere near.
                 c.legal_mask as i64,
+                // `?19`, the slot `type_mask` takes in the column list above `VALUES`.
+                // Corpus schema 5's column, and `legal_mask`'s argument one column over: a
+                // type line as one integer, so a type filter rides `idx_cards_collapse`
+                // instead of a `LIKE` knocking the collapsed browse off it. A printing with
+                // no type line at all masks to 0, which is "no type" and not an error.
+                crate::cardtypes::type_mask(c.type_line.as_deref().unwrap_or("")) as i64,
                 c.games,
                 c.finishes,
                 c.prices,
@@ -355,7 +361,7 @@ fn write_batch(db: &Mutex<Connection>, batch: &mut Vec<CardRow>) -> Result<(), I
                 c.toughness,
                 c.search_text,
                 c.raw,
-                // `?44`, last, matching the column list in `STAGING_INSERT` — the two lists
+                // `?45`, last, matching the column list in `STAGING_INSERT` — the two lists
                 // are one statement written twice and must move together. Corpus schema 3.
                 c.produced_mana,
             ])?;
@@ -371,14 +377,14 @@ fn write_batch(db: &Mutex<Connection>, batch: &mut Vec<CardRow>) -> Result<(), I
 const STAGING_INSERT: &str =
     "INSERT INTO cards_staging (id, oracle_id, name, lang, released_at, set_code, set_name,
         collector_number, rarity, layout, mana_cost, cmc, type_line, oracle_text, colors,
-        color_identity, legalities, legal_mask, games, finishes, prices, price_usd, price_eur,
-        faces, illustration_id, frame_effects, border_color, full_art, promo, promo_types,
-        digital, is_paper, edhrec_rank, game_changer, image_status, image_updated_at,
-        image_uris, face_image_uris, artist, power, toughness, search_text, raw,
-        produced_mana)
+        color_identity, legalities, legal_mask, type_mask, games, finishes, prices, price_usd,
+        price_eur, faces, illustration_id, frame_effects, border_color, full_art, promo,
+        promo_types, digital, is_paper, edhrec_rank, game_changer, image_status,
+        image_updated_at, image_uris, face_image_uris, artist, power, toughness, search_text,
+        raw, produced_mana)
      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,
         ?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38,?39,?40,?41,?42,?43,
-        ?44)";
+        ?44,?45)";
 
 #[cfg(test)]
 mod tests {
@@ -623,7 +629,7 @@ mod tests {
         );
     }
 
-    /// The 44-parameter INSERT is positional, and SQLite columns are dynamically typed:
+    /// The 45-parameter INSERT is positional, and SQLite columns are dynamically typed:
     /// two transposed parameters would still insert without complaint and only show
     /// up much later as wrong data. So read a fully-populated row back and check
     /// every column against the value its name promises. Every text value is distinct
@@ -638,7 +644,7 @@ mod tests {
         // sorts keys or preserves input order. The lone `card_faces` entry is what pushes
         // `search_text` ("ORACLE FACENAME") apart from `oracle_text` ("ORACLE"), and it
         // carries images of its own so `face_image_uris` is populated too.
-        let line = r#"{"object":"card","id":"ID1","oracle_id":"OID","name":"NAME","lang":"LANG","released_at":"2020-01-02","set":"SET","set_name":"SETNAME","collector_number":"CN","rarity":"rare","layout":"normal","mana_cost":"{R}","cmc":3.0,"type_line":"TYPE","oracle_text":"ORACLE","colors":["R"],"color_identity":["R","G"],"legalities":{"modern":"legal"},"games":["paper"],"finishes":["foil"],"prices":{"eur":"2.5","usd":"1.25"},"card_faces":[{"image_uris":{"grid":"FACEGRID"},"name":"FACENAME"}],"illustration_id":"ILL","frame_effects":["showcase"],"border_color":"black","full_art":true,"promo":false,"promo_types":["prerelease"],"digital":false,"edhrec_rank":42,"game_changer":true,"image_status":"lowres","image_updated_at":"2021-02-03T00:00:00Z","image_uris":{"grid":"TOPGRID"},"artist":"ARTIST","power":"POW","toughness":"TUF","produced_mana":["G","U"]}"#;
+        let line = r#"{"object":"card","id":"ID1","oracle_id":"OID","name":"NAME","lang":"LANG","released_at":"2020-01-02","set":"SET","set_name":"SETNAME","collector_number":"CN","rarity":"rare","layout":"normal","mana_cost":"{R}","cmc":3.0,"type_line":"Land Creature — Forest Dryad","oracle_text":"ORACLE","colors":["R"],"color_identity":["R","G"],"legalities":{"modern":"legal"},"games":["paper"],"finishes":["foil"],"prices":{"eur":"2.5","usd":"1.25"},"card_faces":[{"image_uris":{"grid":"FACEGRID"},"name":"FACENAME"}],"illustration_id":"ILL","frame_effects":["showcase"],"border_color":"black","full_art":true,"promo":false,"promo_types":["prerelease"],"digital":false,"edhrec_rank":42,"game_changer":true,"image_status":"lowres","image_updated_at":"2021-02-03T00:00:00Z","image_uris":{"grid":"TOPGRID"},"artist":"ARTIST","power":"POW","toughness":"TUF","produced_mana":["G","U"]}"#;
         // Five boolean columns cannot be told apart by one row — with two values to
         // go round, some pair always matches. These two extra rows give each boolean a
         // distinct pattern across the three: full_art 100, promo 011, digital 010,
@@ -650,7 +656,7 @@ mod tests {
         ingest_gz(&db, &gz_fixture(&[line, bools_2, bools_3]), &mut |_| {}).unwrap();
         let conn = crate::db::lock_blocking(&db);
 
-        let expected: [(&str, Option<&str>); 41] = [
+        let expected: [(&str, Option<&str>); 42] = [
             ("id", Some("ID1")),
             ("oracle_id", Some("OID")),
             ("name", Some("NAME")),
@@ -663,7 +669,7 @@ mod tests {
             ("layout", Some("normal")),
             ("mana_cost", Some("{R}")),
             ("cmc", Some("3.0")),
-            ("type_line", Some("TYPE")),
+            ("type_line", Some("Land Creature — Forest Dryad")),
             ("oracle_text", Some("ORACLE")),
             ("colors", Some("R")),
             ("color_identity", Some("RG")),
@@ -672,6 +678,13 @@ mod tests {
             // easiest to make and hardest to see — SQLite would take an integer in `games`
             // and a JSON array in `legal_mask` without a word. `modern` is bit 9.
             ("legal_mask", Some("512")),
+            // Corpus schema 5's column, beside `legal_mask` for the same reason it is beside
+            // `legalities`: a derived integer next to the text it was derived from is where a
+            // one-place slip hides. The fixture's type line is deliberately a *two-type* one
+            // so the expectation is neither 0 nor a single bit — 0 would be indistinguishable
+            // from the three boolean columns that read back "0", and a mask that quietly
+            // stopped being written would still pass. `Creature` is bit 2 and `Land` bit 5.
+            ("type_mask", Some("36")),
             ("games", Some(r#"["paper"]"#)),
             ("finishes", Some(r#"["foil"]"#)),
             ("prices", Some(r#"{"eur":"2.5","usd":"1.25"}"#)),

@@ -665,6 +665,7 @@ const COLLECTION_TRAY: readonly TrayCell[] = [
   "set",
   "format",
   "rarity",
+  "type",
   "price",
   "finish",
   "condition",

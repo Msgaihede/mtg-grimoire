@@ -46,8 +46,14 @@ pub const TYPE_KEYS: [&str; 8] = [
 ];
 pub fn type_mask(type_line: &str) -> u32;
 pub fn mask_of(picked: &[String]) -> u32;
-pub const TYPE_MASK_SQL: &str;  // the backfill expression, `{col}` where the column goes
+pub fn type_mask_sql(col: &str) -> String;  // the backfill expression, over a named column
 ```
+
+> This line said `pub const TYPE_MASK_SQL: &str` when the plan was written, and Task 1's own
+> implementation section said the function. The function is right: a const cannot be generated
+> from `TYPE_KEYS` at compile time, so it would have to be hand-written — losing exactly the
+> no-drift property `the_backfill_sql_and_the_rust_function_agree` exists to guarantee. Tasks 1
+> and 2 both shipped the function.
 
 ```rust
 // src-tauri/src/filters.rs — CardFilters gains

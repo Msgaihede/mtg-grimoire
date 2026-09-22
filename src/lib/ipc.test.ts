@@ -33,7 +33,11 @@ import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
 import desktopRs from "../../src-tauri/src/desktop.rs?raw";
+// `cardFiltersRs` rather than `filtersRs`, which the scanner's own `filters.rs` already holds
+// below — two files of that name in two crates, and the app's is the one `CardFilters` lives in.
+import cardFiltersRs from "../../src-tauri/src/filters.rs?raw";
 import homeRs from "../../src-tauri/src/home.rs?raw";
+import facetsRs from "../../src-tauri/src/index/facets.rs?raw";
 import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";
 import newPrintingsRs from "../../src-tauri/src/new_printings.rs?raw";
 import priceHistoryRs from "../../src-tauri/src/price_history.rs?raw";
@@ -4740,6 +4744,34 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ScannerPrefs", scannerRs, "ScannerPrefs"],
     ["ScannerTrayRow", scannerRs, "ScannerTrayRow"],
     ["ScannerTrayChoice", scannerRs, "ScannerTrayChoice"],
+    // **The three oldest structs in the app, and none of them had ever been fenced** (2026-09-22,
+    // added with strict colours and the type chips). `SearchRequest` is every search the window
+    // asks for, `CardFilters` is the half of it the collection and the wishlist flatten into
+    // their own queries, and `FacetResponse` is what greys a chip — so between them they carry
+    // every filter in the app, and until this row they drifted in silence like everything else
+    // off these lists.
+    //
+    // Here rather than on `mirrors` above for `DecksCleared`'s reason: none is a card row and
+    // none carries a picture. Two of them do clear that table's floor of ten fields, which is
+    // the point at which the floor stops being the reason and the picture is the whole of it.
+    //
+    // **Two of the three are structs the app _sends_, which is where a drift is loudest** —
+    // `WishOptimizeApplyItem`'s lesson above, and quieter here than at any of its other sites,
+    // because both carry `#[serde(default)]` on every field. A filter field renamed on one side
+    // is not a refusal and not an error: it deserialises to `None`, the backend emits no clause
+    // for it, and the search answers **as though the reader had never pressed the chip**. The
+    // control is drawn, it toggles, its count is right, and the result set does not move. That
+    // is the shape this feature can produce in one careless commit — `types` reaching `ipc.ts`
+    // under a name `filters.rs` does not know — and it is indistinguishable on screen from a
+    // filter that matched everything.
+    //
+    // `FacetResponse` fails the other way round and just as quietly. Every count on it is read
+    // with `?? undefined` and a missing key means *unknown*, which leaves a chip **live** — the
+    // fail-open rule the whole facet row is built on — so a renamed map greys nothing, for ever,
+    // and a reader is offered eight type chips that each answer zero cards.
+    ["SearchRequest", searchRs, "SearchRequest"],
+    ["CardFilters", cardFiltersRs, "CardFilters"],
+    ["FacetResponse", facetsRs, "FacetResponse"],
   ];
 
   it.each(plainMirrors)(

@@ -216,6 +216,15 @@ export interface FilterState {
    * format.
    */
   format: string;
+  /**
+   * The colour chips.
+   *
+   * **The `Exactly` chip beside them is deliberately not a field here**, and that is the one
+   * omission on this interface worth arguing. `colorsStrict` modifies the colour filter rather
+   * than being a filter of its own — it changes what a picked colour *means*, and is unreachable
+   * with none picked — so counting it would move the number on Reset all when nothing new had
+   * been narrowed, over a row the reader had already been told was one thing that is on.
+   */
   colors: readonly string[];
   sets: readonly string[];
   manaValues: readonly number[];
@@ -227,6 +236,10 @@ export interface FilterState {
   owned: boolean | undefined;
   /** The rarity chips. One kind however many are pressed, like {@link colors}. */
   rarities: readonly string[];
+  /** The card-type chips — {@link CARD_TYPES}, ORed with each other. One kind however many are
+   *  pressed, for {@link rarities}' reason: a reader who narrowed to instants and sorceries has
+   *  narrowed once. */
+  types: readonly string[];
   /**
    * The price band's two ends, either usable alone. `undefined` is "this end is open".
    *
@@ -262,6 +275,11 @@ export function activeFilterCount(f: FilterState): number {
     f.manaValues.length > 0 || f.manaX,
     f.owned !== undefined,
     f.rarities.length > 0,
+    // One kind however many chips are pressed, exactly as the colours and the rarities above it
+    // are counted: `Instant` and `Sorcery` together are one narrowing of one question — *which
+    // types* — and a reader told `Reset all 2` over one chip row has been given the wrong number
+    // about one control.
+    f.types.length > 0,
     // One term for the pair, not two: a band is one narrowing however many of its ends the
     // reader has moved — the argument the mana row's `manaValues || manaX` makes.
     f.priceMin !== undefined || f.priceMax !== undefined,
@@ -322,6 +340,82 @@ export function toggleColor(picked: readonly ColorKey[], key: ColorKey): ColorKe
   if (picked.includes(key)) return picked.filter((c) => c !== key);
   if (key === "C") return ["C"];
   return [...picked.filter((c) => c !== "C"), key];
+}
+
+/**
+ * The colour row and its `Exactly` flag as **one piece of state**, in all four hooks that own a
+ * colour filter.
+ *
+ * **Two `useState`s could not express the rule that binds them, and the failure was silent.**
+ * Clearing the last colour has to clear the flag — the chip is only drawn while a colour is
+ * picked, so a flag outliving the row is state with no control: invisible to the reader, still
+ * in the query key, still waiting to change the meaning of the next colour they press. Writing
+ * that as `const next = toggleColor(colors, key); setColors(next); if (!next.length) …` reads
+ * correctly and is wrong, because `colors` is *this render's*: React batches, so three presses
+ * before a re-render all compute from the same array and only the last survives. Picking W, U
+ * and B gave `Colour: Black`, and four story plays caught it.
+ *
+ * A functional updater fixes that and cannot host the flag — an updater must be pure, and React
+ * runs it twice under StrictMode. One state and one updater is what lets the rule be both
+ * batch-safe and pure, which is why the two fields live together rather than beside each other.
+ */
+export interface ColorFilter {
+  picked: readonly ColorKey[];
+  /** "Exactly these colours" rather than "at least these" — a modifier on {@link picked} and
+   *  not a filter of its own, which is why it is absent from {@link FilterState} and from every
+   *  `activeFilterCount`. Its own field and **not a sentinel character inside the `colors`
+   *  string**: that string is read by an uppercase-and-`contains` pass in two languages, and a
+   *  marker in it would have to be stripped in both. */
+  strict: boolean;
+}
+
+/** The cleared colour filter — what every hook opens on and what `resetAll` puts back. */
+export const NO_COLORS: ColorFilter = { picked: [], strict: false };
+
+/** Add or remove one colour, and drop the flag with the last of them. See {@link ColorFilter}. */
+export function toggleColorFilter(state: ColorFilter, key: ColorKey): ColorFilter {
+  const picked = toggleColor(state.picked, key);
+  return { picked, strict: picked.length === 0 ? false : state.strict };
+}
+
+/**
+ * The card types the chip row offers, **in the order it draws them**.
+ *
+ * Creature first and Land last, because that is how every decklist reads — `deckBuckets.ts`'s
+ * `TYPE_BUCKETS` order, and deliberately not the alphabetical bit order `cardtypes.rs` freezes.
+ * A matching order and a display order are two constants here for the reason `autoCategory.ts`
+ * gives about its own pair: one constant cannot be both, and folding them together breaks
+ * whichever job loses.
+ *
+ * **This is a third list beside those two rather than a reuse of either**, and the question is
+ * what makes it one: `autoCategory.ts` and `deckBuckets.ts` file a card into exactly *one*
+ * bucket and disagree with each other about Land on purpose, where a filter asks *does this card
+ * have this type* — so a reader who presses `Creature` and cannot find an artifact creature has
+ * been told a falsehood.
+ *
+ * The words must match `cardtypes.rs`'s `TYPE_KEYS` letter for letter — the backend matches
+ * exactly and drops anything it does not recognise, so a typo here is a chip that silently
+ * filters nothing rather than one that errors.
+ */
+export const CARD_TYPES: readonly string[] = [
+  "Creature",
+  "Planeswalker",
+  "Instant",
+  "Sorcery",
+  "Artifact",
+  "Enchantment",
+  "Battle",
+  "Land",
+];
+
+/**
+ * The picked types as the backend takes them, or nothing.
+ *
+ * Sorted, for `setsParam`'s reason: picking Creature then Land is the same search as Land then
+ * Creature and must not cost a second round trip.
+ */
+export function typesParam(picked: readonly string[]): string[] | undefined {
+  return picked.length > 0 ? [...picked].sort() : undefined;
 }
 
 // `sortCurrency` is gone, and so is the `currency` parameter it fed. It existed to send the
@@ -504,7 +598,16 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     setAppliedDefaultFormat(defaultFormatValue);
     setFormat(defaultFormatValue);
   }
-  const [colors, setColors] = useState<readonly ColorKey[]>([]);
+  // **One state for the row and its `Exactly` flag, not two.** The rule that binds them — the
+  // last colour leaving turns the flag off — cannot be written across two `useState`s without
+  // either losing presses to batching or putting a `setState` inside an updater React runs
+  // twice. {@link ColorFilter} carries the whole reading, including the bug that found it.
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(NO_COLORS);
+  const colors = colorFilter.picked;
+  const colorsStrict = colorFilter.strict;
+  // The eight card-type chips — {@link CARD_TYPES}, ORed with each other and ANDed with
+  // everything else, which is the rarity chips' shape exactly.
+  const [types, setTypes] = useState<readonly string[]>([]);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   // The other half of the mana-value question, and **additive rather than exclusive**:
@@ -713,6 +816,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // Sorted for `setsParam`'s reason: picking rare then mythic is the same search as mythic then
   // rare, and must not cost a second round trip.
   const raritiesParam = rarities.length > 0 ? [...rarities].sort() : undefined;
+  // Sorted by {@link typesParam} for the same reason, and through the shared function rather
+  // than inline: the collection, the wishlist and the deck panel all canonicalise this list, and
+  // four copies of one sort is four places for the normal form to drift.
+  const typesParamValue = typesParam(types);
 
   // Every input the request is built from, so a changed filter can never be answered by
   // another filter's cached pages.
@@ -735,7 +842,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // twice differently.
     format,
     colorsParam ?? "",
+    // **A segment of its own beside the letters, and it is the half most easily forgotten.**
+    // `WU` loose and `WU` strict are two different sets of cards over the same local SQLite, so
+    // a key built from the letters alone would answer the strict press out of the loose search's
+    // cached pages — instantly, with no request, no spinner and nothing on screen to notice,
+    // which reads to a reader as "the chip does nothing". Spelled rather than stringified, like
+    // every other optional segment here.
+    colorsStrict ? "strict" : "",
     setsParam?.join(",") ?? "",
+    typesParamValue?.join(",") ?? "",
     manaParam?.join(",") ?? "",
     // **A segment of its own, and the whole feature turns on it being here.** X is a second
     // axis over the same chips, so a key that carried only the numerals would answer "3, and
@@ -786,7 +901,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
         // {@link formatParams} — including why a named format sends `playableOnly` too.
         ...formatParams(format),
         colors: colorsParam,
+        // Absent rather than `false` when the chip is off, which is the rule every optional
+        // filter on this payload follows: `false` on the wire reads as "the reader chose loose"
+        // where they chose nothing at all, and it would mint a second React Query hash for the
+        // search an untouched row has always had.
+        colorsStrict: colorsStrict || undefined,
         sets: setsParam,
+        types: typesParamValue,
         manaValues: manaParam,
         rarities: raritiesParam,
         // The band, at the marketplace this page is quoting. Absent ends are absent fields, so
@@ -879,7 +1000,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // mana value that only art cards satisfy.
     ...formatParams(format),
     colors: colorsParam,
+    // Rides for the reason every other filter here does: the counts that grey a chip and the
+    // wall that chip filters have to describe one corpus, and a colour count taken loosely over
+    // a wall matched strictly would offer options the strict search has none of. Spelled
+    // `|| undefined` exactly as the page's payload spells it, because React Query hashes this
+    // object with its `undefined` values dropped — a bare `false` would mint a second facet key
+    // for the search an untouched row has always had.
+    colorsStrict: colorsStrict || undefined,
     sets: setsParam,
+    types: typesParamValue,
     manaValues: manaParam,
     // Spelled exactly as the page's payload spells it — `|| undefined` and not `manaX` —
     // because React Query hashes this object with its `undefined` values dropped: a bare
@@ -1035,9 +1164,34 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      */
     anyCard: true,
     colors,
-    toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
+    // A functional updater, so a batch of presses composes: three chips pressed before a
+    // re-render each see the row the one before them left. Clearing the last colour clears
+    // `Exactly` — both halves of that live in {@link toggleColorFilter}, one rule in one place
+    // for all four hooks.
+    toggleColor: (key: ColorKey) => setColorFilter((s) => toggleColorFilter(s, key)),
+    /**
+     * Read the colour row as "exactly these colours" rather than "at least these" — the
+     * `Exactly` chip.
+     *
+     * A modifier on the row rather than a filter beside it, which is the whole of why it is
+     * absent from {@link activeFilterCount} and from `unfiltered`: it narrows nothing on its own
+     * and is unreachable with no colour picked, so a Reset all badge that counted it would move
+     * for a press that filtered nothing new.
+     */
+    colorsStrict,
+    toggleColorsStrict: () => setColorFilter((s) => ({ ...s, strict: !s.strict })),
     sets,
     toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    /**
+     * The card-type chips — {@link CARD_TYPES}, ORed with each other and ANDed with everything
+     * else, which is the rarity chips' shape exactly.
+     *
+     * A card matches a chip if that type word is on its type line as a **whole word**, so an
+     * artifact land answers `Land` and `Artifact` both. Deliberately not the one-bucket rule
+     * `deckBuckets.ts` and `autoCategory.ts` file a card by — see {@link CARD_TYPES}.
+     */
+    types,
+    toggleType: (type: string) => setTypes((picked) => toggleIn(picked, type)),
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
     /**
@@ -1117,6 +1271,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * format`, which is the honest escape hatch rather than a badge lying about what the
      * button does.
      */
+    // `colorsStrict` is deliberately not passed: it is not a field of {@link FilterState}, for
+    // the reason written there.
     activeCount: activeFilterCount({
       text,
       format,
@@ -1126,6 +1282,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       manaX,
       owned,
       rarities,
+      types,
       priceMin,
       priceMax,
     }),
@@ -1226,8 +1383,11 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     resetAll: () => {
       setText("");
       setFormat("");
-      setColors([]);
-      setSets([]);
+      setColorFilter(NO_COLORS);
+      // Cleared although it is not counted above, and the asymmetry is the point: Reset all
+      // means "no filters", and a strict flag left standing over an empty colour row is exactly
+            setSets([]);
+      setTypes([]);
       setManaValues([]);
       setManaX(false);
       setOwned(undefined);
@@ -1284,11 +1444,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * the one consequence written at its definition above. With no default the two expressions
      * are identical, which is why `SearchPage` cannot notice the difference.
      */
+    // `colorsStrict` is absent from this list for {@link activeFilterCount}'s reason: it cannot
+    // be on without `colorsParam` being set, so a term for it could never decide this answer —
+    // and a search narrowed by nothing but a modifier is not a search at all.
     unfiltered:
       !debouncedText &&
       !formatIsReaderSet &&
       !colorsParam &&
       !setsParam &&
+      !typesParamValue &&
       !manaParam &&
       !manaX &&
       owned === undefined &&

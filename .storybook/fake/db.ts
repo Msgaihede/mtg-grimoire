@@ -5929,6 +5929,43 @@ const CONDITION_RANK: Record<FakeEntry["condition"], number> = {
 
 /** `filters::COLORS`, WUBRG order. */
 const COLORS = ["W", "U", "B", "R", "G"];
+/**
+ * `cardtypes::TYPE_KEYS` — the eight words, **alphabetical**, which is the frozen bit order and
+ * not the order the chips are drawn in. A local copy like `COLORS` and `RARITY_KEYS` beside it:
+ * this file mirrors the Rust vocabularies rather than importing the frontend's `CARD_TYPES`,
+ * which is the same eight words in the reading order (Creature first, Land last).
+ *
+ * Membership is all this list is used for here, so the order does not matter to the fake — but
+ * it is worth being the Rust one, because what it stands in for is the mask.
+ */
+const CARD_TYPES = [
+  "Artifact",
+  "Battle",
+  "Creature",
+  "Enchantment",
+  "Instant",
+  "Land",
+  "Planeswalker",
+  "Sorcery",
+];
+
+/**
+ * `cardtypes::type_mask`'s rule, asked one type at a time.
+ *
+ * The shipped search tests a bit of `cards.type_mask`; a fake has no such column, so it reads
+ * the type line the mask was computed from. **Same rule or the workbench disagrees with the
+ * window about Dryad Arbor**: both faces of a `//` line count, only the half before the dash of
+ * each is read, and a type is matched as a whole word — never a substring, which is what keeps
+ * `Planeswalker` out of a `Plane` the frozen list may one day append.
+ */
+function cardHasType(typeLine: string | null, type: string): boolean {
+  if (typeLine === null) return false;
+  return typeLine
+    .split("//")
+    .some((face) =>
+      (face.split(/[—-]/)[0] ?? "").split(/\s+/).some((word) => word === type),
+    );
+}
 /** `filters::MAX_SET_FILTER`. */
 const MAX_SET_FILTER = 64;
 /** `filters::MANA_VALUE_OPEN_ENDED` — the last chip means "8 or more". */
@@ -5981,8 +6018,20 @@ function matchesCardFilters(
     } else {
       // Subset semantics as a deckbuilder means them: "RW" returns mono-R, mono-W, RW and
       // colourless. Expressed as exclusions, which is also why an orphan passes.
+      //
+      // **`colorsStrict` adds the other half rather than replacing it** — an inclusion per
+      // picked letter beside the exclusion per unpicked one, so "RW" answers the RW cards
+      // alone. `filters.rs`' arm has exactly this shape, and an orphan now *fails* a strict
+      // search: its empty identity carries none of the picked letters. That is the SQL's
+      // answer too (`instr('', 'R') = 0`), so the divergence the comment above this function
+      // records for colour narrows to loose mode only.
+      const strict = f.colorsStrict ?? false;
       for (const ch of COLORS) {
-        if (!colors.includes(ch) && identity.includes(ch)) return false;
+        if (!colors.includes(ch)) {
+          if (identity.includes(ch)) return false;
+        } else if (strict && !identity.includes(ch)) {
+          return false;
+        }
       }
     }
   }
@@ -6038,6 +6087,22 @@ function matchesCardFilters(
   if (f.rarities) {
     const picked = f.rarities.map((r) => r.trim().toLowerCase()).filter((r) => r !== "");
     if (picked.length > 0 && !picked.includes(card?.rarity ?? "")) return false;
+  }
+
+  // OR within, AND without, like the rarities above — but narrowed by a list that **validates**
+  // where `picked_rarities` only normalises. `picked_types` drops a word `TYPE_KEYS` does not
+  // hold, so `["Shiny"]` is *no filter*, where `["shiny"]` on the line above is a filter that
+  // matches nothing. The two really do differ; `filters.rs` has the same asymmetry.
+  //
+  // Matched against the type line here rather than against a mask, because a fake has no
+  // `type_mask` column — but by the same whole-word rule `cardtypes::type_mask` uses, so the
+  // workbench and the shipped window agree about Dryad Arbor. Both faces count and only the
+  // half before the dash of each is read.
+  if (f.types) {
+    const picked = f.types.filter((t) => (CARD_TYPES as readonly string[]).includes(t));
+    if (picked.length > 0 && !picked.some((t) => cardHasType(card?.typeLine ?? null, t))) {
+      return false;
+    }
   }
 
   // Omitted means true — and it keys on `is_paper`, which is the column `filters.rs` emits
@@ -6188,7 +6253,7 @@ const RARITY_KEYS = ["common", "uncommon", "rare", "mythic"];
  * have to ignore both or opening it on a request that already names a set would offer nothing
  * but that set.
  */
-type FacetSkip = "colors" | "mana" | "sets" | "formats" | "rarities" | "owned";
+type FacetSkip = "colors" | "mana" | "sets" | "formats" | "rarities" | "types" | "owned";
 
 /**
  * The picked-colour string after one chip is pressed — `facets::toggle_colors`, which is
@@ -8650,6 +8715,7 @@ export function readHandlers(db: FakeDb) {
           manaValues: {},
           formats: {},
           rarities: {},
+          types: {},
           sets: {},
           owned: { owned: 0, missing: 0 },
           total: 0,
@@ -8696,6 +8762,7 @@ export function readHandlers(db: FakeDb) {
         }
         if (skip === "formats") f.format = undefined;
         if (skip === "rarities") f.rarities = undefined;
+        if (skip === "types") f.types = undefined;
         return db.cards.filter((c) => {
           // Text is in every base **including its own**: it is not a facet, and a facet
           // describes the search the reader is looking at.
@@ -8758,11 +8825,32 @@ export function readHandlers(db: FakeDb) {
       const rarities: Record<string, number> = {};
       for (const key of RARITY_KEYS) rarities[key] = countWith(rarityBase, { rarities: [key] });
 
+      // All eight on every ready response, zeros included, for the rarities' reason one line up.
+      // They do **not** sum to `total` and do not bound it either, which is a stronger statement
+      // than the rarities need: the eight *overlap* — Dryad Arbor is in both `Land` and
+      // `Creature` — and the corpus also holds types no chip offers (`Vanguard`, `Plane`), so a
+      // card can be counted twice or not at all.
+      const typeBase = base("types");
+      const types: Record<string, number> = {};
+      for (const key of CARD_TYPES) types[key] = countWith(typeBase, { types: [key] });
+
       const colorBase = base("colors");
       const colors: Record<string, number> = {};
       const picked = nonblank(req.colors)?.toUpperCase() ?? "";
       for (const letter of COLOR_CHIPS) {
-        colors[letter] = countWith(colorBase, { colors: toggleColorString(picked, letter) });
+        colors[letter] = countWith(colorBase, {
+          colors: toggleColorString(picked, letter),
+          // **The flag has to be carried here too, and this is the one place it is easy to
+          // drop.** Every other count above reuses its dimension's base; this one builds a
+          // fresh filter object per chip, so a `colorsStrict` left off would count each press
+          // under subset semantics while the search ran exact — a chip captioned with a number
+          // four times the wall behind it. `index::facets` has exactly this trap at exactly
+          // these two places, and its `apply_colors` takes the flag at both.
+          //
+          // `toggleColorString` needs no such argument: it mirrors `toggleColor`, which
+          // produces the picked-colour *string*, and no colour press alters the flag.
+          colorsStrict: req.colorsStrict,
+        });
       }
 
       // Never greyed — these two are for the chip's tooltip — but still counted over the
@@ -8776,6 +8864,7 @@ export function readHandlers(db: FakeDb) {
         manaX,
         formats,
         rarities,
+        types,
         sets,
         owned: { owned, missing: ownedBase.length - owned },
         // **Printings, always**: `collapse` is a view mode and not a filter, so this counts

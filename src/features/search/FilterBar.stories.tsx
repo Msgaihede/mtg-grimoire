@@ -798,12 +798,116 @@ export const TagBesideFreeText: Story = {
 };
 
 /**
+ * **`Exactly` — the reading the five colour chips beside it get.**
+ *
+ * Loose is the default and the deckbuilder's question: two colours picked answer mono-R, mono-W,
+ * RW *and* the colourless cards that fit in any deck. Pressed, the row reads "exactly these
+ * colours" and answers the two-colour cards alone.
+ *
+ * **It is not drawn at all until a colour is picked**, which is why every other story on this
+ * page has five chips in that group and this one has six. Strict with nothing picked filters
+ * nothing at either end, so an always-drawn chip would be a dead control on the row a reader
+ * opens the app to — and a sixth chip competing for the docked panel's 206px floor, which is the
+ * width that group's `flex-wrap` exists for. The reflow on the first colour press is what that
+ * buys.
+ *
+ * **The badge still reads 1.** Strict modifies the colour filter rather than being one, so
+ * `activeFilterCount` does not count it; what says it is on is the word inside the chip under the
+ * rule — `Colour: exactly White, Blue` — and pressing that chip's × takes the flag off with the
+ * colours it was about.
+ */
+export const StrictColours: Story = {
+  args: {
+    preset: (search) => {
+      search.toggleColor("W");
+      search.toggleColor("U");
+      search.toggleColorsStrict();
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // `findBy`, because the preset lands in an effect — and on the *pressed* chip's own sentence,
+    // so this resolves against the strict row rather than the loose one it passes through.
+    const chip = await canvas.findByRole("button", {
+      name: "Exactly — cards whose colour identity is exactly these colours",
+    });
+    await expect(chip).toHaveAttribute("aria-pressed", "true");
+    // In the colour group, not merely somewhere on the row: a chip about the colours that had
+    // drifted out of them would read as a filter of its own.
+    await expect(canvas.getByRole("group", { name: "Color identity" })).toContainElement(chip);
+    // One kind on, said twice and counted once — the whole of why this is not a chip of its own.
+    await expect(
+      canvas.getByRole("button", { name: "Remove filter — Colour: exactly White, Blue" }),
+    ).toBeInTheDocument();
+    await expect(
+      // Singular: `ResetAll` words its own count through `plural`, so a hard-coded "filters"
+      // here passes only at the counts nobody reaches first.
+      canvas.getByRole("button", { name: "Reset all — 1 filter active" }),
+    ).toHaveTextContent("1");
+  },
+};
+
+/**
+ * **The type cell** — eight chips in the tray, and the one filter on this row that is not a fact
+ * about a *printing*.
+ *
+ * `Land Creature — Forest Dryad` is under **both** Land and Creature, because this filter asks
+ * *does this card have this type* rather than which bucket it is in. `autoCategory.ts` files
+ * Dryad Arbor under Land alone and `deckBuckets.ts` under Creature alone; each of those answers
+ * one question with one bucket, and a reader pressing Creature who could not find an artifact
+ * creature would have been told a falsehood.
+ *
+ * The order is the reading order — Creature first, Land last, which is how every decklist reads —
+ * and deliberately not the alphabetical bit order the mask is stored in. A matching order and a
+ * display order are two constants for `autoCategory.ts`' own reason: one constant cannot be both.
+ *
+ * **A wrapping flow rather than the rarity cell's grid**, and that is the narrowest surface's
+ * rule rather than taste: eight chips do not fit one column of a 206px panel, where
+ * `Planeswalker` alone is most of the cell's content box. Drag the width control down to 371px
+ * and then past it to watch the group break onto as many lines as it needs. The counts are the
+ * fake's own `facet_cards`, so a type nothing in the search has greys exactly as a rarity does.
+ */
+export const TypeChips: Story = {
+  args: { preset: (search) => search.toggleType("Creature") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await openTray(canvas);
+
+    const group = await canvas.findByRole("group", { name: "Type" });
+    // The **text** and not the accessible name: the name carries the facet count wherever there
+    // is one, and the sequence is what this asserts — two chips swapped past each other satisfy
+    // any assertion about one being present.
+    await expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual([
+      "Creature",
+      "Planeswalker",
+      "Instant",
+      "Sorcery",
+      "Artifact",
+      "Enchantment",
+      "Battle",
+      "Land",
+    ]);
+    await expect(
+      await within(group).findByRole("button", { name: /^Creature\b/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    // One kind however many chips are pressed, the colours' and the rarities' rule.
+    await expect(
+      canvas.getByRole("button", { name: "Remove filter — Type: Creature" }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
  * **The tray, open — every filter that is not on the bar.**
  *
- * Six fields in three columns: the set picker, the format ladder, the owned pair, the four
- * rarities, the price band and the printings mode. Four controls stay on the bar above it at
- * every width — the box you type in, the colours, the mana values and the order the results come
- * in — because those are the four a reader reaches for without looking.
+ * Seven fields in three columns: the set picker, the format ladder, the owned pair, the four
+ * rarities, the eight card types, the price band and the printings mode. Four controls stay on
+ * the bar above it at every width — the box you type in, the colours, the mana values and the
+ * order the results come in — because those are the four a reader reaches for without looking.
  *
  * The counts are the fake's own `facet_cards`, so the rarity chips grey exactly as the mana chips
  * beside them do and by the same rule: an option greys when turning it on would not change the
@@ -815,14 +919,14 @@ export const TrayOpen: Story = {
     const canvas = within(canvasElement);
     await openTray(canvas);
 
-    // The six fields, by their captions — the tray's own vocabulary, which is the only place in
-    // the app a label sits above its control.
+    // The seven fields, by their captions — the tray's own vocabulary, which is the only place
+    // in the app a label sits above its control.
     //
-    // `getAllByText`, because two of the six are said twice on purpose: `SetCombobox` and the
+    // `getAllByText`, because two of the seven are said twice on purpose: `SetCombobox` and the
     // format select each carry a name of their own for assistive tech (an `sr-only` span and a
     // `<label>`), and the tray's caption is the *visible* one above it. One control, two
     // spellings of one word, and the caption is the half a sighted reader reads.
-    for (const label of ["Set", "Format", "Owned", "Rarity", "Price (USD)", "Printings"]) {
+    for (const label of ["Set", "Format", "Owned", "Rarity", "Type", "Price (USD)", "Printings"]) {
       await expect(canvas.getAllByText(label).length).toBeGreaterThan(0);
     }
     // The money is the marketplace's, never a bare dollar: the caption reads `Price (USD)` on

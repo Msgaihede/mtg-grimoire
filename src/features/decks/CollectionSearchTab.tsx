@@ -52,7 +52,7 @@ const TILE_BASE = 150;
  * the band is `collection::scope`'s, banding the copy's own finish rather than the printing's
  * fallback chain.
  */
-const COLLECTION_TRAY: readonly TrayCell[] = ["set", "format", "decks", "rarity", "price"];
+const COLLECTION_TRAY: readonly TrayCell[] = ["set", "format", "decks", "rarity", "type", "price"];
 
 /**
  * The orders this column can act on, alphabetically by the word on screen.

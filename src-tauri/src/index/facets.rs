@@ -62,6 +62,16 @@ pub struct FacetResponse {
     /// bitset counts, so the four are a vocabulary rather than a partition — the same reading
     /// [`Self::mana_values`] needs for a fractional cost.
     pub rarities: BTreeMap<String, i64>,
+    /// Keyed by [`crate::cardtypes::TYPE_KEYS`] entry. Plain counts, and **all eight are sent
+    /// on every ready response**, zeros included — the chip row greys a counted zero and leaves
+    /// an absent key live, so a key that went missing would silently stop greying.
+    ///
+    /// **These do not sum to [`Self::total`]**, and do not bound it either, for
+    /// [`Self::rarities`]' reason twice over: the eight overlap (a card can be Artifact *and*
+    /// Creature, so the sum reads high) and the corpus holds types no chip offers (`Vanguard`,
+    /// `Plane`, so the sum reads low). Either direction alone would be a caveat; both at once
+    /// mean the relationship to `total` is not a direction at all.
+    pub types: BTreeMap<String, i64>,
     /// Keyed by set code. Plain counts, and **every code in the corpus is sent, zeros
     /// included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
     /// filters are. A cold one sends this map empty, which is the point of [`Self::ready`].
@@ -95,18 +105,20 @@ enum Skip {
     Sets,
     Formats,
     Rarities,
+    Types,
     Owned,
 }
 
-/// The three dimensions whose bitset costs a walk to build, built once for the whole request.
+/// The four dimensions whose bitset costs a walk to build, built once for the whole request.
 ///
-/// [`base`] is called seven times and none of these depends on which dimension is being
-/// skipped, so building them per call would walk the corpus six more times than the answer
+/// [`base`] is called eight times and none of these depends on which dimension is being
+/// skipped, so building them per call would walk the corpus seven more times than the answer
 /// needs — and the set walk carries a `set_codes` lookup per picked code on top.
 struct Prepared {
     sets: Option<BitSet>,
     mana: Option<BitSet>,
     rarities: Option<BitSet>,
+    types: Option<BitSet>,
 }
 
 /// The result set under every filter except `skip`'s.
@@ -189,7 +201,16 @@ fn base(
         }
     }
     if skip != Skip::Colors {
-        b = apply_colors(ix, &b, crate::filters::nonblank(&req.colors));
+        // **The strict flag rides the filter, not the dimension.** It is a property of the
+        // colour question rather than a filter of its own, so it has no `Skip` — and the
+        // second call site, in `compute`'s colour loop, has to be handed the same value or
+        // the search narrows strictly while every chip is counted loosely.
+        b = apply_colors(
+            ix,
+            &b,
+            crate::filters::nonblank(&req.colors),
+            req.colors_strict.unwrap_or(false),
+        );
     }
     if skip != Skip::Mana {
         if let Some(u) = prep.mana.as_ref() {
@@ -203,6 +224,11 @@ fn base(
     }
     if skip != Skip::Rarities {
         if let Some(u) = prep.rarities.as_ref() {
+            b = b.and(u);
+        }
+    }
+    if skip != Skip::Types {
+        if let Some(u) = prep.types.as_ref() {
             b = b.and(u);
         }
     }
@@ -222,7 +248,27 @@ fn base(
 /// **The complement of the unpicked letters, never the union of the picked ones.** The two
 /// agree on mono-coloured cards and disagree on every multicolour one — a `W` union would
 /// return Lightning Helix for a mono-white search, which the search itself does not.
-fn apply_colors(ix: &CardIndex, base: &BitSet, picked: Option<&str>) -> BitSet {
+///
+/// **`strict` adds the other half rather than replacing it**: the picked letters must all be
+/// present too, so `"RW"` answers the RW cards alone and not mono-R, mono-W or the colourless
+/// ones that fit in any deck. One extra `and` per picked letter, mirroring the extra
+/// `instr(…) > 0` clause `push_card_filters` emits — the two are one contract, and a strict
+/// search over loose counts is what a missing argument here looks like.
+///
+/// **Keep that `instr` on one line.** A doc line *beginning* `> 0` is a blockquote marker to
+/// rustdoc, and the next line without one is `clippy::doc_lazy_continuation` — an error under
+/// `-D warnings`, and one `npm run verify` cannot see, because it runs neither `cargo fmt` nor
+/// `clippy`. CI runs both.
+///
+/// `"C"` is already exact and ignores the flag, which is `CardFilters::colors_strict`'s
+/// deliberate degeneracy rather than an omission: that arm means `color_identity = ''`, and
+/// `toggle_colors` keeps `C` exclusive both ways so `"WC"` is unreachable.
+///
+/// **Both call sites pass it** — [`base`], which filters the result set, and [`compute`]'s
+/// colour loop, which answers how big that set would be after a chip press. They are the same
+/// question asked of two colour strings, so a flag on one and not the other greys chips by a
+/// rule that no longer describes what pressing them does.
+fn apply_colors(ix: &CardIndex, base: &BitSet, picked: Option<&str>, strict: bool) -> BitSet {
     let Some(picked) = picked else {
         return base.clone();
     };
@@ -234,6 +280,8 @@ fn apply_colors(ix: &CardIndex, base: &BitSet, picked: Option<&str>) -> BitSet {
     for (i, letter) in CardIndex::COLOR_KEYS.iter().enumerate().take(5) {
         if !picked.contains(*letter) {
             out = and_not(&out, &ix.colors[i]);
+        } else if strict {
+            out = out.and(&ix.colors[i]);
         }
     }
     out
@@ -298,6 +346,39 @@ fn union_rarities(ix: &CardIndex, rarities: Option<&[String]>) -> Option<BitSet>
     for r in picked {
         if let Some(i) = CardIndex::RARITY_KEYS.iter().position(|k| *k == r) {
             ix.rarity[i].for_each(|d| u.set(d));
+        }
+    }
+    Some(u)
+}
+
+/// The type chips as one bitset, or `None` when the request names none.
+///
+/// OR within, which is what the chip row means and what `push_card_filters` emits as one
+/// `(type_mask & ?) != 0` — so this is a union, like [`union_rarities`] and unlike
+/// [`union_sets`]' two lists. A card with two types is reached by either chip, which is the
+/// point: a filter asks "does this card have this type", so Dryad Arbor is under `Land` and
+/// under `Creature` both.
+///
+/// **Narrowed by exactly [`crate::filters::picked_types`]' list**, which is why that
+/// normalisation is a shared function: a facet counted over a type the search dropped would
+/// report an option as live that the search cannot reach.
+///
+/// **An unknown word is dropped before either side sees it, which is where this parts company
+/// with [`union_rarities`].** `picked_rarities` normalises but does not validate, so `["shiny"]`
+/// survives it and narrows both halves to nothing — `rarity IN ('shiny')` returns no rows.
+/// `picked_types` validates against [`crate::cardtypes::TYPE_KEYS`], so `["Shiny"]` leaves an
+/// empty list, this returns `None`, and `push_card_filters` pushes no clause for a zero mask:
+/// both answer **no filter**. The two sides agree either way, which is the only property that
+/// matters here; the shared normaliser is what makes it structural rather than a coincidence.
+fn union_types(ix: &CardIndex, types: Option<&[String]>) -> Option<BitSet> {
+    let picked = crate::filters::picked_types(types?);
+    if picked.is_empty() {
+        return None;
+    }
+    let mut u = BitSet::new(ix.capacity);
+    for t in picked {
+        if let Some(i) = crate::cardtypes::TYPE_KEYS.iter().position(|k| *k == t) {
+            ix.types[i].for_each(|d| u.set(d));
         }
     }
     Some(u)
@@ -380,6 +461,12 @@ fn union_sets(ix: &CardIndex, req: &SearchRequest) -> Option<BitSet> {
 /// Synthetic and not the live database, which is fair here — nothing in this file reads a
 /// row — but it is a machine-shaped number, not a corpus-shaped one.
 ///
+/// **Read those four figures as a floor.** They were taken over six bases and seven dimensions;
+/// the type chips added an eighth base and a ninth `and_count` loop, and strict colours an
+/// `and` per picked letter, and nobody has re-run `facet_timing` since. The budget they were
+/// measured against has two orders of magnitude of headroom, which is why this is a note rather
+/// than a blocker — but a figure nobody re-took is not this pass's cost.
+///
 /// That is what says [`and_not`] can walk bit by bit rather than word by word: the colour
 /// case runs it up to 24 times over ~107 k docs and still lands two orders of magnitude
 /// inside spec §2's 100 ms budget, so [`BitSet`] needs no new operation for this.
@@ -406,6 +493,7 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, narrow: Option<&BitSet>) -> 
         sets: union_sets(ix, req),
         mana: union_mana(ix, req.mana_values.as_deref(), req.mana_x.unwrap_or(false)),
         rarities: union_rarities(ix, req.rarities.as_deref()),
+        types: union_types(ix, req.types.as_deref()),
     };
     let base = |skip| base(ix, req, narrow, &prep, skip);
 
@@ -459,8 +547,28 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, narrow: Option<&BitSet>) -> 
         );
     }
 
+    // Types: one `and_count` per chip over the base that drops the whole type question, so
+    // picking `Creature` does not grey `Land` — the rule every dimension here follows. All
+    // eight keys are emitted whatever the search is, because a chip greys on a counted zero
+    // and stays live on an absent key.
+    let types_base = base(Skip::Types);
+    for (i, key) in crate::cardtypes::TYPE_KEYS.iter().enumerate() {
+        out.types.insert(
+            (*key).to_owned(),
+            i64::from(types_base.and_count(&ix.types[i])),
+        );
+    }
+
     // Colours: the result AFTER toggling each chip, because they broaden.
+    //
+    // **Under `colorsStrict` they do not broaden**, and this loop needs no arm for that: the
+    // number it reports is "the size of the result set after this press" either way, and
+    // `facets.ts` greys on "that number is 0, or equals `total`" — a rule that reads the same
+    // under both modes. What it does need is the flag itself, which is the second of
+    // `apply_colors`' two call sites and the one that gets missed. Without it the search runs
+    // strict and every chip is counted loose, so the counts describe a search nobody ran.
     let colors_base = base(Skip::Colors);
+    let strict = req.colors_strict.unwrap_or(false);
     let picked = crate::filters::nonblank(&req.colors)
         .unwrap_or("")
         .to_ascii_uppercase();
@@ -470,6 +578,7 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, narrow: Option<&BitSet>) -> 
             ix,
             &colors_base,
             (!after.is_empty()).then_some(after.as_str()),
+            strict,
         );
         out.colors
             .insert(letter.to_string(), i64::from(with.count()));
@@ -869,8 +978,21 @@ pub async fn facet_cards(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::fixtures::{doc, own, seeded, state_with_seeded_cards};
+    use crate::index::fixtures::{doc, own, seeded, state_with_seeded_cards, typed};
     use crate::search::SearchRequest;
+
+    /// The fixture's four rows hold a mono-R, an RW and a colourless printing; strict colour
+    /// needs a **mono-W** beside them, because loose and strict only diverge where a picked
+    /// letter is missing from a card that the subset rule still admits.
+    fn mono_white(conn: &rusqlite::Connection) {
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,
+                color_identity,is_paper,raw)
+             VALUES ('5','Swords to Plowshares','lea','5','en','normal',1.0,'W',1,'{}')",
+            [],
+        )
+        .unwrap();
+    }
 
     fn req(f: impl FnOnce(&mut SearchRequest)) -> SearchRequest {
         let mut r = SearchRequest {
@@ -963,6 +1085,152 @@ mod tests {
         assert_eq!(unknown.total, 0);
     }
 
+    /// The fixture's four rows plus three that carry a type line: a card with two types, a
+    /// plain creature, and one whose type this list does not name.
+    fn with_types() -> rusqlite::Connection {
+        let conn = seeded();
+        typed(&conn, "5", "Dryad Arbor", "Land Creature — Forest Dryad");
+        typed(&conn, "6", "Grizzly Bears", "Creature — Bear");
+        typed(&conn, "7", "Fabled Hero", "Vanguard");
+        conn
+    }
+
+    /// The type chips are a dimension of their own — **counted over a base that drops the
+    /// whole type question**, so picking `Creature` does not grey `Land`. The rule every
+    /// dimension here follows, and the one a `Skip` arm in the wrong place breaks silently.
+    ///
+    /// All eight keys arrive whatever the search is, zeros included: a chip greys on a
+    /// *counted* zero and stays live on an absent key.
+    #[test]
+    fn type_counts_are_answered_over_a_base_that_drops_the_type_question() {
+        let ix = crate::index::CardIndex::build(&with_types()).unwrap();
+
+        let none = compute(&ix, &req(|_| {}), None);
+        assert_eq!(
+            none.types.len(),
+            crate::cardtypes::TYPE_KEYS.len(),
+            "all eight keys, always"
+        );
+        assert_eq!(
+            none.types.get("Creature").copied(),
+            Some(2),
+            "Dryad Arbor and Grizzly Bears"
+        );
+        assert_eq!(
+            none.types.get("Land").copied(),
+            Some(1),
+            "Dryad Arbor, which is in both"
+        );
+        assert_eq!(
+            none.types.get("Battle").copied(),
+            Some(0),
+            "a counted zero rather than an absent key — this is what greys the chip"
+        );
+
+        let creature = compute(&ix, &req(|r| r.types = Some(vec!["Creature".into()])), None);
+        assert_eq!(creature.total, 2, "the two creatures");
+        assert_eq!(
+            creature.types.get("Land").copied(),
+            Some(1),
+            "still offered, still counted — the dimension skips its own filter"
+        );
+        assert_eq!(
+            creature.types.get("Creature").copied(),
+            Some(2),
+            "and its own chip reports what it would report unpressed"
+        );
+    }
+
+    /// …and every other dimension **does** narrow by it, the other half of that rule.
+    ///
+    /// A list naming nothing this build knows is **not a filter**, which is where the types
+    /// part company with the rarities: `picked_types` validates against `TYPE_KEYS` and drops
+    /// the word before either side sees it, where `picked_rarities` passes `shiny` through to
+    /// a `rarity IN ('shiny')` that returns no rows. Both sides of the type contract agree on
+    /// the dropped word, which is the property that matters.
+    #[test]
+    fn other_dimensions_narrow_by_the_type_filter() {
+        let ix = crate::index::CardIndex::build(&with_types()).unwrap();
+
+        let f = compute(&ix, &req(|r| r.types = Some(vec!["Land".into()])), None);
+        assert_eq!(f.total, 1, "Dryad Arbor alone");
+        assert_eq!(
+            f.rarities.values().sum::<i64>(),
+            0,
+            "and the typed rows carry no rarity, so every rarity chip greys"
+        );
+
+        let unknown = compute(&ix, &req(|r| r.types = Some(vec!["Shiny".into()])), None);
+        assert_eq!(unknown.total, 6, "an unknown word is no filter at all");
+        let empty = compute(&ix, &req(|r| r.types = Some(vec![])), None);
+        assert_eq!(empty.total, 6, "and neither is an empty list");
+    }
+
+    /// Two type chips OR with each other, the rarity chips' rule and what
+    /// `(type_mask & ?) != 0` emits — **and a card with two types is reached by either of
+    /// them**, which is what makes this a filter rather than `autoCategory.ts`'s one-bucket
+    /// question.
+    #[test]
+    fn two_type_chips_or_with_each_other_and_a_card_answers_to_both() {
+        let ix = crate::index::CardIndex::build(&with_types()).unwrap();
+
+        let land = compute(&ix, &req(|r| r.types = Some(vec!["Land".into()])), None);
+        assert_eq!(land.total, 1, "Dryad Arbor is a land");
+        let creature = compute(&ix, &req(|r| r.types = Some(vec!["Creature".into()])), None);
+        assert_eq!(creature.total, 2, "…and a creature, counted under both");
+
+        let both = compute(
+            &ix,
+            &req(|r| r.types = Some(vec!["Land".into(), "Creature".into()])),
+            None,
+        );
+        assert_eq!(
+            both.total, 2,
+            "a union and not an intersection — Arbor is not counted twice in the total"
+        );
+    }
+
+    /// **The eight do not sum to `total` and do not bound it**, which is `rarities`' caveat
+    /// twice over and in both directions at once: Dryad Arbor is counted by two chips and the
+    /// Vanguard by none. Nothing may derive a total from this map.
+    #[test]
+    fn type_counts_do_not_sum_to_total() {
+        let ix = crate::index::CardIndex::build(&with_types()).unwrap();
+        let f = compute(&ix, &req(|_| {}), None);
+
+        assert_eq!(
+            f.total, 6,
+            "three fixture paper printings plus the three typed"
+        );
+        assert_eq!(
+            f.types.values().sum::<i64>(),
+            3,
+            "over the two printings that carry a counted type — the sum over-reads by one \
+             because Dryad Arbor is Land and Creature both"
+        );
+
+        // The other direction, stated as the press a reader can actually make: every chip on
+        // at once still does not return the corpus, because a type nothing names is a type no
+        // chip reaches.
+        let every = compute(
+            &ix,
+            &req(|r| {
+                r.types = Some(
+                    crate::cardtypes::TYPE_KEYS
+                        .iter()
+                        .map(|k| (*k).to_owned())
+                        .collect(),
+                )
+            }),
+            None,
+        );
+        assert_eq!(
+            every.total, 2,
+            "the Vanguard is reachable by no chip, and neither are the three untyped fixture \
+             printings"
+        );
+    }
+
     /// …while every OTHER dimension does narrow by it.
     #[test]
     fn other_dimensions_do_narrow_by_the_set_filter() {
@@ -1007,6 +1275,137 @@ mod tests {
         // No blue paper printing exists in the fixture, so adding U to R changes nothing.
         let r = compute(&ix, &req(|r| r.colors = Some("R".into())), None);
         assert_eq!(r.colors.get("U").copied(), Some(r.total));
+    }
+
+    /// **Strict narrows the base**: `RW` answers the RW card alone, not the mono-R, the mono-W
+    /// or the colourless printing that fits in any deck. The loose half of the same request is
+    /// asserted beside it, because a flag with no effect passes every one-sided test.
+    #[test]
+    fn strict_colours_narrow_the_base() {
+        let conn = seeded();
+        mono_white(&conn);
+        let ix = crate::index::CardIndex::build(&conn).unwrap();
+
+        let loose = compute(&ix, &req(|r| r.colors = Some("RW".into())), None);
+        assert_eq!(
+            loose.total, 4,
+            "subset semantics: Bolt, Helix, Swords and the colourless Sol Ring"
+        );
+
+        let strict = compute(
+            &ix,
+            &req(|r| {
+                r.colors = Some("RW".into());
+                r.colors_strict = Some(true);
+            }),
+            None,
+        );
+        assert_eq!(strict.total, 1, "Helix alone");
+    }
+
+    /// **And it reaches the chip counts too, which is the half that breaks silently.**
+    /// `apply_colors` has two call sites: `base`, which filters the result set, and this
+    /// loop, which answers how big that set would be after a press. Pass the flag at `base`
+    /// alone and the search runs strict while every chip is counted loose — the counts then
+    /// describe a search nobody ran, and `facets.ts` greys on them.
+    ///
+    /// With `R` picked and strict on, pressing `W` asks for RW exactly, which is one card.
+    /// The loose answer to the same press is four, so a missing argument is a factor of four
+    /// on this one assertion rather than a rounding difference.
+    #[test]
+    fn strict_colours_reach_the_chip_counts_too() {
+        let conn = seeded();
+        mono_white(&conn);
+        let ix = crate::index::CardIndex::build(&conn).unwrap();
+
+        let loose = compute(&ix, &req(|r| r.colors = Some("R".into())), None);
+        assert_eq!(
+            loose.colors.get("W").copied(),
+            Some(4),
+            "loose RW admits mono-R, mono-W, RW and the colourless one"
+        );
+
+        let strict = compute(
+            &ix,
+            &req(|r| {
+                r.colors = Some("R".into());
+                r.colors_strict = Some(true);
+            }),
+            None,
+        );
+        assert_eq!(
+            strict.total, 1,
+            "strict R is the mono-red card, and not the colourless one"
+        );
+        assert_eq!(
+            strict.colors.get("W").copied(),
+            Some(1),
+            "pressing W under strict gives the RW cards — this is the assertion the second \
+             call site exists for"
+        );
+        assert_eq!(
+            strict.colors.get("R").copied(),
+            Some(4),
+            "and un-pressing R still clears the filter, so the way out stays live"
+        );
+    }
+
+    /// `"C"` is exact already, so strict is degenerate **on the result set** —
+    /// `CardFilters::colors_strict`'s deliberate non-special-case, mirrored here rather than
+    /// branched around.
+    ///
+    /// **Its chip counts are not degenerate, and that is not a contradiction.** Every count in
+    /// that map is the size of the result after a press, and pressing `W` on `"C"` sends
+    /// `"W"` — `toggle_colors` makes `C` exclusive both ways — which is an ordinary
+    /// single-letter request that strict narrows like any other. Only the `C` entry itself
+    /// stays put, because un-pressing it clears the filter under either mode.
+    #[test]
+    fn strict_changes_nothing_for_the_colourless_request_itself() {
+        let conn = seeded();
+        mono_white(&conn);
+        let ix = crate::index::CardIndex::build(&conn).unwrap();
+
+        let loose = compute(&ix, &req(|r| r.colors = Some("C".into())), None);
+        let strict = compute(
+            &ix,
+            &req(|r| {
+                r.colors = Some("C".into());
+                r.colors_strict = Some(true);
+            }),
+            None,
+        );
+        assert_eq!(loose.total, 1, "Sol Ring");
+        assert_eq!(
+            strict.total, loose.total,
+            "`color_identity = ''` either way"
+        );
+        assert_eq!(
+            strict.colors.get("C").copied(),
+            loose.colors.get("C").copied(),
+            "un-pressing C clears the filter, so the way out is the same size under both"
+        );
+        assert_eq!(
+            loose.colors.get("W").copied(),
+            Some(2),
+            "pressing W sends `W`, which loosely admits Swords and the colourless Sol Ring"
+        );
+        assert_eq!(
+            strict.colors.get("W").copied(),
+            Some(1),
+            "…and strictly admits the mono-white card alone — the press leaves `C` behind, so \
+             the flag is live again the moment it does"
+        );
+    }
+
+    /// Strict with no colour picked is not a filter at all — the arm lives inside the
+    /// `nonblank` guard, matching a UI that draws no strict chip until a colour is picked.
+    #[test]
+    fn strict_with_no_colour_picked_is_not_a_filter() {
+        let conn = seeded();
+        mono_white(&conn);
+        let ix = crate::index::CardIndex::build(&conn).unwrap();
+        let f = compute(&ix, &req(|r| r.colors_strict = Some(true)), None);
+        assert_eq!(f.total, 4, "every paper printing");
     }
 
     #[test]
@@ -1317,6 +1716,7 @@ mod tests {
         f.mana_x = 5;
         f.formats.insert("modern".into(), 3);
         f.rarities.insert("rare".into(), 6);
+        f.types.insert("Creature".into(), 7);
         f.sets.insert("lea".into(), 4);
         f.owned = OwnedFacets {
             owned: 1,
@@ -1331,6 +1731,10 @@ mod tests {
                 "manaX": 5,
                 "formats": {"modern": 3},
                 "rarities": {"rare": 6},
+                // Capitalised keys, unlike every other map here, because
+                // `crate::cardtypes::TYPE_KEYS` holds the words the UI sends — the rename is
+                // on the field, never on what is inside it.
+                "types": {"Creature": 7},
                 "sets": {"lea": 4},
                 "owned": {"owned": 1, "missing": 2},
                 "total": 3,
@@ -1919,6 +2323,7 @@ mod tests {
                 .collect(),
             playable: BitSet::new(cap),
             rarity: std::array::from_fn(|_| BitSet::new(cap)),
+            types: std::array::from_fn(|_| BitSet::new(cap)),
             set_ord: vec![0; cap],
             set_codes: (0..1047).map(|i| format!("s{i}")).collect(),
             owned: BitSet::new(cap),
@@ -1962,14 +2367,36 @@ mod tests {
             if d % 25 != 3 {
                 ix.rarity[(d % 4) as usize].set(d);
             }
+            // The eight types, and **neither a partition nor a cover**, which is the shape the
+            // real column has: one doc in seven carries a second type, so the counts over-read,
+            // and one in seventeen carries none at all, standing in for the `Vanguard`/`Plane`
+            // printings no chip offers. A synthetic corpus where they summed to the total would
+            // let this timing hide a bug the live one has.
+            if d % 17 != 5 {
+                ix.types[(d % 8) as usize].set(d);
+                if d % 7 == 0 {
+                    ix.types[((d + 3) % 8) as usize].set(d);
+                }
+            }
             if d % 100 == 0 {
                 ix.owned.set(d);
             }
         }
 
-        let cases: [(&str, SearchRequest); 4] = [
+        let cases: [(&str, SearchRequest); 6] = [
             ("unfiltered browse", req(|_| {})),
             ("colours (R)", req(|r| r.colors = Some("R".into()))),
+            (
+                "strict colours (RW)",
+                req(|r| {
+                    r.colors = Some("RW".into());
+                    r.colors_strict = Some(true);
+                }),
+            ),
+            (
+                "types (Creature + Land)",
+                req(|r| r.types = Some(vec!["Creature".into(), "Land".into()])),
+            ),
             (
                 "colours + mana + owned",
                 req(|r| {
