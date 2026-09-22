@@ -124,7 +124,7 @@ export const MODAL_DFC = "modal_dfc";
  * the two are not in competition: a deck is cast from the front, so Turntimber Symbiosis is a
  * seven-drop to the curve, to the average and to the type bars, and the Lands figure is the one
  * place the reader is counting *how many cards can be a land this game*. So this is a second
- * number beside that figure and never a widening of it — `Lands 38 +2 MDFC` — and nothing here
+ * number beside that figure and never a widening of it — `Lands 38+2 MDFC` — and nothing here
  * may move `lands`, `nonlands` or a bucket.
  *
  * **`layout` and never the type line alone, and that gate is measured rather than tidy.** Against

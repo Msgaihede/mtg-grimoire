@@ -626,8 +626,14 @@ export function NotesBand({
             it is honest as a figure because the heading is set in type immediately beside it and
             says what is being counted. Drawn only once the read has landed: a bare `0 notes`
             under a refused read would be a number the app does not have. */}
+        {/* **The data face since 2026-09-22**, for the reason the tokens band's own count
+            carries: a count beside a band heading was the one figure on this page still set in
+            the prose face. `plural` rather than `count` stays — that helper is where "never
+            print 1 notes" is decided, and it writes the number ungrouped on purpose. */}
         {answered && notes.length > 0 && (
-          <span className="text-xs text-dim">{plural(notes.length, "note")}</span>
+          <span className="font-mono text-xs tabular-nums text-dim">
+            {plural(notes.length, "note")}
+          </span>
         )}
 
         {/* **The band's one act, and it is in the header rather than over the list.** The add row

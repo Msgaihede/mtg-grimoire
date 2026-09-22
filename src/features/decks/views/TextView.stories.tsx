@@ -307,7 +307,7 @@ export const TheoryMatches: Story = {
         `[${THEORY_MATCH_ATTR}]:not([${THEORY_MATCH_ATTR}="unplanned"])`,
       ),
     ];
-    expect(planned.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "-1"]);
+    expect(planned.map((mark) => mark.textContent).sort()).toEqual(["", "", "+2", "−1"]);
 
     // The card that is both in the plan and breaking a rule, in one sentence.
     const both = canvas.getByRole("button", { name: new RegExp(`^${BROKEN}`) });

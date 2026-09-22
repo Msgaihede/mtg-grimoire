@@ -234,19 +234,19 @@ export function DeckLedger({
         <dt className="text-[0.6875rem] text-dim">Lands</dt>
         <dd className="font-mono text-[0.8125rem] tabular-nums">
           {count(stats.lands)}
-          {mdfc > 0 && (
-            <>
-              {/* The separator is a **sibling** text node rather than a space inside the span,
-                  which is this app's rule for the spacing between two elements: a name
-                  computation trims each element's contribution before appending it, so a `{" "}`
-                  in there would survive `textContent` and vanish from an accessible name. Nothing
-                  computes one over this `<dl>` today, so the two spellings are indistinguishable
-                  to both suites — it is written the safe way so that a surface which later does
-                  name this pair reads `38 +2 MDFC` rather than `38+2 MDFC`. */}
-              {" "}
-              <span className="text-dim">+{count(mdfc)} MDFC</span>
-            </>
-          )}
+          {/* **Tight against the figure, with no separator of any kind** — `38+2 MDFC`, which
+              is the `Cards` term's spelling one row up and now this line's only one. It read
+              `38 +2 MDFC` until 2026-09-22, against a `Cards` term that had never had the space:
+              one `<dl>`, one `<dd>` type, two spellings of *and this many more*, 26 lines apart.
+              The reader's own report is that the line looked unsettled, and it is the kind of
+              drift neither suite can see — nothing computes a name over this `<dl>`, so both
+              spellings passed every assertion this app has.
+
+              **The `+n` is the unit and the space goes outside it**, which is the idiom every
+              other tally in this editor already writes: `+3 sideboard` and `+24 inactive` in the
+              stats band, `+4 more` on a note card, `+2` on a theory mark. `MDFC` is a word rather
+              than part of the tally, so it keeps its space; the sign does not. */}
+          {mdfc > 0 && <span className="text-dim">+{count(mdfc)} MDFC</span>}
         </dd>
       </div>
       <Rule />
@@ -296,21 +296,35 @@ export function DeckLedger({
             <dt className="text-[0.6875rem] text-dim">Owned</dt>
             <dd className="font-mono text-[0.8125rem] tabular-nums">
               {count(stats.owned)}
-              {stats.missing > 0 && (
-                <span className="ml-1.5 text-[0.6875rem] text-destructive">
-                  {tight ? (
-                    <>
-                      {/* The words for a screen reader, the sign for the eye. `−3` is only
-                          legible beside the number it is short of, which is exactly what a reader
-                          hearing this line one term at a time does not have. */}
-                      <span className="sr-only">{count(stats.missing)} missing</span>
-                      <span aria-hidden="true">−{count(stats.missing)}</span>
-                    </>
-                  ) : (
-                    `${count(stats.missing)} missing`
-                  )}
-                </span>
-              )}
+              {/* The third tally on this line, and since 2026-09-22 it is set the way the other
+                  two are rather than by a mechanism of its own. It carried an `ml-1.5` — a 6px
+                  CSS margin with no text node — while `Cards` used nothing and `Lands` used a
+                  `{" "}`, so one `<dl>` drew three tallies three ways. The margin is gone and
+                  each branch says in text exactly what it wants.
+
+                  **The sign branch is tight**, `103−3`, which is `100+3` with the other sign:
+                  one headline figure and one dim signed tally, no gap to read across. **The word
+                  branch takes a real space**, and a sibling one — `src/CLAUDE.md`'s rule, and the
+                  `Missing2` bug it names: a name computation trims each element's contribution
+                  before appending it, so the margin was drawing `103 3 missing` for the eye and
+                  concatenating `1033 missing` for anything reading the text. */}
+              {stats.missing > 0 &&
+                (tight ? (
+                  <span className="text-[0.6875rem] text-destructive">
+                    {/* The words for a screen reader, the sign for the eye. `−3` is only
+                        legible beside the number it is short of, which is exactly what a reader
+                        hearing this line one term at a time does not have. */}
+                    <span className="sr-only">{count(stats.missing)} missing</span>
+                    <span aria-hidden="true">−{count(stats.missing)}</span>
+                  </span>
+                ) : (
+                  <>
+                    {" "}
+                    <span className="text-[0.6875rem] text-destructive">
+                      {count(stats.missing)} missing
+                    </span>
+                  </>
+                ))}
             </dd>
           </div>
         </>

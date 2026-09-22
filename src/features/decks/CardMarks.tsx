@@ -420,7 +420,7 @@ export const THEORY_UNPLANNED_LABEL = "Not in the theory list";
  * one screen down: a caller that has not thought about which tier this row is in must not be able
  * to word a green sentence over a substitute printing.
  *
- * The count is the second. The mark itself is two characters (`+2`, `-8`) and a sign is not a
+ * The count is the second. The mark itself is two characters (`+2`, `−8`) and a sign is not a
  * word: "to add" and "to remove" are what the glyph means, and they are the only part of it a
  * reader who cannot see the mark gets. Said here rather than at the three call sites for
  * {@link THEORY_MATCH_LABEL}'s reason.
@@ -454,16 +454,25 @@ export function theoryMatchLabel(tier: TheoryTier, delta: number): string {
 }
 
 /**
- * The difference as the two or three characters the mark draws — `+2`, `-8` — where the sign is
- * the **action**: `+2` is two copies to add, `-8` is eight to remove (`theoryMatch.ts` has why).
+ * The difference as the two or three characters the mark draws — `+2`, `−8` — where the sign is
+ * the **action**: `+2` is two copies to add, `−8` is eight to remove (`theoryMatch.ts` has why).
  *
- * ASCII `+` and `-`, never `−` or `–`: this is set in the tag's `tabular-nums` mono face beside a
- * quantity drawn in the same one, and the typographic minus is not in that face's fixed-advance
- * run — so a `-8` and a `+2` in one deck would be different widths in a box whose whole job is to
- * be the same width as the tag opposite it.
+ * **U+2212 MINUS SIGN, never ASCII `-` and never `–`** — and this reverses what stood here until
+ * 2026-09-22, on a measurement rather than an argument. The claim was that the typographic minus
+ * is outside the mono face's fixed-advance run, so a `−8` and a `+2` in one deck would be
+ * different widths in a box whose whole job is to match the tag opposite it. **It is not true of
+ * this app's face.** Measured in the shipped window (`tauri dev`, debug, 2026-09-22) against a
+ * live `font-mono tabular-nums` element at 13px: `+`, `-`, `−`, `0` and `8` every one of them
+ * **7.813px**, and `document.fonts.check` covers U+2212 in `Geist Mono Variable`. A monospace
+ * face's whole promise is that advance, and the minus is inside it.
+ *
+ * What the ASCII hyphen cost was the other kind of alignment: it is a short mark sitting low,
+ * beside a `+` whose bar is centred on the digits' x-height — so the mark's two states were two
+ * different heights on the same card. `−` is the `+` without its stem, which is what puts the
+ * ledger's own `−{missing}` and this mark in one vocabulary.
  */
 export function theoryDeltaText(delta: number): string {
-  return delta > 0 ? `+${delta}` : `${delta}`;
+  return delta > 0 ? `+${delta}` : `−${Math.abs(delta)}`;
 }
 
 /**
@@ -600,7 +609,7 @@ const THEORY_PAINT: Readonly<Record<TheoryTier, { fill: string; fg: string }>> =
  *
  * ## A card the plan asks for a *different number* of says the difference instead of the tick
  *
- * `+2` where the live list is two copies short of the plan, `-8` where it holds eight too many —
+ * `+2` where the live list is two copies short of the plan, `−8` where it holds eight too many —
  * the sign is what to *do*, add or remove — in the same box and the tier's own colour
  * ([issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212) put the number here, and
  * [issue #400](https://github.com/Msgaihede/mtg-grimoire/issues/400) turned its sign round on
@@ -762,7 +771,7 @@ export function TheoryMatchMark({
       )}
     >
       {/* **The number replaces the tick rather than joining it** (issue #212). A tick beside a
-          `-8` would be a mark saying "this is the card you planned" next to one saying "and you
+          `−8` would be a mark saying "this is the card you planned" next to one saying "and you
           have eight too many" — two clauses of one sentence in a 25px box, at the end of a strip
           whose other mark is already a number. The tick is what the *matching* card wears, and
           the difference is what a card that does not match wears instead.
@@ -838,7 +847,7 @@ export function TheoryMatchMark({
  * Issue #212 is written about the card face, where the mark is a badge beside a quantity badge.
  * These two views draw a **quantity column** instead, so the shortfall is arguably already
  * answerable by reading a number the reader would have to hold the plan in their head to compare
- * against — which is exactly the work the mark exists to save. So `+2` and `-8` are drawn here as
+ * against — which is exactly the work the mark exists to save. So `+2` and `−8` are drawn here as
  * well, in the tier's own colour, and the rule stays one rule across all four views: a tick is the
  * card that matches, a signed number is the card that does not.
  *
