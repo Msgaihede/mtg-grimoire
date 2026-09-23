@@ -430,7 +430,7 @@ describe("CARD_TYPES and typesParam", () => {
 });
 
 /**
- * The `Exactly` chip and the type chips, whose whole risk is the query key — the X chip's risk
+ * The `Exact` toggle and the type chips, whose whole risk is the query key — the X chip's risk
  * one row over, and the reason that block above is the template for this one.
  *
  * `WU` and `WU` strict are two different sets of cards against the same local SQLite, so a key
@@ -439,7 +439,7 @@ describe("CARD_TYPES and typesParam", () => {
  * "the chip does nothing". A new request having gone out at all is therefore the assertion, and
  * the payload is read off that request rather than off a re-render.
  */
-describe("the Exactly chip and the type chips", () => {
+describe("the Exact toggle and the type chips", () => {
   beforeEach(() => {
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
@@ -509,12 +509,19 @@ describe("the Exactly chip and the type chips", () => {
   });
 
   /**
-   * **Clearing the last colour clears strict**, which is the rule that keeps the flag from
-   * surviving as state with no control. The `Exactly` chip is only drawn while a colour is
-   * picked, so a flag left standing over an empty row would be invisible to the reader, still in
-   * the query key, and still waiting to change what the next colour they press means.
+   * **Clearing the last colour leaves strict standing, and takes it off the wire** — the two
+   * halves of what replaced the old clearing rule, asserted together because either alone is the
+   * bug the other prevents.
+   *
+   * Until 2026-09-23 the last colour leaving turned the flag off, because the `Exactly` chip was
+   * drawn only while a colour was picked and a flag over an empty row would have been state with
+   * no control. The `Exact` toggle lives in the tray now and is always drawn, so clearing the
+   * colours would flip a control the reader can see — which is why `toggleColorFilter` leaves it
+   * alone. What stops it being a filter nobody asked for is `strictParam`: strict over an empty
+   * colour row cannot narrow anything (the backend's arm is inside its own `nonblank` guard), so
+   * it rides only with the letters and the key does not churn on a press that changes nothing.
    */
-  it("turns strict off when the last colour goes", async () => {
+  it("keeps strict on when the last colour goes, and stops sending it", async () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 
@@ -522,17 +529,44 @@ describe("the Exactly chip and the type chips", () => {
     act(() => result.current.toggleColor("U"));
     act(() => result.current.toggleColorsStrict());
     expect(result.current.colorsStrict).toBe(true);
+    await waitFor(() => expect(lastSearchRequest().colorsStrict).toBe(true));
 
-    // One colour left: the chip is still drawn, so the flag stays.
+    // One colour left: the flag still has letters to modify, so it still rides.
     act(() => result.current.toggleColor("U"));
     expect(result.current.colors).toEqual(["W"]);
     expect(result.current.colorsStrict).toBe(true);
+    await waitFor(() => expect(lastSearchRequest().colorsStrict).toBe(true));
 
     act(() => result.current.toggleColor("W"));
 
+    // The control still says what the reader set…
     expect(result.current.colors).toEqual([]);
-    expect(result.current.colorsStrict).toBe(false);
+    expect(result.current.colorsStrict).toBe(true);
+    // …and the request no longer carries a modifier with nothing to modify.
     await waitFor(() => expect(lastSearchRequest().colorsStrict).toBeUndefined());
+    await waitFor(() => expect(lastFacetRequest().colorsStrict).toBeUndefined());
+  });
+
+  /**
+   * The other end of `strictParam`, and the reason it is a gate rather than a tidy-up: pressing
+   * `Exact` over an empty colour row must not cost a round trip.
+   *
+   * The toggle is always on screen now, so this is a press a reader can make on the row the app
+   * opens with. It cannot change the wall — nothing is filtered at either end — so a key that
+   * moved would be a spinner and the same cards back.
+   */
+  it("keys the same search when Exact is pressed with no colour picked", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const asked = searchCards.mock.calls.length;
+    const key = result.current.searchKey;
+
+    act(() => result.current.toggleColorsStrict());
+
+    expect(result.current.colorsStrict).toBe(true);
+    expect(result.current.searchKey).toBe(key);
+    expect(searchCards.mock.calls.length).toBe(asked);
+    expect(lastSearchRequest().colorsStrict).toBeUndefined();
   });
 
   /**

@@ -78,7 +78,7 @@ export const COLLECTION_FIRST_DIR: Record<CollectionSortKey, SortDir> = {
 export interface CollectionFilterState {
   text: string;
   format: string;
-  /** The colour chips. **The `Exactly` chip beside them is deliberately not a field here** — it
+  /** The colour chips. **The tray's `Exact` toggle is deliberately not a field here** — it
    *  modifies what a picked colour means rather than being a filter of its own, so counting it
    *  would move the number on Reset all over a press that narrowed nothing new. The search's
    *  `FilterState` carries the same omission and the same argument. */
@@ -179,7 +179,7 @@ export function useCollection() {
   const { marketplace } = useMarketplace();
   const [text, setText] = useState("");
   const [format, setFormat] = useState("");
-  // **One state for the row and its `Exactly` flag, not two** — see {@link ColorFilter}, which
+  // **One state for the row and its `Exact` flag, not two** — see {@link ColorFilter}, which
   // is shared with the other three hooks that own a colour filter and carries the reason.
   // `CollectionFilterState` still has no field for the flag: it is a modifier on the row rather
   // than a filter of its own, so it is counted by no `activeFilterCount`.
@@ -256,6 +256,14 @@ export function useCollection() {
   }, [text]);
 
   const colorsParam = colorParam(colors);
+  /**
+   * **The flag only rides with the letters** — `useCardSearch`'s `strictParam`, same rule and same
+   * reason. Strict over an empty colour row filters nothing (the backend's arm is inside its own
+   * `nonblank` guard), and the `Exact` toggle in the tray is always drawn, so a reader can press
+   * it with no colour picked. Without this gate that press would mint a second query key for a
+   * list that cannot differ.
+   */
+  const strictParam = colorsStrict && colorsParam !== undefined;
   // Every multi-select is canonicalised before it reaches the key: picking two finishes in
   // either order is the same set of rows and must not cost a second round trip. Ordered by
   // the app's own vocabulary rather than alphabetically, so the request reads the way the
@@ -293,7 +301,7 @@ export function useCollection() {
     // Absent rather than `false` when the chip is off, which is the rule every optional filter
     // on this payload follows: `false` on the wire reads as "the reader chose loose" where they
     // chose nothing at all.
-    colorsStrict: colorsStrict || undefined,
+    colorsStrict: strictParam || undefined,
     sets: setsParam,
     types: typesParamValue,
     manaValues: manaParam,
@@ -366,7 +374,7 @@ export function useCollection() {
     // down: `WU` loose and `WU` strict are two different sets of rows over the same local
     // SQLite, so a key built from the letters alone would serve the strict press out of the
     // loose list's cached pages — instantly, with nothing on screen to notice.
-    colorsStrict ? "strict" : "",
+    strictParam ? "strict" : "",
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
     manaParam?.join(",") ?? "",
@@ -474,10 +482,11 @@ export function useCollection() {
     formats: FORMATS,
     colors,
     // A functional updater, so a batch of presses composes, and clearing the last colour clears
-    // `Exactly` — one rule in {@link toggleColorFilter}, shared by all four hooks.
+    // `Exact` — one rule in {@link toggleColorFilter}, shared by all four hooks, and the
+    // clearing rule it used to carry is written down there too.
     toggleColor: (key: ColorKey) => setColorFilter((s) => toggleColorFilter(s, key)),
     /** Read the colour row as "exactly these colours" rather than "at least these" — the
-     *  `Exactly` chip. A modifier on the row rather than a filter beside it, which is why
+     *  tray's `Exact` toggle. A modifier on the row rather than a filter beside it, which is why
      *  {@link activeFilterCount} never sees it and why `resetAll` clears it anyway. */
     colorsStrict,
     toggleColorsStrict: () => setColorFilter((s) => ({ ...s, strict: !s.strict })),

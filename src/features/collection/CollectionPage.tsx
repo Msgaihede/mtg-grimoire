@@ -662,6 +662,7 @@ const TABLE_FLOOR = 680;
  * because that cell is the deck editor's Collection tab and asks about one deck.
  */
 const COLLECTION_TRAY: readonly TrayCell[] = [
+  "exact",
   "set",
   "format",
   "rarity",

@@ -339,7 +339,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
    * every one of the three lists, which is what makes this state-only work rather than a
    * schema change.
    */
-  // **One state for the row and its `Exactly` flag, not two** — see {@link ColorFilter}, which
+  // **One state for the row and its `Exact` flag, not two** — see {@link ColorFilter}, which
   // is shared with the other three hooks that own a colour filter and carries the reason. The
   // flag stays out of the `activeFilterCount` call below: it is a modifier on the row rather
   // than a filter of its own.
@@ -386,6 +386,14 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   // `useCollection` does it: a key built from the press order would miss the cache every time the
   // reader picked the same two colours in the other order.
   const colorsParam = colorParam(colors);
+  /**
+   * **The flag only rides with the letters** — `useCardSearch`'s `strictParam`, same rule and same
+   * reason. Strict over an empty colour row filters nothing (the backend's arm is inside its own
+   * `nonblank` guard), and the `Exact` toggle in the tray is always drawn, so a reader can press
+   * it with no colour picked. Without this gate that press would mint a second query key for a
+   * list that cannot differ.
+   */
+  const strictParam = colorsStrict && colorsParam !== undefined;
   const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
   // Sorted for the key's sake, like the mana values above: a picker's press order is not a fact
   // about the filter, and an unsorted array would be a second cache entry for one answer.
@@ -418,7 +426,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     // Absent rather than `false` when the chip is off, the rule every optional filter on this
     // payload follows: `false` on the wire reads as "the reader chose loose" where they chose
     // nothing at all.
-    colorsStrict: colorsStrict || undefined,
+    colorsStrict: strictParam || undefined,
     sets: setsParam,
     types: typesParamValue,
     rarities: raritiesParam,
@@ -485,7 +493,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     // `WU` strict are two different sets of rows over the same local SQLite, so a key built from
     // the letters alone would serve the strict press out of the loose list's cached pages —
     // instantly, with nothing in this column to notice.
-    colorsStrict ? "strict" : "",
+    strictParam ? "strict" : "",
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
     raritiesParam?.join(",") ?? "",
@@ -592,10 +600,11 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     /** `toggleColor` rather than a plain `toggleIn`, so **C excludes the five and the five exclude
      *  C** — colourless is not a sixth colour and the search's own rule is the one to keep. */
     // A functional updater, so a batch of presses composes, and clearing the last colour clears
-    // `Exactly` — one rule in {@link toggleColorFilter}, shared by all four hooks.
+    // `Exact` — one rule in {@link toggleColorFilter}, shared by all four hooks, and the
+    // clearing rule it used to carry is written down there too.
     toggleColor: (key: ColorKey) => setColorFilter((s) => toggleColorFilter(s, key)),
     /** Read the colour row as "exactly these colours" rather than "at least these" — the
-     *  `Exactly` chip. A modifier on the row rather than a filter beside it, which is why the
+     *  tray's `Exact` toggle. A modifier on the row rather than a filter beside it, which is why the
      *  `activeCount` below never sees it and why `resetAll` clears it anyway. */
     colorsStrict,
     toggleColorsStrict: () => setColorFilter((s) => ({ ...s, strict: !s.strict })),
@@ -686,7 +695,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
      * the reader has, so it is not a question this list can ask.
      *
      * **`colorsStrict` is not passed either, and that is a third reason again**: it is not a
-     * field of `FilterState` at all. The `Exactly` chip modifies what a picked colour means
+     * field of `FilterState` at all. The `Exact` toggle modifies what a picked colour means
      * rather than being a filter beside it, so a badge that counted it would move for a press
      * that narrowed nothing new.
      */

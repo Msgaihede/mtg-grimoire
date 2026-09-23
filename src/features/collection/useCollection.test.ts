@@ -259,7 +259,7 @@ describe("useCollection", () => {
   });
 
   /**
-   * The `Exactly` chip and the type chips, end to end — the X chip's test one row over, and for
+   * The `Exact` toggle and the type chips, end to end — the X chip's test one row over, and for
    * its reason.
    *
    * The key is the half that fails silently: `R` loose and `R` strict are two different sets of
@@ -302,13 +302,15 @@ describe("useCollection", () => {
     act(() => result.current.toggleType("Land"));
     await waitFor(() => expect(lastQuery().types).toEqual(["Creature", "Land"]));
 
-    // **Clearing the last colour clears strict**, so the flag can never survive as state the
-    // filter bar draws no control for — the `Exactly` chip is only rendered while a colour is
-    // picked, and an invisible flag would still be in the key above.
+    // **Clearing the last colour leaves strict standing and takes it off the wire.** It used to
+    // clear the flag, because the `Exactly` chip was only rendered while a colour was picked; the
+    // `Exact` toggle is in the tray and always drawn now, so clearing the colours would flip a
+    // control the reader can see. `strictParam` is what keeps a modifier with nothing to modify
+    // out of the key above.
     act(() => result.current.toggleColor("R"));
 
     expect(result.current.colors).toEqual([]);
-    expect(result.current.colorsStrict).toBe(false);
+    expect(result.current.colorsStrict).toBe(true);
     await waitFor(() => expect(lastQuery().colorsStrict).toBeUndefined());
   });
 

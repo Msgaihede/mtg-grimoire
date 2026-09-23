@@ -100,6 +100,19 @@ export const SEARCH_SORT_ROWS: readonly {
  * the caller owns *which* filters it offers.
  */
 export type TrayCell =
+  /**
+   * The colour row's **reading** — `Exact` — and not the colour chips, which are on the bar at
+   * every width and behind no disclosure.
+   *
+   * It is the one cell every surface can always answer, because `colorsStrict` is above the line
+   * on {@link FilterSurface}. It is a named cell anyway rather than something `FilterTray` draws
+   * unconditionally, for this type's own rule: what the tray holds is the caller's list, so a
+   * surface that grew a filter bar and did not think about this one shows nothing rather than a
+   * control that appeared because a required field happened to be there. All four lists name it,
+   * and name it **first** — it modifies the leftmost group on the bar directly above, so the
+   * modifier opens under the hand that just pressed a colour.
+   */
+  | "exact"
   | "set"
   | "format"
   | "owned"
@@ -117,6 +130,7 @@ export type TrayCell =
 /** What the card search offers, which is every cell there is. The default, so the two surfaces
  *  that draw the whole tray say nothing. */
 export const SEARCH_TRAY: readonly TrayCell[] = [
+  "exact",
   "set",
   "format",
   "owned",
@@ -194,8 +208,11 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
    * at every width and on every surface — and a flag that modifies them has exactly the same
    * reach. Nothing here is a capability one backend has and another does not.
    *
-   * Degenerate for `"C"`, which already means colourless-only in both modes; and a `true` with
-   * no colour picked filters nothing, which is why the chip is not drawn until one is.
+   * Degenerate for `"C"`, which already means colourless-only in both modes; and a `true` with no
+   * colour picked filters nothing. That last one **used** to be why the chip was not drawn until
+   * a colour was picked, and since 2026-09-23 it is a state the reader can simply be in: the
+   * `"exact"` tray cell is always drawn, and each hook's `strictParam` is what keeps a flag with
+   * no letters behind it off the wire.
    */
   colorsStrict: boolean;
   toggleColorsStrict: () => void;
@@ -404,8 +421,14 @@ function activeChips<SortKey extends string>(
       // is one chip per kind: strict is not a filter, it is which reading the colour filter gets,
       // and a chip of its own would put a second entry under a badge that still counted one. The
       // word is in the sentence `Colour: exactly White, Blue` because that is the filter said
-      // out loud — and it is what the × has to take off along with the colours, or clearing the
-      // statement would leave a flag behind with no control on screen to see it by.
+      // out loud — and it is what the × takes off along with the colours, because **the chip
+      // names the reading**: an undo that left the word it had just printed standing would be
+      // the statement and its own × disagreeing about what was cleared.
+      //
+      // **That is not the rule `toggleColorFilter` dropped**, and the difference is worth
+      // holding. Unpressing the last colour chip is a press about one colour, so it leaves the
+      // reading alone; pressing this × is a press on a sentence with `exactly` in it. One is an
+      // incidental emptying of the row, the other is the reader clearing what they can read.
       label: `Colour: ${search.colorsStrict ? "exactly " : ""}${MANA_KEYS.filter((k) =>
         search.colors.includes(k),
       )
@@ -949,7 +972,7 @@ export function FilterBar<SortKey extends string>({
             //
             // **Which way a press moves is now the reader's choice**, which is why this stays
             // "after the press" rather than becoming a direction: loose, `colors` is subset
-            // semantics and pressing a chip with another already on *broadens*; with `Exactly`
+            // semantics and pressing a chip with another already on *broadens*; with `Exact`
             // on it *narrows*. `colorDisabled` needs no branch on the mode — the backend
             // counted under whichever one the request carried.
             disabled={colorDisabled(
@@ -962,33 +985,13 @@ export function FilterBar<SortKey extends string>({
           />
         ))}
 
-        {/* **Only once a colour is picked.** Strict with nothing picked filters nothing — the
-            backend's arm is inside its own `nonblank` guard — so an always-drawn chip would be a
-            dead control, and a sixth chip in this group competing for the deck panel's 206px
-            floor, which is the width the `flex-wrap` above exists for. The reflow on the first
-            colour press is what that buys, and it is the cheaper of the two.
-
-            **Not in `activeFilterCount`, and that is the hook's decision this chip depends on:**
-            it modifies the colour filter rather than being one, so a Reset all caption that moved
-            when nothing new was filtered would be counting the wrong thing. The strip states it
-            as a word inside the colour chip for the same reason.
-
-            It carries no facet count. `colorDisabled` asks "would pressing this broaden", which
-            is the question subset semantics poses; strict asks the opposite of it, and a count
-            answered by the loose facets would be the one number on this row that described a
-            different search from the one the press makes. */}
-        {search.colors.length > 0 && (
-          <ToggleChip
-            label="Exactly"
-            pressed={search.colorsStrict}
-            title={
-              search.colorsStrict
-                ? "Exactly — cards whose colour identity is exactly these colours"
-                : "Exactly — cards whose colour identity fits within these colours"
-            }
-            onClick={search.toggleColorsStrict}
-          />
-        )}
+        {/* **`Exact` used to be a sixth chip in this group, and it is the tray's `"exact"` cell
+            since 2026-09-23.** It was drawn only once a colour was picked, which made it a
+            control that came and went under the reader's hand and cost the group a reflow on the
+            first colour press; the tray has a caption to hang it under and room it does not have
+            to win from five colour chips at the deck panel's 206px floor. What did not move is
+            the axis: the group below is still the colour filter and this one is still the reading
+            it gets. */}
       </div>
 
       {/* The empty flex item that pushes everything after it to the right end of its line. At
@@ -1728,6 +1731,47 @@ function FilterTray<SortKey extends string>({
     ...formatOptions.map((f) => ({ value: f.value, label: f.label, disabled: f.disabled })),
   ];
   const drawn: Record<TrayCell, ReactNode> = {
+    /* **The reading the colour chips on the bar get, and the only cell here about a control that
+       is not in this tray.** Loose is the default and the deckbuilder's question: `RW` answers
+       mono-R, mono-W, RW and every colourless card, because a colourless card fits in any deck.
+       Pressed, the same row is exact-set equality and answers the RW cards alone.
+
+       **Always drawn, which is what it was moved here to be.** It was a sixth chip in the colour
+       group until 2026-09-23 and was rendered only while a colour was picked — a control that
+       came and went under the reader's hand, and one they had to press a colour to discover. The
+       cost of the move is the honest one: strict over an empty colour row filters nothing, so the
+       toggle can now be on over a row it changes nothing about. Each hook's `strictParam` is what
+       keeps that from reaching the wire, and `toggleColorFilter` no longer clears the flag with
+       the last colour, because a visible toggle that flips itself is worse than a dead one.
+
+       **Never greyed and carrying no facet count**, unlike every other chip in this tray.
+       `colorDisabled` asks "would pressing this broaden", which is the question subset semantics
+       poses; strict asks the opposite of it, so a count answered by the loose facets would
+       describe a different search from the one the press makes.
+
+       **Not in `activeFilterCount`, and that is the hook decision this cell depends on:** it
+       modifies the colour filter rather than being one, so a Reset all caption that moved when
+       nothing new was filtered would be counting the wrong thing. The strip under the bar states
+       it as a word inside the colour chip — `Colour: exactly White, Blue` — for the same reason.
+
+       The `hint` folds into the accessible name, so the visible word still leads it (WCAG 2.5.3),
+       and it is what the one-word label cannot say: which of the two readings is on. */
+    exact: (
+      <TrayField key="exact" label="Colour">
+        <ToggleChip
+          label="Exact"
+          pressed={search.colorsStrict}
+          title={
+            search.colorsStrict
+              ? "Exact — cards whose colour identity is exactly these colours"
+              : "Exact — cards whose colour identity fits within these colours"
+          }
+          onClick={search.toggleColorsStrict}
+          className="w-full"
+        />
+      </TrayField>
+    ),
+
     set: (
       <TrayField key="set" label="Set">
           {/* `align="start"`: the picker sits at the left edge of a tray that is itself as wide
