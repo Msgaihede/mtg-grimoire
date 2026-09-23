@@ -798,23 +798,23 @@ export const TagBesideFreeText: Story = {
 };
 
 /**
- * **`Exactly` — the reading the five colour chips beside it get.**
+ * **`Exact` — the reading the five colour chips on the bar get, in the tray's first cell.**
  *
  * Loose is the default and the deckbuilder's question: two colours picked answer mono-R, mono-W,
  * RW *and* the colourless cards that fit in any deck. Pressed, the row reads "exactly these
  * colours" and answers the two-colour cards alone.
  *
- * **It is not drawn at all until a colour is picked**, which is why every other story on this
- * page has five chips in that group and this one has six. Strict with nothing picked filters
- * nothing at either end, so an always-drawn chip would be a dead control on the row a reader
- * opens the app to — and a sixth chip competing for the docked panel's 206px floor, which is the
- * width that group's `flex-wrap` exists for. The reflow on the first colour press is what that
- * buys.
+ * **It was a sixth chip in the colour group until 2026-09-23, drawn only once a colour was
+ * picked.** Which meant a reader had to press a colour to discover the control that says what
+ * pressing a colour means, and the group reflowed under their hand when they did. The tray has a
+ * caption to hang it under and room it does not have to win from five colour chips at the docked
+ * panel's 206px floor — so every story on this page has five chips in that group now, this one
+ * included, and the sixth is a cell behind the disclosure.
  *
  * **The badge still reads 1.** Strict modifies the colour filter rather than being one, so
  * `activeFilterCount` does not count it; what says it is on is the word inside the chip under the
  * rule — `Colour: exactly White, Blue` — and pressing that chip's × takes the flag off with the
- * colours it was about.
+ * colours it was about, because that chip is the one thing on screen that *names* the reading.
  */
 export const StrictColours: Story = {
   args: {
@@ -826,15 +826,23 @@ export const StrictColours: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // `findBy`, because the preset lands in an effect — and on the *pressed* chip's own sentence,
-    // so this resolves against the strict row rather than the loose one it passes through.
-    const chip = await canvas.findByRole("button", {
-      name: "Exactly — cards whose colour identity is exactly these colours",
+    // The colour group is five chips again — the assertion the move is actually about, and the
+    // one a query for the toggle by name cannot make.
+    await expect(
+      within(canvas.getByRole("group", { name: "Color identity" })).queryByRole("button", {
+        name: /^Exact\b/,
+      }),
+    ).toBeNull();
+
+    await openTray(canvas);
+    // `findBy`, because the preset lands in an effect — and on the *pressed* toggle's own
+    // sentence, so this resolves against the strict row rather than the loose one it passes
+    // through.
+    const toggle = await canvas.findByRole("button", {
+      name: "Exact — cards whose colour identity is exactly these colours",
     });
-    await expect(chip).toHaveAttribute("aria-pressed", "true");
-    // In the colour group, not merely somewhere on the row: a chip about the colours that had
-    // drifted out of them would read as a filter of its own.
-    await expect(canvas.getByRole("group", { name: "Color identity" })).toContainElement(chip);
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+
     // One kind on, said twice and counted once — the whole of why this is not a chip of its own.
     await expect(
       canvas.getByRole("button", { name: "Remove filter — Colour: exactly White, Blue" }),

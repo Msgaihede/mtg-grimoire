@@ -156,8 +156,8 @@ using it.
   (release, synthetic corpus, and already a floor since the `mana_x` overlay), and nobody has
   re-run it.
 - **Strict colours have no dimension of their own — they change what `apply_colors` means, and
-  that function has two call sites.** The chip is a *modifier* on the colour filter rather than a
-  filter beside it, so `FacetResponse` grows no field for it and `Skip` grows no variant: the
+  that function has two call sites.** The tray’s `Exact` toggle is a *modifier* on the colour filter
+  rather than a filter beside it, so `FacetResponse` grows no field for it and `Skip` grows no variant: the
   request carries `colorsStrict` and every base computed under it is narrower. The mirror is the
   usual one — `index/facets.rs` holds a second implementation of `push_card_filters`' colour arm
   and the module doc says the two are one contract — so `apply_colors` gains the picked letters as

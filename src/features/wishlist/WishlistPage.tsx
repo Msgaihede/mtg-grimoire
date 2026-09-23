@@ -321,7 +321,14 @@ const WISHLIST_LABELS: FilterLabels = { idStem: "wishlist", search: "Search your
 // `fulfilled` sat between `rarity` and `needsReview` until 2026-09-08 — the Fulfilled / Still
 // missing pair, which asked the backend which wishes the collection already covered. It went with
 // every other comparison this list made against the binder.
-const WISHLIST_TRAY: readonly TrayCell[] = ["set", "format", "rarity", "type", "needsReview"];
+const WISHLIST_TRAY: readonly TrayCell[] = [
+  "exact",
+  "set",
+  "format",
+  "rarity",
+  "type",
+  "needsReview",
+];
 
 export function WishlistPage() {
   const wishlist = useWishlist();

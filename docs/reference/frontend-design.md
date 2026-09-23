@@ -2299,43 +2299,95 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     deck editor's docked panel at its `MIN_PANEL_WIDTH_PX` floor of **206** — a self-explaining
     label would be paid for in that column at every width.
 
-- **`Exactly` is a sixth chip in the colour group that is not a sixth colour** (2026-09-22, with
-  strict colour matching). Every colour filter in the app reads `color_identity` as a *subset* —
-  `RW` answers mono-R, mono-W, RW and every colourless card, because a colourless card fits in
-  any deck — and this chip switches the same row to exact-set equality, so `RW` answers the RW
-  cards alone. The axis does not move: the group is still `aria-label="Color identity"`, and one
-  chip row reading two different columns depending on a toggle is a control that lies.
-  - **It is drawn only once a colour is picked, and clearing the last colour turns it off.**
-    Three things buy that, in descending order of how much they matter. Strict with nothing picked
-    filters nothing — the backend's arm sits inside its own `nonblank` guard — so an always-drawn
-    chip would be a dead control. A flag surviving an empty colour row would be **state with no
-    control on screen**, invisible and still in the React Query key. And it would be a sixth chip
-    competing for the deck panel's 206px floor, which is the width this group's `flex-wrap` exists
-    for. What it costs is a reflow on the first colour press, which is the cheaper failure.
-  - **It is deliberately not in `activeFilterCount`, and that is the decision the chip depends
+- **`Exact` is the tray's first cell, and it is a reading rather than a filter** (2026-09-22 with
+  strict colour matching, moved into the tray and renamed on 2026-09-23). Every colour filter in
+  the app reads `color_identity` as a *subset* — `RW` answers mono-R, mono-W, RW and every
+  colourless card, because a colourless card fits in any deck — and this toggle switches the same
+  row to exact-set equality, so `RW` answers the RW cards alone. The axis does not move: the group
+  on the bar is still `aria-label="Color identity"`, and one chip row reading two different
+  columns depending on a toggle is a control that lies.
+  - **It shipped as a sixth chip in the colour group, drawn only once a colour was picked, and
+    that is what the move undid.** The old arrangement bought three things and the argument for
+    each still holds on its own: strict with nothing picked filters nothing — the backend's arm
+    sits inside its own `nonblank` guard — so an always-drawn chip in that group would be a dead
+    control; a flag surviving an empty colour row would be state with no control on screen; and a
+    sixth chip competed for the deck panel's 206px floor, which is the width the group's
+    `flex-wrap` exists for. What none of them priced is the reader: the control that says *what
+    pressing a colour means* could only be discovered by pressing a colour first, and the group
+    reflowed under their hand when they did. **The tray answers all three differently rather than
+    accepting the cost** — it has a caption to hang the word under, a cell's width instead of a
+    contested line, and a wire gate in place of the disappearance.
+  - **`toggleColorFilter` no longer clears the flag with the last colour; `strictParam` keeps it
+    off the wire instead.** That is the whole of the swap, and it is one rule traded for another
+    rather than a rule dropped. A control the reader is looking straight at must not flip itself,
+    so clearing the colours leaves the toggle where they set it; and a modifier with nothing to
+    modify must not mint a React Query key for a wall that cannot differ, so each of the four
+    hooks derives `colorsStrict && colorsParam !== undefined` and sends *that*. The two values
+    differ on exactly one state — on, with nothing picked — which is the state that means nothing.
+    **The old rule's own reason is what dated it**: `ColorFilter`'s doc said the flag could not be
+    stranded because *the chip is only drawn while a colour is picked*, and that premise died with
+    the chip. The batching bug behind putting both fields in one `useState` is unrelated and still
+    written down there.
+  - **It is deliberately not in `activeFilterCount`, and that is the decision the cell depends
     on.** That number captions `Reset all` and answers *how much would pressing this change*.
     Strict modifies the colour filter rather than being one, so counting it would move the caption
     when nothing new was filtered — a badge reading `Filters · 2` over one narrowed axis. The same
     omission is in each hook's `unfiltered` guard, for the same reason: the `Unplayable` entry
     directly above is where those two numbers first disagreed about one value, and this is the
-    second case.
+    second case. The move makes that *more* true, not less: on with no colour picked is exactly a
+    press that changed nothing.
   - **It rides the stated-filter strip as a word inside the colour chip, never a chip of its
     own.** The strip is one entry per *kind*, so a second chip would put two entries under a badge
     still counting one. `Colour: exactly White, Blue` is the filter said out loud, and the `×`
-    clears the flag alongside the colours — otherwise clearing the statement leaves the flag
-    behind with nothing on screen to see it by.
-  - **It carries no facet count, and that is a refusal rather than an omission.** `colorDisabled`
-    greys a chip whose count is `0` **or equals `total`**, and that second arm exists because
-    loose colours *broaden*. Strict asks the opposite question, so a count answered by the loose
-    facets would be the one number on this row describing a different search from the one the
-    press makes. [search-faceting.md](search-faceting.md) has the rest, including the two
-    `apply_colors` call sites that decide whether the neighbouring counts are computed under the
-    active mode at all.
-  - **The label is repeated into the `title`**, which reads `Exactly — cards whose colour
-    identity is exactly these colours` and flips its second half when the chip is off.
-    `ToggleChip` sets `aria-label={title ?? …}`, so a `title` **replaces** the visible label in
-    the accessible name rather than joining it — a sentence that never said the word "Exactly"
-    would be a label-in-name failure (WCAG 2.5.3) on a chip whose whole visible text is that word.
+    clears the flag alongside the colours — **because that chip is the one thing on screen that
+    names the reading**, so an undo leaving the word it had just printed standing would be the
+    statement and its own `×` disagreeing about what was cleared. That is not the rule
+    `toggleColorFilter` dropped and the two must not be folded together: unpressing the last
+    colour chip is a press about one colour, this is a press on a sentence with `exactly` in it.
+  - **It carries no facet count and is never greyed, which is a refusal rather than an omission**
+    — and the only cell in the tray that takes neither. `colorDisabled` greys a chip whose count
+    is `0` **or equals `total`**, and that second arm exists because loose colours *broaden*.
+    Strict asks the opposite question, so a count answered by the loose facets would be the one
+    number on this row describing a different search from the one the press makes.
+    [search-faceting.md](search-faceting.md) has the rest, including the two `apply_colors` call
+    sites that decide whether the neighbouring counts are computed under the active mode at all.
+  - **The label is repeated into the `title`**, which reads `Exact — cards whose colour identity
+    is exactly these colours` and flips its second half when the toggle is off. `ToggleChip` sets
+    `aria-label={title ?? …}`, so a `title` **replaces** the visible label in the accessible name
+    rather than joining it — a sentence that never said the word "Exact" would be a label-in-name
+    failure (WCAG 2.5.3) on a control whose whole visible text is that word.
+  - **It is a named `TrayCell` (`"exact"`) rather than something `FilterTray` draws
+    unconditionally**, although `colorsStrict` is required on `FilterSurface` and the cell can
+    therefore never be `null`. `TrayCell`'s own rule is what decides it: the tray holds the
+    *caller's* list, so a surface that grows a filter bar and does not think about this one shows
+    nothing rather than a control that appeared because a required field happened to be wired. All
+    four lists name it and all four name it **first** — `SEARCH_TRAY`, `COLLECTION_TRAY` in both
+    its callers, `WISHLIST_TRAY` — because it modifies the leftmost group on the bar directly
+    above, so the modifier opens under the hand that just pressed a colour.
+  - **Driven in the shipped window on 2026-09-23** (debug build, `tauri dev`, 1920×1080, the
+    search page). Four things, and the last two are the ones no suite could have answered.
+    - **The colour group holds at `246 × 36` with six buttons across a colour press** — before and
+      after, the same numbers. That reflow is what the old arrangement cost on the *first* press a
+      reader ever made, and it is gone rather than merely smaller.
+    - **The cell survives the narrowest surface, measured rather than reasoned.** Squeezing the
+      `@container/fb` box to the docked panel's **206px** floor live gave a cell of **172px** and
+      a toggle filling it at **172 × 36**, sitting **17px inside** the container's right edge with
+      `documentElement.scrollWidth === clientWidth` — no overhang, so none of the horizontal
+      scrollbar across the whole deck builder that the old sixth chip's `flex-wrap` existed to
+      avoid. The caption order read `Colour > Set > Format > Owned > Rarity > Type > Printings`.
+    - **`strictParam` is visible in the facet counts, which is the one instrument that can see
+      it.** With White picked and `Exact` on, the colour chips answered under strict — `White —
+      100,176`, `Blue — 1,590`, so pressing Blue *narrows*. Unpressing White left `Exact` pressed
+      (the old rule would have flipped it) and every count went back to its loose value, `White —
+      24,850`, which is the request having stopped carrying the flag. The strip emptied and
+      `Reset all` read `0 filters active` throughout, so the modifier is neither stated nor
+      counted on its own.
+    - **A press over an empty colour row moves nothing.** Toggling `Exact` off with no colour
+      picked left all six chips' accessible names **byte-identical** — no refetch, no new key,
+      exactly what the gate is for.
+    jsdom applies no container query and lays nothing out, so none of the geometry can go red in
+    the suite; the counts above are the local corpus at `data from 2026-09-22` and will move with
+    a resync.
 - **The `Type` tray cell is the rarity cell's greying rule one dimension along, and it is the only
   cell in the tray that is a bare wrapping flow at every width** (2026-09-22). Eight
   `ToggleChip`s — Creature, Planeswalker, Instant,
@@ -2372,10 +2424,13 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     card shares a type line. The surface members are **optional** (`types?`/`toggleType?`) where
     `colorsStrict`/`toggleColorsStrict` are required, so a surface that cannot answer the question
     draws no cell rather than a control that does nothing — `FilterTray`'s `drawn` record already
-    enforces that, and the required half is what puts `Exactly` on every mounted surface at once
-    (`grep -rn '<FilterBar' src --include=*.tsx` is what answers how many that is; the design spec
-    said eight and the JSX sites are six, because `CardSearchBody` is one component behind several
-    docked panels — which is exactly why this page does not write the number down).
+    enforces that. **What the required half buys is that `Exact` can never be a `null` cell**, not
+    that it is drawn without being named: since 2026-09-23 it is `"exact"` in all four lists like
+    every other cell, and the difference from `Type` is that its `drawn` entry has no guard rather
+    than that it skips the list (`grep -rn '<FilterBar' src --include=*.tsx` is what answers how
+    many surfaces that reaches; the design spec said eight and the JSX sites are six, because
+    `CardSearchBody` is one component behind several docked panels — which is exactly why this
+    page does not write the number down).
 
 ## The theory mark, and the four things a photograph settled
 

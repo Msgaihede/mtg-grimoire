@@ -293,11 +293,16 @@ export interface FilterState {
   /**
    * The colour chips.
    *
-   * **The `Exactly` chip beside them is deliberately not a field here**, and that is the one
-   * omission on this interface worth arguing. `colorsStrict` modifies the colour filter rather
-   * than being a filter of its own — it changes what a picked colour *means*, and is unreachable
-   * with none picked — so counting it would move the number on Reset all when nothing new had
-   * been narrowed, over a row the reader had already been told was one thing that is on.
+   * **The `Exact` toggle is deliberately not a field here**, and that is the one omission on this
+   * interface worth arguing. `colorsStrict` modifies the colour filter rather than being a filter
+   * of its own — it changes what a picked colour *means*, and narrows nothing at all with none
+   * picked — so counting it would move the number on Reset all when nothing new had been
+   * narrowed, over a row the reader had already been told was one thing that is on.
+   *
+   * It was *unreachable* with none picked until 2026-09-23, which is a stronger claim than the
+   * one left standing: the toggle is in the tray and always drawn now, so it can be on over an
+   * empty colour row. That changes nothing here, because `strictParam` is what reaches the wire
+   * and an on flag with no letters reaches it as `undefined`.
    */
   colors: readonly string[];
   sets: readonly string[];
@@ -417,21 +422,24 @@ export function toggleColor(picked: readonly ColorKey[], key: ColorKey): ColorKe
 }
 
 /**
- * The colour row and its `Exactly` flag as **one piece of state**, in all four hooks that own a
+ * The colour row and its `Exact` flag as **one piece of state**, in all four hooks that own a
  * colour filter.
  *
- * **Two `useState`s could not express the rule that binds them, and the failure was silent.**
- * Clearing the last colour has to clear the flag — the chip is only drawn while a colour is
- * picked, so a flag outliving the row is state with no control: invisible to the reader, still
- * in the query key, still waiting to change the meaning of the next colour they press. Writing
- * that as `const next = toggleColor(colors, key); setColors(next); if (!next.length) …` reads
- * correctly and is wrong, because `colors` is *this render's*: React batches, so three presses
- * before a re-render all compute from the same array and only the last survives. Picking W, U
- * and B gave `Colour: Black`, and four story plays caught it.
+ * **The rule that first forced them together is gone, and the pairing outlived it on purpose.**
+ * Until 2026-09-23 clearing the last colour cleared the flag, because the chip was only drawn
+ * while a colour was picked and a flag outliving the row was state with no control: invisible to
+ * the reader, still in the query key, still waiting to change the meaning of the next colour
+ * they pressed. That rule could not be written across two `useState`s without losing presses to
+ * batching — `const next = toggleColor(colors, key); setColors(next); if (!next.length) …` reads
+ * correctly and is wrong, because `colors` is *this render's*, so three presses before a
+ * re-render all compute from the same array and only the last survives. Picking W, U and B gave
+ * `Colour: Black`, and four story plays caught it.
  *
- * A functional updater fixes that and cannot host the flag — an updater must be pure, and React
- * runs it twice under StrictMode. One state and one updater is what lets the rule be both
- * batch-safe and pure, which is why the two fields live together rather than beside each other.
+ * The `Exact` toggle now lives in the filter tray and is **always drawn**, so the flag can no
+ * longer be stranded and {@link toggleColorFilter} carries the colours alone. What keeps the two
+ * fields in one state is the other half of the same reading: they are one control's two halves,
+ * `NO_COLORS` is the single value `resetAll` puts back, and splitting them would hand every hook
+ * a second `useState` whose only job is to be reset alongside the first.
  */
 export interface ColorFilter {
   picked: readonly ColorKey[];
@@ -446,10 +454,16 @@ export interface ColorFilter {
 /** The cleared colour filter — what every hook opens on and what `resetAll` puts back. */
 export const NO_COLORS: ColorFilter = { picked: [], strict: false };
 
-/** Add or remove one colour, and drop the flag with the last of them. See {@link ColorFilter}. */
+/**
+ * Add or remove one colour, **leaving the flag alone**. See {@link ColorFilter}.
+ *
+ * It used to drop the flag with the last colour. That rule was the disappearing chip's — with
+ * the `Exact` toggle always on screen in the tray, clearing the colours would now flip a control
+ * the reader is looking straight at, which is the one thing a visible toggle must never do. The
+ * flag stops reaching the wire instead of stopping being true: see each hook's `strictParam`.
+ */
 export function toggleColorFilter(state: ColorFilter, key: ColorKey): ColorFilter {
-  const picked = toggleColor(state.picked, key);
-  return { picked, strict: picked.length === 0 ? false : state.strict };
+  return { ...state, picked: toggleColor(state.picked, key) };
 }
 
 /**
@@ -672,10 +686,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     setAppliedDefaultFormat(defaultFormatValue);
     setFormat(defaultFormatValue);
   }
-  // **One state for the row and its `Exactly` flag, not two.** The rule that binds them — the
-  // last colour leaving turns the flag off — cannot be written across two `useState`s without
-  // either losing presses to batching or putting a `setState` inside an updater React runs
-  // twice. {@link ColorFilter} carries the whole reading, including the bug that found it.
+  // **One state for the row and its `Exact` flag, not two** — one control's two halves, and one
+  // value for `resetAll` to put back. {@link ColorFilter} carries the whole reading, including
+  // the batching bug behind the rule that used to bind them and the reason that rule is gone.
   const [colorFilter, setColorFilter] = useState<ColorFilter>(NO_COLORS);
   const colors = colorFilter.picked;
   const colorsStrict = colorFilter.strict;
@@ -941,6 +954,20 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   };
 
   const colorsParam = colorParam(colors);
+  /**
+   * **The flag only rides with the letters**, and this is the half {@link toggleColorFilter}
+   * used to do by clearing it.
+   *
+   * Strict over an empty colour row filters nothing at either end — the backend's arm sits
+   * inside its own `nonblank` guard — and since the `Exact` toggle moved into the tray and
+   * became permanent, a reader can press it with no colour picked. Without this gate that press
+   * would mint a second query key for a wall that cannot differ: a request, a spinner and the
+   * same cards back.
+   *
+   * So the raw flag is what the control reads and this is what the request carries. They differ
+   * on exactly one state — on, with nothing picked — which is the state that means nothing.
+   */
+  const strictParam = colorsStrict && colorsParam !== undefined;
   // Sorted before they reach the key: picking two sets in either order is the same search
   // and must not cost a second round trip.
   const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
@@ -979,8 +1006,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // a key built from the letters alone would answer the strict press out of the loose search's
     // cached pages — instantly, with no request, no spinner and nothing on screen to notice,
     // which reads to a reader as "the chip does nothing". Spelled rather than stringified, like
-    // every other optional segment here.
-    colorsStrict ? "strict" : "",
+    // every other optional segment here — and built from {@link strictParam} rather than the raw
+    // flag, so the toggle pressed over an empty colour row does not mint a key for a wall that
+    // cannot differ.
+    strictParam ? "strict" : "",
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
     manaParam?.join(",") ?? "",
@@ -1040,11 +1069,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
         // {@link formatParams} — including why a named format sends `playableOnly` too.
         ...formatParams(format),
         colors: colorsParam,
-        // Absent rather than `false` when the chip is off, which is the rule every optional
+        // Absent rather than `false` when the toggle is off, which is the rule every optional
         // filter on this payload follows: `false` on the wire reads as "the reader chose loose"
         // where they chose nothing at all, and it would mint a second React Query hash for the
-        // search an untouched row has always had.
-        colorsStrict: colorsStrict || undefined,
+        // search an untouched row has always had. Absent when it is *on* over an empty colour
+        // row too — see {@link strictParam}, which is the half that used to be a clearing rule
+        // inside `toggleColorFilter`.
+        colorsStrict: strictParam || undefined,
         sets: setsParam,
         types: typesParamValue,
         manaValues: manaParam,
@@ -1154,7 +1185,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // `|| undefined` exactly as the page's payload spells it, because React Query hashes this
     // object with its `undefined` values dropped — a bare `false` would mint a second facet key
     // for the search an untouched row has always had.
-    colorsStrict: colorsStrict || undefined,
+    colorsStrict: strictParam || undefined,
     sets: setsParam,
     types: typesParamValue,
     manaValues: manaParam,
@@ -1338,18 +1369,19 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     anyCard: true,
     colors,
     // A functional updater, so a batch of presses composes: three chips pressed before a
-    // re-render each see the row the one before them left. Clearing the last colour clears
-    // `Exactly` — both halves of that live in {@link toggleColorFilter}, one rule in one place
-    // for all four hooks.
+    // re-render each see the row the one before them left. It leaves `Exact` alone — see
+    // {@link toggleColorFilter}, one rule in one place for all four hooks, and the clearing rule
+    // it used to carry.
     toggleColor: (key: ColorKey) => setColorFilter((s) => toggleColorFilter(s, key)),
     /**
-     * Read the colour row as "exactly these colours" rather than "at least these" — the
-     * `Exactly` chip.
+     * Read the colour row as "exactly these colours" rather than "at least these" — the tray's
+     * `Exact` toggle.
      *
      * A modifier on the row rather than a filter beside it, which is the whole of why it is
-     * absent from {@link activeFilterCount} and from `unfiltered`: it narrows nothing on its own
-     * and is unreachable with no colour picked, so a Reset all badge that counted it would move
-     * for a press that filtered nothing new.
+     * absent from {@link activeFilterCount} and from `unfiltered`: it narrows nothing on its own,
+     * so a Reset all badge that counted it would move for a press that filtered nothing new. That
+     * is truer since the toggle became permanent, not less — on with no colour picked is exactly
+     * a press that changed nothing.
      */
     colorsStrict,
     toggleColorsStrict: () => setColorFilter((s) => ({ ...s, strict: !s.strict })),
@@ -1617,9 +1649,12 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * the one consequence written at its definition above. With no default the two expressions
      * are identical, which is why `SearchPage` cannot notice the difference.
      */
-    // `colorsStrict` is absent from this list for {@link activeFilterCount}'s reason: it cannot
-    // be on without `colorsParam` being set, so a term for it could never decide this answer —
-    // and a search narrowed by nothing but a modifier is not a search at all.
+    // `colorsStrict` is absent from this list for {@link activeFilterCount}'s reason: a search
+    // narrowed by nothing but a modifier is not a search at all. It *used* to be absent for a
+    // second reason as well — the flag could not be on without `colorsParam` being set — and that
+    // premise died with the disappearing chip on 2026-09-23. The first reason is the load-bearing
+    // one and it is unchanged: strict over an empty colour row filters nothing, so a wall it was
+    // the only term for would be captioned "try another word" over every card there is.
     unfiltered:
       !debouncedText &&
       !formatIsReaderSet &&
