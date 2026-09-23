@@ -458,12 +458,25 @@ stored — a letter a total map has never heard of reaches the panel as `undefin
 still reads `?? null` on top of that, so a letter that somehow got through raises nothing rather
 than poisoning the `Math.max`.
 
-**The card side draws the same letters and reads no floor at all**, because it is not looking at
-a deck. What it needs is the *name* and Spellbook's own words, which is `COMBO_TAG` — exported
-from `DeckBracket.tsx` since 2026-09-08 rather than copied, for the reason the first paragraph of
-this section gives: the classification is the **feed's**, so there is one right answer to what
-`S` means and it is not per-panel. Two tables spelling seven letters are two things that can come
-to disagree, in two surfaces a reader moves between inside one session.
+**No surface in the app prints the letter itself, and the card side reads this table's floor
+column** (2026-09-20). What stood here until then was *the card side draws the same letters and
+reads no floor at all*, and both halves were true of the arrangement it described: the accordion's
+header printed `E · Exhibition — for any deck`, letter first, and the floor was the deck
+advisory's business alone. The card side draws five bracket **pips** now, from `comboBrackets` —
+which lives beside `COMBO_FLOOR` in `bracket.ts` and is derived from it, never tabulated a second
+time — because the pips say what the letter *meant*, which is the thing a reader wanted it for,
+and a bare `R` beside them would be a second vocabulary to learn. The deck side prints no letter
+either: `DeckBracket`'s combo list is `{tag.name} — {tag.forces}`, and this change did not touch
+that file.
+
+What both sides still draw is `COMBO_TAG` — the *name* and Spellbook's own words — exported from
+`DeckBracket.tsx` since 2026-09-08 rather than copied, for the reason the first paragraph of this
+section gives: the classification is the **feed's**, so there is one right answer to what `S`
+means and it is not per-panel. Two tables spelling seven letters are two things that can come to
+disagree, in two surfaces a reader moves between inside one session. **`comboBrackets` is that
+same rule applied to the floor column** — one table, read by two surfaces, never respelled — and
+*A rail and a pane* below has what the card side does with it, including why the two `null`s in
+`COMBO_FLOOR` come out of it at opposite ends.
 
 ### One ingest, measured
 
@@ -822,11 +835,14 @@ pieces, and is the only question a reader looking at a single card can be asking
 into one query would mean a `have = card_count` clause that is sometimes applied and sometimes
 not — two queries wearing one name.
 
-A `Combos` row on the card modal's rail opens `CombosDialog`. Each row draws the combo's pieces
-as card art with the reader's own copy count under each, the bracket letter and what it means,
-what the combo produces, both halves of the prerequisites, the numbered steps, the mana it needs
-and a link to Spellbook's own page for the variant. Above them, a chip per combo size and an
-**I own every piece** toggle. Paged 25 at a time behind **Show more**.
+A `Combos` row on the card modal's rail opens `CombosDialog`, which has been a **rail and a
+detail pane** since 2026-09-20: one 59px line per combo down the left, and on the right the one
+combo the reader picked, drawn whole — its pieces as card art with the reader's own copy count
+under each, the brackets it is legal in, what it produces, both halves of the prerequisites, the
+numbered steps, the mana it needs and a link to Spellbook's own page for the variant. Above both
+columns, a search box, a chip per combo size and an **I own every piece** toggle. Fifty rows to a
+page, and the next page arrives by scrolling. *A rail and a pane* below is that arrangement in
+full, and *The accordion it replaced* is the shape it grew out of.
 
 **The card is named by `oracle_id` and never by a printing id.** A combo is a fact about a
 *card*, `combo_cards` is keyed on the oracle id, and asking about a printing would mean resolving
@@ -907,16 +923,25 @@ subject**. A facet's count has to predict what pressing it yields, so:
 | `owned_total` | the **search-filtered** set |
 | `matching` | after the search *and* the size chip *and* `owned_only` |
 
-Read the other way: the chip counts move when the reader types and hold still when a chip is
+Read the other way: the histogram moves when the reader types and holds still when a chip is
 pressed. `total` stays the card's own census because it answers a question the search does not
-change, and it is the number the heading is about. **It therefore stops being the denominator
+change. **It therefore stops being the denominator
 `owned_total` is a share of** — that ratio is now two different questions, and because the
 searched set is a *subset* it cannot go out of range, which is what makes it a bad way to be
 wrong: it simply reads low, and lowest on the searches that narrowed the most.
 
+**Which of the four reach the screen moved on 2026-09-20; the four sets did not** (*A rail and a
+pane* below). The chips carry no counts any more, so `by_card_count` decides which size chips
+*exist* rather than what each one prints; `owned_total` is read and no longer drawn; and `total`
+is read for one job only — telling `NEVER_FETCHED` from `NO_COMBOS`. The figure over the rail is
+`matching`. Every row of the table above is untouched by that, because each row is about the set
+a field is computed over rather than about where it is printed.
+
 `total` needs its own one-line statement for that reason. The histogram describes the searched
 set, so on a search that matches nothing there are **no rows to sum** — which is precisely when
-the panel most needs to say *6 044 combos, none matching*. It runs unconditionally rather than
+the panel most needs to know there are 6 044 combos behind the term rather than none at all,
+since that is what tells *the reader's filter left nothing* from *Spellbook has nothing on
+record*. It runs unconditionally rather than
 only when a needle is present, because a `total` computed one way with a search and another way
 without is two definitions, and the cheap path would be the one nothing exercises.
 
@@ -946,11 +971,25 @@ underscore answers the one combo naming `_____ Goblin`, where an unescaped `LIKE
 answered all 6 044. The empty size buckets drop out of the chip row with it, so a searched list
 offers only the sizes it actually contains.
 
-The accordion was driven on the same pass: **25 header buttons, 0 expanded**, and no `PRODUCES`,
-`STEPS` or Spellbook link anywhere in the DOM until a header is pressed — the body is unmounted
-rather than hidden, which is what the count is evidence of. The built accessible name came back as
+**The `On screen` column is the chips as they were drawn that day, and the chips carry no counts
+any more** (2026-09-20 — *A rail and a pane* below): `All · 6 044` is `All`, and the figure is one
+`6 044 combos` line above the rail. **The cross-check the column exists for is untouched**, which
+is why the rows stay exactly as they were taken: the census SQL computed and the census the
+component drew were arrived at independently, through the command, the IPC mirror and the
+component, and they agreed to the row. A cross-check of the same kind is still available off the
+count line over the rail — with the caveat that that line counts `matching` rather than `total`,
+so it agrees with the census only while no chip is pressed. The empty-bucket rule in the paragraph
+above is unchanged.
+
+**The accordion was driven on the same pass, and the accordion is gone** (retired 2026-09-20). The
+finding stands as a finding about it: **25 header buttons, 0 expanded**, and no `PRODUCES`, `STEPS`
+or Spellbook link anywhere in the DOM until a header was pressed — the body was unmounted rather
+than hidden, which is what the count is evidence of. The built accessible name came back as
 `Grenzo, Dungeon Warden + Epitaph Golem + _____ Goblin + Ashnod's Altar — E Exhibition`, which is
-the name-computation trap avoided rather than merely commented on.
+the name-computation trap avoided rather than merely commented on. **That trap is the half that
+outlived the shape**: a rail row's name is built by `comboRowLabel` for the identical reason, with
+the letter dropped and the size and the ownership added — and it has not been driven in the
+window.
 
 So a real search is *faster* than no search, and the worst case is a term that narrows nothing.
 **The whole +11.1 ms on the common path is `total_sql`, and it is one card**: for a card at the
@@ -985,11 +1024,24 @@ binary, and none of it is comparable with the ingest figures above or with `comb
 …and per card it is far less flat than that. **Ashnod's Altar** (oracle
 `4d18bcba-a346-445e-a182-6cc30b7e066d`) is in **6 044** combos — 2 → 61, 3 → 1 999, 4 → 3 016,
 5 → 968 — and only **114** cards are in more than 500. So the one card a reader is most likely to
-open this on is the one that would ask for six thousand rows, each carrying two to five pictures
-and five prose sections. A page of 25 is nearer a screen of reading than the search wall's screen
-of tiles, which is why it is 25 and not 60.
+open this on is the one that would ask for six thousand rows.
 
-Every timing below is against that worst card unless it says otherwise:
+**`PAGE_SIZE` is 50, and the argument that put it at 25 is gone** (2026-09-20). What stood here
+was *each [row] carrying two to five pictures and five prose sections — a page of 25 is nearer a
+screen of reading than the search wall's screen of tiles, which is why it is 25 and not 60*, and
+that was true of the accordion: a row really did carry that much. A rail row is one line of type
+and no picture, so the paragraph describes a surface that no longer exists, and **a number left
+standing on a false reason is worse than a wrong number**. What sizes the page now is that the
+reader presses nothing to get the next one: the rail fetches when its sentinel comes into view, so
+a page has to be comfortably more than one screenful of 59px rows, or the observer fires again
+before the first page has finished landing. Fifty rows is about 2 800px against a rail some 700px
+tall — four screens of headroom — and it halves the round trips over the whole of Ashnod's Altar's
+list. **That pair of figures is arithmetic off the classes and not a measurement**; the paging is
+one of the two things *A rail and a pane* below says are owed a live pass.
+
+Every timing below is against that worst card unless it says otherwise, and **every one of them
+was taken at a limit of 25**: they are facts about the query plan at that limit, they are not
+restated for 50, and the shipped page is now twice the one they describe.
 
 | Query | Median |
 | --- | --- |
@@ -1110,34 +1162,6 @@ so that a term with no hits still knows there are 6 044 combos behind it. Had `t
 search, an unmatched term would have printed *Spellbook has none on record naming this card* over
 a card in six thousand of them.
 
-### Every row is a collapsed accordion (2026-09-08)
-
-The same live pass reported the second half of the problem: every row drew everything it had, so
-one row was most of a screen and 25 of them read as a wall. A row is now a header and a body.
-
-**The header is the pieces and the bracket rating, and it *is* the toggle**; the body — what it
-produces, the mana, both prerequisite blocks, the numbered steps, the template caveat and the
-Spellbook link — is **collapsed by default and genuinely not rendered** until it is opened, rather
-than hidden with a class. That is `Dialog`'s own *closed is nothing mounted* rule one level down,
-and it is what keeps a 25-row page cheap.
-
-Three things about it that are decisions rather than styling:
-
-- **Ownership marks stay in the header** with the pieces. The whole point of *I own every piece*
-  is scanning a long list for something buildable tonight, and a mark you have to open a row to
-  see cannot be scanned.
-- **The accessible name is built, not computed** — `"Boros Reckoner + Boros Charm — S Spicy"`.
-  Left to the layout it reads `Boros ReckonerOwnedBoros Charm…`, because a CSS `gap` is not a word
-  separator to the accessible-name computation. This repo has paid for that one before.
-- **A row the reader opened stays open across a filter change.** Rows are keyed on the combo id,
-  so only a row that *arrives* arrives closed. Forcing every row shut on every change would also
-  shut the reader's row on any background refetch, which is a worse failure than the one it fixes.
-
-A pressed size chip **survives a search that empties its bucket**, drawn as `3 cards · 0`. Without
-that, narrowing to `3 cards` and then typing a term no three-card combo matches removes the very
-chip that is emptying the list, and the reader is left looking at *No combo matches that filter*
-above a row of controls with nothing switched on and no way back.
-
 **`NEVER_FETCHED` may never be folded into `NO_COMBOS`, and that is the whole reason this dialog
 reads `combos_status` at all.** `combos_for_card` cannot tell a card with no combos from a
 database with no combo table, because both are zero rows — and the two answers are not close: one
@@ -1165,7 +1189,266 @@ card detail still loading, a printing the corpus has since dropped (`card_detail
 which a collection or deck holding a retired printing reaches honestly), and a failed read, which
 says so and names the error rather than reading as an absence.
 
-### Driven in the shipped window — 2026-09-08, debug build
+### The accordion it replaced (2026-09-08, retired 2026-09-20)
+
+**Kept because it is the shape issue #481 was reported against.** The same 2026-09-08 live pass
+reported the second half of the problem: every row drew everything it had, so one row was most of
+a screen and 25 of them read as a wall. The answer that day was to make a row a header and a body.
+The header was the pieces and the bracket rating and it *was* the toggle; the body — what the
+combo produces, the mana, both prerequisite blocks, the numbered steps, the template caveat and
+the Spellbook link — was **collapsed by default and genuinely not rendered** until it was opened,
+rather than hidden with a class. That is `Dialog`'s own *closed is nothing mounted* rule one level
+down, and it is what kept a 25-row page cheap.
+
+Three things about it were decisions rather than styling, and **two of the three outlived it**:
+
+- **Ownership marks stay with the pieces rather than behind a press.** The whole point of *I own
+  every piece* is scanning a long list for something buildable tonight, and a mark you have to
+  open a row to see cannot be scanned. That is the rail row's second line now
+  (`3 cards · Missing 1`), so the rule changed surfaces intact.
+- **The accessible name is built, not computed** — `"Boros Reckoner + Boros Charm — S Spicy"`
+  then, `comboRowLabel`'s four sentences now. Left to the layout it read
+  `Boros ReckonerOwnedBoros Charm…`, because a CSS `gap` is not a word separator to the
+  accessible-name computation. This repo has paid for that one before, and a rail row is the same
+  trap with different children.
+- **A row the reader opened stayed open across a filter change.** Rows were keyed on the combo id,
+  so only a row that *arrived* arrived closed; forcing every row shut on every change would also
+  have shut the reader's row on a background refetch. **That one died with the accordion and needs
+  no successor**, because there is nothing left to keep open: what survives a filter change now is
+  the *selection*, by the rule below.
+
+**Why it was replaced rather than widened.** Issue #481 reads *"The current size of the Combos
+section makes its images and text too small."* Taken literally that asks for a wider panel with
+bigger art inside the same accordion, and a wider accordion answers neither half of what the
+report is actually describing: a surface **scanned by card art through a 96px window, where the
+thing the reader wants is behind a press**. Widen it and the art is still what a reader scans, and
+the prose is still one press down — so both halves moved instead.
+
+### A rail and a pane (2026-09-20, issue #481)
+
+**The left column is the scan list and the right column is one combo drawn whole.** The rail is
+one 59px line per combo with no art in it at all (measured; the plan derived ~56); the pane is
+the combo the reader picked, at
+full size, with nothing collapsed and nothing abbreviated. **Nothing about the backend moved** —
+`combos_for_card`, its page shape, the three filters and the census are the same answer, rendered
+differently.
+
+**The panel is `w-[62rem] h-[54rem]`, and the width is arithmetic rather than taste.** `minWidth`
+is **1024** (`src-tauri/tauri.conf.json`) and `Dialog`'s scrim spends **24px a side** above the
+phone fold, so **976px** is every pixel the smallest window this app can be has to give. 62rem is
+**992** — over that by 16, which the shell's own `max-w-full` absorbs — where 72rem would be 176px
+of panel a reader could never see. Everything else here is `w-[45rem]` or `w-[55rem]`; a split
+pane wants more than either, so this is the widest dialog the app ships. **The height is fixed,
+which no other dialog here does, and that is the pane's doing**: a panel sized by its content
+would resize as the reader moved down the rail — a two-card combo with no steps against a
+five-card one with three — so the list they are reading would move under the pointer on every
+press. `max-h-full` still clamps it to the window's 90vh, so 54rem is a ceiling the panel asks for
+rather than a size it insists on. The panel may not name a `max-h` of its own; that is `Dialog`'s
+rule and [frontend-design.md](frontend-design.md) has why.
+
+**A rail row says three things and none of them is a picture**: which brackets the combo is legal
+in, which *other* cards it needs, and how much of it the reader already owns. The bracket **range**
+— `2–5`, `4–5`, or `Not legal` — sits in a `min-w-[42px]` bordered box, gold on the selected row.
+A range rather than five pips because every answer `comboBrackets` can give is a contiguous run up
+to 5, so the first and the last say the whole of it in four characters; `min-w-` rather than `w-`
+so that the one answer that is words rather than numbers widens its own box instead of being
+clipped inside somebody else's. The names are the **other** pieces, matched on oracle id and never
+on position, because the asked-about card is already the dialog's subtitle and repeating it on
+every one of six thousand rows costs the width the names need — with the whole piece list as the
+fallback, which is not hypothetical: the corpus holds **seven one-card combos**, and a row with an
+empty headline is a row that draws nothing at all. Under them, `3 cards · Missing 1` or
+`3 cards · You own every piece`, the ownership half in `text-ok` when nothing is missing and
+**always a word rather than only a colour**.
+
+**The row's accessible name is built, and it says a different thing from the accordion's.**
+`comboRowLabel` joins the names, `COMBO_TAG`'s name, `bracketSentence`'s words, the size and the
+ownership into four sentences. Left to compute itself the button would read
+`2–5Rings of Brighthearth2 cardsMissing 1`, because the accname computation concatenates text
+nodes and every space on that row is a flex **gap** — the `Missing2` failure this repo has already
+paid for, one surface over. The old name ended `— S Spicy` and led with the letter because the
+letter was what the row drew; nothing draws a letter now, so nothing says one. Every visible
+string on the row is in the name **verbatim**, which is WCAG 2.5.3 rather than tidiness: a name
+paraphrasing `Missing 1` as "one piece missing" is a control a reader cannot address by what is
+written on it. The one exception is the range box, whose `2–5` is expanded into words, and that is
+the box's whole reason for having a sentence at all.
+
+**The pane is where the issue's two numbers are.** `CardArt` at `w-44` — 176 × 246 at 5:7, near
+enough double the accordion's `w-24` — with the name at `text-[0.9375rem]` under it and the
+ownership sentence under that, the command-zone caveat riding that line rather than sitting on its
+own. `produces` is the headline at `text-lg`, because a reader has already picked the row by its
+pieces and what they are here to read is what it does. Prerequisites sit in a 300px column beside
+the steps rather than stacked, since a prerequisite is usually one short line and a step usually
+three, and stacking them leaves a 600px band holding four words. Everything optional still goes
+through `Section`, which draws **nothing** rather than an empty heading. The `+` between two
+pieces is centred by `items-center` and offset by nothing: the accordion's carried an
+`mt-[3.75rem]` that its own comment admitted was derived rather than measured, and a number nobody
+has looked at is worse than no number. The pieces `flex-wrap`, because the pane's content box
+holds three 176px frames and Ashnod's Altar has 3 016 four-card combos and 968 five-card ones —
+and an `overflow-y-auto` box computes `overflow-x` to `auto` as well, so the alternative is a
+sideways scrollbar inside the pane. The pane is keyed on the combo id, which is a **scroll reset**
+rather than a remount for its own sake: a five-piece combo with three steps is taller than the
+pane, and a reader who read to the foot of one and pressed the next row would otherwise arrive
+halfway down a different combo.
+
+**The brackets are derived from `COMBO_FLOOR` and never tabulated a second time.**
+`comboBrackets(tag)` lives beside that table in `bracket.ts` and returns **N through 5 for a floor
+of N** — the same statement the deck advisory makes as a lower bound, said as a set because the
+card side is not estimating a deck's bracket and has no bound to raise. **The two `null`s in
+`COMBO_FLOOR` mean opposite things, and this is the only place that has to know it**: `E` answers
+all five, because it is legal everywhere; `B` answers the **empty list**, because *Banned* is a
+legality finding rather than a power floor, and the caller then says *Not legal in Commander*
+rather than drawing five empty pips. The floor column itself is in *`bracketTag`, and the floor
+each letter implies* above and is not repeated here. `B` is still the branch the live feed has
+never carried — 0 rows on 2026-08-27 — so both the pane's sentence and the rail's *Not legal* box
+are reachable from fixtures and from nothing else.
+
+**The pips speak once.** Five 26px boxes, the legal ones filled `bg-accent text-accent-fg` and the
+rest `border-border text-dim`, inside a `role="img"` whose `aria-label` is `bracketSentence` —
+`Legal in brackets 2, 3, 4 and 5`, with `and` before the last rather than a bare comma list,
+because read aloud "2, 3, 4, 5" is a sequence of numbers where "2, 3, 4 and 5" is a set. Without
+the group a reader hears five separate numbers with no statement of what they are, and the two
+that are *not* filled are read identically to the three that are — the filled/unfilled pair being
+a colour difference, which is exactly the kind of statement this app never makes on its own.
+
+**The letter is gone from this side of the app; `COMBO_TAG` is not.** `R`, `S`, `P` and the rest
+appear nowhere in this dialog, because the pips say what the letter *meant*, which is the thing a
+reader wanted it for. What is still drawn — and still imported from `DeckBracket.tsx` rather than
+respelled — is the tag's **name** and its `forces` sentence (`Spicy — probably 3 or 4, but hard to
+classify`), in one text node so the name and what it forces cannot be read apart. The deck side is
+untouched by this change and prints the same two, also without a letter.
+
+**Paging is scrolling, and `PAGE_SIZE` is 50.** The *Show more* button is gone. A sentinel `<div>`
+sits at the foot of the rail's scroller and an `IntersectionObserver` **rooted on that scroller**
+asks for the next page when it comes into view, gated on `hasNextPage && !isFetchingNextPage`. The
+gate is outside the callback on purpose, and it buys two things: a list with nothing left to ask
+for observes nothing at all, and the observer is **re-created when a fetch finishes** — which is
+what keeps a short list paging, since a target already intersecting when it is observed fires
+immediately, so a rail the first page did not fill goes on asking until it is full or the list
+ends. `hasNextPage` is still `nextComboOffset`'s answer and **the short-page rule is unchanged**:
+a page shorter than asked for ends the list whatever `matching` says, so a refresh landing between
+two requests cannot leave this fetching the same empty page for ever. Why 25 became 50 is under
+*The corpus these run against* above, and it is one sentence: 25's stated justification was that a
+combo row is a wall of art, which is false of a one-line rail row, and a number left standing on a
+false reason is worse than a wrong number.
+
+**Paging is still not a way to *find* anything**, which is the other half of Ashnod's Altar's
+6 044 and why the search box above the chips exists. Fifty at a time with no search is 121 scrolls
+to reach the end of one card's list, and a reader who wants the combo with Krark-Clan Ironworks in
+it has no way to ask for it by scrolling.
+
+**The chips lost their counts and the census did not.** `All · 6 044` is `All` and
+`3 cards · 1 999` is `3 cards`; the number moved to one `6 044 combos` line **above the rail**,
+where it describes the list it is a count of. Five figures of arithmetic in a row of controls
+between a search box and the cards is what issue #481's reporter was looking past. Everything the
+census decides is unchanged: `byCardCount` still says **which** size chips exist at all, a bucket
+that arrives at zero is still dropped, and **a pressed size still keeps its chip when a search
+empties its bucket** — without that, narrowing to `3 cards` and then typing a term no three-card
+combo matches removes the very chip that is emptying the list, and the reader is left looking at
+*No combo matches that filter* above a row of controls with nothing switched on and no way back.
+What that chip no longer does is *say* it is at zero (it read `3 cards · 0`); the empty sentence
+under it says so instead. The line over the rail counts `matching` rather than `total`, and it is
+drawn with `count` rather than `plural` because it reads `6,044 combos` on the card it was written
+for.
+
+**Selection is derived, and that is why there is no effect anywhere on this surface.** One
+`useState<string | null>` holds the id the reader pressed, and the pane draws
+`rows.find((c) => c.id === picked) ?? rows[0] ?? null`. A search, a chip or a new page hands back a
+different `rows`, and an id no longer in it falls through to the first row of the new list — which
+is what a reader who has just narrowed the list means. A `useEffect` reconciling a stored
+selection against a changed list would do the same arithmetic one render late, and would be a
+`setState` inside an effect, which this app refuses. It is local to the body for the search box's
+reason: `Dialog` unmounts the body, so opening card B starts on **All**, with an empty box and its
+first combo selected, without anything having to reset.
+
+**The arrow keys are bound on the `<ul>`, never on the window.** `ArrowDown`/`ArrowUp` walk one
+row, `Home`/`End` go to the ends, and each moves the selection *with* the focus — a rail where the
+caret and the pane had drifted apart would need a second press to say which of them the reader
+meant. Each handled key calls both `preventDefault` and `stopPropagation`, so the press neither
+scrolls the rail by a line nor reaches the panel. **There is no global handler here and there must
+not be one**: `Dialog` owns Escape through its capture rung and this dialog mounts after the card
+modal, so it is already on top of that stack. Focus moves by reading the buttons off the list
+rather than out of a ref array — there is exactly one per row and they are in the list's own order,
+where a ref map would be a second copy of `rows` free to disagree with it — and
+`scrollIntoView({ block: "nearest" })` parks the row against the scrollport's **padding** box,
+which is what makes the scroller's own `py-2` the focus ring's 4px and the row's `scroll-m-1.5`
+the same 6px `DROP_MARK_ROOM` states for a mark drawn at rest.
+
+**The four empty states are untouched, and that is worth saying because their table is immediately
+above.** `NO_ORACLE_CARD`, `NEVER_FETCHED`, `NO_COMBOS` and `NO_MATCH` are the same four
+sentences, on the same conditions, drawn in the same `Filler` box the rail and the pane replace,
+with the as-of caption still outside it and still spanning the foot. **One gate gained a second
+arm**: `NO_MATCH` is now `matching === 0 || selected === null`, because the pane needs a combo to
+draw and a rail with no rows has none to hand it. The two conditions coincide on every answer the
+backend can produce; the second is there so that the split view has no state in which it draws two
+empty columns.
+
+### Driven in the shipped window — 2026-09-20, debug build (the rail and the pane)
+
+`npm run tauri dev`, a debug build over a copy of the real dev pair, at 1920×1080 and again at
+the app's own **1024×700** floor. Two things were owed this pass because the plan derived them
+off the classes rather than off a window — the `w-[62rem]` panel at 1024, and scroll paging on a
+card with thousands of combos — and it found a third that neither suite could see.
+
+**The panel.** 992×864 at 1920×1080, the rail column **344**, the pane **646** with
+`scrollWidth === clientWidth`, a rail row **59px**, and `document.scrollWidth` 1920. At 1024×700
+the panel is **976 at `left: 24`** with **24px either side** and `document.scrollWidth` 1024 — no
+horizontal page scroll, which is the one thing the 1024 floor forbids.
+
+**⚠️ That second reading is the fix rather than the finding, and the finding is `Dialog`'s.**
+Before it, 1024×700 drew the panel at **992** with **8px** of glass on the right against 24 on the
+left: the scrim had `grid-rows-[minmax(0,1fr)]` and no `grid-template-columns`, so the panel's grid
+area was an *implicit* `auto` column that sized to the panel's own content — the column computed
+**992px**, `max-w-full` was `100%` of that, and the clamp clamped **nothing**. It is the
+`max-h-full` circularity of 2026-08-18 on the other axis, unexposed for two years because no panel
+was wider than the padded box; this split view is the first. Setting
+`grid-template-columns: minmax(0,1fr)` live took it to 976 and backing the property out restored
+992, in one pass. `Dialog.tsx` carries the class and `Dialog.test.tsx` pins it.
+
+**Paging.** On **Basalt Monolith** (285 combos here) one scroll to the foot of the rail took it
+from 50 rows to 100. On **Ashnod's Altar** five passes paged **50 → 100 → 150 → 200 → 250 → 300**,
+the scroller growing 2 987 → 17 799 — one page per pass and never more, which is the
+`hasNextPage && !isFetchingNextPage` gate holding. The heading held at its own count throughout,
+because it counts `matching` and not the rows in hand.
+
+**The census on the live feed, and it has moved since 2026-09-08.** Ashnod's Altar reads
+**6,101 combos** where the measurement above reads 6 044, and its `5 cards` chip reads **967**
+against 968 — Spellbook rebuilds the file through the day and the app refreshes weekly, so a
+number that has drifted by tens is the design working. The chips read `All`, `2 cards`, `3 cards`,
+`4 cards`, `5 cards`, `I own every piece` with **no counts on any of them**, and the figure is in
+the one line over the rail.
+
+**The rail row and the pips, read off the window.** A row's built name came back as
+`Forsaken Monument — Ruthless. Legal in brackets 4 and 5. 2 cards. Missing 2.` — the other pieces,
+the tag's name, the brackets in words, and no letter anywhere. The pips group carries
+`aria-label` `Legal in brackets 1, 2, 3, 4 and 5` over a `textContent` of `12345`, so all five are
+drawn and the group speaks once.
+
+**The keyboard.** A real click on row 2 put the caret and `aria-current` on it together;
+`ArrowDown` moved both to row 3 and changed the pane; `End` went to row 299 of 300 **and scrolled
+the rail to its foot**, which is `scrollIntoView({ block: "nearest" })`; `Home` returned to row 0
+at `scrollTop: 0`; and `ArrowUp` there clamped rather than wrapping.
+
+**⚠️ The third thing, which is why this pass was worth running: an empty prerequisites column was
+spending 300px of the pane.** `Section` draws nothing for an empty field, which is right and was
+not enough — the *box around two* of them still took its `w-[300px]` and the row's 32px gap. On
+Basalt Monolith's first combo, which has no prerequisites at all, `Steps` began at **`left: 1161`**
+against `produces` at **829** and was squeezed into **274px** of a 606px content box, with 300px of
+blank beside it. Most of the feed's rows fill neither prerequisite field, so that was the ordinary
+case rather than a corner. The column is now drawn only when it has content: the same combo reads
+`Steps` at **`left: 829`, 606px wide**, and a combo that *does* carry one still draws both columns
+(300 at 829, steps 259 at 1161). Neither suite could have seen it — jsdom lays nothing out.
+
+**The wrap, at the width that decides it.** A piece and its gap occupy 211px, so the pane's
+**606px** content box at 1920 holds three 176px frames and its **575px** box at 1024 holds two. A
+five-piece combo at 1024 drew its pieces over **three** rows with `scrollWidth === clientWidth`
+throughout — the `flex-wrap` doing the job the alternative sideways scrollbar would have done
+badly.
+
+**What this pass did not cover.** The never-downloaded state, for the reason the 2026-09-08 pass
+gives: this corpus has the feed and the launch refresh fetches it uninvited. It is covered in the
+suite and in Storybook.
+
+### Driven in the shipped window — 2026-09-08, debug build (the accordion)
 
 Not the suite and not Storybook: a `tauri dev` window over a **copy of the real dev pair**, taken
 at corpus `user_version` 1 with the seven-column `combos`, 107 016 combo rows and 117 628 cards.
@@ -1179,14 +1462,25 @@ it uninvited, arriving back at **107 016** rows. The prose is genuinely stored r
 defaulted — the census in the timing section above is that check, and it is the one the widened
 `combos_staging` INSERT would have failed silently.
 
-**The dialog, on Ashnod's Altar.** The chips read `All · 6 044`, `2 cards · 61`, `3 cards · 1 999`,
-`4 cards · 3 016`, `5 cards · 968` — the same census this document measured off SQL, arrived at
+**The dialog, on Ashnod's Altar — and every string quoted in this paragraph is the accordion's.**
+The chips read `All · 6 044`, `2 cards · 61`, `3 cards · 1 999`, `4 cards · 3 016`,
+`5 cards · 968` — the same census this document measured off SQL, arrived at
 independently through the command, the IPC mirror and the component. Pressing `2 cards` gave
 `SHOWING 25 OF 61` **with every chip's count unmoved**, which is the census-versus-`matching`
 distinction working where a reader can see it; `Show more` went to `SHOWING 50 OF 61`; and
 `I own every piece · 0` on top of it drew **"No combo matches that filter."** rather than the
 never-fetched or the nothing-on-record sentence, which is the fourth empty state doing the one
 job it exists for.
+
+**What a reader sees in place of those strings since 2026-09-20.** The chips carry no counts —
+`All`, `2 cards` — so the on-screen half of the census cross-check reads off the `6 044 combos`
+line above the rail instead. `SHOWING 25 OF 61` has no successor and needs none: there is no
+*Show more*, the rail pages by scrolling, and the count over the rail is `matching` throughout, so
+the census-versus-`matching` distinction is still on screen, said in one place rather than two.
+The fourth empty state is the one line of that paragraph that is unchanged verbatim, and so is the
+finding it was taken for: `I own every piece` over a pressed `2 cards` still draws *No combo
+matches that filter.* **None of this has been re-driven** — it is what the source says, and the
+pass that would settle it is the one owed above.
 
 **What could not be driven.** The never-downloaded state, because this corpus has the feed and
 the launch refresh fetches it uninvited — it is reachable only through Settings' *Clear combos*
@@ -1202,9 +1496,9 @@ without a relaunch, and it is covered in the suite and in Storybook instead.
 | `src/lib/ipc.ts` | `AUTO_BRACKET`, `ComboBracketTag`, `DeckCombo`, `ComboStatus`, `ComboProgress` and the calls — plus `BracketCardRow`/`DeckBracketRead`/`deckBracketReads`, and the card side's `ComboPiece`/`CardCombo`/`ComboCountBucket`/`CardCombosPage`, plus `CardCombosQuery`, which mirrors no Rust struct and exists so the call site and `cardCombosKey` cannot disagree about what was asked |
 | `src/lib/query.ts` | `COMBOS_KEY`, `COMBOS_STATUS_KEY`, `combosForCardsKey`, `cardCombosKey` — one root, so an ingest landing under an open deck or an open card refills it. The last two are **deliberately not both `"forCards"`**: every prefix-scoped TanStack operation matches by prefix, so one spelling would let a targeted invalidation of the cheap read throw away the expensive one |
 | `src/features/decks/validation/types.ts` | `BracketCardFacts` — the five fields, and why the narrowing lives there and not on `CardFacts` |
-| `src/features/decks/validation/bracket.ts` | The floor, the two greps, `COMBO_FLOOR`, `describeReason`, `bracketWarning` |
+| `src/features/decks/validation/bracket.ts` | The floor, the two greps, `COMBO_FLOOR` — **exported since 2026-09-20** — and `comboBrackets` beside it, the card side's five pips derived from that one table and never tabulated a second time; plus `describeReason` and `bracketWarning` |
 | `src/features/decks/DeckBracket.tsx` | The readout, the picker, the combo list, and the four states of the combo read — **and `COMBO_TAG`**, exported since the card side became its second reader, because two tables spelling Spellbook's seven letters are two things that can come to disagree about what `S` means |
-| `src/features/card/CombosDialog.tsx` | The card side's whole surface: `PAGE_SIZE`, the two filters, the piece art and its owned mark, the four empty sentences, `AS_OF`, and the Spellbook permalink |
+| `src/features/card/CombosDialog.tsx` | The card side's whole surface: the `Rail` with its sentinel and `IntersectionObserver`, the `Pane`, `PAGE_SIZE` (50 since 2026-09-20), `bracketRange` / `bracketSentence` / `comboRowLabel`, the search box and the two filters, the piece art at `w-44` and its owned mark, the four empty sentences, `AS_OF`, and the Spellbook permalink |
 | `src/features/card/CardModalRail.tsx` | The `Combos` row — a noun in the first block, at the end of it, because nothing a reader has learnt the position of moves |
 | `src/features/card/cardDetailKey.ts` | The one `card_detail` key the modal and all four of its overlays share, so opening this dialog is a cache read rather than a round trip |
 | `src/features/decks/useDeckBrackets.ts` | The gallery's read, `deckBracketsKey`, `bracketLabel` and `effectiveBracket` — the wall's whole share of this document |

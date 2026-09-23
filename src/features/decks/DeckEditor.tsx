@@ -2915,8 +2915,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * **Add note…** — the card menu's first note row.
    *
-   * It writes nothing here: the band makes the note, so the create, its refusal line and the
-   * editor that opens on it are all one observer's. `addLabel`'s split exactly.
+   * It writes nothing here and, since 2026-09-20, **the band writes nothing on the press
+   * either**: the request opens the note editor seeded with this card, and **Save** is the create
+   * that names it. What the split buys is unchanged — the create, its refusal line and the editor
+   * are all one observer's — and `addLabel`'s is that same split, one beat later.
    *
    * ⚠️ **A card with no oracle id never reaches this**, and the fence is at the build site rather
    * than in here: `deckCardMenu` passes `addNote: undefined` for an orphan printing, and
@@ -3958,7 +3960,35 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // reader reads rather than handles opt back in at their own shell**: `Dialog`'s panel (every
       // overlay below is mounted *inside* this section and would inherit the refusal),
       // `ValidationPanel` and `DeckBracket` on the ledger line, and the notes band's body.
-      className={cn("relative flex h-full min-h-0 flex-col gap-3 select-none")}
+      //
+      // **`min-h-full` rather than `h-full`, and it is the whole of why this page had no bottom
+      // margin** (2026-09-22, the reader's own report: the bottom-most controls were "very hard
+      // to use"). `AppShell`'s `<main>` is `p-5`, so every other page in this app gets 20px under
+      // its last row. **This one got none.** With `h-full` this section is *exactly* the
+      // scroller's height, its children are `shrink-0`, and on a deck taller than the window they
+      // **overflow** it rather than extend it — and a scroll container's bottom padding is part
+      // of the scrollable overflow of its own **in-flow** content only. An overflowing descendant
+      // contributes its border box and nothing after it, so `main`'s 20px was real on Collection
+      // and Wishlist and silently absent here. Measured in the shipped window (`tauri dev`,
+      // debug) on a 100-card Commander deck at 1920×1080: at `scrollTop === scrollHeight -
+      // clientHeight` the notes band's bottom edge sat at y **1079.59** in a 1080px window —
+      // **0.4px of clearance**, its `New note` button flush against the frame.
+      //
+      // **A `pb-*` here does not fix it and was tried first.** Padding is inside this box's own
+      // border box under `box-sizing: border-box`, and the box is pinned at 100%: `pb-8` applied
+      // (`paddingBottom` read back `32px`) and moved `main.scrollHeight` **not at all** — 4305
+      // before and after, gap still 0.41px. The height had to stop being definite. `min-h-full`
+      // is what `DecksPage` has always used, and with it the section wraps its content (948 →
+      // 4316.6 on the same deck), `main`'s own 20px lands the way it does everywhere else, and
+      // `pb-3` on top brings the clearance to the **32px** asked for. Measured after: 4305 →
+      // 4357, gap **32.4**.
+      //
+      // **Nothing below loses a definite height by it.** The views are `flex-1` under
+      // {@link DECK_HEIGHT_FLOOR}'s `min-h-96`: on a deck shorter than the window this box is
+      // still 100% tall, there is still free space, and `flex-1` still stretches into it; on one
+      // taller there was never free space to distribute and the floor is what was holding the
+      // view up already.
+      className={cn("relative flex min-h-full flex-col gap-3 pb-3 select-none")}
     >
       {/* The four quick destinations, drawn across the top of this scroller for the length of a
           drag and at no other time. **The first child on purpose**: it is `sticky top-0`, so it

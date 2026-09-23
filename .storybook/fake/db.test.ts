@@ -66,6 +66,7 @@ import type {
   ImportResolveLine,
   SearchRequest,
   SearchSortKey,
+  StickyNote,
   TransferImportMode,
   WishlistImportItem,
   WishlistQuery,
@@ -79,6 +80,9 @@ import { activityLine } from "@/features/home/activityText";
 // The app's half of the default layout, which the fake spells out rather than imports — so the
 // only thing holding the two together is a test that compares them.
 import { DEFAULT_LAYOUT } from "@/features/home/widgets";
+// The app's own note reader, borrowed for one fence a grep could not make: the seeded sticky
+// notes claim to carry a hard break, and only this says whether the characters really are one.
+import { parseNoteBody } from "@/features/decks/noteMarkdown";
 import type { MarketplaceId } from "@/lib/marketplace";
 import { parseSnapshotValue, SNAPSHOT_VERSION } from "@/lib/shareSnapshot";
 import type { SortSpec } from "@/lib/sort";
@@ -8133,7 +8137,11 @@ describe("deck notes", () => {
       body: "Fourteen sources.",
       oracleIds: [BOLT_ORACLE],
     });
-    expect(note.cards).toEqual([{ oracleId: BOLT_ORACLE, name: "Lightning Bolt" }]);
+    expect(note.cards).toMatchObject([{ oracleId: BOLT_ORACLE, name: "Lightning Bolt" }]);
+    // The representative printing is the attachment's other half and is asserted on its own
+    // below: a note about a card names a *card*, and which printing draws it is a fact the read
+    // resolves rather than one the write stored.
+    expect(note.cards[0].cardId).not.toBeNull();
     const all = readHandlers(db).deck_notes({ deckId: 1 });
     expect(all).toHaveLength(1);
     expect(all[0].id).toBe(note.id);
@@ -8202,9 +8210,76 @@ describe("deck notes", () => {
       body: "b",
       oracleIds: ["o-not-in-the-corpus"],
     });
+    // **`cardId: null` is the orphan and is the other half of the same sentence**: there is no
+    // printing to name, so the card draws an empty frame rather than a broken image, and the
+    // picture is `null` with it rather than an empty map.
     expect(note.cards).toEqual([
-      { oracleId: "o-not-in-the-corpus", name: "o-not-in-the-corpus" },
+      {
+        oracleId: "o-not-in-the-corpus",
+        name: "o-not-in-the-corpus",
+        cardId: null,
+        imageUris: null,
+      },
     ]);
+  });
+
+  /**
+   * **The picture, pinned on a card that has one** — the half the null arm below cannot see.
+   *
+   * `imageUris` is folded rather than passed through by every reader of it (a note card's
+   * thumbnail, `deckTokenViews`, `CombosDialog`), so a fake answering `null` throughout would
+   * make the workbench the one place each of those resolutions is never exercised — which is
+   * exactly what {@link frontFaceImageUris}' own comment warns about. Asserted **against the
+   * fixture's own row** rather than against a pasted URL: a hard-coded string would go stale with
+   * the generated corpus and would pass a `frontFaceImageUris` that had stopped reading the card.
+   */
+  it("draws the picture of the printing it named, and not an empty map", () => {
+    const db = notesDb();
+    const note = writeHandlers(db).deck_note_create({
+      deckId: 1,
+      title: "t",
+      body: "b",
+      oracleIds: [BOLT_ORACLE],
+    });
+    const [attached] = note.cards;
+    const printing = db.cards.find((c) => c.id === attached.cardId);
+
+    expect(printing).toBeDefined();
+    expect(printing?.normalUrl).toBeTruthy();
+    expect(attached.imageUris).not.toBeNull();
+    expect(attached.imageUris?.display).toBe(printing?.normalUrl);
+    expect(attached.imageUris?.art).toBe(printing?.artCropUrl);
+  });
+
+  it("names the deck's own printing where the deck holds one, and any printing otherwise", () => {
+    // `attachments_by_note`'s `ORDER BY (dc.card_id IS NULL), c.id` — a note about Lightning Bolt
+    // in a deck sleeving one printing must not draw another's art, because the picture is how a
+    // reader recognises the row. A deck holding none of the card still gets a picture.
+    const db = notesDb();
+    const byId = db.cards
+      .filter((c) => c.oracleId === BOLT_ORACLE)
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const chosen = byId[byId.length - 1];
+    expect(chosen.id).not.toBe(byId[0].id);
+    db.deckCards.push(deckCard({ id: 900, deckId: 1, cardId: chosen.id }));
+
+    const note = writeHandlers(db).deck_note_create({
+      deckId: 1,
+      title: "t",
+      body: "b",
+      oracleIds: [BOLT_ORACLE],
+    });
+    expect(note.cards[0].cardId).toBe(chosen.id);
+
+    // The other deck holds none of it, so the corpus answers instead — the lowest id, which is
+    // the tie-break the deck's own pass uses too.
+    const elsewhere = writeHandlers(db).deck_note_create({
+      deckId: 2,
+      title: "t",
+      body: "b",
+      oracleIds: [BOLT_ORACLE],
+    });
+    expect(elsewhere.cards[0].cardId).toBe(byId[0].id);
   });
 
   it("refuses a blank oracle id on the two paths that would store one, and on neither other", () => {
@@ -9785,6 +9860,31 @@ describe("the busy fault", () => {
       // argument, and `"grid"` is non-blank, so the one refusal `set_start_view` has cannot stand
       // in for a refusal about a sync either.
       layout: { version: 2, widgets: [] },
+      // The sticky notes' one key no write before them had. Their other four are already on this
+      // record — `id`, `ids`, `title` and `body` from the note writes above, and `color` from
+      // the three label writes, which is the **fourth** key here that writes in two different
+      // features spell the same way. `"ember"` is a word a label accepts and a sticky note does
+      // not even look at: that column carries no CHECK on either side of the wire, so there is
+      // nothing for `sticky_note_create` to refuse instead of the sync.
+      //
+      // `pinned` is a boolean and has no junk state, `collapsed`'s reason — and it is named
+      // rather than left out because `invoke` matches by name, which is this record's whole
+      // rule, even for a key whose command treats absent and present alike.
+      //
+      // The two that resolve a row are what this loop is really for here: `id: 1` names **no
+      // sticky note** in this world, so a handler that looked its note up before taking the lock
+      // would fail by answering `sticky_notes::NOTE_GONE` instead of BUSY. `ids` is
+      // `[categoryId(1, "main")]` — strings, where a reorder wants numbers — and that is
+      // harmless for every collision's reason on this record: `refuseIfBusy` is that handler's
+      // first statement, and it skips an id that is not a note rather than refusing one anyway.
+      pinned: true,
+      // `mark_new_printings_seen`'s argument, and the **sixth** key on this record that carries a
+      // clock the caller owns rather than one the backend reads. Never looked at on this path —
+      // `refuseIfBusy` is that handler's first statement and it has no refusal of its own to run
+      // second — and named for `collapsed`'s reason: `invoke` matches by name, which is this
+      // record's whole rule. A number off the IPC boundary has no junk state to fail this loop
+      // with instead, so any value would do and the fixture's own today is the honest one.
+      at: WHEN,
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -10191,9 +10291,57 @@ describe("the busy fault", () => {
     // up before taking the lock would refuse in the wrong words, and the `/busy/i` match is what
     // tells the two apart.
     //
+    // The New printings widget then added **one**, 115 → 116, and the feature ships **two**
+    // commands: `mark_new_printings_seen` is the write — the thirteenth `app_meta` write by
+    // `set_deck_folder_pane`'s count above, on the reader's own database through
+    // `sync::with_write`, so it answers BUSY under a sync for every reason its twelve
+    // predecessors do. Its read half (`new_printings`, on `lock_db_read`) is in `readHandlers`
+    // and not in this table at all: the split every preference and every list read before it is
+    // on.
+    //
+    // It is worth this loop **because it has no refusal of its own**, which is the strongest
+    // form of the argument `set_nav_collapsed` makes three paragraphs up: the body is one
+    // assignment of a number that has no junk state, so a handler that forgot `refuseIfBusy`
+    // would answer `Ok` on a busy database and nothing else in this file would notice. The
+    // caller ignores the refusal either way — a cursor that did not move costs a row of gold
+    // dots somebody has already looked at.
+    //
     // **This delta is arithmetic against one tree** — re-run the sweep after the next merge
     // rather than adding to it. 115 was taken by running it and reading `left`.
-    expect(names).toHaveLength(115);
+    //
+    // The sticky notes then added **four**, 115 → 119 on their own branch, and the feature ships **five** commands:
+    // the eighth entry where the handler count and the delta differ, and the ordinary shape of
+    // it — `sticky_notes` is a read on `lock_db_read` and is not in this table at all, while
+    // `sticky_note_create`, `_update`, `_delete` and `_reorder` all take plain
+    // `sync::with_write`. Nothing here moves a copy across the collection boundary and nothing
+    // touches the network, so none needed `with_write_owned` and none joined `unlocked`.
+    //
+    // Two of the four are worth this loop more than the others. `sticky_note_update` and
+    // `sticky_note_delete` each resolve a row and refuse `sticky_notes::NOTE_GONE` when they
+    // cannot, and `id: 1` on the record above names no sticky note in this world — so a handler
+    // that looked its note up first would refuse in the wrong words, and the `/busy/i` match is
+    // what tells the two apart. `sticky_note_reorder` is the third worth naming for the opposite
+    // reason: its whole body is a loop over `sortOrder` that **skips** an id it cannot find, so
+    // a missing refusal there would answer `Ok` on a busy database and show up nowhere else in
+    // this file — `deck_note_reorder`'s shape, one table over.
+    //
+    // **119 was measured rather than reasoned to**, and by a second method worth naming, since
+    // every paragraph above is about a number that keeps going wrong: the `writeHandlers` object
+    // literal was **parsed** with the TypeScript compiler API and its properties counted — 132
+    // keys, no duplicate, no spread, no computed name, and all 13 `unlocked` entries present as
+    // real keys, so 132 − 13 = 119 is exactly what `Object.keys(…).filter(…)` answers here. That
+    // is the same answer as reading `left` off a failing run and is available without one.
+    // (Arithmetic against the previous figure said 119 too; agreement between the two is the
+    // point, because 115 + 4 would have been just as confident if a sibling branch had landed a
+    // write.)
+    //
+    // ⚠️ **It is still a fact about one tree.** A red here after a merge means count again — the
+    // parse above takes seconds — and it does not mean these four are missing a `refuseIfBusy`.
+    // ⚠️ **And a merge did exactly that, the same day.** `newPrintings` landed one write of its
+    // own on `main` while this branch was open — 115 → 116 there, 115 → 119 here — so neither
+    // number survived and the figure below is the parse above re-run on the merged tree. That is
+    // the case the paragraph above was written for, arriving before the ink was dry.
+    expect(names).toHaveLength(120);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -15387,6 +15535,244 @@ describe("the recently viewed cards", () => {
   });
 });
 
+/**
+ * The sticky notes — `sticky_notes.rs`'s five commands, user schema v46.
+ *
+ * **The first table on this page that hangs off nothing**, so there is no owner to resolve and
+ * no parent to be wrong about; what is left to get right is an *order*, a patch that means
+ * "leave it", and two refusals that must lose to the lock.
+ */
+describe("the reader's sticky notes", () => {
+  const DAY = 86_400;
+  /**
+   * `sticky_notes::NOTE_GONE`, verbatim — and **the same sentence `deck_notes.rs` uses**, which
+   * is the house style rather than a copy-paste. Spelled out here rather than imported from
+   * `db.ts` (which does not export it) for the reason the fake keeps two constants for one
+   * string: the two crates may reword independently, and a test reading the fake's own constant
+   * could never tell you that the fake had drifted from the crate.
+   */
+  const GONE = "That note is not there any more.";
+  const SEEDED = [
+    "Trade night — Friday",
+    "Bracket 3 — house rules",
+    "Cards to proxy",
+    "Sealed box math",
+    "Wishlist — birthday",
+    "Sleeve stock",
+    "Draft archetypes",
+    "Deck ideas — Atraxa",
+  ];
+
+  /**
+   * A board holding exactly these notes, ids `1..n` in the order written and `sortOrder` to
+   * match unless a case says otherwise. Every field has a default, because the tests below are
+   * each about one of them and a row spelled out eight times would bury which.
+   */
+  function board(...notes: Partial<StickyNote>[]): FakeDb {
+    return makeDb({
+      stickyNotes: notes.map((n, i) => ({
+        id: i + 1,
+        title: "",
+        body: "",
+        color: "slate",
+        pinned: false,
+        sortOrder: i,
+        createdAt: CLOCK_BASE - DAY,
+        updatedAt: CLOCK_BASE - DAY,
+        ...n,
+      })),
+    });
+  }
+
+  /** `starter` is the only world with any, and `empty` is the state the widget's empty card
+   *  draws — a note is a thing somebody wrote, so no seed can imply one. */
+  it("seeds eight notes on starter in the order they were arranged, and none on empty", () => {
+    const got = readHandlers(seed("starter")).sticky_notes();
+
+    expect(got.map((n) => n.title)).toEqual(SEEDED);
+    // All five colours the page knows, so the tinted layout has something to be tinted about.
+    expect(new Set(got.map((n) => n.color))).toEqual(
+      new Set(["amber", "jade", "azure", "rose", "slate"]),
+    );
+    // Exactly one pin: a mark every row wears is a mark that says nothing, and it is the only
+    // arrangement the Pinned-first option visibly changes.
+    expect(got.filter((n) => n.pinned).map((n) => n.title)).toEqual(["Trade night — Friday"]);
+    // Every seeded row is under the fixture's clock, so a story's first write lands above all
+    // eight — this file's rule for every seeded timestamp.
+    expect(Math.max(...got.map((n) => n.updatedAt))).toBeLessThan(CLOCK_BASE);
+    expect(readHandlers(seed("empty")).sticky_notes()).toEqual([]);
+  });
+
+  /**
+   * ⚠️ **The hard break, read through the app's own reader rather than grepped for.**
+   *
+   * A break is spelled as a trailing backslash in the stored body and travels as a `"\n"`
+   * inside a text run, because `Inline` has no break member — so a renderer that forgets
+   * `whitespace-pre-line` draws it as a space, a lost line boundary nothing else in either
+   * suite would notice. Seeding one is what makes that visible in the workbench; asserting the
+   * parse is what stops a later tidy-up deleting the backslash and leaving the seed claiming a
+   * break it no longer has.
+   */
+  it("seeds bodies that really carry a hard break and a bullet list", () => {
+    const got = readHandlers(seed("starter")).sticky_notes();
+    const blocks = (n: StickyNote) => parseNoteBody(n.body);
+
+    const broken = got.filter((n) =>
+      blocks(n).some((b) => b.kind === "paragraph" && b.inlines.some((i) => i.text.includes("\n"))),
+    );
+    expect(broken.map((n) => n.title)).toEqual(["Sealed box math", "Deck ideas — Atraxa"]);
+
+    expect(
+      got.filter((n) => blocks(n).some((b) => b.kind === "list" && !b.ordered)).length,
+    ).toBeGreaterThan(0);
+  });
+
+  /** Landing last is the promise: a board somebody arranged keeps that arrangement, and the new
+   *  note is where they can find it. The colour is stored as written — no CHECK, because the
+   *  table is synced and a newer build's sixth colour has to survive the round trip. */
+  it("lands a new note at the end of the board and answers its id", () => {
+    const db = board({}, {});
+    const id = writeHandlers(db).sticky_note_create({
+      title: "Pack list",
+      body: "",
+      color: "chartreuse",
+    });
+    const got = readHandlers(db).sticky_notes();
+
+    expect(got.map((n) => n.id)).toEqual([1, 2, id]);
+    expect(got[2]).toMatchObject({ title: "Pack list", color: "chartreuse", sortOrder: 2 });
+    // Not an argument: a note is pinned by pressing the pin, so a create writes the column's
+    // own `DEFAULT 0` and nothing else.
+    expect(got[2].pinned).toBe(false);
+    // One instant for both stamps, and above every row already in the store.
+    expect(got[2].createdAt).toBe(got[2].updatedAt);
+    expect(got[2].createdAt).toBeGreaterThan(CLOCK_BASE);
+  });
+
+  /** `coalesce(?n, col)`, and the two values a truthiness test would swallow. */
+  it("changes only the fields it names, and `\"\"` and `false` are real presses", () => {
+    const db = board({ title: "Trade night", body: "Seven", color: "amber", pinned: true });
+    const w = writeHandlers(db);
+
+    w.sticky_note_update({ id: 1, body: "Eight" });
+    expect(readHandlers(db).sticky_notes()[0]).toMatchObject({
+      title: "Trade night",
+      body: "Eight",
+      color: "amber",
+      pinned: true,
+    });
+
+    // A title the reader deliberately cleared, and a pin they deliberately took out. `??` and
+    // never `||`: either read as "no change" would be a press that reported success and did
+    // nothing, for ever.
+    w.sticky_note_update({ id: 1, title: "", pinned: false });
+    expect(readHandlers(db).sticky_notes()[0]).toMatchObject({
+      title: "",
+      body: "Eight",
+      pinned: false,
+    });
+  });
+
+  /** The crate writes `updated_at = unixepoch()` with nothing compared first, unlike
+   *  `deck_note_update` — there is no history row here to guard and no undo step to spend, so
+   *  there is nothing a comparison would buy. The birth date never moves. */
+  it("moves the clock on every save, even one that names no field, and never the birth date", () => {
+    const db = board({ createdAt: CLOCK_BASE - 2 * DAY, updatedAt: CLOCK_BASE - 2 * DAY });
+    const before = readHandlers(db).sticky_notes()[0];
+
+    writeHandlers(db).sticky_note_update({ id: 1 });
+
+    const after = readHandlers(db).sticky_notes()[0];
+    expect(after.createdAt).toBe(before.createdAt);
+    expect(after.updatedAt).toBeGreaterThan(before.updatedAt);
+  });
+
+  /** **The survivors are not renumbered**, which is the crate's `DELETE` and not an omission:
+   *  `sort_order` is an ordering and never a position, and a renumbering pass would be N extra
+   *  rows for the sync to carry every time a reader threw one note away. */
+  it("deletes one note and leaves the survivors' numbers where they were", () => {
+    const db = board({}, {}, {});
+
+    writeHandlers(db).sticky_note_delete({ id: 2 });
+
+    expect(readHandlers(db).sticky_notes().map((n) => [n.id, n.sortOrder])).toEqual([
+      [1, 0],
+      [3, 2],
+    ]);
+  });
+
+  /** Renumber in the order given. **An id that is not a note is skipped rather than refused** —
+   *  the page sends the order it drew, and a note deleted in another window must not fail the
+   *  drag the reader just made. The sync makes that an ordinary Tuesday. */
+  it("renumbers in the order given, and a stranger is skipped but keeps its place", () => {
+    const db = board({}, {}, {});
+
+    writeHandlers(db).sticky_note_reorder({ ids: [3, 1, 2] });
+    expect(readHandlers(db).sticky_notes().map((n) => n.id)).toEqual([3, 1, 2]);
+
+    // ⚠️ The number written is the position in the **argument**, strangers included — the
+    // crate's `enumerate()` counts them — so the notes after one keep a hole. The reader still
+    // sees the order they dragged, which is the only thing this command promises.
+    writeHandlers(db).sticky_note_reorder({ ids: [2, 999, 1, 3] });
+    expect(readHandlers(db).sticky_notes().map((n) => [n.id, n.sortOrder])).toEqual([
+      [2, 0],
+      [1, 2],
+      [3, 3],
+    ]);
+  });
+
+  /** The tie term, and it is load-bearing rather than tidy: a create mints `max + 1` while a
+   *  reorder renumbers from 0, so two devices really can land on one number — and a read
+   *  sorting on `sort_order` alone would be free to draw those two in either order, a board
+   *  that reshuffles itself between two frames. */
+  it("breaks a tie on the id", () => {
+    const db = board({ sortOrder: 5 }, { sortOrder: 5 }, { sortOrder: 1 });
+
+    expect(readHandlers(db).sticky_notes().map((n) => n.id)).toEqual([3, 1, 2]);
+  });
+
+  /** A page holding a row it can mutate is a state the backend cannot produce, which is this
+   *  fake's own bar — `set_home_layout`'s rule on the way back out. */
+  it("hands back copies rather than the stored rows", () => {
+    const db = board({ title: "Trade night" });
+
+    readHandlers(db).sticky_notes()[0].title = "not this";
+
+    expect(db.stickyNotes[0].title).toBe("Trade night");
+  });
+
+  /** One sentence, `sticky_notes::NOTE_GONE` verbatim, on the two writes that resolve a row —
+   *  a create has none to miss and a reorder skips instead. */
+  it("refuses an update or a delete of a note that is gone, in the crate's sentence", () => {
+    const db = board({});
+    const w = writeHandlers(db);
+
+    expect(() => w.sticky_note_update({ id: 404, title: "x" })).toThrow(GONE);
+    expect(() => w.sticky_note_delete({ id: 404 })).toThrow(GONE);
+    expect(readHandlers(db).sticky_notes()).toHaveLength(1);
+  });
+
+  /**
+   * All four writes take the write connection, and **the lock is asked first** — the ids here
+   * name no note at all, so a handler that resolved its row before `refuseIfBusy` would fail
+   * this by answering {@link GONE} instead of BUSY.
+   *
+   * The read answers through every second of a sync, which is why its own BUSY is unstoryable —
+   * the gap `home-page.md` records for six other widgets, and not one to chase with a fault.
+   */
+  it("refuses all four writes under a sync and answers the read anyway", () => {
+    const db = board({});
+    db.fault = "busy";
+    const w = writeHandlers(db);
+
+    expect(() => w.sticky_note_create({ title: "", body: "", color: "slate" })).toThrow(/busy/i);
+    expect(() => w.sticky_note_update({ id: 404 })).toThrow(/busy/i);
+    expect(() => w.sticky_note_delete({ id: 404 })).toThrow(/busy/i);
+    expect(() => w.sticky_note_reorder({ ids: [404] })).toThrow(/busy/i);
+    expect(readHandlers(db).sticky_notes()).toHaveLength(1);
+  });
+});
+
 /** `set_completion` — distinct collector numbers held, against a printed size when there is one. */
 describe("set completion", () => {
   const at = (set: string, number: string) =>
@@ -15576,6 +15962,342 @@ describe("the price movers", () => {
     expect(got.movers.some((m) => m.delta > 0)).toBe(true);
     expect(got.movers.some((m) => m.delta < 0)).toBe(true);
     expect(ask(seed("empty"), "7d")).toEqual({ movers: [], since: null, days: 0 });
+  });
+});
+
+/**
+ * `new_printings` — the reprints of what the watched decks hold, and the cursor beside them.
+ *
+ * **The corpus is the test's own here where every other block in this file reads the fixture's**,
+ * and that is forced rather than preferred: `cards.ts` is 59 real printings spread over 33 years,
+ * and the widest window this feed will answer is a year — so the shared corpus holds exactly two
+ * rows this command can ever reach (`msc 143` and `sld 913`, measured below against `starter`).
+ * A window, an ordering, a limit and a language set cannot be shown against two rows on two days,
+ * so the cases that are about *arithmetic* mint their printings off {@link BOLT} and the cases
+ * that are about the **seeds** ask the seeds.
+ */
+describe("the new printings feed", () => {
+  const DAY = 86_400;
+  type Ask = Parameters<ReturnType<typeof readHandlers>["new_printings"]>[0];
+
+  /** `YYYY-MM-DD`, `daysAgo` days before the fixture's today — the corpus column's own form. */
+  const day = (daysAgo: number) =>
+    new Date((CLOCK_BASE - daysAgo * DAY) * 1_000).toISOString().slice(0, 10);
+
+  /**
+   * A printing of the Bolt's oracle card, released `daysAgo` days before today.
+   *
+   * Minted off a real row, so every column but the four this feed narrows on is the corpus's —
+   * and the oracle id with them, which is what makes it a *reprint* of the card the deck below
+   * holds rather than a second card wearing the same name.
+   */
+  function reprint(id: string, daysAgo: number, over: Partial<FakeCard> = {}): FakeCard {
+    return { ...BOLT, id, setCode: "rpt", collectorNumber: "1", releasedAt: day(daysAgo), ...over };
+  }
+
+  /** A world whose one deck holds the `lea` Bolt, over that corpus plus the Bolt itself. */
+  function world(reprints: FakeCard[], over: Partial<FakeDb> = {}): FakeDb {
+    return makeDeckDb({
+      cards: [BOLT, ...reprints],
+      decks: [deck({ id: 1, name: "Atraxa" })],
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT.id })],
+      ...over,
+    });
+  }
+
+  /** The ask every case varies from — 90 days, every deck, and the widget's three defaults. */
+  function ask(db: FakeDb, over: Partial<Ask> = {}) {
+    return readHandlers(db).new_printings({
+      scope: "all",
+      deckIds: [],
+      days: 90,
+      langs: ["en"],
+      includeVirtual: false,
+      includeTheory: true,
+      includeBasics: false,
+      limit: 100,
+      ...over,
+    });
+  }
+
+  /**
+   * **The requirement the two-pass shape exists for.** One walk that visited a printing once per
+   * deck holding it would answer this row twice and then need de-duplicating back down, and the
+   * count beside it would be wrong in the same breath.
+   */
+  it("answers a printing two decks hold once, with both decks and both counted", () => {
+    const db = world([reprint("new", 10)], {
+      decks: [deck({ id: 1, name: "Atraxa" }), deck({ id: 2, name: "Edgar" })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id }),
+        deckCard({ id: 2, deckId: 2, cardId: BOLT.id }),
+      ],
+    });
+    const got = ask(db);
+
+    expect(got.printings).toHaveLength(1);
+    expect(got.printings[0].printingId).toBe("new");
+    // By deck name, which is the popover's order and not the store's.
+    expect(got.printings[0].decks.map((d) => d.name)).toEqual(["Atraxa", "Edgar"]);
+    expect(got.decksWatched).toBe(2);
+    expect(got.oldest).toBe(got.printings[0].releasedAt);
+  });
+
+  /** One entry with the total, never two rows that draw identically and sum apart — and the word
+   *  it reports is the lower of the two, so a deck that has sleeved the card up says `live`. */
+  it("sums a deck's copies across its piles and folds the variant to live", () => {
+    const db = world([reprint("new", 10)], {
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id, quantity: 2 }),
+        deckCard({ id: 2, deckId: 1, cardId: BOLT.id, quantity: 3, variant: "theory" }),
+      ],
+    });
+
+    expect(ask(db).printings[0].decks).toEqual([
+      { deckId: 1, name: "Atraxa", quantity: 5, variant: "live", virtualOnly: false },
+    ]);
+  });
+
+  /** Newest first, and the three tie-breaks under it are the crate's `ORDER BY` verbatim. */
+  it("orders by release day, then set, collector number and id", () => {
+    const db = world([
+      reprint("c", 10, { setCode: "zzz" }),
+      reprint("a", 10, { setCode: "aaa", collectorNumber: "2" }),
+      reprint("b", 10, { setCode: "aaa", collectorNumber: "10" }),
+      reprint("newest", 1),
+    ]);
+
+    // `"10"` before `"2"`, because a collector number is TEXT and this is byte order.
+    expect(ask(db).printings.map((p) => p.printingId)).toEqual(["newest", "b", "a", "c"]);
+  });
+
+  /** `since` is the far edge **after** the clamp, so a page that asked for 99 999 days can draw
+   *  the date it really got — and a zero or a negative is one day rather than an empty window. */
+  it("clamps the window and answers the edge it really used", () => {
+    const db = world([reprint("new", 10), reprint("old", 200)]);
+
+    expect(ask(db).since).toBe(day(90));
+    expect(ask(db, { days: 99_999 }).since).toBe(day(365));
+    expect(ask(db, { days: -5 }).since).toBe(day(1));
+    expect(ask(db, { days: 0 }).since).toBe(day(1));
+    expect(ask(db, { days: 30 }).printings.map((p) => p.printingId)).toEqual(["new"]);
+    expect(ask(db, { days: 365 }).printings.map((p) => p.printingId)).toEqual(["new", "old"]);
+    expect(ask(db, { days: 365 }).oldest).toBe(day(200));
+  });
+
+  /** A negative is **no rows** and never the default, which is what SQLite reads a bare negative
+   *  `LIMIT` as; anything past the ceiling is the ceiling. Seeded, because a limit assertion over
+   *  an empty feed proves nothing. */
+  it("clamps the page size, and a negative asks for nothing", () => {
+    const db = world([reprint("a", 10), reprint("b", 11), reprint("c", 12)]);
+
+    expect(ask(db).printings).toHaveLength(3);
+    expect(ask(db, { limit: -1 }).printings).toHaveLength(0);
+    expect(ask(db, { limit: 0 }).printings).toHaveLength(0);
+    expect(ask(db, { limit: 2 }).printings.map((p) => p.printingId)).toEqual(["a", "b"]);
+    // A page cut by the limit says what it is a truncation *of*.
+    expect(ask(db, { limit: 2 }).oldest).toBe(day(11));
+    expect(ask(db, { limit: 9_999 }).printings).toHaveLength(3);
+  });
+
+  /**
+   * **Decision 2, and the whole of it.** `cards.id` is one printing *in one language*, so the
+   * language set is what decides whether a second language is a second row — and each of the
+   * three modes the widget offers is a real answer here.
+   */
+  it("answers one row per language the allow-list admits, and an empty list is every language", () => {
+    const db = world([
+      reprint("new-en", 10),
+      reprint("new-ja", 10, { lang: "ja", collectorNumber: "2" }),
+      reprint("new-de", 10, { lang: "de", collectorNumber: "3" }),
+    ]);
+
+    // English — the widget's default, and the issue's de-duplication requirement.
+    expect(ask(db).printings.map((p) => p.printingId)).toEqual(["new-en"]);
+    expect(ask(db).printings[0].lang).toBe("en");
+    // Every language — an **empty** list, and three rows is what the reader asked for.
+    expect(ask(db, { langs: [] }).printings.map((p) => p.lang)).toEqual(["en", "ja", "de"]);
+    // Chosen — English and Japanese, and not German.
+    expect(ask(db, { langs: ["en", "ja"] }).printings.map((p) => p.lang)).toEqual(["en", "ja"]);
+  });
+
+  /**
+   * The list arrives from a layout document a reader can hand-edit, so it is bounded here as well
+   * as narrowed in TypeScript. **A list the narrowing empties is every language**, which is the
+   * same rule as an empty list rather than a different one — never a silent fallback to English,
+   * which would be this side making a claim the caller did not.
+   */
+  it("drops an entry that is not a language code, and a list emptied that way is every language", () => {
+    const db = world([reprint("new-en", 10), reprint("new-ja", 10, { lang: "ja" })]);
+    // A SQL fragment, a blank, a forty-character word, a capitalised code and two things that
+    // are not strings at all — the last pair being what a hand-edited document can really hold.
+    const junk = ["en' OR 1=1 --", "", "x".repeat(40), "EN", 7, null];
+
+    expect(ask(db, { langs: junk }).printings).toHaveLength(2);
+    // And a list past the cap is bounded rather than refused: the narrowing runs first, so the
+    // cap counts **codes** rather than characters.
+    const long = Array.from({ length: 32 }, () => "zz");
+    expect(ask(db, { langs: long }).printings).toHaveLength(0);
+  });
+
+  /** A basic land is what a deck holds twenty of and never what it wants told about — and a snow
+   *  land is a basic land, because a reader who unticked the switch did not mean *except the snow
+   *  ones*. An ordinary land is not one. */
+  it("drops a basic land unless it is asked for, the snow ones included", () => {
+    const forest = CARDS.find((c) => c.typeLine === "Basic Land — Forest")!;
+    const snow = { ...forest, id: "snow", oracleId: "snow-o", typeLine: "Basic Snow Land — Forest" };
+    const tower = { ...forest, id: "tower", oracleId: "tower-o", typeLine: "Land" };
+    const db = world(
+      [
+        reprint("forest-new", 10, { oracleId: forest.oracleId }),
+        reprint("snow-new", 10, { oracleId: "snow-o", collectorNumber: "2" }),
+        reprint("tower-new", 10, { oracleId: "tower-o", collectorNumber: "3" }),
+        // The three rows the deck actually lists — the type line is read off *these*, because a
+        // type line is a fact about the oracle card and the switch is applied to the held set.
+        forest,
+        snow,
+        tower,
+      ],
+      {
+        deckCards: [
+          deckCard({ id: 1, deckId: 1, cardId: forest.id }),
+          deckCard({ id: 2, deckId: 1, cardId: "snow" }),
+          deckCard({ id: 3, deckId: 1, cardId: "tower" }),
+        ],
+      },
+    );
+
+    expect(ask(db).printings.map((p) => p.printingId)).toEqual(["tower-new"]);
+    expect(ask(db, { includeBasics: true }).printings.map((p) => p.printingId)).toEqual([
+      "forest-new",
+      "snow-new",
+      "tower-new",
+    ]);
+  });
+
+  /**
+   * **And `decksWatched` moves with it**, which is the whole point of taking the count over the
+   * same predicate as the page: a reader whose only deck is virtual has to be told *no decks are
+   * being watched*, which is a different sentence from *nothing was reprinted*.
+   */
+  it("watches no virtual deck by default, and says so in the count as well as the rows", () => {
+    const db = world([reprint("new", 10)], {
+      decks: [deck({ id: 1, name: "Ideas", virtualOnly: true })],
+    });
+
+    expect(ask(db)).toMatchObject({ printings: [], decksWatched: 0 });
+    const asked = ask(db, { includeVirtual: true });
+    expect(asked.decksWatched).toBe(1);
+    expect(asked.printings[0].decks[0]).toMatchObject({ name: "Ideas", virtualOnly: true });
+  });
+
+  /** A plan is a list of cards the reader is building toward, and whether it counts as *held* is
+   *  the reader's answer rather than this command's. */
+  it("counts a theory row only when it is asked for", () => {
+    const db = world([reprint("new", 10)], {
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT.id, variant: "theory" })],
+    });
+
+    expect(ask(db, { includeTheory: false }).printings).toHaveLength(0);
+    // And the deck it *is* watched under says which list holds it.
+    expect(ask(db).printings[0].decks[0].variant).toBe("theory");
+  });
+
+  /** Two arms and not three: `chosen` carries the ids and every other word is every deck. */
+  it("reads the ids under chosen, ignores them under anything else, and treats an empty set as one", () => {
+    const db = world([reprint("new", 10)], {
+      decks: [deck({ id: 1, name: "Atraxa" }), deck({ id: 2, name: "Edgar" })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id }),
+        deckCard({ id: 2, deckId: 2, cardId: BOLT.id }),
+      ],
+    });
+
+    const chosen = ask(db, { scope: "chosen", deckIds: [2] });
+    expect(chosen.decksWatched).toBe(1);
+    expect(chosen.printings[0].decks.map((d) => d.name)).toEqual(["Edgar"]);
+    // `all` ignores the ids, and a word this build has never heard of is `all` rather than a
+    // refusal — the store outlives the build that wrote it.
+    expect(ask(db, { deckIds: [2] }).decksWatched).toBe(2);
+    expect(ask(db, { scope: "aScopeFromALaterBuild", deckIds: [2] }).decksWatched).toBe(2);
+    // An empty `chosen` is a real answer and never *every deck*: the reader chose a set and it
+    // is empty.
+    expect(ask(db, { scope: "chosen", deckIds: [] })).toMatchObject({
+      printings: [],
+      decksWatched: 0,
+    });
+  });
+
+  /** An orphaned deck row names a printing the corpus no longer holds, so there is no oracle card
+   *  to be reprinted — the crate's join says the same thing in SQL. */
+  it("ignores a deck row whose printing the corpus has lost", () => {
+    const db = world([reprint("new", 10)], {
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: "gone" })],
+    });
+
+    expect(ask(db)).toMatchObject({ printings: [], decksWatched: 1 });
+  });
+
+  /**
+   * The cursor, and the world it opens in: **one day before the newest printing the decks can
+   * reach**, so the newest release day is unseen and every older one is read. A stamp at today
+   * would mark the whole feed as seen and a `null` would dot every row of it — either is a mark
+   * no story could fail on.
+   */
+  it("opens with the newest release day unseen, and the write moves the cursor", () => {
+    const db = world([reprint("new", 10), reprint("old", 40)]);
+
+    expect(db.newPrintingsSeen).toBe(Date.parse(`${day(10)}T00:00:00Z`) / 1_000 - DAY);
+    expect(ask(db).seenAt).toBe(db.newPrintingsSeen);
+    writeHandlers(db).mark_new_printings_seen({ at: CLOCK_BASE });
+    expect(ask(db).seenAt).toBe(CLOCK_BASE);
+    // A world that passes the field keeps it, `null` included — *never*, which draws every dot.
+    expect(ask(world([reprint("new", 10)], { newPrintingsSeen: null })).seenAt).toBeNull();
+  });
+
+  /** Nothing there to have been looked at, so *never* — which draws every dot, and is the
+   *  honest floor rather than a gap. */
+  it("has no cursor at all in a world with no decks", () => {
+    expect(makeDb().newPrintingsSeen).toBeNull();
+    expect(seed("empty").newPrintingsSeen).toBeNull();
+  });
+
+  /**
+   * The seeds, and the three sentences the widget picks between.
+   *
+   * **The figures are the shared corpus's and are the whole of what it can answer**: `starter`'s
+   * four decks hold two oracle cards that were reprinted inside a year of the fixture's today —
+   * Swords to Plowshares (`msc 143`, 2026-06-26) and Sol Ring (`sld 913`, 2025-12-01) — and
+   * nothing at all inside thirty days. So *no decks watched*, *nothing reprinted* and a real feed
+   * are all reachable, and a feed of more than two rows is not.
+   */
+  it("gives starter a feed, thirty days nothing, and a deckless world the other sentence", () => {
+    const starter = seed("starter");
+
+    expect(ask(starter, { days: 30 })).toMatchObject({ printings: [], decksWatched: 4 });
+    expect(ask(starter).printings.map((p) => `${p.setCode} ${p.collectorNumber}`)).toEqual([
+      "msc 143",
+    ]);
+    expect(ask(starter, { days: 365 }).printings.map((p) => p.name)).toEqual([
+      "Swords to Plowshares",
+      "Sol Ring",
+    ]);
+    // The newest of those two is unseen and the older one is read, which is the mix the gold dot
+    // needs and the reason the cursor is derived rather than stamped.
+    const feed = ask(starter, { days: 365 });
+    expect(feed.seenAt).toBeLessThan(Date.parse(`${feed.printings[0].releasedAt}T00:00:00Z`) / 1000);
+    expect(feed.seenAt).toBeGreaterThan(
+      Date.parse(`${feed.printings[1].releasedAt}T00:00:00Z`) / 1000,
+    );
+
+    // A world with no decks at all — the *no decks are being watched* sentence, which is a
+    // different sentence from *nothing was reprinted* and points at a different fix.
+    for (const name of ["empty", "large"] as const) {
+      expect(ask(seed(name), { days: 365 })).toMatchObject({ printings: [], decksWatched: 0 });
+    }
+    // And the virtual deck is the fifth one this seed adds, watched only when it is asked for.
+    expect(ask(seed("virtualDeck")).decksWatched).toBe(4);
+    expect(ask(seed("virtualDeck"), { includeVirtual: true }).decksWatched).toBe(5);
   });
 });
 

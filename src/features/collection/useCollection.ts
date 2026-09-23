@@ -5,8 +5,12 @@ import {
   cycleTriState,
   DEBOUNCE_MS,
   FORMATS,
-  toggleColor,
+  NO_COLORS,
+  searchTerms,
+  toggleColorFilter,
   toggleIn,
+  typesParam,
+  type ColorFilter,
   type ColorKey,
 } from "@/features/search/useCardSearch";
 import { CONDITIONS, type Condition } from "@/lib/conditions";
@@ -74,6 +78,10 @@ export const COLLECTION_FIRST_DIR: Record<CollectionSortKey, SortDir> = {
 export interface CollectionFilterState {
   text: string;
   format: string;
+  /** The colour chips. **The `Exactly` chip beside them is deliberately not a field here** — it
+   *  modifies what a picked colour means rather than being a filter of its own, so counting it
+   *  would move the number on Reset all over a press that narrowed nothing new. The search's
+   *  `FilterState` carries the same omission and the same argument. */
   colors: readonly string[];
   sets: readonly string[];
   manaValues: readonly number[];
@@ -81,6 +89,9 @@ export interface CollectionFilterState {
    *  question `manaValues` asks, and counted with it below for that reason. */
   manaX: boolean;
   rarities: readonly string[];
+  /** The card-type chips — `CARD_TYPES`, ORed with each other. One kind however many are
+   *  pressed, for `rarities`' reason. */
+  types: readonly string[];
   /** The band the Price cell sets, at the marketplace the list is quoting. Either end alone is a
    *  filter; both `undefined` is none. */
   priceMin: number | undefined;
@@ -111,6 +122,9 @@ export function activeFilterCount(f: CollectionFilterState): number {
     // all, though — an X-only filter that counted zero would hide the Reset all that clears it.
     f.manaValues.length > 0 || f.manaX,
     f.rarities.length > 0,
+    // One kind however many chips are pressed, the way the colours and the rarities beside it
+    // are counted: `Creature` and `Land` together are one narrowing of one question.
+    f.types.length > 0,
     // One kind for both ends, as the search counts it: `$5 – $20` is one band and one thing to
     // clear, so a reader who set both ends and saw `Reset all 2` would have been told the wrong
     // number about one control.
@@ -165,7 +179,16 @@ export function useCollection() {
   const { marketplace } = useMarketplace();
   const [text, setText] = useState("");
   const [format, setFormat] = useState("");
-  const [colors, setColors] = useState<readonly ColorKey[]>([]);
+  // **One state for the row and its `Exactly` flag, not two** — see {@link ColorFilter}, which
+  // is shared with the other three hooks that own a colour filter and carries the reason.
+  // `CollectionFilterState` still has no field for the flag: it is a modifier on the row rather
+  // than a filter of its own, so it is counted by no `activeFilterCount`.
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(NO_COLORS);
+  const colors = colorFilter.picked;
+  const colorsStrict = colorFilter.strict;
+  // The eight card-type chips, ORed with each other and ANDed with everything else — the rarity
+  // chips' shape exactly. On the wire for free: `CollectionQuery extends CardFilters`.
+  const [types, setTypes] = useState<readonly string[]>([]);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   // Additive rather than exclusive, exactly as the search's is: `cmc` counts `{X}` as zero, so
@@ -240,18 +263,39 @@ export function useCollection() {
   const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
   const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
   const raritiesParam = rarities.length > 0 ? [...rarities].sort() : undefined;
+  // Through the shared `typesParam` rather than a fourth inline sort: three other hooks
+  // canonicalise this same list, and four copies of one normal form is four places for it to
+  // drift.
+  const typesParamValue = typesParam(types);
   const finishParam =
     finishes.length > 0 ? FINISHES.filter((f) => finishes.includes(f)) : undefined;
   const conditionParam =
     conditions.length > 0 ? CONDITIONS.filter((c) => conditions.includes(c)) : undefined;
 
+  /**
+   * The box, read as Scryfall's query syntax — the free text and the typed predicates.
+   *
+   * **This surface has no tag wiring**, so a tag term folds back into the free text rather than
+   * being dropped: see {@link searchTerms}, which is the whole rule and the whole reason.
+   *
+   * Nothing new is owed to `filterKey` below. `debouncedText` is already a segment of it and
+   * these two fields are a pure function of that string, so a payload that changed without the
+   * key changing would be a parser that is not a function.
+   */
+  const terms = useMemo(() => searchTerms(debouncedText), [debouncedText]);
+
   const filters: Omit<CollectionQuery, "limit" | "offset" | "sort"> = {
-    // Blank strings are dropped rather than sent: the backend reads them as unset anyway,
-    // and sending them would make the payload lie about intent.
-    text: debouncedText || undefined,
+    // Blank strings and empty term lists are dropped rather than sent: the backend reads them
+    // as unset anyway, and sending them would make the payload lie about intent.
+    ...terms,
     format: format || undefined,
     colors: colorsParam,
+    // Absent rather than `false` when the chip is off, which is the rule every optional filter
+    // on this payload follows: `false` on the wire reads as "the reader chose loose" where they
+    // chose nothing at all.
+    colorsStrict: colorsStrict || undefined,
     sets: setsParam,
+    types: typesParamValue,
     manaValues: manaParam,
     // Absent rather than `false`, which is what the backend defaults to: an off chip is not a
     // filter, and a payload that said so would be lying about intent the way a blank `text`
@@ -318,7 +362,13 @@ export function useCollection() {
     debouncedText,
     format,
     colorsParam ?? "",
+    // Its own segment beside the letters, and load-bearing for the X chip's reason one field
+    // down: `WU` loose and `WU` strict are two different sets of rows over the same local
+    // SQLite, so a key built from the letters alone would serve the strict press out of the
+    // loose list's cached pages — instantly, with nothing on screen to notice.
+    colorsStrict ? "strict" : "",
     setsParam?.join(",") ?? "",
+    typesParamValue?.join(",") ?? "",
     manaParam?.join(",") ?? "",
     // Its own segment, and load-bearing: X is a second axis over the same chips, so a key
     // built from the numerals alone would serve "3, and also X" out of the pages cached for
@@ -423,9 +473,21 @@ export function useCollection() {
      */
     formats: FORMATS,
     colors,
-    toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
+    // A functional updater, so a batch of presses composes, and clearing the last colour clears
+    // `Exactly` — one rule in {@link toggleColorFilter}, shared by all four hooks.
+    toggleColor: (key: ColorKey) => setColorFilter((s) => toggleColorFilter(s, key)),
+    /** Read the colour row as "exactly these colours" rather than "at least these" — the
+     *  `Exactly` chip. A modifier on the row rather than a filter beside it, which is why
+     *  {@link activeFilterCount} never sees it and why `resetAll` clears it anyway. */
+    colorsStrict,
+    toggleColorsStrict: () => setColorFilter((s) => ({ ...s, strict: !s.strict })),
     sets,
     toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    /** The card-type chips, ORed with each other and ANDed with everything else. A copy matches
+     *  a chip if that word is on its printing's type line as a whole word, so an artifact land
+     *  answers `Land` and `Artifact` both. */
+    types,
+    toggleType: (type: string) => setTypes((picked) => toggleIn(picked, type)),
     rarities,
     toggleRarity: (rarity: string) => setRarities((picked) => toggleIn(picked, rarity)),
     priceMin,
@@ -581,7 +643,9 @@ export function useCollection() {
         : []),
       ...sortOptions(COLLECTION_SORTS, (s) => s.label),
     ] as readonly { value: CollectionSortKey | ""; label: string; disabled?: boolean }[],
-    /** How many kinds of filter are on — the number on the Reset all badge. */
+    /** How many kinds of filter are on — the number on the Reset all badge. `colorsStrict` is
+     *  deliberately not passed: it is not a field of {@link CollectionFilterState}, for the
+     *  reason written there. */
     activeCount: activeFilterCount({
       text,
       format,
@@ -590,6 +654,7 @@ export function useCollection() {
       manaValues,
       manaX,
       rarities,
+      types,
       priceMin,
       priceMax,
       finishes,
@@ -610,8 +675,11 @@ export function useCollection() {
     resetAll: () => {
       setText("");
       setFormat("");
-      setColors([]);
-      setSets([]);
+      setColorFilter(NO_COLORS);
+      // Cleared although it is not counted, and the asymmetry is the point: Reset all means "no
+      // filters", and a strict flag left standing over an empty colour row is exactly the
+            setSets([]);
+      setTypes([]);
       setManaValues([]);
       setManaX(false);
       setRarities([]);

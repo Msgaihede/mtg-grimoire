@@ -12,7 +12,7 @@
  * Set as foil             (or a `Finish ▸` submenu where the printing is sold in three)
  * Label card           ▸  None / the deck's labels / New label…
  * ─────────────────────
- * Add note…               opens the editor with this card already attached
+ * Add note…               opens the editor on a note this card will name — Save is the write
  * Notes                ▸  the notes that name this card — only where there are any
  * ─────────────────────
  * Remove card             every copy, out of this pile
@@ -264,14 +264,26 @@ export interface DeckCardMenuDeps {
    */
   notes?: readonly DeckNote[];
   /**
-   * **Add note…** — open the surface's note editor with this card already attached. It writes
-   * nothing itself.
+   * **Add note…** — open the surface's note editor on a note that **does not exist yet**, seeded
+   * with this card. It writes nothing itself, and since 2026-09-20 neither does the surface: the
+   * reader's **Save** is the create, and the card rides in it as the `oracleIds` that create
+   * carries.
+   *
+   * ⚠️ **Not "with this card already attached", which is what this said until then and was true
+   * until then.** *Attached* is a precise word in this feature — a `deck_note_cards` row, written
+   * by `deck_note_attach` or by the `oracleIds` of a create — and there is no note for one to hang
+   * off until Save answers. What the press makes is a **promise**, which the dialog prints
+   * (`This note will name …`) and the create keeps in one transaction a round trip later. The row
+   * used to write its note on the press, titled with the card, so *attached* was literally true
+   * and is the kind of sentence that survives the behaviour it describes.
    *
    * `addLabel`'s arrangement and its two reasons verbatim: it keeps this file's purity contract,
    * and — the half that is a defect rather than a preference — a `mutate`-scoped `onSuccess`
    * belongs to the *observer*, so a create started from a menu and chained to an attach loses its
-   * second half to an Escape landing during the round trip. The editor's observer outlives both
-   * the menu and the dialog.
+   * second half to an Escape landing during the round trip. **That second reason got sharper with
+   * the move rather than weaker**: there really is a dismissible dialog between the press and the
+   * write now, and the observer that owns the create is the band, which outlives both it and the
+   * menu.
    *
    * **Optional, and absent takes {@link openNote}'s rows with it** — see {@link noteItems}.
    */

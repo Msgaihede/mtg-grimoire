@@ -5,12 +5,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
   `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
-  **not one file since schema 27**: the reader's **twenty-nine** tables are `main` and the
+  **not one file since schema 27**: the reader's **thirty** tables are `main` and the
   rebuildable **twenty-five** are `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the
   split itself; the user side is what has grown since, and this line said eighteen until user
-  schema v43, twenty-seven until v44 and twenty-eight until v45 — a count in prose that no build checks, which is the rot
-  this file's own header warns about. Both halves are `grep -c 'Side::User'` and
-  `grep -c 'Side::Corpus'` over `schema::TABLES`; count them, never add to the number above.)
+  schema v43, twenty-seven until v44, twenty-eight until v45 and twenty-nine until v46 — a count in prose that no build checks, which is the rot
+  this file's own header warns about. Both halves are
+  `grep -c '^\s*("[a-z_]*", Side::User),'` and the same with `Side::Corpus` over
+  `schema.rs`; **a bare `grep -c 'Side::User'` over-counts**, because `mod tests` matches the
+  enum by name four more times. Count them, never add to the number above; `src/lib/userTables.json`
+  is the same thirty and a Rust test holds the two equal.)
   A folder still holding a single
   `mtg.db` is converted at the next launch by `split::convert`, which never touches that
   file until the new one is safely renamed into place. Delete that `data/` folder to force
@@ -526,13 +529,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   sentences from here, and says why — `CORPUS_SCHEMA_VERSION` on the rebuildable one, which stood
   at **1** from the split until it grew its first rung on 2026-09-08: **corpus schema
   2**, four prose columns on `combos`, described in
-  [commander-brackets.md](commander-brackets.md). (That sentence said "first and only" and two
-  more have landed since, both gated on the table's *shape* for the reason
-  `schema::migrate_corpus` gives: **corpus schema 3** is `cards.produced_mana` (2026-09-10) and
+  [commander-brackets.md](commander-brackets.md). (That sentence said "first and only" and three
+  more have landed since, all gated on the table's *shape* for the reason
+  `schema::migrate_corpus` gives: **corpus schema 3** is `cards.produced_mana` (2026-09-10),
   **corpus schema 4** is `sets.printed_size` (2026-09-15), Scryfall's printed-run denominator,
   written only by the `/sets` fetch — which `sync::sets_need_fetch` now also asks for when the
   table holds rows and not one size, so the column fills at the next sync rather than at the next
-  bulk rotation.) This page names that rung rather than parking
+  bulk rotation — and **corpus schema 5** is `cards.type_mask` (2026-09-22), the rung with its
+  own paragraph below.) This page names that rung rather than parking
   the head number beside it, for the reason the next two sentences give about the other half of
   the pair — and note the two scales are **deliberately incomparable**, so nothing may subtract
   one from the other: a user version says what has been done to rows that exist nowhere else, a
@@ -568,8 +572,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **v29 is sync's own rung and it is the widest one on either ladder.** It adds `sync_uid` with a
   unique index to **the eleven tables that were on the census then** — this line said "all twelve"
   until 2026-09-07 and was wrong in both directions, since the rung's own `ALTER TABLE`s are
-  eleven (spelled out below) and the census is **fifteen** now: `device_names` joined
-  at v31, `deck_tokens` at v37, and `deck_notes` and `deck_note_cards` at v43, and each carries
+  eleven (spelled out below) and the census is **sixteen** now: `device_names` joined
+  at v31, `deck_tokens` at v37, `deck_notes` and `deck_note_cards` at v43, and `sticky_notes` at
+  v46, and each carries
   the column in its own `CREATE TABLE` rather than through this rung. It also adds `needs_review` to the three folder tables,
   the op log (`sync_ops`, `sync_clock`, `sync_state`, `sync_peers`), and it **rebuilds
   `error_log`** so `source` can be `'relay'` — that vocabulary is inside a `CHECK` and SQLite
@@ -960,6 +965,32 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   ~10 µs a row weighed — **2.4 s** to weigh 104 000 already-thinned rows and delete nothing — so the
   day's first snapshot weighs only the rows that crossed the 35-day line since the previous
   snapshot day, which for a daily reader is one day's rows.
+  **v46 adds `sticky_notes`, the reader's own prose on the home page** (2026-09-20,
+  [issue #479](https://github.com/Msgaihede/mtg-grimoire/issues/479)) — one table and one index,
+  `idx_sticky_notes_uid`, and the **thirtieth** user table: `(id, title, body, color, pinned,
+  sort_order, created_at, updated_at, sync_uid)`, drawn by the home page's tenth widget kind,
+  `stickyNotes`. The head shape is now thirty tables and forty-seven indexes — both re-counted off
+  the `USER_SCHEMA_SQL` literal in the commit that moved them, never reached by adding one, and the
+  `want.len()` beside them is 80 rather than 81 because an `INTEGER PRIMARY KEY` brings no
+  `sqlite_autoindex` row.
+  **It is synced, where the two rungs above it are not**, and the difference is the only thing
+  that decides it: `activity` and `price_snapshots` are machine-generated, while this is typing —
+  a reader who writes a note on the desktop and finds it missing on the laptop has lost prose
+  rather than a preference, which is v43's argument for `deck_notes` verbatim. **No grain index,
+  uid only**, also `deck_notes`': two devices each typing a note about the same thing must stay
+  two notes. It is the **sixteenth** synced table; [sync.md](sync.md) is the record, including
+  the correction that its empty `parents` is the *fourth* on that census and not the first.
+  ⚠️ **`color` carries no CHECK, and that is a sync decision rather than laxity** — but the rule
+  is *not* that a synced column may not carry one, since `collection_entries.condition`,
+  `deck_cards.variant`, `deck_tokens.state` and five more enumerated columns on synced tables do.
+  Those vocabularies are Magic's or this app's own model and
+  only a rung adds to them, where **a note's colour is a palette the page owns and expects to
+  grow**: a constraint here would make a build that adds a sixth colour emit rows an older build
+  refuses *at apply*, and a refused row is a failed apply rather than a note that arrives looking
+  wrong. Rust stores the string it is handed; the page maps an unknown word to `slate`.
+  **`sort_order` is monotonic and never dense**: a delete leaves a hole, `reorder_notes` lets an
+  unknown id consume a position, and neither is repaired — the column answers *before or after*
+  and nothing more.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every
@@ -1270,6 +1301,68 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   recovery, the `ALTER`, the full-table backfill and the index rebuild together — the
   synthetic 469 MB stand-in the step's own comment quotes measured the backfill alone at
   2.9–5.0 s in a release build, and this is the first time the step has run against real data.
+- **`cards.type_mask` is `legal_mask`'s argument one column over, and it is corpus schema 5**
+  (2026-09-22, with the card-type filter). `cardtypes::TYPE_KEYS` is eight words — `Artifact`,
+  `Battle`, `Creature`, `Enchantment`, `Instant`, `Land`, `Planeswalker`, `Sorcery` — bit _k_ is
+  `TYPE_KEYS[k]`, and **bit positions are stored data** on exactly `LEGALITY_KEYS`' terms: the
+  list is **append-only**, because reordering it silently reinterprets every row already on disk.
+  The reason it is a column at all rather than a `LIKE` on `type_line` is the one `CARDS_INDEXES`
+  already measured: `type_line` is not in `idx_cards_collapse`, putting it there "was built and
+  measured, and is a straight loss", and a predicate the index cannot answer knocks the collapsed
+  group scan into row lookups — **the 455–505 ms against 22–47 ms** band that comment records for
+  the other filter columns, taken 2026-08-11 against a page-for-page backup of the live database.
+  A bitwise test on an integer stays inside the index. **That band is a figure about this index
+  _without_ `type_mask` in it, and nobody has re-measured it with one**: what the extra column
+  costs in bytes, in sync time and on the unfiltered browse is unmeasured, and so is a
+  type-filtered browse. Quote the 455–505/22–47 ms for *why the column exists*, never for what it
+  now costs.
+  **The mask answers "does this card have this type", which is a third question and a third
+  vocabulary.** `autoCategory.ts` files a card into exactly one bucket (Land first, so Dryad Arbor
+  is a land) and `deckBuckets.ts` into exactly one bar (Creature first, so an artifact land heads
+  the Artifact bar); those two disagree with each other about Land on purpose. A *filter* is
+  neither: Dryad Arbor (`Land Creature — Forest Dryad`) carries both bits, and a reader pressing
+  `Creature` who cannot find an artifact creature has been told a falsehood. Both faces of a
+  double-faced card count, because `cards.type_line` holds `Sorcery // Land` and an MDFC land is a
+  land to anyone filtering for lands — the one place this rule diverges from the front-face-only
+  reading the two deck constants share. Matching is **whole-word and deliberately not a
+  substring**: the day anyone appends `Plane` to the list, a substring test matches every
+  Planeswalker, and `cardtypes.rs` carries the assertion that keeps that test honest as the list
+  grows.
+- **Corpus schema 5 is the first corpus rung that _backfills_, and corpus schema 3 and 4 do not
+  — the difference is where the data lives, not how thorough the rung is.** `produced_mana` and
+  `printed_size` leave every existing row NULL because their data is not in the database: the
+  letters live inside a gzip `raw` blob SQL cannot see into, and a printed run size only arrives
+  with the next `/sets` fetch. A **type line is already in `cards`**, so there is nothing to wait
+  for — and `type_mask` is `NOT NULL DEFAULT 0`, which is what turns the omission from a delay
+  into a wrong answer: an un-backfilled column reads as *this card has no type*, and the new
+  filter would answer an empty wall on every upgraded database until the next sync. That is the
+  fail-closed failure this repo refuses everywhere else, and the rung's own test asserts a
+  **non-zero** mask on a seeded Dryad Arbor rather than only that the column arrived — a backfill
+  that leaves 0 passes every column-shape assertion ever written. The `UPDATE` runs
+  `cardtypes::type_mask_sql`, a SQL mirror of the Rust function pinned against it by
+  `the_backfill_sql_and_the_rust_function_agree` over one fixture list of type lines —
+  `legalities::mask_sql`'s arrangement exactly, and for its reason: the
+  backfill and the ingest are two implementations of one rule, and the only thing stopping them
+  drifting is that a build compares them. **Nobody has timed this rung against the real corpus**,
+  and a worktree can never show it — its database is built fresh, so the rung it runs is the one
+  that repairs nothing. The comparison worth reaching for is the `legal_mask` bullet two above —
+  ~7 s of launch on the live 563 MB file, for a full-table backfill and an index rebuild together
+  — but that is a *neighbour's* figure and not this rung's. A launch against a backed-up copy of
+  `src-tauri/target/debug/data/corpus.db` is the only thing that settles it.
+  **The rung is three statements and the third is the one with a trap.** The `ALTER`, the
+  `UPDATE`, and then `DROP INDEX IF EXISTS {schema}.idx_cards_collapse` **before** the
+  `CARDS_INDEXES` replay — because every statement in that list is spelled `IF NOT EXISTS`, and
+  `CREATE INDEX IF NOT EXISTS` over a name that already exists is a **silent no-op**. Replaying
+  the widened definition over a narrow index changes nothing, costs nothing and says nothing,
+  on exactly the machines that need the widening; it is v7's rule ("a step that _changes_ a
+  definition must `DROP` it first") arriving on the corpus half of the split for the first time.
+  It is **shape-gated and not version-gated**, for `migrate_corpus`' standing reason: every
+  converted database and every fresh install reaches that function already stamped at head with a
+  v26-shaped `cards`, so a version gate would skip the two largest populations and the next ingest
+  would die on `table cards_staging has no column named type_mask` — `create_staging` derives
+  staging's layout from the live table's own `PRAGMA table_info`. And it owes **no `cards_fts`
+  rebuild**: it adds an unindexed column, rewrites none of `name`/`type_line`/`search_text`, and
+  renumbers no rowids, which is schema v2's precedent.
 - **A migration that touches `cards` must take the `CARDS_INDEXES` replay from the step below
   it**, and `schema::tests::every_version_ends_with_the_same_schema_as_a_fresh_install` is
   what fails if it does not: it migrates a v1, a v6 and a v9 fixture to head and compares

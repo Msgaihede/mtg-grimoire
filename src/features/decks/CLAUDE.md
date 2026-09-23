@@ -1065,14 +1065,15 @@ layer.
   **Since 2026-09-08 the sign is the *action to take*, not the discrepancy**
   ([issue #400](https://github.com/Msgaihede/mtg-grimoire/issues/400), reported by the reader who
   asked for the number in the first place): **positive is copies to add, negative is copies to
-  remove** — `+2` means *put two more in*, `-8` means *take eight out*, and `0` is still the tick.
+  remove** — `+2` means *put two more in*, `−8` means *take eight out*, and `0` is still the tick.
   It was `live − planned` from 2026-08-26 (issue #212) until 2026-09-08, and the complaint against
   that arrangement is that it described the disagreement without answering it: *"the displayed
   number indicates what is missing as a minus and what is over the required quantity as a plus.
   This does not directly tell the user what action to take."* **Only the direction moved.** The
   grain still follows the tier, both sides are still summed across their piles, an inactive pile
   is still excluded from both, `DIFFERENCE_FLOOR` still fences the whole thing, and
-  `theoryDeltaText` still writes `+N` / `-N` with ASCII signs. **The words moved with it**:
+  `theoryDeltaText` still writes `+N` / `−N` — though the minus became U+2212 on 2026-09-22, when
+  the fixed-advance claim that had kept it ASCII was measured and found false. **The words moved with it**:
   `theoryMatchLabel` now says `In the theory list · 2 to add` and
   `In the theory list · 3 to remove` (and `… · a different printing · 3 to add` on the blue tier),
   so *"more than planned"* and *"fewer than planned"* are gone from the tooltip, the badge and the
@@ -1534,7 +1535,7 @@ layer.
     scope. Read-only — changing it is a Deck settings trip — and it is the first thing to go at
     `TIGHT_HEADER_PX`, where the check button's own name still carries it. With no spec in hand it
     falls back to the deck row's `formatName`.
-  - **The `Lands` term says `38 +2 MDFC`, and the second number is a tally beside the figure
+  - **The `Lands` term says `38+2 MDFC`, and the second number is a tally beside the figure
     rather than a widening of it** (2026-09-20,
     [issue #475](https://github.com/Msgaihede/mtg-grimoire/issues/475)). A modal DFC with a spell
     on the front and a land on the back is filed by what it *does* — `autoCategoryFor` pins `Land`
@@ -4208,8 +4209,15 @@ The storage side, the eight commands and the undo `Op` are
   printing cannot be marked by four views each remembering.
 - **The band is the third collapsible section**, after `DeckStats`, wearing `DeckTokensPanel`'s
   grammar character for character and remembering itself in `decks.notes_open`. Unlike
-  `DeckTokensPanel` it **keeps its disclosure at zero notes**: the way to write a first note is
-  inside the band, so plain type where the control should be would be a dead end.
+  `DeckTokensPanel` it **keeps its disclosure at zero notes** — and the redesign (2026-09-20)
+  left that conclusion standing on a different reason, so the old one is worth naming. It read
+  *the way to write a first note is inside the band, so plain type where the control should be
+  would be a dead end*, which was true while the band opened on an **add row**. It is false now:
+  the act is `New note` in the **heading row**, beside the count and outside the collapsible
+  region, so a reader with nothing written can press it whether the area is open or shut and the
+  disclosure is load-bearing for reaching nothing. What it still buys is the sentence *inside*
+  the empty band, which names that control rather than leaving a reader to find it — so plain
+  type where the disclosure should be would leave that sentence nowhere to go.
 - **The band takes `cards`, not `variant`, and that is a measured call.** It first read
   `useDeck(deckId, variant)` for the attach picker's card names — `CategoriesDialog`'s
   arrangement, and free *only while that query is fresh*. The band is gated on the deck row, so it
@@ -4222,7 +4230,7 @@ The storage side, the eight commands and the undo `Op` are
   `parseNoteBody`'s blocks — a closed AST modelled on `src/lib/releaseNotes.ts`, for that file's
   own reason: the shipped CSP is `script-src 'self'` with no `dangerouslySetInnerHTML` anywhere in
   `src/`. `NoteEditor` is behind `React.lazy`, and **nothing on the read path may import it
-  statically** — one eager import puts a measured 148 kB gzip back in the main chunk and nothing
+  statically** — one eager import puts a measured 141.5 kB gzip back in the main chunk and nothing
   goes red.
 - **A hard break travels as `"\n"` inside a text run**, because `Inline` has no break member. Any
   renderer of these blocks sets `whitespace-pre-line` or every break a reader typed draws as a

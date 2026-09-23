@@ -51,9 +51,28 @@ export function pickOf(widget: HomeWidget, key: string): string | number | undef
   return pick === undefined ? undefined : pickValue(widget, pick);
 }
 
-/** Is this switch on? **Only a stored `false` is off**, so absent — and anything else — is on. */
-export function toggleOn(widget: HomeWidget, key: string): boolean {
-  return stored(widget)[key] !== false;
+/**
+ * Is this switch on?
+ *
+ * **Only a stored boolean is an answer**; anything else — absent, a hand-edited word, a value a
+ * newer build wrote — is `dflt`. The rule this states is *the default stores nothing*, of which
+ * the old `!== false` was the one instance where the default was on.
+ *
+ * The caller passes the default because this function cannot see the registry. Bodies should call
+ * {@link toggleOnOf}, which looks it up; this signature is for a caller holding the row already.
+ */
+export function toggleOn(widget: HomeWidget, key: string, dflt = true): boolean {
+  const value = stored(widget)[key];
+  return typeof value === "boolean" ? value : dflt;
+}
+
+/** A switch's value by key, with the kind's own default applied — {@link pickOf}'s shape for
+ *  toggles, so a body never writes down a default the registry already carries. A key the kind
+ *  declares no toggle for is on, which is what a body with a stale key saw before `dflt` existed. */
+export function toggleOnOf(widget: HomeWidget, key: string): boolean {
+  if (!isWidgetKind(widget.kind)) return toggleOn(widget, key);
+  const toggle = widgetMeta(widget.kind).toggles.find((entry) => entry.key === key);
+  return toggleOn(widget, key, toggle?.dflt);
 }
 
 /** The density the reader picked. Anything but `"compact"` is comfortable. */

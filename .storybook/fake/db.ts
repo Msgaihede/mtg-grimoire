@@ -207,6 +207,9 @@ import type {
   MirrorStatus,
   MoveOutcome,
   MutedTag,
+  NewPrinting,
+  NewPrintingDeck,
+  NewPrintings,
   OracleTagStatus,
   PairingHandshake,
   PairingOffer,
@@ -237,6 +240,7 @@ import type {
   SetCompletion,
   SetSummary,
   ShareRow,
+  StickyNote,
   SupporterStatus,
   SwapResult,
   SyncOutcome,
@@ -1832,6 +1836,31 @@ export interface FakeDb {
    */
   recentCards: FakeRecentCard[];
   /**
+   * `sticky_notes` — the reader's own prose on the home page, user schema v46.
+   *
+   * **A sticky note hangs off nothing**, which is what separates it from {@link FakeDb.deckNotes}:
+   * no deck, no card, no scope. So there is no owner to filter by and no parent to resolve — the
+   * table is the list, and {@link readHandlers.sticky_notes} orders it and hands it back.
+   *
+   * **`StickyNote` and not a `FakeStickyNote`, which is the one place this file stores a DTO on
+   * purpose** — the header's rule met by a table that has nothing to derive. `ownedQuantity` is
+   * three questions under one name, so storing the *answer* would make all three agree; here the
+   * eight columns and the eight fields are the same eight things, `sticky_notes.rs` selects them
+   * and serde renames `sort_order`, and a `FakeStickyNote` would be that shape written twice for
+   * a mapping function that copied each field to itself. **The test that keeps it honest is that
+   * a second shape would have to exist first**: the day this table grows a column the read
+   * *computes* — a drawn heading off a blank title, say — the row type is owed and this comment
+   * is what says why it was not owed before.
+   *
+   * **Seeded by `starter` and empty in every other world**, {@link FakeDb.mutedTags}' rule one
+   * feature over and for its reason: a note is a thing a reader **wrote**, so a database that has
+   * never held one is every install out of the box and is the state the widget's empty card
+   * exists to draw. `empty` therefore gets none, and no derivation fills this in
+   * {@link makeDb} — unlike {@link FakeDb.recentCards} above, which a collection really does
+   * imply.
+   */
+  stickyNotes: StickyNote[];
+  /**
    * `price_history` — one row per day a price refresh saw a printing's finish at a marketplace.
    *
    * **The table the price movers are measured against**, and a table of facts rather than of
@@ -1859,6 +1888,23 @@ export interface FakeDb {
    * {@link writeHandlers.set_start_view}.
    */
   startView: string | null;
+  /**
+   * `app_meta.new_printings_seen` — when this device last looked at the New printings feed, in
+   * unix seconds, or `null` for **never**.
+   *
+   * **An `app_meta` row and deliberately not a widget `config` key**, which is `new_printings.rs`'
+   * own argument: a layout document round-trips through older builds, and a cursor an older build
+   * rewrites is a cursor that lies. So it sits on this table beside {@link FakeDb.recentCards},
+   * where nothing but its own write touches it.
+   *
+   * **Derived by {@link makeDb} when a world says nothing** — see
+   * {@link newPrintingsSeenFromDecks} — so the newest release day a world's decks can reach is
+   * unseen and every older one is marked as read. A world that passes the field keeps it
+   * verbatim, `null` included, which is how a story stands in *never looked* on a full page of
+   * decks. `null` is also what a world with no decks derives, because there is nothing there to
+   * have been seen.
+   */
+  newPrintingsSeen: number | null;
   /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
@@ -2712,6 +2758,53 @@ const PRICE_MOVER_WINDOWS: Readonly<Record<string, number | null>> = {
   all: null,
 };
 
+/** `new_printings::MAX_DAYS` — the longest window the feed will answer, in days. A hand-edited
+ *  `config` cannot ask for the whole corpus. */
+const MAX_NEW_PRINTING_DAYS = 365;
+
+/** `new_printings::NEW_PRINTINGS_READ` — how many printings one read asks for, and the ceiling a
+ *  caller's own limit is cut to. */
+const NEW_PRINTINGS_READ = 100;
+
+/** `new_printings::MAX_LANGS` — how many codes an allow-list may carry. `src/lib/languages.ts`
+ *  names 19, so 24 clears the corpus with room and refuses a list that could only be a bug. */
+const MAX_NEW_PRINTING_LANGS = 24;
+
+/**
+ * `new_printings::BASIC_LAND_LIKE` — `Basic %Land%`, as the regular expression SQLite's `LIKE`
+ * means by it.
+ *
+ * Three things have to line up for the two to agree and each is easy to lose. `LIKE` anchors at
+ * **both** ends, so the `^` is the leading `Basic ` and the trailing `%` is why there is no `$`.
+ * The `%` between them is `.*` and may match **nothing**, which is the whole of what keeps plain
+ * `Basic Land — Forest` in while letting `Basic Snow Land — Forest` in too — a reader who
+ * unticked the switch did not mean *except the snow ones*. And SQLite's `LIKE` is
+ * case-insensitive over ASCII, which is the `i`.
+ */
+const BASIC_LAND_TYPE = /^Basic .*Land/i;
+
+/**
+ * Is this a language code at all? `new_printings::is_lang_code` — two to four lowercase ASCII
+ * letters (`en`, `zhs`, `grc`).
+ *
+ * **A shape check rather than a membership test against `languages.ts`' nineteen**, which is the
+ * crate's own reasoning and worth keeping on this side: a language Scryfall adds next set is the
+ * reader's own data arriving early, and refusing it here would need this file edited before a
+ * feed could show it. The `typeof` is the one thing the crate gets from serde and this does not —
+ * the list arrives from a hand-editable layout document, so an entry can be a number or a null.
+ */
+function isNewPrintingLang(code: unknown): code is string {
+  return typeof code === "string" && /^[a-z]{2,4}$/.test(code);
+}
+
+/**
+ * A unix second as SQLite's `date(…)` writes one — `YYYY-MM-DD`, in **UTC**, which is what
+ * `date('now', '-N days')` answers and what `cards.released_at` already holds.
+ */
+function dayOf(at: number): string {
+  return new Date(at * 1_000).toISOString().slice(0, 10);
+}
+
 /**
  * `startview::DEFAULT_VIEW` — where the app opens for a reader who has never said.
  *
@@ -2996,10 +3089,21 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // a history to measure movers against, and a world with none opens on both sentences.
     recentCards: [],
     priceHistory: [],
+    // **Empty, and derived from nothing** — which is what separates it from the two fields above
+    // rather than an omission beside them. A collection implies cards the reader opened and
+    // prices those cards have had; it implies no prose at all, because a sticky note exists only
+    // where somebody typed one. So this is the state every world but `starter` opens in, and it
+    // is the one the widget's empty card is for.
+    stickyNotes: [],
     // The eleventh `app_meta` row and a `null` a third time: a reader who has never chosen a
     // landing view. `start_view` answers `home` for it, which is what the app opens on out of
     // the box and what every story that says nothing about the setting is standing in.
     startView: null,
+    // The third field in this function whose default depends on the world rather than on this
+    // line — **derived below** by {@link newPrintingsSeenFromDecks}, beside the two above. A
+    // `null` here would be *never*, which draws a dot on every row of the New printings feed and
+    // would make the unseen mark a thing no story could see the absence of.
+    newPrintingsSeen: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -3078,6 +3182,10 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
   // anything" on a full collection.
   if (init.recentCards === undefined) db.recentCards = recentFromCollection(db);
   if (init.priceHistory === undefined) db.priceHistory = historyFromCollection(db);
+  // The third, and the one whose subject is the **decks** rather than the collection: how much of
+  // the reprint feed this device has already looked at. Same rule as the two above — a world that
+  // passes the field keeps it, `null` included.
+  if (init.newPrintingsSeen === undefined) db.newPrintingsSeen = newPrintingsSeenFromDecks(db);
   return db;
 }
 
@@ -3157,6 +3265,40 @@ export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
     }
   }
   return out;
+}
+
+/**
+ * The *seen* cursor a world with decks opens with: **one day before the newest paper printing of
+ * anything the decks hold**, in unix seconds.
+ *
+ * So the newest release day the feed can reach is unseen and every older one is already read,
+ * which is the one shape of world the gold dot is visible *and* absent in. A cursor stamped at
+ * the fake's own today would mark the whole feed as seen and a `null` would dot every row of it;
+ * either is a mark no story could fail on.
+ *
+ * **Derived from the decks rather than from the corpus**, which is what keeps it pointing at a
+ * day the feed really answers: the newest printing in `cards.ts` is a Treasure token no deck
+ * lists, so a cursor set from the corpus alone would sit above every row a deck can produce and
+ * mark the lot as read. The switches are not consulted — a cursor is a fact about a *device*,
+ * where every switch on this widget is a fact about one widget's `config`, and a world whose
+ * cursor moved when a story ticked *Basic lands* would be a world the app cannot produce.
+ *
+ * `null` — **never**, which draws every dot — for a world whose decks hold nothing the corpus
+ * knows, because there is nothing there to have been looked at.
+ */
+export function newPrintingsSeenFromDecks(db: FakeDb): number | null {
+  const held = new Set<string>();
+  for (const row of db.deckCards) {
+    const card = cardById(db, row.cardId);
+    if (card !== null && card.oracleId !== "") held.add(card.oracleId);
+  }
+  let newest: string | null = null;
+  for (const card of db.cards) {
+    if (!card.isPaper || !held.has(card.oracleId)) continue;
+    if (newest === null || card.releasedAt > newest) newest = card.releasedAt;
+  }
+  if (newest === null) return null;
+  return Math.floor(Date.parse(`${newest}T00:00:00Z`) / 1_000) - 86_400;
 }
 
 /* ------------------------------------------------------------------ small helpers ----- */
@@ -5426,15 +5568,23 @@ function storedToken(db: FakeDb, deckId: number, oracleId: string): FakeDeckToke
 
 /**
  * `image_uri::front_face_map` over a fixture row — the picture the **web target and the phone**
- * draw, and the field only two DTOs here carry.
+ * draw, and the field only three DTOs here carry.
  *
  * **Every other DTO omits `imageUris` and that is still the rule**: a picture under Storybook
  * comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever fetches. What
  * earns an exception is a view that ***folds*** the field instead of passing it through, and
- * there are two of those. `deckTokenViews` reads a token tile's `imageUrl` as
+ * there are three of those. `deckTokenViews` reads a token tile's `imageUrl` as
  * `imageUris?.[WALL_CARD_VARIANT] ?? null`; `CombosDialog.tsx` reads a combo piece's the same
- * way, character for character. A row that omitted it would make the fake the one place both
- * views are always `null` and each panel's own resolution unexercised.
+ * way, character for character; and since 2026-09-20 a **note card** reads its representative
+ * printing's the same way again ({@link noteCardsOf}, through {@link noteCardPrinting}). A row
+ * that omitted it would make the fake the one place all three views are always `null` and each
+ * panel's own resolution unexercised.
+ *
+ * ⚠️ **This said "two" for as long as it took the notes band to grow a thumbnail**, which is the
+ * drift `.storybook/CLAUDE.md` names by rule: a prose-only edit routes to neither CI job, so a
+ * count here goes red nowhere. **Re-count the callers when you add one** —
+ * `grep -n "frontFaceImageUris(" .storybook/fake/db.ts` is the census, and the enumeration above
+ * is what makes it checkable.
  *
  * Nothing minted: the two URLs are the fixture's own real Scryfall ones, the same pair
  * {@link readHandlers.card_image_uri} answers with, and the same two variants
@@ -5779,6 +5929,43 @@ const CONDITION_RANK: Record<FakeEntry["condition"], number> = {
 
 /** `filters::COLORS`, WUBRG order. */
 const COLORS = ["W", "U", "B", "R", "G"];
+/**
+ * `cardtypes::TYPE_KEYS` — the eight words, **alphabetical**, which is the frozen bit order and
+ * not the order the chips are drawn in. A local copy like `COLORS` and `RARITY_KEYS` beside it:
+ * this file mirrors the Rust vocabularies rather than importing the frontend's `CARD_TYPES`,
+ * which is the same eight words in the reading order (Creature first, Land last).
+ *
+ * Membership is all this list is used for here, so the order does not matter to the fake — but
+ * it is worth being the Rust one, because what it stands in for is the mask.
+ */
+const CARD_TYPES = [
+  "Artifact",
+  "Battle",
+  "Creature",
+  "Enchantment",
+  "Instant",
+  "Land",
+  "Planeswalker",
+  "Sorcery",
+];
+
+/**
+ * `cardtypes::type_mask`'s rule, asked one type at a time.
+ *
+ * The shipped search tests a bit of `cards.type_mask`; a fake has no such column, so it reads
+ * the type line the mask was computed from. **Same rule or the workbench disagrees with the
+ * window about Dryad Arbor**: both faces of a `//` line count, only the half before the dash of
+ * each is read, and a type is matched as a whole word — never a substring, which is what keeps
+ * `Planeswalker` out of a `Plane` the frozen list may one day append.
+ */
+function cardHasType(typeLine: string | null, type: string): boolean {
+  if (typeLine === null) return false;
+  return typeLine
+    .split("//")
+    .some((face) =>
+      (face.split(/[—-]/)[0] ?? "").split(/\s+/).some((word) => word === type),
+    );
+}
 /** `filters::MAX_SET_FILTER`. */
 const MAX_SET_FILTER = 64;
 /** `filters::MANA_VALUE_OPEN_ENDED` — the last chip means "8 or more". */
@@ -5831,8 +6018,20 @@ function matchesCardFilters(
     } else {
       // Subset semantics as a deckbuilder means them: "RW" returns mono-R, mono-W, RW and
       // colourless. Expressed as exclusions, which is also why an orphan passes.
+      //
+      // **`colorsStrict` adds the other half rather than replacing it** — an inclusion per
+      // picked letter beside the exclusion per unpicked one, so "RW" answers the RW cards
+      // alone. `filters.rs`' arm has exactly this shape, and an orphan now *fails* a strict
+      // search: its empty identity carries none of the picked letters. That is the SQL's
+      // answer too (`instr('', 'R') = 0`), so the divergence the comment above this function
+      // records for colour narrows to loose mode only.
+      const strict = f.colorsStrict ?? false;
       for (const ch of COLORS) {
-        if (!colors.includes(ch) && identity.includes(ch)) return false;
+        if (!colors.includes(ch)) {
+          if (identity.includes(ch)) return false;
+        } else if (strict && !identity.includes(ch)) {
+          return false;
+        }
       }
     }
   }
@@ -5888,6 +6087,22 @@ function matchesCardFilters(
   if (f.rarities) {
     const picked = f.rarities.map((r) => r.trim().toLowerCase()).filter((r) => r !== "");
     if (picked.length > 0 && !picked.includes(card?.rarity ?? "")) return false;
+  }
+
+  // OR within, AND without, like the rarities above — but narrowed by a list that **validates**
+  // where `picked_rarities` only normalises. `picked_types` drops a word `TYPE_KEYS` does not
+  // hold, so `["Shiny"]` is *no filter*, where `["shiny"]` on the line above is a filter that
+  // matches nothing. The two really do differ; `filters.rs` has the same asymmetry.
+  //
+  // Matched against the type line here rather than against a mask, because a fake has no
+  // `type_mask` column — but by the same whole-word rule `cardtypes::type_mask` uses, so the
+  // workbench and the shipped window agree about Dryad Arbor. Both faces count and only the
+  // half before the dash of each is read.
+  if (f.types) {
+    const picked = f.types.filter((t) => (CARD_TYPES as readonly string[]).includes(t));
+    if (picked.length > 0 && !picked.some((t) => cardHasType(card?.typeLine ?? null, t))) {
+      return false;
+    }
   }
 
   // Omitted means true — and it keys on `is_paper`, which is the column `filters.rs` emits
@@ -6038,7 +6253,7 @@ const RARITY_KEYS = ["common", "uncommon", "rare", "mythic"];
  * have to ignore both or opening it on a request that already names a set would offer nothing
  * but that set.
  */
-type FacetSkip = "colors" | "mana" | "sets" | "formats" | "rarities" | "owned";
+type FacetSkip = "colors" | "mana" | "sets" | "formats" | "rarities" | "types" | "owned";
 
 /**
  * The picked-colour string after one chip is pressed — `facets::toggle_colors`, which is
@@ -6944,11 +7159,49 @@ function cardNameOfOracle(db: FakeDb, oracleId: string): string {
  * {@link readHandlers.deck_tokens}' rule, and the same division of labour: Rust supplies facts,
  * TypeScript draws the order.
  */
-function noteCardsOf(db: FakeDb, noteId: number): DeckNoteCard[] {
+function noteCardsOf(db: FakeDb, deckId: number, noteId: number): DeckNoteCard[] {
   return db.deckNoteCards
     .filter((c) => c.noteId === noteId)
-    .map((c) => ({ oracleId: c.oracleId, name: cardNameOfOracle(db, c.oracleId) }))
+    .map((c) => {
+      const printing = noteCardPrinting(db, deckId, c.oracleId);
+      return {
+        oracleId: c.oracleId,
+        name: cardNameOfOracle(db, c.oracleId),
+        cardId: printing?.id ?? null,
+        imageUris: frontFaceImageUris(db, printing?.id ?? null),
+      };
+    })
     .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+}
+
+/**
+ * `deck_notes::attachments_by_note`'s correlated subquery — the **representative printing** one
+ * attachment draws, and the third DTO in this file to fold {@link frontFaceImageUris}.
+ *
+ * **The deck's own printing first, any printing the corpus holds second**, which is that
+ * statement's `ORDER BY (dc.card_id IS NULL), c.id` spelled as two passes: SQLite sorts `0`
+ * before `1`, so a printing this deck sleeves wins, and `c.id` breaks every remaining tie. A
+ * note about Lightning Bolt in a deck playing the M10 art must not draw the Alpha art — the
+ * picture is how a reader recognises the row, and the wrong one reads as a note naming a card
+ * that is not in the deck.
+ *
+ * **`null` is the orphan and is a real answer**, not a lookup that went wrong: the crate's
+ * `LEFT JOIN` keeps an attachment whose oracle id the corpus has never heard of, named by that
+ * id, and the card draws an empty frame rather than a broken image.
+ *
+ * **Every printing of the deck is considered rather than the deck's own row order**, because a
+ * note attaches by oracle id and a deck may hold two printings of one card; `c.id` is what picks
+ * between them, on both sides, so the two passes cannot come to disagree.
+ */
+function noteCardPrinting(db: FakeDb, deckId: number, oracleId: string): FakeCard | null {
+  const byId = (a: FakeCard, b: FakeCard): number => cmp(a.id, b.id);
+  const held = db.deckCards
+    .filter((dc) => dc.deckId === deckId)
+    .map((dc) => cardById(db, dc.cardId))
+    .filter((c): c is FakeCard => c !== null && c.oracleId === oracleId)
+    .sort(byId);
+  if (held.length > 0) return held[0] ?? null;
+  return [...db.cards].filter((c) => c.oracleId === oracleId).sort(byId)[0] ?? null;
 }
 
 /** `deck_notes::note_row` — one stored note with the cards it names joined on, copied for
@@ -6961,7 +7214,7 @@ function toDeckNote(db: FakeDb, n: FakeDeckNote): DeckNote {
     title: n.title,
     body: n.body,
     sortOrder: n.sortOrder,
-    cards: noteCardsOf(db, n.id),
+    cards: noteCardsOf(db, n.deckId, n.id),
     createdAt: n.createdAt,
     updatedAt: n.updatedAt,
   };
@@ -8462,6 +8715,7 @@ export function readHandlers(db: FakeDb) {
           manaValues: {},
           formats: {},
           rarities: {},
+          types: {},
           sets: {},
           owned: { owned: 0, missing: 0 },
           total: 0,
@@ -8508,6 +8762,7 @@ export function readHandlers(db: FakeDb) {
         }
         if (skip === "formats") f.format = undefined;
         if (skip === "rarities") f.rarities = undefined;
+        if (skip === "types") f.types = undefined;
         return db.cards.filter((c) => {
           // Text is in every base **including its own**: it is not a facet, and a facet
           // describes the search the reader is looking at.
@@ -8570,11 +8825,32 @@ export function readHandlers(db: FakeDb) {
       const rarities: Record<string, number> = {};
       for (const key of RARITY_KEYS) rarities[key] = countWith(rarityBase, { rarities: [key] });
 
+      // All eight on every ready response, zeros included, for the rarities' reason one line up.
+      // They do **not** sum to `total` and do not bound it either, which is a stronger statement
+      // than the rarities need: the eight *overlap* — Dryad Arbor is in both `Land` and
+      // `Creature` — and the corpus also holds types no chip offers (`Vanguard`, `Plane`), so a
+      // card can be counted twice or not at all.
+      const typeBase = base("types");
+      const types: Record<string, number> = {};
+      for (const key of CARD_TYPES) types[key] = countWith(typeBase, { types: [key] });
+
       const colorBase = base("colors");
       const colors: Record<string, number> = {};
       const picked = nonblank(req.colors)?.toUpperCase() ?? "";
       for (const letter of COLOR_CHIPS) {
-        colors[letter] = countWith(colorBase, { colors: toggleColorString(picked, letter) });
+        colors[letter] = countWith(colorBase, {
+          colors: toggleColorString(picked, letter),
+          // **The flag has to be carried here too, and this is the one place it is easy to
+          // drop.** Every other count above reuses its dimension's base; this one builds a
+          // fresh filter object per chip, so a `colorsStrict` left off would count each press
+          // under subset semantics while the search ran exact — a chip captioned with a number
+          // four times the wall behind it. `index::facets` has exactly this trap at exactly
+          // these two places, and its `apply_colors` takes the flag at both.
+          //
+          // `toggleColorString` needs no such argument: it mirrors `toggleColor`, which
+          // produces the picked-colour *string*, and no colour press alters the flag.
+          colorsStrict: req.colorsStrict,
+        });
       }
 
       // Never greyed — these two are for the chip's tooltip — but still counted over the
@@ -8588,6 +8864,7 @@ export function readHandlers(db: FakeDb) {
         manaX,
         formats,
         rarities,
+        types,
         sets,
         owned: { owned, missing: ownedBase.length - owned },
         // **Printings, always**: `collapse` is a view mode and not a filter, so this counts
@@ -9967,11 +10244,13 @@ export function readHandlers(db: FakeDb) {
      * {@link DECK_GONE} because an empty plan already means something else here — "nothing in
      * this deck can be filled" — and a dialog cannot tell those two apart from a bare `[]`.
      *
-     * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook
-     * a card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
-     * hand-minted one here would be a URL nobody ever fetches. The exception is
-     * {@link frontFaceImageUris}, and its own comment says what earns it one — a view that *folds*
-     * the field rather than passing it through.
+     * `imageUris` is omitted, as it is from every DTO this fake builds but the ones that **fold**
+     * it: under Storybook a card picture comes from the `@/lib/images` alias rather than from a
+     * URL on the row, so a hand-minted one here would be a URL nobody ever fetches. The
+     * exceptions go through {@link frontFaceImageUris}, and its own comment enumerates them and
+     * says what earns one — a view that folds the field rather than passing it through. **No
+     * count here on purpose**: this sentence read "bar one" while two DTOs carried it and then
+     * three, because a number in prose goes red nowhere.
      */
     deck_pull_plan: (args: { deckId: number }): DeckPullRow[] => {
       // **First, ahead of the read, and {@link isVirtual}'s own contract is what makes that
@@ -10133,9 +10412,11 @@ export function readHandlers(db: FakeDb) {
      * reason: an empty plan already means something else here — *everything this deck is short of
      * has left the card database* — and a dialog cannot tell those two apart from a bare list.
      *
-     * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook a
-     * card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
-     * hand-minted one here would be a URL nobody ever fetches.
+     * `imageUris` is omitted, as it is from every DTO this fake builds but the ones that **fold**
+     * it: under Storybook a card picture comes from the `@/lib/images` alias rather than from a
+     * URL on the row, so a hand-minted one here would be a URL nobody ever fetches.
+     * {@link frontFaceImageUris} enumerates the exceptions; no count is written here, for the
+     * reason its own comment gives.
      */
     deck_missing_plan: (args: { deckId: number }): DeckMissingRow[] => {
       // {@link deck_pull_plan}'s fence, ahead of the shortfall walk and for its reason: a
@@ -10646,6 +10927,33 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `sticky_notes::list_notes` — every note the reader has written, `ORDER BY sort_order, id`.
+     *
+     * **No arguments, no limit and no refusal**, which is the whole of what this read is: the
+     * crate's is `#[tauri::command(async)]` on a *sync* `fn` whose signature carries no `Result`,
+     * because the home page asks for it while drawing its first frame and a page that refuses to
+     * draw over a note is a worse answer than a page with no notes on it.
+     *
+     * **`id` is the second term and is load-bearing**, not tidiness: `sticky_note_create` mints
+     * `max(sort_order) + 1`, but a reorder renumbers from 0 and two devices can land on one
+     * number — so a read sorting on `sort_order` alone would be free to draw those two in either
+     * order, and a board that reshuffled itself between two frames is the failure this term
+     * closes. A copy is handed back rather than the stored objects, for
+     * {@link writeHandlers.set_home_layout}'s reason: a page holding a row it can mutate is a
+     * state the backend cannot produce.
+     *
+     * A read, so it answers through every second of a sync — the four writes below do not.
+     * **That asymmetry leaves this command's BUSY unstoryable**, exactly as it does for the six
+     * other widgets whose reads take `db_read`, and it is a gap
+     * [home-page.md](../../docs/reference/home-page.md) already records rather than one to chase
+     * with a fault of its own.
+     */
+    sticky_notes: (): StickyNote[] =>
+      [...db.stickyNotes]
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+        .map((n) => ({ ...n })),
+
+    /**
      * `set_completion` — every set the collection holds a card from, and how much of it.
      *
      * `owned` is the **distinct collector numbers** held in any finish, grade or language — a
@@ -10774,6 +11082,171 @@ export function readHandlers(db: FakeDb) {
           cmp(a.finish, b.finish),
       );
       return { movers: movers.slice(0, limit), since, days };
+    },
+
+    /**
+     * `new_printings::feed` — reprints of cards the watched decks already hold, newest first.
+     *
+     * **Two passes over the store and never one join, which is the crate's own shape and is here
+     * for its reason.** The page is one question and *which decks hold each of its cards* is a
+     * second: a single walk that visited a printing once per deck holding it would answer the
+     * same printing twice and then need de-duplicating back down, which is exactly how the
+     * issue's *each printing appears only once* gets quietly broken — and the count beside it
+     * would be wrong in the same breath. {@link NewPrintings.decksWatched} is taken over the
+     * **same** predicate the page is, so a reader whose only deck is virtual is told *no decks
+     * are being watched* rather than *nothing was reprinted*: two different sentences pointing at
+     * two different fixes, and a count over a wider set would pick the wrong one.
+     *
+     * **Today is {@link CLOCK_BASE}**, the fake's own, exactly as {@link readHandlers.price_movers}
+     * measures its windows from it — and `since` is the far edge **after** the clamp, so a page
+     * that asked for 99 999 days can draw the date it really got. Everything the caller sent is
+     * narrowed here as well as in TypeScript, because the numbers arrive from a layout document a
+     * reader can hand-edit: `days` into `1..=365`, `limit` into `0..=100` (**a negative is no rows
+     * and never the default**, which is the trap a bare SQL `LIMIT` reads as *no limit at all*),
+     * an unknown `scope` into `all`, and `langs` to codes of the right shape capped at
+     * {@link MAX_NEW_PRINTING_LANGS}.
+     *
+     * **`langs` is an allow-list whose one sentinel is emptiness: an empty list is every
+     * language**, and a list the narrowing empties is the same answer rather than a different one
+     * — never a silent fallback to English, which would be this side making a claim the caller did
+     * not. That matters because `cards.id` is one printing *in one language*, so a set that
+     * shipped in ten is ten rows of one reprint, and which of those a reader wanted is a setting
+     * rather than a rule. The page's own default sends `["en"]`.
+     *
+     * **There is no undated arm and the fixture is why**: `cards.released_at` is nullable in the
+     * corpus and the crate's `WHERE` drops a row with no date rather than inventing an *Undated*
+     * bucket, while {@link FakeCard.releasedAt} is a plain `string` — so this fake has no such row
+     * to drop and a branch here would be one no story could reach.
+     *
+     * A read, so it answers through every second of a sync.
+     */
+    new_printings: (args: {
+      scope: string;
+      deckIds: readonly number[];
+      days: number;
+      langs: readonly unknown[];
+      includeVirtual: boolean;
+      includeTheory: boolean;
+      includeBasics: boolean;
+      limit: number;
+    }): NewPrintings => {
+      const days = Math.min(MAX_NEW_PRINTING_DAYS, Math.max(1, Math.trunc(args.days) || 1));
+      const since = dayOf(CLOCK_BASE - days * 86_400);
+      // `page_size`: a caller that asked for nothing is given nothing, where
+      // `card_printings` falls back to a real page — an empty feed here is an ordinary answer
+      // with a sentence of its own, and an empty printings list there would read as *this card
+      // has no printings*. Absent is the full read, which is the crate's `None`.
+      const asked = Math.trunc(args.limit);
+      const limit = Number.isFinite(asked)
+        ? asked > 0
+          ? Math.min(NEW_PRINTINGS_READ, asked)
+          : 0
+        : NEW_PRINTINGS_READ;
+      // **Two arms and not three.** `decks` has no `pinned` column — a pinned set is a *widget's*
+      // `deckIds` — so `chosen` is the only id-carrying scope there can be, and a word this build
+      // has never heard of is `all` rather than a refusal. An empty `chosen` is a real answer and
+      // never *every deck*: the reader chose a set and it is empty.
+      const chosen = args.scope === "chosen";
+      const picked = new Set(chosen ? (args.deckIds ?? []) : []);
+      const watched = db.decks.filter(
+        (d) => (!chosen || picked.has(d.id)) && (args.includeVirtual || !d.virtualOnly),
+      );
+      const watchedIds = new Set(watched.map((d) => d.id));
+      const allow = new Set(
+        (args.langs ?? []).filter(isNewPrintingLang).slice(0, MAX_NEW_PRINTING_LANGS),
+      );
+      const everyLanguage = allow.size === 0;
+
+      // Pass one's subject: the distinct oracle cards the watched decks hold. **The basics switch
+      // is applied here rather than on the page**, because a type line is a fact about the oracle
+      // card — so both ends give the same answer and narrowing the held set is the cheaper one.
+      const held = new Set<string>();
+      for (const row of db.deckCards) {
+        if (!watchedIds.has(row.deckId)) continue;
+        if (!args.includeTheory && row.variant !== "live") continue;
+        const card = cardById(db, row.cardId);
+        if (card === null || card.oracleId === "") continue;
+        if (!args.includeBasics && BASIC_LAND_TYPE.test(card.typeLine ?? "")) continue;
+        held.add(card.oracleId);
+      }
+
+      const page = db.cards
+        .filter(
+          (c) =>
+            c.isPaper &&
+            held.has(c.oracleId) &&
+            c.releasedAt >= since &&
+            (everyLanguage || allow.has(c.lang)),
+        )
+        .sort(
+          (a, b) =>
+            cmp(b.releasedAt, a.releasedAt) ||
+            cmp(a.setCode, b.setCode) ||
+            cmp(a.collectorNumber, b.collectorNumber) ||
+            cmp(a.id, b.id),
+        )
+        .slice(0, limit);
+
+      // Pass two, over the oracle ids pass one answered — so the popover's rows are exactly the
+      // rows on screen rather than a second, wider question asked at the same time. **The basics
+      // switch is not repeated**: a basic land the page excluded contributed no oracle id to ask
+      // about. The theory switch **is**, because it changes which rows are summed rather than
+      // which cards are asked about.
+      const onPage = new Set(page.map((p) => p.oracleId));
+      const holders = new Map<string, Map<number, NewPrintingDeck>>();
+      for (const row of db.deckCards) {
+        if (!watchedIds.has(row.deckId)) continue;
+        if (!args.includeTheory && row.variant !== "live") continue;
+        const card = cardById(db, row.cardId);
+        if (card === null || !onPage.has(card.oracleId)) continue;
+        const deck = watched.find((d) => d.id === row.deckId);
+        if (deck === undefined) continue;
+        const perDeck = holders.get(card.oracleId) ?? new Map<number, NewPrintingDeck>();
+        // **Keyed by the deck and never by the variant**, which is the whole of the quantity
+        // rule: a deck holding a card in a live pile and a theory one is **one** entry with the
+        // total, where keying the variant too would draw two rows that look identical and sum
+        // apart — the worst shape a bug in this list can have. The word it reports is the
+        // *lower* of the two, so `live` wins wherever any live row holds it.
+        const entry = perDeck.get(deck.id) ?? {
+          deckId: deck.id,
+          name: deck.name,
+          quantity: 0,
+          variant: "theory",
+          virtualOnly: deck.virtualOnly,
+        };
+        perDeck.set(deck.id, {
+          ...entry,
+          quantity: entry.quantity + row.quantity,
+          variant: entry.variant === "live" || row.variant === "live" ? "live" : "theory",
+        });
+        holders.set(card.oracleId, perDeck);
+      }
+
+      const printings: NewPrinting[] = page.map((p) => ({
+        printingId: p.id,
+        oracleId: p.oracleId,
+        name: p.name,
+        setCode: p.setCode,
+        setName: p.setName,
+        collectorNumber: p.collectorNumber,
+        releasedAt: p.releasedAt,
+        rarity: p.rarity,
+        promoTypes: p.promoTypes,
+        finishes: p.finishes,
+        lang: p.lang,
+        decks: [...(holders.get(p.oracleId)?.values() ?? [])].sort(
+          (a, b) => cmp(a.name, b.name) || a.deckId - b.deckId,
+        ),
+      }));
+      return {
+        printings,
+        decksWatched: watched.length,
+        since,
+        // The release day of the **last row on the page**, so a page cut by the limit can say
+        // what it is a truncation of without a second count.
+        oldest: printings.length === 0 ? null : printings[printings.length - 1].releasedAt,
+        seenAt: db.newPrintingsSeen,
+      };
     },
 
     /**
@@ -11263,6 +11736,32 @@ const CARD_NOT_IN_CATEGORY = "That card is not in this deck's category any more.
 const NOTE_GONE = "That note is not there any more.";
 const NOTE_WRONG_DECK = "That note belongs to a different deck.";
 /**
+ * `sticky_notes::NOTE_GONE` — **the same sentence as {@link NOTE_GONE} above, under a second
+ * name, and both halves of that are deliberate.**
+ *
+ * The *sentence* is the same because it is the house style — capitalised, punctuated, a whole
+ * sentence — and because a reader meeting "that note is gone" in two places should not be told
+ * it twice in two voices. It is copied verbatim from `sticky_notes.rs` rather than inferred, as
+ * every refusal here is: a story renders these.
+ *
+ * The *constant* is a second one because **the two modules are free to diverge and a shared
+ * constant would hide it if they did**. `deck_notes.rs` and `sticky_notes.rs` are separate
+ * files with separate refusals — that one already has a second sentence this has no twin for
+ * ({@link NOTE_WRONG_DECK}, since a sticky note has no deck to belong to the wrong one of) —
+ * so the day either crate rewords its own, this file has a place to put the difference. One
+ * constant would have made that edit look like a typo in the other feature's tests.
+ *
+ * ⚠️ **The plan this was built from spelled it `"that note is no longer there"`** — lower case
+ * and unpunctuated — and the fake was written to match before the crate landed. It does not
+ * say that; two sentences for one refusal is exactly the drift the fake exists to catch, and
+ * the crate is the authority. Read the constant, never a plan.
+ *
+ * It guards the **update** and the **delete** and neither of the other two writes. A create has
+ * no row to miss, and a **reorder skips an id that is not a note** rather than refusing —
+ * {@link writeHandlers.sticky_note_reorder} argues that one where it lives.
+ */
+const STICKY_NOTE_GONE = "That note is not there any more.";
+/**
  * `deck_notes::NO_ORACLE_ID` — the module's third refusal, and the only one about an *argument*
  * rather than about a row.
  *
@@ -11604,6 +12103,21 @@ function stamp(db: FakeDb): number {
 /** `INTEGER PRIMARY KEY`'s default rowid: one past the largest, and 1 for an empty table. */
 function nextId(rows: { id: number }[]): number {
   return rows.reduce((n, r) => Math.max(n, r.id), 0) + 1;
+}
+
+/**
+ * {@link stamp} for a table {@link stamp} does not scan — the sticky notes' own `unixepoch()`.
+ *
+ * **It has to read its own rows, and that is what makes it a second function rather than a
+ * fourth loop in `stamp`.** That one scans the three tables whose `updated_at` a *sort* is
+ * keyed on; `sticky_notes` is ordered by `sort_order` and never by a clock, so adding it there
+ * would move every deck's stamp in every story for a column nothing sorts by. What this is for
+ * instead is the same property one table down: two writes in one press must not stamp the same
+ * second, or a story asserting that an edit moved the clock passes on a world where it did not.
+ * {@link writeHandlers.record_recent_card} takes exactly this shape for exactly this reason.
+ */
+function stickyStamp(db: FakeDb): number {
+  return db.stickyNotes.reduce((n, r) => Math.max(n, r.updatedAt), stamp(db)) + 1;
 }
 
 /**
@@ -18249,6 +18763,136 @@ export function writeHandlers(db: FakeDb) {
       };
     },
 
+    /* -------------------------------------------------------------- sticky notes -- */
+
+    /**
+     * `sticky_notes::create_note` — a new note at the **end** of the board.
+     *
+     * `max(sort_order) + 1`, and landing last is the whole of what the reader is promised: a
+     * board somebody has arranged keeps that arrangement, and the new note is where they can
+     * find it rather than where an insertion sort decided. `nextNoteSortOrder`'s arithmetic one
+     * table over, without the deck to filter by.
+     *
+     * **Nothing here refuses anything.** Not a blank title — what a note is *called* is derived
+     * at render, so an empty one is a state the page draws; not a blank body — a note that is
+     * only a heading is a note; and **not a colour**, which is the one worth saying out loud.
+     * The column carries no CHECK because the table is **synced**, so a build that adds a sixth
+     * colour has to be able to emit rows this build still draws — `features/home/stickyNotes.ts`
+     * reads a word it does not know as `slate`. A fake that narrowed the word here would make
+     * that fallback unreachable from a story while looking like diligence:
+     * {@link writeHandlers.set_home_layout}'s `kind` argument, one table over.
+     *
+     * It honours `busy` like every other write here, and **the lock comes first** — `with_write`
+     * takes it before `create_note` looks at an argument. There is nothing else this command
+     * could refuse, so BUSY is its only refusal at all.
+     */
+    sticky_note_create: (args: { title: string; body: string; color: string }): number => {
+      refuseIfBusy(db);
+      const at = stickyStamp(db);
+      db.stickyNotes.push({
+        id: nextId(db.stickyNotes),
+        title: args.title,
+        body: args.body,
+        color: args.color,
+        // **Not a colour's business and not an argument**: a note is pinned by pressing the pin,
+        // so the column's `DEFAULT 0` is the only value a create can write.
+        pinned: false,
+        sortOrder: db.stickyNotes.reduce((n, r) => Math.max(n, r.sortOrder + 1), 0),
+        createdAt: at,
+        updatedAt: at,
+      });
+      return db.stickyNotes[db.stickyNotes.length - 1].id;
+    },
+
+    /**
+     * `sticky_notes::update_note` — **absent means leave it, per field; `""` really empties.**
+     *
+     * `coalesce(?n, col)` is the whole of that rule, and `??` is how it is spelled here — never
+     * `||`, and this command has **two** values a truthiness test would swallow rather than
+     * {@link deck_note_update}'s one: `title: ""` is a title the reader deliberately cleared,
+     * and `pinned: false` is a pin they deliberately took out. Either read as "no change" would
+     * be a press that reported success and did nothing, for ever.
+     *
+     * **The wire shape is `{ id, ...patch }` and not `{ id, patch }`** — the crate declares four
+     * optional parameters beside `id` rather than a struct, so an omitted key simply is not sent
+     * and deserialises as `None`. That is why these four are `?:` here where
+     * {@link deck_note_update}'s two are `?: T | null`: that command spells every key and folds
+     * an absent one to `null` on the way out, and this one has no `null` to send.
+     *
+     * **The clock moves whether or not a field did**, which is `update_note`'s own SQL — one
+     * `updated_at = unixepoch()` with nothing compared first. It differs from
+     * {@link deck_note_update}, which guards its *history* row on a real change; there is no
+     * history here to guard, no deck to touch and no undo step to spend, so there is nothing a
+     * comparison would buy.
+     *
+     * The one refusal is {@link STICKY_NOTE_GONE}, and the lock is asked **before** the row is
+     * looked for: a stale editor saving into a sync gets BUSY, not "not there any more".
+     */
+    sticky_note_update: (args: {
+      id: number;
+      title?: string;
+      body?: string;
+      color?: string;
+      pinned?: boolean;
+    }): void => {
+      refuseIfBusy(db);
+      const note = db.stickyNotes.find((n) => n.id === args.id);
+      if (!note) throw refuse(STICKY_NOTE_GONE);
+      note.title = args.title ?? note.title;
+      note.body = args.body ?? note.body;
+      note.color = args.color ?? note.color;
+      note.pinned = args.pinned ?? note.pinned;
+      note.updatedAt = stickyStamp(db);
+    },
+
+    /**
+     * `sticky_notes::delete_note` — one note, gone.
+     *
+     * **The survivors are not renumbered**, which is the crate's `DELETE` and not an omission:
+     * `sort_order` is an ordering and never a position, so a board that goes `0, 1, 3` is in
+     * perfect order with a hole in it, and a renumbering pass would be four extra rows for the
+     * sync to carry every time a reader threw one note away. It is also why
+     * {@link readHandlers.sticky_notes} sorts on `id` as its second term rather than trusting
+     * the numbers to stay dense.
+     *
+     * **No undo step and no history row**, unlike {@link deck_note_delete} — there is no deck
+     * for {@link journalled} to snapshot and no `deck_audit` row for a step to key on, so the
+     * wrapper files nothing here without being told. A sticky note deleted is deleted.
+     */
+    sticky_note_delete: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      if (!db.stickyNotes.some((n) => n.id === args.id)) throw refuse(STICKY_NOTE_GONE);
+      db.stickyNotes = db.stickyNotes.filter((n) => n.id !== args.id);
+    },
+
+    /**
+     * `sticky_notes::reorder_notes` — renumber in the order given, `0..n`.
+     *
+     * **An id that is not a note is skipped rather than refused**, which is
+     * {@link deck_note_reorder}'s rule and made for a sharper version of its reason: the page
+     * sends the order it drew, and a note deleted in **another window** must not fail the drag
+     * the reader just made. The sync makes that an ordinary Tuesday rather than a corner.
+     *
+     * ⚠️ **The number written is the position in the *argument*, strangers included.** A list
+     * of four whose third id names nothing leaves the notes at `0, 1, 3` — the crate's
+     * `enumerate()` counts the stranger — so the gap is real and is exactly the hole the delete
+     * above leaves. What the reader sees is the order they dragged either way, which is the only
+     * thing either handler promises.
+     *
+     * Every renumbered row's clock moves, because the crate's `UPDATE` writes `updated_at`
+     * alongside `sort_order`. One instant for all of them: a drag is one press.
+     */
+    sticky_note_reorder: (args: { ids: number[] }): void => {
+      refuseIfBusy(db);
+      const at = stickyStamp(db);
+      args.ids.forEach((id, position) => {
+        const note = db.stickyNotes.find((n) => n.id === id);
+        if (!note) return;
+        note.sortOrder = position;
+        note.updatedAt = at;
+      });
+    },
+
     /**
      * `recent_cards::record_now` — remember that a card was opened.
      *
@@ -18303,6 +18947,29 @@ export function writeHandlers(db: FakeDb) {
       const view = args.view.trim();
       if (view === "") throw refuse(NO_START_VIEW);
       db.startView = view;
+    },
+
+    /**
+     * `new_printings::mark_seen` — move the *seen* cursor to `at`, in unix seconds.
+     *
+     * **The clock is the caller's**, which is `record_recent_card`'s rule one `app_meta` row over
+     * and made for the same reason: `SystemTime::now()` panics on the wasm target rather than
+     * erroring, so the page stamps the moment and the backend stores it.
+     *
+     * **No refusal of its own, which is unusual here and is the point.** The value is a number
+     * off the IPC boundary and has no junk state, and there is nothing about a cursor for this
+     * side to have an opinion on — a build that read a stored row it could not parse treats it as
+     * *never*, which draws every dot, and drawing a dot too many costs a reader one glance where
+     * hiding one costs them the whole mark. So the only thing it can answer is `busy`, and it
+     * honours that like every other write here because the crate takes `sync::with_write` for it.
+     *
+     * **The caller ignores that refusal**, deliberately: a cursor that did not move costs a row of
+     * gold dots the reader has already looked at, and a widget that raised an error over one would
+     * be worse than the dots.
+     */
+    mark_new_printings_seen: (args: { at: number }): void => {
+      refuseIfBusy(db);
+      db.newPrintingsSeen = args.at;
     },
 
     /**

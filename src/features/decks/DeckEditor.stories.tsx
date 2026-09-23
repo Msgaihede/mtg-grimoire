@@ -1244,6 +1244,38 @@ export const Gone: Story = {
 export const SwapFolds: Story = {
   args: { deckId: 2 },
   play: async ({ canvasElement }) => {
+    // **Every gesture goes through this one session rather than through the direct API.**
+    // `userEvent.click(...)` calls `setup()` internally, and a session prepares the whole
+    // document: it attaches its own listeners and builds the pointer and keyboard state against
+    // however many elements are mounted. This play mounts the editor, the card modal and the
+    // printings dialog — **~1 900–2 200 elements** — so each of the ten direct calls it used to
+    // make paid that preparation again.
+    //
+    // **Measured back to back in one quiet window, three runs each** (2026-09-20): ten direct
+    // calls **7551 / 7163 / 7443 ms**, one shared session **6564 / 6659 / 6334 ms**. About
+    // **12 %**, and that is the number to quote.
+    //
+    // ⚠️ **The commit that landed this said ~30 % and a variance collapse from seconds to 186 ms,
+    // and both were load drift rather than this change.** Those figures came from runs taken
+    // tens of minutes apart while a fleet of worktrees was building; re-measured back to back the
+    // two arrangements are both stable (388 ms and 325 ms of spread) and differ by 12 %. The
+    // direct-API version really did hit **15 798 ms** against the 15 000 ms `testTimeout` once —
+    // that happened — but a 12 % saving moves such a spike to ~13.9 s rather than preventing it,
+    // so this reduces the odds of a timeout and does not abolish them. **On this machine, take no
+    // timing comparison seriously unless its two halves were measured minutes apart.**
+    //
+    // **It does not generalise, which is why there is no sweep.** The same conversion on
+    // `AutoPileArrivesWithItsCard` — seven direct calls, this same file, the same editor mount —
+    // measured **2457 / 2481 / 2435** against **2470** baseline: nothing. On `SearchPage`'s
+    // `Unplayable` (six calls) it was 13.5 %. So the per-call cost is somewhere between 0 and
+    // ~50 ms depending on the play, never the ~210 ms this one implied, and converting the
+    // suite's other 240 excess sessions was measured as not worth the churn.
+    //
+    // **It is not `pointerEventsCheck`.** Disabling that check on top of the shared session
+    // measured 4131 / 4234 / 4233 — inside the noise of the session change alone — so the safety
+    // net stays on and nothing about what this play would catch has changed.
+    //
+    // `pickOption` below already took this session; the rest of the play simply had not.
     const user = userEvent.setup();
     const canvas = within(canvasElement);
     // **The panel is open at rest again** (issue #183), so there is no disclosure to press
@@ -1253,12 +1285,12 @@ export const SwapFolds: Story = {
     // **The tab is pressed, though.** The panel opens on its Collection tab, and the card
     // search — the wall this play adds `sld 913` from — is the second one. Without this the
     // searchbox below is not mounted at all.
-    await userEvent.click(await canvas.findByRole("button", { name: "All cards" }));
+    await user.click(await canvas.findByRole("button", { name: "All cards" }));
 
     // The wall is searched rather than scrolled: it is virtualised, one column wide under
     // `src/stories.test.tsx`'s layout stub, and Sol Ring is far enough down an alphabetical list
     // of 36 cards that its tile is not mounted.
-    await userEvent.type(
+    await user.type(
       await canvas.findByRole("searchbox", { name: "Search cards" }),
       "Sol Ring",
     );
@@ -1269,16 +1301,16 @@ export const SwapFolds: Story = {
     // the deck is pointed there and the dialog closed again. Picked by the option's own text,
     // because a category's id is the fake's own row numbering and not something a story writes
     // down.
-    await userEvent.click(canvas.getByRole("button", { name: "Deck settings" }));
+    await user.click(canvas.getByRole("button", { name: "Deck settings" }));
     await pickOption(user, "Add cards to", "Main deck");
-    await userEvent.click(canvas.getByRole("button", { name: "Close deck settings" }));
+    await user.click(canvas.getByRole("button", { name: "Close deck settings" }));
     await waitFor(async () => await expect(canvas.queryByRole("dialog")).toBeNull());
 
     // **All printings, because the panel collapses like the search page does.** Collapsed, Sol
     // Ring is one tile — its newest printing — which is the right default for building a deck
     // and the wrong one for a story about choosing between two printings.
-    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
-    await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
+    await user.click(canvas.getByRole("button", { name: /^Show filters/ }));
+    await user.click(canvas.getByRole("button", { name: "All printings" }));
 
     // Two tiles, newest printing first — `sld 913` (2025-12-01) ahead of `c21 263` (2021-04-23),
     // which is `search::ORDER_NAME`: the card, then its newest printing.
@@ -1288,7 +1320,7 @@ export const SwapFolds: Story = {
       { timeout: 4000 },
     );
     await expect(add).toHaveLength(2);
-    await userEvent.click(add[0]);
+    await user.click(add[0]);
 
     // Two cards now, both called Sol Ring, both in the Main deck group.
     const main = () => canvas.getByRole("region", { name: "Main deck" });
@@ -1306,16 +1338,16 @@ export const SwapFolds: Story = {
     const rows = within(main()).getAllByRole("button", { name: /^Sol Ring/ });
     const sld = rows.find((row) => row.closest("li")?.textContent?.includes("SLD"));
     await expect(sld).toBeDefined();
-    await userEvent.click(sld as HTMLElement);
+    await user.click(sld as HTMLElement);
     await canvas.findByRole("button", { name: /^View all printings/ });
-    await userEvent.click(canvas.getByRole("button", { name: /^View all printings/ }));
+    await user.click(canvas.getByRole("button", { name: /^View all printings/ }));
 
     // **Both dialogs are named after the card**, because `AllPrintingsDialog`'s title is the
     // card's name and the card modal's is too. The close label is what tells them apart, and it
     // is a label rather than a heuristic: `closeLabel` is a required prop of `Dialog`.
     const closePrintings = await canvas.findByRole("button", { name: "Close printings" });
     const printings = within(closePrintings.closest('[role="dialog"]') as HTMLElement);
-    await userEvent.click(await printings.findByRole("button", { name: /C21/ }, { timeout: 4000 }));
+    await user.click(await printings.findByRole("button", { name: /C21/ }, { timeout: 4000 }));
 
     // One card of two. The number is the server's arithmetic, never a guess: `useDeck.swapPrinting`
     // writes no optimistic patch precisely because the fold is the one number only the backend can

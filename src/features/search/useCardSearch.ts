@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   ipc,
+  type QueryPredicate,
   type SearchRequest,
   type SearchResponse,
   type SearchSortKey,
@@ -19,13 +20,14 @@ import {
 } from "@/features/tags/tagFilters";
 import { useCardFacets, type FacetRequest } from "./useCardFacets";
 import {
-  parseTagQuery,
+  parseQuery,
   removeToken,
   setTokenNegated,
   setTokenValue,
   tokenKey,
+  type PredicateToken,
   type TagToken,
-} from "./tagQuery";
+} from "./queryLanguage";
 
 /**
  * No tag chips — what a caller that has never heard of the Tags page passes.
@@ -43,6 +45,78 @@ export const PAGE_SIZE = 50;
 
 /** How long the search box stays quiet before a keystroke becomes a query. */
 export const DEBOUNCE_MS = 300;
+
+/**
+ * One parsed term as the **wire** carries it: the span dropped.
+ *
+ * `start`/`end` are the box's business — they exist so a chip can splice the term back out of
+ * the text — and the backend has no use for them at all. Sending them would be worse than
+ * useless: the payload is what every query key here is hashed from, so `t:goblin bolt` and
+ * `bolt t:goblin` are one search that would cost two cache entries, and the same query typed
+ * two characters further along the box would miss its own cached pages.
+ */
+function bare({ field, op, value, negated }: PredicateToken): QueryPredicate {
+  return { field, op, value, negated };
+}
+
+/**
+ * A search box with **no tag wiring**, read into the two fields a card query takes.
+ *
+ * The collection, the wishlist, the deck editor's collection column, `QuickAdd` and
+ * `DeckCoverPicker` all send a raw string today and none of them resolves tag names: there is no
+ * `tag_resolve` round trip behind them and no chip row in front of them. So a tag term typed
+ * into one of those boxes has nowhere to go — and being *dropped* is the one thing it must not
+ * do, because a term that vanishes silently **widens** the search, which is the single direction
+ * a search must never fail in (`useCardSearch`'s `tagQueryBlocked` is the same rule from the
+ * other side).
+ *
+ * **So a tag folds back into the free text as its own value.** `atag:dragon` on the collection
+ * page is a name-and-rules search for `dragon` rather than no filter at all: narrower than the
+ * reader asked for in kind, never wider in extent. A **negated** tag folds the same way, because
+ * the alternatives are worse — free text has no `-`, so the choice is between the word and
+ * nothing, and nothing is the silent widening this whole function exists to refuse. The reader
+ * can see the word did not do what they meant; they cannot see a term that was never sent.
+ *
+ * Absent rather than empty on both fields, which is the rule every other filter in this app
+ * follows: a blank `text` and an empty `predicates` are read as unset at the far end, and
+ * sending them would make the payload lie about intent — and mint a second query key for the
+ * search an untouched box has always made.
+ */
+export function searchTerms(input: string): { text?: string; predicates?: QueryPredicate[] } {
+  const parsed = parseQuery(input);
+  const text = [parsed.text, ...parsed.tags.map((t) => t.value)].filter(Boolean).join(" ");
+  return {
+    ...(text ? { text } : {}),
+    ...(parsed.predicates.length > 0 ? { predicates: parsed.predicates.map(bare) } : {}),
+  };
+}
+
+/**
+ * One typed predicate, as the chip row under the box draws it.
+ *
+ * **Not a {@link TagChip}, and the difference is the vocabulary rather than the pixels.** A tag
+ * chip names a row of a taxonomy — it carries a slug, a namespace and a label Scryfall wrote —
+ * and a screen reader is told "oracle tag". `cmc>=3` is none of those things, so it is drawn by
+ * its own component saying "search term": a predicate announced as a tag would be exactly the
+ * word swap the root `CLAUDE.md` spends a paragraph refusing.
+ */
+export interface PredicateChip {
+  /** `field|op|value`, case-folded — what the row dedupes on and what the ✕ names. Two terms
+   *  that ask the same question are one chip, for the tag row's reason: a chip's identity is the
+   *  filter, while a token's is where it sits in the string. */
+  key: string;
+  /** The term exactly as the reader typed it, minus any leading `-` — `cmc>=3`, `mv>=3`,
+   *  `o:"draw a card"`. Their spelling and not a canonical one, because the chip stands over
+   *  their own sentence and the ✕ edits that sentence. */
+  label: string;
+  mode: "include" | "exclude";
+}
+
+/** A predicate's identity, for {@link PredicateChip.key}. Case-folded because Rust folds the
+ *  value too, so `c:RG` and `c:rg` are one question and must not be two chips. */
+function predicateKey(p: QueryPredicate): string {
+  return `${p.field}|${p.op}|${p.value.toLowerCase()}`;
+}
 
 /**
  * The `legalities` keys the format picker offers, in the order those keys rank — which is a
@@ -216,6 +290,15 @@ export interface FilterState {
    * format.
    */
   format: string;
+  /**
+   * The colour chips.
+   *
+   * **The `Exactly` chip beside them is deliberately not a field here**, and that is the one
+   * omission on this interface worth arguing. `colorsStrict` modifies the colour filter rather
+   * than being a filter of its own — it changes what a picked colour *means*, and is unreachable
+   * with none picked — so counting it would move the number on Reset all when nothing new had
+   * been narrowed, over a row the reader had already been told was one thing that is on.
+   */
   colors: readonly string[];
   sets: readonly string[];
   manaValues: readonly number[];
@@ -227,6 +310,10 @@ export interface FilterState {
   owned: boolean | undefined;
   /** The rarity chips. One kind however many are pressed, like {@link colors}. */
   rarities: readonly string[];
+  /** The card-type chips — {@link CARD_TYPES}, ORed with each other. One kind however many are
+   *  pressed, for {@link rarities}' reason: a reader who narrowed to instants and sorceries has
+   *  narrowed once. */
+  types: readonly string[];
   /**
    * The price band's two ends, either usable alone. `undefined` is "this end is open".
    *
@@ -262,6 +349,11 @@ export function activeFilterCount(f: FilterState): number {
     f.manaValues.length > 0 || f.manaX,
     f.owned !== undefined,
     f.rarities.length > 0,
+    // One kind however many chips are pressed, exactly as the colours and the rarities above it
+    // are counted: `Instant` and `Sorcery` together are one narrowing of one question — *which
+    // types* — and a reader told `Reset all 2` over one chip row has been given the wrong number
+    // about one control.
+    f.types.length > 0,
     // One term for the pair, not two: a band is one narrowing however many of its ends the
     // reader has moved — the argument the mana row's `manaValues || manaX` makes.
     f.priceMin !== undefined || f.priceMax !== undefined,
@@ -322,6 +414,82 @@ export function toggleColor(picked: readonly ColorKey[], key: ColorKey): ColorKe
   if (picked.includes(key)) return picked.filter((c) => c !== key);
   if (key === "C") return ["C"];
   return [...picked.filter((c) => c !== "C"), key];
+}
+
+/**
+ * The colour row and its `Exactly` flag as **one piece of state**, in all four hooks that own a
+ * colour filter.
+ *
+ * **Two `useState`s could not express the rule that binds them, and the failure was silent.**
+ * Clearing the last colour has to clear the flag — the chip is only drawn while a colour is
+ * picked, so a flag outliving the row is state with no control: invisible to the reader, still
+ * in the query key, still waiting to change the meaning of the next colour they press. Writing
+ * that as `const next = toggleColor(colors, key); setColors(next); if (!next.length) …` reads
+ * correctly and is wrong, because `colors` is *this render's*: React batches, so three presses
+ * before a re-render all compute from the same array and only the last survives. Picking W, U
+ * and B gave `Colour: Black`, and four story plays caught it.
+ *
+ * A functional updater fixes that and cannot host the flag — an updater must be pure, and React
+ * runs it twice under StrictMode. One state and one updater is what lets the rule be both
+ * batch-safe and pure, which is why the two fields live together rather than beside each other.
+ */
+export interface ColorFilter {
+  picked: readonly ColorKey[];
+  /** "Exactly these colours" rather than "at least these" — a modifier on {@link picked} and
+   *  not a filter of its own, which is why it is absent from {@link FilterState} and from every
+   *  `activeFilterCount`. Its own field and **not a sentinel character inside the `colors`
+   *  string**: that string is read by an uppercase-and-`contains` pass in two languages, and a
+   *  marker in it would have to be stripped in both. */
+  strict: boolean;
+}
+
+/** The cleared colour filter — what every hook opens on and what `resetAll` puts back. */
+export const NO_COLORS: ColorFilter = { picked: [], strict: false };
+
+/** Add or remove one colour, and drop the flag with the last of them. See {@link ColorFilter}. */
+export function toggleColorFilter(state: ColorFilter, key: ColorKey): ColorFilter {
+  const picked = toggleColor(state.picked, key);
+  return { picked, strict: picked.length === 0 ? false : state.strict };
+}
+
+/**
+ * The card types the chip row offers, **in the order it draws them**.
+ *
+ * Creature first and Land last, because that is how every decklist reads — `deckBuckets.ts`'s
+ * `TYPE_BUCKETS` order, and deliberately not the alphabetical bit order `cardtypes.rs` freezes.
+ * A matching order and a display order are two constants here for the reason `autoCategory.ts`
+ * gives about its own pair: one constant cannot be both, and folding them together breaks
+ * whichever job loses.
+ *
+ * **This is a third list beside those two rather than a reuse of either**, and the question is
+ * what makes it one: `autoCategory.ts` and `deckBuckets.ts` file a card into exactly *one*
+ * bucket and disagree with each other about Land on purpose, where a filter asks *does this card
+ * have this type* — so a reader who presses `Creature` and cannot find an artifact creature has
+ * been told a falsehood.
+ *
+ * The words must match `cardtypes.rs`'s `TYPE_KEYS` letter for letter — the backend matches
+ * exactly and drops anything it does not recognise, so a typo here is a chip that silently
+ * filters nothing rather than one that errors.
+ */
+export const CARD_TYPES: readonly string[] = [
+  "Creature",
+  "Planeswalker",
+  "Instant",
+  "Sorcery",
+  "Artifact",
+  "Enchantment",
+  "Battle",
+  "Land",
+];
+
+/**
+ * The picked types as the backend takes them, or nothing.
+ *
+ * Sorted, for `setsParam`'s reason: picking Creature then Land is the same search as Land then
+ * Creature and must not cost a second round trip.
+ */
+export function typesParam(picked: readonly string[]): string[] | undefined {
+  return picked.length > 0 ? [...picked].sort() : undefined;
 }
 
 // `sortCurrency` is gone, and so is the `currency` parameter it fed. It existed to send the
@@ -504,7 +672,16 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     setAppliedDefaultFormat(defaultFormatValue);
     setFormat(defaultFormatValue);
   }
-  const [colors, setColors] = useState<readonly ColorKey[]>([]);
+  // **One state for the row and its `Exactly` flag, not two.** The rule that binds them — the
+  // last colour leaving turns the flag off — cannot be written across two `useState`s without
+  // either losing presses to batching or putting a `setState` inside an updater React runs
+  // twice. {@link ColorFilter} carries the whole reading, including the bug that found it.
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(NO_COLORS);
+  const colors = colorFilter.picked;
+  const colorsStrict = colorFilter.strict;
+  // The eight card-type chips — {@link CARD_TYPES}, ORed with each other and ANDed with
+  // everything else, which is the rarity chips' shape exactly.
+  const [types, setTypes] = useState<readonly string[]>([]);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   // The other half of the mana-value question, and **additive rather than exclusive**:
@@ -557,8 +734,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   }, [text]);
 
   /**
-   * Scryfall's tagger syntax, read out of the box — `o:ramp`, `otag:"spot removal"`, `-a:dragon`
-   * — and the free text left over for FTS.
+   * Scryfall's query syntax, read out of the box — `t:goblin`, `cmc>=3`, `otag:"spot removal"`,
+   * `-atag:dragon` — and the free text left over for FTS.
    *
    * Parsed from the **debounced** string rather than the live one, so the chips, the note and
    * the wall all move together. A row that appeared a keystroke at a time while the wall waited
@@ -566,12 +743,28 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * its include/exclude toggle — flush the debounce themselves, because a press is a deliberate
    * act and should not sit for 300 ms.
    */
-  const parsed = useMemo(() => parseTagQuery(debouncedText), [debouncedText]);
+  const parsed = useMemo(() => parseQuery(debouncedText), [debouncedText]);
+
+  /**
+   * The typed predicates, as the wire carries them — spans dropped ({@link bare}).
+   *
+   * **Absent rather than empty**, so a box with no syntax in it sends exactly the payload it
+   * always did: `filters::push_card_filters` reads an empty list as no filter, and React Query
+   * would read it as a second search.
+   *
+   * Nothing keys on this and nothing has to: `debouncedText` is already a segment of both keys
+   * below, and these are a pure function of it. A predicate that changed without the text
+   * changing would be a parser that is not a function.
+   */
+  const predicates = useMemo(
+    () => (parsed.predicates.length > 0 ? parsed.predicates.map(bare) : undefined),
+    [parsed],
+  );
 
   /** The tokens as asks, and the one string that identifies them. Order matters: the answer is
    *  positional, so two queries naming the same tags in a different order are two questions. */
   const asks = useMemo(
-    () => parsed.tokens.map((t) => ({ namespace: t.namespace, value: t.value })),
+    () => parsed.tags.map((t) => ({ namespace: t.namespace, value: t.value })),
     [parsed],
   );
   const askKey = useMemo(() => asks.map(tokenKey).join(" "), [asks]);
@@ -580,8 +773,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * The typed names, as the canonical slugs the filters match on.
    *
    * Keyed on {@link askKey} rather than on the whole query, so editing the free text beside a
-   * tag does not re-ask a question already answered — and so the two searches `a:dog bolt` and
-   * `bolt a:dog` share one answer.
+   * tag does not re-ask a question already answered — and so the two searches `atag:dog bolt`
+   * and `bolt atag:dog` share one answer.
    */
   const tagResolution = useQuery({
     queryKey: ["tags", "resolve", askKey],
@@ -593,16 +786,17 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * What the reader typed, as chips — and the tokens that could not be resolved.
    *
    * **Deduplicated by `chipKey`, first mode winning.** A chip's identity is the tag, while a
-   * token's is where it sits in the string, so `a:dog a:dog` is two terms and one chip. That is
-   * also what makes the ✕ honest: it removes *every* term that produced the chip, because a
-   * chip that vanished and left the wall still narrowed would be worse than no chip at all.
+   * token's is where it sits in the string, so `atag:dog atag:dog` is two terms and one chip.
+   * That is also what makes the ✕ honest: it removes *every* term that produced the chip,
+   * because a chip that vanished and left the wall still narrowed would be worse than no chip
+   * at all.
    */
   const typed = useMemo(() => {
     const answers = tagResolution.data;
     const chips: TagChip[] = [];
     const seen = new Set<string>();
     const unknown: TagToken[] = [];
-    parsed.tokens.forEach((token, i) => {
+    parsed.tags.forEach((token, i) => {
       // Undefined while the query is in flight, which is why the search is gated below rather
       // than being allowed to run against a half-resolved list.
       const ref = answers?.[i];
@@ -637,11 +831,52 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   );
 
   /**
+   * The typed predicates, as chips — what the row under the box draws for them.
+   *
+   * **Built from the box's own text, so a chip says what the reader wrote.** The label is the
+   * source slice rather than a reconstruction from `field`/`op`/`value`: a reader who typed
+   * `mv>=3` should read `mv>=3` back, not the canonical `cmc>=3`, because the ✕ edits *their*
+   * sentence and a chip naming a term they cannot find in the box is a control that lies.
+   *
+   * **Deduplicated by the filter and not by the spelling**, which is the tag row's rule one
+   * field over: `cmc>=3 mv>=3` asks one question twice, so it is one chip — and its ✕ then
+   * removes both terms, because a chip that vanished and left the wall still narrowed would be
+   * worse than no chip at all.
+   *
+   * Unlike the tag chips there is nothing to resolve and nothing to wait for, so these are
+   * present on the first render after the debounce. See the payload above for why that is the
+   * whole difference between a tag and a predicate.
+   */
+  const predicateChips = useMemo(() => {
+    const chips: PredicateChip[] = [];
+    const seen = new Set<string>();
+    for (const token of parsed.predicates) {
+      const key = predicateKey(token);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      chips.push({
+        key,
+        // The `-` is the chip's `mode` rather than part of its name, exactly as a tag chip
+        // draws `not Forest` rather than carrying the dash in its label.
+        label: debouncedText.slice(token.start, token.end).replace(/^-/, ""),
+        mode: token.negated ? "exclude" : "include",
+      });
+    }
+    return chips;
+  }, [parsed, debouncedText]);
+
+  /** Every term that produced one predicate chip, latest first — so that splicing a later term
+   *  out leaves the earlier ones' spans still true. {@link removeTagChip}'s rule, and the same
+   *  reason: every span is an offset into the string being edited. */
+  const termsBehind = (key: string): PredicateToken[] =>
+    parsed.predicates.filter((p) => predicateKey(p) === key).reverse();
+
+  /**
    * Every tag this search filters by: the caller's chips ANDed with the reader's typed ones.
    *
    * Both are narrowings the reader asked for, so they merge rather than one winning — see
    * `mergeTagTerms`, which also sorts and dedupes each list so that chipping `dog` and typing
-   * `a:dog` is one predicate and, more to the point, one query key.
+   * `atag:dog` is one predicate and, more to the point, one query key.
    */
   const tagTerms = useMemo(
     () => mergeTagTerms(callerTagTerms, typedTerms),
@@ -713,6 +948,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // Sorted for `setsParam`'s reason: picking rare then mythic is the same search as mythic then
   // rare, and must not cost a second round trip.
   const raritiesParam = rarities.length > 0 ? [...rarities].sort() : undefined;
+  // Sorted by {@link typesParam} for the same reason, and through the shared function rather
+  // than inline: the collection, the wishlist and the deck panel all canonicalise this list, and
+  // four copies of one sort is four places for the normal form to drift.
+  const typesParamValue = typesParam(types);
 
   // Every input the request is built from, so a changed filter can never be answered by
   // another filter's cached pages.
@@ -735,7 +974,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // twice differently.
     format,
     colorsParam ?? "",
+    // **A segment of its own beside the letters, and it is the half most easily forgotten.**
+    // `WU` loose and `WU` strict are two different sets of cards over the same local SQLite, so
+    // a key built from the letters alone would answer the strict press out of the loose search's
+    // cached pages — instantly, with no request, no spinner and nothing on screen to notice,
+    // which reads to a reader as "the chip does nothing". Spelled rather than stringified, like
+    // every other optional segment here.
+    colorsStrict ? "strict" : "",
     setsParam?.join(",") ?? "",
+    typesParamValue?.join(",") ?? "",
     manaParam?.join(",") ?? "",
     // **A segment of its own, and the whole feature turns on it being here.** X is a second
     // axis over the same chips, so a key that carried only the numerals would answer "3, and
@@ -776,17 +1023,30 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     queryFn: ({ pageParam }) =>
       ipc.searchCards({
         // **The free text, not the box** — the tag terms have been lifted out of it, so
-        // `bolt a:dragon` searches FTS for `bolt` alone. Sending the raw string would have FTS
-        // hunting for a card whose text contains `a:dragon`, which is no card.
+        // `bolt atag:dragon` searches FTS for `bolt` alone. Sending the raw string would have FTS
+        // hunting for a card whose text contains `atag:dragon`, which is no card.
         //
         // Blank strings are dropped rather than sent: the backend treats them as unset
         // anyway, and sending them would make the request payload lie about intent.
         text: parsed.text || undefined,
+        // **The typed terms, and they are not gated the way the tags above are.** A tag name can
+        // be *unknown* — a string that names no row of a taxonomy — which is why an unresolved
+        // one holds the whole query closed. A predicate has no such state: `t:goblin` either
+        // matches rows or does not, and an empty answer to it is the honest one. Gating on these
+        // would blank the wall at every keystroke of `t:goblin` waiting for a resolve that is
+        // never asked for.
+        predicates,
         // `format` and `playableOnly` together, from the one select that decides both. See
         // {@link formatParams} — including why a named format sends `playableOnly` too.
         ...formatParams(format),
         colors: colorsParam,
+        // Absent rather than `false` when the chip is off, which is the rule every optional
+        // filter on this payload follows: `false` on the wire reads as "the reader chose loose"
+        // where they chose nothing at all, and it would mint a second React Query hash for the
+        // search an untouched row has always had.
+        colorsStrict: colorsStrict || undefined,
         sets: setsParam,
+        types: typesParamValue,
         manaValues: manaParam,
         rarities: raritiesParam,
         // The band, at the marketplace this page is quoting. Absent ends are absent fields, so
@@ -872,6 +1132,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // wall that chip filters have to describe one corpus, and a facet request carrying the whole
     // box would be counting over an FTS query the search never ran.
     text: parsed.text || undefined,
+    // **The typed terms, and only two of the twelve fields actually narrow a count.**
+    // `typeLine` and `oracleText` ride the FTS bitset `run_facets` already folds, so they narrow
+    // the counts for free; the index carries no power, toughness, artist or card-colour
+    // dimension, so the other ten leave the counts **wider than the wall**. That is spec §7's
+    // fail-open decision rather than a gap to close here: `facets.ts` greys only what would
+    // change nothing, so a count that is too high offers an option that turns out empty, where
+    // one that was too low would hide cards nobody would think to report missing. They ride
+    // anyway, because the two that do narrow are in the same list.
+    predicates,
     // Spelled through the same {@link formatParams} the page's payload is, so the counts
     // greying this row's chips and the wall those chips filter can never describe different
     // corpora. `playableOnly` is a filter the facets must carry (unlike `collapse`): it decides
@@ -879,7 +1148,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // mana value that only art cards satisfy.
     ...formatParams(format),
     colors: colorsParam,
+    // Rides for the reason every other filter here does: the counts that grey a chip and the
+    // wall that chip filters have to describe one corpus, and a colour count taken loosely over
+    // a wall matched strictly would offer options the strict search has none of. Spelled
+    // `|| undefined` exactly as the page's payload spells it, because React Query hashes this
+    // object with its `undefined` values dropped — a bare `false` would mint a second facet key
+    // for the search an untouched row has always had.
+    colorsStrict: colorsStrict || undefined,
     sets: setsParam,
+    types: typesParamValue,
     manaValues: manaParam,
     // Spelled exactly as the page's payload spells it — `|| undefined` and not `manaX` —
     // because React Query hashes this object with its `undefined` values dropped: a bare
@@ -949,9 +1226,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     /**
      * The tags the reader typed into the box, resolved — what the chip row under it draws.
      *
-     * Empty on a box with no tagger syntax in it, and empty *while a name is resolving*, which
-     * is the state the row must not draw a half-answer in. Deduplicated by tag, so `a:dog
-     * a:dog` is one chip; see the note on `typed` for why the ✕ then removes both terms.
+     * Empty on a box with no tag syntax in it, and empty *while a name is resolving*, which
+     * is the state the row must not draw a half-answer in. Deduplicated by tag, so `atag:dog
+     * atag:dog` is one chip; see the note on `typed` for why the ✕ then removes both terms.
      */
     tagChips: typed.chips,
     /**
@@ -977,7 +1254,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       const key = chipKey(namespace, slug);
       // Right to left: every span is an offset into the string being edited, so removing a
       // later term first leaves the earlier ones' spans still true.
-      const doomed = parsed.tokens
+      const doomed = parsed.tags
         .map((token, i) => ({ token, ref: tagResolution.data?.[i] }))
         .filter(({ ref }) => ref && chipKey(ref.namespace, ref.slug) === key)
         .map(({ token }) => token)
@@ -993,6 +1270,31 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      */
     replaceTagToken: (token: TagToken, value: string) =>
       rewrite(setTokenValue(debouncedText, token, value)),
+    /**
+     * The typed predicates, as chips — `cmc>=3`, `t:goblin`, `not a:rebecca`.
+     *
+     * Drawn beside the tag chips and **not as tag chips**: see {@link PredicateChip}. Always
+     * present once the debounce has settled, because a predicate has nothing to resolve.
+     */
+    predicateChips,
+    /** Take one typed predicate out of the query — a chip's ✕. Removes every term that produced
+     *  the chip, for {@link removeTagChip}'s reason. */
+    removePredicateChip: (key: string) =>
+      rewrite(termsBehind(key).reduce((query, token) => removeToken(query, token), debouncedText)),
+    /** Flip one typed predicate between include and exclude — a chip's press. Rewrites each term
+     *  where it stands rather than re-appending it, so the reader's own sentence keeps its
+     *  order. */
+    togglePredicateChipMode: (key: string) => {
+      const picked = predicateChips.find((c) => c.key === key);
+      if (!picked) return;
+      const negated = picked.mode === "include";
+      rewrite(
+        termsBehind(key).reduce(
+          (query, token) => setTokenNegated(query, token, negated),
+          debouncedText,
+        ),
+      );
+    },
     /** Flip one typed tag between include and exclude — a chip's press. Rewrites every term
      *  that produced the chip, for {@link removeTagChip}'s reason. */
     toggleTagChipMode: (slug: string, namespace: TagNamespace) => {
@@ -1000,7 +1302,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       const picked = typed.chips.find((c) => chipKey(c.namespace, c.slug) === key);
       if (!picked) return;
       const negated = picked.mode === "include";
-      const doomed = parsed.tokens
+      const doomed = parsed.tags
         .map((token, i) => ({ token, ref: tagResolution.data?.[i] }))
         .filter(({ ref }) => ref && chipKey(ref.namespace, ref.slug) === key)
         .map(({ token }) => token)
@@ -1035,9 +1337,34 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      */
     anyCard: true,
     colors,
-    toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
+    // A functional updater, so a batch of presses composes: three chips pressed before a
+    // re-render each see the row the one before them left. Clearing the last colour clears
+    // `Exactly` — both halves of that live in {@link toggleColorFilter}, one rule in one place
+    // for all four hooks.
+    toggleColor: (key: ColorKey) => setColorFilter((s) => toggleColorFilter(s, key)),
+    /**
+     * Read the colour row as "exactly these colours" rather than "at least these" — the
+     * `Exactly` chip.
+     *
+     * A modifier on the row rather than a filter beside it, which is the whole of why it is
+     * absent from {@link activeFilterCount} and from `unfiltered`: it narrows nothing on its own
+     * and is unreachable with no colour picked, so a Reset all badge that counted it would move
+     * for a press that filtered nothing new.
+     */
+    colorsStrict,
+    toggleColorsStrict: () => setColorFilter((s) => ({ ...s, strict: !s.strict })),
     sets,
     toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    /**
+     * The card-type chips — {@link CARD_TYPES}, ORed with each other and ANDed with everything
+     * else, which is the rarity chips' shape exactly.
+     *
+     * A card matches a chip if that type word is on its type line as a **whole word**, so an
+     * artifact land answers `Land` and `Artifact` both. Deliberately not the one-bucket rule
+     * `deckBuckets.ts` and `autoCategory.ts` file a card by — see {@link CARD_TYPES}.
+     */
+    types,
+    toggleType: (type: string) => setTypes((picked) => toggleIn(picked, type)),
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
     /**
@@ -1117,6 +1444,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * format`, which is the honest escape hatch rather than a badge lying about what the
      * button does.
      */
+    // `colorsStrict` is deliberately not passed: it is not a field of {@link FilterState}, for
+    // the reason written there.
     activeCount: activeFilterCount({
       text,
       format,
@@ -1126,6 +1455,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       manaX,
       owned,
       rarities,
+      types,
       priceMin,
       priceMax,
     }),
@@ -1226,8 +1556,11 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     resetAll: () => {
       setText("");
       setFormat("");
-      setColors([]);
-      setSets([]);
+      setColorFilter(NO_COLORS);
+      // Cleared although it is not counted above, and the asymmetry is the point: Reset all
+      // means "no filters", and a strict flag left standing over an empty colour row is exactly
+            setSets([]);
+      setTypes([]);
       setManaValues([]);
       setManaX(false);
       setOwned(undefined);
@@ -1284,11 +1617,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * the one consequence written at its definition above. With no default the two expressions
      * are identical, which is why `SearchPage` cannot notice the difference.
      */
+    // `colorsStrict` is absent from this list for {@link activeFilterCount}'s reason: it cannot
+    // be on without `colorsParam` being set, so a term for it could never decide this answer —
+    // and a search narrowed by nothing but a modifier is not a search at all.
     unfiltered:
       !debouncedText &&
       !formatIsReaderSet &&
       !colorsParam &&
       !setsParam &&
+      !typesParamValue &&
       !manaParam &&
       !manaX &&
       owned === undefined &&

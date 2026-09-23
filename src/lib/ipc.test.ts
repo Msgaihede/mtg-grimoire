@@ -33,8 +33,13 @@ import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
 import desktopRs from "../../src-tauri/src/desktop.rs?raw";
+// `cardFiltersRs` rather than `filtersRs`, which the scanner's own `filters.rs` already holds
+// below — two files of that name in two crates, and the app's is the one `CardFilters` lives in.
+import cardFiltersRs from "../../src-tauri/src/filters.rs?raw";
 import homeRs from "../../src-tauri/src/home.rs?raw";
+import facetsRs from "../../src-tauri/src/index/facets.rs?raw";
 import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";
+import newPrintingsRs from "../../src-tauri/src/new_printings.rs?raw";
 import priceHistoryRs from "../../src-tauri/src/price_history.rs?raw";
 import recentCardsRs from "../../src-tauri/src/recent_cards.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
@@ -43,6 +48,7 @@ import setCompletionRs from "../../src-tauri/src/set_completion.rs?raw";
 import shareRs from "../../src-tauri/src/share/commands.rs?raw";
 import startupRs from "../../src-tauri/src/startup.rs?raw";
 import startviewRs from "../../src-tauri/src/startview.rs?raw";
+import stickyNotesRs from "../../src-tauri/src/sticky_notes.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistFoldersRs from "../../src-tauri/src/wishlist_folders.rs?raw";
@@ -1892,7 +1898,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       sortOrder: 0,
       // Empty would be the ordinary case; one entry is what pins the nested shape, which no
       // parity check on the outer struct can see.
-      cards: [{ oracleId: "o-bolt", name: "Lightning Bolt" }],
+      cards: [{ oracleId: "o-bolt", name: "Lightning Bolt", cardId: "m10-146" }],
       createdAt: 1,
       updatedAt: 2,
     };
@@ -2851,6 +2857,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       ["recent_cards.rs", recentCardsRs],
       ["set_completion.rs", setCompletionRs],
       ["price_history.rs", priceHistoryRs],
+      ["new_printings.rs", newPrintingsRs],
     ] as const) {
       expect(src.length, `${name} was not read`).toBeGreaterThan(1_000);
     }
@@ -2884,6 +2891,138 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
     for (const param of ["window", "direction", "marketplace", "limit"]) {
       declares(priceHistoryRs, "price_movers", param);
+    }
+
+    /**
+     * **Eight arguments, three of them bare booleans side by side** — `price_movers`' own trap
+     * one worse. A wrapper that swapped `includeTheory` and `includeBasics` type-checks, is
+     * refused by nothing, and answers a feed that hides theory cards and shows basic lands: a
+     * list that is wrong in both directions at once and looks perfectly ordinary.
+     */
+    invoke.mockResolvedValue({
+      printings: [],
+      decksWatched: 0,
+      since: "2026-06-22",
+      oldest: null,
+      seenAt: null,
+    });
+    await ipc.newPrintings("chosen", [3, 7], 90, ["en", "ja"], false, true, false, 100);
+    expect(invoke).toHaveBeenCalledWith("new_printings", {
+      scope: "chosen",
+      deckIds: [3, 7],
+      days: 90,
+      langs: ["en", "ja"],
+      includeVirtual: false,
+      includeTheory: true,
+      includeBasics: false,
+      limit: 100,
+    });
+    for (const param of [
+      "scope",
+      "deck_ids",
+      "days",
+      "langs",
+      "include_virtual",
+      "include_theory",
+      "include_basics",
+      "limit",
+    ]) {
+      declares(newPrintingsRs, "new_printings", param);
+    }
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.markNewPrintingsSeen(1_700_000_000);
+    expect(invoke).toHaveBeenCalledWith("mark_new_printings_seen", { at: 1_700_000_000 });
+    declares(newPrintingsRs, "mark_new_printings_seen", "at");
+  });
+
+  /**
+   * **The sticky notes' five** (user schema v46), pinned on the day they were written — one case,
+   * because they are one widget's worth of commands and the traps are one family's.
+   *
+   * `sticky_notes` takes **no arguments at all**, `home_layout`'s trap: an argument object sent to
+   * a command that declares only the managed state is a deserialisation error and not a type
+   * error. It is also the one read here that is `#[tauri::command(async)]` on a *sync* `fn`, so
+   * the crate is matched on `fn <name>(` rather than through `commandParams`, which only sees a
+   * `pub async fn` — the home page's five reads' reason exactly.
+   *
+   * **`sticky_note_update` is the one worth the case.** Its patch is *spread*, so the four
+   * optional columns travel as four top-level keys beside `id` — and `payloadKeys` cannot see
+   * through a `...patch`, which is what makes the four names below the assertion rather than
+   * anything the parser could infer. A wrapper that nested them as `{ id, patch }` type-checks
+   * perfectly, is refused at run time, and the symptom is a note that never saves. The same
+   * parser blindness is why the four are asserted against the crate by name.
+   *
+   * `sticky_note_reorder` sends `ids` where `deck_note_reorder` beside it sends `deckId, ids` —
+   * a wrapper copied from that line sends a deck this command does not declare.
+   */
+  it("sends every sticky-note command under the name its command declares", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(stickyNotesRs.length, "sticky_notes.rs was not read").toBeGreaterThan(1_000);
+    const declares = (command: string, param: string) =>
+      expect(stickyNotesRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+
+    invoke.mockResolvedValue([]);
+    expect(await ipc.stickyNotes()).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("sticky_notes");
+    expect(stickyNotesRs).toContain("fn sticky_notes(");
+
+    invoke.mockResolvedValue(7);
+    expect(await ipc.stickyNoteCreate("Trade night", "Bring the binder", "amber")).toBe(7);
+    expect(invoke).toHaveBeenCalledWith("sticky_note_create", {
+      title: "Trade night",
+      body: "Bring the binder",
+      color: "amber",
+    });
+
+    // The whole patch, so every optional column is pinned at least once — and a second call with
+    // one key, because *absent means leave it* is the command's rule and a wrapper that folded
+    // the missing keys to `null` would blank three columns on every edit.
+    invoke.mockResolvedValue(undefined);
+    await ipc.stickyNoteUpdate(7, { title: "Renamed", body: "x", color: "jade", pinned: true });
+    expect(invoke).toHaveBeenCalledWith("sticky_note_update", {
+      id: 7,
+      title: "Renamed",
+      body: "x",
+      color: "jade",
+      pinned: true,
+    });
+    await ipc.stickyNoteUpdate(7, { body: "only the body" });
+    expect(invoke).toHaveBeenLastCalledWith("sticky_note_update", { id: 7, body: "only the body" });
+
+    await ipc.stickyNoteDelete(7);
+    expect(invoke).toHaveBeenLastCalledWith("sticky_note_delete", { id: 7 });
+
+    await ipc.stickyNoteReorder([3, 1, 2]);
+    expect(invoke).toHaveBeenLastCalledWith("sticky_note_reorder", { ids: [3, 1, 2] });
+
+    // And the crate declares every one of them. The four writes are `pub async fn`, so their
+    // payloads are read out of `ipc.ts` rather than written down here — containment rather than
+    // equality, `finishBearing`'s rule, since each also declares a `state` it is never sent.
+    for (const command of [
+      "sticky_note_create",
+      "sticky_note_update",
+      "sticky_note_delete",
+      "sticky_note_reorder",
+    ]) {
+      const sent = payloadKeys(ipcSource, command).map(snake);
+      const declared = commandParams(stickyNotesRs, command);
+      expect(sent, `nothing parsed out of ipc.ts for \`${command}\``).not.toHaveLength(0);
+      expect(
+        declared,
+        `\`${command}\` is not declared \`pub async fn\` in sticky_notes.rs`,
+      ).not.toHaveLength(0);
+      for (const key of sent) {
+        expect(declared, `\`${command}\` is sent \`${key}\` and does not declare it`).toContain(
+          key,
+        );
+      }
+    }
+    // The four the spread hides from `payloadKeys`, by name.
+    for (const param of ["id", "title", "body", "color", "pinned"]) {
+      declares("sticky_note_update", param);
     }
   });
 
@@ -4176,6 +4315,86 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     expect(tsFields(ipcSource, "SearchRequest")).toContain("availableForDeck");
   });
 
+  /** Variant names of a `pub enum` in a Rust source file, in declaration order. */
+  const rustVariants = (src: string, name: string): string[] => {
+    const start = src.indexOf(`pub enum ${name} {`);
+    expect(start, `\`pub enum ${name}\` is not in the Rust source given`).toBeGreaterThan(-1);
+    const body = srcLines(src.slice(start)).slice(1);
+    const end = body.indexOf("}");
+    expect(end, `\`${name}\` has no closing brace`).toBeGreaterThan(0);
+    return body
+      .slice(0, end)
+      .join("\n")
+      .replace(/\/\/.*$/gm, "")
+      .split(/[,\n]/)
+      .map((piece) => piece.trim())
+      .filter((piece) => /^[A-Z][A-Za-z0-9]*$/.test(piece));
+  };
+
+  /**
+   * What `#[serde(rename_all = "camelCase")]` does to a **variant**, which is not what
+   * {@link camel} does to a field: a variant is already PascalCase, so serde only lower-cases
+   * its first character — `Cmc` → `cmc`, `TypeLine` → `typeLine`. Passing one through `camel`
+   * leaves it PascalCase and every comparison below fails for the wrong reason.
+   */
+  const variantName = (v: string) => v[0].toLowerCase() + v.slice(1);
+
+  /** The string members of an exported string-union type in `ipc.ts`. */
+  const tsUnion = (src: string, name: string): string[] => {
+    const body = new RegExp(`export type ${name} =([^;]*);`).exec(src);
+    expect(body, `\`export type ${name}\` is not in ipc.ts`).not.toBeNull();
+    return [...(body?.[1] ?? "").matchAll(/"([A-Za-z0-9_]+)"/g)].map((m) => m[1]);
+  };
+
+  /**
+   * **`filters::QueryPredicate` is a cross-boundary contract with a closed enum at each end,
+   * and nothing in either build type-checks one against the other.**
+   *
+   * The failure it guards is the quietest kind this file knows. `CardFilters` carries
+   * `#[serde(rename_all = "camelCase", default)]`, so a field whose name the two sides spell
+   * differently is **dropped** rather than refused: the chip draws, the reader believes the
+   * wall is narrowed, and every card is still there. `vi.fn()` mocks erase the mirror, so no
+   * suite on this side can see it either.
+   *
+   * The variant names are the sharp end. serde's camelCase leaves a one-word variant alone
+   * (`Cmc` → `cmc`) and lower-cases only the first word of a two-word one (`TypeLine` →
+   * `typeLine`), which is a rule a reader would have to know serde to predict — and a union
+   * member spelled `typeline` here would be a keyword that silently filters nothing.
+   * `filters::tests::the_wire_names_every_field_and_operator_in_camel_case` is the Rust end
+   * of the same contract, written out rather than derived for the same reason.
+   */
+  it("mirrors the query predicate, its two enums and every one of their names", () => {
+    const rustPredicate = rustFields(cardFiltersRs, "QueryPredicate").map(camel);
+    const tsPredicate = tsFields(ipcSource, "QueryPredicate");
+    expect(rustPredicate).toEqual(["field", "op", "value", "negated"]);
+    expect([...tsPredicate].sort()).toEqual([...rustPredicate].sort());
+
+    const fields = rustVariants(cardFiltersRs, "PredicateField").map(variantName);
+    expect(fields).toHaveLength(12);
+    expect(fields).toContain("typeLine");
+    expect(fields).toContain("cmc");
+    expect([...tsUnion(ipcSource, "PredicateField")].sort()).toEqual([...fields].sort());
+
+    const ops = rustVariants(cardFiltersRs, "PredicateOp").map(variantName);
+    expect(ops).toEqual(["colon", "eq", "ne", "gt", "gte", "lt", "lte"]);
+    expect([...tsUnion(ipcSource, "PredicateOp")].sort()).toEqual([...ops].sort());
+  });
+
+  /**
+   * The field itself, on all three payloads that carry it — and the three are one edit in
+   * Rust and three here, because `CollectionQuery` and `WishlistQuery` flatten
+   * `filters::CardFilters` while `SearchRequest` declares its own copy of the same fields.
+   *
+   * A missing one is a search box whose typed terms narrow one list and not the next, with a
+   * green build and no error: `#[serde(default)]` drops the unknown key on the way in.
+   */
+  it("carries the predicate list on the card filters and on the search request", () => {
+    expect(rustFields(cardFiltersRs, "CardFilters")).toContain("predicates");
+    expect(tsFields(ipcSource, "CardFilters")).toContain("predicates");
+    expect(rustFields(searchRs, "SearchRequest")).toContain("predicates");
+    expect(tsFields(ipcSource, "SearchRequest")).toContain("predicates");
+  });
+
   /**
    * **The other three card walls, pinned the same way and for a failure that has already
    * shipped.** `CardSummary` was the only DTO carrying `image_uris` until 2026-08-31, on the
@@ -4511,8 +4730,35 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // reader must never confuse, confused on every launch with nothing red.
     ["RecentCard", recentCardsRs, "RecentCard"],
     ["SetCompletion", setCompletionRs, "SetCompletion"],
+    // **The sticky notes' one** (user schema v46). Here rather than on `mirrors` for
+    // `HomeLayout`'s reason — it draws no card and it has eight fields against that table's floor
+    // of ten — and **`StickyNote`/`StickyNoteRow` is a third pair whose two spellings differ**,
+    // `DeckNote`/`DeckNoteRow`'s precedent, so both names are written out rather than assumed.
+    //
+    // Every drift it can catch is the quiet kind, and each leaves a board that still draws. A
+    // renamed `title` reads `undefined`, `stickyTitle` takes its body's-first-line arm, and every
+    // note on the page is headed by its own opening sentence — which is a *designed* state for a
+    // note with no heading, so the bug and the feature are one picture. A renamed `color` makes
+    // `noteColor` answer `slate` for every note, which is the same word an unknown colour gets,
+    // so the reader's whole filing turns grey and nothing anywhere says why. A renamed `pinned`
+    // is `undefined`, which is falsy, so the widget's *pinned first* toggle lifts nothing. And a
+    // renamed `sortOrder` makes the arrangement `undefined` on every row, so the board stops
+    // remembering a drag — `deck_notes`' failure one table over.
+    ["StickyNote", stickyNotesRs, "StickyNoteRow"],
     ["PriceMover", priceHistoryRs, "PriceMover"],
     ["PriceMovers", priceHistoryRs, "PriceMovers"],
+    // **The tenth widget's three**, and they are nested two deep for `PriceMovers`' reason: a
+    // field renamed inside `NewPrintingDeck` leaves both structs above it agreeing while every
+    // row of the drill-down popover reads `undefined`.
+    //
+    // Each is the quiet kind. A renamed `releasedAt` puts every printing in no day group at all;
+    // a renamed `decksWatched` is `undefined`, which is not `0`, so the *no decks are watched*
+    // sentence never fires and a reader watching nothing is told nothing was reprinted; a renamed
+    // `seenAt` marks every row unseen for ever; and a renamed `quantity` draws `×undefined`
+    // beside a deck name.
+    ["NewPrintingDeck", newPrintingsRs, "NewPrintingDeck"],
+    ["NewPrinting", newPrintingsRs, "NewPrinting"],
+    ["NewPrintings", newPrintingsRs, "NewPrintings"],
     ["WishlistSummary", wishlistRs, "WishlistSummary"],
     // Defined in `collection.rs` and imported by `wishlist.rs` — one struct for two commands, so
     // one row here rather than two, and a second definition in the wishlist would be the drift
@@ -4526,11 +4772,17 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // chip and the deck's per-card marks, so a field renamed one level down leaves `DeckNoteRow`
     // agreeing field for field while every card the note names arrives `undefined`.
     //
-    // **On this table and not on `mirrors` above**, for `ShareRow`'s reason twice over and
-    // deliberately rather than by omission: neither draws a picture — a note is prose about a
-    // card, and a row carrying an art URL per attachment would be paying for a wall nobody
-    // renders — and the largest of the three is eight fields against that table's floor of ten.
-    // Both of those rules are properties of a card *wall's* row rather than of a mirror.
+    // **On this table and not on `mirrors` above, and since 2026-09-20 the _field floor_ is the
+    // whole of why.** `mirrors` asserts two things beyond field parity — `imageUris` present on
+    // both sides, and more than ten fields parsed — and this comment used to rest on the first:
+    // *neither draws a picture, and a row carrying an art URL per attachment would be paying for
+    // a wall nobody renders*. **That stopped being true when `DeckNoteCard` grew `cardId` and
+    // `imageUris`**, which is exactly that art URL per attachment: a note card draws a
+    // representative printing now, so the picture assertion is one these rows would **pass**.
+    // What still keeps all three here is the count — `DeckNoteRow` 8, `CardNoteRow` 5,
+    // `DeckNoteCard` 4 — against a floor of ten that is a property of a card *wall's* row rather
+    // than of a mirror. So: **a later rung that takes one of these past ten fields is a row that
+    // should move up to `mirrors`**, and for `DeckNoteCard` nothing else is in the way.
     //
     // **`DeckNote`/`DeckNoteRow` and `CardNote`/`CardNoteRow` are the two spellings that differ**,
     // `DeckCard`/`DeckCardRow`'s precedent, so both pairs are written out rather than assumed.
@@ -4572,6 +4824,34 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ScannerPrefs", scannerRs, "ScannerPrefs"],
     ["ScannerTrayRow", scannerRs, "ScannerTrayRow"],
     ["ScannerTrayChoice", scannerRs, "ScannerTrayChoice"],
+    // **The three oldest structs in the app, and none of them had ever been fenced** (2026-09-22,
+    // added with strict colours and the type chips). `SearchRequest` is every search the window
+    // asks for, `CardFilters` is the half of it the collection and the wishlist flatten into
+    // their own queries, and `FacetResponse` is what greys a chip — so between them they carry
+    // every filter in the app, and until this row they drifted in silence like everything else
+    // off these lists.
+    //
+    // Here rather than on `mirrors` above for `DecksCleared`'s reason: none is a card row and
+    // none carries a picture. Two of them do clear that table's floor of ten fields, which is
+    // the point at which the floor stops being the reason and the picture is the whole of it.
+    //
+    // **Two of the three are structs the app _sends_, which is where a drift is loudest** —
+    // `WishOptimizeApplyItem`'s lesson above, and quieter here than at any of its other sites,
+    // because both carry `#[serde(default)]` on every field. A filter field renamed on one side
+    // is not a refusal and not an error: it deserialises to `None`, the backend emits no clause
+    // for it, and the search answers **as though the reader had never pressed the chip**. The
+    // control is drawn, it toggles, its count is right, and the result set does not move. That
+    // is the shape this feature can produce in one careless commit — `types` reaching `ipc.ts`
+    // under a name `filters.rs` does not know — and it is indistinguishable on screen from a
+    // filter that matched everything.
+    //
+    // `FacetResponse` fails the other way round and just as quietly. Every count on it is read
+    // with `?? undefined` and a missing key means *unknown*, which leaves a chip **live** — the
+    // fail-open rule the whole facet row is built on — so a renamed map greys nothing, for ever,
+    // and a reader is offered eight type chips that each answer zero cards.
+    ["SearchRequest", searchRs, "SearchRequest"],
+    ["CardFilters", cardFiltersRs, "CardFilters"],
+    ["FacetResponse", facetsRs, "FacetResponse"],
   ];
 
   it.each(plainMirrors)(

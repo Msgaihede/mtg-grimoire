@@ -45,6 +45,7 @@ import { SetCombobox } from "./SetCombobox";
 import { TagQueryRow, type TagQuerySurface } from "./TagQueryRow";
 import {
   ANY_CARD,
+  CARD_TYPES,
   cycleTriState,
   SEARCH_SORT_OPTIONS,
   type ColorKey,
@@ -104,6 +105,7 @@ export type TrayCell =
   | "owned"
   | "decks"
   | "rarity"
+  | "type"
   | "price"
   | "printings"
   | "finish"
@@ -119,6 +121,7 @@ export const SEARCH_TRAY: readonly TrayCell[] = [
   "format",
   "owned",
   "rarity",
+  "type",
   "price",
   "printings",
 ];
@@ -181,6 +184,21 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
   formats: readonly FormatFilterOption[];
   colors: readonly ColorKey[];
   toggleColor: (key: ColorKey) => void;
+  /**
+   * Read {@link FilterSurface.colors} as an **exact** identity rather than a subset: `"RW"`
+   * answers the RW cards alone, not mono-R, mono-W, or the colourless cards that fit in any
+   * deck.
+   *
+   * **Required, and above the line, because every surface that has colours can answer it.**
+   * `colors`/`toggleColor` are required for the same reason — the colour chips are on the bar
+   * at every width and on every surface — and a flag that modifies them has exactly the same
+   * reach. Nothing here is a capability one backend has and another does not.
+   *
+   * Degenerate for `"C"`, which already means colourless-only in both modes; and a `true` with
+   * no colour picked filters nothing, which is why the chip is not drawn until one is.
+   */
+  colorsStrict: boolean;
+  toggleColorsStrict: () => void;
   sets: readonly string[];
   toggleSet: (code: string) => void;
   rarities: readonly string[];
@@ -243,6 +261,19 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
   /** `Not in a deck`. Absent on a surface with no deck to be in. */
   allocation?: "all" | "unallocated";
   setAllocation?: (next: "all" | "unallocated") => void;
+  /**
+   * The card-type chips — `Artifact`/`Battle`/`Creature`/`Enchantment`/`Instant`/`Land`/
+   * `Planeswalker`/`Sorcery`. ORed with each other, ANDed with every other filter.
+   *
+   * **Optional like every cell below this line**: a surface that cannot answer it draws no cell
+   * rather than a control that does nothing.
+   *
+   * **"Does this card have this type", not "which bucket is it in".** Dryad Arbor
+   * (`Land Creature — Forest Dryad`) is under both `Land` and `Creature`, which is what a
+   * filter means and what `autoCategory.ts`' one-bucket rule deliberately does not.
+   */
+  types?: readonly string[];
+  toggleType?: (type: string) => void;
   /**
    * Which finishes a copy may be in. Absent on every surface whose rows are *printings* rather
    * than copies — a printing exists in every finish it was published in, so the question has no
@@ -368,10 +399,22 @@ function activeChips<SortKey extends string>(
     chips.push({
       // `MANA_LABEL` rather than the letters: `Colour: W, U` is the payload, and the payload is
       // not what a reader picked — they pressed a white symbol and a blue one.
-      label: `Colour: ${MANA_KEYS.filter((k) => search.colors.includes(k))
+      //
+      // **`exactly` rides the same chip rather than a second one**, for the reason the whole row
+      // is one chip per kind: strict is not a filter, it is which reading the colour filter gets,
+      // and a chip of its own would put a second entry under a badge that still counted one. The
+      // word is in the sentence `Colour: exactly White, Blue` because that is the filter said
+      // out loud — and it is what the × has to take off along with the colours, or clearing the
+      // statement would leave a flag behind with no control on screen to see it by.
+      label: `Colour: ${search.colorsStrict ? "exactly " : ""}${MANA_KEYS.filter((k) =>
+        search.colors.includes(k),
+      )
         .map((k) => MANA_LABEL[k])
         .join(", ")}`,
-      remove: () => search.colors.forEach((c) => search.toggleColor(c)),
+      remove: () => {
+        search.colors.forEach((c) => search.toggleColor(c));
+        if (search.colorsStrict) search.toggleColorsStrict();
+      },
     });
   }
 
@@ -421,6 +464,27 @@ function activeChips<SortKey extends string>(
         .map(sentence)
         .join(", ")}`,
       remove: () => search.rarities.forEach((r) => search.toggleRarity(r)),
+    });
+  }
+
+  // The **setter**, which is how every optional kind below is gated: a surface that cannot ask
+  // this question is told apart from one that is not currently asking it by which of the two
+  // fields is here at all.
+  //
+  // **It is here because `activeFilterCount` counts it.** This row and that badge are one
+  // arithmetic — pressing a chip takes exactly one off the number — so a kind the count knows
+  // about and this row could not state would be a reader looking at `Reset all 1` with nothing
+  // under the rule saying what the 1 is. It matters more for this kind than for most: the type
+  // chips are in the tray, so with the tray shut they have no control on screen at all.
+  //
+  // Drawn in `CARD_TYPES`' own order rather than the order they were pressed, which is the
+  // rarities' rule above: the statement reads the same however the reader got to it.
+  const { toggleType } = search;
+  if (toggleType && search.types && search.types.length > 0) {
+    const { types } = search;
+    chips.push({
+      label: `Type: ${CARD_TYPES.filter((t) => types.includes(t)).join(", ")}`,
+      remove: () => types.forEach((t) => toggleType(t)),
     });
   }
 
@@ -879,10 +943,15 @@ export function FilterBar<SortKey extends string>({
             symbol={key}
             pressed={search.colors.includes(key)}
             // The one control on this row that does not ask "would this return nothing".
-            // `colors` is subset semantics, so pressing a chip with another already on
-            // *broadens* — the count is the size of the result set after the press, read
-            // against `facets.total`. And that total is the facets' own: printings, exact,
-            // and not the collapsed, capped number the results caption prints.
+            // The count is the size of the result set *after* the press, read against
+            // `facets.total`. And that total is the facets' own: printings, exact, and not
+            // the collapsed, capped number the results caption prints.
+            //
+            // **Which way a press moves is now the reader's choice**, which is why this stays
+            // "after the press" rather than becoming a direction: loose, `colors` is subset
+            // semantics and pressing a chip with another already on *broadens*; with `Exactly`
+            // on it *narrows*. `colorDisabled` needs no branch on the mode — the backend
+            // counted under whichever one the request carried.
             disabled={colorDisabled(
               facets?.colors[key],
               facets?.total ?? 0,
@@ -892,6 +961,34 @@ export function FilterBar<SortKey extends string>({
             onClick={() => search.toggleColor(key)}
           />
         ))}
+
+        {/* **Only once a colour is picked.** Strict with nothing picked filters nothing — the
+            backend's arm is inside its own `nonblank` guard — so an always-drawn chip would be a
+            dead control, and a sixth chip in this group competing for the deck panel's 206px
+            floor, which is the width the `flex-wrap` above exists for. The reflow on the first
+            colour press is what that buys, and it is the cheaper of the two.
+
+            **Not in `activeFilterCount`, and that is the hook's decision this chip depends on:**
+            it modifies the colour filter rather than being one, so a Reset all caption that moved
+            when nothing new was filtered would be counting the wrong thing. The strip states it
+            as a word inside the colour chip for the same reason.
+
+            It carries no facet count. `colorDisabled` asks "would pressing this broaden", which
+            is the question subset semantics poses; strict asks the opposite of it, and a count
+            answered by the loose facets would be the one number on this row that described a
+            different search from the one the press makes. */}
+        {search.colors.length > 0 && (
+          <ToggleChip
+            label="Exactly"
+            pressed={search.colorsStrict}
+            title={
+              search.colorsStrict
+                ? "Exactly — cards whose colour identity is exactly these colours"
+                : "Exactly — cards whose colour identity fits within these colours"
+            }
+            onClick={search.toggleColorsStrict}
+          />
+        )}
       </div>
 
       {/* The empty flex item that pushes everything after it to the right end of its line. At
@@ -1440,7 +1537,7 @@ export function FilterBar<SortKey extends string>({
             two places, and in the sheet neither. See {@link statedFiltersStrip}. */}
         {!narrow && statedFilters}
 
-        {/* The chips a typed `o:ramp` produces, and the note an unknown tag name gets. Under the
+        {/* The chips a typed `otag:ramp` produces, and the note an unknown tag name gets. Under the
             stated filters rather than among them: these are the *query's* own terms, which the box
             above still holds the text of, and a reader looking for why a name did not resolve is
             looking under the box they typed it into. Renders nothing at all until there is
@@ -1767,6 +1864,48 @@ function FilterTray<SortKey extends string>({
         </div>
       </TrayField>
     ),
+
+    /* Eight chips, OR within — the rarity cell's greying rule one dimension along, and a card
+       with two types is under both of them, because this filter asks *does this card have this
+       type* rather than which bucket it is in. Dryad Arbor is the card the rule is written for:
+       `autoCategory.ts` files it under Land alone, and a reader pressing Creature who could not
+       find it has been told a falsehood.
+
+       `CARD_TYPES` is the **reading order** — Creature first, Land last, which is how every
+       decklist reads — and deliberately not `cardtypes.rs`' alphabetical bit order. A matching
+       order and a display order are two constants for `autoCategory.ts`' own reason: one constant
+       cannot be both, and folding them together breaks whichever job loses.
+
+       **A wrapping flow at every width, which is the condition cell's arrangement and not the
+       rarity cell's.** Four rarities fit a line; eight types do not fit one column of a 206px
+       panel, where the cell's content box is ~161px against `Planeswalker`'s own ~112px of
+       min-content. A grid of two columns there would give each chip ~78px, and a grid item
+       cannot shrink below its min-content any more than a flex item can — so the cell would hang
+       out of the panel and put a horizontal scrollbar across the whole deck builder
+       (`src/CLAUDE.md`'s narrowest-surface rule). `flex-wrap` makes this group's min-content one
+       chip, so it breaks onto as many lines as it needs and is unchanged in the wide bars where
+       it already fitted. jsdom applies no container query and lays nothing out, so none of this
+       can go red in the suite. */
+    type: search.toggleType ? (
+      <TrayField key="type" label="Type">
+        <div role="group" aria-label="Type" className="flex flex-wrap gap-1.5">
+          {CARD_TYPES.map((t) => (
+            <ToggleChip
+              key={t}
+              label={t}
+              pressed={search.types?.includes(t) ?? false}
+              // `optionDisabled`'s "a selected option is never greyed" arm, like the rarities
+              // above: the type the reader picked stays pressable however its own count reads,
+              // so the way out of a dead end is never the thing that greys.
+              disabled={optionDisabled(facets?.types, t, search.types?.includes(t) ?? false)}
+              title={facetTitle(t, facets?.types?.[t])}
+              onClick={() => search.toggleType?.(t)}
+              className="flex-1"
+            />
+          ))}
+        </div>
+      </TrayField>
+    ) : null,
 
     /* The marketplace's own money in the caption, never a bare `$`. The number a reader types
             here is compared against the same expression the Price column shows, so a band in

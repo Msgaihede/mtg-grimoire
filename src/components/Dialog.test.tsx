@@ -244,6 +244,40 @@ describe("Dialog", () => {
   });
 
   /**
+   * **And the same pair on the other axis, which was missing until a panel got wide enough to
+   * notice** (2026-09-20).
+   *
+   * `max-w-full` is the shell's promise that a panel wider than the window still fits, and it was
+   * false for the same reason `max-h-full` was before the row above landed: with no
+   * `grid-template-columns` the panel's grid area is an *implicit* column, an implicit column is
+   * `auto`, and an `auto` column sizes to its own content — so `100%` of it is whatever the panel
+   * asked for and the ceiling clamps nothing.
+   *
+   * Nothing exposed it for two years because no panel was wider than the padded box: the widest
+   * fixed size in the app was `w-[55rem]` (880) against 976 at the 1024px floor, and
+   * `AllPrintingsDialog` clamps itself with a `min(100%,…)` of its own. `CombosDialog`'s split
+   * view is `w-[62rem]` (992) and is the first host to actually lean on this class.
+   *
+   * Measured in a browser at 1024×700 with that panel: the column computed **992px**, the panel
+   * drew **992** at `x: 24`, and its right edge sat **8px** from the glass against the scrim's 24
+   * on the left. Setting `grid-template-columns: minmax(0,1fr)` on the scrim live took it to
+   * **976** at `x: 24` with 24px either side, and backing the property out restored 992.
+   *
+   * Class assertion for the row's reason: jsdom lays nothing out, so every box here is 0px and
+   * this whole class of defect is invisible to the suite.
+   */
+  it("bounds the panel's width too, which takes the scrim's column and the panel's max width", async () => {
+    open({ size: "w-[62rem]" });
+    const dialog = await panel();
+
+    expect(dialog).toHaveClass("max-w-full");
+    const scrim = dialog.parentElement as HTMLElement;
+    // `minmax(0,` for the row's reason: a bare `1fr` is `minmax(auto,1fr)`, whose `auto` floor is
+    // the content again.
+    expect(scrim).toHaveClass("grid-cols-[minmax(0,1fr)]");
+  });
+
+  /**
    * **A tall dialog stops 5vh short of the window's edge, and the ceiling is stated as an inset**
    * (2026-09-08).
    *
@@ -437,13 +471,21 @@ describe("Dialog", () => {
    * containing block out from under any absolutely positioned thing a body draws. Neither would
    * fail anything else in this suite, and **jsdom lays nothing out**, so neither would fail
    * anything anywhere.
+   *
+   * **The absence is the flank template, and it was a blanket `/grid-cols-/` until 2026-09-20** —
+   * the same claim only for as long as the scrim had no columns of its own. It has one now, the
+   * width clamp two tests up, so the loose match had stopped describing what this test means and
+   * started forbidding the one class that makes `max-w-full` work. It is named exactly now, and
+   * the single bounding column is asserted **present** in the same breath, so this says what the
+   * unflanked scrim *is* rather than only what it is not.
    */
   it("leaves the scrim and the panel untouched when no flanks were asked for", async () => {
     open();
     const dialog = await panel();
     const scrim = dialog.parentElement as HTMLElement;
 
-    expect(scrim.className).not.toMatch(/grid-cols-/);
+    expect(scrim).not.toHaveClass("grid-cols-[3.5rem_minmax(0,1fr)_3.5rem]");
+    expect(scrim).toHaveClass("grid-cols-[minmax(0,1fr)]");
     expect(dialog).not.toHaveClass("relative");
     expect(dialog).not.toHaveClass("col-start-2");
     // Header and body, and nothing hung off the sides.
@@ -658,10 +700,25 @@ describe("Dialog", () => {
     const view = open({ stackedOver: false, caretPulse: 0 });
     const dialog = await panel();
 
+    // **The settle armed on mount ends on its first frame, not on its deadline**, and the drop
+    // below has to be staged after that frame rather than before it. `stackedOver={false}` arms
+    // the settle on mount as surely as a fall to it does; its first tick then finds the panel
+    // holding the caret and returns, which is the loop's own first guard and the whole of what
+    // ends it. Blurring ahead of that tick hands the same loop a caret on `<body>` instead — it
+    // re-takes it on the next frame, and the assertion below goes on to measure the mount
+    // settle rather than the pulse this test is about.
+    //
+    // Whether the tick had already run was a race decided by how long `panel()` took, and it
+    // was won by 0.4ms: a cold module made that ~107ms and hid this, a warm one makes it ~10ms
+    // and the tick is still pending. So it passed here and went red in CI's full run. Our frame
+    // is queued after the loop's, so one is enough — both run in registration order.
+    await new Promise((r) => requestAnimationFrame(r));
+
     // What a button disabling under the reader leaves behind.
     (document.activeElement as HTMLElement | null)?.blur();
     expect(document.body).toHaveFocus();
-    // The settle armed on mount has long since hit its deadline, so nothing is watching.
+    // Nothing is watching now: the settle ended on that frame, and its deadline passes with the
+    // caret left where the drop put it.
     await new Promise((r) => setTimeout(r, CARET_SETTLE_MS + 60));
     expect(document.body).toHaveFocus();
 

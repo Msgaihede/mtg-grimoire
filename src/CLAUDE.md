@@ -679,10 +679,15 @@ Every one of these has its measurement and its story in
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one** — the virtualiser
   has already made the request count small, so the browser's gate only delays the pictures about
   to be looked at.
-- **Ctrl+wheel zooms the card sections and nothing else, and every section zooms on its own.**
-  `useAppStore`'s `cardZoom` is a `Record<ZoomSection, number>` over the card sections named in
+- **Ctrl+wheel zooms one section of the page and nothing else, and every section zooms on its own.**
+  `useAppStore`'s `cardZoom` is a `Record<ZoomSection, number>` over the sections named in
   `src/lib/cardZoom.ts` — `ZOOM_SECTIONS` is the census, and it has grown twice since this
-  paragraph first said “four”. `deck` is one key for **both** deck views, because Stacks and Grid
+  paragraph first said “four”. **It said “the card sections” until 2026-09-20**, and the
+  dashboard is what made that false: `home` is a grid of widgets with no card on it, and it spends
+  its number as a **CSS `zoom` on the grid box** rather than as a multiplier on a tile's width —
+  the only section that does, because a widget is a box of type and a bigger box at the same type
+  size shows *more* small rows rather than reading as a zoom. See `features/home/HomePage.tsx` and
+  [home-page.md](../docs/reference/home-page.md) §4. `deck` is one key for **both** deck views, because Stacks and Grid
   are two drawings of the same pile and switching view must not resize the cards. Each starts at
   `DEFAULT_ZOOM`, each is stepped along the same ladder, and each is handed back when the reader
   returns to that section.
@@ -907,21 +912,27 @@ Every one of these has its measurement and its story in
   arranged it themselves** (deck categories, the folder tree).
   Everything else sorts. Every exemption carries a comment at its own site saying which of the two
   it is — that comment is the record, and grepping `sortOptions` is how you count them.
-- **The card search box reads Scryfall's tagger syntax, and the parse is TypeScript's while the
-  slug is Rust's.** `o:ramp`, `otag:"spot removal"`, `-a:dragon` — `features/search/tagQuery.ts`
-  splits the box into tag terms and the free text left for FTS, `tag_resolve` turns each name into
-  a canonical slug, and `useCardSearch` merges the result with whatever chips its caller passed.
-  One wiring reaches both surfaces: the search page and the deck editor's docked panel are the
-  same `FilterBar` over the same hook. Three rules that are not obvious, each with its failure
-  written at its own site and all of it in
-  [tag-search-syntax.md](../docs/reference/tag-search-syntax.md): **`a:` and `o:` mean the two
-  taxonomies here and `artist:`/`oracle:` on Scryfall**, so those two keywords are spent and an
-  artist filter cannot have them; **resolution is exact where the Tags page's type-ahead is a
-  substring**, because a substring resolves one typed name to many tags that would have to be
-  ORed while every tag filter in this app intersects; and **this is the one search in the app that
-  fails closed** — an unresolved name empties the wall in the hook rather than at each call site,
-  because `keepPreviousData` would otherwise leave the *previous* search's cards on screen under a
-  query that asked something else.
+- **Every card search box reads Scryfall's query syntax, and the parse is TypeScript's while the
+  SQL and the slug are Rust's.** `t:goblin`, `cmc>=3`, `-kw:flying`, `otag:"spot removal"` —
+  `features/search/queryLanguage.ts` splits the box into **three** things (tag terms, typed
+  predicates, and the free text left for FTS), `tag_resolve` turns each tag name into a canonical
+  slug, the predicate list crosses IPC as one `predicates` field, and `useCardSearch` merges the
+  tags with whatever chips its caller passed. Five surfaces share that hook — the search page, the
+  deck editor's *All cards* tab, the collection's and the wishlist's docked columns, and the Tags
+  page — and `useCollection`, `useCollectionSearch` and `useWishlist` parse the same string into
+  the same two fields. Four rules that are not obvious, each with its failure written at its own
+  site and all of it in [search-syntax.md](../docs/reference/search-syntax.md): **`a:` is the
+  artist and `o:` is the rules text**, Scryfall's meanings, since 2026-09-22 — they were the two
+  taxonomies until then and `atag:`/`otag:` are what a tag is spelt with now; **`:` does not mean
+  one thing**, it resolves to each keyword's own default, so `c:rg` is `c>=rg` and `id:rg` is
+  `id<=rg` (676 against 13,399 on Scryfall, measured); **tag resolution is exact where the Tags
+  page's type-ahead is a substring**, because a substring resolves one typed name to many tags
+  that would have to be ORed while every tag filter in this app intersects; and **this is the one
+  search in the app that fails closed, on its tags only** — an unresolved *tag* name empties the
+  wall in the hook rather than at each call site, because `keepPreviousData` would otherwise leave
+  the *previous* search's cards on screen under a query that asked something else, while a
+  *predicate* must never gate, since a predicate that matches nothing is a search with no results
+  rather than a name nobody knows.
 - **Global actions (Refresh, sync status, settings) live in the top ribbon, not in views**, and a
   long job registers an `Activity` (`src/lib/activity.ts`) rather than wiring itself in.
   Registration is declarative: pass the job or `null` every render.

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Caps, KEY_MAP_LABEL, KeyMap } from "@/components/KeyMap";
+import { QUERY_KEYWORDS, parseQuery } from "@/features/search/queryLanguage";
 import type { Shortcut } from "@/lib/shortcuts";
 import { useAppStore } from "@/lib/store";
 import { isWebTarget } from "@/pwa/target";
@@ -304,5 +305,182 @@ describe("KeyMap", () => {
 
     expect(screen.queryByRole("heading")).not.toBeInTheDocument();
     expect(screen.queryByText("Show this list")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The panel's second half: what a reader may type into any card search box.
+ *
+ * **The whole of why this is a tab rather than a fifth section** is that the panel is 384px wide
+ * and is opened to find a chord: fourteen keywords with examples appended under the chord
+ * sections would bury the thing it is for. The two halves are also not the same shape — a
+ * syntax row is a word you type and an explanation, not a chord — so they cannot share the
+ * caps layout.
+ */
+describe("KeyMap's search syntax tab", () => {
+  /**
+   * `shortcuts.ts`'s principle, one module over: **the panel and the parser read one table**, so
+   * the panel cannot advertise a keyword nothing parses. There it is `SHORTCUTS`, read by the
+   * handler that fires and the panel that lists it; here it is `QUERY_KEYWORDS`, read by
+   * `parseQuery` and by `QuerySyntaxHelp`.
+   *
+   * Every `example` is the claim: a reader who copies it gets exactly one term and no leftover
+   * free text. A row whose example parses to nothing would be a keyword the panel promises and
+   * the box ignores — the drift both modules exist to end, and the one failure a reader cannot
+   * tell from a search that simply matched nothing.
+   */
+  it("draws only keywords the parser actually reads", () => {
+    for (const spec of QUERY_KEYWORDS) {
+      const parsed = parseQuery(spec.example);
+      expect(
+        parsed.predicates.length + parsed.tags.length,
+        `${spec.example} did not parse to exactly one term`,
+      ).toBe(1);
+      expect(parsed.text, `${spec.example} leaked free text`).toBe("");
+    }
+  });
+
+  /**
+   * The other half of the same fence, and it is not implied by the first: a table every row of
+   * which parses is worth nothing if the panel draws twelve of its fourteen rows. The grouping
+   * is derived rather than written down, so a keyword added to the table with a shape nobody
+   * anticipated must still reach the screen — this is what says it did.
+   */
+  it("draws a row for every keyword in the table", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ keyMapOpen: true });
+    render(<Harness />);
+
+    await user.click(screen.getByRole("tab", { name: "Search syntax" }));
+
+    for (const spec of QUERY_KEYWORDS) {
+      expect(screen.getByText(spec.keywords.join(" · "))).toBeInTheDocument();
+      expect(screen.getByText(spec.example)).toBeInTheDocument();
+      expect(screen.getByText(spec.blurb)).toBeInTheDocument();
+    }
+  });
+
+  /**
+   * Shortcuts is what F1 opens on, and pressing the other tab replaces the panel's body rather
+   * than adding to it. Both halves are asserted: a tab that switched the heading and left the
+   * chords underneath would pass the first assertion alone.
+   */
+  it("shows shortcuts first and switches to syntax on the tab", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: true });
+    render(<Harness />);
+
+    expect(screen.getByRole("tab", { name: "Shortcuts" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Show this list")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Search syntax" }));
+
+    expect(screen.getByRole("tab", { name: "Search syntax" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByText("t:goblin")).toBeInTheDocument();
+    expect(screen.queryByText("Show this list")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A reader who opened F1 for a chord should find chords**, whatever the last reader of this
+   * panel was looking up. The state is held by a component that mounts with the panel, so the
+   * reset is the element going away rather than an effect watching a flag — see
+   * {@link KeyMap}'s own note on why.
+   */
+  it("opens on Shortcuts again after being closed", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.click(screen.getByRole("button", { name: KEY_MAP_LABEL }));
+    await user.click(screen.getByRole("tab", { name: "Search syntax" }));
+    expect(screen.getByText("t:goblin")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: KEY_MAP_LABEL }));
+
+    expect(screen.getByRole("tab", { name: "Shortcuts" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByText("t:goblin")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **`role="tab"` is a contract and not a name**, which is exactly why `DeckSearchPanel`'s strip
+   * refuses it and settles for `aria-pressed`. Taking the role here means honouring it: one tab
+   * stop for the pair, the arrows walking between them, and the selection following the caret.
+   * A `tab` role with no keyboard behaviour is worse than no role at all — a screen reader
+   * announces a contract the control does not keep.
+   *
+   * Clicked rather than focused by hand: a programmatic `focus()` is the one caret a reader
+   * cannot produce, and what is under test is the key that follows a real press.
+   */
+  it("walks the two tabs with the arrow keys, and only one of them is a tab stop", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ keyMapOpen: true });
+    render(<Harness />);
+
+    const shortcuts = screen.getByRole("tab", { name: "Shortcuts" });
+    const syntax = screen.getByRole("tab", { name: "Search syntax" });
+    expect(shortcuts).toHaveAttribute("tabindex", "0");
+    expect(syntax).toHaveAttribute("tabindex", "-1");
+
+    await user.click(shortcuts);
+    await user.keyboard("{ArrowRight}");
+
+    expect(syntax).toHaveFocus();
+    expect(syntax).toHaveAttribute("aria-selected", "true");
+    expect(shortcuts).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByText("t:goblin")).toBeInTheDocument();
+
+    // It wraps, because two tabs and a one-way arrow is a dead end at either end.
+    await user.keyboard("{ArrowRight}");
+    expect(shortcuts).toHaveFocus();
+    expect(screen.getByText("Show this list")).toBeInTheDocument();
+  });
+
+  /**
+   * The wiring rather than the attributes: a panel whose `id` is not the one its tab points at
+   * is two controls that look related and are not, and every assertion about the presence of
+   * `role="tabpanel"` passes over it.
+   */
+  it("names each panel with the tab that opens it", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ keyMapOpen: true });
+    render(<Harness />);
+
+    const onShortcuts = screen.getByRole("tabpanel");
+    expect(onShortcuts).toHaveAccessibleName("Shortcuts");
+    expect(screen.getByRole("tab", { name: "Shortcuts" })).toHaveAttribute(
+      "aria-controls",
+      onShortcuts.id,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Search syntax" }));
+
+    const onSyntax = screen.getByRole("tabpanel");
+    expect(onSyntax).toHaveAccessibleName("Search syntax");
+    expect(screen.getByRole("tab", { name: "Search syntax" })).toHaveAttribute(
+      "aria-controls",
+      onSyntax.id,
+    );
+  });
+
+  /**
+   * The one sentence of prose on the tab, and the one claim in it no table can keep honest.
+   * `-t:land` is written by hand, so it is checked by hand — against the parser, not against a
+   * copy of itself.
+   */
+  it("says how terms combine, in a form the parser honours", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ keyMapOpen: true });
+    render(<Harness />);
+
+    await user.click(screen.getByRole("tab", { name: "Search syntax" }));
+    expect(screen.getByText("-t:land")).toBeInTheDocument();
+
+    const parsed = parseQuery("-t:land");
+    expect(parsed.predicates).toHaveLength(1);
+    expect(parsed.predicates[0].negated).toBe(true);
+    expect(parsed.text).toBe("");
   });
 });

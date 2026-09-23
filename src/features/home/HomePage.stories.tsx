@@ -2,8 +2,10 @@ import { useState, type ReactElement } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import type { HomeLayout } from "@/lib/ipc";
-import { CUSTOMIZE_HINT, HomePage } from "./HomePage";
+import { useAppStore } from "@/lib/store";
+import { CUSTOMIZE_HINT, HOME_CANVAS_ATTR, HomePage } from "./HomePage";
 import { HOME_LAYOUT_KEY } from "./useHomeLayout";
 
 /** How long a play waits on something a press has to mount — a dialog's panel, a card a write put on
@@ -330,5 +332,49 @@ export const WhileTheDatabaseIsBusy: Story = {
     // And nothing is said about the refusal: there is no error banner on this page, by design.
     await expect(canvas.queryByRole("alert")).not.toBeInTheDocument();
     await expect(canvas.getByRole("region", { name: "Summary" })).toBeInTheDocument();
+  },
+};
+/**
+ * The dashboard at 150%, which is where the gesture this page grew leaves it.
+ *
+ * **The zoom is a CSS `zoom` on the grid box, and it is the only one in this app.** Every other wall
+ * spends its `cardZoom` number as a multiplier on a tile's width, because a card is a picture and a
+ * picture's size is the question. A widget is a box of *type*: a bigger box at the same type size is
+ * not a zoomed dashboard, it is the same dashboard showing more small rows — the opposite of the
+ * gesture. `zoom` is a layout scale rather than a paint one, so cells, cards, titles, figures and
+ * rows all move together, and `fit.ts` never had to learn the word.
+ *
+ * What the page owes it is one division: the canvas is measured **outside** the zoom and the columns
+ * are computed against `width / zoom`. That is the whole of how a zoom takes tiles away — 1032px is
+ * nine columns at life size and 688 local px, six columns, at this one.
+ *
+ * **In this workbench's Vitest runner this story is stacked like every other**: jsdom measures the
+ * canvas at `0` and implements no `zoom` at all. So the play below asserts the one thing that holds
+ * in both runtimes — that the property reached the grid box and not the ruler above it. What it does
+ * to a painted box belongs to a browser, and the figures are in `HomePage.tsx`'s module doc.
+ *
+ * Written during render, and in its own frame, for `DecksPage.stories.tsx`' two reasons: an effect
+ * would draw one frame at 100% on the way here, and `useAppStore` is a module singleton, so a write
+ * during an inline render would be the last writer and would quietly resize every story on the page.
+ */
+function ZoomedPage(): ReactElement {
+  useState(() => {
+    useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, home: 1.5 } });
+  });
+  return <Page layout={null} />;
+}
+
+export const Zoomed: Story = {
+  render: () => <ZoomedPage />,
+  parameters: { docs: { story: { inline: false, height: "680px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("region", { name: "Summary" }, MOUNT_TIMEOUT);
+
+    const ruler = canvasElement.querySelector<HTMLElement>(`[${HOME_CANVAS_ATTR}]`);
+    // The measured canvas is never scaled — it is the ruler, and a scaled ruler has nothing to
+    // divide. The box inside it is what carries the reader's number.
+    await expect(ruler).not.toHaveStyle({ zoom: "1.5" });
+    await expect(ruler?.firstElementChild).toHaveStyle({ zoom: "1.5" });
   },
 };

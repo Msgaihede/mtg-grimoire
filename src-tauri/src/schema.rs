@@ -194,10 +194,15 @@ const CARDS_INDEXES: &[&str] = &[
     // what needs naming rather than a cargo profile.
     //
     // `legal_mask` and not `legalities`: a JSON path is not indexable, which is the whole
-    // reason [`crate::legalities`] exists.
+    // reason [`crate::legalities`] exists. **`type_mask` is the same sentence one column over
+    // and is corpus schema 5's** — `type_line` is not here and putting it here was measured
+    // above as a straight loss, so a `type_line LIKE '%Creature%'` predicate would knock the
+    // group scan off this index into the 455–505 ms band the paragraph above names for the
+    // other filter columns. A bitwise test on an integer column stays inside it, which is why
+    // [`crate::cardtypes`] exists at all.
     "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_collapse \
      ON cards(oracle_id, is_paper, released_at, id, name, price_usd, \
-              legal_mask, cmc, color_identity)",
+              legal_mask, type_mask, cmc, color_identity)",
     // Art tags key on `illustration_id` — an art tag is a fact about a *picture*, so the
     // printings it belongs to are the ones carrying that picture — and the column had no index
     // until v20. A loop of 50 k point lookups on it against the 609 MB dev database did not
@@ -209,6 +214,72 @@ const CARDS_INDEXES: &[&str] = &[
     // an index the app has until the next morning — and the failure is silent, because nothing
     // becomes wrong, only slow.
     "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_illustration ON cards(illustration_id)",
+    // `a:` is Scryfall's artist search since 2026-09-22, and `cards.artist` had no index at
+    // all — so it was the one predicate in [`crate::filters::push_card_filters`] that read
+    // every row of the table.
+    //
+    // **Measured 2026-09-22 through `node:sqlite` against the real 892 MB dev corpus** —
+    // SQLite's own C, identical under a debug or a release crate, so the fixture is what
+    // needs naming rather than a cargo profile. `instr(lower(c.artist), lower(?)) > 0` plans
+    // as a bare `SCAN c` and costs **417.7 ms**; the identical expression over the *indexed*
+    // `name` column costs **15.7 ms** and plans as `SCAN c USING COVERING INDEX
+    // idx_cards_name`. A bare `a:` on an otherwise empty box measured 466–510 ms end to end.
+    // Spec §5.3 named ~250 ms as the line and an index on this column as the fallback; this
+    // is that fallback, and what it buys is the 26× the name column already gets.
+    //
+    // **It buys the scan a covering index, not a seek.** `instr` is not sargable, so no
+    // planner can look a value up through it — what changes is that the scan reads a narrow
+    // index instead of the whole row heap, which is the entire reason the same expression is
+    // already cheap over `name`.
+    //
+    // In this list rather than in a migration step, for the reason the list exists:
+    // [`swap_staging`] drops and recreates `cards` on every sync, so an index declared only
+    // in a rung is an index the app has until the next morning. The cost of that is one
+    // direction only — a corpus already at head picks it up at its next sync, and until then
+    // a bare `a:` is 418 ms rather than 16 ms, which is slow and never wrong.
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_artist ON cards(artist)",
+];
+
+/// [`CARDS_INDEXES`] frozen at the shape `cards` wears when the **v20 step** replays it, and the
+/// ladder's only list since corpus schema 5.
+///
+/// **This is `FORMAT_SPECS_SEED_V5`'s split, one constant over, and for its reason exactly.** The
+/// list above describes the table at head, and head now names a column the single-file ladder
+/// never creates: `type_mask` arrives after the split, from [`add_type_mask`]. Replaying the head
+/// list at v20 therefore fails on every fresh install with `no such column: type_mask` —
+/// measured, 105 of `schema`'s tests at once — which is the failure [`CARDS_INDEXES`]' own doc
+/// predicts for a step below the newest one, arriving for the first time from *outside* the
+/// ladder. The rule that list states could not be obeyed by moving the replay: the newest step to
+/// touch `cards` is a **corpus** rung, and `migrate_single_file` is frozen at
+/// [`LEGACY_SINGLE_FILE_VERSION`] with no rung above v26 to take it.
+///
+/// **So the ladder's replay became history, like v10's `DROP INDEX` beside it**, and the head
+/// list is replayed only by the two callers that mean a corpus — [`swap_staging`] and
+/// [`add_type_mask`]. **No database is left with the narrow index**: everything that walks this
+/// ladder walks straight into [`migrate_corpus`], whose schema 5 rung is owed on precisely the
+/// `cards` this list built, and which drops the collapse index and replays head.
+/// `the_corpus_schema_is_byte_identical_to_what_the_ladder_builds` compares the two ends.
+///
+/// **It is frozen**: a later index, or a later column on an existing one, belongs in
+/// [`CARDS_INDEXES`] and never here — the two are held to "head minus `type_mask`" by
+/// `the_frozen_v20_index_list_is_head_without_the_column_the_ladder_cannot_have`, which is
+/// `the_head_format_seed_agrees_with_v5_on_every_shared_cell`'s job for this pair.
+const CARDS_INDEXES_V20: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_oracle ON cards(oracle_id)",
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_set_cn ON cards(set_code, collector_number)",
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_name ON cards(name)",
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_collapse \
+     ON cards(oracle_id, is_paper, released_at, id, name, price_usd, \
+              legal_mask, cmc, color_identity)",
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_illustration ON cards(illustration_id)",
+    // Corpus schema 6's, and **safe on this list where `type_mask` is not**: `artist` is a v3
+    // column, seventeen steps before the one that replays this, so the ladder's `cards` really
+    // has it. The rule the split exists for is "a frozen rung may not name a column a later
+    // rung adds" — and this one names a column an *earlier* rung added, which is the opposite
+    // case. Leaving it out instead would fail
+    // `the_frozen_v20_index_list_is_head_without_the_column_the_ladder_cannot_have`, which
+    // requires the two lists to differ by `type_mask` and by nothing else.
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_artist ON cards(artist)",
 ];
 
 /// [`CARDS_INDEXES`] as one executable batch, over one schema.
@@ -216,8 +287,18 @@ const CARDS_INDEXES: &[&str] = &[
 /// **A bare `CREATE INDEX` lands in `main`, whatever file the table is in.** The ladder is
 /// the one caller that means `main` — it builds a single pre-split file and nothing else —
 /// and [`swap_staging`] means [`CORPUS`], which is where `cards` has lived since schema 27.
+/// The ladder no longer reads *this* list, though: it reads [`CARDS_INDEXES_V20`] through
+/// [`cards_indexes_sql_from`], for the reason that constant states.
 fn cards_indexes_sql(schema: &str) -> String {
-    on_schema(schema, &(CARDS_INDEXES.join(";\n") + ";"))
+    cards_indexes_sql_from(CARDS_INDEXES, schema)
+}
+
+/// One of the two index lists as an executable batch, over one schema.
+///
+/// Split out of [`cards_indexes_sql`] rather than spelled twice, so that the frozen list and the
+/// head one cannot come apart in how they are *run* as well as in what they say.
+fn cards_indexes_sql_from(list: &[&str], schema: &str) -> String {
+    on_schema(schema, &(list.join(";\n") + ";"))
 }
 
 /// Resolve a DDL literal written against `{schema}` onto one file.
@@ -421,7 +502,26 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// which puts it in [`crate::db::CrossFileFence`]'s blind spot on purpose —
 /// [`crate::price_history`]'s module doc says why that is safe and what it buys. Soft
 /// `card_id`, no foreign key, for the reason every card id in a user table has none.
-pub const USER_SCHEMA_VERSION: i64 = 45;
+///
+/// **46 (2026-09-20) is `sticky_notes`** — the reader's prose about nothing in particular, drawn
+/// by the home page's `stickyNotes` widget. It **hangs off nothing** — no parent, no attachment,
+/// no scope — which is what separates it from `deck_notes` and is why its capture spec names no
+/// parent at all. Not the first to do so, though an earlier draft of its spec said it was:
+/// `deck_labels`, `device_names` and `muted_tags` already carry `parents: &[]`, so this is the
+/// fourth and the shape is precedented. It **is** synced, where the two rungs above it are
+/// not, and the difference is that both of those are machine-generated while this is typing —
+/// a reader who writes a note on the desktop and finds it missing on the laptop has lost prose
+/// rather than a preference, which is `deck_notes`' argument verbatim. **No grain index, uid
+/// only**, also `deck_notes`': two devices each typing a note about the same thing must stay two
+/// notes, and there is no column pair that could tell an accidental duplicate from a deliberate
+/// one. ⚠️ **`color` carries no CHECK, and that is a sync decision rather than laxity** —
+/// every other enumerated column in this schema has one (`activity.kind`, `activity.scope`,
+/// `price_snapshots.finish`) and **none of those tables is synced**. A `CHECK (color IN (…))` on
+/// a synced table is a forward-compatibility hazard: a build that added a sixth colour would
+/// emit rows a device on this build refuses at the constraint, and a refused row is a failed
+/// apply rather than a note that arrives looking wrong. Rust stores the string it is handed and
+/// the page maps a word it does not know to `slate`.
+pub const USER_SCHEMA_VERSION: i64 = 46;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -430,6 +530,55 @@ pub const USER_SCHEMA_VERSION: i64 = 45;
 /// "is this file's shape what this build expects", and a corpus rung is *allowed* to give up
 /// and rebuild, because what is behind it is a download. Sharing a scale would invite somebody
 /// to subtract them.
+///
+/// **6 (2026-09-22) is `cards.keywords`** — the card's **keyword abilities**, which is the one
+/// term in the search box's query language with no column behind it and the one that cannot be
+/// faked from oracle text. Measured against Scryfall the same day: `kw:flying` answers 3,318 and
+/// `o:flying` 4,617, so the text over-matches by 39% on reminder text and on phrases like
+/// "can't be blocked by creatures with flying". It is corpus schema 3's shape — one
+/// schema-qualified `ALTER TABLE {schema}.cards ADD COLUMN keywords TEXT`, gated on
+/// `PRAGMA {schema}.table_info(cards)` and never on this number, a missing `cards` owing
+/// nothing, no `cards_fts` rebuild and no backfill, because the array lives in the gzip `raw`
+/// BLOB that SQL cannot see into.
+///
+/// **It carries a second statement, and that one is about a different column.** The rung also
+/// builds `idx_cards_artist`, because [`CARDS_INDEXES`] is replayed only by `swap_staging` and
+/// a corpus already at head would otherwise answer a bare `a:` from a full `SCAN c` until its
+/// next ingest — 466–510 ms measured against the real 117,738-printing corpus against ~16 ms
+/// with the index, a **26×**. `IF NOT EXISTS` makes the overlap with schema 5's own replay free.
+///
+/// **The column stores the keywords lowercased, delimited _and wrapped_ — `|flying|vigilance|`.**
+/// Scryfall matches `kw:` against a closed vocabulary rather than as a substring (`kw:fly` is
+/// refused outright, measured), so [`crate::filters::push_card_filters`] asks
+/// `instr(keywords, '|flying|')` and the wrapping is the whole of what stops `kw:fly` matching
+/// `flying`. **The gap before the next ingest is bridged in the SQL** rather than in Rust, which
+/// is where this parts company with `produced_mana`'s `fill_unknown_produced_mana`:
+/// `keywords IS NOT NULL AND <delimited match>` OR `keywords IS NULL AND <the rules text
+/// contains it>`, licensed by `kw:flying -o:flying` being **0** on Scryfall — the text is a
+/// superset of the keyword, so the bridge is over-inclusive before the next ingest rather than
+/// empty, and empty is the one direction a search must never fail in.
+///
+/// ⚠️ **A card with no keywords is therefore `Some("")` and never `None`** — schema 3's fence
+/// exactly, so NULL here means one thing only: *this row predates the column*. It read `None`
+/// until the live pass of 2026-09-22 proved why it cannot: a fully ingested corpus held 68,808
+/// NULLs of 118,609, all of them merely keywordless, and the bridge was matching 2,435 printings
+/// that only *mention* flying. Not a window that closes at the next sync — a permanent hole.
+///
+/// **5 (2026-09-22) is `cards.type_mask`** — the eight card types as one integer, so the search's
+/// new type chips can be answered from inside `idx_cards_collapse` rather than by a
+/// `type_line LIKE` that knocks the collapsed browse off it. [`crate::cardtypes`] owns the bit
+/// order and it is **append-only**, because bit positions are stored data: re-sorting that list
+/// reinterprets every row already on disk. **Its rung is the first on this ladder that is three
+/// statements rather than one, and both of the extra two are load-bearing.** It **backfills**,
+/// where corpus schema 3 and 4 deliberately do not: their data is not in the database at all,
+/// while a type line *is* — and the column is `NOT NULL DEFAULT 0`, so a rung that added it and
+/// stopped would leave every card masked to *no type* and the new filter answering an empty wall
+/// until the next sync. And it **`DROP`s `idx_cards_collapse` before replaying
+/// [`CARDS_INDEXES`]**, because every statement in that list is `CREATE INDEX IF NOT EXISTS` and
+/// over a name that already exists that is a silent no-op — the widening would cost nothing, do
+/// nothing and say nothing. It is the first corpus rung to touch that list. No `cards_fts`
+/// rebuild is owed: an unindexed column, no rowid renumbered, schema v2's precedent. Gated on
+/// `PRAGMA {schema}.table_info(cards)` and never on this number, for the paragraph below.
 ///
 /// **4 (2026-09-15) is `sets.printed_size`** — Scryfall's denominator for a set's printed
 /// collector numbers, the `/280` at the foot of a card, and what the home page's Set completion
@@ -478,7 +627,7 @@ pub const USER_SCHEMA_VERSION: i64 = 45;
 /// on an INSERT naming four columns the table does not have. [`migrate_corpus`] therefore asks
 /// the *shape*; this number is the record of what the shape is, and the thing a future rung
 /// will still want to have moved.
-pub const CORPUS_SCHEMA_VERSION: i64 = 4;
+pub const CORPUS_SCHEMA_VERSION: i64 = 6;
 
 /// Which of the two files a table lives in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -535,8 +684,8 @@ pub const TABLES: &[(&str, Side)] = &[
     // wrote a paragraph about it.
     ("deck_note_cards", Side::User),
     // The reader's prose about a deck (user schema v43), which replaced the single
-    // `decks.notes` column. Emphatically theirs and rebuildable by nothing — this is the one
-    // table on the list whose whole content is typing.
+    // `decks.notes` column. Emphatically theirs and rebuildable by nothing — this was the one
+    // table on the list whose whole content is typing until v46's `sticky_notes` joined it.
     ("deck_notes", Side::User),
     // Only the reader's *deviations* from the tokens a deck derives (user schema v37) — a
     // picked printing, a stepped quantity, a dismissal. Nothing rebuilds one: the derived list
@@ -560,6 +709,10 @@ pub const TABLES: &[(&str, Side)] = &[
     // again, so a corpus rebuild that emptied it would take the history with it. Not synced:
     // every device snapshots the same public prices for itself.
     ("price_snapshots", Side::User),
+    // The reader's prose about nothing in particular (user schema v46), drawn by the home
+    // page's `stickyNotes` widget. Emphatically theirs and rebuildable by nothing — the
+    // second table on this list whose whole content is typing.
+    ("sticky_notes", Side::User),
     // The clock the capture triggers stamp from (user schema v29). One row, and it is the
     // reader's in the only sense this list asks about: rebuilding it from zero would make
     // every op this device writes next sort *before* ops the other devices already hold.
@@ -627,15 +780,16 @@ pub fn side_of(table: &str) -> Option<Side> {
 
 /// The tables a pairing group keeps in step — spec §7.2, corrected against this file.
 ///
-/// **Fifteen, and the spec named none of the five moves that got it there.** The spec's list
+/// **Sixteen, and the spec named none of the six moves that got it there.** The spec's list
 /// names `deck_allocations`, which schema v25 dropped: which deck holds a card is now which
 /// folder its row sits in, so the work that table did is inside `collection_folders`, which is
 /// on this list. `device_names` is user schema v31's, which the spec predates — the names
 /// of the devices in the group, while `sync_devices`, the roster holding their public keys,
 /// stays off this list for ever. `deck_tokens` is v37's, which the spec predates by
 /// further still. And `deck_notes` and `deck_note_cards` are v43's, the pair that replaced the
-/// single `decks.notes` column. A table that does not exist cannot be synced, and the count
-/// moved rather than the intent.
+/// single `decks.notes` column. And `sticky_notes` is v46's, the sixth move — the fourth entry
+/// here to hang off nothing at all, after `deck_labels`, `device_names` and `muted_tags`. A table
+/// that does not exist cannot be synced, and the count moved rather than the intent.
 ///
 /// **Sorted, and `sync_engine::capture::every_synced_table_is_on_the_census` holds it to the
 /// capture specs.** A new user table that nobody decides about is a table whose writes never
@@ -649,7 +803,7 @@ pub fn side_of(table: &str) -> Option<Side> {
 /// hypothetical** — v31 is the rung that made it real, and the v29 rung needed no edit for it
 /// precisely because it was written this way. It is the same rule [`CARDS_COLUMNS`] states and
 /// every rung from v4 on repeats.
-pub const SYNCED_TABLES: [&str; 15] = [
+pub const SYNCED_TABLES: [&str; 16] = [
     "collection_entries",
     "collection_folders",
     "deck_audit",
@@ -678,6 +832,12 @@ pub const SYNCED_TABLES: [&str; 15] = [
     // deliberately is not: a NAME travels, key material never does.
     "device_names",
     "muted_tags",
+    // The sixteenth (user schema v46), and the first on this list with **no parent at all** —
+    // a sticky note hangs off nothing, so its capture spec's `parents` is empty rather than
+    // short. It syncs for `deck_notes`' reason and not `activity`'s: what it holds is typing,
+    // and a note written on the desktop that never reaches the laptop is lost prose rather
+    // than a lost preference.
+    "sticky_notes",
     "wishlist_entries",
     "wishlist_folders",
 ];
@@ -1468,11 +1628,14 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
     }
     if v < 3 {
         let tx = conn.unchecked_transaction()?;
-        // One nullable, unindexed column. No entry in `CARDS_INDEXES` (nothing here is
-        // indexed), no edit to `CARDS_COLUMNS` (frozen), and no FTS rebuild — the index
+        // One nullable column, unindexed *here*. No edit to `CARDS_COLUMNS` (frozen) and no
+        // FTS rebuild — the index
         // covers name/type_line/search_text, none of which this touches, and an UPDATE
         // renumbers no rowid. `the_v3_backfill_leaves_the_search_index_answering` is the
-        // evidence, exactly as v2's twin was.
+        // evidence, exactly as v2's twin was. **`idx_cards_artist` came later**, with corpus
+        // schema 6 — `a:` searches this column and a bare one was a 466–510 ms full scan
+        // without it — and it is in both `CARDS_INDEXES` and `CARDS_INDEXES_V20`, which this
+        // step is upstream of either way.
         tx.execute_batch("ALTER TABLE cards ADD COLUMN artist TEXT;")?;
 
         // Read out of the JSON already on disk rather than re-downloading 77 MB. Two
@@ -2689,7 +2852,15 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
         // it, and a database sitting anywhere above v10 would otherwise never be handed
         // `idx_cards_illustration`. `IF NOT EXISTS` on every entry makes it a no-op for the
         // four that are already there.
-        tx.execute_batch(&cards_indexes_sql("main"))?;
+        //
+        // ⚠️ **It replays [`CARDS_INDEXES_V20`] rather than the head list since corpus schema
+        // 5**, and the value it produces is byte for byte what `cards_indexes_sql("main")`
+        // produced the day before. Head now names `type_mask`, which arrives *after* the split
+        // and which this ladder can never create, so the head list raises
+        // `no such column: type_mask` here on every fresh install. Every database that walks
+        // past this line is handed the widened index by [`add_type_mask`] a moment later. The
+        // constant carries the whole argument.
+        tx.execute_batch(&cards_indexes_sql_from(CARDS_INDEXES_V20, "main"))?;
         // Nothing here is FTS-indexed and no rowid is renumbered, so no `cards_fts` rebuild is
         // owed — the reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
         //
@@ -3558,7 +3729,7 @@ const COMBO_INDEXES_SQL: &str = "
 /// Public because `VACUUM` needs it. Anything that renumbers `cards`' rowids leaves this
 /// index pointing at the wrong rows, and the failure is silent — see
 /// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
-/// The twenty-nine user tables and their forty-six indexes, at [`USER_SCHEMA_VERSION`]'s
+/// The thirty user tables and their forty-seven indexes, at [`USER_SCHEMA_VERSION`]'s
 /// shape, with `{schema}` where the file goes.
 ///
 /// **Copied verbatim out of a migrated database's own `sqlite_master`, not retyped from the
@@ -4063,6 +4234,27 @@ CREATE TABLE {schema}.deck_note_cards (
                  updated_at INTEGER NOT NULL
               , sync_uid TEXT);
 
+CREATE TABLE {schema}.sticky_notes (
+                 id INTEGER PRIMARY KEY,
+                 -- May be empty. The widget prints the body's first line when it is, and that
+                 -- derivation is computed at render rather than stored: a stored one would go
+                 -- stale the moment the body was edited and no writer could notice.
+                 title TEXT NOT NULL DEFAULT '',
+                 -- CommonMark, in the narrowed dialect `noteMarkdown.ts` pins. Never HTML and
+                 -- never ProseMirror JSON: a body Rust can hand to anything as text is what
+                 -- keeps a renderer out of this crate.
+                 body TEXT NOT NULL DEFAULT '',
+                 -- One of five names the page knows. **No CHECK, deliberately**: this table is
+                 -- synced, and a constraint here would make a build that adds a sixth colour
+                 -- emit rows this build refuses at apply. The page maps an unknown word to
+                 -- `slate`, which is `widgets.ts`' rule for a stored value no option carries.
+                 color TEXT NOT NULL DEFAULT 'slate',
+                 pinned INTEGER NOT NULL DEFAULT 0,
+                 sort_order INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+              , sync_uid TEXT);
+
 CREATE TABLE {schema}.activity (
                  -- **Not in `SYNCED_TABLES`, and no `sync_uid` column, on purpose.**
                  -- `deck_audit` syncs, so a paired group's deck lines arrive from every
@@ -4196,6 +4388,8 @@ CREATE UNIQUE INDEX {schema}.idx_deck_notes_uid ON deck_notes (sync_uid);
 
 CREATE UNIQUE INDEX {schema}.idx_deck_note_cards_uid ON deck_note_cards (sync_uid);
 
+CREATE UNIQUE INDEX {schema}.idx_sticky_notes_uid ON sticky_notes (sync_uid);
+
 CREATE INDEX {schema}.idx_activity_recent ON activity (at DESC, id DESC);
 
 CREATE TABLE {schema}.price_snapshots (
@@ -4218,7 +4412,7 @@ CREATE INDEX {schema}.idx_price_snapshots_printing
                  ON price_snapshots (marketplace, card_id, finish, day);
 "#;
 
-/// Create the twenty-nine user tables and their indexes in `schema`, at
+/// Create the thirty user tables and their indexes in `schema`, at
 /// [`USER_SCHEMA_VERSION`]'s shape.
 ///
 /// **One function, two callers, and that is deliberate**: [`crate::split::extract_user_file`]
@@ -4234,7 +4428,7 @@ pub fn create_user_schema(conn: &Connection, schema: &str) -> rusqlite::Result<(
     conn.execute_batch(&USER_SCHEMA_SQL.replace("{schema}", schema))
 }
 
-/// Seventeen of the twenty corpus tables and nine of their eleven indexes, at
+/// Seventeen of the twenty corpus tables and ten of their twelve indexes, at
 /// [`CORPUS_SCHEMA_VERSION`]'s shape, with `{schema}` where the file goes.
 ///
 /// [`USER_SCHEMA_SQL`]'s twin and every one of its rules: copied out of a migrated
@@ -4288,7 +4482,7 @@ CREATE TABLE {schema}.cards (
     image_status TEXT,
     image_updated_at TEXT,
     search_text TEXT,
-    raw TEXT NOT NULL, image_uris TEXT, face_image_uris TEXT, artist TEXT, power TEXT, toughness TEXT, legal_mask INTEGER NOT NULL DEFAULT 0, produced_mana TEXT);
+    raw TEXT NOT NULL, image_uris TEXT, face_image_uris TEXT, artist TEXT, power TEXT, toughness TEXT, legal_mask INTEGER NOT NULL DEFAULT 0, produced_mana TEXT, type_mask INTEGER NOT NULL DEFAULT 0, keywords TEXT);
 
 CREATE TABLE {schema}.sets (
                 code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
@@ -4500,9 +4694,11 @@ CREATE INDEX {schema}.idx_cards_set_cn ON cards(set_code, collector_number);
 
 CREATE INDEX {schema}.idx_cards_name ON cards(name);
 
-CREATE INDEX {schema}.idx_cards_collapse ON cards(oracle_id, is_paper, released_at, id, name, price_usd, legal_mask, cmc, color_identity);
+CREATE INDEX {schema}.idx_cards_collapse ON cards(oracle_id, is_paper, released_at, id, name, price_usd, legal_mask, type_mask, cmc, color_identity);
 
 CREATE INDEX {schema}.idx_cards_illustration ON cards(illustration_id);
+
+CREATE INDEX {schema}.idx_cards_artist ON cards(artist);
 "#;
 
 /// The combo feed's three tables at head — and **the only literal that builds them**.
@@ -6297,6 +6493,57 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v46: the reader's own prose on the home page — a stack of sticky notes belonging to
+    // nobody but them, drawn by the `stickyNotes` widget.
+    //
+    // **Hangs off nothing**: no parent, no attachment, no scope, which is the whole of what
+    // separates it from `deck_notes`. Its capture spec names no parent at all, and
+    // `parents: &[]` is how "belongs to the reader and to nothing else" is spelled there —
+    // the fourth table to say it, after `deck_labels`, `device_names` and `muted_tags`.
+    //
+    // ⚠️ **It IS in [`SYNCED_TABLES`] and carries a `sync_uid`**, which is the opposite of
+    // what the two rungs above it decided — and the difference is that both of those are
+    // machine-generated where this is typing. `deck_notes`' argument verbatim: a reader who
+    // writes a note on the desktop and finds it missing on the laptop has lost prose rather
+    // than a preference. **No grain index, uid only**, also `deck_notes`': two devices each
+    // typing a note about the same thing must stay two notes, and there is no column pair
+    // that could tell an accidental duplicate from a deliberate one.
+    //
+    // **`CREATE TABLE IF NOT EXISTS`**, so [`tests::UNDO_V46`] is owed for [`tests::UNDO_V14`]'s
+    // *quiet* reason: a fixture that left `sticky_notes` standing would climb perfectly happily
+    // while claiming a version that never had it — green, and lying about what it tests.
+    if v < 46 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sticky_notes (
+                 id INTEGER PRIMARY KEY,
+                 -- May be empty. The widget prints the body's first line when it is, and that
+                 -- derivation is computed at render rather than stored: a stored one would go
+                 -- stale the moment the body was edited and no writer could notice.
+                 title TEXT NOT NULL DEFAULT '',
+                 -- CommonMark, in the narrowed dialect `noteMarkdown.ts` pins. Never HTML and
+                 -- never ProseMirror JSON: a body Rust can hand to anything as text is what
+                 -- keeps a renderer out of this crate.
+                 body TEXT NOT NULL DEFAULT '',
+                 -- One of five names the page knows. **No CHECK, deliberately**: this table is
+                 -- synced, and a constraint here would make a build that adds a sixth colour
+                 -- emit rows this build refuses at apply. The page maps an unknown word to
+                 -- `slate`, which is `widgets.ts`' rule for a stored value no option carries.
+                 color TEXT NOT NULL DEFAULT 'slate',
+                 pinned INTEGER NOT NULL DEFAULT 0,
+                 sort_order INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+              , sync_uid TEXT);
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_sticky_notes_uid ON sticky_notes (sync_uid);",
+        )?;
+        // Literal `46`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 46. `USER_SCHEMA_VERSION` would commit "fully migrated"
+        // before any step added after it had run.
+        tx.execute_batch("PRAGMA main.user_version = 46;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -6342,9 +6589,9 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// cards already exists` and stops the launch rather than quietly doing nothing. Anything else
 /// is a file with a shape, and the only things these rungs have to say about one are that the
 /// combo feed's three tables may be a version behind, that `cards` may be missing
-/// `produced_mana` and that `sets` may be missing `printed_size`.
+/// `produced_mana`, `type_mask` or `keywords`, and that `sets` may be missing `printed_size`.
 ///
-/// **Both rungs are gated on the shape and not on `v < CORPUS_SCHEMA_VERSION`, and that is the
+/// **Every rung is gated on the shape and not on `v < CORPUS_SCHEMA_VERSION`, and that is the
 /// trap worth writing down.** `crate::split`'s `finish` stamps [`CORPUS_SCHEMA_VERSION`] — head,
 /// whatever head is on the day the build ships — onto the legacy file it renames into
 /// `corpus.db`, and what is *in* that file is whatever [`migrate_single_file`]'s frozen v26
@@ -6355,7 +6602,10 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// machine nobody could reproduce from a fresh worktree. **Corpus schema 3 is the same
 /// sentence about `cards`**, and its symptom is one table over:
 /// `table cards_staging has no column named produced_mana`, because [`create_staging`] derives
-/// staging's layout from the live table's own `PRAGMA table_info`. Asking the catalog costs one
+/// staging's layout from the live table's own `PRAGMA table_info`. **Corpus schema 5 is that
+/// sentence a third time, one column over again** — `type_mask` — and it is the one that would
+/// also leave the widened `idx_cards_collapse` unbuilt, which breaks nothing and is slow.
+/// Asking the catalog costs one
 /// pragma each per launch and is right for every population at once — which is
 /// [`TAG_INDEXES_SQL`]'s own
 /// argument one line down: a rung fires once, in one direction, and a shape that has to be
@@ -6403,6 +6653,26 @@ pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
         // the last step of every ingest — so the sync would fail *after* downloading the cards.
         if printed_size_is_owed(conn, CORPUS)? {
             add_printed_size(conn, CORPUS)?;
+        }
+        // Corpus schema 5, the same gate over `cards` for the same two populations, and the
+        // first of these rungs that backfills — see [`add_type_mask`]. Its symptom under a
+        // version gate is corpus schema 3's word for word, one column over:
+        // `table cards_staging has no column named type_mask`.
+        if type_mask_is_owed(conn, CORPUS)? {
+            add_type_mask(conn, CORPUS)?;
+        }
+        // Corpus schema 6, the shape gate a fourth time and over the same table as schema 3 —
+        // so the symptom a version gate would buy is schema 3's, word for word with one
+        // column name changed: `table cards_staging has no column named keywords` at the
+        // first ingest after the upgrade, on every converted database and every fresh
+        // install, because [`create_staging`] derives staging's layout from the live table.
+        //
+        // **After schema 5 rather than before it, and it matters for the second statement.**
+        // Schema 5 replays [`CARDS_INDEXES`], which now carries `idx_cards_artist`, so on the
+        // ordinary 4→6 path that index is already there and this rung's `CREATE INDEX IF NOT
+        // EXISTS` is a no-op. It earns its place on the 5→6 path, where nothing else builds it.
+        if keywords_are_owed(conn, CORPUS)? {
+            add_keywords(conn, CORPUS)?;
         }
     }
     if v < CORPUS_SCHEMA_VERSION {
@@ -6547,6 +6817,128 @@ fn add_printed_size(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
     conn.execute_batch(&on_schema(
         schema,
         "ALTER TABLE {schema}.sets ADD COLUMN printed_size INTEGER;",
+    ))
+}
+
+/// Whether corpus schema 5's `ALTER` is owed on `cards` in `schema` — [`produced_mana_is_owed`]'s
+/// shape, and every one of its reasons.
+///
+/// **Column names and never `sqlite_master`'s text**, because [`swap_staging`] rebuilds `cards`
+/// out of [`create_staging`]'s `PRAGMA table_info` on every sync — the same columns, a different
+/// string — and a text probe would issue the `ALTER` a second time and die at
+/// `duplicate column name` on exactly the databases that are already correct. **And a `cards`
+/// that is not there at all owes nothing**: `PRAGMA table_info` on a missing table is an empty
+/// result rather than an error, and only an ingest can put that table back, so a rung that raised
+/// here would turn a repairable database into an app that will not start.
+fn type_mask_is_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(cards)"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(!names.is_empty() && !names.iter().any(|n| n == "type_mask"))
+}
+
+/// Corpus schema 5: give `cards` its `type_mask` column, fill it, and widen the collapse index.
+///
+/// **Three statements where corpus schema 3 and 4 are one, and the second is the one that
+/// matters.** Those two leave every existing row NULL because their data is not in the database
+/// — `produced_mana` lives inside a gzip `raw` that SQL cannot see into, and `printed_size` is
+/// Scryfall's `/sets` answer and nowhere in `cards` at all. A type line *is* in the database,
+/// and this column is `NOT NULL DEFAULT 0`, so a rung that skipped the backfill would leave
+/// every card masked to "no type" and the new filter answering an empty wall until the next
+/// sync. That is the fail-closed failure this repo refuses everywhere else.
+///
+/// **The index is dropped before it is recreated.** [`CARDS_INDEXES`] spells every index
+/// `IF NOT EXISTS`, and over a name that already exists that is a silent no-op — so replaying
+/// the widened definition over an existing `idx_cards_collapse` would change nothing and cost
+/// nothing and be invisible. It is the v10 step's own lesson, one ladder over.
+///
+/// **Schema-qualified throughout, through [`on_schema`]**: a bare `ALTER TABLE cards`, `DROP
+/// INDEX` or `CREATE INDEX` means `main` — the reader's own file — and with the corpus attached
+/// the statement *succeeds*, against nothing useful. The `UPDATE` is the one statement here that
+/// does not need it, because an unqualified write resolves into whichever attached database
+/// holds the table; it is qualified anyway so that the three read as one rung.
+///
+/// No FTS rebuild is owed: this adds an unindexed column and rewrites none of
+/// `name`/`type_line`/`search_text`, and renumbers no rowids — schema v2's precedent.
+fn add_type_mask(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(
+        schema,
+        "ALTER TABLE {schema}.cards ADD COLUMN type_mask INTEGER NOT NULL DEFAULT 0;",
+    ))?;
+    conn.execute_batch(&format!(
+        "UPDATE {schema}.cards SET type_mask = {};",
+        crate::cardtypes::type_mask_sql("type_line")
+    ))?;
+    conn.execute_batch(&on_schema(
+        schema,
+        "DROP INDEX IF EXISTS {schema}.idx_cards_collapse;",
+    ))?;
+    conn.execute_batch(&cards_indexes_sql(schema))
+}
+
+/// Whether corpus schema 6's `ALTER` is owed on `cards` in `schema` — [`produced_mana_is_owed`]
+/// over the same table, and every one of its reasons verbatim.
+///
+/// **Column names and never `sqlite_master`'s text**, because [`swap_staging`] drops and
+/// recreates `cards` on every sync and the stored `CREATE TABLE` is then whatever
+/// [`create_staging`] rebuilt out of `PRAGMA table_info` — the same columns, a different
+/// string. A text probe would re-issue the `ALTER` and die at `duplicate column name` on
+/// exactly the databases that are already correct.
+///
+/// ⚠️ **A `cards` that is not there at all owes nothing**, which is what makes this a debt
+/// question rather than a shape question: `PRAGMA table_info` on a missing table is an empty
+/// result, `ALTER TABLE … ADD COLUMN` on one raises, and [`migrate_corpus`] is one of the two
+/// things allowed to stop a launch. Only an ingest can put `cards` back, and a launch must
+/// survive a repair it cannot carry out.
+fn keywords_are_owed(conn: &Connection, schema: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info(cards)"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(!names.is_empty() && !names.iter().any(|n| n == "keywords"))
+}
+
+/// Corpus schema 6: give `cards` its `keywords` column.
+///
+/// **Schema-qualified through [`on_schema`]**, for [`add_produced_mana`]'s reason: a bare
+/// `ALTER TABLE cards ADD COLUMN` means `main` — the reader's own file — and with the corpus
+/// attached it *succeeds*, putting the column on a table `user.db` does not have and leaving
+/// the one that matters untouched.
+///
+/// **No `cards_fts` rebuild** — the rung adds an unindexed column and renumbers no rowid,
+/// schema v2's precedent — and **no [`CARDS_INDEXES`] entry for this column**:
+/// [`crate::filters::push_card_filters`] reads it with `instr`, which no b-tree can seek
+/// through, so an index on it would be a second copy of the column bought for nothing.
+///
+/// **The second statement is a different column, and it is here rather than left to the next
+/// sync on purpose.** `idx_cards_artist` is in [`CARDS_INDEXES`], and that list is replayed by
+/// `swap_staging` — which means a corpus already sitting at head would go on answering a bare
+/// `a:` from a full `SCAN c` until its next ingest: **466–510 ms measured against the real
+/// 117,738-printing corpus, against ~16 ms once the index exists**, a measured 26×. Every
+/// corpus in the world is at schema 4 or below the day this rung lands, so putting the
+/// `CREATE INDEX` here reaches all of them at the launch that migrates them, and a fresh file
+/// gets it from [`CORPUS_SCHEMA_SQL`] instead. `IF NOT EXISTS` makes the overlap free.
+///
+/// **It is safe here for the same reason the `ALTER` is**: this function runs only when
+/// [`keywords_are_owed`] said yes, and that gate reads `PRAGMA table_info(cards)` and answers
+/// false for a `cards` that is not there — so neither statement can meet a missing table.
+///
+/// **And no backfill, because none is possible.** The array lives in `raw`, `raw` is a gzip
+/// BLOB from schema v3 on, and `json_extract` over one is a hard `malformed JSON` error rather
+/// than a NULL. Every existing row reads NULL until the next full ingest drops and recreates
+/// `cards` — at most a day away, Scryfall regenerating the bulk file daily — and unlike
+/// `produced_mana`, whose gap is bridged at read time in Rust by
+/// [`crate::deck::fill_unknown_produced_mana`], **this one is bridged in the SQL**: the
+/// `keywords IS NULL` arm of the `kw:` predicate falls back to the card's rules text, which
+/// `kw:flying -o:flying` = 0 licenses as a superset. A read-time bridge was not available
+/// here because the question is asked of a `WHERE` clause over the whole corpus rather than of
+/// one deck's rows.
+fn add_keywords(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(
+        schema,
+        "ALTER TABLE {schema}.cards ADD COLUMN keywords TEXT;
+         CREATE INDEX IF NOT EXISTS {schema}.idx_cards_artist ON cards(artist);",
     ))
 }
 
@@ -7489,10 +7881,7 @@ pub(crate) mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(
-            stray, 29,
-            "the user file holds the twenty-nine and nothing else"
-        );
+        assert_eq!(stray, 30, "the user file holds the thirty and nothing else");
     }
 
     /// FTS5 resolves `content='cards'` in **its own schema**, so an index built in the wrong
@@ -7570,6 +7959,18 @@ pub(crate) mod tests {
         add_produced_mana(&ladder, "main").unwrap();
         // Corpus schema 4's, after it for the same reason — take it away and `sets` goes red.
         add_printed_size(&ladder, "main").unwrap();
+        // Corpus schema 5's, with one extra claim of its own: the ladder builds
+        // `idx_cards_collapse` from the frozen [`CARDS_INDEXES_V20`], so this is also what says
+        // the rung's `DROP INDEX` and replay really widen it. Take this line away and both
+        // `cards` and that index go red.
+        add_type_mask(&ladder, "main").unwrap();
+        // Corpus schema 6's, fourth and last, over `cards` again. Take it away and the ladder's
+        // `cards` is a column short of the literal's and this goes red on that table.
+        // `idx_cards_artist` needs no line of its own: [`cards_indexes_sql`] reads
+        // [`CARDS_INDEXES`] at head, so the v20 step builds it on this route exactly as the
+        // literal does on the other, and the rung's own `CREATE INDEX IF NOT EXISTS` is then a
+        // no-op here — which is the same shape it has on a live 4→6 upgrade.
+        add_keywords(&ladder, "main").unwrap();
         let want = dump(&ladder, "main");
 
         let pair = memory_pair();
@@ -7659,8 +8060,8 @@ pub(crate) mod tests {
 
         assert_eq!(
             want.len(),
-            78,
-            "twenty-nine tables, forty-six indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason, and `idx_price_snapshots_printing` is the forty-sixth index"
+            80,
+            "thirty tables, forty-seven indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three is eighty. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -7734,7 +8135,7 @@ pub(crate) mod tests {
     /// The user side, spelled out. A table moving between the two files is a data migration,
     /// never a diff nobody noticed.
     #[test]
-    fn the_user_side_is_the_twenty_nine_tables_no_feed_can_rebuild() {
+    fn the_user_side_is_the_thirty_tables_no_feed_can_rebuild() {
         let mut user: Vec<&str> = TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
@@ -7764,6 +8165,7 @@ pub(crate) mod tests {
                 "error_log",
                 "muted_tags",
                 "price_snapshots",
+                "sticky_notes",
                 "sync_clock",
                 "sync_devices",
                 "sync_group",
@@ -7884,13 +8286,32 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v45's price history — the newest rewind on the user ladder.
+    /// v46's sticky notes — the newest rewind on the user ladder.
+    ///
+    /// Owed for [`UNDO_V14`]'s **quiet** reason, v45's and v44's exactly: the rung is
+    /// `CREATE TABLE IF NOT EXISTS`, so a fixture that left `sticky_notes` standing would climb
+    /// perfectly happily and claim a version that never had it — green, and lying. **It runs
+    /// first, before [`UNDO_V45`]**, because a rewind walks the ladder backwards, and it carries
+    /// the same prediction the two docs below it did: the rung after this one collects a line
+    /// ahead of it.
+    ///
+    /// **The index is spelled out even though [`UNDO_V20`]'s rule says it need not be**:
+    /// `DROP TABLE` takes `idx_sticky_notes_uid` with it, and the line is here so the rewind
+    /// names everything the rung created rather than leaving the reader to work out which half
+    /// is implied. It is `IF EXISTS` and runs first, so it costs one no-op statement and cannot
+    /// fail a chain that has already lost the table.
+    const UNDO_V46: &str = "DROP INDEX IF EXISTS idx_sticky_notes_uid;
+         DROP TABLE IF EXISTS sticky_notes;";
+
+    /// v45's price history — the rewind directly under [`UNDO_V46`].
     ///
     /// Owed for [`UNDO_V14`]'s **quiet** reason, v44's exactly: the rung is `CREATE TABLE IF NOT
     /// EXISTS`, so a fixture that left `price_snapshots` standing would climb happily while
     /// claiming a version that never had it. **It runs first, before [`UNDO_V44`]**, because a
-    /// rewind walks the ladder backwards — and it carries the same prediction v44's doc did: the
-    /// rung after this one collects a line ahead of it.
+    /// rewind walks the ladder backwards — and it carried the same prediction v44's doc did: the
+    /// rung after this one collects a line ahead of it. v46 is that line, collected exactly as
+    /// the sentence predicted, and the prediction moves up to the doc above rather than going
+    /// away.
     ///
     /// **The index needs no line of its own**, [`UNDO_V20`]'s rule: `DROP TABLE` takes
     /// `idx_price_snapshots_printing` with it.
@@ -8285,7 +8706,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -8317,7 +8738,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -8344,7 +8765,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -8371,7 +8792,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -8395,7 +8816,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -8416,7 +8837,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -8437,7 +8858,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
         ))
         .unwrap();
         conn
@@ -8458,7 +8879,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
         ))
         .unwrap();
         conn
@@ -8489,7 +8910,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
         ))
         .unwrap();
         conn
@@ -8510,7 +8931,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
         ))
         .unwrap();
         conn
@@ -8524,8 +8945,10 @@ pub(crate) mod tests {
     fn user_file_at_44() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V45} PRAGMA main.user_version = 44;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -8573,7 +8996,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -8730,7 +9153,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -8787,7 +9210,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -9165,7 +9588,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 45);
+        assert_eq!(USER_SCHEMA_VERSION, 46);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -9176,7 +9599,7 @@ pub(crate) mod tests {
         assert!(!SYNCED_TABLES.contains(&"sync_devices"));
         assert!(!SYNCED_TABLES.contains(&"sync_identity"));
         assert!(!SYNCED_TABLES.contains(&"sync_group"));
-        assert_eq!(SYNCED_TABLES.len(), 15);
+        assert_eq!(SYNCED_TABLES.len(), 16);
     }
 
     /// The table carries no key material. A column added here later that did would be a key
@@ -10145,7 +10568,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -10232,7 +10655,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 45);
+        assert_eq!(version, 46);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -10535,11 +10958,15 @@ pub(crate) mod tests {
         // until fan-in — and 43 → 44 for the home page's activity log, and 44 → 45 for its price
         // history. **Ten times**, and the count is the argument.
         //
-        // ⚠️ **`v41_gives_a_database_the_share_cache` is a fourth assertion of the same kind and
-        // is deliberately not counted here** — it is the v41 rung's own test, not one of these
-        // three, and it carries no comment of its own. A rung that edits only the three this
-        // sentence names leaves that one red. v43 did exactly that.
-        assert_eq!(version, 45);
+        // ⚠️ **There are five assertions of this kind, not the three named above, and naming
+        // them has now failed twice.** The other two are the v41 and v43 rungs' own tests —
+        // `v41_gives_a_database_the_share_cache` and
+        // `v43_replaces_the_deck_notes_column_with_two_tables` — which assert head without
+        // saying that is what they are doing. v43 edited only the three and left v41 red; v46
+        // edited only the four this comment then named and left v43's red. **Do not trust this
+        // list.** Bump what you can find, run `cargo test --lib schema::tests`, and every one
+        // you missed names itself in a `left: <head>, right: <old>` panic.
+        assert_eq!(version, 46);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -10561,7 +10988,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 45);
+        assert_eq!(version, 46);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -11000,7 +11427,9 @@ pub(crate) mod tests {
         let v: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 45);
+        // Head, not v41 — `migrate_user` climbs the whole ladder. One of the five the v36
+        // block's ⚠️ warns about; this one is why that warning exists.
+        assert_eq!(v, 46);
         conn.execute(
             "INSERT INTO collection_shares
                  (id, folder_uid, title, owner_name, url, fields, state, updated_at)
@@ -11234,7 +11663,9 @@ pub(crate) mod tests {
         let v: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 45);
+        // Head, not v43 — `migrate_user` climbs the whole ladder. The fifth of the five the
+        // v36 block's ⚠️ warns about, and the one v46 missed.
+        assert_eq!(v, 46);
 
         assert_eq!(
             has_column(&conn, "decks", "notes"),
@@ -11756,7 +12187,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -18637,6 +19068,467 @@ pub(crate) mod tests {
         migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
     }
 
+    // ---- corpus schema 5: the card types as one integer --------------------------------
+
+    /// A pair whose corpus wears head's version stamp over a `cards` with no `type_mask` and a
+    /// **narrow** `idx_cards_collapse` — [`corpus_missing_produced_mana`]'s construction plus
+    /// the index, which is the half that rung had no equivalent of.
+    ///
+    /// The index goes **before** the column and comes back as a literal, which is
+    /// [`v9_database`]'s pair of rules for the same pair of reasons: SQLite refuses to drop a
+    /// column an index names, and the narrow definition is a description of the shape this rung
+    /// replaces rather than of head — so it must not move when [`CARDS_INDEXES`] does.
+    fn corpus_at_head_without_type_mask() -> Connection {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DROP INDEX {CORPUS}.idx_cards_collapse;
+             ALTER TABLE {CORPUS}.cards DROP COLUMN type_mask;
+             CREATE INDEX {CORPUS}.idx_cards_collapse
+                 ON cards(oracle_id, is_paper, released_at, id, name, price_usd,
+                          legal_mask, cmc, color_identity);
+             PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// Corpus schema 5 is **shape-gated, not version-gated**, for the reason [`migrate_corpus`]
+    /// already documents twice: every converted database and every fresh install arrives here
+    /// already stamped at head with a v26-shaped `cards`. A version gate would skip exactly
+    /// those two populations and the next ingest would die on
+    /// `table cards_staging has no column named type_mask`.
+    #[test]
+    fn a_head_stamped_corpus_still_gets_type_mask() {
+        let conn = corpus_at_head_without_type_mask();
+        // The fixture is really the state being claimed: head's number over the old shape.
+        let version: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CORPUS_SCHEMA_VERSION);
+        assert!(
+            !corpus_cards_has(&conn, "type_mask"),
+            "the fixture must start without the column or it tests nothing"
+        );
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(
+            corpus_cards_has(&conn, "type_mask"),
+            "the number said head and the shape did not"
+        );
+        // Twice is once — `ADD COLUMN` has no `IF NOT EXISTS`, so an ungated second pass would
+        // stop the launch on every database that is already right.
+        migrate_corpus(&conn).unwrap();
+    }
+
+    /// Unlike corpus schema 3 and 4, this rung **backfills**, and it must: `produced_mana` and
+    /// `printed_size` read NULL until the next fetch because their data is not in the database.
+    /// A type line is — and with `NOT NULL DEFAULT 0` an un-backfilled column means "no type",
+    /// so the new filter would answer an empty wall until the next sync.
+    #[test]
+    fn the_rung_backfills_type_mask_from_the_type_line() {
+        let conn = corpus_at_head_without_type_mask();
+        conn.execute_batch(&format!(
+            "INSERT INTO {CORPUS}.cards (id,name,set_code,collector_number,lang,layout,raw,type_line)
+             VALUES ('1','Dryad Arbor','fut','174','en','normal','{{}}','Land Creature — Forest Dryad');"
+        ))
+        .unwrap();
+
+        migrate_corpus(&conn).unwrap();
+
+        let got: i64 = conn
+            .query_row(
+                &format!("SELECT type_mask FROM {CORPUS}.cards WHERE id='1'"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            got as u32,
+            crate::cardtypes::type_mask("Land Creature — Forest Dryad")
+        );
+        assert_ne!(
+            got, 0,
+            "a backfill that leaves 0 is the failure this test exists for"
+        );
+    }
+
+    /// The widening is real. A `CREATE INDEX IF NOT EXISTS` over a name that already exists is
+    /// a silent no-op, so the rung must `DROP` first — the v10 step's lesson on the other
+    /// ladder, and `the_v10_step_replaces_the_narrow_collapse_index_rather_than_skipping_it`
+    /// is its fence there.
+    #[test]
+    fn the_collapse_index_carries_type_mask_after_the_rung() {
+        let conn = corpus_at_head_without_type_mask();
+        let before: String = conn
+            .query_row(
+                &format!(
+                    "SELECT sql FROM {CORPUS}.sqlite_master
+                      WHERE type='index' AND name='idx_cards_collapse'"
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            !before.contains("type_mask"),
+            "the fixture must start narrow or the widening proves nothing: {before}"
+        );
+
+        migrate_corpus(&conn).unwrap();
+
+        let sql: String = conn
+            .query_row(
+                &format!(
+                    "SELECT sql FROM {CORPUS}.sqlite_master
+                      WHERE type='index' AND name='idx_cards_collapse'"
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sql.contains("type_mask"), "not widened: {sql}");
+        // And the columns it was already covering are still there — a widening that dropped
+        // one would stop the scan covering and cost 455–505 ms against 22–47 ms.
+        for column in ["legal_mask", "cmc", "color_identity"] {
+            assert!(sql.contains(column), "{column} lost in the widening: {sql}");
+        }
+    }
+
+    /// A card can never carry a NULL mask — `push_card_filters` asks `type_mask & ? != 0`, and
+    /// `NULL & ?` is NULL, which would drop the row out of every type search silently.
+    /// `legal_mask`'s own argument, one column over.
+    #[test]
+    fn a_card_can_never_carry_a_null_type_mask() {
+        let conn = corpus_at_head_without_type_mask();
+        migrate_corpus(&conn).unwrap();
+
+        let err = conn
+            .execute_batch(&format!(
+                "INSERT INTO {CORPUS}.cards (id,name,set_code,collector_number,lang,layout,raw,type_mask)
+                 VALUES ('9','x','set','1','en','normal','{{}}',NULL);"
+            ))
+            .unwrap_err()
+            .to_string();
+        // On the message, not on `is_err`: a typo'd column name anywhere in this INSERT would
+        // fail just as loudly and pin nothing about `type_mask`.
+        assert!(
+            err.contains("NOT NULL constraint failed: cards.type_mask"),
+            "{err}"
+        );
+    }
+
+    /// A fresh corpus is built with the column rather than climbing to it, and owes the rung
+    /// nothing — the builder and the rung are two paths to one shape, which
+    /// `the_corpus_schema_is_byte_identical_to_what_the_ladder_builds` compares byte for byte.
+    #[test]
+    fn a_fresh_corpus_has_type_mask_and_owes_nothing() {
+        let conn = memory_pair();
+        assert!(corpus_cards_has(&conn, "type_mask"));
+        assert!(!type_mask_is_owed(&conn, CORPUS).unwrap());
+        migrate_corpus(&conn).unwrap();
+        assert!(corpus_cards_has(&conn, "type_mask"));
+    }
+
+    /// ⚠️ **Schema-qualified**, `the_produced_mana_rung_lands_on_the_corpus_and_not_on_the_user_
+    /// file`'s claim for this rung: with a decoy `cards` on the user side, the unqualified
+    /// spelling lands on the wrong file and the qualified one cannot.
+    #[test]
+    fn the_type_mask_rung_lands_on_the_corpus_and_not_on_the_user_file() {
+        let conn = corpus_at_head_without_type_mask();
+        // A decoy on the user side, so an unqualified `ALTER` has somewhere wrong to land.
+        conn.execute_batch("CREATE TABLE main.cards (id TEXT PRIMARY KEY);")
+            .unwrap();
+
+        add_type_mask(&conn, CORPUS).unwrap();
+
+        assert!(
+            corpus_cards_has(&conn, "type_mask"),
+            "the column belongs to the corpus"
+        );
+        let mut stmt = conn.prepare("PRAGMA main.table_info(cards)").unwrap();
+        let user_side: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            user_side,
+            vec!["id".to_owned()],
+            "an unqualified ALTER puts the corpus's column in the reader's own file, silently"
+        );
+    }
+
+    /// And a corpus with no `cards` at all owes nothing rather than dying, which is
+    /// `a_corpus_with_no_cards_table_owes_the_rung_nothing`'s claim for this gate.
+    #[test]
+    fn a_corpus_with_no_cards_table_owes_the_type_mask_rung_nothing() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DROP TABLE {CORPUS}.cards_fts; DROP TABLE {CORPUS}.cards;"
+        ))
+        .unwrap();
+
+        assert!(
+            !type_mask_is_owed(&conn, CORPUS).unwrap(),
+            "there is no table to alter, so nothing is owed"
+        );
+        migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
+    }
+
+    // ---- corpus schema 6: a card's keyword abilities ---------------------------------
+
+    /// A pair whose corpus wears **head's version stamp over a `cards` that has no
+    /// `keywords`** — [`corpus_missing_produced_mana`]'s construction one column over, and
+    /// the state every converted database and every fresh install is in on the day corpus
+    /// schema 5 ships.
+    ///
+    /// `DROP COLUMN` is available for that fixture's reason and it is worth restating here,
+    /// because this commit adds an index to `cards` for the first time since v20: SQLite
+    /// refuses a `DROP COLUMN` on a column an index names, and the rung deliberately declares
+    /// none on `keywords`. `idx_cards_artist` names a different column and does not reach it.
+    fn corpus_missing_keywords() -> Connection {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "ALTER TABLE {CORPUS}.cards DROP COLUMN keywords;
+             PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// **The population a version gate would miss**, for `keywords`: head's number over the
+    /// old shape, which is what `crate::split`'s `finish` stamps onto every converted file and
+    /// every fresh install. The failure it would buy is corpus schema 3's word for word with
+    /// one name changed — the next ingest raising `table cards_staging has no column named
+    /// keywords`, because [`create_staging`] derives staging's layout from the live table's
+    /// own `PRAGMA table_info`.
+    #[test]
+    fn a_corpus_stamped_at_head_with_no_keywords_still_gets_it() {
+        let conn = corpus_missing_keywords();
+        let version: i64 = conn
+            .query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, CORPUS_SCHEMA_VERSION);
+        assert!(
+            !corpus_cards_has(&conn, "keywords"),
+            "the fixture must start without the column or it tests nothing"
+        );
+
+        migrate_corpus(&conn).unwrap();
+
+        assert!(
+            corpus_cards_has(&conn, "keywords"),
+            "the number said head and the shape did not"
+        );
+    }
+
+    /// The rung builds `idx_cards_artist` too, and this is the corpus that says why it must.
+    ///
+    /// The index is in [`CARDS_INDEXES`], and **only `swap_staging` replays that list** — so a
+    /// corpus already stamped at head would go on answering a bare `a:` from a full `SCAN c`
+    /// until its next ingest. Measured against the real 117,738-printing corpus: **466–510 ms
+    /// that way, ~16 ms with the index**, the same `instr(lower(…), …)` either way. Every
+    /// corpus that exists the day this rung lands is at schema 4 or below, so this is the one
+    /// place that reaches all of them, at the launch that migrates them.
+    #[test]
+    fn the_keywords_rung_also_builds_the_artist_index() {
+        let conn = corpus_missing_keywords();
+        let has_index = |c: &Connection| -> i64 {
+            c.query_row(
+                &format!(
+                    "SELECT count(*) FROM {CORPUS}.sqlite_master
+                     WHERE type = 'index' AND name = 'idx_cards_artist'"
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        conn.execute_batch(&format!("DROP INDEX IF EXISTS {CORPUS}.idx_cards_artist;"))
+            .unwrap();
+        assert_eq!(
+            has_index(&conn),
+            0,
+            "the fixture must start without the index or this tests nothing"
+        );
+
+        migrate_corpus(&conn).unwrap();
+
+        assert_eq!(
+            has_index(&conn),
+            1,
+            "a bare `a:` is a 26x full scan without it"
+        );
+    }
+
+    /// The counterweight: a corpus already carrying the column is left alone.
+    ///
+    /// `a_launch_over_a_corpus_that_has_the_column_does_not_add_it_twice`'s claim for this
+    /// rung, and it is the same loud one — `ALTER TABLE … ADD COLUMN` has no `IF NOT EXISTS`,
+    /// so an ungated second pass raises `duplicate column name` and **stops the launch** on
+    /// every database that is already correct, which after one sync is all of them.
+    #[test]
+    fn a_fresh_corpus_has_keywords_and_owes_nothing() {
+        let conn = memory_pair();
+        assert!(corpus_cards_has(&conn, "keywords"));
+        assert!(!keywords_are_owed(&conn, CORPUS).unwrap());
+
+        migrate_corpus(&conn).unwrap();
+        migrate_corpus(&conn).unwrap();
+
+        assert!(corpus_cards_has(&conn, "keywords"));
+    }
+
+    /// ⚠️ **The rung is schema-qualified**, `the_produced_mana_rung_lands_on_the_corpus_and_
+    /// not_on_the_user_file`'s claim for this one. The decoy on the user side is what makes
+    /// the two spellings able to disagree at all: with a `cards` on each side the unqualified
+    /// form lands on the wrong one and the qualified form cannot. In the field `user.db` has
+    /// no `cards`, which is what makes the mistake *silent* — nothing raises, the corpus is
+    /// left unrepaired, and the next ingest fails naming a different table.
+    #[test]
+    fn the_keywords_rung_lands_on_the_corpus_and_not_on_the_user_file() {
+        let conn = corpus_missing_keywords();
+        conn.execute_batch("CREATE TABLE main.cards (id TEXT PRIMARY KEY);")
+            .unwrap();
+
+        add_keywords(&conn, CORPUS).unwrap();
+
+        assert!(
+            corpus_cards_has(&conn, "keywords"),
+            "the column belongs to the corpus"
+        );
+        let mut stmt = conn.prepare("PRAGMA main.table_info(cards)").unwrap();
+        let user_side: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            user_side,
+            vec!["id".to_owned()],
+            "an unqualified ALTER puts the corpus's column in the reader's own file, silently"
+        );
+    }
+
+    /// And a corpus with no `cards` at all owes nothing rather than dying.
+    ///
+    /// The debt this rung can repair is *a table missing a column*, never *a missing table* —
+    /// only an ingest can put `cards` back, and [`migrate_corpus`] is one of the two things
+    /// allowed to stop a launch.
+    #[test]
+    fn a_corpus_with_no_cards_table_owes_the_keywords_rung_nothing() {
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "DROP TABLE {CORPUS}.cards_fts; DROP TABLE {CORPUS}.cards;"
+        ))
+        .unwrap();
+
+        assert!(
+            !keywords_are_owed(&conn, CORPUS).unwrap(),
+            "there is no table to alter, so nothing is owed"
+        );
+        migrate_corpus(&conn).expect("a launch must not die over a repair it cannot carry out");
+    }
+
+    /// **The `kw:` bridge against real rows, which is the half `filters.rs` could not test.**
+    ///
+    /// Task 2 shipped the two-arm predicate and pinned its SQL text and both bound parameters;
+    /// what it could not do was run it, because this column did not exist yet. Spec §10 asks
+    /// for exactly this pairing — *the NULL-keywords arm answers from oracle text and the
+    /// populated arm answers exactly* — and it belongs here rather than there because what it
+    /// really asserts is that the **format this rung's ingest writes** and the **form
+    /// `push_card_filters` binds** are one string. They are two files apart and nothing else
+    /// compares them.
+    ///
+    /// The delimiters are the whole of the exactness: `bear` carries `|flying|` and must not
+    /// match, and `angel` — whose column is populated — must not fall through to the rules
+    /// text arm. `dragon` is the un-ingested row the bridge exists for.
+    #[test]
+    fn the_keyword_predicate_reads_both_arms_against_real_rows() {
+        use crate::filters::{
+            push_card_filters, CardFilters, PredicateField, PredicateOp, Predicates, QueryPredicate,
+        };
+
+        let conn = memory_pair();
+        conn.execute_batch(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw,
+                 search_text, keywords)
+             VALUES
+               ('angel','Serra Angel','lea','1','en','normal','{}',
+                'Flying, vigilance', '|flying|vigilance|'),
+               ('dragon','Shivan Dragon','lea','2','en','normal','{}',
+                'Flying {R}: Shivan Dragon gets +1/+0 until end of turn.', NULL),
+               ('bear','Grizzly Bears','lea','3','en','normal','{}',
+                'A vanilla bear.', '|flying|');",
+        )
+        .unwrap();
+        // The third row's column says `|flying|` on purpose — it is the control for the
+        // *first* arm, so `kw:fly` failing below cannot be passing because no row has it.
+
+        let hits = |value: &str| -> Vec<String> {
+            let mut p = Predicates::default();
+            push_card_filters(
+                &mut p,
+                &CardFilters {
+                    predicates: Some(vec![QueryPredicate {
+                        field: PredicateField::Keyword,
+                        op: PredicateOp::Colon,
+                        value: value.to_owned(),
+                        negated: false,
+                    }]),
+                    ..Default::default()
+                },
+                "c",
+                None,
+            );
+            let sql = format!(
+                "SELECT c.id FROM cards c WHERE {} ORDER BY c.id",
+                p.where_sql()
+            );
+            let mut stmt = conn.prepare(&sql).unwrap();
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(p.params.iter().map(|b| b.as_ref())),
+                    |r| r.get::<_, String>(0),
+                )
+                .unwrap()
+                .map(Result::unwrap)
+                .collect::<Vec<_>>();
+            rows
+        };
+
+        assert_eq!(
+            hits("flying"),
+            vec!["angel".to_owned(), "bear".to_owned(), "dragon".to_owned()],
+            "the populated rows match on the column and the NULL row matches on its rules text"
+        );
+        assert_eq!(
+            hits("Flying"),
+            vec!["angel".to_owned(), "bear".to_owned(), "dragon".to_owned()],
+            "the reader's capitalisation is not theirs to get right: both arms fold case"
+        );
+        assert_eq!(
+            hits("vigilance"),
+            vec!["angel".to_owned()],
+            "a keyword only one card has"
+        );
+        // ⚠️ **The delimiter contract, stated as a behaviour rather than as a string compare,
+        // and the over-inclusiveness stated beside it so neither can be mistaken for the
+        // other.** Scryfall refuses `kw:fly` outright (measured 2026-09-22). On the *column*
+        // arm the wrapping `|` is the whole of what reproduces that, so `angel` and `bear` —
+        // both ingested — must be absent; drop one delimiter and both walk in. On the *rules
+        // text* arm there is no such fence and there cannot be one, so `dragon`, whose column
+        // is NULL, matches on the word "Flying" and that is the bridge behaving as designed:
+        // over-inclusive before the next ingest, never empty. The day `dragon` is ingested it
+        // leaves this answer, which is the gap closing rather than a test going stale.
+        assert_eq!(
+            hits("fly"),
+            vec!["dragon".to_owned()],
+            "a prefix must not reach an ingested row, and must still reach an un-ingested one"
+        );
+    }
+
     /// And it takes an interrupted ingest's staging pair with it, so nothing shaped like
     /// yesterday is left in a file the rung has just declared to be at head.
     #[test]
@@ -19233,6 +20125,39 @@ pub(crate) mod tests {
     /// the latter by stored SQL rather than by name, because a narrow `idx_cards_collapse`
     /// and a widened one share a name and differ in the only way that matters.
     ///
+    /// [`CARDS_INDEXES_V20`] is [`CARDS_INDEXES`] with `type_mask` taken out of the collapse
+    /// index and nothing else, which is the whole of what the frozen list may differ by.
+    ///
+    /// `the_head_format_seed_agrees_with_v5_on_every_shared_cell`'s job for the other pair this
+    /// file has split into head and history. Both directions matter: an index added to head and
+    /// not to the frozen list is one `every_version_ends_with_the_same_schema_as_a_fresh_install`
+    /// would catch, but a *column* added to head and not here is invisible to it — and a column
+    /// added to the frozen list is the `no such column` crash this split exists to stop, on the
+    /// one population a fresh worktree cannot show.
+    #[test]
+    fn the_frozen_v20_index_list_is_head_without_the_column_the_ladder_cannot_have() {
+        assert_eq!(
+            CARDS_INDEXES_V20.len(),
+            CARDS_INDEXES.len(),
+            "the ladder must still build every index a fresh install has"
+        );
+        for (head, frozen) in CARDS_INDEXES.iter().zip(CARDS_INDEXES_V20) {
+            assert_eq!(
+                &head.replace("type_mask, ", ""),
+                frozen,
+                "the frozen list may differ from head by `type_mask` and by nothing else"
+            );
+        }
+        assert!(
+            !CARDS_INDEXES_V20.iter().any(|s| s.contains("type_mask")),
+            "the ladder's `cards` has no such column when this list runs"
+        );
+        assert!(
+            CARDS_INDEXES.iter().any(|s| s.contains("type_mask")),
+            "head names the column, or the split above has nothing to be about"
+        );
+    }
+
     /// **`decks`' columns are compared too, since v12/v13** (and `deck_categories`' since v15),
     /// because `cards` stopped being the only
     /// table a step adds columns to at v8 and the claim was never about `cards` — it is about

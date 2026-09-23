@@ -204,7 +204,7 @@ function mergeOne(a: TagTerms | undefined, b: TagTerms | undefined): TagTerms | 
  *
  * **Both halves are statements the reader made and both narrow**, so this is a union of the
  * lists rather than one side winning: a Tags page reader who has chipped `dog` and then types
- * `o:ramp` is asking for a dog that ramps, and either half silently dropping the other's tags
+ * `otag:ramp` is asking for a dog that ramps, and either half silently dropping the other's tags
  * would answer a question nobody asked. Includes still intersect at the far end —
  * `filters::picked_tags` gives each slug its own `EXISTS` — so a longer list is a narrower wall,
  * which is what both gestures mean.
@@ -214,7 +214,7 @@ function mergeOne(a: TagTerms | undefined, b: TagTerms | undefined): TagTerms | 
  * means no filter everywhere in this codebase, and an empty list riding on every request would
  * be a payload that lies about intent.
  *
- * Each list is deduplicated and sorted, so chipping `dog` and *also* typing `a:dog` is one
+ * Each list is deduplicated and sorted, so chipping `dog` and *also* typing `atag:dog` is one
  * `EXISTS` and — more to the point — one **query key**: the key `useCardSearch` derives from
  * this payload must not mint a second cache entry for a search that is the same search.
  *

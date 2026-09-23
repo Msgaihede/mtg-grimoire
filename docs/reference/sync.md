@@ -463,8 +463,9 @@ was holding advances on its own, which is the stall above resolving itself. High
 the roster at that epoch**. A device that adopts *N+1* deletes every `sync_devices` row the
 manifest does not name.
 
-**That is deliberately not a synced table** — it would be the fourteenth now, and this line read
-*thirteenth* until `deck_tokens` took that number at user schema v37, which is the argument
+**That is deliberately not a synced table** — it would be the **seventeenth** now, and this line
+read *thirteenth* until `deck_tokens` took that number at user schema v37 and *fourteenth* until
+v43's two note tables and v46's `sticky_notes` moved it twice more, which is the argument
 against writing a count into prose at all. A manifest that *is* the key distribution
 cannot disagree with it, where a synced `device_removals` table could arrive late, arrive out of
 order, or arrive at a device that cannot decrypt it — which is precisely the state a rotation puts
@@ -850,15 +851,15 @@ Spec §7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees
 
 ---
 
-## What syncs: fifteen tables, and the spec's twelfth still does not exist
+## What syncs: sixteen tables, and the spec's twelfth still does not exist
 
 `schema::SYNCED_TABLES`:
 
 `collection_entries` · `collection_folders` · `deck_audit` · `deck_cards` · `deck_categories` ·
 `deck_folders` · `deck_labels` · `deck_note_cards` · `deck_notes` · `deck_tokens` · `decks` ·
-`device_names` · `muted_tags` · `wishlist_entries` · `wishlist_folders`
+`device_names` · `muted_tags` · `sticky_notes` · `wishlist_entries` · `wishlist_folders`
 
-**Fifteen, and not for the reason the spec's own count would suggest.** The spec's list names
+**Sixteen, and not for the reason the spec's own count would suggest.** The spec's list names
 `deck_allocations`, which **schema v25 dropped** — which deck holds a card is now which folder
 its row sits in, so the work that table did is inside `collection_folders`, which is on the
 list. A table that does not exist cannot be synced, and that argument has not changed: it is
@@ -887,8 +888,11 @@ checkable, and it splices the field into a real captured op rather than hand-wri
 because a v43 build emits no `notes`, so a test that only *hoped* the field was there would pass
 while proving nothing.
 
-**`deck_notes` is the fifth table on this census with no grain at all**, joining `decks`, the
-three folder tables and `deck_audit`. Two devices each typing a note about the mana base must
+**`deck_notes` is the fifth table on this census with no grain at all**, joining `decks`,
+`deck_folders`, `wishlist_folders` and `deck_audit` — **not all three folder tables**, which this
+line said until it was re-read against `apply::META` on 2026-09-20: `collection_folders` carries
+two partial grains, for the `Recently removed` row every database seeds itself and the group
+folder a deck brings. `sticky_notes` made it six at v46. Two devices each typing a note about the mana base must
 stay two notes, and there is no column pair that could tell an accidental duplicate from a
 deliberate one — a title grain would silently fold two readers' separate thoughts into whichever
 arrived second. **`deck_note_cards` needs one for the opposite reason**: two devices attaching
@@ -901,6 +905,35 @@ is why its `apply::Meta` rank is 14 and sorts after the note's 13.
 verbatim: a printing id means nothing on the far device's shelf. What it buys beyond sync is that
 a note survives the reader swapping printings, and shows on the Live list and the Theory list
 alike, because both hold the same oracle id.
+
+**The sixteenth is `sticky_notes`, at user schema v46** (2026-09-20, issue #479) — the reader's
+prose on the home page, filed against no deck, no folder and no collection row.
+It syncs for `deck_notes`' reason and not `activity`'s: what it holds is typing, and a note
+written on the desktop that never reaches the laptop is lost prose rather than a lost preference.
+It has **no grain, uid only**, `deck_notes`' argument verbatim — two devices each typing a note
+about the same thing must stay two notes, and no column pair could tell an accidental duplicate
+from a deliberate one.
+
+⚠️ **Its `capture::Spec` is the fourth empty `parents`, not the first**, and the design document
+this table was built from called it a first. `deck_labels`, `device_names` and `muted_tags` are
+already parentless — a label is app-wide since v21, a device name is keyed on the device, a mute
+is keyed on the tag — so the *shape* is precedented and worth reading before quoting that sentence
+back. What is new is only that a parentless table on this census now holds the reader's prose.
+`schema.rs`'s own `SYNCED_TABLES` comment still says "first"; `capture.rs`'s spec says "fourth"
+beside the field it describes, and the spec is the one that was written against the array.
+
+⚠️ **`color` carries no CHECK, and the rule is not "a synced column may not have one".** Seven
+tables on this census carry an enumerated one between them: `collection_entries.finish` and
+`condition`, `decks.cover_kind`, `deck_categories.kind`, `deck_cards.variant`,
+`deck_audit.variant`, `collection_folders.kind` and `deck_tokens.state`. Those vocabularies are Magic's or this app's
+own model, and a build does not get to add to them unilaterally — a rung would, and a rung moves
+every device. **A note's colour is a palette the page owns and expects to grow**, which is what
+turns a constraint into a forward-compatibility hazard: a build that added a sixth colour would
+emit rows an older build refuses **at apply**, and a failed apply rolls the group's savepoint back
+rather than showing a note that looks wrong. So Rust stores the string it is handed and the page
+maps a word it has never heard of to `slate`. It is *A table's NAME is on the wire* below, one
+column type down — a vocabulary that can grow between builds must not be enforced by anything a
+peer can trip over.
 
 **`deck_tokens.quantity` travels as a `field` and not as a `counter`, and it is the first column
 on this census where the distinction had to be argued.** Mechanically the column is nullable, so
@@ -1060,10 +1093,10 @@ while every count still reads one.
 **A sparse update op cannot describe a grain and does not need to** — the row it edits is found
 by uid. An *insert* op carries every field, which is what makes the grain rule work at all.
 
-**The row handle in `apply` is the uid and never the rowid.** Thirteen of the fifteen tables have an
-`INTEGER PRIMARY KEY`; two have none at all — `muted_tags` is `WITHOUT ROWID` on
+**The row handle in `apply` is the uid and never the rowid.** Fourteen of the sixteen tables have
+an `INTEGER PRIMARY KEY`; two have none at all — `muted_tags` is `WITHOUT ROWID` on
 `(namespace, tag_id)` and `device_names` on `device_id` alone. Addressing by `sync_uid` is one
-spelling for all fifteen.
+spelling for all sixteen.
 
 **Minting takes three sites, not one**, and only one of them is the ladder:
 
@@ -1082,8 +1115,13 @@ would fail **the reader's own write**.
 
 ## Capture: triggers, and three facts about SQLite that decide the shape
 
-`sync_engine::capture` installs 31 triggers from one census — an insert trigger per table, plus
-an update and a delete for the ten that are not `deck_audit`, plus one that advances the clock.
+`sync_engine::capture` installs its triggers from one census, and the shape is the number rather
+than the other way round: **an insert trigger for every table, an update and a delete for every
+table but `deck_audit`** — the one `Spec` with `append_only: true`, since a log that is only ever
+appended to needs no other arm — **plus one that advances the clock.** At sixteen tables that is
+16 + 15 + 15 + 1 = **47**, re-derived off `capture::TABLES` on 2026-09-20; this line said 31 and
+named ten non-append-only tables, which had been wrong since before `deck_tokens`. Count the
+array, never add to the figure above.
 They are `DROP` + `CREATE` at every open and never `CREATE … IF NOT EXISTS`: a trigger is stored
 SQL, and a build that changed the generator would otherwise leave every existing database
 running last year's rules forever.
@@ -1884,7 +1922,7 @@ of the two ways it happens:
 
 | Object | What it is |
 | --- | --- |
-| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v37 and **fifteen** at v43 |
+| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v37, **fifteen** at v43 and **sixteen** at v46 |
 | `device_names` (v31) | `device_id` → `name`, and nothing else. **The twelfth synced table**, so a rename reaches the group and a joiner stops reading "Paired device". `sync_devices` stays unsynced beside it, because it holds keys |
 | `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
 | `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |

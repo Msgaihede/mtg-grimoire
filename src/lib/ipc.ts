@@ -24,6 +24,7 @@
  * `BracketCardRow`/`DeckBracketRead`/`DeckValue`   — `src-tauri/src/deck.rs`
  * `ActivityEntry`                                — `src-tauri/src/activity.rs`
  * `HomeWidget`/`HomeLayout`                      — `src-tauri/src/home.rs`
+ * `StickyNoteRow`                                — `src-tauri/src/sticky_notes.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
@@ -271,8 +272,23 @@ export interface SearchRequest {
   text?: string;
   /** A `legalities` key (`"modern"`, `"vintage"`, …). `restricted` counts as playable. */
   format?: string;
-  /** Colour identity, e.g. `"WU"`; `"C"` means colourless only. Subset semantics. */
+  /**
+   * Colour identity, e.g. `"WU"`; `"C"` means colourless only.
+   *
+   * **Subset semantics unless {@link colorsStrict} says otherwise** — the default reads these
+   * letters as a ceiling, so `"WU"` answers mono-W, mono-U, WU and the colourless cards alike.
+   * That is the Commander question ("what may go in this deck"); strict is the other one
+   * ("what *is* this colour pair"), and the letters are the same on both.
+   */
   colors?: string;
+  /**
+   * Read {@link colors} as an **exact** identity rather than a subset: `"RW"` answers the RW
+   * cards alone, not mono-R, mono-W, or the colourless cards that fit in any deck.
+   *
+   * Degenerate for `"C"`, which already means colourless-only in both modes. A `true` with no
+   * {@link colors} filters nothing — the chip is not drawn until a colour is picked.
+   */
+  colorsStrict?: boolean;
   setCode?: string;
   /**
    * Every printing of one oracle card — the card, not the cardboard. Absent means unset,
@@ -309,6 +325,14 @@ export interface SearchRequest {
    * `rarities: Option<Vec<String>>`.
    */
   rarities?: string[];
+  /**
+   * Card-type chips — `Artifact`/`Battle`/`Creature`/`Enchantment`/`Instant`/`Land`/
+   * `Planeswalker`/`Sorcery`. ORed with each other, ANDed with every other filter.
+   *
+   * **"Does this card have this type", not "which bucket is it in".** Dryad Arbor
+   * (`Land Creature — Forest Dryad`) answers both `Land` and `Creature`.
+   */
+  types?: string[];
   /**
    * The price band, at {@link marketplace}. Inclusive at both ends, either half usable alone.
    *
@@ -420,6 +444,15 @@ export interface SearchRequest {
    * `activeFilterCount` and `resetAll`.
    */
   collapse?: boolean;
+  /**
+   * The Scryfall-syntax terms the box was parsed into — see {@link QueryPredicate}.
+   *
+   * **`typeLine` and `oracleText` ride {@link text}'s `MATCH` string rather than becoming SQL**,
+   * so they narrow the facet counts for free and a purely negative one (`-t:goblin`) becomes a
+   * `NOT IN` subquery of its own, FTS5's `NOT` being binary. Nothing here has to know that; it
+   * is why the list is read by `filters::fts_match` as well as by `push_card_filters`.
+   */
+  predicates?: QueryPredicate[];
   /** Clamped to 200 by the backend; 0 means "use the default page size". */
   limit: number;
   offset: number;
@@ -600,8 +633,14 @@ export interface SearchResponse {
 export interface FacetResponse {
   /**
    * Keyed `W`/`U`/`B`/`R`/`G`/`C`, and **the size of the result set after toggling that
-   * chip** rather than a count of cards carrying that colour. Colours are subset semantics,
-   * so pressing one with another already on *broadens*; compare against {@link total}.
+   * chip** rather than a count of cards carrying that colour. Compare against {@link total}.
+   *
+   * **Which direction a press moves in depends on {@link SearchRequest.colorsStrict}, which is
+   * why the number is "after the press" rather than "cards carrying this".** Loose, colours are
+   * subset semantics and pressing one with another already on *broadens*; strict, the same
+   * press *narrows*. The count is computed under whichever mode the request carried, so the
+   * rule that reads it — greying when a press would not change the result set — holds either
+   * way without knowing which mode it is in.
    */
   colors: Record<string, number>;
   /** Keyed `"0"`–`"8"`, `8` meaning eight-or-more. Plain counts. */
@@ -631,6 +670,15 @@ export interface FacetResponse {
    * vocabulary rather than a partition of the result set.
    */
   rarities: Record<string, number>;
+  /**
+   * Keyed by card type. Plain counts, and all eight are sent on every ready response, zeros
+   * included.
+   *
+   * **These do not sum to {@link total} and do not bound it** — the eight overlap (a card can
+   * be Artifact and Creature) and the corpus holds types no chip offers. The same reading
+   * {@link rarities} needs.
+   */
+  types: Record<string, number>;
   /**
    * Keyed by set code. Plain counts, and **every code in the corpus arrives, zeros
    * included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
@@ -955,8 +1003,26 @@ export interface CardFilters {
    *  stored, because a wish may have no card row to index. */
   text?: string;
   format?: string;
-  /** Colour identity, e.g. `"WU"`; `"C"` means colourless only. Subset semantics. */
+  /**
+   * Colour identity, e.g. `"WU"`; `"C"` means colourless only.
+   *
+   * **Subset semantics unless {@link colorsStrict} says otherwise** — see
+   * {@link SearchRequest.colors}, which is the same field on the same control. The default
+   * reads these letters as a ceiling; strict reads them as the whole identity.
+   */
   colors?: string;
+  /**
+   * Read {@link colors} as an **exact** identity rather than a subset: `"RW"` answers the RW
+   * cards alone, not mono-R, mono-W, or the colourless cards that fit in any deck.
+   *
+   * Degenerate for `"C"`, which already means colourless-only in both modes. A `true` with no
+   * {@link colors} filters nothing — the chip is not drawn until a colour is picked.
+   *
+   * Declared here as well as on {@link SearchRequest} because `filters::push_card_filters`
+   * emits it for all three lists, exactly as {@link oracleId} below is. Rust:
+   * `colors_strict: Option<bool>`.
+   */
+  colorsStrict?: boolean;
   setCode?: string;
   /**
    * Narrow to every printing of one oracle card — the card, not the cardboard.
@@ -985,6 +1051,18 @@ export interface CardFilters {
    *  it for all three lists, exactly as {@link oracleId} above is. Rust:
    *  `rarities: Option<Vec<String>>`. */
   rarities?: string[];
+  /**
+   * Card-type chips — `Artifact`/`Battle`/`Creature`/`Enchantment`/`Instant`/`Land`/
+   * `Planeswalker`/`Sorcery`. ORed with each other, ANDed with every other filter.
+   *
+   * **"Does this card have this type", not "which bucket is it in".** Dryad Arbor
+   * (`Land Creature — Forest Dryad`) answers both `Land` and `Creature`.
+   *
+   * Declared here as well as on {@link SearchRequest} for {@link rarities}' reason:
+   * `filters::push_card_filters` emits it for all three lists, so a binder or a wishlist can
+   * be narrowed to a type without a second filter path. Rust: `types: Option<Vec<String>>`.
+   */
+  types?: string[];
   /** Omitted means true in the search and false in the collection: a search offers cards to
    *  own, a collection lists cards that are owned. */
   paperOnly?: boolean;
@@ -1015,6 +1093,75 @@ export interface CardFilters {
   /** `"strong"` drops the `weak` art matches; absent or `"any"` keeps them. Art includes only —
    *  see {@link ArtWeightFloor}. */
   artWeightFloor?: ArtWeightFloor;
+  /**
+   * The Scryfall-syntax terms the search box was parsed into — see {@link QueryPredicate}.
+   *
+   * **Declared here as well as on {@link SearchRequest}, because `filters::push_card_filters`
+   * emits them for all three lists** — {@link oracleId} and {@link artTags} above are here for
+   * exactly that reason, and this is the same fact one field along. So `t:goblin cmc>=3`
+   * narrows a binder and a wishlist as well as the search wall, and Rust needed one edit for
+   * the three.
+   */
+  predicates?: QueryPredicate[];
+}
+
+/**
+ * What one {@link QueryPredicate} is a statement about — `filters::PredicateField`, whose
+ * variants carry `#[serde(rename_all = "camelCase")]`, so these strings are the wire.
+ *
+ * **`typeLine` and `oracleText` emit no SQL at all.** They travel in the same list as the other
+ * ten and are folded into the FTS5 `MATCH` string instead, because `LIKE` over either column
+ * measured 80× to 250× slower on the real corpus. Nothing on this side has to know that — it is
+ * recorded because the two are the fields whose behaviour differs from their neighbours', and
+ * the difference is invisible in the payload.
+ */
+export type PredicateField =
+  | "typeLine"
+  | "oracleText"
+  | "keyword"
+  | "artist"
+  | "colors"
+  | "colorIdentity"
+  | "cmc"
+  | "power"
+  | "toughness"
+  | "rarity"
+  | "setCode"
+  | "format";
+
+/**
+ * A {@link QueryPredicate}'s comparison — `filters::PredicateOp`, camelCase on the wire.
+ *
+ * **`"colon"` is Scryfall's `:` and means a different thing on each field**: `c:rg` is `c>=rg`
+ * and answers 676 cards, while `id:rg` is `id<=rg` and answers 13,399 (both measured on
+ * Scryfall, 2026-09-22). `queryLanguage.ts` resolves it per keyword before sending, so a
+ * `"colon"` on the wire is one of the four fields whose default really is `:` — and Rust
+ * resolves it the same way for anything else, rather than refusing.
+ */
+export type PredicateOp = "colon" | "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
+
+/**
+ * One parsed term of a search box — `t:goblin`, `cmc>=3`, `-a:rebecca`. Rust:
+ * `filters::QueryPredicate`.
+ *
+ * **Parsing happens here and never in Rust.** `src/features/search/queryLanguage.ts` reads the
+ * box into free text, tag tokens and a list of these; the crate receives closed enums and emits
+ * SQL. Rust supplies facts, TypeScript draws conclusions, and a query grammar is a conclusion.
+ *
+ * **One list rather than ten fields on {@link CardFilters}**, because a list carries three
+ * things no field can spell: negation, repetition (`t:creature t:goblin` is two terms and both
+ * must hold) and an operator per term. Terms AND with each other and with every other filter;
+ * there is no `or` and no grouping.
+ */
+export interface QueryPredicate {
+  field: PredicateField;
+  op: PredicateOp;
+  /** Exactly what the reader typed, **unnormalised except for rarity**: `c:RG` and `s:NEO`
+   *  arrive with their case, and Rust folds it. Rarity is the one keyword the parser expands
+   *  and lower-cases first, so `r:c` is sent as `"common"`. */
+  value: string;
+  /** A leading `-` in the box. Rust reads an absent field as `false`. */
+  negated: boolean;
 }
 
 /**
@@ -4381,10 +4528,18 @@ export interface DeckNote {
  * see {@link DeckNote}. `name` is a convenience the backend joins from `cards`, and **it falls
  * back to the oracle id itself** where the corpus has no row for one: a note must not disappear
  * from a deck because a card left the reader's copy of Scryfall's data.
+ *
+ * `cardId` and `imageUris` are a **representative printing**, resolved at read time so a note card
+ * can draw a picture of what it names — the deck's own printing where the deck holds one, and any
+ * printing the corpus has otherwise. Neither is ever matched on, written, or synced, and the same
+ * row read twice may honestly name two different printings. `cardId: null` is the orphan, and it
+ * draws the empty frame rather than a broken image.
  */
 export interface DeckNoteCard {
   oracleId: string;
   name: string;
+  cardId: string | null;
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -5244,14 +5399,14 @@ export interface TagRef {
  * One tag a reader named in a card search box — `tags::query::TagLookup`, the ask half of
  * {@link ipc.tagResolve}.
  *
- * `tagQuery.ts`'s token minus what is the *box's* business: where the term sat in the string,
+ * `queryLanguage.ts`'s token minus what is the *box's* business: where the term sat in the string,
  * and whether it was negated. Resolution answers "is there such a tag"; which of
  * {@link TagTerms}' two lists the slug lands in is decided in TypeScript, because that is a
  * conclusion rather than a fact.
  */
 export interface TagLookup {
   /** **Never `"both"`**, unlike {@link ipc.tagSearch}'s: a typed `o:` names one taxonomy, and
-   *  answering across both would let `o:dog` filter by the picture. */
+   *  answering across both would let `otag:dog` filter by the picture. */
   namespace: TagNamespace;
   /** What the reader typed after the keyword. Normalised by Rust, never here — two copies of
    *  that rule would leave both halves self-consistent and the search matching nothing. */
@@ -6355,6 +6510,122 @@ export interface PriceMovers {
   movers: PriceMover[];
   since: number | null;
   days: number;
+}
+
+/**
+ * One of the reader's own sticky notes — `sticky_notes.rs`'s `StickyNoteRow` (user schema v46).
+ *
+ * **It hangs off nothing**, which is what separates it from {@link DeckNote}: no deck, no card,
+ * no scope. The home page's `stickyNotes` widget is its only reader.
+ *
+ * Two fields carry no vocabulary on this side of the wire and both are deliberate. `title` may be
+ * empty, and what a note is *called* is computed at render rather than stored — a stored
+ * derivation would go stale the moment the body was edited and no writer could notice. `color` is
+ * one of five words the page knows, and the column carries **no CHECK**: the table is synced, so a
+ * build that adds a sixth colour must be able to emit rows this build can still draw.
+ * `features/home/stickyNotes.ts`'s `noteColor` reads an unknown word as `slate`.
+ *
+ * `body` is CommonMark in the dialect `features/decks/noteMarkdown.ts` pins — never HTML and never
+ * ProseMirror JSON, which is what keeps a renderer out of the crate.
+ */
+export interface StickyNote {
+  id: number;
+  /** May be empty. See the note above: the drawn heading is derived, never this field alone. */
+  title: string;
+  body: string;
+  color: string;
+  pinned: boolean;
+  /** The reader's own arrangement, renumbered by {@link ipc.stickyNoteReorder}. */
+  sortOrder: number;
+  /** Unix seconds. Neither timestamp is synced — two answers to "when" is one too many. */
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * What {@link ipc.stickyNoteUpdate} changes — **absent means leave it**, and `""` really empties.
+ *
+ * Rust's `coalesce(?n, col)` is the whole of that rule, so an omitted key and a key set to
+ * `undefined` are the same thing on the wire and neither can blank a field by accident.
+ */
+export interface StickyNotePatch {
+  title?: string;
+  body?: string;
+  color?: string;
+  pinned?: boolean;
+}
+
+/**
+ * One deck holding the card a {@link NewPrinting} is a reprint of — `new_printings.rs`'s
+ * `NewPrintingDeck`.
+ *
+ * `quantity` is summed across the deck's categories, so a deck holding the card in both a live
+ * and a theory pile is **one** entry with the total rather than two entries that look like two
+ * decks. `variant` is then the *lower* of the two words it was folded from — `live` wins over
+ * `theory`, because a deck that has sleeved the card up is holding it whatever else it plans.
+ */
+export interface NewPrintingDeck {
+  deckId: number;
+  name: string;
+  quantity: number;
+  variant: "live" | "theory";
+  virtualOnly: boolean;
+}
+
+/**
+ * One reprinted printing and the decks that hold the card — `new_printings.rs`'s `NewPrinting`.
+ *
+ * **`releasedAt` is never null here**, unlike `Printing.releasedAt` one command over: a printing
+ * with no date cannot be placed in a day group, so the query drops it rather than the page
+ * inventing an *Undated* bucket.
+ */
+export interface NewPrinting {
+  printingId: string;
+  oracleId: string;
+  name: string;
+  setCode: string;
+  setName: string | null;
+  collectorNumber: string;
+  /** `YYYY-MM-DD`. Never null — see above. */
+  releasedAt: string;
+  rarity: string | null;
+  /** JSON, verbatim — read with `src/lib/treatment.ts`, as on {@link Printing}. */
+  promoTypes: string | null;
+  finishes: string | null;
+  /**
+   * Which language this printing is — `cards.lang`.
+   *
+   * **On the wire because a row has to be able to say it.** A reader who asks for every language
+   * gets one row per language of a reprint, which is what they asked for — and without this those
+   * rows are identical on screen and the list reads as duplicated rather than complete.
+   */
+  lang: string;
+  decks: readonly NewPrintingDeck[];
+}
+
+/**
+ * The feed, and the four facts that travel beside it — `new_printings.rs`'s `NewPrintings`.
+ *
+ * **An empty list means one of three different things and a count of zero cannot tell them
+ * apart**: no deck is watched, nothing was reprinted inside this window, or the window is
+ * shorter than the card data goes back. `decksWatched`, `since` and `oldest` are what let the
+ * page pick its sentence — `PriceMovers`' `days`/`since` device, one widget over.
+ */
+export interface NewPrintings {
+  printings: readonly NewPrinting[];
+  /** How many decks the scope resolved to. **`0` is a real answer** with a sentence of its own. */
+  decksWatched: number;
+  /** The window's far edge, `YYYY-MM-DD`. */
+  since: string;
+  /** The oldest printing actually in the answer, or `null` when there are none. */
+  oldest: string | null;
+  /**
+   * When this device last saw a non-empty feed, in Unix seconds — `app_meta.new_printings_seen`,
+   * and deliberately **not** a `config` key: a config round-trips through older builds, and a
+   * cursor an older build rewrites is a cursor that lies. `null` is *never*, which marks every
+   * row as unseen.
+   */
+  seenAt: number | null;
 }
 
 /**
@@ -8966,6 +9237,87 @@ export const ipc = {
     limit: number,
   ) => invoke<PriceMovers>("price_movers", { window, direction, marketplace, limit }),
   /**
+   * Every sticky note, `ORDER BY sort_order, id` — see {@link StickyNote}.
+   *
+   * **Takes no arguments and cannot fail**: the read is `#[tauri::command(async)]` on a *sync*
+   * function whose signature has no `Result`, because it is called while the window draws its
+   * first frame and a home page that refuses to draw over a note is a worse answer than a page
+   * with no notes on it. A database that has never held one answers an empty list.
+   */
+  stickyNotes: (): Promise<StickyNote[]> => invoke("sticky_notes"),
+  /**
+   * Write a new note and answer its id. It lands **last** — `max(sort_order) + 1` — so a reader
+   * who has arranged their board keeps that arrangement and finds the new note at the end of it.
+   *
+   * **The colour is stored as written and validated by nobody**, which is the column's own rule
+   * read from this end: a word a newer build sends survives the round trip, and this build draws
+   * it as `slate`. Answers `collection::BUSY` under a running sync like every other write.
+   */
+  stickyNoteCreate: (title: string, body: string, color: string): Promise<number> =>
+    invoke("sticky_note_create", { title, body, color }),
+  /**
+   * Change a note — see {@link StickyNotePatch}, whose absent-means-leave-it rule is the whole of
+   * what this sends.
+   *
+   * **The patch is spread rather than nested**, because `sticky_note_update` declares its four
+   * optional columns as four parameters beside `id` rather than taking a struct — so a wrapper
+   * that sent `{ id, patch }` would be refused at run time with nothing red in either build.
+   * `ipc.test.ts` pins all five names.
+   *
+   * **And a key the patch omits is simply not sent, where {@link ipc.deckNoteUpdate} spells every
+   * key and folds `undefined` to `null`.** That is the same rule met a different way rather than
+   * drift: an absent field deserialises into an `Option` as `None`, which is exactly the
+   * `coalesce(?n, col)` arm that leaves the column alone — and here there is no `null` to send,
+   * because `None` and *leave it* are one word on both sides of this wire.
+   */
+  stickyNoteUpdate: (id: number, patch: StickyNotePatch): Promise<void> =>
+    invoke("sticky_note_update", { id, ...patch }),
+  /** Delete one note. Refused in a sentence — `sticky_notes::NOTE_GONE` — if it is already gone. */
+  stickyNoteDelete: (id: number): Promise<void> => invoke("sticky_note_delete", { id }),
+  /**
+   * Renumber the notes in the order given, `0..n`.
+   *
+   * **An id that is no longer a note is skipped rather than refused**: the page sends what it
+   * drew, and a note deleted in another window must not fail the drag the reader just made.
+   */
+  stickyNoteReorder: (ids: number[]): Promise<void> => invoke("sticky_note_reorder", { ids }),
+  /**
+   * Reprints of cards the watched decks already hold, newest first — see {@link NewPrintings}.
+   *
+   * Every argument is the widget's stored `config` narrowed on the way out, and every one is
+   * narrowed again in Rust: `days` into `1..=365`, `limit` into `1..=100`, an unknown `scope`
+   * into `all`, and `langs` to codes of the right shape. A hand-edited row cannot ask for the
+   * whole corpus.
+   */
+  newPrintings: (
+    scope: string,
+    deckIds: readonly number[],
+    days: number,
+    /**
+     * The languages to answer in. **An empty list is every language** — the allow-list's one
+     * sentinel, and the same rule at both ends of the wire. The default the widget sends is
+     * `["en"]`, which is one row per reprint.
+     */
+    langs: readonly string[],
+    includeVirtual: boolean,
+    includeTheory: boolean,
+    includeBasics: boolean,
+    limit: number,
+  ) =>
+    invoke<NewPrintings>("new_printings", {
+      scope,
+      deckIds,
+      days,
+      langs,
+      includeVirtual,
+      includeTheory,
+      includeBasics,
+      limit,
+    }),
+  /** Move the *seen* cursor to `at`, in Unix seconds. **The clock is the caller's** — never
+   *  `SystemTime::now()`, which panics on the wasm target. */
+  markNewPrintingsSeen: (at: number) => invoke<void>("mark_new_printings_seen", { at }),
+  /**
    * Which view the app opens on, as a stored word — `"home"` for a database nobody has changed.
    *
    * The **twelfth** `app_meta` setting and the fourth answered as a bare string. It is
@@ -9127,7 +9479,7 @@ export const ipc = {
     invoke<TagHit[]>("tag_children", { namespace, slug }),
   /**
    * Turn tag names typed into a card search box into the slugs {@link SearchRequest.artTags} and
-   * {@link SearchRequest.oracleTags} match on — `tagQuery.ts`'s tokens, resolved.
+   * {@link SearchRequest.oracleTags} match on — `queryLanguage.ts`'s tokens, resolved.
    *
    * **One answer per ask, in the order asked, `null` where there is no such tag.** The misses
    * ride along rather than being filtered out, because the box has to be able to name the token
@@ -9136,7 +9488,7 @@ export const ipc = {
    * **Exact, where {@link ipc.tagSearch} is a substring, and the difference is the job.** That
    * one is a type-ahead and should find `removal` from `remov`; this one builds a *filter*, and
    * a substring here would resolve one token to many tags that would have to be ORed — while
-   * every tag filter in this app intersects, so `a:dragon` would silently also answer
+   * every tag filter in this app intersects, so `atag:dragon` would silently also answer
    * `dragonborn`. Separators and case are still noise (`otag:"spot removal"`,
    * `otag:spot-removal` and `otag:SPOT-REMOVAL` are one tag, verified live 2026-08-20), because
    * Rust matches through `slug_norm`.

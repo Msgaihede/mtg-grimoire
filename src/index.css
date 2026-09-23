@@ -395,6 +395,30 @@
   --color-rarity-rare: #bfa35a;
   --color-rarity-mythic: #e86a33;
 
+  /* The five sticky-note fills (user schema v46). Deliberately low chroma and placed outside
+     the pie deeps: a note's colour is the reader's own filing and carries no meaning the app
+     reads, so it must not be mistaken for a sixth identity colour or out-shout a mana pip.
+     Surfaces sit at L 26% against `--color-surface`'s 21%, so a note reads as paper raised
+     off the panel; the strip is the 3px edge across its top. */
+  --color-note-amber: oklch(0.26 0.04 85);
+  --color-note-amber-strip: oklch(0.62 0.1 85);
+  --color-note-jade: oklch(0.26 0.04 155);
+  --color-note-jade-strip: oklch(0.6 0.1 155);
+  --color-note-azure: oklch(0.26 0.04 250);
+  --color-note-azure-strip: oklch(0.62 0.1 250);
+  --color-note-rose: oklch(0.26 0.04 20);
+  --color-note-rose-strip: oklch(0.62 0.11 20);
+  --color-note-slate: oklch(0.26 0.008 270);
+  --color-note-slate-strip: oklch(0.55 0.015 270);
+  /* Secondary text ON a note. `--color-dim` measures about 4.3:1 against these L 26% fills,
+     under the 4.5:1 floor, so it is a contrast bug no test catches. `text-dim` stays correct
+     on the page background. */
+  --color-note-dim: oklch(0.73 0.012 90);
+  /* The reader's own prose on a note — a step below `--color-text`'s 93%, deliberately. A note
+     is paper laid on the page rather than more page, and ink at full strength makes it read as
+     a panel. Still far above the contrast floor against the L 26% fills. */
+  --color-note-body: oklch(0.88 0.005 90);
+
   /* The mana line's sweep while a sync has no denominator — the app's one *repeating* loop,
      and the only animation that runs without a reader having done anything. It used to be
      described here as "the one animation in the app", which stopped being true the day

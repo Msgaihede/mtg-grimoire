@@ -36,6 +36,7 @@ const NONE = {
   manaValues: [],
   manaX: false,
   rarities: [],
+  types: [],
   priceMin: undefined,
   priceMax: undefined,
   finishes: [],
@@ -61,6 +62,9 @@ describe("activeFilterCount", () => {
     // truthiness, which is the whole difference between a tri-state and a checkbox.
     expect(activeFilterCount({ ...NONE, needsReview: false })).toBe(1);
     expect(activeFilterCount({ ...NONE, rarities: ["rare", "mythic"] })).toBe(1);
+    // The type chips are the same rule over a row of eight: a reader narrowed to creatures and
+    // lands has narrowed once.
+    expect(activeFilterCount({ ...NONE, types: ["Creature", "Land"] })).toBe(1);
   });
 
   /**
@@ -86,12 +90,16 @@ describe("activeFilterCount", () => {
 
   /**
    * The collection's row is longer than the search's by three: what the copy is (finish),
-   * what state it is in (condition), and whether it is one of the rows a sync flagged. Ten
-   * kinds over twelve fields — the price band is one kind with two ends, and the X chip rides
+   * what state it is in (condition), and whether it is one of the rows a sync flagged. Eleven
+   * kinds over thirteen fields — the price band is one kind with two ends, and the X chip rides
    * with the mana values. Reset all has to reach every one of them, so the count has to see
    * every one of them.
+   *
+   * **`colorsStrict` is not one of the thirteen and never will be**: it is not a field of
+   * `CollectionFilterState` at all, because it modifies what a picked colour means rather than
+   * narrowing anything of its own.
    */
-  it("sees all ten kinds the collection offers", () => {
+  it("sees all eleven kinds the collection offers", () => {
     expect(
       activeFilterCount({
         text: "bolt",
@@ -101,13 +109,14 @@ describe("activeFilterCount", () => {
         manaValues: [1],
         manaX: true,
         rarities: ["rare"],
+        types: ["Creature"],
         priceMin: 5,
         priceMax: 20,
         finishes: ["foil"],
         conditions: ["NM"],
         needsReview: true,
       }),
-    ).toBe(10);
+    ).toBe(11);
   });
 
   /** X is the last chip of the mana-value group and is OR'd with the numerals, so it is that
@@ -169,7 +178,7 @@ describe("useCollection", () => {
     });
   });
 
-  it("clears all eight filters at once", async () => {
+  it("clears all nine filters at once", async () => {
     const { result } = renderHook(() => useCollection(), { wrapper });
     await waitFor(() => expect(collectionList).toHaveBeenCalled());
 
@@ -179,15 +188,16 @@ describe("useCollection", () => {
       result.current.toggleColor("R");
       result.current.toggleSet("lea");
       result.current.toggleManaValue(1);
-      // The tenth chip of the mana-value group, cleared by the same press — and not a ninth
-      // kind: it is counted with the numerals it sits among, so the badge still reads 8.
+      // The tenth chip of the mana-value group, cleared by the same press — and not a kind of
+      // its own: it is counted with the numerals it sits among, so the badge does not move.
       result.current.toggleManaX();
+      result.current.toggleType("Creature");
       result.current.toggleFinish("foil");
       result.current.toggleCondition("NM");
       result.current.toggleNeedsReview();
     });
 
-    expect(result.current.activeCount).toBe(8);
+    expect(result.current.activeCount).toBe(9);
 
     act(() => result.current.resetAll());
 
@@ -195,6 +205,10 @@ describe("useCollection", () => {
     expect(result.current.finishes).toEqual([]);
     expect(result.current.conditions).toEqual([]);
     expect(result.current.manaX).toBe(false);
+    expect(result.current.types).toEqual([]);
+    // Cleared although the badge above never counted it — Reset all means "no filters", and a
+    // strict flag left over an emptied colour row is state with no control drawn for it.
+    expect(result.current.colorsStrict).toBe(false);
     expect(result.current.needsReview).toBeUndefined();
     await waitFor(() => {
       const q = lastQuery();
@@ -202,6 +216,8 @@ describe("useCollection", () => {
       expect(q.finishes).toBeUndefined();
       expect(q.conditions).toBeUndefined();
       expect(q.manaX).toBeUndefined();
+      expect(q.types).toBeUndefined();
+      expect(q.colorsStrict).toBeUndefined();
       expect(q.needsReview).toBeUndefined();
     });
   });
@@ -240,6 +256,60 @@ describe("useCollection", () => {
     act(() => result.current.toggleManaX());
 
     expect(result.current.queryKeyString).toBe(key);
+  });
+
+  /**
+   * The `Exactly` chip and the type chips, end to end — the X chip's test one row over, and for
+   * its reason.
+   *
+   * The key is the half that fails silently: `R` loose and `R` strict are two different sets of
+   * copies over the same local SQLite, so a key that could not tell them apart would serve the
+   * strict press out of the loose list's cached pages instantly, with nothing on screen to
+   * notice. A new request having gone out at all is therefore the assertion.
+   */
+  it("sends both new filters and keys the query on each", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    // Absent rather than `false`: an off chip is not a filter, and `false` on the wire would read
+    // as "the reader chose loose" where they chose nothing at all.
+    expect(lastQuery().colorsStrict).toBeUndefined();
+    expect(lastQuery().types).toBeUndefined();
+
+    act(() => result.current.toggleColor("R"));
+    await waitFor(() => expect(lastQuery().colors).toBe("R"));
+    const askedColours = collectionList.mock.calls.length;
+    const looseKey = result.current.queryKeyString;
+
+    act(() => result.current.toggleColorsStrict());
+
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(askedColours));
+    expect(result.current.queryKeyString).not.toBe(looseKey);
+    expect(lastQuery().colorsStrict).toBe(true);
+    // The letters are unchanged: strict modifies the row rather than replacing it.
+    expect(lastQuery().colors).toBe("R");
+
+    const askedTypes = collectionList.mock.calls.length;
+    const strictKey = result.current.queryKeyString;
+
+    act(() => result.current.toggleType("Creature"));
+
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(askedTypes));
+    expect(result.current.queryKeyString).not.toBe(strictKey);
+    expect(lastQuery().types).toEqual(["Creature"]);
+    // Sorted on the way out, so a press order is not a fact about the filter — picking Land
+    // second has to be the same request, and the same cache entry, as picking it first.
+    act(() => result.current.toggleType("Land"));
+    await waitFor(() => expect(lastQuery().types).toEqual(["Creature", "Land"]));
+
+    // **Clearing the last colour clears strict**, so the flag can never survive as state the
+    // filter bar draws no control for — the `Exactly` chip is only rendered while a colour is
+    // picked, and an invisible flag would still be in the key above.
+    act(() => result.current.toggleColor("R"));
+
+    expect(result.current.colors).toEqual([]);
+    expect(result.current.colorsStrict).toBe(false);
+    await waitFor(() => expect(lastQuery().colorsStrict).toBeUndefined());
   });
 
   /**
@@ -593,5 +663,61 @@ describe("useCollection", () => {
     act(() => result.current.openFolder(3));
 
     expect(result.current.queryKeyString).toBe(flat);
+  });
+
+  /**
+   * Scryfall's syntax reaches the binder too — the same parse the search page makes, minus the
+   * tags, which this surface has no wiring for.
+   */
+  it("sends the free text and the typed predicates apart", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.setText("bolt cmc>=3"));
+
+    await waitFor(() => expect(lastQuery().predicates).toBeDefined());
+    expect(lastQuery().text).toBe("bolt");
+    // No `start`/`end`: the spans are the box's business, and on the wire they would make two
+    // cache entries out of one search typed at two positions.
+    expect(lastQuery().predicates).toEqual([
+      { field: "cmc", op: "gte", value: "3", negated: false },
+    ]);
+    // The header counts over the same rows the list draws, so it gets the same terms.
+    expect(lastSummary().predicates).toEqual(lastQuery().predicates);
+  });
+
+  /**
+   * **A tag typed here folds back into the free text rather than being dropped.**
+   *
+   * This surface resolves no tag names — no `tag_resolve` behind it, no chip row in front of it
+   * — so a parsed tag token has nowhere to go. Dropped, `atag:dragon` would be a term the
+   * reader typed that narrowed *nothing*, which silently **widens** the search: the one
+   * direction a search must never fail in, and the failure a reader cannot see. Folded, they
+   * get a name-and-rules search for the word instead — narrower in kind than they asked for,
+   * never wider in extent.
+   */
+  it("folds a tag term back into the free text instead of dropping it", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.setText("atag:dragon"));
+
+    await waitFor(() => expect(lastQuery().text).toBe("dragon"));
+    // Not a tag filter either — this hook sends none, which is what makes the fold necessary
+    // rather than belt-and-braces.
+    expect(lastQuery().artTags).toBeUndefined();
+    expect(lastQuery().oracleTags).toBeUndefined();
+  });
+
+  /** A box with no syntax in it sends exactly the payload it always did: an empty `predicates`
+   *  would be a payload lying about intent and a second cache key for one search. */
+  it("sends no predicates field for a plain search", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.setText("bolt"));
+
+    await waitFor(() => expect(lastQuery().text).toBe("bolt"));
+    expect(lastQuery().predicates).toBeUndefined();
   });
 });
