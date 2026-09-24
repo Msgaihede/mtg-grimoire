@@ -206,9 +206,9 @@ function cardDeps(act: Act, wishlistFolders: readonly WishlistFolder[] = []): Ca
  * of them), and the nesting itself.
  */
 const WISH_FOLDERS: WishlistFolder[] = [
-  { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
-  { id: 2, parentId: 1, name: "Backordered", sortOrder: 0 },
-  { id: 3, parentId: null, name: "Someday", sortOrder: 1 },
+  { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null },
+  { id: 2, parentId: 1, name: "Backordered", sortOrder: 0, managedDeckId: null },
+  { id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null },
 ];
 
 /** The command zone, and a pile the reader made and dragged to the end of their own order. Named
@@ -316,6 +316,7 @@ const DECK: DeckRow = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
+  managedWishlist: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",

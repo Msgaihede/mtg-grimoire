@@ -160,6 +160,7 @@ function deckRow(over: Partial<DeckRow> & { id: number; name: string }): DeckRow
     theoryMarkExact: true,
     theoryMarkName: true,
     theoryMarkUnplanned: true,
+    managedWishlist: true,
     lastVariant: "live",
     lastGroupBy: "category",
     lastSortBy: "alphabetical",

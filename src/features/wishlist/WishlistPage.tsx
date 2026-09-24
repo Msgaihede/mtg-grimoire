@@ -56,6 +56,8 @@ import { useDockHeight } from "@/lib/useDockHeight";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { WishFolderCard, WishParentFolderCard } from "./WishFolderCard";
+import { managedIds, managedWishFolders, userWishFolders } from "./managed";
+import { ManagedFolderNote, ManagedWishFolders } from "./ManagedWishFolders";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
 import { WishlistSearchPanel } from "./WishlistSearchPanel";
 import { WishlistGrid } from "./WishlistGrid";
@@ -884,6 +886,48 @@ export function WishlistPage() {
   const subtotals = useMemo(() => subtotalsOf(nodes, folders.summary), [nodes, folders.summary]);
 
   /**
+   * **The cabinet split in two: the reader's drawers and the decks' managed ones** (issue #512).
+   *
+   * `nodes` above stays the *whole* tree, because it is what the trail, the subtotals and a
+   * flattened tile's caption are read from, and a managed folder is somewhere a wish really is.
+   * `userNodes` is the tree every **destination** is drawn from — the wall's own level, a folder's
+   * `Move to folder…`, a wish's, the search column's `+` — because a managed folder refuses every
+   * hand write in words, and a destination whose only outcome is that sentence is a control that
+   * teaches nothing. The managed ones are drawn in their own section instead
+   * ({@link ManagedWishFolders}), with nothing on them that writes.
+   *
+   * `managed` is the per-row question — is this wish the deck's? — asked by the wall and the
+   * table of every row, which is why it is a `Set` rather than a `find`.
+   */
+  const userNodes = useMemo(
+    () => buildFolderTree(userWishFolders(folders.folders), []),
+    [folders.folders],
+  );
+  const managedFolders = useMemo(() => managedWishFolders(folders.folders), [folders.folders]);
+  const managed = useMemo(() => managedIds(folders.folders), [folders.folders]);
+  /** The managed folder the reader is standing in, or `null` — never while flattened, where no
+   *  level is on screen to be standing in. */
+  const managedHere =
+    !flatten && folderId !== null && managed.has(folderId)
+      ? (folders.folders.find((folder) => folder.id === folderId) ?? null)
+      : null;
+  const isManagedWish = useCallback(
+    (row: WishRow) => row.folderId !== null && managed.has(row.folderId),
+    [managed],
+  );
+  const setActiveView = useAppStore((s) => s.setActiveView);
+  const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
+  /** The way from a deck's list to the deck — a view change *and* an id, in that order, because
+   *  `setActiveView` clears `openDeckId` on the way in (`DecksWidget`'s `openDeck`). */
+  const openDeck = useCallback(
+    (deckId: number) => {
+      setActiveView("decks");
+      setOpenDeckId(deckId);
+    },
+    [setActiveView, setOpenDeckId],
+  );
+
+  /**
    * The folders filed directly at the level being drawn — nothing deeper, because a card is a
    * door into one drawer rather than a picture of the cabinet.
    *
@@ -891,7 +935,10 @@ export function WishlistPage() {
    * another surface deleted surfaces here at the root instead of disappearing with the parent
    * that is gone — `buildFolderTree`'s rule, and the reason this is not a one-line `filter`.
    */
-  const childFolders = useMemo(() => folderLevel(nodes, folderId), [nodes, folderId]);
+  // `userNodes`, so the wall's own level is the reader's drawers alone: a managed folder is drawn
+  // in its own section, and a card here would be a drop target and a `⋯` for a folder that refuses
+  // both. Inside a managed folder this is empty — nothing can be made there.
+  const childFolders = useMemo(() => folderLevel(userNodes, folderId), [userNodes, folderId]);
 
   /**
    * The level **above** the one on screen — `null` at the root, and `null` again for a `folderId`
@@ -1162,14 +1209,22 @@ export function WishlistPage() {
    * **A card off the search column has no such refusal to make, and that is a fact about it
    * rather than a gap here.** It is on nobody's list, so there is no `folderId` to compare a
    * destination against — every drawer is somewhere it is not already, so every drawer takes it.
-   * The wishlist has no ownership clause to add either: `wishlist_folders` carries no `kind`
-   * column, so every row in that table was made by the reader and none of them is the app's.
-   * (`CollectionPage`'s twin of this arm does have one, because that cabinet holds deck groups
-   * and `Recently removed`.)
+   * **The ownership clause arrived with user schema v48's managed folders** (issue #512), which
+   * are the decks' rather than the reader's — `CollectionPage`'s twin has had one all along for its
+   * deck groups and `Recently removed`. Both ends of a drop are fenced, because the backend refuses
+   * both in `MANAGED_REFUSAL`'s words (`./managed.ts`): a wish may not be filed *into* a deck's
+   * list, and a wish in one may not be filed *out*. The second arm is belt and braces — a managed
+   * wish is not a drag source on either view — so a stray payload cannot light a ring for a write
+   * that is always refused.
    */
   const canFile = useCallback(
-    (drop: WishDrop, to: number | null) => drop.kind === "new" || drop.wish.folderId !== to,
-    [],
+    (drop: WishDrop, to: number | null) => {
+      if (to !== null && managed.has(to)) return false;
+      if (drop.kind === "new") return true;
+      if (drop.wish.folderId !== null && managed.has(drop.wish.folderId)) return false;
+      return drop.wish.folderId !== to;
+    },
+    [managed],
   );
   /**
    * And what the drop writes — a **re-file** for a wish that exists, an **add** for a printing
@@ -1200,10 +1255,12 @@ export function WishlistPage() {
    * `CollectionPage`'s twin of this function opens by fencing both ends to folders the reader
    * made, because `collection_folders.kind` makes some of that table the app's — one row per deck
    * plus the single `Recently removed` — and `collection_folders::reorder_folders` answers
-   * `FOLDER_NOT_YOURS` for either at either end. `wishlist_folders` carries **no `kind` column**:
-   * every row in it was made by the reader with `+ New folder`, `wishlist_folder_reorder` has
-   * nothing to refuse, and a clause here would be a check with no false case. If that table ever
-   * grows a row the app owns, this is the second place that has to learn it.
+   * `FOLDER_NOT_YOURS` for either at either end. `wishlist_folders` carries no `kind` column, but
+   * since user schema v48 it does carry rows the app owns — a deck's **managed** folder — and
+   * `wishlist_folder_reorder` refuses one at either end. **The clause is structural here rather
+   * than a check**: every card on this wall is drawn from `userNodes`, so `target` and the level
+   * `childFolders` names are the reader's by construction, and a managed folder is never a drag
+   * source to arrive as `drag` either.
    *
    * **A folder may not land inside itself or inside anything it holds.** The backend refuses that
    * one, and the guard is not cosmetic: `wishlist_folders.parent_id` is `ON DELETE CASCADE` **on
@@ -1331,14 +1388,16 @@ export function WishlistPage() {
       const ids = reorderedLevel({
         // The destination level as the tree draws it, which is what makes the arriving folder
         // *last* rather than last among whatever the flat rows happen to name.
-        siblings: folderLevel(nodes, upFolderId).map((one) => one.folder.id),
+        // `userNodes`: the level above may be the root, where the decks' managed folders live too,
+        // and a reorder naming one of those is refused whole.
+        siblings: folderLevel(userNodes, upFolderId).map((one) => one.folder.id),
         dragged: drag.folderId,
         target: upFolderId ?? ROOT_TARGET,
         edge: "inside",
       });
       return ids === null ? null : { parentId: upFolderId, ids: [...ids] };
     },
-    [folderId, upFolderId, nodes, folders.folders],
+    [folderId, upFolderId, userNodes, folders.folders],
   );
   const canMoveFolderUp = useCallback(
     (drag: FolderDrag) => upPlacement(drag) !== null,
@@ -1393,7 +1452,10 @@ export function WishlistPage() {
    * their way. `+ New folder` is not content: a wall holding nothing but the tile that makes the
    * first folder is still a level with nothing in it, and it still has to say so.
    */
-  const filed = !flatten && childFolders.length > 0;
+  // The decks' managed folders live at the root, so at the root they are this level's drawers
+  // too — a wishlist whose only content is a deck's list is not "nothing on your wishlist".
+  const filed =
+    !flatten && (childFolders.length > 0 || (folderId === null && managedFolders.length > 0));
   /**
    * **Whether the cabinet is drawn at all — and it is drawn over an empty one on purpose.**
    *
@@ -1430,7 +1492,11 @@ export function WishlistPage() {
     folder: !flatten && folderId !== null ? folderNameOf(folderId) : null,
     narrows: hasFolders && !flatten,
   };
-  const status = statusOf(wishlist, failure, { filed, inFolder: !flatten && folderId !== null });
+  const status = statusOf(wishlist, failure, {
+    filed,
+    inFolder: !flatten && folderId !== null,
+    managed: managedHere !== null,
+  });
 
   // The notes a total needs to stay honest, in one string because they are one qualification
   // of one figure. The second is the rare one: the backend pages at 100 and a shopping list
@@ -1444,9 +1510,16 @@ export function WishlistPage() {
 
   /** Everything both layouts are handed about the cabinet, in one object because it is one set
    *  of facts and the wall and the table must not be given different halves of it. */
+  //
+  // `nodes` is `userNodes` — the tree `EditWish`'s `Move to folder…` offers as destinations, so a
+  // deck's managed folder is never one — while `folders` stays the whole list, because it is
+  // what names the folder a wish is already in. `readOnly` is the per-row fence: a wish in a
+  // managed folder draws no stepper, no pencil, no removal and no drag, since every one of those
+  // writes is refused for it.
   const filing = {
     folders: folders.folders,
-    nodes,
+    nodes: userNodes,
+    readOnly: isManagedWish,
     folderNameOf,
     flattened: flatten,
     onSetFolder,
@@ -1643,6 +1716,16 @@ export function WishlistPage() {
             </div>
           )}
 
+          {/* Standing inside a deck's managed folder: whose list this is and that it keeps
+              itself — the sentence that makes the controls missing from every wish below read as
+              a rule rather than as a broken wall. */}
+          {managedHere !== null && managedHere.managedDeckId !== null && (
+            <ManagedFolderNote
+              deckName={managedHere.name}
+              onOpenDeck={() => openDeck(managedHere.managedDeckId!)}
+            />
+          )}
+
           {/* **One strip for the folder layers that are still layers, and it is not a placement
               decision so much as the only place there is.** Every other anchored layer in this app
               hangs off a `relative` wrapper around its own trigger; the trigger here is a folder
@@ -1668,7 +1751,8 @@ export function WishlistPage() {
               {openPanel.kind === "moveFolder" && (
                 <MoveToFolder
                   label={`Move ${folderNameOf(openPanel.folderId) ?? "folder"} into a folder`}
-                  nodes={nodes}
+                  // The reader's drawers only: a deck's managed folder takes no sub-folder.
+                  nodes={userNodes}
                   currentId={
                     folders.folders.find((f) => f.id === openPanel.folderId)?.parentId ?? null
                   }
@@ -1795,16 +1879,21 @@ export function WishlistPage() {
                     onDropFolder={moveFolderUp}
                   />
                 )}
-                <NewFolderCard
-                  onClick={openNewFolder}
-                  // The tile *is* the naming field while this is on. `openPanel` rather than
-                  // `panel`, so flattening the list and walking into another folder both close it —
-                  // the derived value is what the whole page reads.
-                  naming={openPanel?.kind === "newFolder"}
-                  pending={folders.create.isPending}
-                  onSubmit={nameFolder}
-                  onCancel={dismiss}
-                />
+                {/* **Absent inside a deck's managed folder**, rather than greyed: the backend
+                    refuses a sub-folder there, and a tile whose only outcome is that sentence is
+                    the control this page does not draw. */}
+                {managedHere === null && (
+                  <NewFolderCard
+                    onClick={openNewFolder}
+                    // The tile *is* the naming field while this is on. `openPanel` rather than
+                    // `panel`, so flattening the list and walking into another folder both close
+                    // it — the derived value is what the whole page reads.
+                    naming={openPanel?.kind === "newFolder"}
+                    pending={folders.create.isPending}
+                    onSubmit={nameFolder}
+                    onCancel={dismiss}
+                  />
+                )}
                 {childFolders.map((node) => (
                   <WishFolderCard
                     key={node.folder.id}
@@ -1851,6 +1940,23 @@ export function WishlistPage() {
                 ))}
               </ul>
             </div>
+          )}
+
+          {/* **The decks' managed folders, in a section of their own** (issue #512) — after the
+              reader's wall and pinned at every level, `CollectionPage`'s `PinnedFolders` band read
+              across to this cabinet; the component carries the argument. Gone with the rest of the
+              cabinet while flattened, for that band's reason: every managed wish is in the
+              flattened list anyway, captioned with its deck. */}
+          {cabinet && (
+            <ManagedWishFolders
+              folders={managedFolders}
+              totals={(folder) =>
+                folders.summaryQuery.isPending ? null : (subtotals.get(folder.id) ?? NO_WISHES)
+              }
+              currency={currency}
+              openFolderId={folderId}
+              onOpen={wishlist.openFolder}
+            />
           )}
 
           {/* One live region, mounted for the life of the view: a region that appears together
@@ -1971,8 +2077,13 @@ export function WishlistPage() {
             // `Wishlist · all folders`, and there is no folder on screen to be standing in. Note
             // this page's flatten default is `false` where the collection's is `true` — the two
             // cabinets disagree about the root and always have.
-            folderId={flatten ? null : folderId}
-            folderNodes={nodes}
+            //
+            // **And the root inside a deck's managed folder**, which refuses an add by hand: the
+            // column's `+` still files somewhere the reader can see, rather than being a press
+            // that can only end in a refusal. Its override picker offers the reader's drawers
+            // alone, for the same reason.
+            folderId={flatten || managedHere !== null ? null : folderId}
+            folderNodes={userNodes}
             folderName={folderNameOf}
             roomy={roomy}
             overWidth={overWidth}
@@ -2258,7 +2369,7 @@ function ClearFolderConfirm({
 function statusOf(
   wishlist: Wishlist,
   failure: string | null,
-  { filed, inFolder }: { filed: boolean; inFolder: boolean },
+  { filed, inFolder, managed }: { filed: boolean; inFolder: boolean; managed: boolean },
 ): string {
   const { query, rows, activeCount } = wishlist;
 
@@ -2270,6 +2381,9 @@ function statusOf(
     // Drawers, and nothing loose beside them. The cards below are the answer to "what is here",
     // and a sentence over them would be the page contradicting itself.
     if (filed) return "";
+    // A deck's managed folder holding nothing is a deck short of nothing — good news about the
+    // deck, and not a drawer waiting to be filled by hand, which it cannot be.
+    if (managed) return "Nothing missing — this deck has every card its plan asks for.";
     // Nothing filtered and nothing there. Two statements, and which one is honest depends on
     // where the reader is: "No wishes match" would blame the reader for a list nobody has put
     // anything on yet, and the root's instruction would answer the wrong question inside a

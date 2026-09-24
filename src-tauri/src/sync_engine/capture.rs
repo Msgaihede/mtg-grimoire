@@ -436,6 +436,10 @@ pub const TABLES: [Spec; 16] = [
             "theory_mark_exact",
             "theory_mark_name",
             "theory_mark_unplanned",
+            // Schema v48. The **switch** syncs, because it is the reader's answer about the deck;
+            // the folder it produces does not — see `crate::managed_wishlist`, which every device
+            // runs against its own copy of the synced deck.
+            "managed_wishlist",
         ],
         counters: &[],
         parents: &[

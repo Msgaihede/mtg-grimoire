@@ -103,7 +103,7 @@ import { useWishDropTarget, type WishDrop } from "./wishDrag";
  * would draw `0 wishes` over a drawer holding twelve. The caller adds the children in, the same
  * arithmetic `buildFolderTree` already does for `FolderNode.count`, and hands the total here.
  */
-interface WishFolderSummary {
+export interface WishFolderSummary {
   wishes: number;
   /** Copies wanted here, sub-folders included. It was copies *still to find* until 2026-09-08,
    *  when the wishlist stopped comparing itself to the collection. */
@@ -139,7 +139,7 @@ interface WishFolderSummary {
  * wish is on the list until the reader takes it off, so the only folder reaching this arm is one
  * holding no wishes at all.
  */
-function face(
+export function wishFolderFace(
   summary: WishFolderSummary | null,
   currency: Currency,
 ): { shown: string; spoken: string } {
@@ -173,7 +173,7 @@ export function WishFolderCard({
 }: {
   node: FolderNode<WishlistFolder>;
   /** The recursive total the caller summed — or `null` while the summary read is still in
-   *  flight, which is not the same answer as an empty drawer. See {@link face}. */
+   *  flight, which is not the same answer as an empty drawer. See {@link wishFolderFace}. */
   summary: WishFolderSummary | null;
   currency: Currency;
   onOpen: () => void;
@@ -275,7 +275,7 @@ export function WishFolderCard({
     canDrop: canDropFolder,
     onDrop: onDropFolder,
   });
-  const { shown, spoken } = face(summary, currency);
+  const { shown, spoken } = wishFolderFace(summary, currency);
   // The caret's way back out of the field, and it has to be a ref taken here rather than the
   // element the page remembered when the menu was opened: the `⋯` this restores to is a *new*
   // element, built by the render that closed the field, so the one the page is holding is a

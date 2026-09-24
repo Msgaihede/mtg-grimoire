@@ -24,7 +24,7 @@ import { wishDraggable, type WishDrag, type WishDrop } from "./wishDrag";
 const DRAG_WAIT = 5_000;
 
 function folder(over: Partial<WishlistFolder> & { id: number; name: string }): WishlistFolder {
-  return { parentId: null, sortOrder: over.id, ...over };
+  return { parentId: null, sortOrder: over.id, managedDeckId: null, ...over };
 }
 
 /** The drawer every story below draws, and the one a wish is dropped into. */

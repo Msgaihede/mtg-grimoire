@@ -409,8 +409,10 @@ export const NamingAFolder: Story = {
  * create one inside. Every wish is captioned with the folder it is in instead, because without
  * that the flattened list is just the old list with more rows in it.
  *
- * Eight rows plus the header, which is the whole of `starterWishes`: the five at the root and the
- * three the folder cards were standing in front of.
+ * Thirteen rows plus the header, which is the whole of `starterWishes`: the five at the root, the
+ * three the folder cards were standing in front of, and the five in deck 4's managed wishlist —
+ * which are listed here like any other wish, captioned with the deck's name, and draw no editing
+ * control ({@link ManagedWishlist}).
  */
 export const Flattened: Story = {
   // Off to begin with, so the press below is a real flip rather than whatever the store was
@@ -426,7 +428,7 @@ export const Flattened: Story = {
     await waitFor(async () => {
       await expect(canvas.getByRole("table", { name: "Your wishlist" })).toHaveAttribute(
         "aria-rowcount",
-        "9",
+        "14",
       );
     });
     await expect(canvas.queryByRole("button", { name: /^Ordered folder/ })).toBeNull();
@@ -436,6 +438,42 @@ export const Flattened: Story = {
 
     // Where each one is filed, in the caption beside its printing — `Wishlist` for the root.
     await expect(canvas.getAllByText("Filed in").length).toBeGreaterThan(0);
+  },
+};
+
+/**
+ * **A deck's managed wishlist** (user schema v48, issue #512) — deck 4's, which `starter` seeds
+ * because a `Theory + Actual` deck with the switch on (its default) keeps one.
+ *
+ * Two things are on screen that are the issue's own words. **A separate section with a special
+ * icon**: the folder is not a card on the reader's wall but a door in a `Managed by decks` band
+ * after it, wearing `Layers` — the collection's deck-group glyph, because it is the same fact —
+ * solid-bordered and with no `⋯`, `PinnedFolders`' shape one cabinet over. **No editing by
+ * hand**: inside it the `New folder` tile is gone, a line says whose list this is, and the wishes
+ * draw no stepper, no pencil and no drag — every one of those writes is refused by the backend,
+ * and the fake refuses them in the same words.
+ */
+export const ManagedWishlist: Story = {
+  args: { view: "grid", flatten: false },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    const section = await canvas.findByRole("list", { name: "Managed by decks" });
+    const door = await within(section).findByRole("button", {
+      name: /^Rhystic Testbed managed wishlist, 5 wishes/,
+    });
+    // Not a drawer on the reader's wall.
+    const wall = canvas.getByRole("list", { name: "Folders" });
+    await expect(within(wall).queryByText("Rhystic Testbed")).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Manage Rhystic Testbed" })).toBeNull();
+
+    await userEvent.click(door);
+
+    await expect(await canvas.findByText(/Follows the deck “Rhystic Testbed”/)).toBeInTheDocument();
+    await expect(await canvas.findByAltText("Smuggler's Copter")).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "New folder" })).toBeNull();
+    await expect(canvas.queryByRole("spinbutton", { name: /^Copies wanted of/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /on your wishlist$/ })).toBeNull();
   },
 };
 

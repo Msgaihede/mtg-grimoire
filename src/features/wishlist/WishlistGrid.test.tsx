@@ -85,7 +85,7 @@ const ANY: WishRow = {
   unitPrice: 12,
 };
 
-const EXPENSIVE: WishlistFolder = { id: 3, name: "Expensive", parentId: null, sortOrder: 0 };
+const EXPENSIVE: WishlistFolder = { id: 3, name: "Expensive", parentId: null, sortOrder: 0, managedDeckId: null };
 
 const NODES: FolderNode<WishlistFolder>[] = [
   { folder: EXPENSIVE, depth: 0, count: 0, children: [] },
