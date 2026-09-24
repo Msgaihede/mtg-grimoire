@@ -1117,7 +1117,8 @@ layer.
   never carries a number.** `unplanned` draws lucide's **`X`** — never a digit, because there is
   no arithmetic left to do: the plan asks for none of this card, so a signed count would be a
   subtraction against nothing, and `data-theory-match="unplanned"` is what a test or a live pass
-  addresses it by. Its words are **"Not in the theory list"** everywhere the other two tiers put
+  addresses it by. Its words are **"No Match"** (since issue #502; "Not in the theory list"
+  before it) everywhere the other two tiers put
   their sentence — the tooltip, the table's `sr-only` twin, the card's accessible name — and they
   are the whole of the mark's meaning: *the plan does not ask for this*, which is a fact and not a
   verdict, exactly as the other two are.
@@ -1428,8 +1429,24 @@ layer.
   a sort across the whole deck (the most expensive card, not the most expensive per pile). Nothing
   in Rust moved: `last_group_by` is stored verbatim and `asGroupBy` accepts the new words because
   it is derived from `GROUP_BY_OPTIONS`.
-- **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with five
-  `Group by` modes (`category | manaValue | type | label | deck`) and four sorts (`alphabetical |
+- **`Matches theory` joined the picker on 2026-09-24** ([issue
+  #502](https://github.com/Msgaihede/mtg-grimoire/issues/502)), stored as `theory`: a derived mode
+  with three headings, `Exact Match`, `Art Mismatch` and `No Match` — `theoryMatch.ts`'s
+  `THEORY_TIER_NAMES`, which are also the words every theory mark's tooltip, `sr-only` twin and
+  accessible-name clause say, so a heading and the marks under it cannot disagree. Three rules:
+  - **It is offered only on the Actual list of a Theory + Actual deck** (`theoryGroupable`).
+    Elsewhere the row is left out of the picker and a remembered `theory` draws as `category`
+    **without being written back**, so pressing `Actual` again brings it back.
+  - **It buckets by `theoryTier`, never by `theoryMatchMark`**: a heading cannot go silent the way
+    a mark can, so a card whose tier's switch is off in Deck settings still files under its tier.
+  - **No plan answered yet is `category`**, not a wall of `No Match` — `buildGroups` takes the plan
+    as its last, optional argument and falls back when it is absent.
+
+  The Deck settings and Settings → Appearance switch headings (`Matching printing`, `Different
+  printing`, `Not in the theory list`) were deliberately **not** renamed: they name the switch,
+  and the issue asked for the marks' words.
+- **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with six
+  `Group by` modes (`category | manaValue | type | label | deck | theory`) and four sorts (`alphabetical |
   manaCost | price | type`). An **inactive category stays its own group in every grouping mode** — as long
   as it holds cards — and it stays that group _whole_: `buildGroups` appends it carrying its own
   `kind`, so a switched-off

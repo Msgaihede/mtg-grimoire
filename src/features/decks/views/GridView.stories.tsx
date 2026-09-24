@@ -164,15 +164,15 @@ export const TheoryMatches: Story = {
     // The card carrying both marks: in the plan **and** breaking a rule. The two facts are in
     // one sentence because a button's `aria-label` replaces everything inside it.
     const both = canvas.getByRole("button", { name: /^Island/ });
-    expect(both).toHaveAccessibleName(expect.stringContaining("in the theory list"));
+    expect(both).toHaveAccessibleName(expect.stringContaining("exact match"));
     expect(both).toHaveAccessibleName(expect.stringContaining("rule break:"));
 
     // And a card the plan does not ask for says so, in words — it is a *statement* now rather
-    // than a silence. The negatives are what keep it the third tier's sentence and not a planned
-    // one: green's own words are the prefix of blue's, and neither of them is this.
+    // than a silence. The negatives are what keep it the third tier's name and not a planned
+    // one, which would carry a count.
     const missing = canvas.getByRole("button", { name: /^Dismember/ });
-    expect(missing).toHaveAccessibleName(expect.stringContaining("not in the theory list"));
-    expect(missing).toHaveAccessibleName(expect.not.stringContaining("in the theory list ·"));
+    expect(missing).toHaveAccessibleName(expect.stringContaining("no match"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("exact match ·"));
     expect(missing).toHaveAccessibleName(expect.not.stringContaining("to add"));
     expect(missing).toHaveAccessibleName(expect.not.stringContaining("to remove"));
   },
@@ -302,18 +302,16 @@ export const BothTiers: Story = {
     expect(canvas.getByRole("button", { name: /^Swords to Plowshares/ })).toHaveAccessibleName(
       expect.stringContaining(THEORY_MATCH_NAME_LABEL.toLowerCase()),
     );
-    // Green's sentence is the *prefix* of blue's, so "in the theory list" cannot tell the two
-    // apart — what says this row is the printing the plan named is the absence of the rest.
+    // And the printing the plan named says green's name and not blue's.
     expect(canvas.getByRole("button", { name: /^Sol Ring/ })).toHaveAccessibleName(
-      expect.not.stringContaining("a different printing"),
+      expect.not.stringContaining("art mismatch"),
     );
 
     // The control: a card the plan does not ask for wears the third mark and says so. The
-    // negatives are what keep it *this* sentence — green's words are the prefix of blue's, and
-    // neither of them is "not in the theory list", which carries no count either way.
+    // negatives are what keep it *this* name — "no match" carries no count either way.
     const missing = canvas.getByRole("button", { name: /^Dismember/ });
-    expect(missing).toHaveAccessibleName(expect.stringContaining("not in the theory list"));
-    expect(missing).toHaveAccessibleName(expect.not.stringContaining("in the theory list ·"));
+    expect(missing).toHaveAccessibleName(expect.stringContaining("no match"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("exact match ·"));
     expect(missing).toHaveAccessibleName(expect.not.stringContaining("to add"));
     expect(missing).toHaveAccessibleName(expect.not.stringContaining("to remove"));
   },
@@ -369,11 +367,10 @@ export const ExactMarkOff: Story = {
 
     // And the row that was never in the plan is still not in it: the fallback widens which
     // *tier* a planned card is drawn at, never which cards are planned. It says so in the third
-    // tier's own words, and in neither of the other two — green's sentence is the prefix of
-    // blue's, and this one carries no count at all.
+    // tier's own words, and in neither of the other two — this one carries no count at all.
     const missing = canvas.getByRole("button", { name: /^Dismember/ });
-    expect(missing).toHaveAccessibleName(expect.stringContaining("not in the theory list"));
-    expect(missing).toHaveAccessibleName(expect.not.stringContaining("in the theory list ·"));
+    expect(missing).toHaveAccessibleName(expect.stringContaining("no match"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("exact match ·"));
     expect(missing).toHaveAccessibleName(expect.not.stringContaining("to add"));
     expect(missing).toHaveAccessibleName(expect.not.stringContaining("to remove"));
   },

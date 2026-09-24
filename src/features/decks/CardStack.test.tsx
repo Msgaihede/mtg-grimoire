@@ -1580,7 +1580,7 @@ describe("CardStack marks", () => {
 
     // …and its sentence is still one hover away — `describes: false`, redundant with the
     // button's own name, so the panel carries no `role="tooltip"` and is found by its id.
-    expect(await openTooltip(ticks[0])).toHaveTextContent("In the theory list");
+    expect(await openTooltip(ticks[0])).toHaveTextContent("Exact Match");
 
     // …and the rule break is at the other end of the card.
     expect(screen.getByText("RULE BREAK").className).toContain("left-");
@@ -1588,7 +1588,7 @@ describe("CardStack marks", () => {
     // The words, for the reader who cannot see either mark. Both marks are `aria-hidden`, so
     // the button's own name is the whole of what is announced.
     expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
-      expect.stringContaining("in the theory list"),
+      expect.stringContaining("exact match"),
     );
     expect(screen.getByRole("button", { name: /^Sol Ring/ })).toHaveAccessibleName(
       expect.not.stringContaining("theory"),
@@ -1638,13 +1638,13 @@ describe("CardStack marks", () => {
     // so this is the assertion that would fail if the two were rendered together.
     expect(marks[0].querySelector("svg")).toBeNull();
 
-    expect(await openTooltip(marks[0])).toHaveTextContent("In the theory list · 2 to add");
+    expect(await openTooltip(marks[0])).toHaveTextContent("Exact Match · 2 to add");
 
     expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
-      expect.stringContaining("in the theory list · 2 to add"),
+      expect.stringContaining("exact match · 2 to add"),
     );
     expect(screen.getByRole("button", { name: /^Sol Ring/ })).toHaveAccessibleName(
-      expect.stringContaining("in the theory list · 3 to remove"),
+      expect.stringContaining("exact match · 3 to remove"),
     );
   });
 
@@ -1700,14 +1700,13 @@ describe("CardStack marks", () => {
 
     // …and its sentence, on the hover and on the button, exactly where the other two tiers put
     // theirs. Lowercased in the button's name, because `deckCardName` folds it into a sentence.
-    expect(await openTooltip(cross)).toHaveTextContent("Not in the theory list");
+    expect(await openTooltip(cross)).toHaveTextContent("No Match");
     expect(screen.getByRole("button", { name: /^Sol Ring/ })).toHaveAccessibleName(
-      expect.stringContaining("not in the theory list"),
+      expect.stringContaining("no match"),
     );
-    // And the planned card is untouched: green's words are a *prefix* of nothing here, so the
-    // pair is told apart by the "not" rather than by which sentence is present.
+    // And the planned card is untouched: it says green's name and never the third tier's.
     expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
-      expect.not.stringContaining("not in the theory list"),
+      expect.not.stringContaining("no match"),
     );
   });
 
