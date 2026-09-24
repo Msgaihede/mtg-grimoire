@@ -69,6 +69,7 @@ import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { hasTokenPile, TokenTablePile, type TokenPile } from "./TokenPile";
 
 /**
  * What one row of the flat list is. A table with bands is a flat list of two kinds of thing,
@@ -131,6 +132,7 @@ export function TableView({
   actions,
   selectedSlot,
   landed,
+  tokenPile,
   className,
 }: {
   groups: readonly CardGroup[];
@@ -193,6 +195,10 @@ export function TableView({
   /** `deck_cards.id` → the nonce of the add that put it there, for the cards that have just
    *  landed. See `cardControl`'s `LandedMark`. */
   landed?: ReadonlyMap<number, number>;
+  /** The deck's tokens and emblems, drawn as a trailing section under the table (issue #507) —
+   *  never rows of it, so no band total and no row count can see them. Absent, or with no
+   *  tokens, the view is exactly what it was. See `TokenPile.tsx`. */
+  tokenPile?: TokenPile;
   className?: string;
 }) {
   const tip = useTooltip();
@@ -596,6 +602,7 @@ export function TableView({
         isSelected={(row) => row.kind === "card" && deckCardMarked(row.card, selectedSlot, actions)}
         renderRow={renderRow}
       />
+      {hasTokenPile(tokenPile) && <TokenTablePile pile={tokenPile} />}
     </div>
   );
 }

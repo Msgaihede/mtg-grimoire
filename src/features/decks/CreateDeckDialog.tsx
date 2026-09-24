@@ -67,6 +67,9 @@ const BLANK: DeckSettingsValue = {
   // is passed no `categories`, so no "Add cards to" row is drawn, and the create sends nothing
   // for it: `decks.default_category_id` has `DEFAULT 0`, which is this same value.
   defaultCategoryId: AUTO_CATEGORY,
+  // The Tokens & Emblems pile, off — and never sent: `DeckInput` has no field for it and
+  // `decks.token_stack` is `DEFAULT 0`. No `canSetTokenStack` is passed, so no switch is drawn.
+  tokenStack: false,
 };
 
 /**

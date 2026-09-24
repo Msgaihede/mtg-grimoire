@@ -396,6 +396,9 @@ function Settings({ deckId }: { deckId: number }) {
     if (patch.theoryMarkName !== undefined) update({ theoryMarkName: patch.theoryMarkName });
     if (patch.theoryMarkUnplanned !== undefined)
       update({ theoryMarkUnplanned: patch.theoryMarkUnplanned });
+    // The Tokens & Emblems pile: one switch, one field, one write — a reading preference that
+    // moves no card, the marks' kind of write.
+    if (patch.tokenStack !== undefined) update({ tokenStack: patch.tokenStack });
     // A select, so it settles in one act and writes here. **`0` is a value and not an absence**,
     // which is why this needs no `deckSetFolder`-shaped escape below it: `AUTO_CATEGORY` is a
     // number the patch can carry, so "back to filing by what the card does" is an ordinary
@@ -456,6 +459,7 @@ function Settings({ deckId }: { deckId: number }) {
               theoryMarkUnplanned: row.theoryMarkUnplanned,
               folderId: row.folderId,
               defaultCategoryId: row.defaultCategoryId,
+              tokenStack: row.tokenStack,
             }}
             onChange={change}
             onCommit={commit}
@@ -470,6 +474,9 @@ function Settings({ deckId }: { deckId: number }) {
             // the mark switches are answerable here — which the create dialog's are not. Drawn
             // only where the deck also keeps a plan; the form owns that second half.
             canSetTheoryMarks
+            // Same answer for the same reason: `tokenStack` rides the ordinary `deck_update`,
+            // where `DeckInput` at create carries no such field.
+            canSetTokenStack
             folders={{
               paths,
               unread: folders.query.isError ? ipcError(folders.query.error) : null,

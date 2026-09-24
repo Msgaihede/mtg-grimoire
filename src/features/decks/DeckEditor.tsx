@@ -85,6 +85,9 @@ import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { DeckTokensPanel } from "./DeckTokensPanel";
+import { TokenArtPicker } from "./TokenArtPicker";
+import { useDeckTokens } from "./useDeckTokens";
+import type { TokenPile } from "./views/TokenPile";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
@@ -3918,10 +3921,69 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     ],
   );
 
+  /**
+   * The tokens and emblems this deck makes — **read once, here, for every surface that draws
+   * them** (issue #507). The Tokens & Emblems band and, on a deck with `tokenStack` on, the pile
+   * each view appends are two drawings of one answer: a quantity stepped on one is the number the
+   * other draws, and a dismissal made on the band takes the token out of the pile. A hook call per
+   * surface would be two `showDismissed` switches and two write observers, each free to own a
+   * refusal the other never hears about.
+   */
+  const deckTokens = useDeckTokens(deckId, variant);
+
+  /**
+   * Which token's art is being picked, by `oracle_id` — **one picker for the band's tiles and the
+   * views' pile alike**, so a press on either opens the same dialog and a pick from either writes
+   * the same row.
+   *
+   * **An id and never the view**, which is the `Layer` union's rule: the tokens are re-derived
+   * after every write, so a frozen view would answer about the token as it was when it was
+   * pressed — a printing swap would leave the dialog marking the printing the deck has just
+   * stopped bringing. Looked up in `deckTokens.tokens`, which is every token either surface can
+   * draw: the pile draws a subset of it (never a dismissed one) and the band draws all of it.
+   */
+  const [pickingToken, setPickingToken] = useState<string | null>(null);
+  const pickedToken = deckTokens.tokens.find((view) => view.oracleId === pickingToken) ?? null;
+  /** The size the band and the pile both draw a token at, which the picker has to agree with or
+   *  a swap does not read as one — `DeckTokensPanel`'s header has the whole argument. */
+  const tokenZoom = useAppStore((s) => s.cardZoom.deck);
+
+  /**
+   * The pile each view appends after every other pile, or `undefined` — which is the whole of
+   * the off switch, since a view handed nothing draws exactly what it drew before `tokenStack`.
+   *
+   * **Never a dismissed token, whatever the band's `Show dismissed` says.** That switch is the
+   * band's own tool for finding a token to put back, and a pile on the desk is a statement of what
+   * the deck brings, which a dismissed token is not.
+   *
+   * **Nothing here enters `groups`, `deck.cards` or `buildGroups`**, and that is what keeps a
+   * token out of the deck's size, every pile total, the ledger, the stats and validation — the
+   * views append it in their own layer, after the groups this editor hands them.
+   *
+   * Memoised on the tokens and a `setQuantity` that `useDeckTokens` keeps stable while the rows
+   * are, so a keystroke anywhere in the editor does not hand four views a new pile.
+   */
+  const tokenStack = row?.tokenStack === true;
+  const tokenList = deckTokens.tokens;
+  const setTokenQuantity = deckTokens.setQuantity;
+  const tokenPile = useMemo<TokenPile | undefined>(
+    () =>
+      tokenStack
+        ? {
+            tokens: tokenList.filter((view) => view.state !== "hidden"),
+            setQuantity: setTokenQuantity,
+            pickArt: setPickingToken,
+          }
+        : undefined,
+    [tokenStack, tokenList, setTokenQuantity],
+  );
+
   const viewProps = {
     groups,
     marketplace,
     violations,
+    // The tokens and emblems as a pile of their own, or nothing — see {@link tokenPile}.
+    tokenPile,
     // Which cards a note names, handed down whole beside `violations` and for its reason: one
     // answer about the deck that every card drawn is tested against, where a per-card lookup
     // would be a hundred answers to one question. **All four views**, so a card marked in Stacks
@@ -4915,12 +4977,33 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // the token wall in front of them is an answer about a *particular* deck, and a
         // `useState` here would ask it again every time they opened one.
         <DeckTokensPanel
-          deckId={deckId}
-          variant={variant}
+          tokens={deckTokens}
           open={row.tokensOpen}
           onToggle={(next) => deck.update.mutate({ tokensOpen: next })}
+          onPick={setPickingToken}
         />
       )}
+
+      {/* The one art picker the band's tiles and the views' token pile both open — see
+          {@link pickingToken}.
+
+          **Mounted in this column, and the check that makes that legal is written down rather
+          than assumed.** `Dialog`'s scrim is a bare `fixed inset-0` and corrects for nothing, so
+          a dialog opened from inside a box that is transformed, filtered or
+          `container-type: inline-size` stretches to *that box* instead of to the window. This
+          editor's root is `relative flex h-full min-h-0 flex-col`, and `relative` is not a
+          containing block for `fixed`. It lived inside the band until 2026-09-24 on the same
+          reasoning; the rule to keep is that a container query may never be added above it. */}
+      <TokenArtPicker
+        token={pickedToken}
+        zoom={tokenZoom}
+        onPick={(cardId) => {
+          if (pickedToken !== null) deckTokens.setPrinting(pickedToken.oracleId, cardId);
+          setPickingToken(null);
+        }}
+        onDismiss={() => setPickingToken(null)}
+        onClose={() => setPickingToken(null)}
+      />
 
       {row && (
         // What the deck adds up to — the foot of the page, and the last band on it.
@@ -4943,7 +5026,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // them would leave a reader dragging a card the height of four charts to reach the one
         // drop that takes it out.
         //
-        // **And below the Tokens & emblems band since 2026-09-08**, where it was above it. That
+        // **And below the Tokens & Emblems band since 2026-09-08**, where it was above it. That
         // band is a wall of cards; this one is four charts. A reader scanning down the page
         // reads the deck, then what the deck puts on the table beside it, then what it all adds
         // up to — and the charts, which nothing is dragged into and nothing is pressed on, are

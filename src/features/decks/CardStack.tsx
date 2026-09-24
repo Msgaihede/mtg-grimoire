@@ -369,7 +369,7 @@ export function stackLiftRoom(zoom: number = DEFAULT_ZOOM): number {
 type Timer = ReturnType<typeof setTimeout>;
 
 /** What {@link useFlipThrough} answers with. */
-interface FlipThrough {
+export interface FlipThrough {
   /** Which card is open, or `null` for a stack at rest. */
   openIndex: number | null;
   /** The pointer arrived on card `index`. Opens it once it has stayed {@link STACK_OPEN_DWELL_MS}. */
@@ -406,7 +406,7 @@ interface FlipThrough {
  * focus leaves the stack from another — the dwell is dropped and the next pointer move re-arms
  * it. That is a cheaper wrong answer than a card that opens 80ms *after* the reader left.
  */
-function useFlipThrough(): FlipThrough {
+export function useFlipThrough(): FlipThrough {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   // At most one pending timer of each kind. A ref rather than state: a timer handle is not
   // something to draw, and writing one must never schedule a render of its own.
