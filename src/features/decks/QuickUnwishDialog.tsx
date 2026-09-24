@@ -3,12 +3,12 @@
  * can ask that the reader has to answer.
  *
  * A deck card's right-click offers three collection rows (issue #350), and the second of them is
- * two acts in one press: record the copies the line is short of, and take them off a wish that
- * was asking for exactly that printing. Almost always there is nothing to decide — no wish
- * matches, or one does — and `quickCollection.ts`'s `chooseWish` settles both of those without
- * drawing anything at all. This is the third case: **several wishes match**, which happens when a
- * reader has the same card on their list in two folders, and no rule the app could invent would
- * say which of them a purchase satisfies.
+ * two acts in one press: record the copies the line is short of, and take them off a wish. Since
+ * issue #511 the wishes offered are **every line for the card** — any printing, any finish, any
+ * folder — so this dialog opens whenever the card is on the wishlist at all, even for one line:
+ * whether M10 copies settle a wish for the Alpha printing is the reader's call, and each row shows
+ * the printing, finish and folder it asks for so they can make it. `quickCollection.ts`'s
+ * `chooseWish` still writes straight through when nothing is wished for.
  *
  * ## Why a dialog rather than a rule
  *
@@ -30,9 +30,9 @@
  *
  * ## The pre-pick, and why it is not a guess
  *
- * The rows arrive in `deck_quick_add_wishes`' order — the root first, then the reader's own
- * folders in their own `sort_order`, oldest row first inside a tie — and the **first is
- * selected**. That is `PullFromCollectionDialog`'s arrangement and its argument: the backend has
+ * The rows arrive in `deck_quick_add_wishes`' order — the pressed printing first, then a finish
+ * the copies satisfy, then the root and the reader's own folders in their own `sort_order`,
+ * oldest row first inside a tie — and the **first is selected**. That is `PullFromCollectionDialog`'s arrangement and its argument: the backend has
  * already ranked by how little of the reader's filing the write disturbs, so opening on the head
  * of that list is the same answer the app would have given had there been only one. A radio
  * group with nothing chosen would make the commonest press two acts instead of one.
@@ -54,9 +54,13 @@
  */
 import { useId, useState, type JSX } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { Folder } from "lucide-react";
+import { CardImage } from "@/components/CardImage";
 import { Dialog } from "@/components/Dialog";
 import { plural } from "@/lib/counts";
+import { FINISH_LABEL } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
+import { cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { DeckQuickAddWish } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -97,8 +101,31 @@ const NO_WISHES = "No wishlist line matches this printing any more.";
  * what WCAG 2.5.3 asks of a control whose label is drawn beside it.
  */
 function wishFace(wish: DeckQuickAddWish): string {
-  return `${wish.folderName ?? ROOT_LABEL} · ${plural(wish.quantity, "copy", "copies")}`;
+  return [
+    wish.folderName ?? ROOT_LABEL,
+    printingLabel(wish),
+    finishLabel(wish),
+    plural(wish.quantity, "copy", "copies"),
+  ].join(" · ");
 }
+
+/** The printing a wish names in the app's usual spelling — `LEA 161` — or {@link ANY_PRINTING}
+ *  for a wish that takes any printing of the card. */
+function printingLabel(wish: DeckQuickAddWish): string {
+  if (wish.cardId === null || wish.setCode === null) return ANY_PRINTING;
+  return `${wish.setCode.toUpperCase()} ${wish.collectorNumber ?? ""}`.trim();
+}
+
+/** The finish a wish asks for, or {@link ANY_FINISH} for a wish that names none. */
+function finishLabel(wish: DeckQuickAddWish): string {
+  return wish.preferredFinish === null ? ANY_FINISH : FINISH_LABEL[wish.preferredFinish];
+}
+
+/** What a wish that names no printing, or no finish, is shown as. Issue #511 put those wishes in
+ *  this list — the read answers every line for the card — so each row has to say what it asks
+ *  for, or two lines in one folder would read as one. */
+const ANY_PRINTING = "Any printing";
+const ANY_FINISH = "Any finish";
 
 export interface QuickUnwishDialogProps {
   open: boolean;
@@ -165,7 +192,7 @@ export function QuickUnwishDialog({
             "do they come off?"
       }
       closeLabel="Close which wish"
-      size="w-[26rem]"
+      size="w-[30rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >
@@ -249,37 +276,13 @@ function QuickUnwishBody({
               group — a radio group with no legend is N options with no question over them. */}
           <legend className="sr-only">Which wishlist line these copies come off</legend>
           {wishes.map((wish) => (
-            <label
+            <WishRow
               key={wish.id}
-              className={cn(
-                "flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5",
-                "text-[0.8125rem] transition-colors duration-150",
-                "hover:border-accent motion-reduce:transition-none",
-                // `has-[:checked]:` is written out whole, never built by interpolation:
-                // Tailwind scans source text for whole class names.
-                "has-[:checked]:border-accent has-[:checked]:text-accent",
-              )}
-            >
-              <input
-                type="radio"
-                name={name}
-                value={String(wish.id)}
-                checked={picked === wish.id}
-                onChange={() => setPicked(wish.id)}
-                // Named outright rather than by the two spans beside it — see {@link wishFace}
-                // for why a name assembled from them is a name CSS decides.
-                aria-label={wishFace(wish)}
-                className={cn("size-4 shrink-0 accent-accent", FOCUS)}
-              />
-              {/* The place first, because it is what tells two lines of one card apart and is
-                  the whole of what the reader is choosing on. The quantity is second and is
-                  the term they *check* rather than choose by: it is what says whether this
-                  wish is settled outright by the press or merely reduced. */}
-              <span className="min-w-0 flex-1 truncate">{wish.folderName ?? ROOT_LABEL}</span>
-              <span className="shrink-0 font-mono text-[0.6875rem] tabular-nums text-dim">
-                {plural(wish.quantity, "copy", "copies")}
-              </span>
-            </label>
+              wish={wish}
+              name={name}
+              checked={picked === wish.id}
+              onPick={() => setPicked(wish.id)}
+            />
           ))}
         </fieldset>
       )}
@@ -288,8 +291,9 @@ function QuickUnwishBody({
           reduced by what is recorded and disappears when that empties it, which is the fact a
           reader most wants before pressing and cannot read off a radio. */}
       <p className="text-[0.6875rem] leading-relaxed text-dim">
-        The copies are recorded in this deck&rsquo;s folder and taken off the line you pick — it
-        goes when nothing is left on it. Cancel does neither.
+        The copies are recorded in this deck&rsquo;s folder as the printing in the deck, and taken
+        off the line you pick — whatever printing it asks for. It goes when nothing is left on it.
+        Cancel does neither.
       </p>
 
       {/* Beside the button that was pressed, not in the editor's banner behind the scrim. Its
@@ -319,5 +323,78 @@ function QuickUnwishBody({
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * One wishlist line as a choice: its picture, the printing and finish it asks for, and the
+ * folder it is filed in — the three facts that tell two lines of one card apart (issue #511).
+ *
+ * The folder is on a line of its own with a folder glyph, because it is what the reader filed on
+ * purpose and the issue asked for it by name; the printing and finish lead because since the read
+ * widened they are what separates a line for *this* cardboard from one for another art. The
+ * quantity sits at the end and is the term they *check* rather than choose by: it says whether
+ * the press settles the wish outright or merely reduces it.
+ */
+function WishRow({
+  wish,
+  name,
+  checked,
+  onPick,
+}: {
+  wish: DeckQuickAddWish;
+  name: string;
+  checked: boolean;
+  onPick: () => void;
+}) {
+  // `AddMissingToCollectionDialog`'s arrangement: the protocol URL on desktop, the row's own
+  // Scryfall URL in a browser, and `null` for an any-printing wish, which has no one picture.
+  const art =
+    wish.cardId === null
+      ? null
+      : cardArtSrc(cardImageUrl(wish.cardId, 0, "art"), wish.imageUris?.art);
+  return (
+    <label
+      className={cn(
+        "flex items-center gap-2.5 rounded-md border border-border px-2.5 py-1.5",
+        "text-[0.8125rem] transition-colors duration-150",
+        "hover:border-accent motion-reduce:transition-none",
+        // `has-[:checked]:` is written out whole, never built by interpolation:
+        // Tailwind scans source text for whole class names.
+        "has-[:checked]:border-accent",
+      )}
+    >
+      <input
+        type="radio"
+        name={name}
+        value={String(wish.id)}
+        checked={checked}
+        onChange={onPick}
+        // Named outright rather than by the spans beside it — see {@link wishFace} for why a name
+        // assembled from them is a name CSS decides.
+        aria-label={wishFace(wish)}
+        className={cn("size-4 shrink-0 accent-accent", FOCUS)}
+      />
+      {/* Decoration beside the words, through `CardImage` for its slot rule — `aria-hidden`,
+          because the radio's name already says the printing. */}
+      <span aria-hidden="true" className="h-8 w-11 shrink-0 overflow-hidden rounded bg-surface">
+        {art !== null && (
+          <CardImage src={art} alt="" draggable={false} className="size-full object-cover" />
+        )}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 items-baseline gap-x-2">
+          <span className="truncate font-mono text-xs tabular-nums">{printingLabel(wish)}</span>
+          <span className="shrink-0 text-[0.6875rem] text-dim">{finishLabel(wish)}</span>
+        </span>
+        <span className="flex min-w-0 items-center gap-1 text-[0.6875rem] text-dim">
+          <Folder aria-hidden="true" className="size-3 shrink-0" />
+          <span className="truncate">{wish.folderName ?? ROOT_LABEL}</span>
+        </span>
+      </span>
+      <span className="shrink-0 font-mono text-[0.6875rem] tabular-nums text-dim">
+        {plural(wish.quantity, "copy", "copies")}
+      </span>
+    </label>
   );
 }

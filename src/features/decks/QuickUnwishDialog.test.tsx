@@ -10,8 +10,22 @@ import { QuickUnwishDialog } from "./QuickUnwishDialog";
  * says so, so a folder name in an assertion is never a fixture default.
  */
 function wish(over: Partial<DeckQuickAddWish> = {}): DeckQuickAddWish {
-  return { id: 31, quantity: 2, folderId: null, folderName: null, ...over };
+  return {
+    id: 31,
+    quantity: 2,
+    folderId: null,
+    folderName: null,
+    cardId: "bolt-lea",
+    name: "Lightning Bolt",
+    setCode: "lea",
+    collectorNumber: "161",
+    preferredFinish: null,
+    ...over,
+  };
 }
+
+/** What every row of {@link wish}'s printing reads after its folder. */
+const LEA = "LEA 161 · Any finish";
 
 /** The two-row payload this dialog exists for: the root and a folder, in the backend's order. */
 const TWO: DeckQuickAddWish[] = [
@@ -73,8 +87,41 @@ describe("QuickUnwishDialog", () => {
       "radio",
     );
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toHaveAccessibleName("Wishlist · 1 copy");
-    expect(rows[1]).toHaveAccessibleName("Modern staples · 4 copies");
+    expect(rows[0]).toHaveAccessibleName(`Wishlist · ${LEA} · 1 copy`);
+    expect(rows[1]).toHaveAccessibleName(`Modern staples · ${LEA} · 4 copies`);
+  });
+
+  /**
+   * **Issue #511: every line for the card is offered, so each row says which cardboard it asks
+   * for** — another printing, a finish, or any printing at all — beside the folder it is filed in.
+   * Without the printing two lines in one folder would read as one.
+   */
+  it("names each wish by its printing and finish as well as its folder", async () => {
+    open({
+      wishes: [
+        wish({ preferredFinish: "foil", folderId: 8, folderName: "Modern staples" }),
+        wish({ id: 33, setCode: "m10", collectorNumber: "146", cardId: "bolt-m10" }),
+        wish({ id: 34, cardId: null, setCode: null, collectorNumber: null, quantity: 1 }),
+      ],
+    });
+
+    const rows = within(await screen.findByRole("dialog", { name: "Which wish?" })).getAllByRole(
+      "radio",
+    );
+    expect(rows[0]).toHaveAccessibleName("Modern staples · LEA 161 · Foil · 2 copies");
+    expect(rows[1]).toHaveAccessibleName("Wishlist · M10 146 · Any finish · 2 copies");
+    expect(rows[2]).toHaveAccessibleName("Wishlist · Any printing · Any finish · 1 copy");
+    // The folder is drawn as well as spoken — the issue asked for it by name.
+    expect(within(panel()).getByText("Modern staples")).toBeVisible();
+  });
+
+  /** A single matching line still asks: it may be for another printing than the one recorded. */
+  it("asks about a single line too", async () => {
+    const { onConfirm } = open({ wishes: [wish({ cardId: "bolt-m10", setCode: "m10" })] });
+
+    expect(await screen.findByRole("radio")).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Record 4 copies" }));
+    expect(onConfirm).toHaveBeenCalledWith(31);
   });
 
   /**
@@ -85,8 +132,8 @@ describe("QuickUnwishDialog", () => {
   it("opens on the backend's first row", async () => {
     open();
 
-    expect(await screen.findByRole("radio", { name: "Wishlist · 2 copies" })).toBeChecked();
-    expect(screen.getByRole("radio", { name: "Modern staples · 4 copies" })).not.toBeChecked();
+    expect(await screen.findByRole("radio", { name: `Wishlist · ${LEA} · 2 copies` })).toBeChecked();
+    expect(screen.getByRole("radio", { name: `Modern staples · ${LEA} · 4 copies` })).not.toBeChecked();
   });
 
   /** The affirmative quotes the count the menu row quoted, so a reader who pressed
@@ -117,7 +164,7 @@ describe("QuickUnwishDialog", () => {
   it("confirms on whichever wish the reader picks", async () => {
     const { onConfirm } = open();
 
-    await userEvent.click(await screen.findByRole("radio", { name: "Modern staples · 4 copies" }));
+    await userEvent.click(await screen.findByRole("radio", { name: `Modern staples · ${LEA} · 4 copies` }));
     await userEvent.click(screen.getByRole("button", { name: "Record 4 copies" }));
 
     expect(onConfirm).toHaveBeenCalledWith(32);

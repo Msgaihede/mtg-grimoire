@@ -16,7 +16,18 @@ const FRAME_WAIT = 5_000;
 
 /** One wishlist line as `deck_quick_add_wishes` answers one. */
 function wish(over: Partial<DeckQuickAddWish> = {}): DeckQuickAddWish {
-  return { id: 1, quantity: 4, folderId: null, folderName: null, ...over };
+  return {
+    id: 1,
+    quantity: 4,
+    folderId: null,
+    folderName: null,
+    cardId: "f29ba16f-c8fb-42fe-aabf-87089cb214a7",
+    name: "Lightning Bolt",
+    setCode: "2x2",
+    collectorNumber: "117",
+    preferredFinish: null,
+    ...over,
+  };
 }
 
 /**

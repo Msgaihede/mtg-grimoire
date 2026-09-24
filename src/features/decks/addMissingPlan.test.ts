@@ -21,6 +21,11 @@ const wish = (quantity: number, folderName: string | null = null): DeckQuickAddW
   quantity,
   folderId: folderName === null ? null : 7,
   folderName,
+  cardId: "bolt",
+  name: "Lightning Bolt",
+  setCode: "lea",
+  collectorNumber: "161",
+  preferredFinish: null,
 });
 
 /** One printing-and-finish the live list is short of, as `deck_missing_plan` answers it. */

@@ -6505,34 +6505,32 @@ describe("quick-adding bought copies into a deck", () => {
   });
 
   /**
-   * **The read's predicate is `OWNED_SQL`'s first arm with the any-printing arm dropped**, so the
-   * narrowing is on the *printing*: a wish for any printing of the card is left standing, exactly
-   * as the pull leaves an Alpha Bolt out of an M10 line and for the same trade \u2014 nothing is ever
-   * taken off a shopping list that is not the cardboard the reader has just recorded.
-   *
-   * A NULL `preferredFinish` still matches, because the list itself says a wish that names no
-   * finish takes any of them; excluding it would refuse the commonest wish there is. The seed puts
-   * the one match **last**, so a handler that ignored the finish or the printing answers more than
-   * one row rather than coinciding.
+   * **Issue #511: the per-card read offers every wish for the card** - another printing, another
+   * finish, and a wish for any printing at all - because the press always asks and the reader
+   * decides which line a purchase settles. **The exact printing leads, a satisfied finish next**,
+   * so the pre-pick is what the narrow read would have chosen. Another card is never offered.
    */
-  it("offers the exact printing at any finish it names, and never an any-printing wish", () => {
+  it("offers every printing and finish of the card, the exact match first", () => {
     const db = shortOfThree({
       wishlistEntries: [
-        // Another printing of the same oracle card \u2014 the narrowing this feature took.
         wish({ id: 1, cardId: BOLT_2X2.id, quantity: 1 }),
-        // The any-printing wish: `cardId` null, which no equality can match.
         wish({ id: 2, cardId: null, quantity: 1 }),
-        // The right printing pinned to the wrong finish.
         wish({ id: 3, cardId: BOLT.id, preferredFinish: "foil", quantity: 1 }),
-        // …and the two that do match: an explicit `nonfoil` and a wish that names no finish.
         wish({ id: 4, cardId: BOLT.id, preferredFinish: "nonfoil", quantity: 1 }),
         wish({ id: 5, cardId: BOLT.id, quantity: 2 }),
+        // Another oracle card entirely, which no press of a Bolt may offer.
+        wish({ id: 6, cardId: FOIL_ONLY.id, oracleId: FOIL_ONLY.oracleId, quantity: 1 }),
       ],
     });
-    expect(wishesFor(db).map((w) => w.id)).toEqual([4, 5]);
-    // And the foil press is the mirror image: the `foil` wish and the finish-blind one, never the
-    // `nonfoil` one. Both directions, because a handler that compared nothing passes either alone.
-    expect(wishesFor(db, BOLT.id, "foil").map((w) => w.id)).toEqual([3, 5]);
+    expect(wishesFor(db).map((w) => w.id)).toEqual([4, 5, 3, 1, 2]);
+    // The foil press puts the `foil` wish ahead of the `nonfoil` one - the same five lines.
+    expect(wishesFor(db, BOLT.id, "foil").map((w) => w.id)).toEqual([3, 5, 4, 1, 2]);
+    // Each row carries what the picker draws: the printing, or `null` for any printing.
+    expect(wishesFor(db).find((w) => w.id === 2)).toMatchObject({
+      cardId: null,
+      name: "Lightning Bolt",
+      preferredFinish: null,
+    });
   });
 
   /**
@@ -6558,11 +6556,13 @@ describe("quick-adding bought copies into a deck", () => {
         wish({ id: 4, cardId: BOLT.id, quantity: 1 }),
       ],
     });
-    expect(wishesFor(db)).toEqual([
-      { id: 3, quantity: 1, folderId: null, folderName: null },
-      { id: 4, quantity: 1, folderId: null, folderName: null },
-      { id: 2, quantity: 1, folderId: 2, folderName: "Ordered" },
-      { id: 1, quantity: 1, folderId: 1, folderName: "Later" },
+    expect(
+      wishesFor(db).map(({ id, folderId, folderName }) => ({ id, folderId, folderName })),
+    ).toEqual([
+      { id: 3, folderId: null, folderName: null },
+      { id: 4, folderId: null, folderName: null },
+      { id: 2, folderId: 2, folderName: "Ordered" },
+      { id: 1, folderId: 1, folderName: "Later" },
     ]);
   });
 
@@ -6615,22 +6615,32 @@ describe("quick-adding bought copies into a deck", () => {
     expect(copiesIn(gone, groupId(1))).toBe(1);
     expect(gone.deckAudit).toEqual([]);
 
-    // Re-pinned to another printing since the picker read it \u2014 a different sentence, because a
-    // line that is still on the list and a line that has gone are different things to be told.
+    // Re-pinned to another *card* since the picker read it - a different sentence, because a line
+    // that is still on the list and a line that has gone are different things to be told.
     const repinned = shortOfThree({
-      wishlistEntries: [wish({ id: 1, cardId: BOLT_2X2.id, quantity: 3 })],
+      wishlistEntries: [
+        wish({ id: 1, cardId: FOIL_ONLY.id, oracleId: FOIL_ONLY.oracleId, quantity: 3 }),
+      ],
     });
     expect(() => quickAdd(repinned, { wishId: 1 })).toThrow(/not for this card/);
     expect(copiesIn(repinned, groupId(1))).toBe(1);
+    expect(repinned.wishlistEntries[0].quantity).toBe(3);
+  });
 
-    // …and re-pinned to another *finish*, which is the same sentence and a different fixture: a
-    // handler that re-checked only the card id passes the arm above and fails this one.
-    const refoiled = shortOfThree({
-      wishlistEntries: [wish({ id: 1, cardId: BOLT.id, preferredFinish: "foil", quantity: 3 })],
+  /** Issue #511: another printing or finish of the card is the reader's call, so the write takes
+   *  it - the fence is the card, never the printing. */
+  it("takes a wish for another printing or finish of the card", () => {
+    const reprint = shortOfThree({
+      wishlistEntries: [wish({ id: 1, cardId: BOLT_2X2.id, quantity: 3 })],
     });
-    expect(() => quickAdd(refoiled, { wishId: 1 })).toThrow(/not for this card/);
-    expect(copiesIn(refoiled, groupId(1))).toBe(1);
-    expect(refoiled.wishlistEntries[0].quantity).toBe(3);
+    expect(quickAdd(reprint, { wishId: 1 })).toMatchObject({ copies: 3, wishCopies: 3 });
+    expect(reprint.wishlistEntries).toEqual([]);
+
+    const foil = shortOfThree({
+      wishlistEntries: [wish({ id: 1, cardId: BOLT.id, preferredFinish: "foil", quantity: 5 })],
+    });
+    expect(quickAdd(foil, { wishId: 1 })).toMatchObject({ wishCopies: 3 });
+    expect(foil.wishlistEntries[0].quantity).toBe(2);
   });
 
   /**
@@ -6798,7 +6808,19 @@ describe("adding a deck's missing copies to the collection", () => {
         finish: null,
         short: 3,
         categories: ["Main deck"],
-        wishes: [{ id: 1, quantity: 2, folderId: null, folderName: null }],
+        wishes: [
+          {
+            id: 1,
+            quantity: 2,
+            folderId: null,
+            folderName: null,
+            cardId: BOLT.id,
+            name: BOLT.name,
+            setCode: BOLT.setCode,
+            collectorNumber: BOLT.collectorNumber,
+            preferredFinish: null,
+          },
+        ],
       },
     ]);
   });
