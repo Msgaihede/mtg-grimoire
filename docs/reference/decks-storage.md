@@ -3043,6 +3043,24 @@ not a default that disagrees with itself. The Storybook fake is a third: `toDeck
 `statsOpen: d.statsOpen ?? true` sits directly under `tokensOpen: d.tokensOpen ?? false`, and
 copying the line above it is the bug.
 
+### `decks.token_stack`, the setting that sits among the disclosures
+
+User schema **v47** (2026-09-24, [issue #507](https://github.com/Msgaihede/mtg-grimoire/issues/507))
+is `decks.token_stack INTEGER NOT NULL DEFAULT 0` — whether the deck views draw the deck's tokens
+and emblems as a trailing **Tokens & Emblems** pile, read as `DeckRow.tokenStack` and written as
+`DeckPatch.tokenStack` on the ordinary `deck_update`. It is on the `decks` capture `Spec`, appended
+after `notes_open` as the last named column of `DECK_SELECT` (read off `deck_row`, not off this
+page), with `update_deck`'s next `?` hole. Like the three disclosures it writes **no `deck_audit`
+row and no undo step** and is not on `deck_undo::DECK_FIELDS`; `DEFAULT 0` because the pile is new
+and off is what every deck already showed.
+
+**Where it parts company with them: `duplicate_deck` carries it.** Whether a band is open is where
+the reader left a deck; whether the views draw a token pile is a setting chosen in Deck settings
+about how the list is read — `separate_x_group`'s footing — so a copy reads the way its original
+did. Rust stores the bit and nothing more: the pile is drawn in the view layer from the same
+`deck_tokens` answer the band draws and never enters `deck.cards`, so it counts toward nothing.
+Not on `DeckInput` — a deck is born with it off.
+
 ### A stale comment found on the way, and deliberately not fixed here
 
 `search.rs:1252` claims token-only and memorabilia sets have no rows in `cards` at all, "because

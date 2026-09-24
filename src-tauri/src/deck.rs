@@ -478,6 +478,15 @@ pub struct DeckPatch {
     /// default takes nothing from anybody. A patch says nothing about defaults either way:
     /// absent still means "leave it".
     pub notes_open: Option<bool>,
+    /// Whether the deck views draw the deck's tokens and emblems as a trailing **Tokens &
+    /// Emblems** pile — user schema v47.
+    ///
+    /// **Storage only, on this side**, [`Self::tokens_open`]'s rule: which tokens a deck needs is
+    /// [`crate::deck_tokens`]' answer and where to draw them is TypeScript's. **No arm in
+    /// [`record_deck_edit`]** and not a [`crate::deck_undo`] op, for the same reason — but unlike
+    /// the three disclosures above it this is a *setting*, chosen in Deck settings, so
+    /// [`duplicate_deck`] carries it the way it carries [`Self::separate_x_group`].
+    pub token_stack: Option<bool>,
     /// Which of this deck's categories an add that names none lands in — the editor's "Add to"
     /// answer, asked in the deck's settings.
     ///
@@ -740,6 +749,15 @@ pub struct DeckRow {
     /// **[`duplicate_deck`] deliberately does not carry it**, both neighbours' note — so a copy
     /// takes the column default, which here is *shut*.
     pub notes_open: bool,
+    /// Whether the deck views draw a trailing **Tokens & Emblems** pile — user schema v47,
+    /// `DEFAULT 0`, so every existing deck reads off and nothing changes on upgrade.
+    ///
+    /// Read here as well as written through [`DeckPatch`], for [`Self::theory_enabled`]'s
+    /// reason. **Where it parts company with the three disclosures above it**: it is a setting
+    /// chosen in Deck settings rather than a band the reader opened, so [`duplicate_deck`]
+    /// carries it, [`Self::separate_x_group`]'s rule. Still no history row and no undo op, the
+    /// disclosures' rule — see [`DeckPatch::token_stack`].
+    pub token_stack: bool,
     /// Which of this deck's categories an add that names none lands in — schema v16, and `0`
     /// for **Auto**, where the card's own text decides.
     ///
@@ -1056,7 +1074,7 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
-            d.virtual_only, d.stats_open, d.notes_open,
+            d.virtual_only, d.stats_open, d.notes_open, d.token_stack,
             {images}
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
@@ -1086,7 +1104,9 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
     /// every `r.get(n)` below it moved anyway. A reader checking the migration against this
     /// number alone would conclude nothing had to change; the fourteen reads between
     /// `theory_enabled` and `stats_open` are what actually shifted.
-    const IMAGE_COL: usize = 27;
+    ///
+    /// User schema v47 moved it to 28, appending `token_stack` after `notes_open`.
+    const IMAGE_COL: usize = 28;
     Ok(DeckRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -1202,7 +1222,12 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // types out perfectly, because the shifted pairs are TEXT-onto-TEXT and INTEGER-onto-
         // INTEGER all the way up.
         notes_open: r.get(26)?,
-        // **From 27**, last of all, for the reason written eleven comments up — the
+        // 27, at the end of the list, for the reason written eleven comments up — and the
+        // twelfth proof of it. User schema v47's setting is a fourth `bool` over an `INTEGER`
+        // column beside three disclosures at 20, 25 and 26; an index landing on any of them
+        // would swap a view setting for whether a band was open, every field still a `0` or `1`.
+        token_stack: r.get(27)?,
+        // **From 28**, last of all, for the reason written twelve comments up — the
         // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
         // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
         //
@@ -2131,6 +2156,10 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- `Option<bool>`, and a crossed number among them is an UPDATE that succeeds
                 -- and opens a band the reader did not press.
                 notes_open = coalesce(?20, notes_open),
+                -- `?21`, the next number at the **end**, same rule one rung later. User schema
+                -- v47's view setting sits beside three disclosures of the same `Option<bool>`
+                -- shape, so a crossed number here draws a pile the reader did not ask for.
+                token_stack = coalesce(?21, token_stack),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -2156,6 +2185,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 virtual_only,
                 patch.stats_open,
                 patch.notes_open,
+                patch.token_stack,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -2923,7 +2953,8 @@ struct CopiedCard {
 ///
 /// Everything that describes the deck rather than its state — format, description, cover,
 /// which folder it is filed in, whether it keeps a theory list, whether it groups its X cards,
-/// which bracket it is — comes across, so the copy looks like what was copied.
+/// which bracket it is, whether its views draw a Tokens & Emblems pile — comes across, so the
+/// copy looks like what was copied.
 ///
 /// **`notes` was on that list until user schema v43 and its replacement is not**, which is a
 /// change of substance rather than of spelling. A single paragraph was a property of the deck
@@ -3003,15 +3034,20 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // `theory_enabled` is beside it and travels for the same reason it always has, which
             // keeps the pair the two of them spell intact across the copy: the source's kind is
             // the copy's kind, whichever of the three it is.
+            //
+            // **`token_stack` (user schema v47) is copied too**, where the three disclosures
+            // beside it in the table are not: whether the views draw a Tokens & Emblems pile is
+            // a setting chosen in Deck settings, `separate_x_group`'s kind of answer, not a band
+            // the reader happened to have open.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
-                                theory_mark_unplanned, virtual_only,
+                                theory_mark_unplanned, virtual_only, token_stack,
                                 archived, created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
                     folder_id, theory_enabled, separate_x_group,
                     bracket, theory_mark_exact, theory_mark_name, theory_mark_unplanned,
-                    virtual_only,
+                    virtual_only, token_stack,
                     0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
              RETURNING id, name, virtual_only",
@@ -10034,6 +10070,9 @@ mod tests {
             // which share a value because three booleans cannot be pairwise distinct — the
             // theory marks' own note, one set of fields along.
             notes_open: true,
+            // `true` rather than the column's `DEFAULT 0`, the same rule again: `false` is what
+            // every deck carries and would read correct on a field that never left Rust.
+            token_stack: true,
             // Two keys, both real URLs, because this is the one field on the row whose *shape*
             // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
             // TypeScript as an object of variant keys and not as a list or a bare string, and
@@ -10109,6 +10148,9 @@ mod tests {
                 // crossed index among them succeeds silently, and only the values (`true`,
                 // `false`, `true`) and these three keys tell them apart.
                 "notesOpen": true,
+                // User schema v47, and `tokenStack` rather than `token_stack`: the four views
+                // read this key to decide whether to draw the token pile at all.
+                "tokenStack": true,
                 // The cover printing's picture, spelled out key by key: this is the deck
                 // gallery's only way to draw a cover on web and on the phone, and it is a map
                 // rather than a URL because `LIST_VARIANTS` decides what a row carries.
@@ -10166,7 +10208,7 @@ mod tests {
 
         let patch: DeckPatch = serde_json::from_str(
             r#"{"coverCardId":"bolt-lea","archived":true,"separateXGroup":true,"gameKey":"mtgo",
-                "virtualOnly":true}"#,
+                "virtualOnly":true,"tokenStack":true}"#,
         )
         .expect("the patch payload");
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
@@ -10174,6 +10216,9 @@ mod tests {
         assert_eq!(patch.separate_x_group, Some(true));
         assert_eq!(patch.game_key.as_deref(), Some("mtgo"));
         assert_eq!(patch.virtual_only, Some(true));
+        // User schema v47. The Deck settings switch sends this, and a misspelled key would be
+        // read by `#[serde(default)]` as an omitted one — a press that changes nothing.
+        assert_eq!(patch.token_stack, Some(true));
         assert!(patch.name.is_none(), "an omitted field means leave it");
 
         // And the third: `deck_set_view_state`'s `viewState`, which the editor sends one
@@ -10722,6 +10767,119 @@ mod tests {
         let copy = duplicate_deck(&conn, deck.id).unwrap();
         assert!(copy.separate_x_group, "how it is read comes across");
         assert!(!copy.archived, "what state it is in does not");
+    }
+
+    /// The token pile setting, end to end (user schema v47): off on a new deck, a patch moves
+    /// it, an absent field leaves it, and **no history row** — the disclosures' rule.
+    ///
+    /// **Moved against the three disclosures, no two of the four agreeing on every write**:
+    /// `token_stack` is read at 27 by `deck_row`, one past `notes_open`, and bound to `?21`, one
+    /// past `?20` — the two places a crossed index opens a band where it should draw a pile.
+    #[test]
+    fn the_token_pile_setting_round_trips_and_is_not_recorded() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert!(
+            !deck.token_stack,
+            "a new deck draws no token pile — the column's own DEFAULT 0"
+        );
+
+        let patched = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                token_stack: Some(true),
+                notes_open: Some(false),
+                stats_open: Some(false),
+                tokens_open: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(patched.token_stack, "the readback is the write");
+        assert!(!patched.notes_open && !patched.stats_open && !patched.tokens_open);
+
+        let read = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert!(
+            read.token_stack && !read.notes_open,
+            "…including through `DECK_SELECT`'s positional reads"
+        );
+        assert!(
+            read.image_uris.is_none(),
+            "and `IMAGE_COL` moved with it — a deck with no cover reads no picture"
+        );
+
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert!(after.token_stack, "an absent field means leave it");
+
+        let off = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                token_stack: Some(false),
+                notes_open: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!off.token_stack && off.notes_open);
+
+        // A real edit first, so the absence below is an absence and not an empty list.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                name: Some("Burn II".to_owned()),
+                token_stack: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let words: Vec<String> = crate::deck_audit::list(&conn, deck.id, 20)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| r.payload.clone())
+            .collect();
+        assert!(
+            words.iter().any(|p| p.contains("name")),
+            "the drawer has to be reachable for the next assertion to mean anything: {words:?}"
+        );
+        assert!(
+            !words
+                .iter()
+                .any(|p| p.contains("tokenStack") || p.contains("token_stack")),
+            "a view setting is not an edit the drawer records: {words:?}"
+        );
+    }
+
+    /// **A copy keeps the token pile setting**, which is where it parts company with the three
+    /// disclosures beside it: it is a setting chosen in Deck settings, `separate_x_group`'s kind
+    /// of answer, so [`duplicate_deck`] carries it. The disclosure patched open alongside it is
+    /// the control — it must *not* come across.
+    #[test]
+    fn a_duplicate_keeps_the_token_pile_setting() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                token_stack: Some(true),
+                tokens_open: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
+        assert!(copy.token_stack, "the setting comes across");
+        assert!(!copy.tokens_open, "the disclosure beside it does not");
+
+        // And a copy of a deck with it off is off — not a column defaulting the right way by
+        // accident.
+        let plain = create_deck(&conn, &input("Storm", "modern")).unwrap();
+        assert!(!duplicate_deck(&conn, plain.id).unwrap().token_stack);
     }
 
     /// The deck's bracket, end to end: a new deck is on Auto, a patch moves it, an absent field

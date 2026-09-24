@@ -991,6 +991,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **`sort_order` is monotonic and never dense**: a delete leaves a hole, `reorder_notes` lets an
   unknown id consume a position, and neither is repaired — the column answers *before or after*
   and nothing more.
+  **v47 adds `decks.token_stack`** (2026-09-24,
+  [issue #507](https://github.com/Msgaihede/mtg-grimoire/issues/507)) — whether the deck views draw
+  the deck's tokens and emblems as a trailing pile. One `ALTER TABLE … ADD COLUMN`, v42's shape,
+  `NOT NULL DEFAULT 0` because the pile is new and off is today's behaviour, so it owes its
+  `USER_SCHEMA_SQL` line and an `UNDO_V47` and changes no table or index count. On the `decks`
+  capture spec; on no history row and no `deck_undo::DECK_FIELDS`; **carried by `duplicate_deck`**,
+  unlike the `*_open` disclosures beside it, because it is a setting.
+  [decks-storage.md](decks-storage.md) has the rest.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

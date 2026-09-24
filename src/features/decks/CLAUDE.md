@@ -1690,7 +1690,7 @@ layer.
   **(1)** the band sits **below the price strip**, because that strip is where the remove tray is
   drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
   would put four charts between a card and the one drop that takes it out — and since 2026-09-08
-  it is also below the **Tokens & emblems** band, so this is the last band on the page rather than
+  it is also below the **Tokens & Emblems** band, so this is the last band on the page rather than
   the last thing under the deck. **The figures in (2) and (3) below predate that band entirely**
   (2026-08-14 against 2026-09-07), so read them as the arithmetic of the deck, the strip and this
   band alone; nothing has been re-measured with a token wall open above it, and an open one is
@@ -3979,7 +3979,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   freshness guard is **unit-tested only**: reproducing a stale list live means winning a 300ms
   race by hand, which is what a test with a controlled clock is for.
 
-## Tokens & emblems
+## Tokens & Emblems
 
 `DeckTokensPanel.tsx` (the band), `TokenArtPicker.tsx` (the printings dialog),
 `useDeckTokens.ts` (the query and the four writes) and `deckTokens.ts` (every conclusion), landed
@@ -3995,7 +3995,7 @@ in are all decisions, and they live in one function with one test file so that c
 one edit and not four components disagreeing.
 
 - **The naming rule, and it is the reason this section is not called "Tokens".** The area is
-  **"Tokens & emblems"** — `TOKENS_HEADING` in `DeckTokensPanel.tsx`, one constant because three
+  **"Tokens & Emblems"** — `TOKENS_HEADING` in `DeckTokensPanel.tsx`, one constant because three
   things say it: the region's `aria-label`, the disclosure's visible text, and every test and
   story that addresses either.
   `autoCategory.ts:130` already uses the bare word *Tokens* for an auto-category
@@ -4003,6 +4003,16 @@ one edit and not four components disagreeing.
   opposite meanings of one word, and **the auto-category is deliberately not renamed** — renaming
   it would silently regroup every existing deck — so the two strings are kept apart instead. Same
   discipline as *tag* versus *label*: this repo does not let words trade places.
+  **`Emblems` is capitalised since 2026-09-24** (issue #507); the constant is the one spelling.
+- **One read, one picker, two drawings** (2026-09-24, issue #507). `DeckEditor` calls
+  `useDeckTokens(deckId, variant)` **once** and hands the answer to the band as a prop, and — on a
+  deck with `decks.token_stack` on — to the four views as `tokenPile` (visible tokens only, never a
+  dismissed one whatever `Show dismissed` says). It mounts the **one** `TokenArtPicker` both
+  surfaces open, holding `picking` by `oracle_id`. The band calls no hook and holds no picker; a
+  second hook call would be a second `showDismissed` and a second write observer. The band's count
+  is `TokenCountPill` — the distinct kept tokens as a bare number, the figure that read
+  `N to bring`. **The pile never enters `groups`**, which is what keeps a token out of the deck's
+  size, every pile total, the ledger, the stats and validation.
 - **Four placement constraints, each already documented at its site and one of which has cost a
   session.** A **`<section>`, never an `<aside>`** — a second complementary landmark broke five of
   `App.test.tsx`'s pane assertions. **`shrink-0` is mandatory** — the editor's root is the only

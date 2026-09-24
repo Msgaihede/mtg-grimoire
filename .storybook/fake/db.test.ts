@@ -520,7 +520,7 @@ describe("the paper filter", () => {
     });
     // 59 fixture rows, 2 of them `isPaper: false` (Black Lotus `vma`, A-Vivi Ornitier
     // `fin`) — measured 2026-09-07 over `CARDS`. The seven token and emblem rows added with the
-    // deck editor's Tokens & emblems area are all paper, so they are on both sides of this.
+    // deck editor's Tokens & Emblems area are all paper, so they are on both sides of this.
     expect(withDigital.items).toHaveLength(59);
     expect(all.items).toHaveLength(57);
   });
@@ -8050,6 +8050,25 @@ describe("the deck row itself", () => {
     });
     const born = writeHandlers(db).deck_create({ deck: { name: "Burn", formatKey: "modern" } });
     expect(born).toMatchObject({ notesOpen: false, statsOpen: true, tokensOpen: false });
+  });
+
+  /**
+   * `decks.token_stack` (user schema v47): off by default, moved by the ordinary patch with no
+   * history row, and **carried by a duplicate** — the crate's `duplicate_deck` names it in its
+   * INSERT, because it is a setting about how the deck is read rather than a band left open.
+   */
+  it("draws no token pile by default, patches it, and carries it to a copy", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    expect(readHandlers(db).deck_list()[0]).toMatchObject({ tokenStack: false });
+    const born = writeHandlers(db).deck_create({ deck: { name: "Burn", formatKey: "modern" } });
+    expect(born).toMatchObject({ tokenStack: false });
+
+    const on = writeHandlers(db).deck_update({ id: 1, patch: { tokenStack: true } });
+    expect(on).toMatchObject({ tokenStack: true });
+    expect(writeHandlers(db).deck_update({ id: 1, patch: {} })).toMatchObject({
+      tokenStack: true,
+    });
+    expect(writeHandlers(db).deck_duplicate({ id: 1 })).toMatchObject({ tokenStack: true });
   });
 
   /**

@@ -106,6 +106,7 @@ const DECK: DeckRow = {
   // asserted on.
   separateXGroup: false,
   tokensOpen: false,
+  tokenStack: false,
   statsOpen: true,
   defaultCategoryId: 0,
   bracket: 0,

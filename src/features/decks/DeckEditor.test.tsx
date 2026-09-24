@@ -18,8 +18,10 @@ import type {
   DeckNote,
   DeckRow,
   DeckLabel,
+  DeckTokenRow,
   FormatSpec,
   ImportMatch,
+  Printing,
   SyncStatus,
   TheorySlot,
 } from "@/lib/ipc";
@@ -42,6 +44,7 @@ import {
 import { THEORY_MATCH_ATTR } from "./CardMarks";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 import { SEARCH_OVER_ATTR } from "./DeckSearchPanel";
+import { TOKENS_HEADING } from "./DeckTokensPanel";
 import { CUT_CARDS_NOTE } from "./PriceStrip";
 import { theorySlot } from "./theoryMatch";
 import { QUICK_ZONE_ATTR } from "./QuickZones";
@@ -159,6 +162,11 @@ const deckNotes = vi.hoisted(() => vi.fn());
 const deckNoteCreate = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
+// Hoisted so the token-pile cases can answer a deck that makes something and watch the one write
+// the art picker makes; `beforeEach` puts both back to the silent defaults every other case needs.
+const deckTokens = vi.hoisted(() => vi.fn());
+const deckTokenSet = vi.hoisted(() => vi.fn());
+const cardPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -179,7 +187,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckSwapPrinting,
     deckSetCardFinish,
     deckSetViewState,
-    // **The Tokens & emblems band asks on every open, so every test in this file pays for it
+    // **The Tokens & Emblems band asks on every open, so every test in this file pays for it
     // whether or not it looks at the band.** Answered with an empty list: the panel then draws
     // its "nothing in this deck makes a token" sentence and, crucially, *no* `role="alert"`.
     // Left off the mock entirely, the read rejects with `ipc.deckTokens is not a function`, the
@@ -187,8 +195,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // "Found multiple elements" — eight of them did. The three writes are here for the same
     // reason: a press that reached an undefined function would fail as a write refusal rather
     // than as the missing double it is.
-    deckTokens: vi.fn().mockResolvedValue([]),
-    deckTokenSet: vi.fn().mockResolvedValue(undefined),
+    deckTokens,
+    deckTokenSet,
+    // The art picker's one read — the card modal's printings command, which is what a token's
+    // printings are too. Answered with nothing unless a case says otherwise.
+    cardPrintings,
     deckTokenClear: vi.fn().mockResolvedValue(undefined),
     deckTokenAdd: vi.fn().mockResolvedValue(undefined),
     // **The Notes band asks on every open too, for the tokens band's reason exactly** — its
@@ -251,7 +262,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionToDeck,
     // **The shortfall line's destination picker asks on every open of a deck that is short of
     // something** (issue #437), so every test in this file pays for it whether or not it looks
-    // at the control — the Tokens & emblems band's reason, one row over. Answered with an empty
+    // at the control — the Tokens & Emblems band's reason, one row over. Answered with an empty
     // list: the picker then offers the wishlist root and its own `New folder…` row, which is the
     // state a reader with no folders is in and the one that keeps the first folder reachable.
     // Left off the mock entirely the read rejects with `ipc.wishlistFolderList is not a
@@ -340,6 +351,9 @@ const DECK: DeckRow = {
   // value Scryfall gives it until the reader says otherwise.
   separateXGroup: false,
   tokensOpen: false,
+  // Schema v47, and `0` is the column's own default: the token pile in the deck views is opt-in
+  // per deck, so a test that says nothing about it draws the views exactly as they were.
+  tokenStack: false,
   statsOpen: true,
   // Schema v43, and `0` is the column's own default: the Notes band is new, so no deck on any
   // disk has ever shown one and a shut default takes nothing from anybody.
@@ -864,6 +878,11 @@ beforeEach(() => {
       detail({}, [bolt(), card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 })]),
     );
   deckUpdate.mockReset().mockResolvedValue(DECK);
+  // A deck that makes no token, and a picker with nothing in it, unless a case says otherwise —
+  // the silent defaults the band's mock comment above explains.
+  deckTokens.mockReset().mockResolvedValue([]);
+  deckTokenSet.mockReset().mockResolvedValue(undefined);
+  cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
   // No notes unless a test says otherwise — which is what keeps the band silent and, since
   // 2026-09-10, keeps the note glyph off every card in every other case here.
   deckNotes.mockReset().mockResolvedValue([]);
@@ -1927,7 +1946,7 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **Tokens & emblems sits between the price strip and the stats band** (2026-09-08), where it
+   * **Tokens & Emblems sits between the price strip and the stats band** (2026-09-08), where it
    * was under both.
    *
    * The half that is a *constraint* is the one above: neither band may come between the deck and
@@ -1945,7 +1964,7 @@ describe("DeckEditor", () => {
     await open();
 
     const asOf = screen.getByText(/prices as of the last/i);
-    const tokens = screen.getByRole("region", { name: "Tokens & emblems" });
+    const tokens = screen.getByRole("region", { name: "Tokens & Emblems" });
     const stats = screen.getByRole("region", { name: "Deck stats" });
 
     expect(asOf.compareDocumentPosition(tokens) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -7818,5 +7837,180 @@ describe("DeckEditor multi-select", () => {
     useAppStore.getState().setOpenDeckId(null);
 
     expect(useAppStore.getState().cardSelection).toBeNull();
+  });
+});
+
+/**
+ * **Tokens & Emblems as a pile in the deck views** (issue #507, user schema v47).
+ *
+ * The band stays and the pile is an *additional* drawing of the same answer: `DeckEditor` reads
+ * the tokens once, hands them to the band and — on a deck with `tokenStack` on — to the views, and
+ * mounts one art picker both open. Five things are this file's to hold, because each is a fact
+ * about the editor rather than about a view: the pile is there only when the deck asks, the two
+ * surfaces open one dialog, a pick from the pile writes the whole stored triple, no deck figure
+ * counts a token, and the two surfaces cost one read.
+ */
+describe("DeckEditor — the token pile (issue #507)", () => {
+  /** One `deck_tokens` row, for a deck whose cards make a Treasure. */
+  const treasure = (over: Partial<DeckTokenRow> = {}): DeckTokenRow => ({
+    oracleId: "o-treasure",
+    name: "Treasure",
+    typeLine: "Token Artifact — Treasure",
+    layout: "token",
+    defaultCardId: "t-default",
+    sources: [{ cardId: "p1", name: "Lightning Bolt" }],
+    derived: true,
+    cardId: null,
+    // Five copies, on purpose: a number no deck figure could reach by accident, so a ledger that
+    // folded the pile in would read 11 where it must read 6.
+    quantity: 5,
+    state: null,
+    power: null,
+    toughness: null,
+    colors: "",
+    oracleText: "{T}, Sacrifice this token: Add one mana of any color.",
+    ...over,
+  });
+
+  /** A second token the reader has dismissed — which the pile must never draw. */
+  const dismissedWurm = treasure({
+    oracleId: "o-wurm",
+    name: "Wurm",
+    typeLine: "Token Artifact Creature — Wurm",
+    defaultCardId: "w-default",
+    quantity: null,
+    state: "hidden",
+    power: "3",
+    toughness: "3",
+    oracleText: "Deathtouch",
+  });
+
+  /** One printing the picker offers — the card modal's shape, filled in as nothing. */
+  const printing = (id: string): Printing => ({
+    id,
+    setCode: "tmh3",
+    setName: null,
+    collectorNumber: "12",
+    releasedAt: "2024-06-14",
+    rarity: "common",
+    illustrationId: null,
+    artist: null,
+    lang: "en",
+    finishes: `["nonfoil"]`,
+    finishPrices: { nonfoil: null, foil: null, etched: null },
+    promo: false,
+    promoTypes: null,
+    fullArt: false,
+    frameEffects: null,
+    borderColor: null,
+    layout: "token",
+  });
+
+  /** The pile a view draws, found by the contract's attribute (`TOKEN_PILE_ATTR`). */
+  const pile = () => document.querySelector<HTMLElement>("[data-token-pile]");
+
+  /** The band — the one `Tokens & Emblems` region that is not the pile or inside it. */
+  const band = () => {
+    const found = screen
+      .getAllByRole("region", { name: TOKENS_HEADING })
+      .find((region) => region.closest("[data-token-pile]") === null);
+    if (found === undefined) throw new Error("no Tokens & Emblems band");
+    return found;
+  };
+
+  /** A token's picture button on either surface — named for changing the art, and for the
+   *  token. A pattern rather than the band's exact phrase, so the pile may word its own verb. */
+  const ART = /\bart\b.*Treasure/i;
+
+  function deckWith(over: Partial<DeckRow>) {
+    deckGet.mockResolvedValue(
+      detail(over, [bolt(), card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 })]),
+    );
+  }
+
+  beforeEach(() => {
+    deckTokens.mockResolvedValue([treasure(), dismissedWurm]);
+  });
+
+  it("draws a Tokens & Emblems pile in the Stacks view when the deck asks for one", async () => {
+    deckWith({ tokenStack: true });
+    await open();
+
+    await waitFor(() => expect(pile()).not.toBeNull());
+    const drawn = pile()!;
+    expect(within(drawn).getAllByText(TOKENS_HEADING).length).toBeGreaterThan(0);
+    // The kept token, and never the dismissed one — whatever the band's `Show dismissed` says.
+    expect(within(drawn).getAllByRole("button", { name: ART }).length).toBeGreaterThan(0);
+    expect(within(drawn).queryAllByRole("button", { name: /Wurm/ })).toHaveLength(0);
+  });
+
+  it("draws no pile on a deck that has not asked for one", async () => {
+    deckWith({ tokenStack: false });
+    await open();
+
+    // The band has answered — its disclosure is drawn only once there is a token to disclose — so
+    // the read has landed and the pile's absence is a decision rather than a read in flight.
+    await within(band()).findByRole("button", { name: TOKENS_HEADING });
+    expect(pile()).toBeNull();
+  });
+
+  it("opens the one art picker from a pile token, and the choice writes its printing", async () => {
+    deckWith({ tokenStack: true, tokensOpen: true });
+    cardPrintings.mockResolvedValue({ items: [printing("t-new")], total: 1 });
+    const user = userEvent.setup();
+    await open();
+
+    await waitFor(() => expect(pile()).not.toBeNull());
+    await user.click(within(pile()!).getAllByRole("button", { name: ART })[0]);
+
+    // One dialog — the band's and the pile's alike.
+    const dialog = await screen.findByRole("dialog", { name: /Art for Treasure/ });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+
+    await user.click(await within(dialog).findByRole("button", { name: /^Treasure — TMH3/ }));
+    // The whole stored triple, the quantity kept — `storedOverride`'s rule.
+    await waitFor(() =>
+      expect(deckTokenSet).toHaveBeenCalledWith(4, "o-treasure", {
+        cardId: "t-new",
+        quantity: 5,
+        state: null,
+      }),
+    );
+  });
+
+  it("opens that same picker from the band's own tile", async () => {
+    deckWith({ tokenStack: true, tokensOpen: true });
+    const user = userEvent.setup();
+    await open();
+
+    await waitFor(() => expect(pile()).not.toBeNull());
+    await user.click(await within(band()).findByRole("button", { name: ART }));
+
+    await screen.findByRole("dialog", { name: /Art for Treasure/ });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("never counts a token toward the deck's cards", async () => {
+    deckWith({ tokenStack: true });
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+
+    // Four Bolts and two Bears — and not the five Treasures beside them.
+    const stats = screen.getByRole("region", { name: "Deck stats" });
+    const header = screen
+      .getAllByText("Cards", { selector: "dt" })
+      .filter((term) => !stats.contains(term));
+    expect(header).toHaveLength(1);
+    expect(header[0].closest("div")).toHaveTextContent("6");
+    expect(header[0].closest("div")).not.toHaveTextContent("11");
+  });
+
+  it("reads the deck's tokens once, for the band and the pile together", async () => {
+    deckWith({ tokenStack: true, tokensOpen: true });
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+
+    expect(deckTokens).toHaveBeenCalledTimes(1);
+    expect(deckTokens).toHaveBeenCalledWith(4, "live");
   });
 });

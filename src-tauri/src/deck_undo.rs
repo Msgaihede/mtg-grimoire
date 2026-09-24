@@ -97,6 +97,8 @@ const DECK_FIELDS: &[&str] = &[
     // is gone — one paragraph became [`Op::Notes`]' many rows — and `notes_open` is not its
     // successor on this list any more than `tokens_open` or `stats_open` are on it: a
     // disclosure is not an audited edit, so there is nothing for a Ctrl+Z to put back.
+    // `token_stack` (user schema v47) is absent on the same terms: a view setting with no
+    // history row, so no step either.
     "cover_card_id",
     "cover_kind",
     // **Retired, and it must stay on this list until the column itself goes.** Nothing has

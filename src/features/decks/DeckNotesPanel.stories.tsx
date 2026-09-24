@@ -182,7 +182,7 @@ type Story = StoryObj<typeof meta>;
  * **A deck nobody has written about yet, which is every deck in the database.**
  *
  * The column is `DEFAULT 0`, so this band is shut on every existing deck — but the disclosure is
- * a control even here, and that is where this band parts company with `Tokens & emblems`. That
+ * a control even here, and that is where this band parts company with `Tokens & Emblems`. That
  * one draws its heading as plain type on a deck that makes nothing, because there is nothing to
  * disclose.
  *

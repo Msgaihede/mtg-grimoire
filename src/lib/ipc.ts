@@ -3364,7 +3364,7 @@ export interface DeckPatch {
    */
   separateXGroup?: boolean;
   /**
-   * Whether the editor's **Tokens & emblems** area is expanded. See
+   * Whether the editor's **Tokens & Emblems** area is expanded. See
    * {@link DeckRow.tokensOpen} — a per-deck reading preference, so switching it writes one
    * column and touches not one `deck_cards` row.
    *
@@ -3402,6 +3402,15 @@ export interface DeckPatch {
    * note is reaching for {@link ipc.deckNoteCreate}.
    */
   notesOpen?: boolean;
+  /**
+   * Whether the deck views draw the deck's tokens and emblems as a trailing **Tokens & Emblems**
+   * pile. See {@link DeckRow.tokenStack} — a setting chosen in Deck settings, so switching it
+   * writes one column and touches no `deck_cards` or `deck_tokens` row.
+   *
+   * **On this patch, with no history row and no undo step**, the three disclosures' terms above
+   * it — but unlike them it is carried by a duplicate, because it says how the deck is read.
+   */
+  tokenStack?: boolean;
   /**
    * Which of this deck's categories an add that names none lands in. See
    * {@link DeckRow.defaultCategoryId} — `0` is `AUTO_CATEGORY` and is a **value**, not an
@@ -3739,7 +3748,7 @@ export interface DeckRow {
    */
   separateXGroup: boolean;
   /**
-   * Whether the editor's **Tokens & emblems** area is expanded — `decks.tokens_open INTEGER NOT
+   * Whether the editor's **Tokens & Emblems** area is expanded — `decks.tokens_open INTEGER NOT
    * NULL DEFAULT 0`, schema v35, and `false` on every deck that has never been opened, which is
    * the state every existing deck is in.
    *
@@ -3802,6 +3811,20 @@ export interface DeckRow {
    * because a deck's tile and its gallery read want a row and not a notebook.
    */
   notesOpen: boolean;
+  /**
+   * Whether the deck views (Stacks, Grid, Text and Table) draw the deck's tokens and emblems as
+   * a trailing **Tokens & Emblems** pile — `decks.token_stack INTEGER NOT NULL DEFAULT 0`, user
+   * schema v47, and `false` on every deck that predates it, so the upgrade changes nothing on
+   * screen.
+   *
+   * **A setting, not a disclosure**, though it sits beside three of them: it is chosen in Deck
+   * settings, it is carried by `deck_duplicate` the way {@link separateXGroup} is, and it syncs
+   * with the rest of the row. Like the disclosures it writes no history row and is not undoable.
+   *
+   * The pile it switches on is drawn in the view layer from the same answer the band draws and
+   * never enters `deck.cards`, so it counts toward nothing — size, piles, stats or validation.
+   */
+  tokenStack: boolean;
   /**
    * Which of this deck's categories an add that names no pile lands in — `decks.default_category_id`,
    * schema v16, and **`AUTO_CATEGORY` (`0`) for "let the card's own text decide"**.

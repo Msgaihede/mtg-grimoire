@@ -725,7 +725,7 @@ Every one of these has its measurement and its story in
   sentence said "exactly three elements (`CardGrid`'s tile, `GridView`'s tile, `CardStack`'s
   card)" through four additions, and `grep -n "cardScaleVars(" src/` is the census. Two of those
   four are worth knowing about because they are not card walls: the decks gallery's tile and
-  folder card scale a whole deck's crop, and the deck editor's **Tokens & emblems** band and its
+  folder card scale a whole deck's crop, and the deck editor's **Tokens & Emblems** band and its
   art picker draw the tokens a deck makes at `stackCardWidth(cardZoom.deck)` — the stacked card's
   own width at the desk's own zoom, so the tokens are the size of the cards that make them.
   **A variable rather than a prop, because the marks

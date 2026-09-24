@@ -55,6 +55,9 @@ import {
 } from "./StackView";
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
+import { TOKENS_HEADING } from "../DeckTokensPanel";
+import type { DeckTokenView } from "../deckTokens";
+import { TOKEN_PILE_ATTR, tokenControlName, type TokenPile } from "./TokenPile";
 
 /**
  * A card carried from wherever it sits into a pile, as a real pointer gesture.
@@ -291,6 +294,8 @@ interface ViewProps {
   /** The two marks a card can carry beside its own facts — see the sweep that asserts them. */
   selectedSlot?: string | null;
   landed?: ReadonlyMap<number, number>;
+  /** The deck's tokens as a pile — see the token-pile sweep at the foot of this file. */
+  tokenPile?: TokenPile;
 }
 
 /**
@@ -4557,6 +4562,137 @@ describe("the deck grid's art", () => {
     const src = container.querySelector("img")?.getAttribute("src");
     expect(src).toContain("mtgimg");
     expect(src).not.toContain("scryfall.io");
+  });
+});
+
+/**
+ * The deck's tokens and emblems as a pile in every view (issue #507) — drawn only when a deck has
+ * opted in and has tokens, drawn **last**, and never a deck row: no count, no total and no card
+ * affordance of a deck card can reach it.
+ */
+describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
+  const TOKEN = (over: Partial<DeckTokenView>): DeckTokenView => ({
+    oracleId: "o-treasure",
+    name: "Treasure",
+    typeLine: "Token Artifact — Treasure",
+    layout: "token",
+    printingId: "p-treasure",
+    quantity: 3,
+    sources: [{ cardId: "c-Sol Ring", name: "Sol Ring" }],
+    derived: true,
+    state: "auto",
+    overridden: false,
+    subtitle: "Colorless · {T}, Sacrifice this token: Add one mana of any color.",
+    imageUrl: null,
+    ...over,
+  });
+  const TOKENS: DeckTokenView[] = [
+    TOKEN({}),
+    TOKEN({ oracleId: "o-wurm-d", name: "Wurm", subtitle: "Colorless 3/3 · Deathtouch" }),
+    TOKEN({ oracleId: "o-wurm-l", name: "Wurm", subtitle: "Colorless 3/3 · Lifelink" }),
+  ];
+
+  const setup = (tokens: readonly DeckTokenView[] | undefined, groups = GROUPS) => {
+    const pile: TokenPile | undefined =
+      tokens === undefined ? undefined : { tokens, setQuantity: vi.fn(), pickArt: vi.fn() };
+    const view = render(
+      <TooltipProvider>
+        {renderView({ groups, marketplace: TCG, violations: VIOLATIONS, tokenPile: pile })}
+      </TooltipProvider>,
+    );
+    const root = view.container.querySelector<HTMLElement>(`[${TOKEN_PILE_ATTR}]`);
+    return { pile, view, root };
+  };
+
+  it("draws no pile when it is given none, or one with no tokens", () => {
+    expect(setup(undefined).root).toBeNull();
+    cleanup();
+    expect(setup([]).root).toBeNull();
+  });
+
+  it("draws the pile last, under the heading and the distinct-token pill", () => {
+    const { root } = setup(TOKENS);
+    expect(root).not.toBeNull();
+    expect(root).toBe(screen.getByRole("group", { name: TOKENS_HEADING }));
+    expect(within(root!).getByText("3 tokens and emblems to bring")).toBeInTheDocument();
+    // Last among its siblings — and on the two column views, last in the rail.
+    expect(root!.parentElement!.lastElementChild).toBe(root);
+    if (name === "StackView" || name === "TextView") {
+      expect(root!.parentElement).toHaveAttribute(RAIL_ATTR);
+    }
+    // After every pile of the deck, in document order.
+    for (const section of document.querySelectorAll(`[${DECK_GROUP_ATTR}]`)) {
+      expect(section.compareDocumentPosition(root!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
+  it("steps a token's copies and opens the art picker on the one pressed", () => {
+    const { pile } = setup(TOKENS);
+    const wurm = TOKENS[2];
+    fireEvent.click(
+      screen.getByRole("button", { name: `Increase ${tokenControlName("Quantity of", wurm)}` }),
+    );
+    expect(pile!.setQuantity).toHaveBeenCalledWith("o-wurm-l", 4);
+    fireEvent.click(screen.getByRole("button", { name: tokenControlName("Change the art for", wurm) }));
+    expect(pile!.pickArt).toHaveBeenCalledWith("o-wurm-l");
+  });
+
+  it("gives the two Wurms two different names", () => {
+    setup(TOKENS);
+    const names = screen
+      .getAllByRole("button", { name: /^Change the art for Wurm/ })
+      .map((button) => button.getAttribute("aria-label"));
+    expect(new Set(names).size).toBe(2);
+  });
+
+  it("counts none of its tokens in any pile, and is no deck card", () => {
+    const { root } = setup(TOKENS);
+    // The fixture's own heading figures, exactly as the heading sweep above reads them.
+    expect(screen.getByText("3 cards")).toBeInTheDocument();
+    expect(screen.getByText("$4.97")).toBeInTheDocument();
+    expect(within(root!).queryByText(/\bcards?\b/)).toBeNull();
+    for (const attr of [DECK_CARD_ATTR, CARD_BODY_ATTR, DECK_GROUP_ATTR, SELECTED_ATTR]) {
+      expect(root!.querySelector(`[${attr}]`)).toBeNull();
+    }
+  });
+});
+
+describe("StackView token pile", () => {
+  it("draws the rail for the pile alone, on a deck with nothing railed", () => {
+    const groups = buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical");
+    const { container } = render(
+      <TooltipProvider>
+        <StackView
+          tracksCollection
+          groups={groups}
+          marketplace={TCG}
+          tokenPile={{
+            tokens: [
+              {
+                oracleId: "o-treasure",
+                name: "Treasure",
+                typeLine: null,
+                layout: "token",
+                printingId: "p-treasure",
+                quantity: 1,
+                sources: [],
+                derived: false,
+                state: "manual",
+                overridden: true,
+                subtitle: null,
+                imageUrl: null,
+              },
+            ],
+            setQuantity: vi.fn(),
+            pickArt: vi.fn(),
+          }}
+        />
+      </TooltipProvider>,
+    );
+    const rail = container.querySelector(`[${RAIL_ATTR}]`);
+    expect(rail).not.toBeNull();
+    expect(rail!.children).toHaveLength(1);
+    expect(rail!.firstElementChild).toHaveAttribute(TOKEN_PILE_ATTR);
   });
 });
 
