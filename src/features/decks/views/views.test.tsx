@@ -3861,29 +3861,114 @@ describe("StackView reordering", () => {
   const pile = (name: string) => piles.find((group) => group.name === name)!;
 
   /**
-   * **Only the flow**, and this is the one case in the block that names a position.
+   * **Every pile but the pinned one, each counted within its own run**, and this is the one case
+   * in the block that names a position.
    *
-   * Three of the deck's five piles are drawn somewhere a reorder cannot reach, for two different
-   * reasons that both come out as "no grip". The Sideboard and the Maybeboard are held against
-   * the right edge, and where they sit is not an order the reader arranged. **The Commander is
-   * pinned to the head of the desk** in all three groupings (added 2026-08-20), so a grip on it
-   * would offer a move with nowhere to move to — and it is the one that would break quietly,
-   * because it is drawn in the flowing half of the view rather than beside it and looks exactly
-   * like a pile that should have one.
+   * **The Commander is pinned to the head of the desk** in all three groupings (added
+   * 2026-08-20), so a grip on it would offer a move with nowhere to move to — and it is the one
+   * that would break quietly, because it is drawn in the flowing half of the view rather than
+   * beside it and looks exactly like a pile that should have one.
    *
-   * The count in every grip's name is therefore the flow's **two** rather than the deck's five,
-   * and the whole list is read out rather than counted: `toHaveLength(2)` alone is satisfied by
-   * two grips on the wrong piles.
+   * **The Sideboard and the Maybeboard carry grips since issue #508**, and they count among each
+   * other rather than among the flow: the rail's place on the desk is fixed by kind, but the order
+   * *inside* it is the reader's own `sortOrder`. So the flow reads `of 2` and the rail reads `of 2`,
+   * never `of 4` — and the whole list is read out rather than counted: `toHaveLength(4)` alone is
+   * satisfied by four grips on the wrong piles.
    */
-  it("gives every flowing pile a grip, and the railed and pinned ones none", () => {
+  it("gives every flowing and railed pile a grip counted in its own run, and the pinned one none", () => {
     draw();
 
     expect(
       screen.getAllByRole("button", { name: /^Move / }).map((b) => b.getAttribute("aria-label")),
-    ).toEqual(["Move Ramp, 1 of 2", "Move Draw, 2 of 2"]);
+    ).toEqual([
+      "Move Ramp, 1 of 2",
+      "Move Draw, 2 of 2",
+      "Move Sideboard, 1 of 2",
+      "Move Maybeboard, 2 of 2",
+    ]);
     expect(screen.queryByRole("button", { name: /^Move Commander/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Move Sideboard/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Move Maybeboard/ })).not.toBeInTheDocument();
+  });
+
+  /** The rail's own reorder, by keyboard: one step down the rail from the Sideboard is the
+   *  Maybeboard — id 5, with two flowing piles between them in the deck's list — and the step
+   *  back is the Sideboard. Stepping past either end of the rail sends nothing, exactly as the
+   *  flow's ends do; in particular Left on the Sideboard does not reach across into the flow. */
+  it("steps a railed pile along the rail with the arrow keys, and never into the flow", async () => {
+    const moveCategory = draw();
+    const user = userEvent.setup();
+
+    grip("Sideboard").focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(moveCategory).not.toHaveBeenCalled();
+    await user.keyboard("{ArrowRight}");
+    expect(moveCategory).toHaveBeenCalledWith(SIDE.id, MAYBE.id);
+
+    moveCategory.mockClear();
+    grip("Maybeboard").focus();
+    await user.keyboard("{ArrowRight}");
+    expect(moveCategory).not.toHaveBeenCalled();
+    await user.keyboard("{ArrowLeft}");
+    expect(moveCategory).toHaveBeenCalledWith(MAYBE.id, SIDE.id);
+  });
+
+  /** The rail's own reorder, by drag — and the refusal the other way, which is the one that would
+   *  read as a bug: a railed pile let go on a flowing one would write a new order and be drawn
+   *  exactly where it was, because the rail is placed by kind. */
+  it("moves a railed pile onto another railed pile, and refuses the flow", async () => {
+    const moveCategory = draw();
+    const side = pile("Sideboard");
+    const maybe = pile("Maybeboard");
+    boxPiles(pile("Ramp"), side, maybe);
+
+    const press = { pressOn: grip("Maybeboard") };
+    const onFlow = await startPointerDrag(sectionOf(maybe), press);
+    try {
+      expect(onFlow.started).toBe(true);
+      await onFlow.over(sectionOf(pile("Ramp")));
+      await onFlow.drop();
+    } finally {
+      await onFlow.cancel();
+    }
+    expect(moveCategory).not.toHaveBeenCalled();
+
+    const onRail = await startPointerDrag(sectionOf(maybe), press);
+    try {
+      await onRail.over(sectionOf(side));
+      await onRail.drop();
+    } finally {
+      await onRail.cancel();
+    }
+    expect(moveCategory).toHaveBeenCalledWith(MAYBE.id, SIDE.id);
+  });
+
+  /**
+   * **The rail is two runs, and a grip reorders within one.** A switched-off pile of the reader's
+   * own is railed *under* the Sideboard and the Maybeboard whatever its `sortOrder` (the kind is
+   * tested before the switch in `splitRail`), so moving it above the Sideboard would change the
+   * number and not the picture. Its grip therefore counts only the switched-off run, and the
+   * Sideboard's count is unchanged by its arrival.
+   */
+  it("keeps the rail's switched-off piles a run of their own", async () => {
+    const cut = category({ id: 7, name: "Cut", kind: "main", isActive: false, sortOrder: 1 });
+    const moveCategory = vi.fn();
+    render(
+      <StackView
+        tracksCollection
+        groups={buildGroups(CARDS, [COMMANDER, RAMP, SIDE, DRAW, MAYBE, cut], "category", "alphabetical")}
+        marketplace={TCG}
+        actions={{ moveCategory }}
+      />,
+    );
+    const user = userEvent.setup();
+
+    expect(grip("Sideboard")).toHaveAccessibleName("Move Sideboard, 1 of 2");
+    expect(grip("Cut")).toHaveAccessibleName("Move Cut, 1 of 1");
+
+    grip("Cut").focus();
+    await user.keyboard("{ArrowLeft}");
+    grip("Maybeboard").focus();
+    await user.keyboard("{ArrowRight}");
+    expect(moveCategory).not.toHaveBeenCalled();
   });
 
   /** Absent is the off switch the editor uses under `Group by mana value` — and the state every
@@ -4020,8 +4105,9 @@ describe("StackView reordering", () => {
    * A pile dropped on itself is not a move. The other two refusals are worth pinning beside it
    * because each has a different cause and all three come out as silence.
    *
-   * **The rail registers no target at all**, so a pile dragged over the Sideboard falls through
-   * to nothing. **The command zone registers none either** (added 2026-08-20), and it is the one
+   * **The rail refuses a flowing pile** — it has had a target of its own since issue #508, for its
+   * own piles, and a flowing pile dropped there would write an order the next render could not
+   * show. **The command zone registers no target at all** (added 2026-08-20), and it is the one
    * that would break quietly: it is drawn in the flowing half of the view, at the head of the
    * masonry, so it looks exactly like the pile a reader would expect to be able to drop onto —
    * and it is pinned there, so landing a pile in front of it would be a move the next render
