@@ -129,6 +129,10 @@ pub mod ingest;
 pub mod legalities;
 pub mod listview;
 pub mod maintenance;
+/// **A theory deck's managed wishlist** (user schema v47, issue #512) — a wishlist folder each
+/// device derives from its own copy of the deck and rewrites after every write, and the guard
+/// that refuses a hand-made edit to it.
+pub mod managed_wishlist;
 /// **A settings row wearing [`listview`]'s shape with the vocabulary moved one step out.**
 /// There the frontend owns which walls exist and this crate owns the two words a wall may be
 /// drawn in; here the frontend owns which *marks* exist and this crate owns only the shape a

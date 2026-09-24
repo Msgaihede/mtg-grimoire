@@ -169,6 +169,9 @@ const WISH_SQL: &str = "SELECT w.id, w.quantity, w.folder_id, f.name
        LEFT JOIN wishlist_folders f ON f.id = w.folder_id
       WHERE w.card_id = ?1
         AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)
+        -- A managed wishlist's wish is its deck's, rewritten by `crate::managed_wishlist` when
+        -- the card reaches the deck; taking it down by hand is a write the guard refuses.
+        AND f.managed_deck_id IS NULL
       ORDER BY (w.folder_id IS NOT NULL), f.sort_order, w.id";
 
 /// Run [`WISH_SQL`] for one printing and finish.

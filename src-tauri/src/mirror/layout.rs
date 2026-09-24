@@ -624,6 +624,7 @@ mod tests {
             theory_mark_exact: true,
             theory_mark_name: true,
             theory_mark_unplanned: true,
+            managed_wishlist: true,
             separate_x_group: false,
             default_category_id: 0,
             last_variant: "live".to_owned(),
@@ -682,6 +683,7 @@ mod tests {
 
     fn wish_folder(id: i64, parent_id: Option<i64>, name: &str) -> WishlistFolder {
         WishlistFolder {
+            managed_deck_id: None,
             id,
             parent_id,
             name: name.to_owned(),

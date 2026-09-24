@@ -396,6 +396,9 @@ function Settings({ deckId }: { deckId: number }) {
     if (patch.theoryMarkName !== undefined) update({ theoryMarkName: patch.theoryMarkName });
     if (patch.theoryMarkUnplanned !== undefined)
       update({ theoryMarkUnplanned: patch.theoryMarkUnplanned });
+    // The managed wishlist rides the same `deck_update`; the backend creates, refills or removes
+    // the folder in that write, so this host does nothing more than relay the press.
+    if (patch.managedWishlist !== undefined) update({ managedWishlist: patch.managedWishlist });
     // A select, so it settles in one act and writes here. **`0` is a value and not an absence**,
     // which is why this needs no `deckSetFolder`-shaped escape below it: `AUTO_CATEGORY` is a
     // number the patch can carry, so "back to filing by what the card does" is an ordinary
@@ -454,6 +457,7 @@ function Settings({ deckId }: { deckId: number }) {
               theoryMarkExact: row.theoryMarkExact,
               theoryMarkName: row.theoryMarkName,
               theoryMarkUnplanned: row.theoryMarkUnplanned,
+              managedWishlist: row.managedWishlist,
               folderId: row.folderId,
               defaultCategoryId: row.defaultCategoryId,
             }}

@@ -84,6 +84,14 @@ export interface DeckSettingsValue {
    * one says the plan asks for it **not at all** — a stand-in, a spare, an experiment.
    */
   theoryMarkUnplanned: boolean;
+  /**
+   * Whether this deck keeps a **managed wishlist** — a wishlist folder named after the deck that
+   * always holds what its Compare dialog lists (issue #512). Drawn and gated beside the three
+   * marks, because it too reads the live list against the plan: only a `Theory + Actual` deck
+   * has a difference to keep. Required for the marks' reason — the create draft holds `true`,
+   * the column's `DEFAULT 1`, and sends nothing.
+   */
+  managedWishlist: boolean;
   folderId: number | null;
   /**
    * Which pile an add that names none lands in — `AUTO_CATEGORY` (`0`) for "by what the card
@@ -323,6 +331,8 @@ export function DeckSettingsForm({
               onExact={(theoryMarkExact) => onChange({ theoryMarkExact })}
               onName={(theoryMarkName) => onChange({ theoryMarkName })}
               onUnplanned={(theoryMarkUnplanned) => onChange({ theoryMarkUnplanned })}
+              managedWishlist={value.managedWishlist}
+              onManagedWishlist={(managedWishlist) => onChange({ managedWishlist })}
               id={idPrefix}
             />
           )}
@@ -707,6 +717,8 @@ function TheoryMarkSwitches({
   onExact,
   onName,
   onUnplanned,
+  managedWishlist,
+  onManagedWishlist,
   id,
 }: {
   exact: boolean;
@@ -715,6 +727,8 @@ function TheoryMarkSwitches({
   onExact: (on: boolean) => void;
   onName: (on: boolean) => void;
   onUnplanned: (on: boolean) => void;
+  managedWishlist: boolean;
+  onManagedWishlist: (on: boolean) => void;
   id: string;
 }) {
   return (
@@ -751,11 +765,21 @@ function TheoryMarkSwitches({
         on={unplanned}
         onChange={onUnplanned}
       />
+      {/* Not a mark, so no swatch — but the same subject: the folder holds the difference
+          between the two lists these marks are read across, so it shares their gate and indent. */}
+      <MarkSwitch
+        id={`${id}-managed-wishlist`}
+        heading="Managed wishlist"
+        caption="A wishlist folder named after this deck that always holds what the Compare dialog lists. It follows the deck and can't be edited by hand; turning this off removes the folder."
+        on={managedWishlist}
+        onChange={onManagedWishlist}
+      />
     </div>
   );
 }
 
-/** One mark's row: its colour, its name, what it means, and the switch that draws it or not. */
+/** One mark's row: its colour, its name, what it means, and the switch that draws it or not.
+ *  The managed-wishlist row borrows it without a swatch. */
 function MarkSwitch({
   id,
   swatch,
@@ -766,8 +790,8 @@ function MarkSwitch({
 }: {
   id: string;
   /** The custom property the mark itself is filled from — a `var()`, never a hex, so the
-   *  reader's own colour is what this sample shows. */
-  swatch: string;
+   *  reader's own colour is what this sample shows. Absent for a row that is not a mark. */
+  swatch?: string;
   heading: string;
   caption: string;
   on: boolean;
@@ -781,11 +805,13 @@ function MarkSwitch({
               already named in them, and a swatch cannot be read out. An inline style rather than
               an arbitrary Tailwind class for `TheoryMatchMark`'s two reasons: the property name
               has to be greppable, and a mistyped arbitrary value emits no rule at all. */}
-          <span
-            aria-hidden="true"
-            className="size-2.5 shrink-0 rounded-[2px]"
-            style={{ backgroundColor: swatch }}
-          />
+          {swatch !== undefined && (
+            <span
+              aria-hidden="true"
+              className="size-2.5 shrink-0 rounded-[2px]"
+              style={{ backgroundColor: swatch }}
+            />
+          )}
           {heading}
         </p>
         <p className="mt-0.5 text-[0.6875rem] leading-snug text-dim">{caption}</p>

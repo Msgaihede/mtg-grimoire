@@ -799,6 +799,15 @@ function deckLine(p: Record<string, unknown>): AuditLine {
           : "Stopped marking cards not in the theory list",
         detail: null,
       };
+    // The managed wishlist (user schema v47, issue #512): `deck.rs` records it under this word,
+    // the switch's own heading lowercased into the sentence. No `detail`, for the marks' reason.
+    case "managedWishlist":
+      return {
+        text: flag(p.to)
+          ? "Turned the managed wishlist on"
+          : "Turned the managed wishlist off",
+        detail: null,
+      };
     // A field this build has never heard of, written by a newer one — or by an older one,
     // since a database outlives the app that wrote it. A plain line with a date and a delta
     // beats a blank one, and beats a throw by a good deal more.

@@ -552,7 +552,19 @@ pub(crate) fn with_write<T>(
     f: impl FnOnce(&Connection) -> Result<T, String>,
 ) -> Result<T, String> {
     let out = match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-        Some(conn) => f(&conn),
+        Some(conn) => {
+            // **The managed wishlists ride every write, before and after** (issue #512). Armed
+            // first so the write's own changes to a deck are marked, and settled after — outside
+            // the write's transaction, which has committed or rolled back by then — so a folder
+            // is rewritten once per press rather than once per row. Neither can fail the write:
+            // an arm that did not take is a folder that catches up at the next launch.
+            if let Err(e) = crate::managed_wishlist::arm(&conn) {
+                eprintln!("the managed wishlists could not be armed on this connection: {e}");
+            }
+            let out = f(&conn);
+            crate::managed_wishlist::settle_logged(&conn);
+            out
+        }
         None => Err(crate::db::BUSY.to_owned()),
     };
     // **Every user-facing write in the crate passes through here**, so a debug build runs the

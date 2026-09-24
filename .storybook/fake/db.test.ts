@@ -3343,11 +3343,67 @@ describe("the wishlist's folders", () => {
     });
     // `Backordered` is in the answer despite being nobody's sibling on screen: the list is flat
     // and unscoped, and building the tree from `parentId` is `folderTree.ts`'s job.
+    // `managedDeckId: null` on every one — user schema v47's column, which a folder the reader
+    // made always answers `null` for.
     expect(readHandlers(db).wishlist_folder_list()).toEqual([
-      { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
-      { id: 3, parentId: null, name: "Someday", sortOrder: 0 },
-      { id: 2, parentId: 1, name: "Backordered", sortOrder: 1 },
+      { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null },
+      { id: 3, parentId: null, name: "Someday", sortOrder: 0, managedDeckId: null },
+      { id: 2, parentId: 1, name: "Backordered", sortOrder: 1, managedDeckId: null },
     ]);
+  });
+
+  /**
+   * **A deck's managed wishlist refuses every hand write, in the crate's words** (user schema v47,
+   * issue #512) — the folder, a sub-folder in it, a wish filed into or out of it, and any edit to
+   * a wish inside it. The fake is not allowed to be kinder than the app, so each door is tried and
+   * the store is checked unchanged afterwards: a refusal that had written first would pass the
+   * `toThrow` and still be the bug.
+   */
+  it("refuses every hand write to a deck's managed wishlist", () => {
+    const db = seed("starter");
+    const w = writeHandlers(db);
+    const MANAGED = 4;
+    const NOT_BY_HAND = /^A managed wishlist follows its deck, so it can't be edited by hand\.$/;
+    const managedWish = db.wishlistEntries.find((x) => x.folderId === MANAGED)!;
+    const rootWish = db.wishlistEntries.find((x) => x.folderId === null)!;
+    const folders = JSON.stringify(db.wishlistFolders);
+    const wishes = JSON.stringify(db.wishlistEntries);
+
+    // The folder.
+    expect(() => w.wishlist_folder_rename({ id: MANAGED, name: "Mine now" })).toThrow(NOT_BY_HAND);
+    expect(() => w.wishlist_folder_move({ id: MANAGED, parentId: 1 })).toThrow(NOT_BY_HAND);
+    expect(() => w.wishlist_folder_move({ id: 3, parentId: MANAGED })).toThrow(NOT_BY_HAND);
+    expect(() => w.wishlist_folder_create({ parentId: MANAGED, name: "Inside" })).toThrow(
+      NOT_BY_HAND,
+    );
+    expect(() => w.wishlist_folder_reorder({ parentId: null, ids: [MANAGED, 1, 3] })).toThrow(
+      NOT_BY_HAND,
+    );
+    expect(() => w.wishlist_folder_delete({ id: MANAGED })).toThrow(NOT_BY_HAND);
+    expect(() => w.wishlist_folder_clear({ id: MANAGED })).toThrow(NOT_BY_HAND);
+    expect(() => w.wishlist_folder_delete_with_wishes({ id: MANAGED })).toThrow(NOT_BY_HAND);
+    // A wish, into it and out of it.
+    expect(() => w.wishlist_set_folder({ id: rootWish.id, folderId: MANAGED })).toThrow(
+      NOT_BY_HAND,
+    );
+    expect(() => w.wishlist_set_folder({ id: managedWish.id, folderId: null })).toThrow(
+      NOT_BY_HAND,
+    );
+    expect(() =>
+      w.wishlist_add({ wish: { cardId: rootWish.cardId!, quantity: 1, folderId: MANAGED } }),
+    ).toThrow(NOT_BY_HAND);
+    // A wish inside it.
+    expect(() => w.wishlist_set_quantity({ id: managedWish.id, quantity: 3 })).toThrow(NOT_BY_HAND);
+    expect(() => w.wishlist_set_quantity({ id: managedWish.id, quantity: 0 })).toThrow(NOT_BY_HAND);
+    expect(() => w.wishlist_remove({ id: managedWish.id })).toThrow(NOT_BY_HAND);
+    expect(() => w.wishlist_set_printing({ id: managedWish.id, cardId: null })).toThrow(
+      NOT_BY_HAND,
+    );
+
+    expect(JSON.stringify(db.wishlistFolders)).toBe(folders);
+    expect(JSON.stringify(db.wishlistEntries)).toBe(wishes);
+    // And the reader's own drawers are untouched by the fence: the same doors still open there.
+    expect(w.wishlist_folder_rename({ id: 3, name: "Later" }).name).toBe("Later");
   });
 
   it("refuses a cycle, a move into itself, and a loop it did not write", () => {
@@ -12927,6 +12983,9 @@ describe("categories, labels, folders, history and the plan", () => {
   /** `starterWishFolders`' first drawer, which the seed already files two wishes into — so a
    *  press aimed at it is aimed somewhere a story can actually look. */
   const ORDERED = 1;
+  /** `starterWishFolders`' fourth row — deck 4's **managed** wishlist (user schema v47), which
+   *  the deck writes and no sweep may. */
+  const MANAGED_FOLDER = 4;
   /** An id nothing answers to: the drawer the reader picked and another window deleted. */
   const GONE_FOLDER = 404;
   /** Whole rather than a fragment — `DECK_GONE` is the same six words about the deck, and which
@@ -12964,8 +13023,12 @@ describe("categories, labels, folders, history and the plan", () => {
       folderId: ORDERED,
     });
     // And the row the reader did not tick reached neither that folder nor the list at all. The
-    // seed's own Sol Ring wish names no printing, so this is a question about *this* press.
-    expect(db.wishlistEntries.some((x) => x.cardId === ring.cardId)).toBe(false);
+    // seed's own Sol Ring wish names no printing, so this is a question about *this* press — and
+    // about the reader's own list: deck 4's **managed** wishlist (folder 4, user schema v47)
+    // already holds the foil Sol Ring, written by the deck rather than by any sweep.
+    expect(
+      db.wishlistEntries.some((x) => x.cardId === ring.cardId && x.folderId !== MANAGED_FOLDER),
+    ).toBe(false);
   });
 
   /**
@@ -12988,7 +13051,11 @@ describe("categories, labels, folders, history and the plan", () => {
     // press is short of exactly what the second was — and lands on the grain the second made.
     w.deck_theory_missing_to_wishlist({ deckId: 4, only, folderId: ORDERED });
 
-    const lotuses = db.wishlistEntries.filter((x) => x.cardId === lotus.cardId);
+    // The reader's own rows: deck 4's managed wishlist holds a Black Lotus of its own, which is
+    // the deck's answer to the same difference and never a grain these presses fold into.
+    const lotuses = db.wishlistEntries.filter(
+      (x) => x.cardId === lotus.cardId && x.folderId !== MANAGED_FOLDER,
+    );
     expect(lotuses.map((x) => x.folderId)).toEqual([null, ORDERED]);
     expect(lotuses.map((x) => x.quantity)).toEqual([lotus.quantity, lotus.quantity * 2]);
   });

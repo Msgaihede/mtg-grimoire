@@ -70,6 +70,7 @@ import {
 } from "@/features/collection/CollectionFolderCard";
 import { DECK_KIND, REMOVED_KIND } from "@/features/collection/PinnedFolders";
 import { useCollectionFolders } from "@/features/collection/useCollectionFolders";
+import { isManaged } from "@/features/wishlist/managed";
 import { useWishlistFolders } from "@/features/wishlist/useWishlistFolders";
 import { count, plural } from "@/lib/counts";
 import { buildFolderTree, type FolderLike, type FolderNode } from "@/lib/folderTree";
@@ -418,10 +419,16 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
     });
 
   const wishlistRows = (): FolderRowModel[] =>
-    pick(config.wishlistFolderIds, wishlist.folders, () => wishlistNodes).map((folder) => {
+    // Automatic is the drawers the reader made — the collection's rule above, which leaves the
+    // app's deck groups out — so a deck's **managed** wishlist (issue #512) appears here only when
+    // it is pinned by hand, and then says whose it is.
+    pick(config.wishlistFolderIds, wishlist.folders, () =>
+      wishlistNodes.filter((node) => !isManaged(node.folder)),
+    ).map((folder) => {
       const totals = wishTotals.get(folder.id) ?? NO_WISHES;
       const face = wishFace(totals, currency);
       const wishes = plural(totals.wishes, "wish", "wishes");
+      const managed = isManaged(folder);
       return {
         key: `wishlist-${folder.id}`,
         cabinet: "wishlist",
@@ -429,15 +436,21 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
         name: folder.name,
         // The unpriced count qualifies the money beside it, so it rides in the caption the money
         // has no room for — the same place `wishFace` puts it.
-        caption: `Wishlist · ${wishes}${totals.unpriced > 0 ? ` · ${totals.unpriced} unpriced` : ""}`,
+        caption: `${managed ? "Managed wishlist" : "Wishlist"} · ${wishes}${totals.unpriced > 0 ? ` · ${totals.unpriced} unpriced` : ""}`,
         money:
           totals.copies === 0
             ? undefined
             : formatPrice(totals.cost > 0 ? totals.cost : null, currency),
         count: wishes,
         face: face.shown,
-        spokenName: `${folder.name}, wishlist folder, ${face.spoken}`,
-        icon: <Heart className="size-3.5" aria-hidden="true" />,
+        spokenName: `${folder.name}, ${managed ? "managed wishlist" : "wishlist folder"}, ${face.spoken}`,
+        // `Layers` on a managed one — the deck groups' glyph above, and the wishlist page's own
+        // for the same fact: this folder belongs to a deck.
+        icon: managed ? (
+          <Layers className="size-3.5" aria-hidden="true" />
+        ) : (
+          <Heart className="size-3.5" aria-hidden="true" />
+        ),
         color: WISH,
       };
     });
@@ -658,7 +671,8 @@ export function FoldersWidgetSettings({ widget, onConfig }: WidgetSettingsProps)
           label="Wishlist folders"
           options={wishlist.folders.map((each) => ({
             value: String(each.id),
-            label: each.name,
+            // A shortcut may point at a deck's managed list, and says so — `(deck)` above.
+            label: isManaged(each) ? `${each.name} (managed)` : each.name,
           }))}
           selected={config.wishlistFolderIds}
           onToggle={(value) => toggle("wishlistFolderIds", value)}

@@ -39,8 +39,8 @@ import { useWishlistFolderList, useWishlistFolders } from "./useWishlistFolders"
 
 /** Two folders, one inside the other — flat rows, because the tree is the reader's to build
  *  from `parentId` and `wishlist_folders` has no notion of depth. */
-const WANTS: WishlistFolder = { id: 1, parentId: null, name: "Wants", sortOrder: 0 };
-const STAPLES: WishlistFolder = { id: 2, parentId: 1, name: "Staples", sortOrder: 0 };
+const WANTS: WishlistFolder = { id: 1, parentId: null, name: "Wants", sortOrder: 0, managedDeckId: null };
+const STAPLES: WishlistFolder = { id: 2, parentId: 1, name: "Staples", sortOrder: 0, managedDeckId: null };
 
 /** One summary row per folder above — direct per folder, never recursive. */
 const WANTS_SUMMARY: WishlistFolderSummary = {

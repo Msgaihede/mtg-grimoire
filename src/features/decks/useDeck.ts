@@ -458,12 +458,13 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * The whole `["decks"]` root, not this one detail: a card write can move every
    * `ownedQuantity` in the deck, and the gallery tile's `cardCount` and `updatedAt` with them.
    *
-   * **And, for most writes, nothing wider than that.** Owned/missing is a sum over the rows
+   * **And, for most writes, not the collection.** Owned/missing is a sum over the rows
    * sitting in this deck's collection group, so a write that only changes the *list* — an add, a
    * move between piles, a finish, a label — provably leaves `collection_entries` where it was,
    * and firing the collection's root as well would be a refetch per press of the stepper that can
-   * only answer what is already on screen. `missingToWishlist` takes `["wishlist"]` on top,
-   * because it is the one command here that actually writes wishes.
+   * only answer what is already on screen. **`["wishlist"]` rides every write since user schema
+   * v47**, because a theory deck's managed wishlist is rewritten by Rust after any change to the
+   * deck — see the line below.
    *
    * **{@link invalidateCollection} is the exception and it is a real one**, so read that one
    * before adding a write to this file: since schema v25 a cut on the live list *moves a
@@ -471,6 +472,10 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    */
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
+    // A theory deck's managed wishlist (issue #512) is rewritten by Rust after every deck
+    // write, so the wishlist's reads go stale with the deck's. Only a mounted query refetches;
+    // an unmounted one is marked and read fresh the next time the wishlist opens.
+    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
   };
 
   /**

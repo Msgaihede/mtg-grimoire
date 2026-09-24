@@ -122,12 +122,16 @@ const WRITES: readonly string[] = ["wishlistAdd"];
 const SHARE_WRITES: readonly string[] = ["shareCreate", "shareRefresh", "shareRevoke"];
 
 /**
- * Every name this directory may import from a **sibling feature**, and there are two.
+ * Every name this directory may import from a **sibling feature**, and there are three.
  *
  * * `BUTTON` — `features/settings/controls`. A class string; it reaches nothing.
  * * `useWishlistFolderList` — `features/wishlist/useWishlistFolders`. One fixed read
  *   (`ipc.wishlistFolderList`), no argument, no callback, so nothing here can steer it — and
  *   using it is what keeps the app's folder list one query instead of two cache entries.
+ * * `userWishFolders` — `features/wishlist/managed`. A pure filter over that list, which drops a
+ *   deck's managed wishlist folder (user schema v47, issue #512) from the want list's
+ *   destinations, since the backend refuses a hand add into one. The module imports nothing but
+ *   a type, so it reaches no command.
  *
  * **The name that must never appear is `useWishlistFolders`**, its neighbour in the same module,
  * which carries every folder write. It would give this view a folder-creating control, which spec
@@ -137,7 +141,7 @@ const SHARE_WRITES: readonly string[] = ["shareCreate", "shareRefresh", "shareRe
  * `@/lib/*` and `@/components/*` are deliberately outside this list: they are the app's shared
  * floor rather than another feature's surface, and `ipc.ts` is already fenced by name.
  */
-const OUTSIDE_IMPORTS: readonly string[] = ["BUTTON", "useWishlistFolderList"];
+const OUTSIDE_IMPORTS: readonly string[] = ["BUTTON", "useWishlistFolderList", "userWishFolders"];
 
 /** A named-import list taken from another feature — `import { a, b as c } from "@/features/…"`. */
 const CROSS_FEATURE = /import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+"@\/features\/([^"]*)"/g;

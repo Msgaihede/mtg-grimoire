@@ -93,19 +93,22 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The seeded wishlist, sliced by rarity — eight wishes over fourteen copies costing `$246.53`.
+ * The seeded wishlist, sliced by rarity — thirteen wishes since deck 4's managed wishlist joined
+ * `starter` (user schema v47), which is also what priced the `Rare` bucket that used to be this
+ * story's hole: the managed wishes put priced rares in it.
  *
- * `Common` is the money (`$140.48` over two copies), and `Rare` is the **hole**: one copy the
- * marketplace will not quote a price to buy at, which draws an em dash and says so in words.
+ * `Common` is still the money (`$140.48` over two copies). The copies no marketplace quotes are
+ * still counted, in words, under the chart — the foil Secret Lair Sol Ring and the Black Lotus
+ * among them.
  */
 export const ByRarity: Story = {
   play: async ({ canvasElement }) => {
     const card = await cardIn(canvasElement);
     await expect(
-      await card.findByText("Common: 2 copies, $140.48, 57% of the total."),
+      await card.findByText("Common: 2 copies, $140.48, 45% of the total."),
     ).toBeInTheDocument();
-    await expect(card.getByText("Rare: 1 copy, no price to buy at TCGplayer.")).toBeInTheDocument();
-    await expect(card.getByText("1 copy nobody quotes a price for")).toBeInTheDocument();
+    await expect(card.getByText("Rare: 6 copies, $41.58, 13% of the total.")).toBeInTheDocument();
+    await expect(card.getByText(/^\d+ cop(y|ies) nobody quotes a price for$/)).toBeInTheDocument();
   },
 };
 
@@ -138,7 +141,7 @@ export const AConfigThisBuildCannotRead: Story = {
   play: async ({ canvasElement }) => {
     const card = await cardIn(canvasElement);
     await expect(
-      await card.findByText("Common: 2 copies, $140.48, 57% of the total."),
+      await card.findByText("Common: 2 copies, $140.48, 45% of the total."),
     ).toBeInTheDocument();
   },
 };

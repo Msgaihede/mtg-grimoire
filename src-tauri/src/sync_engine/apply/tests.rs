@@ -1476,6 +1476,12 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
             // is what will say so.
             // `WISHLIST_GRAIN`, four terms since v23.
             "wishlist_entries.idx_wishlist_grain",
+            // **Not a grain, and not about sync at all** (user schema v47): one managed folder
+            // per deck. `managed_deck_id` is on no capture spec and every row it is set on is
+            // written inside `capture::suppressed`, so no op ever carries it and every folder
+            // that syncs has it NULL — which a UNIQUE index treats as distinct. No two devices
+            // can collide on it.
+            "wishlist_folders.idx_wishlist_folders_managed",
         ]
         .map(str::to_owned),
         "a UNIQUE index on a synced table with no grain is two devices keeping separate rows, \

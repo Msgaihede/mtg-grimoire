@@ -197,7 +197,11 @@ pub fn plan(conn: &Connection, q: &WishlistQuery) -> Result<WishlistOptimizePlan
                 w.card_id, w.oracle_id,
                 c.id, c.set_code, c.collector_number, c.lang,
                 ({price}) AS cur_price
-           FROM {from} WHERE {where_sql}
+           FROM {from} WHERE ({where_sql})
+            -- A managed wishlist's wishes are its deck's printings, and repointing one is a
+            -- hand-made edit `crate::managed_wishlist` refuses — so they are never offered.
+            AND (w.folder_id IS NULL OR w.folder_id NOT IN
+                  (SELECT id FROM wishlist_folders WHERE managed_deck_id IS NOT NULL))
           ORDER BY w.name ASC, w.id ASC"
     );
     // Collected whole rather than classified as the rows arrive: a wishlist is tens of rows, so

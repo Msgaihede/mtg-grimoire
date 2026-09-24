@@ -665,6 +665,9 @@ const DECK_1_GROUP = 4;
  *  which is what the cross-deck confirmation is about. See {@link starterEntries}. */
 const DECK_2_GROUP = 5;
 
+/** Deck 4's managed wishlist folder (user schema v47) — see {@link starterWishFolders}. */
+const MANAGED_TESTBED_FOLDER = 4;
+
 /**
  * Three folders (schema v23), and each is a shape the wishlist page has to be able to draw.
  *
@@ -683,12 +686,27 @@ const DECK_2_GROUP = 5;
  *
  * `sortOrder` is what `wishlist_folder_create` writes — `max + 1` **among siblings** — so the two
  * at the root are 0 and 1 while the child starts at 0 again rather than continuing their run.
+ *
+ * **The fourth row is not the reader's** — deck 4's managed wishlist ({@link MANAGED_TESTBED_FOLDER}).
  */
 function starterWishFolders(): FakeWishlistFolder[] {
   return [
     { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
     { id: 2, parentId: 1, name: "Backordered", sortOrder: 0 },
     { id: 3, parentId: null, name: "Someday", sortOrder: 1 },
+    // **Deck 4's managed wishlist** (user schema v47, issue #512) — the folder a `Theory + Actual`
+    // deck keeps with its switch on, which is the column's default. Deck 4 is the one seeded deck
+    // with a plan, so a `starter` world without this row is one the app cannot produce: its first
+    // launch after v47 makes it. Named after the deck, at the root, and never the reader's —
+    // every hand write to it is refused (`db.ts`'s `MANAGED_WISHLIST`). Its wishes are
+    // {@link MANAGED_TESTBED_FOLDER}'s rows in {@link starterWishes}.
+    {
+      id: MANAGED_TESTBED_FOLDER,
+      parentId: null,
+      name: "Rhystic Testbed",
+      sortOrder: 2,
+      managedDeckId: 4,
+    },
   ];
 }
 
@@ -757,6 +775,19 @@ function starterWishes(): FakeWish[] {
       folderId: 2,
       notes: "The reprint is announced; this is the pile that waits for it.",
     }),
+    // --- Deck 4's managed wishlist: what its Compare dialog lists, theory less live ------------
+    // Written by the deck and not the reader, so every row here is one Rust would have written
+    // at rest — {@link testbedDeckCards}' plan against its sleeved list. The foil `sld 913` Sol
+    // Ring is the `Different printing` row and keeps its finish; the Black Lotus is short because
+    // the live copy sits in the switched-off Cut list; the other three are plain `Missing`.
+    pinnedWish(next(), printing("sld", "913"), 1, {
+      folderId: MANAGED_TESTBED_FOLDER,
+      preferredFinish: "foil",
+    }),
+    pinnedWish(next(), printing("lea", "232"), 1, { folderId: MANAGED_TESTBED_FOLDER }),
+    pinnedWish(next(), printing("kld", "235"), 2, { folderId: MANAGED_TESTBED_FOLDER }),
+    pinnedWish(next(), printing("mh2", "259"), 1, { folderId: MANAGED_TESTBED_FOLDER }),
+    pinnedWish(next(), printing("wwk", "31"), 1, { folderId: MANAGED_TESTBED_FOLDER }),
   ];
 }
 

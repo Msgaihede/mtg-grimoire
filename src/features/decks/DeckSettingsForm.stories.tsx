@@ -130,6 +130,7 @@ function Body({
     theoryMarkExact: row?.theoryMarkExact ?? true,
     theoryMarkName: row?.theoryMarkName ?? true,
     theoryMarkUnplanned: row?.theoryMarkUnplanned ?? true,
+    managedWishlist: row?.managedWishlist ?? true,
     folderId: row?.folderId ?? null,
     // `AUTO_CATEGORY` for a deck that does not exist — the column's own `DEFAULT 0`, and the
     // only answer a deck with no categories could honestly give.

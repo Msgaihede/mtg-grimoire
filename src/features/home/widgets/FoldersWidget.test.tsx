@@ -79,9 +79,9 @@ const COLLECTION_ROWS: CollectionFolderSummary[] = [
   { folderId: 5, cards: 2, value: null },
 ];
 
-const BUY_SOON: WishlistFolder = { id: 10, parentId: null, name: "Buy soon", sortOrder: 0 };
-const STAPLES: WishlistFolder = { id: 11, parentId: 10, name: "Staples", sortOrder: 0 };
-const LATER: WishlistFolder = { id: 12, parentId: null, name: "Later", sortOrder: 1 };
+const BUY_SOON: WishlistFolder = { id: 10, parentId: null, name: "Buy soon", sortOrder: 0, managedDeckId: null };
+const STAPLES: WishlistFolder = { id: 11, parentId: 10, name: "Staples", sortOrder: 0, managedDeckId: null };
+const LATER: WishlistFolder = { id: 12, parentId: null, name: "Later", sortOrder: 1, managedDeckId: null };
 const WISHES = [BUY_SOON, STAPLES, LATER];
 
 const WISHLIST_ROWS: WishlistFolderSummary[] = [
@@ -335,6 +335,7 @@ describe("FoldersWidget", () => {
         parentId: null,
         name: `Wish ${i + 1}`,
         sortOrder: i,
+        managedDeckId: null,
       }));
 
     /**

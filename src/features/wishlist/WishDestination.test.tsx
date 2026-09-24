@@ -40,11 +40,11 @@ const LABEL = "Wishlist folder to send to";
  * whole path rule exists for: a picker that drew bare names would list that word twice with
  * nothing telling a reader — or a `getByRole` — which is which.
  */
-const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0 };
-const DRAFT_NIGHT: WishlistFolder = { id: 2, parentId: 1, name: "Draft night", sortOrder: 0 };
-const ORDERED_SOMEDAY: WishlistFolder = { id: 3, parentId: 1, name: "Someday", sortOrder: 1 };
-const EXPENSIVE: WishlistFolder = { id: 4, parentId: null, name: "Expensive", sortOrder: 1 };
-const EXPENSIVE_SOMEDAY: WishlistFolder = { id: 5, parentId: 4, name: "Someday", sortOrder: 0 };
+const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null };
+const DRAFT_NIGHT: WishlistFolder = { id: 2, parentId: 1, name: "Draft night", sortOrder: 0, managedDeckId: null };
+const ORDERED_SOMEDAY: WishlistFolder = { id: 3, parentId: 1, name: "Someday", sortOrder: 1, managedDeckId: null };
+const EXPENSIVE: WishlistFolder = { id: 4, parentId: null, name: "Expensive", sortOrder: 1, managedDeckId: null };
+const EXPENSIVE_SOMEDAY: WishlistFolder = { id: 5, parentId: 4, name: "Someday", sortOrder: 0, managedDeckId: null };
 
 /**
  * The flat rows, **deliberately not in the order the tree draws them**.
@@ -69,7 +69,7 @@ const ROWS = [
 
 /** The folder a `New folder…` press makes in the tests below — filed in `Ordered`, so its path is
  *  two levels deep and a create that dropped the parent draws a different one. */
-const PRERELEASE: WishlistFolder = { id: 6, parentId: 1, name: "Prerelease", sortOrder: 2 };
+const PRERELEASE: WishlistFolder = { id: 6, parentId: 1, name: "Prerelease", sortOrder: 2, managedDeckId: null };
 
 let client: QueryClient;
 
@@ -162,6 +162,23 @@ describe("WishDestination", () => {
    * disagrees with this one.
    */
   it("lists the root, every folder by full path, and New folder…", async () => {
+    const user = userEvent.setup();
+    renderControl();
+    await openCabinet(user);
+
+    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual(ROWS);
+  });
+
+  /**
+   * **A deck's managed wishlist is never a destination** (user schema v47, issue #512): the deck
+   * writes it and the backend refuses a send into it, so the row is absent rather than a choice
+   * ending in a refusal — here, and so in both deck dialogs that draw this control.
+   */
+  it("leaves a deck's managed wishlist out of the list", async () => {
+    wishlistFolderList.mockResolvedValue([
+      ...CABINET,
+      { id: 9, parentId: null, name: "Rhystic Testbed", sortOrder: 2, managedDeckId: 4 },
+    ]);
     const user = userEvent.setup();
     renderControl();
     await openCabinet(user);

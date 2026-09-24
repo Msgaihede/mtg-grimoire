@@ -2276,6 +2276,18 @@ export interface WishlistFolder {
   parentId: number | null;
   name: string;
   sortOrder: number;
+  /**
+   * The deck this folder is the **managed wishlist** of, or `null` for a folder the reader made
+   * (user schema v47, [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512)).
+   *
+   * A managed folder holds exactly what that deck's Compare dialog lists — the theory list less
+   * the actual list — and Rust rewrites it after every write that changes the deck. It is the
+   * **deck's** rather than the reader's: every write that would file, rename, move, delete or
+   * edit a wish in it is refused by the backend, so a surface draws no such control for it.
+   * Always a root folder (`parentId` is `null`), and never synced — each device derives its own
+   * from the deck, which is.
+   */
+  managedDeckId: number | null;
 }
 
 /**
@@ -3357,6 +3369,9 @@ export interface DeckPatch {
    *  all. See {@link DeckRow.theoryMarkUnplanned}, and {@link DeckPatch.theoryMarkExact} above
    *  for the rules all three share. `decks.theory_mark_unplanned`, schema v39. */
   theoryMarkUnplanned?: boolean;
+  /** Whether this deck keeps a **managed wishlist** folder. See {@link DeckRow.managedWishlist};
+   *  `decks.managed_wishlist`, schema v47. */
+  managedWishlist?: boolean;
   /**
    * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
    * the mana value Scryfall gives it. See {@link DeckRow.separateXGroup} — a **reading**
@@ -3802,6 +3817,18 @@ export interface DeckRow {
    * because a deck's tile and its gallery read want a row and not a notebook.
    */
   notesOpen: boolean;
+  /**
+   * Whether this deck keeps a **managed wishlist** — a wishlist folder of its own holding exactly
+   * what the Compare dialog lists, rewritten by Rust after every change to the deck
+   * (`decks.managed_wishlist`, user schema v47, `NOT NULL DEFAULT 1` —
+   * [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512)).
+   *
+   * **It only does anything on a `Theory + Actual` deck**: a regular deck has no plan to be
+   * short of and a virtual one owns no cardboard, so the column is read but ignored for both
+   * and a deck switched to either loses its folder. On by default, so every theory deck that
+   * existed before the column gets a folder at the first launch after the upgrade.
+   */
+  managedWishlist: boolean;
   /**
    * Which of this deck's categories an add that names no pile lands in — `decks.default_category_id`,
    * schema v16, and **`AUTO_CATEGORY` (`0`) for "let the card's own text decide"**.

@@ -95,6 +95,7 @@ const DECK: DeckRow = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
+  managedWishlist: true,
   // How the editor was last read, written by `deckSetViewState` alone — `rememberView` below is
   // the only mutation here that touches them, and the only one that does not invalidate.
   lastVariant: "live",
@@ -414,7 +415,7 @@ describe("useDeck", () => {
 
     await result.current.clearCategory.mutateAsync(MAIN.id);
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks", "wishlist"]));
   });
 
   /**
@@ -429,7 +430,7 @@ describe("useDeck", () => {
 
     await result.current.clearCategory.mutateAsync(MAIN.id);
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
   });
 
   /**
@@ -499,7 +500,7 @@ describe("useDeck", () => {
 
     await result.current.clearDeck.mutateAsync("live");
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks", "wishlist"]));
   });
 
   /**
@@ -515,7 +516,7 @@ describe("useDeck", () => {
 
     await result.current.clearDeck.mutateAsync("theory");
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
   });
 
   /**
@@ -531,7 +532,7 @@ describe("useDeck", () => {
 
     await result.current.clearDeck.mutateAsync("live");
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
   });
 
   /** A deck the gallery has not refreshed since another view deleted it. `null` is the
@@ -1026,7 +1027,7 @@ describe("useDeck", () => {
    * summed from `collection_entries`. Only the one command that actually writes wishes takes
    * `["wishlist"]` with it.
    */
-  it("refreshes every deck query after a card write, and the wishlist only when it wrote one", async () => {
+  it("refreshes every deck query and the wishlist after a card write", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
     const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -1038,7 +1039,9 @@ describe("useDeck", () => {
       quantity: 3,
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    // Every deck write marks the wishlist since user schema v47: a theory deck's managed
+    // wishlist is rewritten after it (issue #512).
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
 
     invalidate.mockClear();
@@ -1252,7 +1255,7 @@ describe("useDeck", () => {
       held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
     });
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks", "wishlist"]));
   });
 
   /**
@@ -1280,7 +1283,7 @@ describe("useDeck", () => {
       held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
     });
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
   });
 
   /**
@@ -1345,7 +1348,7 @@ describe("useDeck", () => {
    * shotgun: this command writes no wish, and the one write in this hook that does is the one
    * next to it. `staleRoots` covers all four roots, so the exact array is the whole assertion.
    */
-  it("refreshes the deck, the collection and the search after a pull — and not the wishlist", async () => {
+  it("refreshes the deck, the collection, the search and the wishlist after a pull", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
     seedOwned(client);
@@ -1359,7 +1362,7 @@ describe("useDeck", () => {
     // What actually moved, which is what a sentence quotes — never the picks that went in.
     expect(moved).toEqual({ copies: 3, cards: 1 });
     await waitFor(() =>
-      expect(staleRoots(client)).toEqual(["cards", "collection", "decks"]),
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
     );
   });
 
@@ -1774,7 +1777,7 @@ describe("useDeck invalidation", () => {
 
     await result.current.addCard.mutateAsync({ cardId: "p1", categoryId: MAIN.id, quantity: 2 });
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
   });
 
   /** The stepper, which is the one a reader presses over and over. */
@@ -1790,7 +1793,7 @@ describe("useDeck invalidation", () => {
       quantity: 3,
     });
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
   });
 });
 

@@ -48,6 +48,7 @@
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Dialog } from "@/components/Dialog";
+import { userWishFolders } from "@/features/wishlist/managed";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
 import { BUTTON } from "@/features/settings/controls";
 import { buildFolderTree, flattenFolders } from "@/lib/folderTree";
@@ -177,7 +178,13 @@ export function AddToWishlist({
   /** The cabinet top to bottom, which is the order the tree is drawn in — never the flat rows'
    *  own order, which says nothing about depth. No members are passed: this list is a set of
    *  destinations and a count beside each one would be a second question. */
-  const tree = useMemo(() => flattenFolders(buildFolderTree(folders, [])), [folders]);
+  //
+  // **The reader's own drawers only** — a deck's managed wishlist refuses a hand add in words
+  // (issue #512), so it is not a destination here any more than in the card menu.
+  const tree = useMemo(
+    () => flattenFolders(buildFolderTree(userWishFolders(folders), [])),
+    [folders],
+  );
   const folderId = destination === "" ? null : Number(destination);
   const named = tree.find((node) => node.folder.id === folderId)?.folder.name ?? "your wishlist";
 

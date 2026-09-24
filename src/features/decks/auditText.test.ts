@@ -808,6 +808,16 @@ describe("auditSentence", () => {
     expect(deck({ field: "theoryMarkUnplanned", to: true }).text).not.toEqual(
       deck({ field: "theoryMarkExact", to: true }).text,
     );
+    // The managed wishlist (schema v47) — `deck.rs`'s `camelCase` word, never the column's.
+    expect(deck({ field: "managedWishlist", from: false, to: true })).toEqual({
+      text: "Turned the managed wishlist on",
+      detail: null,
+    });
+    expect(deck({ field: "managedWishlist", from: true, to: false })).toEqual({
+      text: "Turned the managed wishlist off",
+      detail: null,
+    });
+    expect(deck({ field: "managed_wishlist", to: true }).text).toBe("Changed the deck");
     // The wrong-but-plausible spellings: one key for every switch, and the raw column names.
     expect(deck({ field: "theoryMark", to: true })).toEqual({
       text: "Changed the deck",

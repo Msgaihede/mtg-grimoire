@@ -241,9 +241,9 @@ const SEARCH_BOLT: CardSummary = {
  * and an empty folder has **no summary row at all** — the read groups the wishes — so it is the
  * one that catches a card fed a raw `Map.get`.
  */
-const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0 };
-const BACKORDERED: WishlistFolder = { id: 2, parentId: 1, name: "Backordered", sortOrder: 0 };
-const SOMEDAY: WishlistFolder = { id: 3, parentId: null, name: "Someday", sortOrder: 1 };
+const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null };
+const BACKORDERED: WishlistFolder = { id: 2, parentId: 1, name: "Backordered", sortOrder: 0, managedDeckId: null };
+const SOMEDAY: WishlistFolder = { id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null };
 const FOLDERS: WishlistFolder[] = [ORDERED, BACKORDERED, SOMEDAY];
 
 /** Direct per folder, and `Someday` is deliberately absent rather than zeroed. */
@@ -3685,5 +3685,148 @@ describe("the search column", () => {
       ),
     );
     expect(wishlistSetFolder).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * **A deck's managed wishlist** (user schema v47, issue #512): a folder a `Theory + Actual` deck
+ * keeps, holding what its Compare dialog lists and rewritten by Rust after every deck write. The
+ * backend refuses every hand write that touches one, so what this page owes it is the issue's two
+ * sentences — *a separate section with a special icon*, and *no editing by hand* — plus the rule
+ * that it is never offered as a destination.
+ */
+describe("a deck's managed wishlist", () => {
+  const MANAGED: WishlistFolder = {
+    id: 9,
+    parentId: null,
+    name: "Rhystic Testbed",
+    sortOrder: 2,
+    managedDeckId: 4,
+  };
+  /** What the deck's plan is short of — filed in the managed folder by the deck, not the reader. */
+  const COPTER: WishRow = {
+    ...BOLT,
+    id: 30,
+    folderId: MANAGED.id,
+    name: "Smuggler's Copter",
+    cardId: "c-copter",
+    artCardId: "c-copter",
+    setCode: "kld",
+    collectorNumber: "235",
+    preferredFinish: null,
+    quantity: 2,
+    unitPrice: 3,
+  };
+  const listByLevel = async (q: WishlistQuery) =>
+    q.flatten === true
+      ? page([BOLT, COPTER])
+      : page(q.folderId === MANAGED.id ? [COPTER] : q.folderId === undefined ? [BOLT] : []);
+
+  beforeEach(() => {
+    wishlistList.mockReset().mockImplementation(listByLevel);
+    wishlistFolderList.mockResolvedValue([...FOLDERS, MANAGED]);
+    wishlistFolderSummary.mockResolvedValue([
+      ...SUMMARY,
+      { folderId: MANAGED.id, wishes: 1, copies: 2, cost: 6, unpriced: 0 },
+    ]);
+    useAppStore.setState({ activeView: "wishlist", openDeckId: null });
+  });
+
+  const openManaged = async () => {
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Rhystic Testbed managed wishlist/ }),
+    );
+    await waitFor(() => expect(lastQuery().folderId).toBe(MANAGED.id));
+    // The wall names a tile by its art's `alt`, the table by a cell's text.
+    await (useAppStore.getState().wishlistView === "grid"
+      ? screen.findByAltText("Smuggler's Copter")
+      : screen.findByText("Smuggler's Copter"));
+  };
+
+  it("draws the managed folder in a section of its own, with the deck glyph and no menu", async () => {
+    wrap(<WishlistPage />);
+
+    const section = await screen.findByRole("list", { name: "Managed by decks" });
+    const door = await within(section).findByRole("button", {
+      name: /^Rhystic Testbed managed wishlist, 1 wish/,
+    });
+    // `Layers` — the collection's deck-group glyph, one fact wearing one picture.
+    expect(door.querySelector("svg.lucide-layers")).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Managed by decks" })).toBeInTheDocument();
+    // Not a drawer on the reader's wall, and nothing on it that writes.
+    const wall = screen.getByRole("list", { name: "Folders" });
+    expect(within(wall).queryByText("Rhystic Testbed")).not.toBeInTheDocument();
+    expect(within(wall).getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage Rhystic Testbed" })).not.toBeInTheDocument();
+    expect(door.closest(`[${DND_SOURCE_ATTR}]`)).toBeNull();
+  });
+
+  it("draws a managed wish with no stepper, no pencil, no removal and no drag", async () => {
+    wrap(<WishlistPage />);
+    await openManaged();
+
+    expect(screen.getByText(/Follows the deck “Rhystic Testbed”/)).toBeInTheDocument();
+    // Nothing can be made inside it, and nothing on the row writes.
+    expect(screen.queryByRole("button", { name: "New folder" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: /Copies wanted of Smuggler/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Edit Smuggler's Copter/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remove Smuggler's Copter/ })).toBeNull();
+    const row = screen.getByText("Smuggler's Copter").closest('[role="row"]') as HTMLElement;
+    expect(row).not.toHaveAttribute(DND_SOURCE_ATTR);
+    // The count it wants is still said.
+    expect(within(row).getByText("2")).toBeInTheDocument();
+    // And the way up is still there — reading the folder is not a trap.
+    expect(upTile("Wishlist")).toBeInTheDocument();
+  });
+
+  it("draws the managed wish's tile with no controls on the wall either", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wrap(<WishlistPage />);
+    await openManaged();
+
+    expect(screen.queryByRole("spinbutton", { name: /Copies wanted of Smuggler/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Edit Smuggler's Copter/ })).toBeNull();
+    expect(cardSources(document.body)).toEqual([]);
+  });
+
+  it("keeps the reader's own wishes editable beside a managed one when flattened", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+    await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
+    await screen.findByText("Smuggler's Copter");
+
+    expect(
+      screen.getByRole("spinbutton", { name: /Copies wanted of Lightning Bolt/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: /Copies wanted of Smuggler/ })).toBeNull();
+    // And the section goes with the rest of the cabinet: the filing is off screen.
+    expect(screen.queryByRole("list", { name: "Managed by decks" })).not.toBeInTheDocument();
+  });
+
+  it("never offers the managed folder as somewhere to move a wish", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Edit Lightning Bolt (LEA 161, Foil) on your wishlist" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Move to folder: Lightning Bolt (LEA 161, Foil)" }),
+    );
+    const destinations = await screen.findByRole("group", {
+      name: "Move Lightning Bolt (LEA 161, Foil) to a folder",
+    });
+    expect(within(destinations).getByRole("button", { name: /Ordered/ })).toBeInTheDocument();
+    expect(within(destinations).queryByRole("button", { name: /Rhystic Testbed/ })).toBeNull();
+  });
+
+  it("opens the deck the folder follows", async () => {
+    wrap(<WishlistPage />);
+    await openManaged();
+
+    await userEvent.click(screen.getByRole("button", { name: "Open deck" }));
+
+    expect(useAppStore.getState().activeView).toBe("decks");
+    expect(useAppStore.getState().openDeckId).toBe(4);
   });
 });

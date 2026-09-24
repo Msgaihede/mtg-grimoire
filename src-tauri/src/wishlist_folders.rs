@@ -76,6 +76,11 @@ pub struct WishlistFolder {
     pub parent_id: Option<i64>,
     pub name: String,
     pub sort_order: i64,
+    /// The deck this folder is the **managed wishlist** of — schema v47, and `None` for every
+    /// folder the reader made. [`crate::managed_wishlist`] owns such a folder: it is always at
+    /// the root, named after its deck, and every hand-made write to it or to a wish inside it is
+    /// refused with [`crate::managed_wishlist::MANAGED`].
+    pub managed_deck_id: Option<i64>,
 }
 
 /// What one folder tile is drawn from — the four numbers, per folder, in one round trip.
@@ -119,12 +124,14 @@ fn folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<WishlistFolder> {
         parent_id: r.get(1)?,
         name: r.get(2)?,
         sort_order: r.get(3)?,
+        managed_deck_id: r.get(4)?,
     })
 }
 
 fn read_folder(conn: &Connection, id: i64) -> Result<Option<WishlistFolder>, String> {
     conn.query_row(
-        "SELECT id, parent_id, name, sort_order FROM wishlist_folders WHERE id = ?1",
+        "SELECT id, parent_id, name, sort_order, managed_deck_id
+           FROM wishlist_folders WHERE id = ?1",
         params![id],
         folder_row,
     )
@@ -137,7 +144,7 @@ fn read_folder(conn: &Connection, id: i64) -> Result<Option<WishlistFolder>, Str
 pub fn list_folders(conn: &Connection) -> Result<Vec<WishlistFolder>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, parent_id, name, sort_order
+            "SELECT id, parent_id, name, sort_order, managed_deck_id
                FROM wishlist_folders ORDER BY sort_order, id",
         )
         .map_err(|e| e.to_string())?;

@@ -62,6 +62,7 @@ import { useDeckFolders } from "@/features/decks/useDeckFolders";
 // `MenuLazy.Content` and fires on an expand rather than on a right-click.
 import { playKey, useDecksPlaying } from "@/features/decks/useDeckPlays";
 import { useDecks } from "@/features/decks/useDecks";
+import { userWishFolders } from "@/features/wishlist/managed";
 import { copyText } from "@/lib/clipboard";
 import { edhrecCardUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
 import { parseFinishes, type Finish } from "@/lib/finish";
@@ -929,7 +930,9 @@ function wishlistItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): Menu
   const wishAll = (folderId: number | null) => {
     for (const target of rows) deps.addToWishlist(target, folderId);
   };
-  if (deps.wishlistFolders.length === 0) {
+  // The reader's own drawers: a deck's managed folder is never a destination (issue #512), so a
+  // reader whose only folders are managed ones still gets the single press.
+  if (userWishFolders(deps.wishlistFolders).length === 0) {
     return { kind: "action", ...row, onSelect: () => wishAll(null) };
   }
   return {
@@ -1329,6 +1332,12 @@ function deckLevel(
  * **Members are deliberately not passed** — `buildFolderTree(folders, [])`. The node counts come
  * back zero and nothing here reads one: a folder is a *destination*, and how many wishes are
  * already in it has no bearing on whether a reader may file the fortieth there.
+ *
+ * **Only the reader's own folders are offered** — a deck's managed wishlist (user schema v47,
+ * issue #512) is written by the deck and refuses every hand add in words, so it is filtered out
+ * here, `buildCollectionTargetItems`' `userFolders` rule on this cabinet. Absent rather than
+ * greyed: a row whose only outcome is a refusal teaches nothing, and it is the whole of the
+ * managed folder's point that the reader never has to think about filing into it.
  */
 export function buildWishlistTargetItems(
   folders: readonly WishlistFolder[],
@@ -1345,7 +1354,7 @@ export function buildWishlistTargetItems(
       onSelect: () => choose(null),
     },
     { kind: "separator", id: "wishlist-sep-root" },
-    ...wishlistLevel(buildFolderTree(folders, []), choose),
+    ...wishlistLevel(buildFolderTree(userWishFolders(folders), []), choose),
   ];
 }
 

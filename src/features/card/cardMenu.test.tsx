@@ -164,7 +164,7 @@ const wishFolder = (
   name: string,
   parentId: number | null = null,
   sortOrder = 0,
-): WishlistFolder => ({ id, parentId, name, sortOrder });
+): WishlistFolder => ({ id, parentId, name, sortOrder, managedDeckId: null });
 
 /**
  * One collection folder, the reader's own unless a test says otherwise.
@@ -998,6 +998,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
+  managedWishlist: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
@@ -1197,6 +1198,34 @@ describe("buildWishlistTargetItems", () => {
       vi.fn(),
     );
     expect(labels(items)).toEqual(["Wishlist", "Zoo", "Alpha"]);
+  });
+
+  it("never offers a deck's managed wishlist folder", () => {
+    // User schema v47 (issue #512): the deck writes that folder, and the backend refuses a hand
+    // add into it — so it is absent from the picker rather than a row ending in a refusal.
+    const items = buildWishlistTargetItems(
+      [wishFolder(1, "Ordered"), { ...wishFolder(9, "Rhystic Testbed"), managedDeckId: 4 }],
+      vi.fn(),
+    );
+    expect(labels(items)).toEqual(["Wishlist", "Ordered"]);
+  });
+
+  it("keeps the single press when the only folders are managed ones", () => {
+    const addToWishlist = vi.fn();
+    const addTo = find(
+      buildCardMenu(
+        BOLT,
+        deps({
+          addToWishlist,
+          wishlistFolders: [{ ...wishFolder(9, "Rhystic Testbed"), managedDeckId: 4 }],
+        }),
+      ),
+      "Add to",
+    ) as MenuSubmenu;
+    const wishlist = find(addTo.items, "Wishlist");
+    expect(wishlist.kind).toBe("action");
+    (wishlist as MenuAction).onSelect();
+    expect(addToWishlist).toHaveBeenCalledWith(BOLT, null);
   });
 });
 

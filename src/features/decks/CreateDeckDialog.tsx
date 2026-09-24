@@ -60,6 +60,9 @@ const BLANK: DeckSettingsValue = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
+  // `decks.managed_wishlist` is `NOT NULL DEFAULT 1` too, and its switch is drawn under the same
+  // `canSetTheoryMarks` gate — so, like the marks, the draft holds the default and sends nothing.
+  managedWishlist: true,
   folderId: null,
   // **The one field this dialog never asks about**, and the only honest answer it could give:
   // a deck being created has no categories — `deck_create` seeds the four zones in the same
