@@ -1,5 +1,5 @@
 /**
- * The notes on the open deck, and the five writes that change them.
+ * The notes on the open deck, and the six writes that change them.
  *
  * **A note belongs to a deck and never to a card**, which is the whole of the model this hook
  * reads: `deck_notes` holds the note and `deck_note_cards` holds the oracle ids it names, so the
@@ -145,6 +145,43 @@ export function useDeckNotes(deckId: number | null) {
     onSuccess: invalidate,
   });
 
+  /**
+   * The deck's notes in a new order — issue #509. `deck_note_reorder` takes **every** id and writes
+   * `sort_order` from position, so the argument is the whole list rather than a from/to pair.
+   *
+   * **The cache is reordered before the write answers**, because a note dropped on another and
+   * then drawn back where it was until a round trip lands reads as a drop that did not take. On a
+   * refusal the snapshot goes back; either way the settle re-reads, so the cache ends up being what
+   * the table says.
+   */
+  const reorder = useMutation({
+    mutationFn: (ids: number[]) => ipc.deckNoteReorder(opened(deckId), ids),
+    onMutate: async (ids: number[]) => {
+      const key = ["decks", "notes", deckId];
+      await queryClient.cancelQueries({ queryKey: key });
+      const before = queryClient.getQueryData<DeckNote[]>(key);
+      if (before !== undefined) {
+        const byId = new Map(before.map((note) => [note.id, note]));
+        const moved = ids.flatMap((id) => {
+          const note = byId.get(id);
+          return note === undefined ? [] : [note];
+        });
+        // A note the list does not name keeps its place at the end rather than vanishing — the
+        // backend skips a stale id the same way, so the two agree about a reorder that raced a
+        // create in another window.
+        const rest = before.filter((note) => !ids.includes(note.id));
+        queryClient.setQueryData<DeckNote[]>(key, [...moved, ...rest]);
+      }
+      return { before };
+    },
+    onError: (_error, _ids, context) => {
+      if (context?.before !== undefined) {
+        queryClient.setQueryData(["decks", "notes", deckId], context.before);
+      }
+    },
+    onSettled: invalidate,
+  });
+
   return {
     /** The query itself, for a caller that needs more than {@link loading} — the band reads
      *  `isSuccess` to tell "this deck has no notes" from "nothing has answered yet", which are
@@ -163,7 +200,8 @@ export function useDeckNotes(deckId: number | null) {
       update.isPending ||
       remove.isPending ||
       attach.isPending ||
-      detach.isPending,
+      detach.isPending ||
+      reorder.isPending,
     /**
      * The one refusal line, `sectionFailure`'s rule: the **newest write** owns it whatever its
      * outcome, and the read only speaks when no write has been refused.
@@ -172,12 +210,13 @@ export function useDeckNotes(deckId: number | null) {
      * note another surface has since deleted, and both are facts about the list rather than about
      * the button that happened to hit them.
      */
-    failure: sectionFailure([create, update, remove, attach, detach], query),
+    failure: sectionFailure([create, update, remove, attach, detach, reorder], query),
     create,
     update,
     remove,
     attach,
     detach,
+    reorder,
   };
 }
 
