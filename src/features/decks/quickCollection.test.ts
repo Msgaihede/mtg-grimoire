@@ -92,6 +92,11 @@ const wish = (over: Partial<DeckQuickAddWish> = {}): DeckQuickAddWish => ({
   quantity: 3,
   folderId: null,
   folderName: null,
+  cardId: "bolt",
+  name: "Lightning Bolt",
+  setCode: "lea",
+  collectorNumber: "161",
+  preferredFinish: null,
   ...over,
 });
 
@@ -230,27 +235,26 @@ describe("chooseWish", () => {
     expect(chooseWish([])).toEqual({ kind: "none" });
   });
 
-  /** **One is removed with no dialog.** A picker offering a single row asks the reader to
-   *  confirm the only thing it could have done. */
-  it("takes a lone wish without asking", () => {
+  /**
+   * **One still asks** (issue #511): the read answers every printing and finish of the card, so a
+   * lone line may be for another printing than the one recorded, and only the reader knows
+   * whether this purchase settles it. This case used to take the lone wish without a dialog.
+   */
+  it("asks about a lone wish too", () => {
     const only = wish({ id: 7 });
 
-    expect(chooseWish([only])).toEqual({ kind: "one", wish: only });
+    expect(chooseWish([only])).toEqual({ kind: "ask", wishes: [only] });
   });
 
-  /**
-   * **Two is the fork**, and the boundary is what this pins: which shopping list a copy comes off
-   * is a filing decision the reader made on purpose, so the app must not pick one. The array is
-   * handed back **as it arrived** — the backend's order is the pre-pick and a sort here would be
-   * a second opinion about it.
-   */
-  it("asks once there are two, and hands the order back untouched", () => {
+  /** The array is handed back **as it arrived** — the backend's order is the pre-pick and a sort
+   *  here would be a second opinion about it. */
+  it("hands the order back untouched", () => {
     const root = wish({ id: 7, folderId: null, folderName: null });
     const filed = wish({ id: 9, folderId: 3, folderName: "Christmas list" });
 
-    expect(chooseWish([root, filed])).toEqual({ kind: "many", wishes: [root, filed] });
+    expect(chooseWish([root, filed])).toEqual({ kind: "ask", wishes: [root, filed] });
     // The reverse order comes back reversed: nothing here re-ranks.
-    expect(chooseWish([filed, root])).toEqual({ kind: "many", wishes: [filed, root] });
+    expect(chooseWish([filed, root])).toEqual({ kind: "ask", wishes: [filed, root] });
   });
 });
 
