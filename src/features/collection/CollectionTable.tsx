@@ -265,8 +265,8 @@ function columnsFor(
           /* **A number, not a `disabled` stepper.** A greyed control says "not now" and invites
             the reader to look for the state that would enable it; a plain figure says "this is
             what you hold, and it is not edited here" — which is the truth, because the way to
-            change it is somewhere else entirely (cut the card from the deck, or file the copy
-            back out of `Recently removed`). It is drawn in this table's own data styling for the
+            change it is somewhere else entirely (cut the card from the deck, or move the copy
+            into a folder the reader made). It is drawn in this table's own data styling for the
             same reason the Value column is: a quantity is data. `text-dim` is the rank — the
             column has stopped being the place anything happens on this row.
 
@@ -573,8 +573,11 @@ export function CollectionTable({
    * instead.** The words are the caller's — this table prints them and decides nothing about
    * them — and the page passes two shapes. For a deck's group:
    * `` `In ${row.folderName ?? "a deck"}. Cut the card from the deck to change how many you hold.` ``
-   * And for the removals drawer:
-   * `In Recently removed. Move it back to your collection to change how many you hold.`
+   * And for a folder kind the page has not been taught about:
+   * `` `In ${row.folderName}. Move it into one of your own folders to change how many you hold.` ``
+   * **`Recently removed` is not fenced at all since issue #506** — its copies belong to no deck, so
+   * its rows draw the stepper like any row the reader filed, and the sentence it used to get
+   * (*Move it back to your collection…*) is gone with the fence.
    * Both are deliberately the grammar of `PickCopies`' own `blockedReason`
    * (`CollectionPage.tsx`) — one voice across this feature for "you cannot do this here, and
    * here is what to do instead".

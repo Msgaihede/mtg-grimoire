@@ -793,7 +793,10 @@ shared_cell` walks both into two databases and compares them column by column.
   folder per deck, archived decks included** — both partial unique indexes enforce the "one",
   `create_deck` makes a group for every deck since, and every write in `collection_folders.rs`
   refuses to touch either kind: `FOLDER_NOT_YOURS`, in words, because the DDL CHECKs what a row
-  *is* and can say nothing about who may edit it. `refile_entry` carries no such fence
+  *is* and can say nothing about who may edit it. **The one write aimed at an app folder on
+  purpose is `clear_removed`** (issue #506, 2026-09-24): it deletes the *entries* filed in
+  `Recently removed` — never the folder, never a deck group, never `deck_cards` — and refuses
+  with `NO_REMOVED_FOLDER` when the folder is missing. `refile_entry` carries no such fence
   deliberately — that is what lets `collection_alloc`'s two writes and `delete_deck` file into
   exactly those folders, and the fence belongs to the *command*.
 - **`collection_alloc.rs` holds the pair that moves a row across the deck boundary, and two more

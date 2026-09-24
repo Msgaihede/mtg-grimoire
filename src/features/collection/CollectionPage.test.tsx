@@ -89,6 +89,8 @@ const collectionFolderDelete = vi.hoisted(() => vi.fn());
 /** Setting a drawer aside, and bringing it back — issue #365's one new write. */
 const collectionFolderSetLocked = vi.hoisted(() => vi.fn());
 const collectionSetFolder = vi.hoisted(() => vi.fn());
+/** `Clear…` inside `Recently removed` (issue #506): every entry in the holding area, one write. */
+const collectionRemovedClear = vi.hoisted(() => vi.fn());
 /**
  * The docked card-search column's own three commands.
  *
@@ -167,6 +169,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionFolderDelete,
     collectionFolderSetLocked,
     collectionSetFolder,
+    collectionRemovedClear,
   },
 }));
 
@@ -802,6 +805,7 @@ beforeEach(() => {
   // that the promise resolves rather than what is in it.
   collectionFolderSetLocked.mockReset().mockResolvedValue({ ...BINDER, locked: true });
   collectionSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 2, removed: false });
+  collectionRemovedClear.mockReset().mockResolvedValue(0);
   // One printing on the sidebar's wall, so every case has a tile to press or drag without saying
   // so — and so the ones that are not about the sidebar meet the same page a reader does.
   searchCards.mockReset().mockResolvedValue(searchPage([SEARCH_LOTUS]));
@@ -2157,21 +2161,17 @@ describe("CollectionPage", () => {
     });
 
     /**
-     * **`Recently removed` is a holding area the app owns, and the same fence covers it** — which
-     * is what makes this case worth writing separately from the deck group's: the rule is
-     * `collection_folders.kind` being `user`, stated positively, rather than a blocklist of deck
-     * groups. A fourth kind added later is fenced by default under that spelling and permitted by
-     * default under the other.
+     * **`Recently removed` is stepped like a binder since issue #506** — and this case asserted the
+     * opposite until then, under the title *draws no stepper on the wall inside Recently removed*.
+     * The fence on a count is about deck custody, and the holding area's copies belong to no deck,
+     * so a reader thinning the pile no longer has to drag each copy back into a binder first.
      *
-     * Driven by **standing in the folder** rather than by a flattened row filed there, because
-     * that is the half with no page-level branch behind it: unflattened, every row on that wall is
-     * in the folder, so the per-tile rule fences the whole wall on its own and the page needs no
-     * second gate on `folderId` to keep in step with it.
-     *
-     * The pinned entry is drawn from the folder census, so pressing it is itself proof the census
-     * arrived — no sentinel is needed here.
+     * Driven by **standing in the folder**, which is the half with no page-level branch: every row
+     * on that wall is in the folder, so it is the per-tile rule alone that now lets them through.
+     * The last `−` is the ordinary delete — `set_quantity(id, 0)` — which is the table's and every
+     * binder tile's, so the write is the same one with the same entry id.
      */
-    it("draws no stepper on the wall inside Recently removed", async () => {
+    it("draws a stepper on the wall inside Recently removed, and the last press deletes", async () => {
       useAppStore.setState({ collectionFlattened: false });
       collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
       collectionList.mockResolvedValue(
@@ -2182,10 +2182,11 @@ describe("CollectionPage", () => {
             finish: "nonfoil",
             folderId: 21,
             folderName: "Recently removed",
-            quantity: 2,
+            quantity: 1,
           },
         ]),
       );
+      collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: true });
       wrap(<CollectionPage />);
 
       await userEvent.click(
@@ -2194,7 +2195,41 @@ describe("CollectionPage", () => {
       await waitFor(() => expect(lastQuery().folderId).toBe(21));
 
       await screen.findByAltText("Lightning Bolt");
-      expect(steppers()).toHaveLength(0);
+      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) })).toHaveValue(1);
+
+      await userEvent.click(stepper("Decrease", "Lightning Bolt"));
+      expect(collectionSetQuantity).toHaveBeenCalledWith(7, 0);
+    });
+
+    /**
+     * **The deck group beside it stays fenced** — the half of #506's change that must not move.
+     * Flattened, so both kinds are on one wall and the holding area's tile is the sentinel that
+     * the census has answered: its stepper can only be drawn once the page knows which folder
+     * `Recently removed` is.
+     */
+    it("still draws no stepper on a deck group's tile beside a Recently removed one", async () => {
+      collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+      collectionList.mockResolvedValue(
+        page([
+          { ...BOLT, id: 7, finish: "nonfoil", folderId: 21, folderName: "Recently removed", quantity: 1 },
+          {
+            ...BOLT,
+            id: 8,
+            cardId: "c2",
+            name: "Counterspell",
+            finish: "nonfoil",
+            folderId: 20,
+            folderName: "Mono-Red Aggro",
+            quantity: 4,
+          },
+        ]),
+      );
+      wrap(<CollectionPage />);
+      await screen.findByAltText("Counterspell");
+
+      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) })).toHaveValue(1);
+      expect(noBox("Counterspell")).toBeNull();
+      expect(steppers()).toHaveLength(1);
     });
   });
 
@@ -2206,7 +2241,7 @@ describe("CollectionPage", () => {
    * cannot be proved from inside that component is that anything ever hands it the predicate.
    * This repo has shipped a fix that was fully tested and unreachable, with the whole suite
    * green, for exactly that reason — the question "what calls this?" belongs in the plan and not
-   * only in the diff. So the claim here is the page's: the same `readersOwnLevel` that decides
+   * only in the diff. So the claim here is the page's: the same `countEditable` that decides
    * which tiles draw a stepper is what reaches the table's rows, so the two layouts of one list
    * cannot disagree about which copies are editable.
    */
@@ -2250,6 +2285,42 @@ describe("CollectionPage", () => {
       expect(
         screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt (Foil, NM)" }),
       ).toHaveValue(2);
+    });
+
+    /**
+     * **A row in `Recently removed` is stepped here too** (issue #506), and says nothing about
+     * moving it back — the sentence it used to carry is gone with the fence. The deck row beside
+     * it is the sentinel that the census answered, since a fenced row is what a filed row reads
+     * while it has not.
+     */
+    it("draws a stepper on a row in Recently removed, and still none on a deck's", async () => {
+      collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+      collectionList.mockResolvedValue(
+        page([
+          { ...BOLT, id: 7, folderId: 21, folderName: "Recently removed", quantity: 2 },
+          {
+            ...BOLT,
+            id: 8,
+            cardId: "c2",
+            name: "Counterspell",
+            finish: "nonfoil",
+            condition: "NM",
+            folderId: 20,
+            folderName: "Mono-Red Aggro",
+            quantity: 4,
+          },
+        ]),
+      );
+      wrap(<CollectionPage />);
+      await screen.findByText("Counterspell");
+
+      expect(
+        await screen.findByRole("spinbutton", { name: "Quantity of Lightning Bolt (Foil, NM)" }),
+      ).toHaveValue(2);
+      expect(screen.queryByText(/Move it back to your collection/)).toBeNull();
+      expect(
+        screen.queryByRole("spinbutton", { name: "Quantity of Counterspell (Nonfoil, NM)" }),
+      ).toBeNull();
     });
   });
 
@@ -2890,6 +2961,173 @@ describe("the card menu", () => {
       // menu still being the collection's.
       expect(screen.getByRole("menuitem", { name: /Add to/ })).toBeInTheDocument();
     });
+  });
+
+  /**
+   * `Remove from collection` — issue #506's right-click, wired by this page only where the copies
+   * behind the target may have their count changed: the stepper's fence, asked of every row.
+   */
+  describe("Remove from collection", () => {
+    it("removes a Recently removed tile's copies, every entry behind the art", async () => {
+      useAppStore.setState({ collectionView: "grid" });
+      collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+      collectionList.mockResolvedValue(
+        page([
+          { ...BOLT, id: 7, folderId: 21, folderName: "Recently removed", quantity: 1 },
+          // A second grade of the same printing and finish: one tile, two entries.
+          { ...BOLT, id: 9, condition: "LP", folderId: 21, folderName: "Recently removed", quantity: 2 },
+        ]),
+      );
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      const tile = await screen.findByRole("button", { name: "Lightning Bolt" });
+      // The census has answered once a stepper is drawn on the tile — before that, the page does
+      // not yet know which folder is the holding area and the row is correctly withheld.
+      await screen.findByRole("spinbutton", { name: /^Copies of Lightning Bolt/ });
+
+      rightClick(tile);
+      await screen.findByRole("menu");
+      await user.click(screen.getByRole("menuitem", { name: "Remove 2 cards from collection" }));
+
+      await waitFor(() => expect(collectionRemove).toHaveBeenCalledTimes(2));
+      expect(collectionRemove).toHaveBeenCalledWith(7);
+      expect(collectionRemove).toHaveBeenCalledWith(9);
+    });
+
+    it("offers no removal on a tile a deck's group holds", async () => {
+      useAppStore.setState({ collectionView: "grid" });
+      collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+      collectionList.mockResolvedValue(
+        page([
+          { ...BOLT, id: 7, folderId: 21, folderName: "Recently removed", quantity: 1 },
+          {
+            ...BOLT,
+            id: 8,
+            cardId: "c2",
+            name: "Counterspell",
+            folderId: 20,
+            folderName: "Mono-Red Aggro",
+            quantity: 4,
+          },
+        ]),
+      );
+      wrap(<CollectionPage />);
+      // Sentinel: the holding area's tile has its stepper, so the census is in.
+      await screen.findByRole("spinbutton", { name: /^Copies of Lightning Bolt/ });
+
+      rightClick(screen.getByRole("button", { name: "Counterspell" }));
+      await screen.findByRole("menu");
+
+      expect(screen.queryByRole("menuitem", { name: /^Remove/ })).toBeNull();
+      // Still the collection's menu, so the absence is the fence's and not an empty panel's.
+      expect(screen.getByRole("menuitem", { name: /Add to/ })).toBeInTheDocument();
+    });
+
+    it("offers it on a table row at the root, one entry", async () => {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+      await screen.findByRole("menu");
+
+      await user.click(screen.getByRole("menuitem", { name: "Remove from collection" }));
+      await waitFor(() => expect(collectionRemove).toHaveBeenCalledWith(7));
+      expect(collectionRemove).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+/**
+ * `Clear…` inside `Recently removed` — issue #506. Drawn only while standing in the holding area
+ * with the cabinet on screen and cards in it, asked in words before it writes, and one write.
+ */
+describe("clearing Recently removed", () => {
+  beforeEach(() => {
+    useAppStore.setState({ collectionFlattened: false, collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER, REMOVED]);
+    collectionFolderSummary.mockResolvedValue([{ folderId: 21, cards: 3, value: null }]);
+    collectionList.mockResolvedValue(
+      page([{ ...BOLT, id: 7, folderId: 21, folderName: "Recently removed", quantity: 3 }]),
+    );
+  });
+
+  async function standInRemoved() {
+    await userEvent.click(await screen.findByRole("button", { name: /^Recently removed folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(21));
+  }
+
+  it("is drawn inside Recently removed and nowhere else", async () => {
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Recently removed folder/ });
+    expect(screen.queryByRole("button", { name: "Clear…" })).toBeNull();
+
+    await standInRemoved();
+    expect(await screen.findByRole("button", { name: "Clear…" })).toBeInTheDocument();
+  });
+
+  it("is not drawn over an empty holding area", async () => {
+    collectionFolderSummary.mockResolvedValue([]);
+    collectionList.mockResolvedValue(page([]));
+    wrap(<CollectionPage />);
+    await standInRemoved();
+    // The summary has answered (its `0` is what hides the button), so this is not a race.
+    await waitFor(() => expect(collectionFolderSummary).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Clear…" })).toBeNull();
+  });
+
+  it("asks first, and Cancel writes nothing", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await standInRemoved();
+
+    await user.click(await screen.findByRole("button", { name: "Clear…" }));
+    const question = await screen.findByRole("group", { name: "Clear Recently removed" });
+    expect(question).toHaveTextContent(
+      "Remove all 3 cards in Recently removed from your collection?",
+    );
+    expect(question).toHaveTextContent("This cannot be undone.");
+
+    await user.click(within(question).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("group", { name: "Clear Recently removed" })).toBeNull();
+    expect(collectionRemovedClear).not.toHaveBeenCalled();
+    // The caret goes back to the control that raised the question.
+    expect(screen.getByRole("button", { name: "Clear…" })).toHaveFocus();
+  });
+
+  it("clears on confirm, in one write, and re-reads what it changed", async () => {
+    collectionRemovedClear.mockResolvedValue(1);
+    const user = userEvent.setup();
+    const { client } = wrap(<CollectionPage />);
+    await standInRemoved();
+    await user.click(await screen.findByRole("button", { name: "Clear…" }));
+    const question = await screen.findByRole("group", { name: "Clear Recently removed" });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await user.click(within(question).getByRole("button", { name: "Clear Recently removed" }));
+
+    await waitFor(() => expect(collectionRemovedClear).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Clear Recently removed" })).toBeNull(),
+    );
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+  });
+
+  it("keeps the question open and says why when the clear is refused", async () => {
+    collectionRemovedClear.mockRejectedValue("There is no Recently removed folder.");
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await standInRemoved();
+    await user.click(await screen.findByRole("button", { name: "Clear…" }));
+    const question = await screen.findByRole("group", { name: "Clear Recently removed" });
+
+    await user.click(within(question).getByRole("button", { name: "Clear Recently removed" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not change your collection — There is no Recently removed folder.",
+    );
+    expect(screen.getByRole("group", { name: "Clear Recently removed" })).toBeInTheDocument();
   });
 });
 
