@@ -81,6 +81,7 @@
 
 import type { QueryKey } from "@tanstack/react-query";
 
+import type { Finish } from "@/lib/finish";
 import type { PriceMoverDirection, PriceMoverWindow } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 
@@ -186,6 +187,21 @@ export const priceMoversKey = (
   marketplace: MarketplaceId,
   limit: number,
 ): QueryKey => ["collection", "priceMovers", range, direction, marketplace, limit];
+
+/**
+ * One printing's price over time — `ipc.priceHistory`, the movers popup's read.
+ *
+ * Under `["collection"]` for {@link priceMoversKey}'s second reason: a feed landing moves `now`
+ * and is the moment a new day's snapshot is taken, and `invalidatePricedQueries` sweeps that root —
+ * so the popup and the row it opened from are refreshed by the same sweep and cannot come to
+ * disagree about today's price. The card, the finish and the marketplace are each part of the
+ * question — a foil copy is priced apart from its nonfoil printing — so each is in the key.
+ */
+export const priceHistoryKey = (
+  cardId: string,
+  finish: Finish,
+  marketplace: MarketplaceId,
+): QueryKey => ["collection", "priceHistory", cardId, finish, marketplace];
 
 /**
  * The root the recently viewed strip is filed under — the module doc's second exception, and the

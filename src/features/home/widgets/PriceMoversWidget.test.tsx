@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +19,7 @@ import type {
   PriceMoverWindow,
 } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
+import { useAppStore } from "@/lib/store";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { makeFit, type WidgetFit } from "../fit";
 import { priceMoversKey } from "../keys";
@@ -80,7 +82,7 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-function draw(config: unknown = null, fit: WidgetFit = fitFor(4, 4)) {
+function draw(config: unknown = null, fit: WidgetFit = fitFor(4, 4), still = false) {
   const widget: HomeWidget = {
     id: "priceMovers",
     kind: "priceMovers",
@@ -95,7 +97,7 @@ function draw(config: unknown = null, fit: WidgetFit = fitFor(4, 4)) {
       widget={widget}
       fit={fit}
       editing={false}
-      still={false}
+      still={still}
       onConfig={vi.fn()}
     />,
     { wrapper },
@@ -114,6 +116,7 @@ function seed(
 }
 
 beforeEach(() => {
+  useAppStore.setState(useAppStore.getInitialState());
   priceMovers.mockReset().mockResolvedValue(answer());
   qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   qc.setQueryData(MARKETPLACE_KEY, "tcgplayer");
@@ -240,5 +243,63 @@ describe("PriceMoversWidget", () => {
     seed(answer({ movers }));
     draw(null, fit);
     expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(51, 22));
+  });
+});
+
+describe("pressing a mover", () => {
+  /**
+   * The press names the printing **and** the finish — Lightning Bolt is the foil row here, and a
+   * foil and a nonfoil copy of one printing are two price lines — and hands over the widget's own
+   * window, so the popup opens on the span the reader was looking at. Asserted on the store rather
+   * than a spy, because the field is the whole of the wire: the dialog is mounted at `App` level
+   * and reads nothing else.
+   */
+  it("opens the price history on that printing, at that finish, over the widget's window", async () => {
+    const user = userEvent.setup();
+    seed(answer(), "30d");
+    draw({ window: "30d" });
+
+    await user.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+
+    expect(useAppStore.getState().priceHistory).toEqual({
+      cardId: "bolt",
+      finish: "foil",
+      window: "30d",
+    });
+  });
+
+  /**
+   * The whole row in one name, in the order it is drawn, so the visible label is inside the
+   * accessible one (WCAG 2.5.3). Asserted on the element as one phrase — `src/CLAUDE.md`'s rule,
+   * since the parts separately are exactly what a run-together name still passes.
+   */
+  it("names the press with every word the row shows, then what it does", () => {
+    seed(answer());
+    draw();
+    expect(screen.getByRole("button", { name: /^Black Lotus/ })).toHaveAccessibleName(
+      "Black Lotus · LEA · nonfoil · +$184.00 — price history",
+    );
+  });
+
+  // The name a reader speaks does not change as the card is resized, though the tile draws less.
+  it("keeps the same name on a two-cell tile", () => {
+    seed(answer());
+    draw(null, fitFor(2, 3));
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
+      "Lightning Bolt · SLD · foil · −$8.60 — price history",
+    );
+  });
+
+  /**
+   * **A catalogue still opens nothing** (`widgetProps.ts`). Its rows are pictures of rows: the same
+   * words, no button, and no store write however it is clicked.
+   */
+  it("draws a still body with no presses", () => {
+    seed(answer());
+    draw(null, fitFor(4, 4), true);
+
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText("Black Lotus")).toBeInTheDocument();
+    expect(useAppStore.getState().priceHistory).toBeNull();
   });
 });

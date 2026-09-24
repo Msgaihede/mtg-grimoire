@@ -526,6 +526,7 @@ connection-only query, which is exactly what `web::route` answers.
 | `recent_cards` / `record_recent_card` | `recent_cards.rs` | the cards this device opened, newest first (added with the grid, §11) |
 | `set_completion` | `set_completion.rs` | `[{ setCode, name, releasedAt, owned, size }]` (§11) |
 | `price_movers` | `price_history.rs` | `{ movers, since, days }` (§11) |
+| `price_history` | `price_history.rs` | `{ points, now, today }` — one copy's kept snapshots, for the mover popup (§11) |
 | `sticky_notes` and its four writes | `sticky_notes.rs` | every note by `sort_order`, then create, update, delete and reorder (§12) |
 
 Registration is three places, and a command missing from one of them answers `unknown command` at
@@ -643,10 +644,11 @@ From the design's §9, plus two the build itself turned up:
   that actually cross the boundary on this page were measured at 150% and both are correct (§4),
   but neither is a `fixed inset-0` scrim *inside* the zoom, and that case was not reachable: the
   browser used for the 2026-09-20 property probe reported a 0×0 viewport, so a `fixed` rect came
-  back all zeros. **Nothing on the dashboard is on that path today** — no widget opens a dialog, the
-  tooltip panel is `fixed` at the app root outside the zoom, and `AnchoredPopup` says in its own doc
-  that it is anchored and not portalled. The first widget that opens a dialog is the one that has to
-  check, in a real window.
+  back all zeros. ⚠️ **This said nothing on the dashboard was on that path, and one widget is now**:
+  `StickyNotesWidget` mounts `StickyNoteDialog` inside the zoomed grid, so it is the widget that has
+  to be checked in a real window. The tooltip panel is `fixed` at the app root outside the zoom,
+  `AnchoredPopup` says in its own doc that it is anchored and not portalled, and the Price movers
+  popup (§11) is mounted at `App` level precisely so it stays off this path.
 * **Six refusal sentences are unreachable from Storybook**, and this is a gap in the workbench
   rather than in the feature — each is covered by its widget's own unit test. Measured while
   writing the stories: `.storybook/fake/db.ts`'s `gone` fault is checked in exactly one place
@@ -822,6 +824,28 @@ days of snapshots the marketplace holds — **so the widget can say two differen
 history yet* and *nothing moved*. `since` is taken before zero moves and the direction are filtered
 out, because computed over the returned movers a quiet week would also answer `null` and read as a
 database that had never remembered a price.
+
+**A mover is a press, and it opens the Price history popup**
+([issue #515](https://github.com/Msgaihede/mtg-grimoire/issues/515)). `price_history(card_id,
+finish, marketplace)` answers every kept snapshot of that one copy **before today**, oldest first,
+plus `now` — the live price the widget already calls `now` — and `today` as SQLite's own UTC
+midnight, so the page reads no clock. The figures are TypeScript's
+(`features/home/priceHistory/priceAnalytics.ts`), and **the change it draws for a range is the
+widget's number to the cent**: the same baseline (the latest snapshot at least 7 or 30 days old,
+the oldest one for `all`) and the same refusal to fall back to a younger one, so a row reading
+`+$3.00` never opens a popup reading something else.
+
+**The picture is the card modal's own `CardModalArt`, not a copy of it.** That column is
+presentational — every fact a prop, every write a callback — so the popup mounts it with no deck
+row and no meld, inside a `Dialog` with `container` and the modal's own art-column widths per
+rung, and the frame, the chin, the flip and turn controls and the per-finish cells are one
+component on two surfaces. The footer carries the modal's two footnotes for the modal's reason:
+the artist and the source have to be identifiable wherever the art is shown. The popup is mounted
+at `App` level beside the card modal, never inside the widget: the grid spends the reader's zoom as
+a CSS `zoom` on its box and `zoom` is inherited whatever a descendant's `position`, so a dialog
+drawn in a row would be drawn at the dashboard's scale where a dialog is chrome — and whether a
+`zoom` also traps a `fixed` scrim is still open (§8), which an `App`-level mount never has to
+find out. A `still` body (the catalogue's previews) draws no press at all.
 
 ---
 

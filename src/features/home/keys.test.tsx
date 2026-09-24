@@ -26,6 +26,7 @@ import {
   deckValuesKey,
   NEW_PRINTINGS_ROOT,
   newPrintingsKey,
+  priceHistoryKey,
   priceMoversKey,
   RECENT_CARDS_ROOT,
   recentCardsKey,
@@ -97,6 +98,22 @@ describe("shape", () => {
       "cardmarket",
       100,
     ]);
+  });
+
+  // The movers popup's history under the same root as the row it opens from, so one feed landing
+  // refreshes both. The finish is in the key because a foil copy is priced apart from its nonfoil
+  // printing — two popups for one card id must be two entries.
+  it("files one printing's price history under the collection root, finish and marketplace included", () => {
+    expect(priceHistoryKey("bolt-lea", "foil", "manapool")).toEqual([
+      "collection",
+      "priceHistory",
+      "bolt-lea",
+      "foil",
+      "manapool",
+    ]);
+    expect(priceHistoryKey("bolt-lea", "foil", "manapool")).not.toEqual(
+      priceHistoryKey("bolt-lea", "nonfoil", "manapool"),
+    );
   });
 
   // The second exception: a root with one writer, the card modal's recorder, which invalidates

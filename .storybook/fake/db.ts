@@ -217,8 +217,10 @@ import type {
   PairingSealedKey,
   PairingStatus,
   PassReport,
+  PriceHistory,
   PriceMover,
   PriceMovers,
+  PricePoint,
   Printing,
   QrMatrix,
   PrintingTags,
@@ -11082,6 +11084,50 @@ export function readHandlers(db: FakeDb) {
           cmp(a.finish, b.finish),
       );
       return { movers: movers.slice(0, limit), since, days };
+    },
+
+    /**
+     * `price_history::price_history` — one printing's daily price at one marketplace, the movers
+     * popup's read.
+     *
+     * **One point per UTC day, strictly before today, oldest first.** The crate's table is keyed
+     * on a calendar day and cannot hold two rows for one; {@link FakePriceSnapshot.takenAt} is an
+     * instant, so a world that seeds two on one day is folded here to the **later** one — the
+     * crate's `INSERT OR REPLACE`, where a second snapshot on one afternoon replaces the first.
+     * `day` is that day's UTC midnight. **Today is {@link CLOCK_BASE}**, the fake's own, exactly
+     * as {@link readHandlers.price_movers} measures from it, and today's snapshot is left out
+     * because today's figure is `now`: {@link finishPriceAt}, the collection's own and the number
+     * a mover's `now` is, so the popup's last point can never disagree with the row it opened
+     * from. `null` for a finish this marketplace does not quote and for a card the corpus does not
+     * know, which is an answer rather than a refusal — the popup is opened from a row that exists.
+     *
+     * The marketplace resolves as `Marketplace::from_id` does: an absent or unknown id **and an
+     * unpriced one** read as TCGplayer, because `cardtrader` quotes TCGplayer and
+     * {@link historyFromCollection} stores no rows of its own for it. An unknown finish is refused
+     * in {@link validFinish}'s words. A read, so it answers through every second of a sync.
+     */
+    price_history: (args: {
+      cardId: string;
+      finish: string;
+      marketplace?: string;
+    }): PriceHistory => {
+      const finish = validFinish(args.finish);
+      const asked = marketplaceOf(args.marketplace);
+      const mp = MARKETPLACES[asked].priced ? asked : DEFAULT_MARKETPLACE;
+      const today = Math.floor(CLOCK_BASE / 86_400) * 86_400;
+      const latest = new Map<number, FakePriceSnapshot>();
+      for (const s of db.priceHistory) {
+        if (s.marketplace !== mp || s.cardId !== args.cardId || s.finish !== finish) continue;
+        const day = Math.floor(s.takenAt / 86_400) * 86_400;
+        if (day >= today) continue;
+        const kept = latest.get(day);
+        if (kept === undefined || s.takenAt > kept.takenAt) latest.set(day, s);
+      }
+      const points: PricePoint[] = [...latest]
+        .sort(([a], [b]) => a - b)
+        .map(([day, s]) => ({ day, price: s.price }));
+      const now = finishPriceAt(db, cardById(db, args.cardId), finish, mp);
+      return { points, now, today };
     },
 
     /**

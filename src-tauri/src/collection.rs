@@ -283,7 +283,9 @@ pub(crate) fn valid_quantity(n: i64, what: &str) -> Result<i64, String> {
         .ok_or_else(|| format!("{n} is not a quantity. A {what} cannot be less than zero."))
 }
 
-fn valid_finish(finish: &str) -> Result<&str, String> {
+/// One of [`FINISHES`], or a refusal in words. `price_history::history` borrows it too, so a
+/// request naming a finish is refused in one sentence wherever it arrives.
+pub(crate) fn valid_finish(finish: &str) -> Result<&str, String> {
     FINISHES.contains(&finish).then_some(finish).ok_or_else(|| {
         format!(
             "`{finish}` is not a finish. Use one of: {}.",

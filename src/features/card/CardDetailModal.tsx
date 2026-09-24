@@ -92,6 +92,7 @@ import { pricesAsOf } from "@/lib/prices";
 import { useAppStore, type CardWalkStop } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { ACTION, ACTION_PRIMARY } from "./actionButtons";
 import { ownsArrowKeys } from "./arrowKeys";
 import { useOptionalAddCardToDeck } from "./cardMenu";
 import { cardDetailKey } from "./cardDetailKey";
@@ -214,8 +215,12 @@ import { useCardMenuDeps } from "./useCardMenuDeps";
  * The `100%` those floors used to carry is gone rather than kept beside `80vh`: the scrim's
  * column is `100vh` less its vertical inset, so `80vh` is the tighter of the two for any window
  * taller than 240px and the term it replaces could never have been the binding one.
+ *
+ * **Exported for `PriceHistoryDialog`**, the one other panel drawn in this modal's shape: it takes
+ * this ceiling rather than spelling its own, so the two popups cannot come to disagree about how
+ * much glass to leave.
  */
-const PANEL_MAX_H = "min-[640px]:max-h-[min(825px,80vh)]";
+export const PANEL_MAX_H = "min-[640px]:max-h-[min(825px,80vh)]";
 
 const PANEL_SIZE =
   "w-full h-full " +
@@ -277,32 +282,18 @@ function useFlankRoom(): boolean {
  * identifiable wherever the art is shown. It was passed a literal `null` for the wave the meld
  * control was missing; `null` — a relation whose printing has left `cards` — still draws no
  * credit, which is the honest answer for a frame that is also drawing no picture.
+ *
+ * **Exported for `PriceHistoryDialog`**, which draws this modal's art column and therefore owes
+ * the same credit under it — one rule for whose name goes under the picture, not two.
  */
-function artistOf(card: CardDetail, face: number, melded: MeldRelation | null): string | null {
+export function artistOf(
+  card: CardDetail,
+  face: number,
+  melded: MeldRelation | null,
+): string | null {
   if (melded !== null) return melded.artist;
   return card.faces[face]?.artist ?? card.artist;
 }
-
-/**
- * An action-row button. 44px below `@min-[900px]/card` and the app's own 36px above it, which is
- * the fold `CardModalControls` draws its own controls at — the two rows sit under one another and
- * a row that changed height on a different measurement would read as a mistake.
- */
-const ACTION =
-  "flex h-11 min-w-0 items-center justify-center rounded-md border border-border px-4 " +
-  "text-sm text-dim transition-colors duration-[var(--duration-fast)] ease-standard " +
-  "hover:text-text motion-reduce:transition-none @min-[900px]/card:h-9";
-
-/**
- * The gold one. `border-accent text-accent` filling on hover is this app's primary button
- * wherever a dialog has one (`CreateDeckDialog`'s **Create deck**), rather than a solid fill
- * invented here.
- */
-const ACTION_PRIMARY =
-  "flex h-11 min-w-0 items-center justify-center rounded-md border border-accent px-4 " +
-  "text-sm text-accent transition-colors duration-[var(--duration-fast)] ease-standard " +
-  "hover:bg-accent hover:text-accent-foreground motion-reduce:transition-none " +
-  "@min-[900px]/card:h-9";
 
 /** The condition a one-press add records — **`MENU_CONDITION` itself now, rather than a third
  *  spelling of what it holds.** It said `"NM"`, on the argument that something has to choose and
@@ -694,8 +685,13 @@ export function CardDetailModal() {
  *
  * `Dialog` sets `aria-labelledby` to this heading, so the modal is addressed **by the card**
  * rather than by a category word — which is what `App.test.tsx`'s dialog queries become.
+ *
+ * **Exported for `PriceHistoryDialog`**, whose heading is the same card read the same way — the
+ * price popup is asked to look like this one, and a second spelling of the heading would be the
+ * first place the two drifted. Both hosts pass `Dialog`'s `container`, which is what its
+ * `@min-[640px]/card:` fold needs.
  */
-function Title({ card, pending }: { card: CardDetail | null; pending: boolean }) {
+export function Title({ card, pending }: { card: CardDetail | null; pending: boolean }) {
   const name = card?.name ?? (pending ? "Loading…" : "Card");
   return (
     <span className="flex min-w-0 flex-col gap-1 @min-[640px]/card:flex-row @min-[640px]/card:items-baseline @min-[640px]/card:gap-3">
