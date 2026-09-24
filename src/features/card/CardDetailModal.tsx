@@ -65,7 +65,6 @@ import {
 } from "@tanstack/react-query";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { RECENT_CARDS_ROOT } from "@/features/home/keys";
-import { ManaText } from "@/components/ManaText";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { Dialog, type DialogFlanks } from "@/components/Dialog";
 import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
@@ -99,6 +98,7 @@ import { CardModalArt } from "./CardModalArt";
 import { CardModalControls } from "./CardModalControls";
 import { CardModalPrintings } from "./CardModalPrintings";
 import { CardModalRail, type RailAction, type RailCounts } from "./CardModalRail";
+import { CardModalTitle } from "./CardModalTitle";
 import { useCardModalScope, type CardModalScope } from "./cardModalScope";
 import { StepChevron } from "./StepChevron";
 import { useCardMenuDeps } from "./useCardMenuDeps";
@@ -630,7 +630,7 @@ export function CardDetailModal() {
       // four overlays the rail opens are `App`-level siblings for exactly that reason.
       container
       size={PANEL_SIZE}
-      title={<Title card={card.data ?? null} pending={card.isPending} />}
+      title={<CardModalTitle card={card.data ?? null} pending={card.isPending} />}
       closeLabel="Close card details"
       flanks={flanks}
       onPanelKeyDown={onPanelKeyDown}
@@ -680,33 +680,6 @@ export function CardDetailModal() {
         />
       )}
     </Dialog>
-  );
-}
-
-/**
- * `Dialog`'s heading: the card's name, with its type line and mana cost beside it above the fold
- * and stacked under it below.
- *
- * **A `ReactNode` title is what makes this legal**, and it is why the type line is here rather
- * than in `subtitle`: the two facts are the card's identity read at a glance, and a subtitle
- * truncates to one line. The name is `font-heading` by `Dialog`'s own header; the two facts
- * beside it are `text-sm text-dim` so the name is still the loudest thing in the row.
- *
- * `Dialog` sets `aria-labelledby` to this heading, so the modal is addressed **by the card**
- * rather than by a category word — which is what `App.test.tsx`'s dialog queries become.
- */
-function Title({ card, pending }: { card: CardDetail | null; pending: boolean }) {
-  const name = card?.name ?? (pending ? "Loading…" : "Card");
-  return (
-    <span className="flex min-w-0 flex-col gap-1 @min-[640px]/card:flex-row @min-[640px]/card:items-baseline @min-[640px]/card:gap-3">
-      <span className="min-w-0 truncate">{name}</span>
-      {card !== null && (
-        <span className="flex min-w-0 items-baseline gap-2 font-sans text-sm font-normal text-dim">
-          {card.typeLine !== null && <span className="min-w-0 truncate">{card.typeLine}</span>}
-          <ManaText source={card.manaCost} className="shrink-0" />
-        </span>
-      )}
-    </span>
   );
 }
 

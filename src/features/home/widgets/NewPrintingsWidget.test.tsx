@@ -4,7 +4,15 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DeckRow, HomeWidget, NewPrinting, NewPrintingDeck, NewPrintings } from "@/lib/ipc";
+import type {
+  CardDetail,
+  DeckRow,
+  HomeWidget,
+  NewPrinting,
+  NewPrintingDeck,
+  NewPrintings,
+} from "@/lib/ipc";
+import type { MarketplaceId } from "@/lib/marketplace";
 
 /**
  * The three commands this widget can reach, in front of an **intact** mirror.
@@ -22,9 +30,11 @@ import type { DeckRow, HomeWidget, NewPrinting, NewPrintingDeck, NewPrintings } 
  * matters most here is precisely what the *second* answer does to the dots. So the stub is the
  * seam, and `newPrintings.mock.calls` is what pins the question the body asked.
  *
- * `deckList` is the popover's, and it is reached only when a row is pressed: `AnchoredPopup`
- * renders its children only while open, which is the whole of why an unpressed card pays nothing
- * for the covers.
+ * `deckList` and `cardDetail` are the row dialog's, and both are reached only when a row is
+ * pressed: `Dialog` renders its children only while open, which is the whole of why an unpressed
+ * card pays nothing for the covers — and the heading's read is mounted with the dialog, which the
+ * body mounts on the first press. The two marketplace reads are `useMarketplace`'s, which the
+ * dialog prices the printing through.
  */
 const newPrintings = vi.hoisted(() =>
   vi.fn<
@@ -42,9 +52,25 @@ const newPrintings = vi.hoisted(() =>
 );
 const markNewPrintingsSeen = vi.hoisted(() => vi.fn<(at: number) => Promise<void>>());
 const deckList = vi.hoisted(() => vi.fn<() => Promise<DeckRow[]>>());
+const cardDetail = vi.hoisted(() =>
+  vi.fn<(id: string, marketplace: MarketplaceId) => Promise<CardDetail | null>>(),
+);
+const getMarketplace = vi.hoisted(() => vi.fn<() => Promise<string>>());
+const marketplaceFeedStatus = vi.hoisted(() => vi.fn<() => Promise<never[]>>());
 vi.mock("@/lib/ipc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ipc")>();
-  return { ...actual, ipc: { ...actual.ipc, newPrintings, markNewPrintingsSeen, deckList } };
+  return {
+    ...actual,
+    ipc: {
+      ...actual.ipc,
+      newPrintings,
+      markNewPrintingsSeen,
+      deckList,
+      cardDetail,
+      getMarketplace,
+      marketplaceFeedStatus,
+    },
+  };
 });
 
 import { useAppStore } from "@/lib/store";
@@ -144,6 +170,38 @@ function deckRow(over: Partial<DeckRow> & { id: number; name: string }): DeckRow
   };
 }
 
+/**
+ * The printing as `card_detail` answers it — what the dialog's heading and picture are drawn from.
+ * Filled out whole so it is a real `CardDetail` rather than a cast; the fields read are the name,
+ * the type line, the chin's set and number, and the finishes the price cells are laid out by.
+ */
+function detail(over: Partial<CardDetail> & { id: string }): CardDetail {
+  return {
+    oracleId: "o-sol-ring",
+    name: "Sol Ring",
+    setCode: "sld",
+    setName: "Secret Lair Drop",
+    collectorNumber: "1",
+    rarity: "uncommon",
+    layout: "normal",
+    lang: "en",
+    manaCost: "{1}",
+    cmc: 1,
+    typeLine: "Artifact",
+    oracleText: "{T}: Add {C}{C}.",
+    illustrationId: "art-sol",
+    artist: "Mark Tedin",
+    releasedAt: SEP18,
+    legalities: null,
+    finishPrices: { nonfoil: 1.5, foil: null, etched: null },
+    finishes: '["nonfoil","foil"]',
+    promoTypes: null,
+    imageStatus: "highres_scan",
+    faces: [],
+    ...over,
+  };
+}
+
 /** The stored entry the page hands a body. `null` is the config of a widget nobody has set up,
  *  which is what the catalogue adds and what every reader in `widgetSettings.ts` reads as
  *  defaults. */
@@ -201,15 +259,24 @@ function draw({
  *  string on purpose: three flex children separated by a `gap` concatenate to `Sol RingSLD2
  *  decks`, so the parts would not survive name computation. */
 function rowNames(): string[] {
+  return rows().map((el) => el.getAttribute("aria-label") ?? "");
+}
+
+/** Every pressable row — the buttons that open a printing's dialog. Found by `aria-haspopup`,
+ *  because the row carries no `aria-expanded` on purpose (see `PrintingRow`). */
+function rows(): HTMLElement[] {
   return screen
-    .queryAllByRole("button", { expanded: false })
-    .map((el) => el.getAttribute("aria-label") ?? "");
+    .queryAllByRole("button")
+    .filter((el) => el.getAttribute("aria-haspopup") === "dialog");
 }
 
 beforeEach(() => {
   newPrintings.mockReset().mockResolvedValue(answer());
   markNewPrintingsSeen.mockReset().mockResolvedValue(undefined);
   deckList.mockReset().mockResolvedValue([]);
+  cardDetail.mockReset().mockImplementation((id) => Promise.resolve(detail({ id })));
+  getMarketplace.mockReset().mockResolvedValue("tcgplayer");
+  marketplaceFeedStatus.mockReset().mockResolvedValue([]);
   qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   // Store state is module-level and leaks between tests, so the popover's navigation case would
   // otherwise pass on an id a previous case wrote. Every case starts from the store's own
@@ -726,12 +793,13 @@ describe("the unseen cursor", () => {
 });
 
 /**
- * The row is the question — *which decks hold this card* — so the whole row is the popover's
- * trigger rather than a second control inside it.
+ * The row is the question — *which decks hold this card* — so the whole row is the press, and what
+ * it opens is the printing drawn the way the card modal draws a card, with the decks beside it
+ * (issue #514).
  */
-describe("the deck popover", () => {
-  it("names the decks holding the card and opens the one that is pressed", async () => {
-    const user = userEvent.setup();
+describe("the printing dialog", () => {
+  /** One Sol Ring reprint held by a live deck and a theory one, with both covers readable. */
+  function heldTwice() {
     newPrintings.mockResolvedValue(
       answer({
         printings: [
@@ -748,18 +816,103 @@ describe("the deck popover", () => {
       }),
     );
     deckList.mockResolvedValue([deckRow({ id: 4, name: "Atraxa" }), deckRow({ id: 9, name: "Edgar" })]);
+  }
+
+  /**
+   * **The card modal's own parts, and the test says which ones** — the reader asked for the
+   * preview to look like the card details popup, so what is pinned is that it *is* those parts: the
+   * picture named by the card, the chin's `SLD · 1` under it, the price cell per finish, and a
+   * heading carrying the type line beside the name. Not a screenshot; a drawing that shares no
+   * code with the modal would fail every one of these.
+   */
+  it("draws the printing the way the card modal does, with the decks that hold it", async () => {
+    const user = userEvent.setup();
+    heldTwice();
 
     draw();
-
     await user.click(await screen.findByRole("button", { name: /^Sol Ring/ }));
 
-    const panel = await screen.findByRole("dialog", { name: "Sol Ring is in" });
+    const dialog = await screen.findByRole("dialog", { name: /^Sol Ring/ });
+    // The heading waits on nothing: the row already knew the name, so it never reads *Loading…*.
+    expect(within(dialog).queryByText("Loading…")).toBeNull();
+    // `CardModalArt`: the picture, named by the card, over its chin and one cell per finish.
+    expect(await within(dialog).findByRole("img", { name: "Sol Ring" })).toBeInTheDocument();
+    expect(within(dialog).getByText("SLD · 1")).toBeInTheDocument();
+    expect(within(dialog).getByText("Nonfoil")).toBeInTheDocument();
+    expect(within(dialog).getByText("Foil")).toBeInTheDocument();
+    // `CardModalTitle`: the type line beside the name, from the same read.
+    expect(within(dialog).getByText("Artifact")).toBeInTheDocument();
+    expect(within(dialog).getByText("Released Friday, 18 September 2026")).toBeInTheDocument();
+    // Read once, at the card modal's own key — so *Open card details* paints from this entry.
+    expect(cardDetail).toHaveBeenCalledWith("sld-1", "tcgplayer");
+    expect(qc.getQueryData(["card", "sld-1", "tcgplayer"])).toMatchObject({ id: "sld-1" });
+
+    const decks = within(dialog).getByRole("region", { name: "In 2 watched decks" });
     // A deck holding the card only in a theory pile says so rather than counting copies nobody
     // owns.
-    expect(within(panel).getByRole("button", { name: "Atraxa · 2 copies" })).toBeInTheDocument();
-    const planned = within(panel).getByRole("button", { name: "Edgar · planned" });
+    expect(within(decks).getByRole("button", { name: "Atraxa · 2 copies" })).toBeInTheDocument();
+    expect(within(decks).getByRole("button", { name: "Edgar · planned" })).toBeInTheDocument();
+  });
 
-    await user.click(planned);
+  it("names the printing's language under the heading when it is not English", async () => {
+    const user = userEvent.setup();
+    newPrintings.mockResolvedValue(
+      answer({ printings: [printing({ printingId: "sld-ja", releasedAt: SEP18, lang: "ja" })] }),
+    );
+
+    draw({ config: { langs: "all" } });
+    await user.click(await screen.findByRole("button", { name: /^Sol Ring/ }));
+
+    const dialog = await screen.findByRole("dialog", { name: /^Sol Ring/ });
+    expect(
+      within(dialog).getByText("Released Friday, 18 September 2026 · Japanese"),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * ⚠️ **The row must never carry `aria-expanded`.** `WidgetCard` lifts itself to `z-10` whenever
+   * anything inside it says `aria-expanded="true"`, and a card with a z-index is a stacking context
+   * — which would cap this dialog's scrim at the card's layer. jsdom has no opinion about a
+   * z-index, so the attribute is the only thing the suite can pin.
+   */
+  it("opens from a row that carries no aria-expanded, before or after the press", async () => {
+    const user = userEvent.setup();
+    heldTwice();
+
+    draw();
+    const row = await screen.findByRole("button", { name: /^Sol Ring/ });
+    expect(row).toHaveAttribute("aria-haspopup", "dialog");
+    expect(row).not.toHaveAttribute("aria-expanded");
+
+    await user.click(row);
+    await screen.findByRole("dialog", { name: /^Sol Ring/ });
+    expect(row).not.toHaveAttribute("aria-expanded");
+  });
+
+  it("hands the caret back to the row on Escape", async () => {
+    const user = userEvent.setup();
+    heldTwice();
+
+    draw();
+    const row = await screen.findByRole("button", { name: /^Sol Ring/ });
+    await user.click(row);
+    await screen.findByRole("dialog", { name: /^Sol Ring/ });
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(row).toHaveFocus();
+  });
+
+  it("opens the deck that is pressed", async () => {
+    const user = userEvent.setup();
+    heldTwice();
+
+    draw();
+    await user.click(await screen.findByRole("button", { name: /^Sol Ring/ }));
+    const dialog = await screen.findByRole("dialog", { name: /^Sol Ring/ });
+
+    await user.click(within(dialog).getByRole("button", { name: "Edgar · planned" }));
 
     // **`decks` is one view with two states**, so a press writes the view *and* the id.
     expect(useAppStore.getState().activeView).toBe("decks");
@@ -779,28 +932,62 @@ describe("the deck popover", () => {
    */
   it("opens the deck with the pressed printing picked out in it", async () => {
     const user = userEvent.setup();
-    newPrintings.mockResolvedValue(
-      answer({
-        printings: [
-          printing({
-            printingId: "sld-1",
-            releasedAt: SEP18,
-            decks: [deckHolding({ deckId: 4, name: "Atraxa" })],
-          }),
-        ],
-        oldest: SEP18,
-      }),
-    );
-    deckList.mockResolvedValue([deckRow({ id: 4, name: "Atraxa" })]);
+    heldTwice();
 
     draw();
-
     await user.click(await screen.findByRole("button", { name: /^Sol Ring/ }));
-    const panel = await screen.findByRole("dialog", { name: "Sol Ring is in" });
-    await user.click(within(panel).getByRole("button", { name: "Atraxa · 2 copies" }));
+    const dialog = await screen.findByRole("dialog", { name: /^Sol Ring/ });
+    await user.click(within(dialog).getByRole("button", { name: "Atraxa · 2 copies" }));
 
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(useAppStore.getState().openDeckId).toBe(4);
     expect(useAppStore.getState().selectedCardId).toBe("sld-1");
+  });
+
+  /**
+   * *Open card details* is the card modal on this printing, over the home page — and the caret is
+   * handed to the row **before** the card is selected, so the modal remembers the row as its opener
+   * rather than this dialog's panel, which is on its way out of the document.
+   */
+  it("opens the card modal on the printing, with the caret back on its row", async () => {
+    const user = userEvent.setup();
+    heldTwice();
+
+    draw();
+    const row = await screen.findByRole("button", { name: /^Sol Ring/ });
+    await user.click(row);
+    const dialog = await screen.findByRole("dialog", { name: /^Sol Ring/ });
+
+    await user.click(within(dialog).getByRole("button", { name: "Open card details" }));
+
+    expect(useAppStore.getState().selectedCardId).toBe("sld-1");
+    // Still on the home page: the card modal is drawn over whatever view is on screen.
+    expect(useAppStore.getState().activeView).toBe("home");
+    expect(row).toHaveFocus();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("says so when the card cannot be read, and still lists the decks", async () => {
+    const user = userEvent.setup();
+    heldTwice();
+    cardDetail.mockRejectedValue("The card database is busy.");
+
+    draw();
+    await user.click(await screen.findByRole("button", { name: /^Sol Ring/ }));
+    const dialog = await screen.findByRole("dialog", { name: /^Sol Ring/ });
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Could not read this card — The card database is busy.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Atraxa · 2 copies" })).toBeInTheDocument();
+  });
+
+  it("opens nothing from a catalogue preview", async () => {
+    heldTwice();
+
+    draw({ still: true });
+
+    expect(await screen.findByText("Sol Ring")).toBeInTheDocument();
+    expect(rows()).toEqual([]);
   });
 });

@@ -6600,6 +6600,12 @@ export interface NewPrinting {
    * rows are identical on screen and the list reads as duplicated rather than complete.
    */
   lang: string;
+  /**
+   * The printing's picture, front face, exactly as {@link CardSummary.imageUris}. **The web and
+   * Android builds' only way to draw the row's thumb** — `mtgimg://` is a desktop protocol — which
+   * is why a row was an empty frame there until this travelled (issue #514).
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
   decks: readonly NewPrintingDeck[];
 }
 
