@@ -4333,8 +4333,37 @@ describe("DeckEditor", () => {
     }
     // …and in words, on the one thing a keyboard reader gets from the card.
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
-      expect.stringContaining("in the theory list · 2 to remove"),
+      expect.stringContaining("exact match · 2 to remove"),
     );
+  });
+
+  /**
+   * Issue #502: `Matches theory` groups the Actual list by the three tiers its marks already
+   * say, and is offered only where there is a plan to match. On the Theory tab the row is gone
+   * and the grouping draws as Categories — without the remembered choice being written over, so
+   * pressing `Actual` again brings it back.
+   */
+  it("groups the Actual list by how it matches the plan, and only there", async () => {
+    const user = userEvent.setup();
+    withPlan({}, [card({ name: "Dismember" })]);
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 2)]);
+    await open();
+
+    await pickOption(user, "Group by", "Matches theory");
+    expect(await screen.findByRole("list", { name: "Exact Match" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "No Match" })).toBeInTheDocument();
+    expect(deckSetViewState).toHaveBeenLastCalledWith(4, { groupBy: "theory" });
+
+    await user.click(screen.getByRole("button", { name: "Theory" }));
+    expect(await screen.findByRole("list", { name: "Main deck" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Group by" })).toHaveTextContent("Categories");
+    await openDropdown(user, "Group by");
+    expect(screen.queryByRole("option", { name: "Matches theory" })).toBeNull();
+    await user.keyboard("{Escape}");
+    expect(deckSetViewState).not.toHaveBeenLastCalledWith(4, { groupBy: "category" });
+
+    await user.click(screen.getByRole("button", { name: "Actual" }));
+    expect(await screen.findByRole("list", { name: "Exact Match" })).toBeInTheDocument();
   });
 
   /**
@@ -4369,7 +4398,7 @@ describe("DeckEditor", () => {
     // as a colour, so `deckCardName` is the only place a reader who cannot see one is told which
     // of the two statements this mark is making.
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
-      expect.stringContaining("in the theory list · a different printing"),
+      expect.stringContaining("art mismatch"),
     );
   });
 
@@ -4401,15 +4430,14 @@ describe("DeckEditor", () => {
     // In words, on the one thing a keyboard reader gets from the card. Lowercased, because the
     // sentence is folded into the control's own name here rather than drawn as a label — and
     // that name is what says *which* row the one X is on, which the count above cannot.
-    expect(stray).toHaveAccessibleName(expect.stringContaining("not in the theory list"));
+    expect(stray).toHaveAccessibleName(expect.stringContaining("no match"));
 
     // And the planned row is untouched by the third switch: still the exact tier, and still the
-    // sentence with no "not" in front of it — which is the discrimination that matters here,
-    // since green's words are a substring of the third tier's.
+    // exact tier's name and never the third tier's.
     expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}="exact"]`)).toHaveLength(1);
     const planned = screen.getByRole("button", { name: /^Lightning Bolt/ });
-    expect(planned).toHaveAccessibleName(expect.stringContaining("in the theory list"));
-    expect(planned).toHaveAccessibleName(expect.not.stringContaining("not in the theory list"));
+    expect(planned).toHaveAccessibleName(expect.stringContaining("exact match"));
+    expect(planned).toHaveAccessibleName(expect.not.stringContaining("no match"));
   });
 
   /** The other half of the same switch: turned off, the row the plan says nothing about goes

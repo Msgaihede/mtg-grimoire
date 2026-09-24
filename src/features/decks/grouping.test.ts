@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DeckCard, DeckCategory } from "@/lib/ipc";
+import type { DeckCard, DeckCategory, TheorySlot } from "@/lib/ipc";
 import { card } from "./validation/fixtures";
 import {
   asGroupBy,
@@ -15,9 +15,11 @@ import {
   isCommandZone,
   NO_LABEL_GROUP_KEY,
   NO_LABEL_GROUP_NAME,
+  theoryGroupable,
   X_GROUP_KEY,
   X_GROUP_NAME,
 } from "./grouping";
+import { THEORY_TIER_NAMES, theoryMatchPlan } from "./theoryMatch";
 
 /**
  * One `deck_categories` row. The ids match `validation/fixtures`' `CATEGORIES` table so a
@@ -936,13 +938,14 @@ describe("buildGroups by a derived key", () => {
    * `sortOptions` before drawing it, so the sequence here is free to read in whatever order
    * explains the modes. `DeckEditor.test.tsx` is where the picker's own order is pinned.
    */
-  it("offers exactly the five groupings the toolbar shows", () => {
+  it("offers exactly the six groupings the toolbar shows", () => {
     expect(GROUP_BY_OPTIONS.map((o) => o.value)).toEqual([
       "category",
       "manaValue",
       "type",
       "label",
       "deck",
+      "theory",
     ]);
     expect(GROUP_BY_OPTIONS.map((o) => o.label)).toEqual([
       "Categories",
@@ -950,6 +953,7 @@ describe("buildGroups by a derived key", () => {
       "Type",
       "Labels",
       "Full deck",
+      "Matches theory",
     ]);
   });
 });
@@ -1578,5 +1582,76 @@ describe("asGroupBy", () => {
     for (const word of [...offered, "manavalue", "maybe", "sortOrder"]) {
       expect(asGroupBy(word) === word).toBe(offered.includes(word));
     }
+  });
+});
+
+describe("buildGroups by theory match (issue #502)", () => {
+  // `card()` spells `cardId` as `c-${name}`, so the planned printing of a card is that id and a
+  // different printing is anything else under the same name.
+  const slot = (name: string, cardId = `c-${name}`): TheorySlot => ({
+    key: `${cardId}|`,
+    nameKey: name,
+    quantity: 1,
+  });
+  const ALL_ON = { exact: true, name: true, unplanned: true };
+  const deck = [
+    card({ name: "Sol Ring" }),
+    { ...card({ name: "Forest" }), cardId: "c-Forest-other-art" },
+    card({ name: "Dismember" }),
+  ];
+  const plan = (marks = ALL_ON) =>
+    theoryMatchPlan([slot("Sol Ring"), slot("Forest")], deck, marks);
+
+  it("files each card under Exact Match, Art Mismatch or No Match, in that order", () => {
+    const groups = buildGroups(deck, [MAIN], "theory", "alphabetical", false, EDH, plan());
+    expect(names(groups)).toEqual(["Exact Match", "Art Mismatch", "No Match"]);
+    expect(groups.map((g) => g.cards.map((c) => c.name))).toEqual([
+      ["Sol Ring"],
+      ["Forest"],
+      ["Dismember"],
+    ]);
+    expect(groups.every((g) => g.categoryId === null && g.kind === null)).toBe(true);
+  });
+
+  /** A heading cannot go silent the way a mark can, so the switches decide nothing here. */
+  it("buckets by the plan whatever the deck's mark switches say", () => {
+    const off = { exact: false, name: false, unplanned: false };
+    const groups = buildGroups(deck, [MAIN], "theory", "alphabetical", false, EDH, plan(off));
+    expect(names(groups)).toEqual(["Exact Match", "Art Mismatch", "No Match"]);
+  });
+
+  it("uses the same names the card marks say", () => {
+    expect(Object.values(THEORY_TIER_NAMES)).toEqual(["Exact Match", "Art Mismatch", "No Match"]);
+  });
+
+  /** The plan is a query; until it answers, every card still draws somewhere. */
+  it("draws as category while there is no plan", () => {
+    const byTheory = buildGroups(deck, [MAIN], "theory", "alphabetical");
+    const byCategory = buildGroups(deck, [MAIN], "category", "alphabetical");
+    expect(names(byTheory)).toEqual(names(byCategory));
+  });
+
+  it("keeps the command zone at the head and a switched-off pile whole at the tail", () => {
+    const rows = [
+      inCategory(COMMANDER, { name: "Azula" }),
+      card({ name: "Sol Ring" }),
+      inCategory(MAYBE, { name: "Mind Stone" }),
+    ];
+    const groups = buildGroups(
+      rows,
+      [COMMANDER, MAIN, MAYBE],
+      "theory",
+      "alphabetical",
+      false,
+      EDH,
+      theoryMatchPlan([slot("Sol Ring")], rows, ALL_ON),
+    );
+    expect(names(groups)).toEqual(["Commander", "Exact Match", "Maybeboard"]);
+  });
+
+  it("is offered only on the Actual list of a deck that keeps a plan", () => {
+    expect(theoryGroupable(true, "live")).toBe(true);
+    expect(theoryGroupable(true, "theory")).toBe(false);
+    expect(theoryGroupable(false, "live")).toBe(false);
   });
 });

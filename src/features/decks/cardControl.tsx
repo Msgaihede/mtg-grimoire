@@ -499,7 +499,7 @@ export function deckCardName(
     // bare "in the theory list" this said before issue #212 — and, since the mark grew its
     // second and third tiers, the same sentence names **which** tier, because that half of the
     // mark is drawn as a colour and a glyph and a colour is the one thing a screen reader is told
-    // nothing about. On the third tier the sentence is the negation — "not in the theory list" —
+    // nothing about. On the third tier the sentence is "no match" (issue #502's names) —
     // which is the whole of what that mark says and is why the count clause is absent there.
     theoryMark === null
       ? null

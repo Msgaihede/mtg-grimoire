@@ -56,17 +56,20 @@ import {
   PREDEFINED_CATEGORY_NAMES,
 } from "./autoCategory";
 import { sortCards, type SortBy } from "./sorting";
+import { THEORY_TIER_NAMES, theoryTier, type TheoryPlan, type TheoryTier } from "./theoryMatch";
 import { splitRail } from "./views/columns";
 
 /**
  * What the headings are. `category` is the reader's own piles; `manaValue`, `type` and `label`
  * are **derived** headings built from the active cards; `deck` is one heading over the whole
- * deck — see {@link buildGroups} for what each of the last two leaves out and why.
+ * deck — see {@link buildGroups} for what each of the last two leaves out and why. `theory` is
+ * a derived mode too, bucketing each card by how it matches the deck's plan (issue #502), and it
+ * exists only where there is a plan to match: the Actual list of a Theory + Actual deck.
  *
  * The words are stored verbatim in `decks.last_group_by`, so a value is spelled once and never
  * renamed: a stored word this build does not know reopens the editor on the default.
  */
-export type GroupBy = "category" | "manaValue" | "type" | "label" | "deck";
+export type GroupBy = "category" | "manaValue" | "type" | "label" | "deck" | "theory";
 
 /** The toolbar's Group by select, so the modes are named in one place. **The order here is not
  *  the order they are offered in** — a picker sorts by label (`src/lib/options.ts`), so this
@@ -78,7 +81,18 @@ export const GROUP_BY_OPTIONS: readonly { value: GroupBy; label: string }[] = [
   { value: "type", label: "Type" },
   { value: "label", label: "Labels" },
   { value: "deck", label: "Full deck" },
+  { value: "theory", label: "Matches theory" },
 ];
+
+/**
+ * Whether the `Matches theory` grouping means anything here: only on the **Actual** list of a deck
+ * that keeps a plan. On the Theory tab every row *is* the plan, and a deck with no plan has
+ * nothing to match against — so the picker leaves the row out, and a remembered `theory` draws
+ * as {@link DEFAULT_GROUP_BY} without being overwritten, so the grouping comes back with the tab.
+ */
+export function theoryGroupable(theoryEnabled: boolean, variant: string): boolean {
+  return theoryEnabled && variant === "live";
+}
 
 /** What a deck is grouped by until somebody says otherwise — the editor's initial state, and
  *  what a stored value this build cannot draw falls back to. */
@@ -188,6 +202,25 @@ export const X_GROUP_NAME = "Mana value X";
  */
 export const NO_LABEL_GROUP_KEY = "label-none";
 export const NO_LABEL_GROUP_NAME = "No label";
+
+/**
+ * The `Matches theory` headings, one per tier and in the resolver's own order — this printing,
+ * then this card, then neither. The names are {@link THEORY_TIER_NAMES}, which is also what each
+ * card's mark says, so a heading and the marks under it cannot disagree.
+ */
+const THEORY_BUCKET_ORDER: Readonly<Record<TheoryTier, number>> = {
+  exact: 0,
+  name: 1,
+  unplanned: 2,
+};
+
+function theoryBucket(
+  plan: TheoryPlan,
+  card: Pick<DeckCard, "cardId" | "finish" | "name">,
+): { key: string; name: string; order: number } {
+  const tier = theoryTier(plan, card);
+  return { key: `theory-${tier}`, name: THEORY_TIER_NAMES[tier], order: THEORY_BUCKET_ORDER[tier] };
+}
 
 /** The one heading `groupBy: "deck"` draws over the deck itself. Its key is outside every other
  *  namespace here, because it is not a bucket of anything — it is all of them. */
@@ -534,6 +567,13 @@ function splitCommandZones(groups: readonly CardGroup[]): {
  * @param rules the one fact an empty pile's heading depends on that the pile itself cannot carry
  *   — {@link EmptyGroupRules}. Defaults to {@link DEFAULT_EMPTY_GROUP_RULES}, and is last for
  *   the same reason `separateX` is: no existing call site breaks.
+ * @param theoryPlan the deck's plan, for `groupBy: "theory"` alone. **Absent, that mode draws as
+ *   `category`** — the plan is a query, and a deck whose plan has not answered yet (or has none)
+ *   must still draw every card somewhere rather than filing all of them under `No Match`.
+ *
+ * **`theory` buckets by the tier the plan says, never by the deck's mark switches** —
+ * {@link theoryTier} rather than `theoryMatchMark`. A heading cannot go silent the way a mark can,
+ * so a card whose tier's mark is switched off still files under its tier.
  *
  * **There is no currency argument any more.** It took one while every row carried two prices,
  * so that a heading's total and the `price` order under it could not be computed from
@@ -577,6 +617,7 @@ export function buildGroups(
   sortBy: SortBy,
   separateX = false,
   rules: EmptyGroupRules = DEFAULT_EMPTY_GROUP_RULES,
+  theoryPlan?: TheoryPlan,
 ): CardGroup[] {
   const byCategory = new Map<number, DeckCard[]>();
   for (const card of cards) {
@@ -615,7 +656,9 @@ export function buildGroups(
   // the buckets, since a pile in `command` is a pile drawn whole.
   const { command, rest } = splitCommandZones([...categoryGroups, ...strays]);
 
-  if (groupBy === "category") return [...command, ...rest];
+  if (groupBy === "category" || (groupBy === "theory" && theoryPlan === undefined)) {
+    return [...command, ...rest];
+  }
 
   // One heading over the deck — the piles `splitRail` would *flow* — and every other pile as
   // itself: the command zones already lifted to the head, and the Sideboard, the Maybeboard and
@@ -657,7 +700,9 @@ export function buildGroups(
         ? manaValueBucket(card, separateX)
         : groupBy === "label"
           ? labelBucket(card)
-          : (() => {
+          : groupBy === "theory" && theoryPlan !== undefined
+            ? theoryBucket(theoryPlan, card)
+            : (() => {
             // What the card *is* comes from the matching order; where its heading *sits*
             // comes from the reading order, which puts Land last. See `autoCategory.ts` for
             // why those are two lists and must stay two.
