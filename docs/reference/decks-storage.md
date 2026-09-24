@@ -2213,7 +2213,8 @@ is the one `collection_to_deck` grew — `deck::plays_card`, `PLAYED_KEY`'s
 
 ### Two commands, and the read is the smaller half this time
 
-`deck_quick_add_wishes` answers which wishlist lines this printing would satisfy;
+`deck_quick_add_wishes` answers every wishlist line for this printing's card (since
+[issue #511](https://github.com/Msgaihede/mtg-grimoire/issues/511) — see the next section);
 `deck_quick_add_to_collection` records the copies and, when the reader named one, takes them off
 that line. The split is the pull's and for the pull's reason — a prompt needs its options named
 before anything is written — but it is a narrower read: there is no plan to compute, because how
@@ -2222,8 +2223,10 @@ many copies to record is a fact the row the reader right-clicked is already show
 The read is one statement over `wishlist_entries LEFT JOIN wishlist_folders`, ordered root first,
 then the reader's own folders in their `sort_order`, oldest row first inside a tie. That is
 `deck_pull::PullCandidate`'s order borrowed rather than re-decided, and it is borrowed with its
-argument: rank by how little of the reader's own filing the write disturbs. It is a pre-pick and
-nothing more — every match still reaches the picker when there is more than one.
+argument: rank by how little of the reader's own filing the write disturbs. The per-card read puts
+two terms in front of it — the pressed printing first, then a finish the copies satisfy — so the
+pre-pick is the line the narrow read would have chosen. It is a pre-pick and nothing more: every
+match reaches the picker.
 
 **Nothing is fetched on a right-click.** The wishes are read imperatively at the press, so the
 menu costs no round trip on a surface a reader opens constantly, and the key —
@@ -2232,16 +2235,32 @@ fetch and any observer of it cannot disagree about what they are sharing. **It n
 because a wish does not: which deck the press came from decides where the *copies* are filed and
 says nothing about which shopping lines could be cleared.
 
-### The wishlist predicate is a printing-and-finish match, with the any-printing arm dropped
+### Two wish predicates: the card for the picker, the printing for the batch
+
+**The per-card press reads every wish for the card and always asks** (2026-09-24,
+[issue #511](https://github.com/Msgaihede/mtg-grimoire/issues/511)). `deck_quick_add::card_wishes`
+matches `w.card_id = ?1` or the wish's `oracle_id` equal to the pressed printing's, so another
+printing, another finish and an any-printing wish are all offered; `chooseWish` opens
+`QuickUnwishDialog` for **one or more** of them, and each row shows its picture, printing, finish
+and folder. The write's re-check (`take_wish`) was widened to match: a named wish must be for the
+same *card* and nothing else. The reason is the reader's report: the narrow read hid the line they
+meant — a wish for another art, or one filed in a folder — and a lone match was cleared without
+their seeing which line it was. Whether M10 copies settle a wish for the Alpha printing is the
+reader's call, so the picker offers it and they make it.
+
+**The deck-wide batch keeps the narrow predicate below**, through `deck_quick_add::wishes`,
+because `deck_missing` clears a lone match *without asking*, and a guess is only safe where the
+wish names exactly the cardboard recorded. Everything in the rest of this section is about that
+narrow read.
 
 ```sql
 w.card_id = ?1 AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)
 ```
 
 "Which wishes could these copies take down" has two arms: a printing-exact one, and an
-any-printing one that would match `w.card_id IS NULL` through `cards.oracle_id`. This takes the
-first and drops the second. Two consequences, both decisions taken on 2026-09-03 and neither an
-oversight:
+any-printing one that would match `w.card_id IS NULL` through `cards.oracle_id`. The narrow read
+takes the first and drops the second. Two consequences, both decisions taken on 2026-09-03 and
+neither an oversight:
 
 **It was written as `wishlist::OWNED_SQL`'s first arm and that constant is gone** (2026-09-08).
 `OWNED_SQL` summed how much of a wish the collection already held, which is a question the wishlist
@@ -2285,9 +2304,10 @@ present:
    *copies*, and a purchase price or an acquisition source it invented would be provenance nobody
    entered. The condition is `MENU_CONDITION` — TypeScript's, `"NM"`, the same constant every
    other menu add records at, imported rather than respelled so the two cannot drift.
-6. **The wish, re-read inside the transaction against the predicate above.** The dialog's answer
-   is a round trip old, which is the pull's discipline: gone → `WISH_GONE`, no longer a match →
-   `WISH_WRONG_CARD`. Then `take = min(copies, wish.quantity)`, deleting the row at zero and
+6. **The wish, re-read inside the transaction.** The dialog's answer is a round trip old, which is
+   the pull's discipline: gone → `WISH_GONE`, a wish for another card → `WISH_WRONG_CARD`. Since
+   issue #511 printing and finish are not re-checked — the picker offered every line for the card
+   and the reader chose one. Then `take = min(copies, wish.quantity)`, deleting the row at zero and
    decrementing it otherwise.
 
 **A refusal at step 6 rolls the copies back with it**, and that is the answer the press deserves

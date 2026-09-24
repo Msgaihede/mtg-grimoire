@@ -17,8 +17,23 @@ const FRAME_WAIT = 5_000;
 /** One wish as `deck_quick_add_wishes` answers one, at the root — the row with a `null` folder,
  *  which is the one whose word this component owns. */
 function wish(over: Partial<DeckQuickAddWish> = {}): DeckQuickAddWish {
-  return { id: 31, quantity: 2, folderId: null, folderName: null, ...over };
+  return {
+    id: 31,
+    quantity: 2,
+    folderId: null,
+    folderName: null,
+    // The workbench corpus's own Alpha Bolt, so the art beside each row resolves.
+    cardId: "d573ef03-4730-45aa-93dd-e45ac1dbaf4a",
+    name: "Lightning Bolt",
+    setCode: "lea",
+    collectorNumber: "161",
+    preferredFinish: null,
+    ...over,
+  };
 }
+
+/** What every row of {@link wish}'s printing reads after its folder. */
+const LEA = "LEA 161 · Any finish";
 
 /**
  * The payload this dialog exists for: one printing on two shopping lines.
@@ -62,15 +77,12 @@ const meta = {
       description: {
         component:
           "`Quick add N and remove from wishlist` is two acts in one press: record the copies " +
-          "the deck row is short of, and take them off a wish that was asking for exactly that " +
-          "printing. **Almost always there is nothing to decide** — no wish matches, or one " +
-          "does — and `quickCollection.ts`'s `chooseWish` settles both without drawing anything " +
-          "at all.\n\n" +
-          "**This is the third case: several wishes match.** It happens when a reader has one " +
-          "card on their list in two folders, and no rule the app could invent would say which " +
-          "of them a purchase satisfies — a `Modern staples` line and a `Birthday list` line " +
-          "are two different intentions about one card, and picking for the reader would " +
-          "quietly empty a list they were keeping on purpose.\n\n" +
+          "the deck row is short of, and take them off a wishlist line. **Since issue #511 the " +
+          "lines offered are every wish for the card** — any printing, any finish, any folder — " +
+          "so this dialog opens whenever the card is on the wishlist at all, even for one line. " +
+          "Whether M10 copies settle a wish for the Alpha printing is the reader's call, so " +
+          "each row shows its picture, printing, finish and folder. `chooseWish` still writes " +
+          "straight through when nothing is wished for.\n\n" +
           "**Cancel does nothing at all, including the add.** They asked for both halves of one " +
           "act and get neither, which is the only answer a cancel can honestly give: a " +
           "collection row recorded against a wish still standing is the exact state the row " +
@@ -102,18 +114,59 @@ export const Ambiguous: Story = {
     await waitFor(
       async () =>
         await expect(
-          await canvas.findByRole("radio", { name: "Wishlist · 2 copies" }),
+          await canvas.findByRole("radio", { name: `Wishlist · ${LEA} · 2 copies` }),
         ).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
 
-    await expect(canvas.getByRole("radio", { name: "Wishlist · 2 copies" })).toBeChecked();
-    await expect(canvas.getByRole("radio", { name: "Modern staples · 4 copies" })).not.toBeChecked();
+    await expect(canvas.getByRole("radio", { name: `Wishlist · ${LEA} · 2 copies` })).toBeChecked();
+    await expect(canvas.getByRole("radio", { name: `Modern staples · ${LEA} · 4 copies` })).not.toBeChecked();
 
     // The affirmative quotes the number the menu row quoted, so a reader who pressed
     // `Quick add 4 and remove from wishlist` meets the same 4 here.
     await userEvent.click(canvas.getByRole("button", { name: "Record 4 copies" }));
     await expect(args.onConfirm).toHaveBeenCalledWith(31);
+  },
+};
+
+/**
+ * **Every line for the card, whatever it asks for** — issue #511's case. The deck holds the Alpha
+ * printing; the wishlist has a foil Alpha line in a folder, a Double Masters line at the root and
+ * a line for any printing at all. Each row says which cardboard it is for and where it is filed,
+ * and the reader picks the one this purchase settles.
+ */
+export const EveryPrinting: Story = {
+  args: {
+    wishes: [
+      wish({ preferredFinish: "foil", folderId: 8, folderName: "Modern staples" }),
+      wish({
+        id: 33,
+        cardId: "f29ba16f-c8fb-42fe-aabf-87089cb214a7",
+        setCode: "2x2",
+        collectorNumber: "117",
+        quantity: 1,
+      }),
+      wish({ id: 34, cardId: null, setCode: null, collectorNumber: null, quantity: 3 }),
+    ],
+  },
+  play: async ({ canvas, args }) => {
+    await waitFor(
+      async () =>
+        await expect(
+          await canvas.findByRole("radio", {
+            name: "Modern staples · LEA 161 · Foil · 2 copies",
+          }),
+        ).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+    await expect(
+      canvas.getByRole("radio", { name: "Wishlist · 2X2 117 · Any finish · 1 copy" }),
+    ).toBeVisible();
+    await userEvent.click(
+      canvas.getByRole("radio", { name: "Wishlist · Any printing · Any finish · 3 copies" }),
+    );
+    await userEvent.click(canvas.getByRole("button", { name: "Record 4 copies" }));
+    await expect(args.onConfirm).toHaveBeenCalledWith(34);
   },
 };
 
@@ -129,12 +182,12 @@ export const PickingTheOtherLine: Story = {
     await waitFor(
       async () =>
         await expect(
-          await canvas.findByRole("radio", { name: "Modern staples · 4 copies" }),
+          await canvas.findByRole("radio", { name: `Modern staples · ${LEA} · 4 copies` }),
         ).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
 
-    await userEvent.click(canvas.getByRole("radio", { name: "Modern staples · 4 copies" }));
+    await userEvent.click(canvas.getByRole("radio", { name: `Modern staples · ${LEA} · 4 copies` }));
     await userEvent.click(canvas.getByRole("button", { name: "Record 4 copies" }));
 
     await expect(args.onConfirm).toHaveBeenCalledWith(32);
@@ -180,7 +233,7 @@ export const OneCopy: Story = {
         ).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
-    await expect(canvas.getByRole("radio", { name: "Wishlist · 1 copy" })).toBeVisible();
+    await expect(canvas.getByRole("radio", { name: `Wishlist · ${LEA} · 1 copy` })).toBeVisible();
   },
 };
 

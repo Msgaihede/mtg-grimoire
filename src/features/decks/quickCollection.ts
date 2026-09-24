@@ -154,10 +154,7 @@ export function quickAddBlock(
 }
 
 /** What to do with the wishes a press found. */
-export type WishChoice =
-  | { kind: "none" }
-  | { kind: "one"; wish: DeckQuickAddWish }
-  | { kind: "many"; wishes: readonly DeckQuickAddWish[] };
+export type WishChoice = { kind: "none" } | { kind: "ask"; wishes: readonly DeckQuickAddWish[] };
 
 /**
  * The wishes `deck_quick_add_wishes` answered, read as a decision.
@@ -167,22 +164,22 @@ export type WishChoice =
  * a wish if there is one", so a card with no wish gets the first half and nothing is owed about
  * the second.
  *
- * **`one` is removed with no dialog.** A picker offering a single row is a press that asks the
- * reader to confirm the only thing it could have done.
- *
- * **`many` is the one fork.** Which shopping list a copy comes off is a filing decision the
- * reader made on purpose — a wish in *Christmas list* and a wish in *Trade targets* are not
- * interchangeable — so the app must not pick one, and a **cancel there does neither half**: the
- * reader asked for both and got neither, which is the only answer a cancel can honestly give.
+ * **Anything else asks, even a single line** (issue #511). The read answers every wish for the
+ * *card* — another printing, another finish, any printing at all — so a lone row is no longer
+ * certainly the cardboard just recorded: a wish for the Alpha printing is only settled by M10
+ * copies if the reader says so. The picker shows each line's printing, finish and folder, and a
+ * **cancel does neither half** — the reader asked for both and got neither, which is the only
+ * answer a cancel can honestly give. (It used to take a lone match with no dialog, which was safe
+ * while the read matched only the exact printing and finish.)
  *
  * The array is handed back untouched rather than re-sorted: the backend's order is the pre-pick
- * (the root first, then the reader's folders in their own `sortOrder`), and a sort here would be
- * a second opinion about a question already settled where the folder tree is visible.
+ * (the pressed printing first, then a satisfied finish, then the root and the reader's folders in
+ * their own `sortOrder`), and a sort here would be a second opinion about a question already
+ * settled.
  */
 export function chooseWish(wishes: readonly DeckQuickAddWish[]): WishChoice {
   if (wishes.length === 0) return { kind: "none" };
-  if (wishes.length === 1) return { kind: "one", wish: wishes[0] };
-  return { kind: "many", wishes };
+  return { kind: "ask", wishes };
 }
 
 /** Whether a pull of this card needs the dialog, and the picks when it does not. */

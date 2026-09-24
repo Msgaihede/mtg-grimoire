@@ -651,10 +651,15 @@ layer.
     the import took the toolbar component for one run and answered *"quickAddShort is not a
     function"* — `folderTree.ts` beside `FolderTree.tsx` a second time. tsc refuses the program
     outright (TS1149), which is the only reason it is not a silent wrong answer.
-  - **The prompt is only for the ambiguous half**, `quickCollection.ts`'s `chooseWish` and
-    `choosePull`. One matching wish is taken with no dialog and several open
-    `QuickUnwishDialog`; one pull candidate is pulled and several — **or none** — open
-    `PullFromCollectionDialog`, which already words the empty case. Ambiguity is `candidates.length >= 2` and nothing else: a lone candidate
+  - **The wish half always asks; the pull asks only when it is ambiguous** — `quickCollection.ts`'s
+    `chooseWish` and `choosePull`. Since [issue #511](https://github.com/Msgaihede/mtg-grimoire/issues/511)
+    `deck_quick_add_wishes` answers **every** wish for the card — any printing, any finish — so one
+    matching wish or more opens `QuickUnwishDialog`, whose rows show the picture, printing, finish
+    and folder, and only no wish at all writes straight through. It used to take a lone match
+    silently, which was safe only while the read matched the exact printing and finish; the
+    deck-wide batch still reads that narrow predicate, because it clears a lone match without
+    asking. One pull candidate is pulled and several — **or none** — open
+    `PullFromCollectionDialog`, which already words the empty case. The pull's ambiguity is `candidates.length >= 2` and nothing else: a lone candidate
     holding fewer copies than the shortfall is still unambiguous, so it is taken. Both reads are
     `queryClient.fetchQuery` at the press rather than hooks, so a right-click fires nothing — and
     both query-options factories live in `useDeck.ts`, because a second spelling of either key is

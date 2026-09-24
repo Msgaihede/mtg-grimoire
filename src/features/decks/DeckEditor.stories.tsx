@@ -719,9 +719,10 @@ export const NoMoveControl: Story = {
  *
  * - **Quick add N copies** — record them, filed straight into this deck's own group. It is the
  *   only write in the app that *creates* cardboard rather than moving it.
- * - **Quick add N and remove from wishlist** — the same, and take them off a matching shopping
- *   line. A prompt only where several lines match; one match and no match both write straight
- *   through, which is `quickCollection.ts`'s `chooseWish`.
+ * - **Quick add N and remove from wishlist** — the same, and take them off a shopping line the
+ *   reader picks. Every line for the card is offered — any printing, any finish, with its folder
+ *   — so a prompt opens whenever the card is on the wishlist at all (issue #511); no match writes
+ *   straight through, which is `quickCollection.ts`'s `chooseWish`.
  * - **Pull N from your collection** — copies the reader already owns loose, moved in. One
  *   candidate pulls outright; several, or none, open `PullFromCollectionDialog` over this one
  *   card.

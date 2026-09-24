@@ -6312,9 +6312,16 @@ describe("DeckEditor — the Collection submenu", () => {
 
   /** Two wishes for one printing — the ambiguous case, and the only one that draws a dialog.
    *  One at the root and one in a folder, which is what the rows are told apart by. */
+  const PRINTING = {
+    cardId: "c-Lightning Bolt",
+    name: "Lightning Bolt",
+    setCode: "m10",
+    collectorNumber: "146",
+    preferredFinish: null,
+  };
   const WISHES = [
-    { id: 31, quantity: 2, folderId: null, folderName: null },
-    { id: 32, quantity: 4, folderId: 8, folderName: "Modern staples" },
+    { id: 31, quantity: 2, folderId: null, folderName: null, ...PRINTING },
+    { id: 32, quantity: 4, folderId: 8, folderName: "Modern staples", ...PRINTING },
   ];
 
   /** One `deck_pull_plan` row for this card, with as many candidates as a case wants. `short` is
@@ -6402,16 +6409,16 @@ describe("DeckEditor — the Collection submenu", () => {
   });
 
   /**
-   * **One matching wish is not a question**, which is `chooseWish`'s rule and the half of this
-   * feature most easily broken by "just always ask": the write goes with that wish's id and no
-   * dialog is drawn at all.
-   *
-   * The absence is asserted **after** the write has landed rather than immediately, or it would
-   * pass against a dialog that had simply not opened yet.
+   * **One matching wish is still a question** (issue #511). The read answers every printing and
+   * finish of the card, so a lone line may be for other cardboard than the copies recorded — here
+   * a wish for another printing, in a folder — and only the reader knows whether this purchase
+   * settles it. Nothing is written until they answer.
    */
-  it("clears a single matching wish without asking", async () => {
+  it("asks about a single wish too, showing its printing and folder", async () => {
     deckGet.mockResolvedValue(detail({}, [SHORT()]));
-    deckQuickAddWishes.mockResolvedValue([WISHES[0]]);
+    deckQuickAddWishes.mockResolvedValue([
+      { ...WISHES[1], cardId: "c-Other Bolt", setCode: "lea", collectorNumber: "161" },
+    ]);
     await open();
     await collectionMenu();
 
@@ -6420,6 +6427,16 @@ describe("DeckEditor — the Collection submenu", () => {
     );
 
     await waitFor(() => expect(deckQuickAddWishes).toHaveBeenCalledWith("c-Lightning Bolt", null));
+    const dialog = await screen.findByRole("dialog", { name: "Which wish?" });
+    expect(
+      within(dialog).getByRole("radio", {
+        name: "Modern staples · LEA 161 · Any finish · 4 copies",
+      }),
+    ).toBeChecked();
+    expect(deckQuickAddToCollection).not.toHaveBeenCalled();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
+
     await waitFor(() =>
       expect(deckQuickAddToCollection).toHaveBeenCalledWith(
         4,
@@ -6427,10 +6444,9 @@ describe("DeckEditor — the Collection submenu", () => {
         null,
         MENU_CONDITION,
         4,
-        31,
+        32,
       ),
     );
-    expect(screen.queryByRole("dialog", { name: "Which wish?" })).not.toBeInTheDocument();
   });
 
   /** No matching wish is not a question either, and the press is exactly the plain add — the
@@ -6458,8 +6474,7 @@ describe("DeckEditor — the Collection submenu", () => {
   });
 
   /**
-   * Two wishes for one printing is the one case with an answer only the reader has, so the press
-   * stops at the dialog — **nothing is written before it is answered**, which is the assertion
+   * Two wishes for one card have an answer only the reader has, so the press stops at the dialog — **nothing is written before it is answered**, which is the assertion
    * that makes "Cancel does nothing" possible at all.
    */
   it("asks which wish when two match, and writes nothing until it is answered", async () => {
