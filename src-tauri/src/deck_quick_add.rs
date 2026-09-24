@@ -46,28 +46,31 @@
 //! the same shape: the importer writes the deck's list in the same press, and this one checks
 //! that the list already says so.
 //!
-//! # The wishlist half narrows on the *printing*, not on the wish
+//! # Two wish reads: one narrow, for a press that guesses; one wide, for a press that asks
 //!
 //! [`wishes`] is the wishlist's own printing-and-finish match with the any-printing arm
 //! dropped — `w.card_id = :cardId AND (w.preferred_finish IS NULL OR w.preferred_finish =
-//! :finish)` — rather than a second opinion about what fills a wish. A wish for *any* printing of
-//! the card is left standing, exactly as [`crate::deck_pull`] leaves an Alpha Bolt out of an M10
-//! line and for the same trade: nothing is ever taken off a shopping list that is not the piece
-//! of cardboard the reader just recorded. A NULL `preferred_finish` still matches, because the
-//! list itself says *a wish that names no finish takes any of them*; excluding it would refuse
-//! the commonest wish there is.
+//! :finish)`. It is what the deck-wide batch ([`crate::deck_missing`]) reads, and it has to be
+//! that narrow: the batch clears a lone matching wish **without asking**, and a guess is only
+//! safe where the wish names exactly the cardboard just recorded.
 //!
-//! # A prompt only when the answer is ambiguous
+//! [`card_wishes`] is the per-card menu's read since
+//! [issue #511](https://github.com/Msgaihede/mtg-grimoire/issues/511): **every** wish for the
+//! card — another printing, another finish, or any printing at all — because that press always
+//! opens a picker now and the reader chooses which line the copies came off. Whether an M10
+//! purchase settles a wish for the Alpha printing is the reader's call, and a narrow read hid the
+//! line they meant; the picker shows each row's printing, finish and folder so the choice is
+//! made with the facts on screen. [`quick_add`]'s own re-check is widened to match: a named wish
+//! must be for the same *card*, and printing and finish are no longer refused.
 //!
-//! One matching wish is removed with no dialog; several open a picker. That decision is
-//! TypeScript's — this module answers the *facts* (which wishes match, in an order it argues
-//! for) and the page draws the conclusion, which is the crate's boundary read one module in.
-//! [`quick_add`] takes at most one `wish_id`, because a press that cleared three wishes at once
-//! would be a write nobody could review before it happened.
+//! [`quick_add`] still takes at most one `wish_id`, because a press that cleared three wishes at
+//! once would be a write nobody could review before it happened. Whether to ask is TypeScript's
+//! decision; this module answers the *facts* — which wishes match, in an order it argues for.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
+use std::collections::BTreeMap;
 
 /// What [`quick_add`] says when the wish it was pointed at is not there any more.
 ///
@@ -118,6 +121,23 @@ pub struct QuickAddWish {
     /// that shows it, and [`crate::deck_pull::PullCandidate::folder_name`] makes the same call
     /// one table over.
     pub folder_name: Option<String>,
+    /// The printing the wish names, or `None` for a wish that takes **any** printing of the card.
+    /// [`card_wishes`] offers both kinds, so the picker has to be able to say which is which.
+    pub card_id: Option<String>,
+    /// The wish's stored name — the one name a wish always has, orphan or any-printing alike.
+    pub name: String,
+    /// The printing's set code as the wish stored it, `None` on an any-printing wish.
+    pub set_code: Option<String>,
+    /// The printing's collector number as the wish stored it, `None` on an any-printing wish.
+    pub collector_number: Option<String>,
+    /// The finish the wish asks for in the **wishlist's** spelling (`nonfoil`/`foil`/`etched`),
+    /// or `None` for a wish that takes any finish.
+    pub preferred_finish: Option<String>,
+    /// The named printing's picture, front face, exactly as
+    /// [`crate::search::CardSummary::image_uris`] — `None` for an any-printing wish or a printing
+    /// the corpus no longer holds. Carried for the web build, which cannot draw from the
+    /// `mtgimg:` cache.
+    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// What one quick add recorded.
@@ -164,27 +184,66 @@ pub struct QuickAddOutcome {
 /// **This is a pre-pick and not a decision.** Every match is returned and the *page* chooses:
 /// one is taken with no dialog, several open a picker. An empty vector is the ordinary answer —
 /// a reader who never wished for the card is not an error.
-const WISH_SQL: &str = "SELECT w.id, w.quantity, w.folder_id, f.name
-       FROM wishlist_entries w
-       LEFT JOIN wishlist_folders f ON f.id = w.folder_id
-      WHERE w.card_id = ?1
+const WISH_SQL: &str = "WHERE w.card_id = ?1
         AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)
       ORDER BY (w.folder_id IS NOT NULL), f.sort_order, w.id";
 
-/// Run [`WISH_SQL`] for one printing and finish.
+/// Every wish for **the card** — any printing, any finish — best first. The per-card menu's
+/// read since [issue #511](https://github.com/Msgaihede/mtg-grimoire/issues/511).
+///
+/// [`WISH_SQL`] narrows on the printing because the deck-wide batch ([`crate::deck_missing`])
+/// clears a wish **without asking**, and a guess is only safe where the wish names the exact
+/// cardboard. The per-card press always asks: the reader is shown every line on their list for
+/// this card — each with its printing, finish and folder — and picks the one the copies came off.
+/// A reader who bought M10 Bolts against a wish for the Alpha printing is the one person who
+/// knows whether that wish is settled, so the list offers it and the reader decides.
+///
+/// **The match is the oracle card, with the printing as the fallback** — `w.card_id = ?1`, or the
+/// wish's `oracle_id` equal to the pressed printing's — which is [`crate::deck::PLAYED_KEY`]'s
+/// shape: an orphaned printing still finds the wishes naming it by id.
+///
+/// **The order puts the exact match first**, so the pre-pick is the wish the narrow read would
+/// have chosen: the pressed printing, then a finish the copies satisfy, then [`WISH_SQL`]'s own
+/// root-then-folders ranking, then the row id — a primary key, so the walk is total.
+const CARD_WISH_SQL: &str = "WHERE w.card_id = ?1
+         OR (w.oracle_id IS NOT NULL
+             AND w.oracle_id = (SELECT oracle_id FROM cards WHERE id = ?1))
+      ORDER BY (w.card_id IS NULL OR w.card_id <> ?1),
+               (w.preferred_finish IS NOT NULL AND w.preferred_finish <> ?2),
+               (w.folder_id IS NOT NULL), f.sort_order, w.id";
+
+/// The `SELECT` both reads share, with the `WHERE … ORDER BY` left for each to supply — one
+/// column list, so the positional read in [`run_wishes`] cannot come to disagree with either.
+fn wish_select(tail: &str) -> String {
+    let image_uris = crate::image_uri::front_face_selects("c").join(", ");
+    format!(
+        "SELECT w.id, w.quantity, w.folder_id, f.name,
+                w.card_id, w.name, w.set_code, w.collector_number, w.preferred_finish,
+                {image_uris}
+           FROM wishlist_entries w
+           LEFT JOIN wishlist_folders f ON f.id = w.folder_id
+           LEFT JOIN cards c ON c.id = w.card_id
+          {tail}"
+    )
+}
+
+/// Run one of the two wish reads for a printing and finish.
 ///
 /// The finish arrives in the **deck row's** spelling, where `None` is the regular copy, and is
 /// translated through [`crate::deck::normalise_finish`] and [`NONFOIL`] into the word the
 /// wishlist stores — the same one-line translation [`crate::deck_pull`]'s own candidate read
 /// makes into the collection's column. An unknown finish is refused there rather than matching
 /// nothing here.
-pub fn wishes(
+fn run_wishes(
     conn: &Connection,
+    tail: &str,
     card_id: &str,
     finish: Option<&str>,
 ) -> Result<Vec<QuickAddWish>, String> {
     let finish = crate::deck::normalise_finish(finish)?.unwrap_or_else(|| NONFOIL.to_owned());
-    let mut stmt = conn.prepare(WISH_SQL).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(&wish_select(tail))
+        .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![card_id, finish], |r| {
             Ok(QuickAddWish {
@@ -192,11 +251,40 @@ pub fn wishes(
                 quantity: r.get(1)?,
                 folder_id: r.get(2)?,
                 folder_name: r.get(3)?,
+                card_id: r.get(4)?,
+                name: r.get(5)?,
+                set_code: r.get(6)?,
+                collector_number: r.get(7)?,
+                preferred_finish: r.get(8)?,
+                // From 9 — the (top-level, face) pairs `front_face_selects` added.
+                image_uris: crate::image_uri::front_face_map(|i| {
+                    r.get::<_, Option<String>>(9 + i)
+                })?,
             })
         })
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
+}
+
+/// The wishes this exact printing and finish would fill — [`WISH_SQL`]. The deck-wide batch's
+/// read, which acts on a lone match without asking.
+pub fn wishes(
+    conn: &Connection,
+    card_id: &str,
+    finish: Option<&str>,
+) -> Result<Vec<QuickAddWish>, String> {
+    run_wishes(conn, WISH_SQL, card_id, finish)
+}
+
+/// Every wish for this printing's card, whatever printing or finish it names —
+/// [`CARD_WISH_SQL`]. The per-card menu's read, behind a picker that always asks.
+pub fn card_wishes(
+    conn: &Connection,
+    card_id: &str,
+    finish: Option<&str>,
+) -> Result<Vec<QuickAddWish>, String> {
+    run_wishes(conn, CARD_WISH_SQL, card_id, finish)
 }
 
 /// Record copies straight into this deck's group, and take a named wish down with them.
@@ -310,7 +398,7 @@ pub fn quick_add(
 
     let wish_copies = match wish_id {
         None => 0,
-        Some(wish_id) => take_wish(&tx, wish_id, card_id, &finish, quantity)?,
+        Some(wish_id) => take_wish(&tx, wish_id, card_id, quantity)?,
     };
 
     // Inside the transaction, [`crate::deck_audit`]'s first rule: a history row for a write that
@@ -390,26 +478,23 @@ pub(crate) fn record_copies(
 /// `card_id` is `Option<String>` on the table — NULL is the any-printing wish — and an equality
 /// against `Some(card_id)` refuses it, which is the same narrowing [`wishes`] makes by writing
 /// `w.card_id = ?1` rather than a `coalesce`.
-fn take_wish(
-    tx: &Connection,
-    wish_id: i64,
-    card_id: &str,
-    finish: &str,
-    quantity: i64,
-) -> Result<i64, String> {
-    let row: Option<(Option<String>, Option<String>, i64)> = tx
+fn take_wish(tx: &Connection, wish_id: i64, card_id: &str, quantity: i64) -> Result<i64, String> {
+    // [`CARD_WISH_SQL`]'s test asked of one row: the wish names this printing, or its oracle card
+    // is this printing's. Printing and finish are the reader's call now, so neither is checked.
+    let row: Option<(bool, i64)> = tx
         .query_row(
-            "SELECT card_id, preferred_finish, quantity FROM wishlist_entries WHERE id = ?1",
-            params![wish_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            "SELECT w.card_id IS ?2
+                    OR (w.oracle_id IS NOT NULL
+                        AND w.oracle_id = (SELECT oracle_id FROM cards WHERE id = ?2)),
+                    w.quantity
+               FROM wishlist_entries w WHERE w.id = ?1",
+            params![wish_id, card_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let (wish_card, preferred, held) = row.ok_or_else(|| WISH_GONE.to_owned())?;
-    if wish_card.as_deref() != Some(card_id) {
-        return Err(WISH_WRONG_CARD.to_owned());
-    }
-    if preferred.as_deref().is_some_and(|f| f != finish) {
+    let (same_card, held) = row.ok_or_else(|| WISH_GONE.to_owned())?;
+    if !same_card {
         return Err(WISH_WRONG_CARD.to_owned());
     }
     let take = quantity.min(held);
@@ -441,14 +526,15 @@ fn take_wish(
 /// which are module plus verb and do not stutter.
 pub mod commands {
     #[cfg(not(target_family = "wasm"))]
-    use super::{quick_add as add, wishes as read_wishes, QuickAddOutcome, QuickAddWish};
+    use super::{card_wishes as read_wishes, quick_add as add, QuickAddOutcome, QuickAddWish};
     #[cfg(not(target_family = "wasm"))]
     use crate::sync::AppState;
     #[cfg(not(target_family = "wasm"))]
     use std::sync::Arc;
 
-    /// [`super::wishes`]' command. **Read-only** connection, and no marketplace: nothing in the
-    /// answer is priced.
+    /// [`super::card_wishes`]' command — every wish for the card, any printing and any finish,
+    /// since issue #511. **Read-only** connection, and no marketplace: nothing in the answer is
+    /// priced.
     ///
     /// Fetched imperatively at the press rather than by a hook, so a right-click fires nothing —
     /// the menu is drawn from the deck row the reader clicked and this read happens only if they
@@ -933,31 +1019,64 @@ mod tests {
     }
 
     #[test]
-    fn a_wish_for_another_printing_refuses_the_whole_press() {
+    fn a_wish_for_another_printing_of_the_card_is_the_readers_to_take() {
+        // Issue #511: the picker offers every line for the card, so the write takes the one the
+        // reader picked — an M10 wish settled by Alpha copies is their call, not a refusal.
         let (conn, deck, cat) = fixture();
         seed_reprint(&conn, "bolt-m10", "bolt");
         live_card(&conn, deck, cat, "bolt", 4);
         let other = seed_wish(&conn, Some("bolt-m10"), None, 4, None);
 
-        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, Some(other)).unwrap_err();
+        let out = quick_add(&conn, deck, "bolt", None, Some("NM"), 3, Some(other)).unwrap();
 
-        assert_eq!(err, WISH_WRONG_CARD);
-        assert_eq!(entry_count(&conn), 0);
-        assert_eq!(wish_quantity(&conn, other), Some(4), "and the wish stands");
+        assert_eq!(out.wish_copies, 3);
+        assert_eq!(wish_quantity(&conn, other), Some(1));
+        assert_eq!(
+            group_copies(&conn, deck, "bolt"),
+            3,
+            "the copies are the pressed printing"
+        );
     }
 
     #[test]
-    fn a_wish_for_another_finish_refuses_the_whole_press() {
-        // The same predicate `wishes` offered by, re-applied: a foil wish is not filled by the
-        // nonfoil copies the reader just recorded.
+    fn a_wish_for_another_finish_or_any_printing_is_taken_too() {
         let (conn, deck, cat) = fixture();
         live_card(&conn, deck, cat, "bolt", 4);
-        let foil = seed_wish(&conn, Some("bolt"), Some("foil"), 4, None);
+        let foil = seed_wish(&conn, Some("bolt"), Some("foil"), 1, None);
+        // `seed_wish` writes `o-bolt`, which is the oracle id `seed_card` derives for `bolt`.
+        let any = seed_wish(&conn, None, None, 2, None);
 
-        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, Some(foil)).unwrap_err();
+        quick_add(&conn, deck, "bolt", None, Some("NM"), 1, Some(foil)).unwrap();
+        quick_add(&conn, deck, "bolt", None, Some("NM"), 2, Some(any)).unwrap();
+
+        assert_eq!(wish_quantity(&conn, foil), None);
+        assert_eq!(wish_quantity(&conn, any), None);
+    }
+
+    #[test]
+    fn a_wish_for_another_card_refuses_the_whole_press() {
+        // The fence that stays: a wish is taken only for the card the copies are.
+        let (conn, deck, cat) = fixture();
+        seed_card(&conn, "shock", "m10", "155");
+        live_card(&conn, deck, cat, "bolt", 4);
+        let shock = conn
+            .query_row(
+                "INSERT INTO wishlist_entries
+                     (oracle_id, card_id, set_code, collector_number, lang, name, quantity,
+                      created_at, updated_at)
+                 VALUES ('o-shock', 'shock', 'm10', '155', 'en', 'Shock', 4,
+                         unixepoch(), unixepoch())
+                 RETURNING id",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap();
+
+        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, Some(shock)).unwrap_err();
 
         assert_eq!(err, WISH_WRONG_CARD);
-        assert_eq!(entry_count(&conn), 0);
+        assert_eq!(entry_count(&conn), 0, "no copies were recorded");
+        assert_eq!(wish_quantity(&conn, shock), Some(4), "and the wish stands");
     }
 
     // ---- the read -----------------------------------------------------------------
@@ -1063,6 +1182,50 @@ mod tests {
             .collect();
 
         assert_eq!(ids, vec![older, newer]);
+    }
+
+    #[test]
+    fn the_card_read_offers_every_printing_and_finish_with_the_exact_match_first() {
+        // Issue #511: the per-card picker lists every line for the card. The exact printing and
+        // finish lead, so the pre-pick is what the narrow read would have chosen; the rest follow
+        // in the folder ranking. Another card's wish is never offered.
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        seed_reprint(&conn, "bolt-m10", "bolt");
+        seed_card(&conn, "shock", "m10", "155");
+        let folder = wish_folder(&conn, "Soon", 1);
+        let reprint = seed_wish(&conn, Some("bolt-m10"), None, 1, None);
+        let any = seed_wish(&conn, None, None, 1, Some(folder));
+        let foil = seed_wish(&conn, Some("bolt"), Some("foil"), 1, None);
+        let exact = seed_wish(&conn, Some("bolt"), None, 1, Some(folder));
+        conn.execute(
+            "INSERT INTO wishlist_entries
+                 (oracle_id, card_id, name, quantity, created_at, updated_at)
+             VALUES ('o-shock', 'shock', 'Shock', 1, unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        let rows = card_wishes(&conn, "bolt", None).unwrap();
+
+        assert_eq!(
+            rows.iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![exact, foil, reprint, any]
+        );
+        assert_eq!(rows[0].card_id.as_deref(), Some("bolt"));
+        assert_eq!(rows[0].folder_name.as_deref(), Some("Soon"));
+        assert_eq!(rows[1].preferred_finish.as_deref(), Some("foil"));
+        assert_eq!(rows[3].card_id, None, "the any-printing wish says so");
+        assert_eq!(rows[3].name, "Lightning Bolt");
+        // The narrow read is untouched: the batch still sees only the exact line.
+        assert_eq!(
+            wishes(&conn, "bolt", None)
+                .unwrap()
+                .iter()
+                .map(|w| w.id)
+                .collect::<Vec<_>>(),
+            vec![exact]
+        );
     }
 
     #[test]

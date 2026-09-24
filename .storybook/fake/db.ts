@@ -10324,68 +10324,17 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_quick_add::wishes` — every wishlist line a quick add of this printing could take
-     * copies off, best first.
-     *
-     * **The predicate is `deck_quick_add`'s own and is written out in one line** —
-     * `w.card_id = ?1 AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)`. It used to be
-     * described as `wishlist::OWNED_SQL`'s first arm with the any-printing arm dropped, and that
-     * borrowed reading died with the constant when the wishlist stopped asking the collection
-     * anything; the line itself never changed, because it was never about what *fills* a wish. It
-     * is about which wish a press the reader has just made can take copies off, so the narrowing
-     * is on the **printing**, exactly as {@link pullCandidates} leaves an Alpha Bolt out of an
-     * M10 line and for the same trade: nothing is taken off a shopping list that is not the piece
-     * of cardboard just recorded. A wish for *any* printing is left standing, which is why the
-     * `card_id` test is a plain equality — `null` is not a card id, and the arm that would have
-     * to be written to include one is as absent here as it is in the SQL.
-     *
-     * **A NULL `preferred_finish` still matches**, because the list itself says a wish that names
-     * no finish takes any of them; excluding it would refuse the commonest wish there is. The
-     * comparison is against the **collection** word, so a deck row's `null` finish and a
-     * `nonfoil` wish are a match rather than a third state — {@link normaliseFinish} is the one
-     * place those two spellings meet, here as everywhere else in this file.
-     *
-     * **The root first, then the reader's folders in their own `sort_order`, oldest row first
-     * inside a tie** — {@link pullOrder}'s order and its argument, borrowed rather than
-     * re-decided: rank by how little of the reader's filing the write disturbs. It is the
-     * picker's pre-selection, which is why it is the backend's decision and not the component's.
-     * Note the one shape it does *not* borrow: there is no `removed` rank, because a wishlist
-     * folder has no kinds — every one of them is the reader's own.
+     * `deck_quick_add::card_wishes` — every wishlist line for this printing's **card**, any
+     * printing and any finish, best first (issue #511). The per-card picker lists them all and
+     * the reader chooses; {@link quickAddWishes} carries the predicate, the order, and why the
+     * deck-wide batch keeps the narrow read instead.
      *
      * **An empty answer is the ordinary case and never a refusal.** Most cards a deck is short of
      * are on no shopping list at all, and the editor reads `[]` as "record the copies and take
      * nothing off" rather than as something to report.
      */
-    deck_quick_add_wishes: (args: { cardId: string; finish?: DeckFinish }): DeckQuickAddWish[] => {
-      const wanted = normaliseFinish(args.finish) ?? "nonfoil";
-      const order = (w: FakeWish): [number, number] =>
-        w.folderId === null
-          ? [0, 0]
-          : [1, db.wishlistFolders.find((f) => f.id === w.folderId)?.sortOrder ?? 0];
-      return db.wishlistEntries
-        .filter(
-          (w) =>
-            w.cardId === args.cardId &&
-            (w.preferredFinish === null || w.preferredFinish === wanted),
-        )
-        .sort((a, b) => {
-          const [aRank, aOrder] = order(a);
-          const [bRank, bOrder] = order(b);
-          return aRank - bRank || aOrder - bOrder || a.id - b.id;
-        })
-        .map((w) => ({
-          id: w.id,
-          quantity: w.quantity,
-          folderId: w.folderId,
-          // `null` at the root, which the UI words — the wishlist page's own `Wishlist`. The
-          // backend has no row to read a name off and must not invent one, exactly as
-          // {@link pullCandidates} does not.
-          folderName:
-            w.folderId === null
-              ? null
-              : (db.wishlistFolders.find((f) => f.id === w.folderId)?.name ?? null),
-        }));
-    },
+    deck_quick_add_wishes: (args: { cardId: string; finish?: DeckFinish }): DeckQuickAddWish[] =>
+      quickAddWishes(db, args.cardId, args.finish ?? null, "card"),
 
     /**
      * `deck_missing::plan` — every printing the **live** list is short of that the reader could
@@ -10473,7 +10422,9 @@ export function readHandlers(db: FakeDb) {
           categories: [row.categoryName],
           // The deck's spelling of the finish goes across, which is what that handler takes: it
           // runs {@link normaliseFinish} on the way in and compares the collection's word.
-          wishes: reads.deck_quick_add_wishes({ cardId: row.cardId, finish: row.finish }),
+          // The **narrow** read — `deck_quick_add::wishes` — because the batch clears a lone
+          // match without asking, where the per-card command's wide read backs a picker.
+          wishes: quickAddWishes(db, row.cardId, row.finish, "printing"),
         });
       }
       return [...folded.values()];
@@ -14164,6 +14115,80 @@ function removeWish(db: FakeDb, id: number): EntryChange {
 }
 
 /**
+ * Whether a wish is for the card this printing is — `deck_quick_add::take_wish`'s test and
+ * `CARD_WISH_SQL`'s: the wish names this printing, or its oracle card is this printing's. An
+ * orphaned printing still finds the wishes naming it by id.
+ */
+function wishIsForCard(db: FakeDb, wish: FakeWish, cardId: string): boolean {
+  if (wish.cardId === cardId) return true;
+  const oracleId = cardById(db, cardId)?.oracleId ?? null;
+  return wish.oracleId !== null && wish.oracleId === oracleId;
+}
+
+/**
+ * `deck_quick_add::wishes` (`"printing"`) and `deck_quick_add::card_wishes` (`"card"`) — the two
+ * wish reads, one function because they share the row shape and the folder ranking.
+ *
+ * **`"printing"` is the narrow one**: the exact printing, and a finish the copies satisfy. The
+ * deck-wide batch reads it, because that press clears a lone match without asking and a guess is
+ * only safe where the wish names exactly the cardboard recorded.
+ *
+ * **`"card"` is every wish for the card** — another printing, another finish, or any printing at
+ * all — which is the per-card menu's read since issue #511: that press always opens a picker and
+ * the reader chooses. Its order puts the exact printing first and a satisfied finish second, so
+ * the pre-pick is what the narrow read would have chosen; then both reads share the root-first,
+ * then folders in their own `sort_order`, then oldest-row ranking — {@link pullOrder}'s argument.
+ *
+ * **An empty answer is the ordinary case and never a refusal.** `imageUris` is omitted for the
+ * reason {@link deck_missing_plan} gives: a Storybook picture comes from the `@/lib/images` alias.
+ */
+function quickAddWishes(
+  db: FakeDb,
+  cardId: string,
+  finish: DeckFinish | string | null,
+  scope: "printing" | "card",
+): DeckQuickAddWish[] {
+  const wanted = normaliseFinish(finish) ?? "nonfoil";
+  const finishFits = (w: FakeWish) => w.preferredFinish === null || w.preferredFinish === wanted;
+  const folderRank = (w: FakeWish): [number, number] =>
+    w.folderId === null
+      ? [0, 0]
+      : [1, db.wishlistFolders.find((f) => f.id === w.folderId)?.sortOrder ?? 0];
+  const rank = (w: FakeWish): number[] => [
+    ...(scope === "card" ? [w.cardId === cardId ? 0 : 1, finishFits(w) ? 0 : 1] : []),
+    ...folderRank(w),
+    w.id,
+  ];
+  return db.wishlistEntries
+    .filter((w) =>
+      scope === "card" ? wishIsForCard(db, w, cardId) : w.cardId === cardId && finishFits(w),
+    )
+    .sort((a, b) => {
+      const ra = rank(a);
+      const rb = rank(b);
+      for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i] - rb[i];
+      return 0;
+    })
+    .map((w) => ({
+      id: w.id,
+      quantity: w.quantity,
+      folderId: w.folderId,
+      // `null` at the root, which the UI words — the wishlist page's own `Wishlist`. The backend
+      // has no row to read a name off and must not invent one, exactly as {@link pullCandidates}
+      // does not.
+      folderName:
+        w.folderId === null
+          ? null
+          : (db.wishlistFolders.find((f) => f.id === w.folderId)?.name ?? null),
+      cardId: w.cardId,
+      name: w.name,
+      setCode: w.setCode,
+      collectorNumber: w.collectorNumber,
+      preferredFinish: w.preferredFinish,
+    }));
+}
+
+/**
  * `deck_missing::take_lone_wish` — take copies off this printing's wish, but **only when exactly
  * one line matches**.
  *
@@ -14196,7 +14221,7 @@ function takeLoneWish(
   finish: DeckFinish,
   quantity: number,
 ): number {
-  const matches = readHandlers(db).deck_quick_add_wishes({ cardId, finish });
+  const matches = quickAddWishes(db, cardId, finish, "printing");
   if (matches.length !== 1) return 0;
   const wish = db.wishlistEntries.find((w) => w.id === matches[0].id);
   if (!wish) return 0;
@@ -15177,12 +15202,9 @@ export function writeHandlers(db: FakeDb) {
           // The fault is read beside the lookup rather than instead of it, so a story standing in
           // that world still refuses a wish id that was never there for the ordinary reason.
           if (!wish || db.fault === "wishGone") throw refuse(QUICK_ADD_WISH_GONE);
-          if (
-            wish.cardId !== args.cardId ||
-            !(wish.preferredFinish === null || wish.preferredFinish === finish)
-          ) {
-            throw refuse(QUICK_ADD_WISH_WRONG_CARD);
-          }
+          // Issue #511: the picker offers every line for the *card*, so the write refuses only a
+          // wish for another card — printing and finish are the reader's call.
+          if (!wishIsForCard(db, wish, args.cardId)) throw refuse(QUICK_ADD_WISH_WRONG_CARD);
           wishCopies = Math.min(args.quantity, wish.quantity);
           if (wishCopies === wish.quantity) {
             // A want that is met is over, and `wishlist_entries` has a CHECK against a zero row —
