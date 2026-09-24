@@ -3292,6 +3292,13 @@ export interface DeckInput {
  * field names and is an INSERT, where an absent `folderId` really does mean the top level —
  * see {@link DeckInput.folderId}, which says so at the field.
  */
+/**
+ * Which Compare view a deck's managed wishlist follows — `decks.managed_wishlist_mode` (user
+ * schema v49), and `managed_wishlist::MODES` in the crate. `other` is the dialog's
+ * `Different printing`. The words and their order are `features/decks/managedWishlist.ts`'s.
+ */
+export type ManagedWishlistMode = "off" | "all" | "missing" | "other";
+
 export interface DeckPatch {
   name?: string;
   formatKey?: string;
@@ -3380,9 +3387,10 @@ export interface DeckPatch {
    *  all. See {@link DeckRow.theoryMarkUnplanned}, and {@link DeckPatch.theoryMarkExact} above
    *  for the rules all three share. `decks.theory_mark_unplanned`, schema v39. */
   theoryMarkUnplanned?: boolean;
-  /** Whether this deck keeps a **managed wishlist** folder. See {@link DeckRow.managedWishlist};
-   *  `decks.managed_wishlist`, schema v48. */
-  managedWishlist?: boolean;
+  /** Which Compare view this deck's **managed wishlist** follows, or `"off"`. See
+   *  {@link DeckRow.managedWishlist}; `decks.managed_wishlist_mode`, schema v49. A word outside the
+   *  four is refused by name. */
+  managedWishlist?: ManagedWishlistMode;
   /**
    * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
    * the mana value Scryfall gives it. See {@link DeckRow.separateXGroup} — a **reading**
@@ -3838,17 +3846,18 @@ export interface DeckRow {
    */
   notesOpen: boolean;
   /**
-   * Whether this deck keeps a **managed wishlist** — a wishlist folder of its own holding exactly
-   * what the Compare dialog lists, rewritten by Rust after every change to the deck
-   * (`decks.managed_wishlist`, user schema v48, `NOT NULL DEFAULT 1` —
-   * [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512)).
+   * Which of the Compare dialog's three views this deck's **managed wishlist** follows — `all`,
+   * `missing` or `other` (Different printing) — or `off` for no folder
+   * (`decks.managed_wishlist_mode`, user schema v49, `DEFAULT 'off'` —
+   * [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512)). The folder is rewritten
+   * by Rust after every change to the deck.
    *
    * **It only does anything on a `Theory + Actual` deck**: a regular deck has no plan to be
    * short of and a virtual one owns no cardboard, so the column is read but ignored for both
-   * and a deck switched to either loses its folder. On by default, so every theory deck that
-   * existed before the column gets a folder at the first launch after the upgrade.
+   * and a deck switched to either loses its folder. Always one of the four words: Rust reads a
+   * word it does not know as `off`.
    */
-  managedWishlist: boolean;
+  managedWishlist: ManagedWishlistMode;
   /**
    * Whether the deck views (Stacks, Grid, Text and Table) draw the deck's tokens and emblems as
    * a trailing **Tokens & Emblems** pile — `decks.token_stack INTEGER NOT NULL DEFAULT 0`, user

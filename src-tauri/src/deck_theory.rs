@@ -958,25 +958,52 @@ pub(crate) struct Wanted {
     pub quantity: i64,
 }
 
-/// Everything the plan asks for that the live list has not got, as the wishes
-/// [`missing_to_wishlist`] would make of it — the same [`grouped_diff`], the same orphan skip,
-/// the same pinned printing and finish.
+/// Which of the Compare dialog's three views a managed wishlist follows — `TheoryDiffDialog.tsx`'s
+/// `DiffView`, in Rust.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiffView {
+    /// Every row, at its whole quantity.
+    All,
+    /// The copies no printing in the deck covers: `quantity − held_as_other_printing`, the
+    /// dialog's `quantity > heldAsOtherPrinting`.
+    Missing,
+    /// The copies the deck plays as a different printing: `held_as_other_printing`, the dialog's
+    /// `heldAsOtherPrinting > 0` — the cardboard to swap for the printing the plan names.
+    Other,
+}
+
+/// One Compare view of the plan against the live list, as wishes pinned to the printing and
+/// finish the plan names — what [`crate::managed_wishlist`] files.
 ///
-/// **One definition of "missing" for the Compare dialog, its Send press and the managed folder**,
-/// which is why this reads [`grouped_diff`] rather than a query of its own: a managed wishlist
-/// that disagreed with the dialog beside it would be a list nobody could check.
-pub(crate) fn wanted(conn: &Connection, deck_id: i64) -> Result<Vec<Wanted>, String> {
+/// **Each view's quantity is that view's own, not the row's** (the reader's correction to
+/// issue #512: a managed wishlist following `Missing` was listing `All`). The dialog filters rows
+/// and still shows each row's whole count; a wishlist line is a count of cardboard to go and get,
+/// so it carries only the copies the view is about, and a line with none is dropped.
+///
+/// Reads [`grouped_diff`] rather than a query of its own, so the folder and the dialog beside it
+/// cannot come to disagree about which rows a view holds.
+pub(crate) fn wanted(
+    conn: &Connection,
+    deck_id: i64,
+    view: DiffView,
+) -> Result<Vec<Wanted>, String> {
     Ok(
         grouped_diff(conn, deck_id, crate::sorting::Marketplace::default())?
             .into_iter()
             .filter_map(|g| {
                 let oracle_id = g.oracle_id?;
-                (g.row.quantity > 0).then_some(Wanted {
+                let held = g.row.held_as_other_printing;
+                let quantity = match view {
+                    DiffView::All => g.row.quantity,
+                    DiffView::Missing => g.row.quantity - held,
+                    DiffView::Other => held,
+                };
+                (quantity > 0).then_some(Wanted {
                     oracle_id,
                     card_id: g.row.card_id,
                     name: g.row.name,
                     finish: g.row.finish,
-                    quantity: g.row.quantity,
+                    quantity,
                 })
             })
             .collect(),

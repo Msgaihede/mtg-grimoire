@@ -307,7 +307,7 @@ const BURN: DeckRow = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
-  managedWishlist: true,
+  managedWishlist: "off",
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",

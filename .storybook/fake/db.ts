@@ -173,6 +173,7 @@ import type {
   DeckNote,
   DeckNoteCard,
   DeckPatch,
+  ManagedWishlistMode,
   DeckPullCandidate,
   DeckPullOutcome,
   DeckPullPick,
@@ -580,7 +581,7 @@ export interface FakeDeck {
   theoryMarkName?: boolean;
   theoryMarkUnplanned?: boolean;
   /** v48's managed-wishlist switch — `NOT NULL DEFAULT 1`, so absent reads as on. */
-  managedWishlist?: boolean;
+  managedWishlist?: ManagedWishlistMode;
   /**
    * What the reader was last looking at in this deck's editor: which tab, grouped how, sorted
    * how. Written by {@link writeHandlers.deck_set_view_state} and by nothing else, so that
@@ -7112,7 +7113,7 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     theoryMarkName: d.theoryMarkName ?? true,
     theoryMarkUnplanned: d.theoryMarkUnplanned ?? true,
     // v48's, and `?? true` for the three lines above' reason: the column is `DEFAULT 1`.
-    managedWishlist: d.managedWishlist ?? true,
+    managedWishlist: d.managedWishlist ?? "off",
     // The three v12 ones that remember where the reader was. They ride the *gallery's* row
     // rather than a read of their own because the editor already has this row when it mounts —
     // a second command to ask "which tab was I on" would be a round trip between opening a deck
@@ -16325,7 +16326,7 @@ export function writeHandlers(db: FakeDb) {
       if (unplanned !== undefined && unplanned !== markUnplannedWas) {
         field("theoryMarkUnplanned", markUnplannedWas, unplanned);
       }
-      const managedWas = before.managedWishlist ?? true;
+      const managedWas = before.managedWishlist ?? "off";
       if (patch.managedWishlist !== undefined && patch.managedWishlist !== managedWas) {
         field("managedWishlist", managedWas, patch.managedWishlist);
       }

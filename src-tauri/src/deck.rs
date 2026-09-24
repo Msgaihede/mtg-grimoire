@@ -487,10 +487,13 @@ pub struct DeckPatch {
     /// the three disclosures above it this is a *setting*, chosen in Deck settings, so
     /// [`duplicate_deck`] carries it the way it carries [`Self::separate_x_group`].
     pub token_stack: Option<bool>,
-    /// Whether this deck keeps a **managed wishlist** — schema v48, and see
-    /// [`DeckRow::managed_wishlist`]. A bool with two answers, so no fence:
-    /// [`Self::theory_mark_exact`]'s shape.
-    pub managed_wishlist: Option<bool>,
+    /// Which Compare view this deck's **managed wishlist** follows — one of
+    /// [`crate::managed_wishlist::MODES`], `off` for none. See [`DeckRow::managed_wishlist`].
+    ///
+    /// **Refused by name outside the four words** ([`crate::managed_wishlist::BAD_MODE`]), where
+    /// a read is lenient: a stored word this build does not know came from a newer peer and reads
+    /// as `off`, but a *patch* naming one is this build's own mistake.
+    pub managed_wishlist: Option<String>,
     /// Which of this deck's categories an add that names none lands in — the editor's "Add to"
     /// answer, asked in the deck's settings.
     ///
@@ -762,15 +765,17 @@ pub struct DeckRow {
     /// carries it, [`Self::separate_x_group`]'s rule. Still no history row and no undo op, the
     /// disclosures' rule — see [`DeckPatch::token_stack`].
     pub token_stack: bool,
-    /// Whether this deck keeps a **managed wishlist** — a wishlist folder holding exactly what
-    /// [`crate::deck_theory::theory_diff`] lists, rewritten by [`crate::managed_wishlist`] after
-    /// every write that changes the deck (schema v48, `NOT NULL DEFAULT 1`, issue #512).
+    /// Which of the Compare dialog's three views this deck's **managed wishlist** follows —
+    /// `all`, `missing` or `other` (Different printing) — or `off` for no folder at all
+    /// (`decks.managed_wishlist_mode`, schema v49, `DEFAULT 'off'`; issue #512). The folder is
+    /// rewritten by [`crate::managed_wishlist`] after every write that changes the deck.
     ///
     /// **Only a theory deck acts on it.** A regular deck has no plan to be short of and a
     /// virtual one owns no cardboard, so the column is stored for both and ignored — switching a
     /// deck to either kind takes its folder away, and switching it back brings it back, because
-    /// the folder is derived rather than remembered.
-    pub managed_wishlist: bool,
+    /// the folder is derived rather than remembered. Always one of the four words: a stored value
+    /// this build does not know reads as `off` ([`crate::managed_wishlist::read_mode`]).
+    pub managed_wishlist: String,
     /// Which of this deck's categories an add that names none lands in — schema v16, and `0`
     /// for **Auto**, where the card's own text decides.
     ///
@@ -1087,7 +1092,7 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
-            d.virtual_only, d.stats_open, d.notes_open, d.token_stack, d.managed_wishlist,
+            d.virtual_only, d.stats_open, d.notes_open, d.token_stack, d.managed_wishlist_mode,
             {images}
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
@@ -1120,7 +1125,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
     ///
     /// User schema v47 moved it to 28, appending `token_stack` after `notes_open`.
     ///
-    /// User schema v48 moved it to 29, appending `managed_wishlist`.
+    /// User schema v48 moved it to 29, appending the managed-wishlist column.
     const IMAGE_COL: usize = 29;
     Ok(DeckRow {
         id: r.get(0)?,
@@ -1242,9 +1247,9 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // column beside three disclosures at 20, 25 and 26; an index landing on any of them
         // would swap a view setting for whether a band was open, every field still a `0` or `1`.
         token_stack: r.get(27)?,
-        // 28, at the end of the named list, same rule — schema v48's switch, appended after
-        // v47's `token_stack`, never inserted.
-        managed_wishlist: r.get(28)?,
+        // 28, at the end of the named list, same rule — the managed-wishlist mode (schema v49
+        // re-added it as TEXT at the same position v48's switch held), read leniently.
+        managed_wishlist: crate::managed_wishlist::read_mode(r.get::<_, String>(28)?),
         // **From 29**, last of all, for the reason written twelve comments up — the
         // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
         // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
@@ -1908,8 +1913,8 @@ struct DeckBefore {
     /// deck's copies and drops its group, ceasing to be virtual makes the group again, and
     /// neither can be told from the patch alone. [`update_deck`] compares against this.
     virtual_only: bool,
-    /// Schema v48's managed-wishlist switch, for the history row.
-    managed_wishlist: bool,
+    /// Schema v49's managed-wishlist mode, for the history row.
+    managed_wishlist: String,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id, and the word
@@ -2007,6 +2012,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // about the value the caller sent and has nothing to say about the deck, so there is
     // nothing to roll back and no reason to have taken a write lock to find out.
     let bracket = patch.bracket.map(valid_bracket).transpose()?;
+    let managed_wishlist = patch
+        .managed_wishlist
+        .as_deref()
+        .map(crate::managed_wishlist::valid_mode)
+        .transpose()?;
     // **One transaction, because a rename is two writes.** `decks.name` and the name on the
     // `collection_folders` row standing for the deck are one fact stored twice — nothing in the
     // schema keeps them in step — so a rename that committed one and lost the other would leave
@@ -2022,7 +2032,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     archived, folder_id, theory_enabled, separate_x_group,
                     default_category_id, game_key, bracket,
                     theory_mark_exact, theory_mark_name, theory_mark_unplanned,
-                    virtual_only, managed_wishlist
+                    virtual_only, managed_wishlist_mode
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -2076,7 +2086,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     // the three marks and this one — and only the position tells them apart.
                     virtual_only: r.get(15)?,
                     // 16, at the end, same rule.
-                    managed_wishlist: r.get(16)?,
+                    managed_wishlist: crate::managed_wishlist::read_mode(r.get::<_, String>(16)?),
                 })
             },
         )
@@ -2183,7 +2193,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- shape, so a crossed number here draws a pile the reader did not ask for.
                 token_stack = coalesce(?21, token_stack),
                 -- `?22`, the next number at the **end**, same rule one rung later.
-                managed_wishlist = coalesce(?22, managed_wishlist),
+                managed_wishlist_mode = coalesce(?22, managed_wishlist_mode),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -2210,7 +2220,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.stats_open,
                 patch.notes_open,
                 patch.token_stack,
-                patch.managed_wishlist,
+                managed_wishlist,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -2621,6 +2631,7 @@ fn record_deck_edit(
     }
     if let Some(to) = patch
         .managed_wishlist
+        .as_deref()
         .filter(|m| *m != before.managed_wishlist)
     {
         field("managedWishlist", json!(before.managed_wishlist), json!(to))?;
@@ -3073,12 +3084,12 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
-                                theory_mark_unplanned, virtual_only, token_stack, managed_wishlist,
+                                theory_mark_unplanned, virtual_only, token_stack, managed_wishlist_mode,
                                 archived, created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
                     folder_id, theory_enabled, separate_x_group,
                     bracket, theory_mark_exact, theory_mark_name, theory_mark_unplanned,
-                    virtual_only, token_stack, managed_wishlist,
+                    virtual_only, token_stack, managed_wishlist_mode,
                     0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
              RETURNING id, name, virtual_only",
@@ -10073,7 +10084,7 @@ mod tests {
             theory_mark_name: true,
             theory_mark_unplanned: false,
             // `false`, the column's non-default, for `bracket`'s reason below.
-            managed_wishlist: false,
+            managed_wishlist: "missing".to_owned(),
             last_variant: "theory".to_owned(),
             last_group_by: "manaValue".to_owned(),
             last_sort_by: "price".to_owned(),
@@ -10141,7 +10152,7 @@ mod tests {
                 "theoryMarkUnplanned": false,
                 // Schema v48, off because `DEFAULT 1` would read correct on a field that never
                 // left Rust.
-                "managedWishlist": false,
+                "managedWishlist": "missing",
                 // The two mode fields carry TypeScript's own vocabulary, so the fixture spells
                 // real editor words rather than placeholders: this crate never parses them, and
                 // a test written with `"x"` would hide that they are meant to round-trip.

@@ -150,8 +150,8 @@ const DECK_FIELDS: &[&str] = &[
     "theory_mark_exact",
     "theory_mark_name",
     "theory_mark_unplanned",
-    // Schema v48's switch — an ordinary `deck_update` answer with an ordinary history row.
-    "managed_wishlist",
+    // Schema v49's managed-wishlist mode — an ordinary `deck_update` answer with a history row.
+    "managed_wishlist_mode",
     "last_variant",
     "last_group_by",
     "last_sort_by",

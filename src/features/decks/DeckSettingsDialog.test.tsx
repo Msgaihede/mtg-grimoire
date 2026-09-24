@@ -67,7 +67,7 @@ const BURN: DeckRow = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
-  managedWishlist: true,
+  managedWishlist: "off",
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
@@ -699,13 +699,14 @@ describe("DeckSettingsDialog", () => {
   });
 
   /** The managed wishlist is one more `deck_update` field, relayed exactly like a mark. */
-  it("writes the managed wishlist switch as its own patch", async () => {
+  it("writes the managed wishlist choice as its own patch", async () => {
     deckGet.mockResolvedValue(withPlan());
     open();
     await loaded();
 
-    await userEvent.click(screen.getByRole("switch", { name: /Managed wishlist/ }));
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { managedWishlist: false }));
+    const group = screen.getByRole("group", { name: "Managed wishlist" });
+    await userEvent.click(within(group).getByRole("button", { name: "All" }));
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { managedWishlist: "all" }));
     expect(deckUpdate).toHaveBeenCalledTimes(1);
   });
 
