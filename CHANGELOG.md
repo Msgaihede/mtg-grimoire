@@ -30,6 +30,50 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.30.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.29.0...v0.30.0) (2026-09-24)
+
+
+### Features
+
+* **card:** the set name in the card modal opens Search on that set ([a41b4c5](https://github.com/Msgaihede/mtg-grimoire/commit/a41b4c56086a3e9975a902b87ebc09699c76c1f4))
+* **card:** the set name in the card modal opens Search on that set ([0d7c81f](https://github.com/Msgaihede/mtg-grimoire/commit/0d7c81f064e571fecfef27ac55915a61b9f43675)), closes [#503](https://github.com/Msgaihede/mtg-grimoire/issues/503)
+* **collection:** manage Recently removed — steppers, Remove, Clear ([#506](https://github.com/Msgaihede/mtg-grimoire/issues/506)) ([9fdb0bb](https://github.com/Msgaihede/mtg-grimoire/commit/9fdb0bb5723f039c28b3c000c3847ea885721f70))
+* **collection:** manage Recently removed — steppers, Remove, Clear ([#506](https://github.com/Msgaihede/mtg-grimoire/issues/506)) ([5b02dd3](https://github.com/Msgaihede/mtg-grimoire/commit/5b02dd3d218f582837d16f7ffb13b9bd6d49722c))
+* **decks:** drag to reorder deck notes ([df285a1](https://github.com/Msgaihede/mtg-grimoire/commit/df285a1be65c51b1d4b111a29dcd32e196f48c22))
+* **decks:** drag to reorder deck notes ([ea7622f](https://github.com/Msgaihede/mtg-grimoire/commit/ea7622f2c8c01d1f09ad65b3c68c8dca2672eae6)), closes [#509](https://github.com/Msgaihede/mtg-grimoire/issues/509)
+* **decks:** group the Actual list by Matches theory ([812e197](https://github.com/Msgaihede/mtg-grimoire/commit/812e19791df3f143227c7a0249b3afa5925ac913))
+* **decks:** group the Actual list by Matches theory ([be99635](https://github.com/Msgaihede/mtg-grimoire/commit/be9963550cd6f573e8656d872c0c6147dfb7a0f1)), closes [#502](https://github.com/Msgaihede/mtg-grimoire/issues/502)
+* **decks:** regroup the deck card menu and rename two rows ([8743064](https://github.com/Msgaihede/mtg-grimoire/commit/874306436483c83eb7fc3678d6795243e0dfa00d))
+* **decks:** regroup the deck card menu and rename two rows ([9d7d19a](https://github.com/Msgaihede/mtg-grimoire/commit/9d7d19aa9cf0a66283c771d96d247b5b2931265e)), closes [#505](https://github.com/Msgaihede/mtg-grimoire/issues/505)
+* **decks:** reorder the piles in the right-hand rail ([2d4150c](https://github.com/Msgaihede/mtg-grimoire/commit/2d4150cc75d32319601cbe06a7cc519407fe99ba))
+* **decks:** reorder the piles in the right-hand rail ([48466a6](https://github.com/Msgaihede/mtg-grimoire/commit/48466a6df7f3b6ac206207514579d06b7dcdd5b5)), closes [#508](https://github.com/Msgaihede/mtg-grimoire/issues/508)
+* **decks:** show Tokens & Emblems as a pile in the deck views ([dd998ff](https://github.com/Msgaihede/mtg-grimoire/commit/dd998ff505be5c1a5f2e156c892050c49c07ec15))
+* **decks:** show Tokens & Emblems as a pile in the deck views ([10febe3](https://github.com/Msgaihede/mtg-grimoire/commit/10febe3d693e5537614e3e82f9384a62f1961107))
+* hide colorless from the mana pips bars ([#513](https://github.com/Msgaihede/mtg-grimoire/issues/513)) ([0288567](https://github.com/Msgaihede/mtg-grimoire/commit/0288567f7a23049bfcdc0f55a62f5eb966bed403))
+* hide colorless from the mana pips bars ([#513](https://github.com/Msgaihede/mtg-grimoire/issues/513)) ([40c24a2](https://github.com/Msgaihede/mtg-grimoire/commit/40c24a21fa5391383d7639d71159b764db6a9f85))
+* **home:** carry a new printing's picture URLs on the wire ([65e71bb](https://github.com/Msgaihede/mtg-grimoire/commit/65e71bb4f8b1f33c9d60ffbc6f66fa27261b67a9))
+* **home:** give the new-printing dialog the card modal's footer and app scale ([f4ac41a](https://github.com/Msgaihede/mtg-grimoire/commit/f4ac41a654ba5a0c11cae749b927b27fbe3c6e9f))
+* **home:** open a new printing as a card-modal preview beside its decks ([a3de4a0](https://github.com/Msgaihede/mtg-grimoire/commit/a3de4a0e2f49de858c4ed4b8897465a7c4406ed4))
+* **home:** open a new printing as a card-modal preview beside its decks ([8490408](https://github.com/Msgaihede/mtg-grimoire/commit/849040816a94b2b4995fab3a9bced35e3bd20ff3)), closes [#514](https://github.com/Msgaihede/mtg-grimoire/issues/514)
+* managed wishlists for Theory + Actual decks ([954b4af](https://github.com/Msgaihede/mtg-grimoire/commit/954b4af2b042c315dbb4e7d536377d3ea86564c0))
+* managed wishlists for Theory + Actual decks ([a379aa4](https://github.com/Msgaihede/mtg-grimoire/commit/a379aa4bbbd1799d33c6976cc73ee7a90d318977)), closes [#512](https://github.com/Msgaihede/mtg-grimoire/issues/512)
+* price history popup for the Price movers widget ([#515](https://github.com/Msgaihede/mtg-grimoire/issues/515)) ([30fb3d4](https://github.com/Msgaihede/mtg-grimoire/commit/30fb3d4c1b179abe70b1487394c2c12e13debebe))
+* price history popup for the Price movers widget ([#515](https://github.com/Msgaihede/mtg-grimoire/issues/515)) ([f3d68ec](https://github.com/Msgaihede/mtg-grimoire/commit/f3d68ec1c976404f5a279cd634ff7dcb8f9804f5))
+* **search:** move Exactly into the filter tray as a permanent Exact toggle ([df9359e](https://github.com/Msgaihede/mtg-grimoire/commit/df9359eb7e14b1bf8193d2ca6217d01ae929531b))
+* **search:** move Exactly into the filter tray as a permanent Exact toggle ([7d337fc](https://github.com/Msgaihede/mtg-grimoire/commit/7d337fc3b0e4bdd79512e6b10c96b708650450cf))
+
+
+### Bug Fixes
+
+* collection link acts on the whole multi-selection ([0789adf](https://github.com/Msgaihede/mtg-grimoire/commit/0789adf23d0678f787c828d04aa0c821cf1edb79))
+* collection link acts on the whole multi-selection ([02ca4f2](https://github.com/Msgaihede/mtg-grimoire/commit/02ca4f224a26e7e4767074198630ed52d2bd6b7d)), closes [#510](https://github.com/Msgaihede/mtg-grimoire/issues/510)
+* **home:** every reprint of a card carries its decks; the dialog survives a refetch ([e45c10a](https://github.com/Msgaihede/mtg-grimoire/commit/e45c10aabccd8747ac154e8a2bb346fba28f0f1a))
+* match the price popup's picture to the card modal's, chart above the fold ([ffa19a4](https://github.com/Msgaihede/mtg-grimoire/commit/ffa19a4b009ec2158fee181c13bccfc78c648657))
+* **menu:** add the viewed finish from Add to → Collection without asking ([acfad5e](https://github.com/Msgaihede/mtg-grimoire/commit/acfad5ed9d60e07f449b3f9afbabc3e48c936602))
+* **menu:** add the viewed finish from Add to → Collection without asking ([dd8a1ac](https://github.com/Msgaihede/mtg-grimoire/commit/dd8a1ac66dbea430a597d757ddd9aa55364015ce)), closes [#504](https://github.com/Msgaihede/mtg-grimoire/issues/504)
+* pick which wishlist copy a quick add removes, across printings ([1a02f5d](https://github.com/Msgaihede/mtg-grimoire/commit/1a02f5d482f2892e55dfb33bd6ef725116ae56c2))
+* pick which wishlist copy a quick add removes, across printings ([5e1da10](https://github.com/Msgaihede/mtg-grimoire/commit/5e1da10c970e44002db820f2c821dc7611dafe1f)), closes [#511](https://github.com/Msgaihede/mtg-grimoire/issues/511)
+
 ## [0.29.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.28.0...v0.29.0) (2026-09-22)
 
 
