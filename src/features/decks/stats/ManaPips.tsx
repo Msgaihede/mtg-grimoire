@@ -14,11 +14,22 @@
  * has nothing of draws nothing. The tiles are the *census*, and there all six are always drawn,
  * because a grid that changed its row count with the deck is one the reader has to read again
  * from scratch every time they edit.
+ *
+ * **Colourless can be taken out of the question** (issue #513), from a toggle at the card's
+ * top-right. Colourless is the one key that is not a colour of the pie — a pile of `{C}` rocks and
+ * Wastes can take half of both bands and squeeze the five colours a reader is balancing into
+ * slivers. Hidden, it leaves both bands **and both denominators**, so a tile's percentage keeps
+ * agreeing with the band above it; the Colourless tile stays in the grid, for the grid's reason,
+ * with its counts still printed and both shares an em dash — `percent`'s *not in the question*.
+ * Component state and not a stored preference, like `CardDistribution`'s `by`: it is a way of
+ * reading the chart rather than a fact about the deck.
  */
 import type { CSSProperties, JSX, ReactNode } from "react";
+import { useState } from "react";
 import { ManaText } from "@/components/ManaText";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { plural } from "@/lib/counts";
+import { FOCUS } from "@/lib/focus";
 import {
   MANA_FILL,
   MANA_KEYS,
@@ -27,6 +38,7 @@ import {
   type ManaKey,
   type PipCounts,
 } from "@/lib/mana";
+import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import type { DeckStatsSummary } from "../DeckStats";
 import { percent, StatsCard, Track } from "./StatsCard";
@@ -56,19 +68,62 @@ const SOURCES_HINT =
 /** The band's own label column. Fixed, so `Cost` and `Sources` start their tracks at one x. */
 const BAND_LABEL = "w-[4.5rem] shrink-0 text-[0.9375rem] font-medium text-text";
 
+/** The toggle's accessible name. Names the card it acts on, so it cannot be confused with any
+ *  other colourless control on the screen, and stays one string whether pressed or not —
+ *  `aria-pressed` carries the state. */
+export const HIDE_COLORLESS_LABEL = "Hide colorless in mana pips";
+
 export function ManaPips({ stats }: { stats: DeckStatsSummary }): JSX.Element {
   const { pips, pipCards, sources, sourcesKnown } = stats;
+  const [hideColorless, setHideColorless] = useState(false);
+  const tip = useTooltip();
 
-  const costTotal = total(pips);
-  const sourceTotal = total(sources);
+  // The keys in the question. Everything below reads this rather than `MANA_KEYS`, so a hidden
+  // colourless leaves the bands and the denominators together — see this file's header.
+  const counted: readonly ManaKey[] = hideColorless
+    ? MANA_KEYS.filter((key) => key !== "C")
+    : MANA_KEYS;
+
+  const costTotal = total(pips, counted);
+  const sourceTotal = total(sources, counted);
 
   // The union, so the two bands are segmented alike and a colour that only *appears* on one side
   // still holds its place on the other — a band whose segments moved between its two rows would
   // read as two different decks rather than as two facts about one.
-  const present = MANA_KEYS.filter((key) => pips[key] > 0 || sources[key] > 0);
+  const present = counted.filter((key) => pips[key] > 0 || sources[key] > 0);
 
   return (
-    <StatsCard title="Mana pips">
+    <StatsCard
+      title="Mana pips"
+      actions={
+        <button
+          type="button"
+          aria-pressed={hideColorless}
+          aria-label={HIDE_COLORLESS_LABEL}
+          onClick={() => setHideColorless((hidden) => !hidden)}
+          {...tip(
+            hideColorless
+              ? "Colorless is left out of the Cost and Sources bars. Press to count it again."
+              : "Leave colorless out of the Cost and Sources bars.",
+          )}
+          className={cn(
+            // `Dropdown size="sm"`'s box, so this sits on the heading line at the height the
+            // Card distribution card's select does one readout over.
+            "inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs",
+            PRESS,
+            FOCUS,
+            hideColorless ? "border-accent text-accent" : "border-border text-dim hover:text-text",
+          )}
+        >
+          <span aria-hidden="true">
+            <ManaText source="{C}" className="text-[0.75rem]" />
+          </span>
+          {/* One word in both states — the accent edge and `aria-pressed` say which — so the
+              visible label stays inside the accessible name (WCAG 2.5.3). */}
+          <span aria-hidden="true">Hide</span>
+        </button>
+      }
+    >
       <div className="flex flex-col gap-2">
         <Band label="Cost" keys={present} counts={pips} total={costTotal} hint={COST_HINT} />
         {sourcesKnown ? (
@@ -103,8 +158,11 @@ export function ManaPips({ stats }: { stats: DeckStatsSummary }): JSX.Element {
             pipCards={pipCards[key]}
             sources={sources[key]}
             sourcesKnown={sourcesKnown}
-            costTotal={costTotal}
-            sourceTotal={sourceTotal}
+            // Out of the question, so both shares are an em dash rather than a slice of a total
+            // this key is no longer in. The counts in the captions are still true and stay.
+            costTotal={counted.includes(key) ? costTotal : 0}
+            sourceTotal={counted.includes(key) ? sourceTotal : 0}
+            excluded={!counted.includes(key)}
           />
         ))}
       </ul>
@@ -112,9 +170,9 @@ export function ManaPips({ stats }: { stats: DeckStatsSummary }): JSX.Element {
   );
 }
 
-/** The six keys summed — the denominator a share is taken against. */
-function total(counts: PipCounts): number {
-  return MANA_KEYS.reduce((sum, key) => sum + counts[key], 0);
+/** The counted keys summed — the denominator a share is taken against. */
+function total(counts: PipCounts, keys: readonly ManaKey[]): number {
+  return keys.reduce((sum, key) => sum + counts[key], 0);
 }
 
 /**
@@ -229,6 +287,7 @@ function ColorTile({
   sourcesKnown,
   costTotal,
   sourceTotal,
+  excluded,
 }: {
   colour: ManaKey;
   pips: number;
@@ -237,11 +296,13 @@ function ColorTile({
   sourcesKnown: boolean;
   costTotal: number;
   sourceTotal: number;
+  /** Taken out of the question by the card's toggle — dimmed like an idle tile. */
+  excluded: boolean;
 }): JSX.Element {
   // With the sources unknown every key's `sources` is 0, so this reduces to "no pips of this
   // colour" — which is the honest reading: the cost half is answered for every colour, and the
   // source half is unanswered for every colour equally and so cannot tell one tile from another.
-  const idle = pips === 0 && sources === 0;
+  const idle = excluded || (pips === 0 && sources === 0);
 
   return (
     <li
