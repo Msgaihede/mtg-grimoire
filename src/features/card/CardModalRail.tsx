@@ -99,8 +99,8 @@ const VARIANT_LABEL: Record<DeckVariant, string> = { live: "Actual", theory: "Th
  * the panel moving rather than as a button going down.
  *
  * Exported for `NewPrintingDialog` (issue #514), which was asked to look like this modal: its
- * deck rows and its `Open card details` are rail entries in everything but the list they are in,
- * and a copied class string is the drift this repo has already paid for twice.
+ * deck rows are rail entries in everything but the list they are in, and a copied class string is
+ * the drift this repo has already paid for twice.
  */
 export const RAIL_ENTRY = cn(
   // `px-5` rather than the `px-3` this shipped with: the mockup draws these at 22px and the

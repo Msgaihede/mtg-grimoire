@@ -277,8 +277,15 @@ function useFlankRoom(): boolean {
  * identifiable wherever the art is shown. It was passed a literal `null` for the wave the meld
  * control was missing; `null` — a relation whose printing has left `cards` — still draws no
  * credit, which is the honest answer for a frame that is also drawing no picture.
+ *
+ * Exported for `NewPrintingDialog` (issue #514), which draws `CardModalArt` and therefore owes the
+ * same credit under it.
  */
-function artistOf(card: CardDetail, face: number, melded: MeldRelation | null): string | null {
+export function artistOf(
+  card: CardDetail,
+  face: number,
+  melded: MeldRelation | null,
+): string | null {
   if (melded !== null) return melded.artist;
   return card.faces[face]?.artist ?? card.artist;
 }
@@ -287,8 +294,11 @@ function artistOf(card: CardDetail, face: number, melded: MeldRelation | null): 
  * An action-row button. 44px below `@min-[900px]/card` and the app's own 36px above it, which is
  * the fold `CardModalControls` draws its own controls at — the two rows sit under one another and
  * a row that changed height on a different measurement would read as a mistake.
+ *
+ * Exported for `NewPrintingDialog`'s one action (issue #514), which sits in a copy of this
+ * modal's footer row and must not be a second spelling of its button.
  */
-const ACTION =
+export const ACTION =
   "flex h-11 min-w-0 items-center justify-center rounded-md border border-border px-4 " +
   "text-sm text-dim transition-colors duration-[var(--duration-fast)] ease-standard " +
   "hover:text-text motion-reduce:transition-none @min-[900px]/card:h-9";

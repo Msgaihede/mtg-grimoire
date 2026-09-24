@@ -12,7 +12,8 @@ import type {
   NewPrintingDeck,
   NewPrintings,
 } from "@/lib/ipc";
-import type { MarketplaceId } from "@/lib/marketplace";
+import { MARKETPLACES, type MarketplaceId } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 
 /**
  * The three commands this widget can reach, in front of an **intact** mirror.
@@ -842,6 +843,13 @@ describe("the printing dialog", () => {
     expect(within(dialog).getByText("Foil")).toBeInTheDocument();
     // `CardModalTitle`: the type line beside the name, from the same read.
     expect(within(dialog).getByText("Artifact")).toBeInTheDocument();
+    // The modal's footer row: its credit, and the sentence dating the price cells above it.
+    expect(
+      within(dialog).getByText(
+        "Illustrated by Mark Tedin. Card images © Wizards of the Coast · Data © Scryfall",
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeInTheDocument();
     expect(within(dialog).getByText("Released Friday, 18 September 2026")).toBeInTheDocument();
     // Read once, at the card modal's own key — so *Open card details* paints from this entry.
     expect(cardDetail).toHaveBeenCalledWith("sld-1", "tcgplayer");
@@ -887,6 +895,27 @@ describe("the printing dialog", () => {
     await user.click(row);
     await screen.findByRole("dialog", { name: /^Sol Ring/ });
     expect(row).not.toHaveAttribute("aria-expanded");
+  });
+
+  /**
+   * **The dashboard's Ctrl+scroll `zoom` stops at the dialog.** The grid box carries it and a
+   * `fixed` descendant inherits it, so without `AppScale` the panel was drawn at 1.5 × its size at
+   * the dashboard's 150% — measured in the shipped window — beside a card modal that never scales.
+   * jsdom lays nothing out, so what is pinned is the reciprocal on the wrapper, which is the whole
+   * of the mechanism; the painted width is `home-page.md`'s record.
+   */
+  it("draws the dialog at the app's scale whatever the dashboard's zoom", async () => {
+    const user = userEvent.setup();
+    heldTwice();
+    useAppStore.setState({ cardZoom: { ...useAppStore.getState().cardZoom, home: 1.5 } });
+
+    draw();
+    await user.click(await screen.findByRole("button", { name: /^Sol Ring/ }));
+    const dialog = await screen.findByRole("dialog", { name: /^Sol Ring/ });
+
+    const wrapper = dialog.closest<HTMLElement>("div.contents");
+    expect(wrapper).not.toBeNull();
+    expect(Number(wrapper?.style.zoom)).toBeCloseTo(1 / 1.5, 4);
   });
 
   it("hands the caret back to the row on Escape", async () => {

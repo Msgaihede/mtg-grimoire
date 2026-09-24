@@ -7,8 +7,9 @@
  * It was an `AnchoredPopup` of the decks alone, 248px wide, anchored inside the row. That panel is
  * `absolute` and the row is inside the widget body's scroller — `overflow-x-hidden`,
  * `overflow-y-auto` — so the scroller clipped it on exactly the cards a reader is most likely to
- * have: a 2 × 2 tile has 204px of body across, and a panel wider than its card is cut down the
- * left. A large card image is the one thing that could not survive that clip, so the surface moved
+ * have: a 2 × 2 tile is 220px wide at the grid's target cell, and a 248px panel pinned by its right
+ * edge reaches past the scroller's left one. A large card image is the one thing that could not
+ * survive that clip, so the surface moved
  * to `src/CLAUDE.md`'s answer for a surface that is *consulted*: `components/Dialog`, over a scrim.
  * `StickyNoteDialog` is the precedent for mounting one from a widget body, and its header states
  * the condition this relies on too — **the home page has no containment**, so a `fixed` scrim
@@ -20,9 +21,12 @@
  * surfaces look alike without them drifting apart is for them to be one drawing. So the heading is
  * `CardModalTitle` (name, type line, mana cost), the left column is **`CardModalArt` itself** — the
  * bordered frame, the chin naming the printing, the flip and foil controls and one price cell per
- * finish — and the right column's rows are `CardModalRail`'s `RAIL_ENTRY` boxes. The column is
- * `18.75rem`, the card modal's own at its two-column rung, and the fold is the same
- * `@container/card` measurement, which is why `container` is passed.
+ * finish — the right column is the modal's rail (its left rule, its accented heading, its
+ * `RAIL_ENTRY` boxes), and the footer is the modal's footer row: the illustrator and Scryfall
+ * credit and the prices' as-of line on the left, the one action as an `ACTION` button on the
+ * right. The art column is `18.75rem`, the card modal's own at its two-column rung, and the fold is
+ * the same `@container/card` measurement, which is why `container` is passed. Put side by side in
+ * the shipped window on 2026-09-24, the two panels' left columns were the same drawing.
  *
  * **The card is read with `cardDetailKey`**, the entry the card modal and its four overlays share —
  * so pressing *Open card details* paints the modal from the cache this dialog already filled, and
@@ -36,12 +40,8 @@
  * as foil*. **Meld is empty**: a meld card's counterparts are a second query and a third piece of
  * state for a rare layout, and the card modal — one press away — draws them. The set's name keeps
  * its meaning (`showSetInSearch`), which is a navigation, so the home page and this dialog go with
- * it.
- *
- * **No artist credit line**, where the card modal draws one: that modal's credit exists because it
- * also shows art *crops* elsewhere in the panel and follows a meld view onto another illustrator.
- * This dialog shows a full printed card and only that, which carries its own credit —
- * `src/CLAUDE.md`'s image rule, met by construction.
+ * it. The credit is `artistOf` with no meld view — the same function, so a double-faced card
+ * flipped to its back names the back's illustrator here exactly as it does there.
  */
 import { useId, useState, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -49,10 +49,12 @@ import { useQuery } from "@tanstack/react-query";
 import { CardArt } from "@/components/CardArt";
 import { Dialog } from "@/components/Dialog";
 import { CardModalArt, type MeldTarget } from "@/features/card/CardModalArt";
+import { ACTION, artistOf } from "@/features/card/CardDetailModal";
 import { RAIL_ENTRY } from "@/features/card/CardModalRail";
 import { CardModalTitle } from "@/features/card/CardModalTitle";
 import { cardDetailKey } from "@/features/card/cardDetailKey";
 import { plural } from "@/lib/counts";
+import { parseFinishes } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT } from "@/lib/images";
 import {
@@ -65,6 +67,8 @@ import {
 } from "@/lib/ipc";
 import { languageName } from "@/lib/languages";
 import type { Marketplace } from "@/lib/marketplace";
+import { PRESS } from "@/lib/motion";
+import { pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
@@ -217,54 +221,67 @@ function Body({
   const [face, setFace] = useState(0);
   const showSetInSearch = useAppStore((s) => s.showSetInSearch);
   const decksId = useId();
+  const shown = card ?? null;
+  // `CardModalArt`'s own gate on its price cells, read here for the footnote that dates them — the
+  // card modal's `priced` for one printing. No cells, no sentence about how old they are.
+  const priced = shown !== null && parseFinishes(shown.finishes).length > 0;
+  const artist = shown === null ? null : artistOf(shown, face, null);
 
   return (
-    <div
-      className={cn(
-        // `CardDetailModal`'s grid, one rung: below the fold one scroller with the picture on top,
-        // at and above it the card modal's art column beside the decks. `flex-auto` rather than
-        // `flex-1`, for that file's reason — a zero basis reports no content height, and the panel
-        // is sized from its content above the fold.
-        "scrollbar-slim grid min-h-0 flex-auto grid-cols-1 gap-5 overflow-y-auto p-5",
-        "@min-[640px]/card:grid-cols-[18.75rem_1fr]",
-      )}
-    >
-      <div className="min-w-0">
-        {error !== null ? (
-          <p role="alert" className="m-0 text-sm text-destructive">
-            Could not read this card — {error}
-          </p>
-        ) : card === undefined || pending ? (
-          // The frame the picture will fill, so the decks beside it do not jump when the read
-          // lands — `CardModalArt`'s own box and radius, empty.
-          <div
-            aria-hidden="true"
-            className="rounded-xl border border-border bg-bg"
-            style={{ aspectRatio: CARD_ASPECT }}
-          />
-        ) : card === null ? (
-          <p className="m-0 text-sm text-dim">
-            This printing is not in the card database any more. The next card data sync will take
-            it off the list.
-          </p>
-        ) : (
-          <CardModalArt
-            key={card.id}
-            card={card}
-            face={face}
-            onFlip={() => setFace((f) => (f === 0 ? 1 : 0))}
-            marketplace={marketplace}
-            deckRow={null}
-            openedAs={null}
-            onToggleFoil={viewOnly}
-            meld={NO_MELD}
-            onShowSet={showSetInSearch}
-          />
+    // The flex column `Dialog`'s panel expects a body to be: the grid scrolls, the footer does not.
+    <div className="flex min-h-0 flex-auto flex-col">
+      <div
+        className={cn(
+          // `CardDetailModal`'s grid, one rung: below the fold one scroller with the picture on
+          // top, at and above it the card modal's art column beside the decks. `flex-auto` rather
+          // than `flex-1`, for that file's reason — a zero basis reports no content height, and
+          // the panel is sized from its content above the fold.
+          "scrollbar-slim grid min-h-0 flex-auto grid-cols-1 gap-5 overflow-y-auto p-5",
+          "@min-[640px]/card:grid-cols-[18.75rem_1fr]",
         )}
-      </div>
+      >
+        <div className="min-w-0">
+          {error !== null ? (
+            <p role="alert" className="m-0 text-sm text-destructive">
+              Could not read this card — {error}
+            </p>
+          ) : card === undefined || pending ? (
+            // The frame the picture will fill, so the decks beside it do not jump when the read
+            // lands — `CardModalArt`'s own box and radius, empty.
+            <div
+              aria-hidden="true"
+              className="rounded-xl border border-border bg-bg"
+              style={{ aspectRatio: CARD_ASPECT }}
+            />
+          ) : card === null ? (
+            <p className="m-0 text-sm text-dim">
+              This printing is not in the card database any more. The next card data sync will
+              take it off the list.
+            </p>
+          ) : (
+            <CardModalArt
+              key={card.id}
+              card={card}
+              face={face}
+              onFlip={() => setFace((f) => (f === 0 ? 1 : 0))}
+              marketplace={marketplace}
+              deckRow={null}
+              openedAs={null}
+              onToggleFoil={viewOnly}
+              meld={NO_MELD}
+              onShowSet={showSetInSearch}
+            />
+          )}
+        </div>
 
-      <div className="flex min-w-0 flex-col gap-5">
-        <section aria-labelledby={decksId} className="flex flex-col gap-2">
+        {/* The card modal's rail, in position and in rule: a left border only where it stands
+            beside the picture, since below the fold it is *under* it and a vertical line would
+            have nothing on either side. `pl-5` puts the line midway in the grid's 20px gutter —
+            that file's own arithmetic. */}
+        <section
+          aria-labelledby={decksId}
+          className="flex min-w-0 flex-col gap-2 @min-[640px]/card:border-l @min-[640px]/card:border-border @min-[640px]/card:pl-5"
+        >
           {/* **`text-accent`, for the card modal's own reason**: its *In your grimoire* heading is
               the one accented heading in that panel because it is the one block about the
               reader's own things, and this list is exactly that. "Watched", because these are the
@@ -275,13 +292,35 @@ function Body({
           </h3>
           <PrintingDecks printing={printing} onOpenDeck={onOpenDeck} />
         </section>
-        <button
-          type="button"
-          onClick={() => onOpenCard(printing.printingId)}
-          className={cn(RAIL_ENTRY, FOCUS)}
-        >
-          <span className="min-w-0 flex-1 truncate">Open card details</span>
-        </button>
+      </div>
+
+      {/* The card modal's footer row, outside the scroller: the panel's footnotes in its left
+          corner and the one action on the right, `ACTION` and not a second spelling of it. */}
+      <div className="shrink-0 border-t border-border px-5 py-3">
+        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+          <div className="min-w-0 flex-1 text-[0.7rem] leading-relaxed text-dim">
+            {/* The modal's credit, drawn for the modal's reason: Scryfall asks that the artist and
+                the source be identifiable wherever the art is shown, and this is the same picture
+                that modal draws. A full printed card carries its own credit as well; the line is
+                here so the two surfaces say the same thing about one image. */}
+            {shown !== null && (
+              <p className="m-0">
+                {artist !== null && <>Illustrated by {artist}. </>}
+                Card images © Wizards of the Coast · Data © Scryfall
+              </p>
+            )}
+            {/* Spec §5 of the card modal: a price is never shown without saying how old it is and
+                whose it is. */}
+            {priced && <p className="m-0">{pricesAsOf(marketplace)}</p>}
+          </div>
+          <button
+            type="button"
+            onClick={() => onOpenCard(printing.printingId)}
+            className={cn(ACTION, PRESS, FOCUS)}
+          >
+            Open card details
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -298,6 +298,11 @@ Pressing a printing opens `AnchoredPopup` (`align="end"`, `panelClassName="w-[24
 
 The popover is the reason `WidgetCard` does not clip and this body must not either.
 
+> **Superseded 2026-09-24 by [issue #514](https://github.com/Msgaihede/mtg-grimoire/issues/514).**
+> The body is the widget's scroller, so it clips by construction, and a 248px popover pinned to a
+> row's right edge does not fit a 220px tile. A row opens a centred `Dialog` drawn from the card modal's own parts,
+> with the decks beside the picture — `docs/reference/home-page.md` §13 has the record.
+
 ---
 
 ## 7. The three empty sentences, and the failure

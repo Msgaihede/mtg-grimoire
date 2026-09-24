@@ -107,6 +107,7 @@ import { useAppStore } from "@/lib/store";
 import { cardTreatments, treatmentName } from "@/lib/treatment";
 import { cn } from "@/lib/utils";
 
+import { AppScale } from "../AppScale";
 import type { WidgetFit } from "../fit";
 import { deckListKey, newPrintingsKey, NEW_PRINTINGS_ROOT } from "../keys";
 import { widgetConfig } from "../layout";
@@ -639,16 +640,20 @@ export function NewPrintingsWidget({ widget, fit, still }: WidgetBodyProps): Rea
       </WidgetFooter>
       {/* Mounted inside the body, `StickyNoteDialog`'s precedent: the scrim is `fixed` and the
           home page has no containment, so it is drawn against the window wherever it sits in the
-          tree. Never while `still` — a catalogue preview has no rows to press. */}
+          tree. **`AppScale` is what that precedent lacks** — the grid's Ctrl+scroll `zoom` reaches
+          a `fixed` descendant too, and a dialog is chrome rather than dashboard. Never while
+          `still` — a catalogue preview has no rows to press. */}
       {pressed !== null && !still && (
-        <NewPrintingDialog
-          printing={pressed}
-          open={open}
-          onDismiss={dismiss}
-          onClose={() => setOpen(false)}
-          onOpenDeck={openDeck}
-          onOpenCard={openCard}
-        />
+        <AppScale>
+          <NewPrintingDialog
+            printing={pressed}
+            open={open}
+            onDismiss={dismiss}
+            onClose={() => setOpen(false)}
+            onOpenDeck={openDeck}
+            onOpenCard={openCard}
+          />
+        </AppScale>
       )}
     </>
   );
