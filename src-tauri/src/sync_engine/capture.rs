@@ -397,6 +397,11 @@ pub const TABLES: [Spec; 16] = [
             // arrives at what that device can only have meant — the band open, which is what
             // every deck on that device is showing.
             "stats_open",
+            // Whether the deck views draw a trailing Tokens & Emblems pile (user schema v47).
+            // A setting chosen in Deck settings, so it travels for `separate_x_group`'s reason
+            // — how *this* list is read — and `DEFAULT 0` makes the old-peer direction safe the
+            // way it is for `virtual_only` above.
+            "token_stack",
             "bracket",
             // **Schema v38's two theory marks and v39's third, and they travel for `bracket`'s
             // reason** — which
@@ -1146,6 +1151,33 @@ mod tests {
             fields.get("tokens_open"),
             Some(&serde_json::json!(0)),
             "and the other disclosure is a field of its own, in {fields}"
+        );
+    }
+
+    /// **A deck's token-pile setting travels** (user schema v47) — the hand-written spec's
+    /// missing-fence argument above, for a column that would otherwise draw a pile on one
+    /// device and none on the other.
+    #[test]
+    fn a_decks_token_pile_setting_is_captured() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute("UPDATE decks SET token_stack = 1 WHERE id = 1", [])
+            .unwrap();
+
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 1, "one write, one op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(
+            fields.get("token_stack"),
+            Some(&serde_json::json!(1)),
+            "the setting must reach the reader's other devices, in {fields}"
         );
     }
 

@@ -75,6 +75,7 @@ const BURN: DeckRow = {
   statsOpen: true,
   defaultCategoryId: 0,
   bracket: 0,
+  tokenStack: false,
 };
 
 const SPECS: FormatSpec[] = [spec("modern"), spec("commander"), spec("casual")];
@@ -694,6 +695,36 @@ describe("DeckSettingsDialog", () => {
     // whole `DeckPatch`, so the field costs one line here and nothing in `useDeck`.
     await userEvent.click(screen.getByRole("switch", { name: /Not in the theory list/ }));
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryMarkUnplanned: false }));
+  });
+
+  /**
+   * The Tokens & Emblems pile (issue #507): drawn here, where a `deck_update` can carry it, and
+   * written in the one act that settles it — the create dialog draws no such row.
+   */
+  it("draws the Tokens & Emblems switch and writes it on the press", async () => {
+    deckGet.mockResolvedValue(detail());
+    open();
+    await loaded();
+
+    const toggle = screen.getByRole("switch", {
+      name: "Show Tokens & Emblems in the deck Disabled",
+    });
+    await userEvent.click(toggle);
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { tokenStack: true }));
+  });
+
+  /** A deck that already draws the pile reads `Enabled`, and the press turns it off. */
+  it("reads the stored Tokens & Emblems answer off the deck row", async () => {
+    deckGet.mockResolvedValue(detail({ tokenStack: true }));
+    open();
+    await loaded();
+
+    const toggle = screen.getByRole("switch", {
+      name: "Show Tokens & Emblems in the deck Enabled",
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(toggle);
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { tokenStack: false }));
   });
 
   /** And a deck with no plan is offered none of them, for the reason it is offered no theory
