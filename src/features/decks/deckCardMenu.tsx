@@ -3,14 +3,15 @@
  * surface draws, plus the things that only mean something about a card that is in a deck.
  *
  * ```
- * … the card menu every surface draws …
+ * … the card menu every surface draws, down to Add to …
+ * Collection link      ▸  the three presses that answer this row's shortfall
  * ─────────────────────
- * Move to              ▸  every category of the deck, in the reader's own order
- * Collection           ▸  the three presses that answer this row's shortfall
+ * Category             ▸  every category of the deck, in the reader's own order
+ * Label card           ▸  None / the deck's labels / More labels…
+ * ─────────────────────
  * Set as commander        (only where the format has a command zone)
  * Set as companion        (only where the format has a slot for one)
  * Set as foil             (or a `Finish ▸` submenu where the printing is sold in three)
- * Label card           ▸  None / the deck's labels / New label…
  * ─────────────────────
  * Add note…               opens the editor on a note this card will name — Save is the write
  * Notes                ▸  the notes that name this card — only where there are any
@@ -28,8 +29,8 @@
  * `lazy` and nothing here mounts, queries or holds state.
  *
  * **Two rows are stricter than the rest of this menu, and the asymmetry is deliberate rather
- * than a drift.** `Move to ▸ Commander` is live for a card `Set as commander` greys two rows
- * above it, and both answers are right. `Move to` is *filing*: it is built from every category
+ * than a drift.** `Category ▸ Commander` is live for a card `Set as commander` greys one rule
+ * below it, and both answers are right. `Category` is *filing*: it is built from every category
  * the deck has and permits exactly what a drag onto the pile's heading permits, because the two
  * are one gesture with two input devices and a menu that refused what a drop allows would be the
  * odd one out. The zone rows are *claims* — "this card is the commander" — so they are fenced by
@@ -105,7 +106,7 @@ export function deckCardTarget(card: DeckCard): CardMenuTarget {
 /**
  * What a row says when the card is already in the pile it names.
  *
- * Two rows are greyed by it — the card's own category under `Move to`, and a zone row on the
+ * Two rows are greyed by it — the card's own category under `Category`, and a zone row on the
  * card that fills it — and both are the same statement, so it is one string. Only the first
  * **draws** it, since 2026-08-17: a zone row greys wordlessly, for the reason on
  * {@link zoneItem}. Not a *refusal* in `validation/`'s sense: nothing is wrong with the card,
@@ -123,7 +124,7 @@ export interface DeckCardMenuDeps {
    * **Every category the deck has, in `sortOrder`** — `DeckEditor`'s own array and never the
    * drawn groups. That array is deliberately unfiltered, and for an emptied `auto` pile it is
    * the only surface the pile appears on at all: no heading is drawn for one, so a drop target
-   * for it does not exist and a drag cannot reach it. See {@link moveItem}.
+   * for it does not exist and a drag cannot reach it. See {@link categoryItem}.
    */
   categories: readonly DeckCategory[];
   /**
@@ -195,7 +196,7 @@ export interface DeckCardMenuDeps {
    * second one is how a press comes to file a number the card is not wearing. See
    * {@link collectionItems}.
    *
-   * **Optional, and absent takes the whole `Collection ▸` item with it** — `cardMenu.tsx`'s
+   * **Optional, and absent takes the whole `Collection link ▸` item with it** — `cardMenu.tsx`'s
    * `moveItem` rule, which drops its own item when the write it needs is missing rather than
    * drawing a picker that cannot file.
    */
@@ -231,7 +232,7 @@ export interface DeckCardMenuDeps {
    *
    * **The belt to the structural collapse's braces, and the braces are what a reader meets.**
    * `DeckEditor` passes no `quickAdd`, `quickAddAndUnwish` or `pullCard` for a virtual deck, so
-   * {@link collectionItems}' all-three-or-none guard drops the whole `Collection ▸` item before
+   * {@link collectionItems}' all-three-or-none guard drops the whole `Collection link ▸` item before
    * this flag is consulted at all — which is the answer that was chosen (see `QUICK_ADD_REASON`'s
    * `virtual` arm for why a wholly greyed submenu was the other candidate and lost).
    *
@@ -335,7 +336,7 @@ function manyCards(n: number): string {
  *
  * ## Which rows go plural, and which cannot
  *
- * `Move to`, `Label` and `Remove` act on **every** picked card when the right-clicked one is
+ * `Category`, `Label` and `Remove` act on **every** picked card when the right-clicked one is
  * in the set (issue #214). All three are per-row writes over an address the row already carries, so
  * plural is a loop and the label is the only thing that has to change.
  *
@@ -347,7 +348,7 @@ function manyCards(n: number): string {
  * narrower still: a deck has one commander and one companion, so "set 4 cards as commander" names
  * a thing that cannot happen.
  *
- * **`Collection ▸`'s three rows stay singular for the same reason and one of its own** — see
+ * **`Collection link ▸`'s three rows stay singular for the same reason and one of its own** — see
  * {@link collectionItems}. Every label in it names a *count*, and that count is one row's
  * shortfall: four rows short by four different amounts have no one number to name, so a plural
  * row could only quote a total no card on screen is wearing.
@@ -369,19 +370,20 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     // `Add to` directly above them stayed singular, which is one menu answering the same
     // question two ways. `buildCardMenu` decides for itself which of its rows a set can mean
     // anything to; what this has to do is hand the set over.
-    ...buildCardMenu(deckCardTarget(card), { ...deps.card, picked: rows.map(deckCardTarget) }),
+    //
+    // **`Collection link ▸` is spliced in directly under `Add to`** (issue #505). Both write to
+    // the reader's binder or wishlist rather than to this deck's list, so they are one group — the
+    // deck's own rows start at the rule below.
+    ...withCollectionLink(
+      buildCardMenu(deckCardTarget(card), { ...deps.card, picked: rows.map(deckCardTarget) }),
+      collectionItems(card, deps),
+    ),
     // The rule is where "this card" stops and "this card in this deck" starts. Everything above
     // it is true of the same printing in a search wall; nothing below it means anything there.
     { kind: "separator", id: "sep-deck" },
-    moveItem(card, deps),
-    // **After `Move to` and in front of the zone rows**, because it is *filing* and `Move to` is
-    // filing: both answer where a card's copies go. Everything below the zone line is a claim
-    // about what the card **is** in this deck, which is a different question and is drawn as one.
-    ...collectionItems(card, deps),
-    ...zoneItems(card, deps),
-    // Beside the zone rows rather than beside `Move to`: those say what this card *is* in the
-    // deck, and so does this. `Move to` is filing.
-    finishItem(card, deps),
+    // **`Category` and `Label card` are one group** (issue #505): both are how the reader *files*
+    // this card inside the deck — which pile it sits in, and which of their own marks it wears.
+    categoryItem(card, deps),
     {
       kind: "submenu",
       id: "label-card",
@@ -408,7 +410,13 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
         },
       ],
     },
-    // **Under a rule of their own, between the label rows and the removal** — the notes are
+    // **The three `Set as` rows under a rule of their own** (issue #505). Each is a claim about
+    // what this card *is* in the deck — its commander, its companion, the object it plays — which
+    // is a different question from where it is filed, and is drawn as one.
+    { kind: "separator", id: "sep-set-as" },
+    ...zoneItems(card, deps),
+    finishItem(card, deps),
+    // **Under a rule of their own, between the `Set as` rows and the removal** — the notes are
     // neither. Everything above them writes the *deck* (where the card goes, what it is called);
     // the row below takes the cardboard out. A note writes neither: it is something the reader
     // wrote *about* the card, so it is its own block rather than a tail on the filing rows or a
@@ -438,7 +446,21 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
 }
 
 /**
- * **Move to**, and it is the replacement for the per-card `Move…` select removed on
+ * The shared card menu with `Collection link ▸` placed directly after its `Add to` row.
+ *
+ * Found by id rather than by position, because `buildCardMenu` may draw rows after `Add to` on
+ * other surfaces; a menu with no `Add to` (none today) takes the submenu at its end instead of
+ * dropping it.
+ */
+function withCollectionLink(shared: MenuItem[], link: MenuItem[]): MenuItem[] {
+  const at = shared.findIndex((item) => item.kind !== "separator" && item.id === "add-to");
+  if (at === -1) return [...shared, ...link];
+  return [...shared.slice(0, at + 1), ...link, ...shared.slice(at + 1)];
+}
+
+/**
+ * **Category** (it was **Move to** until issue #505), and it is the replacement for the per-card
+ * `Move…` select removed on
  * 2026-08-14 rather than a duplicate of the drag.
  *
  * Two things that control could do and a drag cannot, both named at `cardControl.tsx`'s
@@ -458,12 +480,14 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
  * would be a press that means nothing — `aria-disabled`, so it stays in the tab order and stays
  * readable, which is what a greyed row in this app is for.
  */
-function moveItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
+function categoryItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
   const rows = targets(card, deps);
   return {
     kind: "submenu",
-    id: "move-to",
-    label: rows.length > 1 ? `Move ${manyCards(rows.length)} to` : "Move to",
+    id: "category",
+    // `Category` since issue #505, where it read `Move to` — the submenu is the deck's piles, and
+    // the head names the thing it opens like every other submenu head here (`Notes`, `Finish`).
+    label: rows.length > 1 ? `Category for ${manyCards(rows.length)}` : "Category",
     Icon: FolderInput,
     items: deps.categories.map((category): MenuItem => {
       // **Greyed only when there is nothing left to move** — every picked card already in this
@@ -498,7 +522,7 @@ function moveItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
 }
 
 /**
- * Why the three `Collection ▸` rows are greyed, in the words a menu row has room for.
+ * Why the three `Collection link ▸` rows are greyed, in the words a menu row has room for.
  *
  * **A phrase and not a sentence**, `MenuAction.reason`'s own rule: a row is as wide as its widest
  * content, so one long reason sets the width of the whole panel. Each says the *fact* and neither
@@ -544,11 +568,11 @@ const QUICK_ADD_REASON: Record<Exclude<ReturnType<typeof quickAddBlock>, null>, 
 };
 
 /**
- * **Collection ▸** — the three presses that answer a live row's shortfall, and the only place in
+ * **Collection link ▸** — the three presses that answer a live row's shortfall, and the only place in
  * this menu that writes to the reader's binder rather than to their list (issue #350).
  *
  * ```
- * Collection                              ▸
+ * Collection link                         ▸
  *     Quick add 4 copies
  *     Quick add 4 and remove from wishlist
  *     ─────────
@@ -557,8 +581,9 @@ const QUICK_ADD_REASON: Record<Exclude<ReturnType<typeof quickAddBlock>, null>, 
  *
  * **A submenu rather than three flat rows**, because this menu already carries thirteen and three
  * more on every card of the surface a reader spends the longest in is a menu that has to be read
- * instead of scanned. It sits under `Move to` because the two are the same kind of act — see the
- * comment at the call site.
+ * instead of scanned. It sits directly under the card menu's `Add to` (issue #505), because both
+ * write to the reader's binder or wishlist rather than to this deck — see the comment at the call
+ * site.
  *
  * **All three stay singular about the right-clicked card even under a picked set**, and that is a
  * statement rather than an omission: {@link finishItem}'s argument reached from the other side.
@@ -614,10 +639,12 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
     {
       kind: "submenu",
       id: "deck-collection",
-      // `Collection`, the same word and the same `LibraryBig` the card menu's own
-      // `Add to ▸ Collection` wears one rule above: it is the reader's binder in both places, and
-      // a second name for it here would read as a second thing.
-      label: "Collection",
+      // `Collection link`, and the same `LibraryBig` the card menu's own `Add to ▸ Collection`
+      // wears directly above it: it is the reader's binder in both places. The word grew from
+      // `Collection` with issue #505, when this moved up beside `Add to` — two rows called
+      // `Collection` one under the other (one of them a submenu of the first) would read as one
+      // thing drawn twice, and these three presses link the deck's row to the binder.
+      label: "Collection link",
       Icon: LibraryBig,
       items: [
         row(
@@ -782,10 +809,10 @@ export function deckCardNoteRows(
  * its two rows on the same argument).
  *
  * A card that is **already in** the zone is greyed too, for the reason its own pile is greyed
- * under `Move to`: the write would be a move from a category to itself. It is the one refusal
+ * under `Category`: the write would be a move from a category to itself. It is the one refusal
  * here that is not `validation/`'s, because it is not a question about the card — the reigning
  * commander is by definition an eligible one. `ALREADY_HERE` is what it is greyed *by* and no
- * longer what it is greyed *with*; only `Move to` still draws that string.
+ * longer what it is greyed *with*; only `Category` still draws that string.
  */
 function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
   const { spec } = deps;
@@ -860,7 +887,7 @@ function companionRefusal(card: DeckCard, deps: DeckCardMenuDeps): string | null
  * has room — "not a legendary creature", "this card has no companion ability" — and a menu row
  * is sized by its widest content, so two of them set the width of *every* row in the panel. The
  * reader reported the card menu as unusably wide, and these two rows were the whole of it: the
- * card menu's own refusals are short, and `Move to`'s is `ALREADY_HERE`.
+ * card menu's own refusals are short, and `Category`'s is `ALREADY_HERE`.
  *
  * **The refusal is still computed and is still what greys the row** — the rule underneath is
  * untouched, so a card this menu offers is still a card the validation panel will accept. What

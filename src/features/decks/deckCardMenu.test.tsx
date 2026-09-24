@@ -151,6 +151,11 @@ function noteDeps(over: Partial<DeckCardMenuDeps> = {}): DeckCardMenuDeps {
 const labels = (items: MenuItem[]) =>
   items.filter((i) => i.kind !== "separator").map((i) => i.label);
 
+/** The shape with separators kept, since `labels` strips them and an assertion over labels alone
+ *  is therefore blind to a rule arriving or leaving. */
+const shape = (items: MenuItem[]) =>
+  items.map((item) => (item.kind === "separator" ? `—${item.id}` : item.id));
+
 function find(items: MenuItem[], label: string | RegExp): MenuItem {
   const match = items.find(
     (i) =>
@@ -180,14 +185,17 @@ describe("buildDeckCardMenu", () => {
       "View all printings",
       "Add to",
     ]);
-    expect(labels(items).slice(5)).toEqual([
-      "Move to",
-      "Set as companion",
-      // The finish row sits with the zone rows rather than with `Move to`: those say what this
-      // card *is* in the deck, and so does this. `Move to` is filing.
-      "Set as foil",
-      "Label card",
-      "Remove card",
+    // Issue #505's three groups: filing (`Category`, `Label card`), then the `Set as` claims about
+    // what the card *is* in the deck, each under its own rule.
+    expect(shape(items).slice(shape(items).indexOf("—sep-deck"))).toEqual([
+      "—sep-deck",
+      "category",
+      "label-card",
+      "—sep-set-as",
+      "set-companion",
+      "finish",
+      "—sep-remove",
+      "remove-card",
     ]);
   });
 
@@ -294,9 +302,7 @@ describe("buildDeckCardMenu", () => {
    */
   it("puts a rule between the card's filing rows and the row that removes it", () => {
     const items = buildDeckCardMenu(bolt(), deps());
-    const shape = items.map((item) => (item.kind === "separator" ? `—${item.id}` : item.id));
-
-    expect(shape.slice(-2)).toEqual(["—sep-remove", "remove-card"]);
+    expect(shape(items).slice(-2)).toEqual(["—sep-remove", "remove-card"]);
   });
 
   /**
@@ -320,7 +326,7 @@ describe("buildDeckCardMenu", () => {
    * 2026-08-14, not a duplicate of the drag.
    */
   it("lists every category of the deck, including one with no heading on screen", () => {
-    const move = find(buildDeckCardMenu(bolt(), deps()), "Move to") as MenuSubmenu;
+    const move = find(buildDeckCardMenu(bolt(), deps()), "Category") as MenuSubmenu;
     expect(labels(move.items)).toContain("Recursion");
   });
 
@@ -330,7 +336,7 @@ describe("buildDeckCardMenu", () => {
    * Commander, Companion, Main deck, Recursion, Sideboard.
    */
   it("keeps the reader's own category order rather than sorting it", () => {
-    const move = find(buildDeckCardMenu(bolt(), deps()), "Move to") as MenuSubmenu;
+    const move = find(buildDeckCardMenu(bolt(), deps()), "Category") as MenuSubmenu;
     expect(labels(move.items)).toEqual(CATEGORY_ORDER);
     expect(labels(move.items)).not.toEqual([...CATEGORY_ORDER].sort());
   });
@@ -340,7 +346,7 @@ describe("buildDeckCardMenu", () => {
    *  would be a write that means nothing. */
   it("greys the pile the card is already in, with the reason", () => {
     const items = buildDeckCardMenu(bolt({ categoryId: 1 }), deps());
-    const move = find(items, "Move to") as MenuSubmenu;
+    const move = find(items, "Category") as MenuSubmenu;
     const here = find(move.items, "Main deck") as MenuAction;
     expect(here.disabled).toBe(true);
     expect(here.reason).toMatch(/already/i);
@@ -349,7 +355,7 @@ describe("buildDeckCardMenu", () => {
   it("moves the card into the pile that was pressed", () => {
     const moveTo = vi.fn();
     const row = bolt({ categoryId: 1 });
-    const move = find(buildDeckCardMenu(row, deps({ moveTo })), "Move to") as MenuSubmenu;
+    const move = find(buildDeckCardMenu(row, deps({ moveTo })), "Category") as MenuSubmenu;
     (find(move.items, "Recursion") as MenuAction).onSelect();
     expect(moveTo).toHaveBeenCalledWith(row, 7);
   });
@@ -424,12 +430,12 @@ describe("buildDeckCardMenu", () => {
 
   /**
    * The reigning commander gets a greyed row rather than a live one — the write would be a move
-   * from a category to itself, which is the same nothing `Move to`'s own pile is greyed for.
+   * from a category to itself, which is the same nothing `Category`'s own pile is greyed for.
    * Worth its own case because the test is *not* `commanderIneligibility`'s: the card in the
    * command zone is by definition an eligible one, so an eligibility test alone would offer it.
    *
    * `ALREADY_HERE` is still what greys it and is no longer drawn on it — a zone row words
-   * nothing, whichever of the two refusals it met. `Move to`'s own pile still draws that string.
+   * nothing, whichever of the two refusals it met. `Category`'s own pile still draws that string.
    */
   it("greys the zone row on the card that is already in it", () => {
     const atraxa = card({
@@ -500,7 +506,7 @@ describe("buildDeckCardMenu", () => {
      *  card's chin draws. */
     const short = () => bolt({ quantity: 4, ownedQuantity: 1 });
 
-    const collection = (items: MenuItem[]) => find(items, "Collection") as MenuSubmenu;
+    const collection = (items: MenuItem[]) => find(items, "Collection link") as MenuSubmenu;
 
     /**
      * **The absence is the surface saying it wired no writes** — `cardMenu.tsx`'s `moveItem`
@@ -508,31 +514,33 @@ describe("buildDeckCardMenu", () => {
      * also the state every other test in this file is written against.
      */
     it("builds nothing at all where the surface wired no collection writes", () => {
-      expect(has(buildDeckCardMenu(short(), deps()), "Collection")).toBe(false);
+      expect(has(buildDeckCardMenu(short(), deps()), "Collection link")).toBe(false);
     });
 
     /** The three answer one question and travel together, so two of them is a half-wired
      *  surface rather than a menu with a row missing. */
     it("builds nothing where only some of the three writes are wired", () => {
       const partial = deps({ quickAdd: vi.fn(), pullCard: vi.fn() });
-      expect(has(buildDeckCardMenu(short(), partial), "Collection")).toBe(false);
+      expect(has(buildDeckCardMenu(short(), partial), "Collection link")).toBe(false);
     });
 
     /**
-     * **After `Move to` and in front of the zone rows.** It is *filing*, like `Move to`;
-     * everything from `Set as commander` down is a claim about what the card **is** in this deck.
+     * **Directly under `Add to`, above the deck's own rule** (issue #505). Both write to the
+     * reader's binder or wishlist rather than to the deck, so they are one group.
      */
-    it("sits after Move to and before the zone rows", () => {
+    it("sits directly under Add to, in front of the deck's own rows", () => {
       const items = buildDeckCardMenu(short(), collectionDeps({ spec: spec("commander") }));
-      expect(labels(items).slice(5)).toEqual([
-        "Move to",
-        "Collection",
+      expect(labels(items).slice(4)).toEqual([
+        "Add to",
+        "Collection link",
+        "Category",
+        "Label card",
         "Set as commander",
         "Set as companion",
         "Set as foil",
-        "Label card",
         "Remove card",
       ]);
+      expect(shape(items).indexOf("deck-collection") + 1).toBe(shape(items).indexOf("—sep-deck"));
     });
 
     /** The rows, in the plan's own order, with the shortfall named in each. */
@@ -703,8 +711,8 @@ describe("buildDeckCardMenu", () => {
       const parent = collection(stocked);
 
       expect(parent.kind).toBe("submenu");
-      expect(labels(stocked).indexOf("Collection")).toBe(
-        labels(buildDeckCardMenu(bolt({ quantity: 4 }), collectionDeps())).indexOf("Collection"),
+      expect(labels(stocked).indexOf("Collection link")).toBe(
+        labels(buildDeckCardMenu(bolt({ quantity: 4 }), collectionDeps())).indexOf("Collection link"),
       );
     });
 
@@ -727,7 +735,7 @@ describe("buildDeckCardMenu", () => {
        */
       it("draws no Collection item at all when the surface wires no collection writes", () => {
         const virtual = deps({ tracksCollection: false });
-        expect(has(buildDeckCardMenu(short(), virtual), "Collection")).toBe(false);
+        expect(has(buildDeckCardMenu(short(), virtual), "Collection link")).toBe(false);
       });
 
       /**
@@ -741,7 +749,7 @@ describe("buildDeckCardMenu", () => {
         const withBinder = collectionDeps({ spec: spec("commander") });
 
         expect(labels(buildDeckCardMenu(short(), virtual))).toEqual(
-          labels(buildDeckCardMenu(short(), withBinder)).filter((l) => l !== "Collection"),
+          labels(buildDeckCardMenu(short(), withBinder)).filter((l) => l !== "Collection link"),
         );
       });
 
@@ -813,11 +821,6 @@ describe("buildDeckCardMenu", () => {
  * the rest of the menu moved.
  */
 describe("the note block", () => {
-  /** The shape with separators kept, since `labels` strips them and every other assertion in this
-   *  file is therefore blind to one arriving or leaving. */
-  const shape = (items: MenuItem[]) =>
-    items.map((item) => (item.kind === "separator" ? `—${item.id}` : item.id));
-
   /**
    * **All-or-none, and absent is the whole block including its rule** — `collectionItems`' guard
    * and `cardMenu.tsx`'s `moveItem` rule. A surface that wired no note editor draws the menu it
@@ -853,7 +856,7 @@ describe("the note block", () => {
   it("puts the rows under their own rule, between Label card and Remove card", () => {
     const items = buildDeckCardMenu(bolt(), noteDeps({ notes: [note({}, ["Lightning Bolt"])] }));
     expect(shape(items).slice(-6)).toEqual([
-      "label-card",
+      "finish",
       "—sep-notes",
       "note-add",
       "card-notes",
@@ -867,7 +870,7 @@ describe("the note block", () => {
   it("keeps the rule and the add row for a card no note names", () => {
     const items = buildDeckCardMenu(bolt(), noteDeps({ notes: [note({}, ["Ponder"])] }));
     expect(shape(items).slice(-5)).toEqual([
-      "label-card",
+      "finish",
       "—sep-notes",
       "note-add",
       "—sep-remove",
@@ -1097,7 +1100,7 @@ describe("buildDeckCardMenu with a picked set", () => {
 
   it("counts the set in the labels of the three rows that act on it", () => {
     const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED }));
-    expect(has(items, "Move 3 cards to")).toBe(true);
+    expect(has(items, "Category for 3 cards")).toBe(true);
     expect(has(items, "Label 3 cards")).toBe(true);
     expect(has(items, "Remove 3 cards")).toBe(true);
   });
@@ -1135,10 +1138,10 @@ describe("buildDeckCardMenu with a picked set", () => {
   it("stays singular for a set of one", () => {
     const items = buildDeckCardMenu(BOLT, deps({ picked: [BOLT] }));
     expect(labels(items).slice(5)).toEqual([
-      "Move to",
+      "Category",
+      "Label card",
       "Set as companion",
       "Set as foil",
-      "Label card",
       "Remove card",
     ]);
   });
@@ -1158,7 +1161,7 @@ describe("buildDeckCardMenu with a picked set", () => {
   it("moves every picked card on one press", () => {
     const moveTo = vi.fn();
     const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED, moveTo }));
-    (find(rowsOf(find(items, "Move 3 cards to")), "Sideboard") as MenuAction).onSelect();
+    (find(rowsOf(find(items, "Category for 3 cards")), "Sideboard") as MenuAction).onSelect();
 
     expect(moveTo).toHaveBeenCalledTimes(3);
     expect(moveTo.mock.calls.map((call) => call[1] as number)).toEqual([2, 2, 2]);
@@ -1173,7 +1176,7 @@ describe("buildDeckCardMenu with a picked set", () => {
     const moveTo = vi.fn();
     const here = card({ name: "Bear", quantity: 2, categoryId: 2 });
     const items = buildDeckCardMenu(BOLT, deps({ picked: [BOLT, here], moveTo }));
-    const row = find(rowsOf(find(items, "Move 2 cards to")), "Sideboard") as MenuAction;
+    const row = find(rowsOf(find(items, "Category for 2 cards")), "Sideboard") as MenuAction;
 
     expect(row.disabled).toBeUndefined();
     row.onSelect();
@@ -1185,7 +1188,7 @@ describe("buildDeckCardMenu with a picked set", () => {
     const there = card({ name: "Ponder", quantity: 1, categoryId: 2 });
     const items = buildDeckCardMenu(here, deps({ picked: [here, there] }));
 
-    expect((find(rowsOf(find(items, "Move 2 cards to")), "Sideboard") as MenuAction).disabled).toBe(
+    expect((find(rowsOf(find(items, "Category for 2 cards")), "Sideboard") as MenuAction).disabled).toBe(
       true,
     );
   });
@@ -1204,7 +1207,7 @@ describe("buildDeckCardMenu with a picked set", () => {
       pressed,
       collectionDeps({ picked: [pressed, other], quickAdd }),
     );
-    const rows = (find(items, "Collection") as MenuSubmenu).items;
+    const rows = (find(items, "Collection link") as MenuSubmenu).items;
 
     // The right-clicked row's own shortfall, and never the set's total of six.
     expect(labels(rows)).toEqual([

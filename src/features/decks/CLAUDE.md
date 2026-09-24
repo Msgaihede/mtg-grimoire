@@ -589,6 +589,13 @@ layer.
   never owned, and `useDeck` fires `["collection"]` only when copies actually moved. `query.ts`
   caches 30 s, so a missing invalidation there is a ghost row on the collection page rather than a
   stale one.
+- **The deck card menu is three groups since issue #505 (2026-09-24), and two of its rows were
+  renamed.** `Add to` is followed directly by **`Collection link ▸`** (the `Collection ▸` below —
+  both write to the binder or the wishlist rather than to the deck); under the deck's rule come
+  **`Category ▸`** (what this page still calls the card's `Move to` in many places) and
+  `Label card ▸`, which both file the card; and under a rule of their own, `Set as commander`,
+  `Set as companion` and `Set as foil`. Read older prose here with that mapping —
+  `deckCardMenu.tsx`'s header is the current picture.
 - **`Collection ▸` is the card menu's one write to the reader's _binder_ rather than to their
   list, and it is three rows** (issue #350, 2026-09-03). `Quick add N copies`, `Quick add N and
   remove from wishlist`, then — under a separator — `Pull N from your collection`. The first two
