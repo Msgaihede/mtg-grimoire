@@ -32,6 +32,14 @@
  * that to whole rows. A read sized to the rows that fit would re-issue itself on every drag of the
  * resize corner and draw *pending* over a list that was already right; a hundred rows over local
  * SQLite is not a cost worth that.
+ *
+ * ## A mover is a press
+ *
+ * It opens the price history popup on that printing, at that finish, over the widget's own window
+ * — by writing `priceHistory` in the store, because the dialog is mounted at `App` level: this body
+ * sits inside the grid's CSS `zoom`, and a dialog drawn from here would inherit it (`App.tsx` says
+ * the rest). **Never in a `still` body**, which is a catalogue preview and opens nothing
+ * (`widgetProps.ts`), so its rows stay plain rows rather than buttons that go nowhere.
  */
 import { useQuery } from "@tanstack/react-query";
 import { TrendingDown, TrendingUp } from "lucide-react";
@@ -49,6 +57,7 @@ import {
 } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
+import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 
 import { priceMoversKey } from "../keys";
@@ -125,11 +134,12 @@ export function emptySentence(
   return `Nothing you own ${moved} ${span}.`;
 }
 
-export function PriceMoversWidget({ widget, fit }: WidgetBodyProps): ReactElement {
+export function PriceMoversWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
   // `range` rather than `window`, which would shadow the global inside a component body.
   const range = windowOf(pickOf(widget, "window"));
   const direction = directionOf(pickOf(widget, "direction"));
   const { marketplace, currency } = useMarketplace();
+  const openPriceHistory = useAppStore((s) => s.openPriceHistory);
 
   const query = useQuery({
     queryKey: priceMoversKey(range, direction, marketplace.id, PRICE_MOVERS_READ),
@@ -166,6 +176,12 @@ export function PriceMoversWidget({ widget, fit }: WidgetBodyProps): ReactElemen
             currency={currency}
             bare={bare}
             tile={fit.tier === 0}
+            onPress={
+              still
+                ? undefined
+                : () =>
+                    openPriceHistory({ cardId: mover.cardId, finish: mover.finish, window: range })
+            }
           />
         ))}
       </WidgetRowList>
@@ -178,17 +194,23 @@ export function PriceMoversWidget({ widget, fit }: WidgetBodyProps): ReactElemen
   );
 }
 
-/** One mover: the glyph that says which way, the name, where it is from, and the move. */
+/**
+ * One mover: the glyph that says which way, the name, where it is from, and the move — and, given
+ * an `onPress`, a press that opens its price history.
+ */
 function MoverRow({
   mover,
   currency,
   bare,
   tile,
+  onPress,
 }: {
   mover: PriceMover;
   currency: Currency;
   bare: boolean;
   tile: boolean;
+  /** `undefined` in a still body, which opens nothing — the row is then not a button at all. */
+  onPress: (() => void) | undefined;
 }): ReactElement {
   const up = mover.delta > 0;
   const Glyph = up ? TrendingUp : TrendingDown;
@@ -200,6 +222,16 @@ function MoverRow({
     iconColor: up ? UP_FILL : DOWN_FILL,
     // Both ends of the move, for a pointer — the row itself only has room for the difference.
     hint: `${formatPrice(mover.then, currency)} then, ${formatPrice(mover.now, currency)} now`,
+    onPress,
+    /**
+     * The whole row in one string, `DecksWidget`'s rule: the parts are flex children with a `gap`
+     * and no whitespace between them, so name computation would run them together. Every word a
+     * wide row shows is here in the order it shows them — which keeps the visible name inside the
+     * accessible one (WCAG 2.5.3) and keeps the name a reader speaks the same as the card is
+     * resized — and then what the press does.
+     */
+    pressLabel:
+      onPress === undefined ? undefined : `${mover.name} · ${caption} · ${money} — price history`,
   };
   // At two cells the move goes under the name, `WidgetRow`'s rule for a tile.
   return tile ? (

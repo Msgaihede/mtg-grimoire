@@ -16,6 +16,7 @@ import { CollectionPage } from "@/features/collection/CollectionPage";
 import { DeckEditor } from "@/features/decks/DeckEditor";
 import { DecksPage } from "@/features/decks/DecksPage";
 import { HomePage } from "@/features/home/HomePage";
+import { PriceHistoryDialog } from "@/features/home/priceHistory/PriceHistoryDialog";
 import { PlaytestingPage } from "@/features/playtesting/PlaytestingPage";
 import { ScannerPage } from "@/features/scanner/ScannerPage";
 import { SearchPage } from "@/features/search/SearchPage";
@@ -211,6 +212,23 @@ export default function App() {
               `QueryClientProvider` because it reads `card_printings` and writes through
               `deck_swap_printing`. */}
                 <AllPrintingsDialog />
+
+                {/* **The Price movers widget's popup, mounted out here rather than in the row that
+              opens it.** The home grid spends the reader's zoom as a CSS `zoom` on its box, and
+              zoom is inherited down the DOM tree whatever a descendant's `position` — so a dialog
+              drawn in a widget row would be drawn at the dashboard's scale, where a dialog is
+              chrome and belongs at the app's, as the tooltip already is (`home-page.md` §4).
+              Whether a `zoom` also traps a `fixed inset-0` scrim the way layout containment does is
+              recorded there as still open; mounted here, nothing has to find out. The page has no
+              `@container` today, deliberately and for `src/CLAUDE.md`'s rule, and this placement
+              keeps a future one from reparenting this scrim too. The row writes `priceHistory` in
+              the store and this reads it.
+
+              **Above `CardDetailModal`, and here the order *is* load-bearing**, unlike the seven
+              below: both take `LAYER.overlay`, so document order breaks the tie, and the popup's
+              `Open card details` closes this one and opens that one in the same press. Mounted
+              after it, this scrim would paint over the arriving card for the length of its fade. */}
+                <PriceHistoryDialog />
 
                 {/* **The card itself, and the five overlays its rail opens — seven siblings of
               the shell, and not one of them may be a child of another.**

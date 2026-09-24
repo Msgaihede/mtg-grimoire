@@ -613,11 +613,12 @@ pub fn run() {
             // the card modal's, which ignores a BUSY — a missed entry costs one tile.
             recent_cards::recent_cards,
             recent_cards::record_recent_card,
-            // The Set completion and Price movers widgets: two reads on the read-only
-            // connection. The movers' history is written by the launch, a sync and a feed store,
-            // never by a command — see `price_history`'s doc.
+            // The Set completion and Price movers widgets, and a mover's detail: three reads on
+            // the read-only connection. The movers' history is written by the launch, a sync and
+            // a feed store, never by a command — see `price_history`'s doc.
             set_completion::set_completion,
             price_history::price_movers,
+            price_history::price_history,
             // The New printings widget: the feed, and the cursor that puts its gold dots out.
             // The read is two `SELECT`s on the read-only connection; the write takes its clock
             // from the caller, never `SystemTime::now()` — `recent_cards`' rule, and the reason

@@ -15,11 +15,13 @@ import type { CardDetail } from "@/lib/ipc";
  * `Dialog` sets `aria-labelledby` to this heading, so the modal is addressed **by the card**
  * rather than by a category word — which is what `App.test.tsx`'s dialog queries become.
  *
- * **Its own file because two dialogs draw it** — `CardDetailModal`, where it was born, and the
- * home page's `NewPrintingDialog` (issue #514), which was asked to look like the card modal and
- * so opens on the same heading rather than a second drawing of one. The fold is the panel's
- * `@container/card`, so a host has to pass `Dialog` its `container` prop for the row arrangement
- * to appear at all.
+ * **Its own file because three dialogs draw it** — `CardDetailModal`, where it was born, and the
+ * home page's `PriceHistoryDialog` and `NewPrintingDialog` (issues #515 and #514), each asked to
+ * look like the card modal and so opening on the same heading rather than a second drawing of
+ * one. The two home dialogs arrived on the same day from two branches, one exporting this in
+ * place from `CardDetailModal` and the other moving it here; the merge kept one implementation.
+ * The fold is the panel's `@container/card`, so a host has to pass `Dialog` its `container` prop
+ * for the row arrangement to appear at all.
  *
  * @param fallback The name to draw while `card` is not here yet. The card modal knows nothing
  *   but an id until its read lands and says *Loading…*; a host that already holds the name says it
