@@ -511,9 +511,10 @@ export const AddToDeck: Story = {
     await waitFor(async () => await expect(addTo).toBeVisible(), { timeout: FRAME_WAIT });
 
     await userEvent.click(addTo);
-    // Two finishes on this printing, so Collection asks rather than adding silently.
+    // Two finishes on this printing, and Collection still adds in one press — the finish on screen
+    // is the answer, never a question (issue #504).
     const collection = await canvas.findByRole("menuitem", { name: "Collection" });
-    await expect(collection).toHaveAttribute("aria-haspopup", "menu");
+    await expect(collection).not.toHaveAttribute("aria-haspopup");
     await expect(canvas.getByRole("menuitem", { name: "Wishlist" })).toBeInTheDocument();
 
     await userEvent.click(await canvas.findByRole("menuitem", { name: "Deck" }));
