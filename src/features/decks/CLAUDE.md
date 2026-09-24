@@ -589,6 +589,13 @@ layer.
   never owned, and `useDeck` fires `["collection"]` only when copies actually moved. `query.ts`
   caches 30 s, so a missing invalidation there is a ghost row on the collection page rather than a
   stale one.
+- **The deck card menu is three groups since issue #505 (2026-09-24), and two of its rows were
+  renamed.** `Add to` is followed directly by **`Collection link ▸`** (the `Collection ▸` below —
+  both write to the binder or the wishlist rather than to the deck); under the deck's rule come
+  **`Category ▸`** (what this page still calls the card's `Move to` in many places) and
+  `Label card ▸`, which both file the card; and under a rule of their own, `Set as commander`,
+  `Set as companion` and `Set as foil`. Read older prose here with that mapping —
+  `deckCardMenu.tsx`'s header is the current picture.
 - **`Collection ▸` is the card menu's one write to the reader's _binder_ rather than to their
   list, and it is three rows** (issue #350, 2026-09-03). `Quick add N copies`, `Quick add N and
   remove from wishlist`, then — under a separator — `Pull N from your collection`. The first two
@@ -4262,6 +4269,17 @@ The storage side, the eight commands and the undo `Op` are
 - **A hard break travels as `"\n"` inside a text run**, because `Inline` has no break member. Any
   renderer of these blocks sets `whitespace-pre-line` or every break a reader typed draws as a
   space.
+- **A note is moved by the grip in its title row and by nothing else** (issue #509,
+  `noteDrag.ts`). The card is the drag source and the drop target; the grip is the dnd-kit
+  `handle`, because the band is `select-text` and a press in a note's body has to stay a text
+  selection. The arrow keys on the grip are the keyboard's route: up or left moves the note one
+  place earlier, down or right one place later, because the masonry fills row by row. A drop
+  means *land where this one is*, `categoryDrag.ts`' rule, and `movedTo` is reused from there.
+  `useDeckNotes.reorder` redraws the cache before `deck_note_reorder` answers. A move that
+  changes nothing writes nothing, and a band with one note draws no grip. Driven in the shipped
+  window 2026-09-24 (debug build, a copy of the real db): two drags wrote two `reorder` history
+  rows, a plain click on the grip wrote none, and a press in the body text selected text and
+  started no drag.
 
 ### ⚠️ The card menu's note rows are opt-in, and that is how they shipped unreachable
 

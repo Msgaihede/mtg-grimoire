@@ -750,7 +750,7 @@ export const CollectionSubmenu: Story = {
 
     // A submenu row says so in ARIA rather than only with a chevron — the chevron is
     // `aria-hidden`, so this is the whole of what a screen reader is told.
-    const parent = canvas.getByRole("menuitem", { name: "Collection" });
+    const parent = canvas.getByRole("menuitem", { name: "Collection link" });
     await expect(parent).toHaveAttribute("aria-haspopup", "menu");
     await expect(parent).toHaveAttribute("aria-expanded", "false");
 
@@ -800,7 +800,7 @@ export const QuickAddSettlesTheShortfall: Story = {
     // **Scoped to the open submenu's panel**, because two rows on this menu are called
     // `Collection` — this one and `Add to ▸ Collection` — and the repeat is deliberate: it is the
     // reader's binder in both places. What tells them apart is the panel each is in.
-    await userEvent.click(canvas.getByRole("menuitem", { name: "Collection" }));
+    await userEvent.click(canvas.getByRole("menuitem", { name: "Collection link" }));
     const panels = canvas.getAllByRole("menu");
     // The innermost panel, which is the one just opened. `.at(-1)` is not in this build's
     // `lib` target — see the TS 6.0.x pin.

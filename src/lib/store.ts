@@ -807,6 +807,25 @@ interface AppState {
    *  piece of state here, and this is only the half that says it has been used. */
   clearPendingFolder: () => void;
   /**
+   * **The set a press somewhere else asked the Search page to show**, waiting for that page to
+   * read it — {@link pendingFolder}'s one-shot shape, aimed at the search instead of a cabinet.
+   * Written by the card modal's set name (issue #503) and consumed by `SearchPage`, which answers
+   * it by putting the search back to a clean slate and picking this one set.
+   *
+   * **A lower-case Scryfall set code**, the same string the Set picker's chips hold, so the page
+   * drops it straight into the filter it already has rather than typing `e:` into the box.
+   *
+   * Cleared by {@link setActiveView} for `pendingFolder`'s reason, and the order problem that
+   * field states is solved here by writing both halves in {@link showSetInSearch} rather than by
+   * asking every caller to remember it.
+   */
+  pendingSearchSet: string | null;
+  /** Go to the Search view showing every card in one set — the view change and the hand-off in
+   *  one action, so no caller can write them in the order that wipes the second. */
+  showSetInSearch: (setCode: string) => void;
+  /** Spend it — `SearchPage`, on the commit it applied it. */
+  clearPendingSearchSet: () => void;
+  /**
    * The card a reader asked to see every printing of, and the deck slot they asked from.
    *
    * **One field, written by one action that touches nothing else.** What this replaced —
@@ -1256,6 +1275,9 @@ export const useAppStore = create<AppState>((set) => ({
         // are ordered, `setActiveView` first and `setPendingFolder` second, and `FoldersWidget`'s
         // `openFolder` is the one place that ordering is spelled out. See `pendingFolder`.
         pendingFolder: null,
+        // The search hand-off, for the folder's reason on the line above. `showSetInSearch` writes
+        // it *after* calling this, which is the order that survives.
+        pendingSearchSet: null,
       };
     }),
   // Nothing until a reader pastes a link, which is what keeps the rail row off the screen of
@@ -1561,6 +1583,14 @@ export const useAppStore = create<AppState>((set) => ({
   pendingFolder: null,
   setPendingFolder: (pendingFolder) => set({ pendingFolder }),
   clearPendingFolder: () => set({ pendingFolder: null }),
+  pendingSearchSet: null,
+  // Two `set`s rather than one, so the navigation half stays `setActiveView`'s own and cannot
+  // drift from it — and the hand-off second, because the first clears it.
+  showSetInSearch: (setCode) => {
+    useAppStore.getState().setActiveView("search");
+    set({ pendingSearchSet: setCode });
+  },
+  clearPendingSearchSet: () => set({ pendingSearchSet: null }),
   printingsRequest: null,
   // One field, and that is the whole point — see the interface. Its predecessor wrote six in
   // this `set` because it was a navigation; a modal drawn over the app is not one, so nothing

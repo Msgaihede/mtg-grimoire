@@ -22,9 +22,12 @@
  * would put the whole of Tiptap back in the main bundle. A press on `Edit` reports upward through
  * {@link NoteCardProps.onEdit} and the host decides what to open.
  */
-import { useEffect, useMemo, type JSX, type Ref } from "react";
+import { useCallback, useEffect, useMemo, type JSX, type KeyboardEvent } from "react";
+import { GripVertical } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { plural } from "@/lib/counts";
+import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import { openExternal } from "@/lib/externalLinks";
 import { FOCUS } from "@/lib/focus";
 import { cardArtSrc, cardImageUrl } from "@/lib/images";
@@ -32,6 +35,7 @@ import type { DeckNote, DeckNoteCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { noteTitle } from "./deckNotes";
 import { useMasonryRowSpan } from "./masonry";
+import { useDeckNoteReorder } from "./noteDrag";
 import { RowAction } from "./metaRows";
 import { parseNoteBody, type Block, type Inline } from "./noteMarkdown";
 
@@ -116,7 +120,36 @@ export interface NoteCardProps {
    * used to carry the count is gone and `+N more` does not exist below four cards.
    */
   onOpenCard?: (card: DeckNoteCard) => void;
+  /**
+   * Where this note sits in the band and how to move it — issue #509. **`undefined` draws no grip
+   * and registers no drag**, which is the band's answer for a deck with one note (there is nowhere
+   * for it to go) and for every caller that has not wired a reorder.
+   */
+  reorder?: NoteReorder;
 }
+
+/** What a card needs to offer the reorder: its place, and the two ways to leave it. */
+export interface NoteReorder {
+  /** Zero-based, in the order the band draws the notes. */
+  index: number;
+  total: number;
+  /** A note dropped on this one takes its place. */
+  onMove: (dragged: number, targetId: number) => void;
+  /** One arrow press on the grip: `-1` is one place earlier, `1` one place later. */
+  onStep: (delta: -1 | 1) => void;
+}
+
+/**
+ * Which way each arrow key on the grip steps a note. The masonry fills row by row, so *earlier*
+ * is both up and left — one order drawn in two dimensions, and two keys each way so a reader does
+ * not have to know which axis the next card happens to sit on.
+ */
+const STEP: Readonly<Record<string, -1 | 1>> = {
+  ArrowUp: -1,
+  ArrowLeft: -1,
+  ArrowDown: 1,
+  ArrowRight: 1,
+};
 
 export function NoteCard({
   note,
@@ -125,9 +158,33 @@ export function NoteCard({
   onCards,
   onDelete,
   onOpenCard,
+  reorder,
 }: NoteCardProps): JSX.Element {
   const title = noteTitle(note);
   const { elementRef, span } = useMasonryRowSpan(NOTE_GAP);
+  const { attachCard, attachHandle, armed, over } = useDeckNoteReorder(note.id, reorder?.onMove);
+  const tip = useTooltip();
+
+  /** The masonry measures the `<li>` through a ref object and the drag registers on it through a
+   *  callback, and React takes one ref per element — so the two are joined here. */
+  const attachItem = useCallback(
+    (element: HTMLLIElement | null) => {
+      elementRef.current = element;
+      const release = attachCard(element);
+      return () => {
+        elementRef.current = null;
+        release?.();
+      };
+    },
+    [elementRef, attachCard],
+  );
+
+  const onGripKey = (event: KeyboardEvent) => {
+    const delta = STEP[event.key];
+    if (delta === undefined || reorder === undefined) return;
+    event.preventDefault();
+    reorder.onStep(delta);
+  };
 
   /**
    * Bring this card where the reader is looking, when the card menu sent them here.
@@ -161,7 +218,7 @@ export function NoteCard({
 
   return (
     <li
-      ref={elementRef as Ref<HTMLLIElement>}
+      ref={attachItem}
       tabIndex={-1}
       style={span === null ? undefined : { gridRow: `span ${span}` }}
       // ⚠️ **`min-h-*` on a grid item replaces `min-height: auto`** — which makes it a floor here
@@ -171,11 +228,37 @@ export function NoteCard({
       //
       // `max-w-[26.25rem]` is the spec's 420px cap. At the editor column's 1192px it never bites
       // (four tracks at ~292px), and at one column it keeps a card from becoming a banner.
-      className="flex min-h-[11.5rem] max-w-[26.25rem] flex-col gap-1.5 rounded-lg border border-border bg-surface px-3 py-2.5"
+      className={cn(
+        "flex min-h-[11.5rem] max-w-[26.25rem] flex-col gap-1.5 rounded-lg border border-border bg-surface px-3 py-2.5",
+        // The card owns an edge, so the eligible mark recolours it rather than adding an outline —
+        // `dropMarks.ts`' rule for a bordered target — and the card under the pointer goes solid.
+        armed && DROP_EDGE,
+        over && cn(DROP_OVER, "border-accent"),
+      )}
     >
       {/* One line, truncated. A note's title is the reader's own and is deliberately not a
           heading: a grid of these at heading weight would be a type scale nobody chose. */}
-      <span className="min-w-0 truncate text-[0.8125rem] font-medium text-text">{title}</span>
+      <div className="flex min-w-0 items-center gap-1.5">
+        {reorder !== undefined && (
+          <button
+            ref={attachHandle}
+            type="button"
+            onKeyDown={onGripKey}
+            // The position is in the name because the only other way to know where a note landed
+            // is to look at it — `CategoriesDialog`'s grip, one feature over.
+            aria-label={`Move ${title}, ${reorder.index + 1} of ${reorder.total}`}
+            {...tip("Drag to reorder, or press the arrow keys")}
+            className={cn(
+              "-ml-1 shrink-0 cursor-grab rounded-sm text-dim",
+              "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+              FOCUS,
+            )}
+          >
+            <GripVertical className="size-3.5" aria-hidden="true" />
+          </button>
+        )}
+        <span className="min-w-0 truncate text-[0.8125rem] font-medium text-text">{title}</span>
+      </div>
 
       {/* `flex-1` is what pushes the actions to the foot while the card sits at its floor; past
           the floor the body is simply its content, and there is no clamp on it. */}

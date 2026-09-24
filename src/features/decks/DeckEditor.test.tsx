@@ -5520,7 +5520,7 @@ describe("DeckEditor — a card's menu", () => {
 
     expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Add to/ })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /Move to/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Category/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Label card/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Remove card" })).toBeInTheDocument();
   });
@@ -5571,7 +5571,7 @@ describe("DeckEditor — a card's menu", () => {
     fireEvent.keyDown(el, { key: "F10", shiftKey: true });
 
     await screen.findByRole("menu");
-    await expand(/Move to/);
+    await expand(/^Category/);
     await userEvent.click(await screen.findByRole("menuitem", { name: "Recursion" }));
 
     expect(deckMoveCard).toHaveBeenCalledWith(
@@ -5598,7 +5598,7 @@ describe("DeckEditor — a card's menu", () => {
     expect(screen.queryByRole("region", { name: "Recursion" })).toBeNull();
 
     await rightClickCard("Lightning Bolt");
-    await expand(/Move to/);
+    await expand(/^Category/);
     await userEvent.click(await screen.findByRole("menuitem", { name: "Recursion" }));
 
     expect(deckMoveCard).toHaveBeenCalledWith(
@@ -5623,7 +5623,7 @@ describe("DeckEditor — a card's menu", () => {
     deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, RECURSION]));
     await open();
     await rightClickCard("Lightning Bolt");
-    await expand(/Move to/);
+    await expand(/^Category/);
 
     const panel = (await screen.findAllByRole("menu"))[1];
     const rows = within(panel).getAllByRole("menuitem");
@@ -6069,13 +6069,10 @@ describe("DeckEditor — a card's menu", () => {
     await open();
     await rightClickCard("Lightning Bolt");
     await expand(/Add to/);
-    // One finish on this printing, so `Collection` is a plain row rather than a submenu — but
-    // **two rows on this menu are called `Collection` since 2026-09-03**: this destination and
-    // the new `Collection ▸` submenu of quick actions. `deckCardMenu.tsx` says the repeat is
-    // deliberate — it is the reader's binder in both places, and a second name for it would read
-    // as a second thing — and what tells them apart is the panel each is in, which is what a
-    // reader sees and what a screen reader announces. So the press is scoped to the open
-    // submenu's panel, which is the last `role="menu"` in the tree.
+    // One finish on this printing, so `Collection` is a plain row rather than a submenu. The deck
+    // menu's own quick actions sit directly beside `Add to` as `Collection link ▸` (issue #505),
+    // so the press is still scoped to the open submenu's panel — the last `role="menu"` in the
+    // tree — rather than trusting the name alone.
     const panels = screen.getAllByRole("menu");
     const addTo = panels[panels.length - 1];
     expect(addTo).toBeDefined();
@@ -6159,7 +6156,7 @@ describe("DeckEditor — a card's menu", () => {
 
     await screen.findByRole("menu");
     expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: /Move to/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /^Category/ })).not.toBeInTheDocument();
 
     // Escape closes the menu it opened, so the pointer half below is a fresh open rather than a
     // panel that was already there — which is the whole of what makes it discriminate.
@@ -6378,7 +6375,7 @@ describe("DeckEditor — the Collection submenu", () => {
     expect(el).not.toBeNull();
     fireEvent.contextMenu(el as HTMLElement);
     await screen.findByRole("menu");
-    await userEvent.click(screen.getByRole("menuitem", { name: "Collection" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Collection link" }));
   }
 
   /**
@@ -6871,10 +6868,10 @@ describe("DeckEditor — a virtual deck", () => {
     await open();
     await rightClickCard("Lightning Bolt");
 
-    expect(screen.queryByRole("menuitem", { name: "Collection" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Collection link" })).not.toBeInTheDocument();
     // The menu really did open, and everything that is not about a binder is still on it.
     expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /Move to/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Category/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Remove card" })).toBeInTheDocument();
   });
 
@@ -6928,7 +6925,7 @@ describe("DeckEditor — a virtual deck", () => {
 
     // And the card's own submenu.
     await rightClickCard("Lightning Bolt");
-    expect(await screen.findByRole("menuitem", { name: "Collection" })).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: "Collection link" })).toBeInTheDocument();
   });
 });
 
@@ -7798,7 +7795,7 @@ describe("DeckEditor multi-select", () => {
     await screen.findByRole("menu");
 
     expect(screen.getByRole("menuitem", { name: /^Remove 2 cards/ })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /^Move 2 cards to/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Category for 2 cards/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /^Label 2 cards/ })).toBeInTheDocument();
   });
 

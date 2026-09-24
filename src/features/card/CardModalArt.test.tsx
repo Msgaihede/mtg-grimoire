@@ -69,6 +69,7 @@ const rest = {
   onToggleFoil: vi.fn(),
   // `[]` is the answer for every card that is not a meld, which is 116 518 of 116 590 rows.
   meld: { relations: [], melded: null, onMeld: vi.fn(), onOpen: vi.fn() },
+  onShowSet: vi.fn(),
 };
 
 describe("CardModalArt", () => {
@@ -427,5 +428,25 @@ describe("CardModalArt", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^meld —/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open melded card" })).not.toBeInTheDocument();
+  });
+
+  it("hands the set's code over when the set's name is pressed", async () => {
+    // Issue #503. The *code*, lower-case, because that is what the Set filter holds — the name
+    // is only what the reader recognises and presses.
+    const onShowSet = vi.fn();
+    render(<CardModalArt card={card({})} {...rest} onShowSet={onShowSet} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Limited Edition Alpha" }));
+
+    expect(onShowSet).toHaveBeenCalledExactlyOnceWith("lea");
+  });
+
+  it("offers nothing to press for a printing whose set has no name", () => {
+    // An orphan: the code still stands on its own in the chin, and a button there would name
+    // nothing a reader could recognise.
+    render(<CardModalArt card={card({ setName: null })} {...rest} />);
+
+    expect(screen.getByText("LEA · 161")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /alpha/i })).not.toBeInTheDocument();
   });
 });
