@@ -12,6 +12,7 @@ const deckNoteUpdate = vi.hoisted(() => vi.fn());
 const deckNoteDelete = vi.hoisted(() => vi.fn());
 const deckNoteAttach = vi.hoisted(() => vi.fn());
 const deckNoteDetach = vi.hoisted(() => vi.fn());
+const deckNoteReorder = vi.hoisted(() => vi.fn());
 // The fake sits under `ipc.ts` in the workbench; here it replaces the object, because these six
 // commands are what the band *is* — every assertion below is about the argument one of them was
 // handed. `importOriginal` keeps `ipcError`, which the refusal line renders through.
@@ -24,6 +25,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckNoteDelete,
     deckNoteAttach,
     deckNoteDetach,
+    deckNoteReorder,
   },
 }));
 
@@ -141,6 +143,7 @@ beforeEach(() => {
   deckNoteDelete.mockResolvedValue(undefined);
   deckNoteAttach.mockResolvedValue(note({ id: 1 }));
   deckNoteDetach.mockResolvedValue(note({ id: 1 }));
+  deckNoteReorder.mockResolvedValue(undefined);
 });
 
 /* ----------------------------------------------------------------------- the band ------ */
@@ -899,6 +902,106 @@ describe("a note act asked for from the card menu", () => {
     expect(deckNoteCreate).not.toHaveBeenCalled();
     expect(view.onToggle).not.toHaveBeenCalled();
     expect(view.onRequestHandled).not.toHaveBeenCalled();
+  });
+});
+
+/* -------------------------------------------------------------- moving a note --------- */
+
+describe("moving a note", () => {
+  const three = [
+    note({ id: 1, title: "Mana base" }),
+    note({ id: 2, title: "Mulligans" }),
+    note({ id: 3, title: "Sideboard plan" }),
+  ];
+
+  /**
+   * The grip is the keyboard's whole path to the reorder, and it writes **every** id —
+   * `deck_note_reorder` numbers `sort_order` from position, so a list naming only the two notes
+   * that swapped would renumber the third to the front by omission.
+   */
+  it("steps a note one place along on an arrow press, writing the whole order", async () => {
+    deckNotes.mockResolvedValue(three);
+    renderBand();
+
+    const grip = await within(await band()).findByRole("button", { name: "Move Mana base, 1 of 3" });
+    grip.focus();
+    await userEvent.keyboard("{ArrowDown}");
+
+    await waitFor(() => expect(deckNoteReorder).toHaveBeenCalledWith(4, [2, 1, 3]));
+  });
+
+  it("steps back with the up and left arrows alike", async () => {
+    deckNotes.mockResolvedValue(three);
+    renderBand();
+
+    const region = await band();
+    (await within(region).findByRole("button", { name: "Move Sideboard plan, 3 of 3" })).focus();
+    await userEvent.keyboard("{ArrowLeft}");
+
+    await waitFor(() => expect(deckNoteReorder).toHaveBeenCalledWith(4, [1, 3, 2]));
+  });
+
+  /** An arrow at either end is a gesture and not an edit: a write there would be a history row
+   *  for a press that changed nothing on screen. */
+  it("writes nothing for an arrow past either end", async () => {
+    deckNotes.mockResolvedValue(three);
+    renderBand();
+
+    const region = await band();
+    (await within(region).findByRole("button", { name: "Move Mana base, 1 of 3" })).focus();
+    await userEvent.keyboard("{ArrowUp}");
+    within(region).getByRole("button", { name: "Move Sideboard plan, 3 of 3" }).focus();
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(deckNoteReorder).not.toHaveBeenCalled();
+  });
+
+  /** The band draws the new order before the write answers, so a moved note does not sit in its
+   *  old place for a round trip and read as a move that did not take. */
+  it("draws the new order before the write answers", async () => {
+    deckNotes.mockResolvedValue(three);
+    deckNoteReorder.mockReturnValue(new Promise(() => {}));
+    renderBand();
+
+    const region = await band();
+    (await within(region).findByRole("button", { name: "Move Mana base, 1 of 3" })).focus();
+    await userEvent.keyboard("{ArrowDown}");
+
+    await waitFor(() =>
+      expect(
+        within(region)
+          .getAllByRole("button", { name: /^Move / })
+          .map((b) => b.getAttribute("aria-label")),
+      ).toEqual(["Move Mulligans, 1 of 3", "Move Mana base, 2 of 3", "Move Sideboard plan, 3 of 3"]),
+    );
+  });
+
+  it("puts the old order back when the write is refused", async () => {
+    deckNotes.mockResolvedValue(three);
+    deckNoteReorder.mockRejectedValue("database is locked");
+    renderBand();
+
+    const region = await band();
+    (await within(region).findByRole("button", { name: "Move Mana base, 1 of 3" })).focus();
+    await userEvent.keyboard("{ArrowDown}");
+
+    await waitFor(() => expect(deckNoteReorder).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(
+        within(region).getByRole("button", { name: "Move Mana base, 1 of 3" }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  /** One note has nowhere to go, so it draws no grip — a control whose every press is refused
+   *  reads as broken. */
+  it("draws no grip on a deck with one note", async () => {
+    deckNotes.mockResolvedValue([note({ id: 1, title: "Mana base" })]);
+    renderBand();
+
+    const region = await band();
+    await within(region).findByRole("button", { name: "Edit Mana base" });
+    expect(within(region).queryByRole("button", { name: /^Move / })).toBeNull();
   });
 });
 
