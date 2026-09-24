@@ -4259,6 +4259,17 @@ The storage side, the eight commands and the undo `Op` are
 - **A hard break travels as `"\n"` inside a text run**, because `Inline` has no break member. Any
   renderer of these blocks sets `whitespace-pre-line` or every break a reader typed draws as a
   space.
+- **A note is moved by the grip in its title row and by nothing else** (issue #509,
+  `noteDrag.ts`). The card is the drag source and the drop target; the grip is the dnd-kit
+  `handle`, because the band is `select-text` and a press in a note's body has to stay a text
+  selection. The arrow keys on the grip are the keyboard's route: up or left moves the note one
+  place earlier, down or right one place later, because the masonry fills row by row. A drop
+  means *land where this one is*, `categoryDrag.ts`' rule, and `movedTo` is reused from there.
+  `useDeckNotes.reorder` redraws the cache before `deck_note_reorder` answers. A move that
+  changes nothing writes nothing, and a band with one note draws no grip. Driven in the shipped
+  window 2026-09-24 (debug build, a copy of the real db): two drags wrote two `reorder` history
+  rows, a plain click on the grip wrote none, and a press in the body text selected text and
+  started no drag.
 
 ### ⚠️ The card menu's note rows are opt-in, and that is how they shipped unreachable
 
