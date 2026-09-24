@@ -54,6 +54,8 @@ const VALUE: DeckSettingsValue = {
   theoryMarkUnplanned: true,
   folderId: null,
   defaultCategoryId: AUTO_CATEGORY,
+  // Off, which is `decks.token_stack`'s `DEFAULT 0` — every deck until a reader asks.
+  tokenStack: false,
 };
 
 /**
@@ -138,6 +140,8 @@ function Harness({
       // absent is the create dialog, which is one case rather than the ordinary one. A test that
       // wants that case passes `false` and says so.
       canSetTheoryMarks={rest.canSetTheoryMarks ?? true}
+      // The edit host's answer again, for the same reason.
+      canSetTokenStack={rest.canSetTokenStack ?? true}
       cover={rest.cover ?? COVER}
       idPrefix={rest.idPrefix ?? "s"}
     />
@@ -522,6 +526,55 @@ describe("DeckSettingsForm", () => {
     expect(
       screen.queryByRole("switch", { name: /not in the theory list/i }),
     ).not.toBeInTheDocument();
+  });
+
+  /**
+   * The Tokens & Emblems pile (issue #507): a switch named by its visible heading plus its own
+   * state word, reporting one field and nothing a text field's commit would carry.
+   */
+  it("reports the Tokens & Emblems switch as one field, named by its heading", async () => {
+    const { onChange, onCommit } = form();
+
+    const toggle = screen.getByRole("switch", {
+      name: "Show Tokens & Emblems in the deck Disabled",
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(
+      screen.getByText(
+        "Adds a Tokens & Emblems pile to Stacks, Grid, Text and Table. Tokens never count toward the deck's card total.",
+      ),
+    ).toBeInTheDocument();
+
+    await userEvent.click(toggle);
+
+    expect(onChange).toHaveBeenCalledWith({ tokenStack: true });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("switch", { name: "Show Tokens & Emblems in the deck Enabled" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  /**
+   * Not tied to the deck's kind: a Regular, a Theory + Actual and a Virtual deck all make tokens,
+   * so the switch is there on each.
+   */
+  it("draws the Tokens & Emblems switch whatever the deck's kind", async () => {
+    form();
+    for (const kind of Object.values(DECK_KIND_LABEL)) {
+      await userEvent.click(screen.getByRole("button", { name: kind }));
+      expect(screen.getByRole("switch", { name: /tokens & emblems/i })).toBeInTheDocument();
+    }
+  });
+
+  /**
+   * The create host's half: `DeckInput` carries no `tokenStack`, so a press there would reach
+   * nothing — `canSetTheoryMarks`' argument, and `defaultCategoryId`'s before it.
+   */
+  it("draws no Tokens & Emblems switch for a host that cannot write it", () => {
+    form({ canSetTokenStack: false });
+
+    expect(screen.queryByRole("switch", { name: /tokens & emblems/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Tokens & Emblems/)).not.toBeInTheDocument();
   });
 
   /**

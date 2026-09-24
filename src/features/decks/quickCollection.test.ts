@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { DeckCard, DeckPullCandidate, DeckPullRow, DeckQuickAddWish } from "@/lib/ipc";
-import { chooseWish, choosePull, quickAddBlock, quickAddShort } from "./quickCollection";
+import {
+  chooseWish,
+  choosePull,
+  choosePullFor,
+  missingPicks,
+  quickAddBlock,
+  quickAddShort,
+} from "./quickCollection";
 
 /**
  * A live row of the Main deck: four copies wanted, two of them in the deck's group.
@@ -343,5 +350,72 @@ describe("choosePull", () => {
 
     expect(plan[0].candidates).toHaveLength(1);
     expect(plan[0].candidates[0]).toEqual(candidate({ entryId: 21, quantity: 4 }));
+  });
+});
+
+/** Issue #510: a picked set's quick add goes out as the deck-wide record's picks. */
+describe("missingPicks", () => {
+  /** A printing short in two piles is two deck rows and one address, so one pick of the sum. */
+  it("folds two rows of one printing and finish into one pick", () => {
+    const main = card({ id: 1, categoryId: 1 });
+    const side = card({ id: 2, categoryId: 2 });
+    const bear = card({ id: 3, cardId: "p2" });
+
+    expect(
+      missingPicks([
+        { card: main, copies: 2 },
+        { card: bear, copies: 1 },
+        { card: side, copies: 3 },
+      ]),
+    ).toEqual([
+      { cardId: "p1", finish: null, quantity: 5 },
+      { cardId: "p2", finish: null, quantity: 1 },
+    ]);
+  });
+
+  it("keeps the foil and the regular copy apart, and drops a zero", () => {
+    expect(
+      missingPicks([
+        { card: card(), copies: 1 },
+        { card: card({ finish: "foil" }), copies: 2 },
+        { card: card({ cardId: "p3" }), copies: 0 },
+      ]),
+    ).toEqual([
+      { cardId: "p1", finish: null, quantity: 1 },
+      { cardId: "p1", finish: "foil", quantity: 2 },
+    ]);
+  });
+});
+
+describe("choosePullFor", () => {
+  const bolt = row({ cardId: "p1", short: 2, candidates: [candidate({ entryId: 21, quantity: 4 })] });
+  const bear = row({ cardId: "p2", short: 1, candidates: [candidate({ entryId: 31, quantity: 1 })] });
+
+  it("takes every member silently when each has one answer", () => {
+    expect(choosePullFor([bolt, bear], [card(), card({ cardId: "p2" })])).toEqual({
+      kind: "take",
+      picks: [
+        { entryId: 21, quantity: 2 },
+        { entryId: 31, quantity: 1 },
+      ],
+    });
+  });
+
+  /** One member needing the reader opens the dialog over the whole set, never half a write. */
+  it("asks when any one member is ambiguous or has nothing to pull", () => {
+    const forked = row({
+      cardId: "p2",
+      candidates: [candidate({ entryId: 31 }), candidate({ entryId: 32 })],
+    });
+    expect(choosePullFor([bolt, forked], [card(), card({ cardId: "p2" })])).toEqual({ kind: "ask" });
+    expect(choosePullFor([bolt], [card(), card({ cardId: "p9" })])).toEqual({ kind: "ask" });
+  });
+
+  /** The same printing in two piles is one plan row, and its picks are taken once. */
+  it("takes a printing picked in two piles once", () => {
+    expect(choosePullFor([bolt], [card({ id: 1 }), card({ id: 2, categoryId: 2 })])).toEqual({
+      kind: "take",
+      picks: [{ entryId: 21, quantity: 2 }],
+    });
   });
 });

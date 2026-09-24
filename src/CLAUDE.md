@@ -556,7 +556,8 @@ Every one of these has its measurement and its story in
   is both, and **the border is the whole of what tells them apart**, on the dashed rule above: the
   create tile stays **solid** because it is still a control, the renaming card stays **dashed**
   because it is already a container, and both go `border-accent` while open. The strip survives
-  for `Move to folder…` and `Delete…` — plus the wishlist's `Clear…` since issue #471 — and for
+  for `Move to folder…` and `Delete…` — plus the wishlist's `Clear…` since issue #471 and the
+  collection's `Clear…` inside `Recently removed` since issue #506 — and for
   nothing else: none of them is a name typed on a line, and none has a tile of its own. **The caret's return is the part a new naming tile must not reinvent**: the
   page's `dismiss` focuses the element it remembered as the opener, and here that element is
   exactly what the field replaced, so by then it is a detached node whose `focus()` is a silent
@@ -725,7 +726,7 @@ Every one of these has its measurement and its story in
   sentence said "exactly three elements (`CardGrid`'s tile, `GridView`'s tile, `CardStack`'s
   card)" through four additions, and `grep -n "cardScaleVars(" src/` is the census. Two of those
   four are worth knowing about because they are not card walls: the decks gallery's tile and
-  folder card scale a whole deck's crop, and the deck editor's **Tokens & emblems** band and its
+  folder card scale a whole deck's crop, and the deck editor's **Tokens & Emblems** band and its
   art picker draw the tokens a deck makes at `stackCardWidth(cardZoom.deck)` — the stacked card's
   own width at the desk's own zoom, so the tokens are the size of the cards that make them.
   **A variable rather than a prop, because the marks
@@ -849,11 +850,11 @@ Every one of these has its measurement and its story in
   focus *moved* and the last input was a key, and `src/index.css` redefines Tailwind's own
   `focus-visible` variant to require it — so **every `focus-visible:` utility is already gated and
   a new one needs nothing**. Do not add a key to a list; there is no list, and that is the design.
-  **The landing pads**: ten `tabIndex={-1}` containers exist only so focus can be *put*
+  **The landing pads**: `tabIndex={-1}` containers exist only so focus can be *put*
   somewhere rather than dropped on `<body>`, and a reader can neither Tab nor arrow onto one, so
   they carry no focus class in any modality — `Dialog`'s panel, the editor root, `AnchoredPopup`,
-  `DeckBracket`, `ValidationPanel`, `MoveToFolder`, `PickCopies`, and the three delete
-  confirmations. It was eleven on the day the rule landed; the eleventh was `CardDetailPane`,
+  `DeckBracket`, `ValidationPanel`, `MoveToFolder`, `PickCopies`, the three delete
+  confirmations, and the collection's `ClearRemovedConfirm` (issue #506). It was eleven on the day the rule landed; the eleventh was `CardDetailPane`,
   deleted the same day for the card modal, which is drawn by `Dialog` and so is already the first
   name on the list. **Do not "restore" one by resemblance to a sibling that has one.** The line
   is "can the caret move *from* here", not `tabIndex`: a deck pile's section and a printing row are

@@ -28,11 +28,23 @@
  *   is four charts read at a glance: the cards belong next to the cards. The old ordering was
  *   argued only as "under the stats is the far side of that pair and costs nothing", which was
  *   true and was never a reason to be there.
- * - **The heading is `Tokens & emblems`, never bare `Tokens`.** `autoCategory.ts` already uses
+ * - **The heading is `Tokens & Emblems`, never bare `Tokens`.** `autoCategory.ts` already uses
  *   that word for an auto-category of cards that *make* tokens, driven by the
  *   `repeatable-token-generator` oracle tag — the opposite meaning of the same word — and the
  *   auto-category is deliberately not renamed, because renaming it would silently regroup every
  *   existing deck. So the two strings are kept apart instead.
+ *
+ * ## One read, one picker, two drawings
+ *
+ * **This band takes the {@link DeckTokens} answer as a prop and calls `useDeckTokens` nowhere**
+ * (2026-09-24, issue #507). A deck with `tokenStack` on draws the same tokens a second time, as a
+ * pile inside whichever view is on the desk, and the two drawings have to be one answer: a
+ * quantity stepped on the band is the number the pile draws, and a printing picked from a pile is
+ * the picture the band draws. `DeckEditor` therefore calls the hook **once** and hands the result
+ * to both, and it mounts the **one** `TokenArtPicker` both of them open — so this band holds no
+ * picker and no `picking` state, and a tile's press is `onPick(oracleId)` up to the host. Two hook
+ * calls would have been two `showDismissed` switches and two write observers, and two pickers
+ * would have been two dialogs free to disagree about which token they were for.
  *
  * ## A tile is a stacked card, at the reader's own zoom
  *
@@ -86,23 +98,23 @@
  * that separates the two Wurms, so a truncation short enough to fit a 150px tile would fold them
  * back together in exactly the case this exists for.
  */
-import { useId, useState, type JSX } from "react";
+import { useId, type JSX } from "react";
 import { ChevronRight, Eye, EyeOff, Undo2 } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { ToggleChip } from "@/components/FilterChips";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { atLeast, cardScaleVars } from "@/lib/cardZoom";
-import { count, plural } from "@/lib/counts";
+import { plural } from "@/lib/counts";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
-import { ipcError, type DeckVariant } from "@/lib/ipc";
+import { ipcError } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { stackCardWidth } from "./CardStack";
 import type { DeckTokenView } from "./deckTokens";
-import { TokenArtPicker } from "./TokenArtPicker";
-import { useDeckTokens, type DeckTokens } from "./useDeckTokens";
+import { TokenCountPill } from "./TokenCountPill";
+import type { DeckTokens } from "./useDeckTokens";
 
 /**
  * The area's name, in one place because three things say it: the region's `aria-label`, the
@@ -111,7 +123,7 @@ import { useDeckTokens, type DeckTokens } from "./useDeckTokens";
  * **`&` rather than `and`**, which is the deck editor's own house style for a pair of nouns in a
  * heading (`Categories & labels`), and the ampersand is what a reader scans past.
  */
-export const TOKENS_HEADING = "Tokens & emblems";
+export const TOKENS_HEADING = "Tokens & Emblems";
 
 /**
  * A tile's two icon buttons — the same 20px box the `xs` stepper beside them draws, **at the same
@@ -150,15 +162,26 @@ const TILE_GAP_X = 10;
 const TILE_GAP_Y = 16;
 
 export interface DeckTokensPanelProps {
-  deckId: number;
-  /** Which of the deck's two lists the wall is derived from. The **override** is not per
-   *  variant — `deck_tokens` is grained on `(deck_id, oracle_id)` — but the derived list is,
-   *  because deck cards are. */
-  variant: DeckVariant;
+  /**
+   * `useDeckTokens`' answer for the deck and the list on screen, called **once** by the editor
+   * and handed to this band and to the views' token pile alike — see this file's header. The
+   * override is not per variant (`deck_tokens` is grained on `(deck_id, oracle_id)`) but the
+   * derived list is, because deck cards are, so the host is what passes the hook the variant.
+   */
+  tokens: DeckTokens;
   /** `decks.tokens_open`. Collapsed is what every existing deck is, and what a reader who never
    *  sleeves tokens goes on paying one header row for. */
   open: boolean;
   onToggle: (next: boolean) => void;
+  /**
+   * A tile's picture was pressed: open the art picker on this token.
+   *
+   * **The host owns the picker**, because the views' token pile opens the same one — see this
+   * file's header. An `oracle_id` and never the view, which is the `Layer` union's rule one
+   * surface over: the wall is re-derived after every write, so a frozen view would answer about
+   * the token as it was when the tile was pressed.
+   */
+  onPick: (oracleId: string) => void;
 }
 
 /**
@@ -171,12 +194,11 @@ export interface DeckTokensPanelProps {
  * say "press to find out".
  */
 export function DeckTokensPanel({
-  deckId,
-  variant,
+  tokens,
   open,
   onToggle,
+  onPick,
 }: DeckTokensPanelProps): JSX.Element {
-  const tokens = useDeckTokens(deckId, variant);
   const bodyId = useId();
 
   /**
@@ -185,21 +207,10 @@ export function DeckTokensPanel({
    *
    * **Read once for the whole band and handed down**, which is `GridView`'s own arrangement and
    * its reason: a deck that makes twenty tokens is twenty tiles, and twenty store subscriptions
-   * to answer one number they all share. It reaches the picker too — see this file's header for
-   * why the two walls have to agree about it.
+   * to answer one number they all share. The picker reads the same key in `DeckEditor`, which
+   * is what keeps the two walls agreeing about it.
    */
   const zoom = useAppStore((s) => s.cardZoom.deck);
-
-  /**
-   * Which token's art is being picked, by `oracle_id`.
-   *
-   * **An id and never the view**, which is the `Layer` union's rule one surface over: the wall is
-   * re-derived after every write, so a frozen view would answer about the token as it was when
-   * the tile was pressed — a printing swap would leave the dialog marking the printing the deck
-   * has just stopped bringing.
-   */
-  const [picking, setPicking] = useState<string | null>(null);
-  const picked = tokens.tokens.find((view) => view.oracleId === picking) ?? null;
 
   /**
    * The resolver's rows, before `showDismissed` narrows them.
@@ -278,17 +289,16 @@ export function DeckTokensPanel({
           <p className="text-sm text-text">{TOKENS_HEADING}</p>
         )}
 
-        {/* The count is a bare number and it is honest here for the app's own reason: the
-            heading is set in type immediately beside it and says what is being counted. It is
-            its own element, so nothing computes it into another control's name.
+        {/* The count is a bare number in a pill, and it is honest here for the app's own
+            reason: the heading is set in type immediately beside it and says what is being
+            counted. It is its own element, so nothing computes it into another control's name.
 
-            **The data face since 2026-09-22.** It was plain sans with no `tabular-nums`, which
-            made it the one count on this page set in the prose face — every pile heading a few
-            inches above writes `12 cards · $5.00` in mono, and the stats band's own notes are
-            `font-mono text-xs tabular-nums text-dim` exactly. Same slot, same size, one face. */}
-        {canOpen && (
-          <span className="font-mono text-xs tabular-nums text-dim">{count(kept)} to bring</span>
-        )}
+            **A pill since 2026-09-24 (issue #507)**, where it read `N to bring`: the views' token
+            pile draws the same number beside the same heading, and one component is what keeps
+            the two drawings one mark. It still counts the **distinct kept** tokens — `kept`, off
+            the resolver's rows before `showDismissed` narrows them — so revealing a dismissal
+            does not move it. */}
+        {canOpen && <TokenCountPill count={kept} />}
 
         {answered && rows.length === 0 && (
           <p className="text-xs text-dim">Nothing in this deck makes a token or an emblem.</p>
@@ -314,30 +324,8 @@ export function DeckTokensPanel({
       {/* Always in the tree so `aria-controls` above always names something, and empty while the
           area is shut so a closed band costs no picture, no tile and no state. */}
       <div id={bodyId}>
-        {open && canOpen && <TokenWall tokens={tokens} zoom={zoom} onPick={setPicking} />}
+        {open && canOpen && <TokenWall tokens={tokens} zoom={zoom} onPick={onPick} />}
       </div>
-
-      {/* **Mounted inline, and the check that makes that legal is written down rather than
-          assumed.** `Dialog`'s scrim is a bare `fixed inset-0` and corrects for nothing, so a
-          dialog opened from inside a box that is transformed, filtered or
-          `container-type: inline-size` stretches to *that box* instead of to the window. Neither
-          this `<section>` nor the editor's root is any of those — the root is
-          `relative flex h-full min-h-0 flex-col`, and `relative` is not a containing block for
-          `fixed`. Settings' panels mount their own dialogs on exactly this reasoning, and the
-          rule to keep is that a container query may never be added above this line. */}
-      <TokenArtPicker
-        token={picked}
-        // The same number the wall behind the scrim is drawing at. See this file's header and
-        // `TokenArtPicker`'s own: a reader who presses a tile has to meet the same picture at the
-        // same size, or the swap does not read as a swap.
-        zoom={zoom}
-        onPick={(cardId) => {
-          if (picked !== null) tokens.setPrinting(picked.oracleId, cardId);
-          setPicking(null);
-        }}
-        onDismiss={() => setPicking(null)}
-        onClose={() => setPicking(null)}
-      />
     </section>
   );
 }

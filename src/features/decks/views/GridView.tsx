@@ -46,6 +46,7 @@ import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { hasTokenPile, TokenGridPile, type TokenPile } from "./TokenPile";
 
 /**
  * A tile at 1× and the gutter around it — what is left of the wall's geometry, and both of these
@@ -80,6 +81,7 @@ export function GridView({
   actions,
   selectedSlot,
   landed,
+  tokenPile,
   className,
 }: {
   groups: readonly CardGroup[];
@@ -135,6 +137,9 @@ export function GridView({
   /** `deck_cards.id` → the nonce of the add that put it there. See `cardControl`'s
    *  `LandedMark`. */
   landed?: ReadonlyMap<number, number>;
+  /** The deck's tokens and emblems, drawn as a trailing group after every other one (issue
+   *  #507). Absent, or with no tokens, the wall is exactly what it was — see `TokenPile.tsx`. */
+  tokenPile?: TokenPile;
   className?: string;
 }) {
   // One read for the whole wall, passed down rather than read per tile: a hundred-card deck is a
@@ -220,6 +225,16 @@ export function GridView({
           zoom={cardZoom}
         />
       ))}
+      {/* The tokens, after every other group — the rail's piles included, since they are still
+          cards of this deck and these are not. Tiles at this wall's own width for the zoom. */}
+      {hasTokenPile(tokenPile) && (
+        <TokenGridPile
+          pile={tokenPile}
+          zoom={cardZoom}
+          tileWidth={scaled(TILE_WIDTH, cardZoom)}
+          gap={TILE_GAP}
+        />
+      )}
     </div>
   );
 }

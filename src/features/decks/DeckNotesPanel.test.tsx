@@ -173,7 +173,7 @@ describe("the Notes band", () => {
   });
 
   /**
-   * **The departure from the Tokens & emblems band, and the one this file exists to pin.** That
+   * **The departure from the Tokens & Emblems band, and the one this file exists to pin.** That
    * band draws its heading as plain type on a deck that makes nothing, because a control that
    * spends the whole deck refusing teaches a reader to stop looking at it. Here there is always
    * something under the heading — on an empty deck, the sentence that says what the band is for

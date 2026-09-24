@@ -79,7 +79,7 @@ import { noteTitle, notesForCard } from "./deckNotes";
 // reaches first. This import took the toolbar component for one run and answered
 // "quickAddShort is not a function"; tsc refuses the program outright (TS1149). It is
 // `folderTree.ts` beside `FolderTree.tsx` a second time.
-import { quickAddBlock, quickAddShort } from "./quickCollection";
+import { quickAddBlock, quickAddShort, type QuickAddTarget } from "./quickCollection";
 import { commanderIneligibility } from "./validation/commanders";
 import { companionIssues } from "./validation/companions";
 
@@ -196,16 +196,17 @@ export interface DeckCardMenuDeps {
    * deck's own group, and write nothing to the wishlist (`deck_quick_add_to_collection` with no
    * wish named).
    *
-   * **`copies` is the number the row's own label quoted**, handed over rather than re-derived at
-   * the surface: `quickAddShort` is the one spelling of a shortfall this feature has, and a
-   * second one is how a press comes to file a number the card is not wearing. See
-   * {@link collectionItems}.
+   * **Each target's `copies` is the number that row's own shortfall quoted**, handed over rather
+   * than re-derived at the surface: `quickAddShort` is the one spelling of a shortfall this
+   * feature has, and a second one is how a press comes to file a number the card is not wearing.
+   * One target for a right-click on a lone card; every picked row that is short for a picked set
+   * (issue #510). See {@link collectionItems}.
    *
    * **Optional, and absent takes the whole `Collection link ▸` item with it** — `cardMenu.tsx`'s
    * `moveItem` rule, which drops its own item when the write it needs is missing rather than
    * drawing a picker that cannot file.
    */
-  quickAdd?: (card: DeckCard, copies: number) => void;
+  quickAdd?: (targets: readonly QuickAddTarget[]) => void;
   /**
    * **Quick add and remove from wishlist** — the same record, and then take the copies off a wish
    * that matches this exact printing and finish.
@@ -215,9 +216,12 @@ export interface DeckCardMenuDeps {
    * of that is this builder's, which stays pure and holds no query client — and the ambiguity is
    * genuinely the reader's to settle, not a rule a menu row could carry.
    *
+   * Under a picked set there is no one wish to ask about, so the surface clears only the wishes
+   * whose answer is unambiguous — the deck-wide `Add missing to collection`'s own rule.
+   *
    * Optional, on {@link quickAdd}'s terms.
    */
-  quickAddAndUnwish?: (card: DeckCard, copies: number) => void;
+  quickAddAndUnwish?: (targets: readonly QuickAddTarget[]) => void;
   /**
    * **Pull from your collection** — move copies the reader already owns loose into this deck's
    * group, the per-card entrance to the write `deck_pull_from_collection` already answers for.
@@ -226,11 +230,13 @@ export interface DeckCardMenuDeps {
    * rows above *create* cardboard, so the number is the whole of what they need; this one moves
    * cardboard that exists, so what it can take is decided by what the binder actually holds —
    * the surface reads the plan and either pulls the one candidate or opens
-   * `PullFromCollectionDialog`, which is the prompt and which words the empty case itself.
+   * `PullFromCollectionDialog`, which is the prompt and which words the empty case itself. Every
+   * picked row that is short arrives at once under a picked set, and the dialog opens over all of
+   * them if any one needs the reader.
    *
    * Optional, on {@link quickAdd}'s terms.
    */
-  pullCard?: (card: DeckCard) => void;
+  pullCard?: (cards: readonly DeckCard[]) => void;
   /**
    * Whether this deck reads the collection at all — `deckKind.ts`'s `tracksCollection(deck)`,
    * `false` for a **virtual** deck (issue #401).
@@ -353,10 +359,9 @@ function manyCards(n: number): string {
  * narrower still: a deck has one commander and one companion, so "set 4 cards as commander" names
  * a thing that cannot happen.
  *
- * **`Collection link ▸`'s three rows stay singular for the same reason and one of its own** — see
- * {@link collectionItems}. Every label in it names a *count*, and that count is one row's
- * shortfall: four rows short by four different amounts have no one number to name, so a plural
- * row could only quote a total no card on screen is wearing.
+ * **`Collection link ▸` goes plural too since issue #510**, and its count is the *sum* of the
+ * picked rows' shortfalls — see {@link collectionItems} for why that total is honest where it
+ * was once refused.
  *
  * **The two note rows stay singular too, and it is a third kind of reason** — see
  * {@link noteItems}. `Notes ▸` lists the notes that name *this* card, and four cards have four
@@ -590,11 +595,18 @@ const QUICK_ADD_REASON: Record<Exclude<ReturnType<typeof quickAddBlock>, null>, 
  * write to the reader's binder or wishlist rather than to this deck — see the comment at the call
  * site.
  *
- * **All three stay singular about the right-clicked card even under a picked set**, and that is a
- * statement rather than an omission: {@link finishItem}'s argument reached from the other side.
- * Every label here names a **count**, and the count is one row's shortfall — a set of four rows
- * short by four different amounts has no one number to name, so a plural row could only quote a
- * total no card on screen is wearing, or file whichever member the label happened to be about.
+ * **Under a picked set all three act on every picked row that is short, and quote the sum**
+ * (issue #510). This reverses the rule that stood here from issue #350 on, which kept the rows
+ * about the right-clicked card because "four rows short by four different amounts have no one
+ * number to name". They do: the total is exactly what the press files, it is the sum of the red
+ * `N/M`s the picked cards are wearing, and the head says `Collection link for N cards` so the
+ * number is read against the set rather than against the card under the pointer. What the old
+ * rule actually shipped was worse than either — `Quick add 1 copy` under `Add 11 cards to`, and a
+ * press that silently ignored ten of the eleven cards the reader had picked.
+ *
+ * A picked row that is blocked (a theory row, a switched-off pile, nothing missing) is passed
+ * over rather than greying the whole submenu, which is `Category`'s "greyed only when there is
+ * nothing left to move" rule: the rows grey only when **no** picked row can be pressed.
  *
  * **That count is `quickAddShort`'s and is the same string in both states.** It is
  * `max(0, quantity − ownedQuantity)`, which is exactly the red `3/4` `CardStack` draws in the
@@ -625,9 +637,28 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
   if (quickAdd === undefined || quickAddAndUnwish === undefined || pullCard === undefined) {
     return [];
   }
-  const copies = quickAddShort(card);
-  const block = quickAddBlock(card, deps.tracksCollection ?? true);
+  const picked = targets(card, deps);
+  const many = picked.length > 1;
+  const tracks = deps.tracksCollection ?? true;
+  const blocks = picked.map((member) => quickAddBlock(member, tracks));
+  // The rows a press actually writes for: every picked row with nothing blocking it, each with
+  // the shortfall its own chin is wearing.
+  const pressed: QuickAddTarget[] = picked
+    .filter((_, i) => blocks[i] === null)
+    .map((member) => ({ card: member, copies: quickAddShort(member) }));
+  // A lone card keeps quoting its own shortfall even when greyed — `Quick add 0 copies` beside
+  // `nothing missing`; a set quotes what the press would file, which is `0` when nothing can be.
+  const copies = many
+    ? pressed.reduce((sum, target) => sum + target.copies, 0)
+    : quickAddShort(card);
+  // Greyed only when no picked row can be pressed, and then with the reason every one of them
+  // shares — or `nothing missing`, which is true of a mixed set as a whole.
+  const block =
+    pressed.length > 0
+      ? null
+      : (blocks.every((b) => b === blocks[0]) ? blocks[0] : null) ?? "nothing-missing";
   const reason = block === null ? undefined : QUICK_ADD_REASON[block];
+  const pressedCards = pressed.map((target) => target.card);
   /** One row: live, or greyed **with** its reason — never greyed with a live `onSelect` behind
    *  it, which is what `aria-disabled` would leave pressable by a caret. */
   const row = (
@@ -649,7 +680,10 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
       // `Collection` with issue #505, when this moved up beside `Add to` — two rows called
       // `Collection` one under the other (one of them a submenu of the first) would read as one
       // thing drawn twice, and these three presses link the deck's row to the binder.
-      label: "Collection link",
+      //
+      // Under a picked set the head names the set, `Category for N cards`' shape one row down, so
+      // the total in the rows below is read against the cards it is a total of.
+      label: many ? `Collection link for ${manyCards(picked.length)}` : "Collection link",
       Icon: LibraryBig,
       items: [
         row(
@@ -659,7 +693,7 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
           // never print "1 copies" on the count a reader meets most.
           `Quick add ${plural(copies, "copy", "copies")}`,
           Plus,
-          () => quickAdd(card, copies),
+          () => quickAdd(pressed),
         ),
         row(
           "quick-add-unwish",
@@ -667,7 +701,7 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
           // its widest content, and this is the widest row in the submenu either way.
           `Quick add ${copies} and remove from wishlist`,
           HeartOff,
-          () => quickAddAndUnwish(card, copies),
+          () => quickAddAndUnwish(pressed),
         ),
         // The rule between *recording* cardboard and *moving* it. The two rows above say the
         // copies exist and file them into the deck's group; this one takes copies the reader
@@ -678,7 +712,7 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
           "pull-from-collection",
           `Pull ${copies} from your collection`,
           PackageOpen,
-          () => pullCard(card),
+          () => pullCard(pressedCards),
         ),
       ],
     },

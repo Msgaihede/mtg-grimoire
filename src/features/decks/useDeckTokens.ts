@@ -22,7 +22,7 @@
  * anybody buys — so carrying it would be two cached answers to one question, refetched on a
  * switch that cannot change it.
  */
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type DeckVariant } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";
@@ -165,10 +165,24 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
     onSuccess: invalidate,
   });
 
-  /** One field changed against whatever the row already holds — see {@link storedOverride}. */
-  const write = (oracleId: string, change: Partial<TokenOverride>) => {
-    set.mutate({ oracleId, over: { ...storedOverride(rows, oracleId), ...change } });
-  };
+  /** One field changed against whatever the row already holds — see {@link storedOverride}.
+   *
+   *  **Stable while the rows are**, because it now has a second reader: the editor hands
+   *  {@link setQuantity} to every deck view as part of the token pile, inside a `useMemo`, and a
+   *  callback minted fresh on every render would rebuild that pile — and re-render four views —
+   *  on every keystroke anywhere in the editor. TanStack's `mutate` is stable per observer, so
+   *  the rows are the only thing this has to change for. */
+  const mutateSet = set.mutate;
+  const write = useCallback(
+    (oracleId: string, change: Partial<TokenOverride>) => {
+      mutateSet({ oracleId, over: { ...storedOverride(rows, oracleId), ...change } });
+    },
+    [rows, mutateSet],
+  );
+  const setQuantity = useCallback(
+    (oracleId: string, quantity: number) => write(oracleId, { quantity }),
+    [write],
+  );
 
   return {
     /** The query itself, for a caller that needs more than {@link loading} and {@link failure} —
@@ -201,7 +215,7 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
      * **`0` is a value and not an absence**, so it is stored: a token zeroed while its art is
      * kept is a decision, and the read side is written with `??` for the same reason.
      */
-    setQuantity: (oracleId: string, quantity: number) => write(oracleId, { quantity }),
+    setQuantity,
     /** Take one token off the wall. The row survives — this is `state: "hidden"` and not a
      *  delete — so {@link showDismissed} can find it again. */
     dismiss: (oracleId: string) => write(oracleId, { state: "hidden" }),

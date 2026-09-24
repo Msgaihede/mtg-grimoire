@@ -125,12 +125,18 @@ const ROOT_TARGET = 0;
  * about. What it is *not* is a second Escape rung — that layer is a `Dialog`, and every `Dialog`
  * registers its own `"inner"` rung on its open flag. See {@link CollectionPage.openPanel}, which
  * is where the folder half of this union parts company with this member.
+ *
+ * **`clearRemoved` carries no id, and that is `deleteFolder`'s rule read the other way** (issue
+ * #506): it is asked only while the reader is *standing in* `Recently removed`, there is exactly
+ * one such folder, and the pinned census already names it — so an id here would be a second copy
+ * of a fact the page holds, free to disagree with it.
  */
 type Panel =
   | { kind: "newFolder"; parentId: number | null }
   | { kind: "renameFolder"; folderId: number }
   | { kind: "moveFolder"; folderId: number }
   | { kind: "deleteFolder"; folderId: number }
+  | { kind: "clearRemoved" }
   | { kind: "editCopy"; entryId: number }
   | null;
 
@@ -968,6 +974,55 @@ export function CollectionPage() {
   });
 
   /**
+   * The card menu's `Remove from collection` — issue #506, and {@link remove} said once per entry
+   * the press reaches.
+   *
+   * **In sequence rather than all at once**, because each one is a transaction on one connection
+   * and a `Promise.all` would only queue them there anyway; in order, a refusal stops the rest and
+   * the page's banner says which sentence stopped it. What the ones before it did is real, and
+   * {@link settleFailure} re-reads the whole list so the wall shows exactly that rather than the
+   * rows the press was *going* to take.
+   *
+   * Which targets may reach this at all is the menu deps' decision ({@link countEditable}, asked of
+   * every row behind the target), not this write's — `collection_remove` is the unconditional
+   * delete.
+   */
+  const removeMany = useMutation({
+    mutationFn: async (ids: readonly number[]) => {
+      for (const id of ids) await ipc.collectionRemove(id);
+    },
+    onError: settleFailure,
+    onSuccess: (_done, ids) => {
+      for (const id of ids) patchEntry(id, null);
+      settle();
+    },
+  });
+  // `mutate` is stable across renders and the result object around it is not, so the menu deps
+  // below are rebuilt only when something they carry actually changed.
+  const { mutate: removeManyMutate } = removeMany;
+  const removeCopies = useCallback(
+    (ids: readonly number[]) => removeManyMutate(ids),
+    [removeManyMutate],
+  );
+
+  /**
+   * `Clear…` inside `Recently removed` — every copy in the holding area, gone in one transaction
+   * (issue #506).
+   *
+   * **The whole view is re-read, success or refusal**, because this is not one row changing: it is
+   * a folder's worth of rows leaving at once, so there is nothing to patch and the list has to be
+   * asked again. The four keys are {@link settleFailure}'s, and for its reasons — the list, the
+   * header and the folder subtotals under `["collection"]`, every wish's `ownedQuantity`, the
+   * search's owned badges, and every deck's theory lists, which count spare copies wherever they
+   * sit. A refusal (`NO_REMOVED_FOLDER`, the folder gone under another window) takes the same
+   * refresh, which is what makes the pinned entry disappear rather than go on offering a clear.
+   */
+  const clearRemoved = useMutation({
+    mutationFn: () => ipc.collectionRemovedClear(),
+    onSettled: settleFailure,
+  });
+
+  /**
    * Filing a copy — the drag's write, and **the same mutation the row's own context menu makes it
    * through**, so a merge behaves the same whichever hand made the gesture.
    *
@@ -1392,38 +1447,6 @@ export function CollectionPage() {
     () => ({ ...baseMenuDeps, pickCopies, editCopy }),
     [baseMenuDeps, pickCopies, editCopy],
   );
-  /** One row's handler. The item list is a **thunk** inside `menu`, so a list of a thousand
-   *  pays for nothing until a reader actually right-clicks one of them. */
-  const rowMenu = useCallback(
-    (row: CollectionRow) => menu(() => buildCardMenu(rowTarget(row), menuDeps)),
-    [menu, menuDeps],
-  );
-  /** The same menu on Shift+F10 and the ContextMenu key — wired everywhere its pointer twin is,
-   *  because a menu only a mouse can open is a menu half this app's readers do not have. */
-  const rowMenuKey = useCallback(
-    (row: CollectionRow) => menuKey(() => buildCardMenu(rowTarget(row), menuDeps)),
-    [menuKey, menuDeps],
-  );
-  const tileMenu = useCallback(
-    (tile: CollectionTile, picked: readonly CollectionTile[] = []) =>
-      menu(() =>
-        buildCardMenu(tileTarget(tile, entryIdsOf(tile)), {
-          ...menuDeps,
-          picked: picked.map((one) => tileTarget(one, entryIdsOf(one))),
-        }),
-      ),
-    [menu, menuDeps, entryIdsOf],
-  );
-  const tileMenuKey = useCallback(
-    (tile: CollectionTile, picked: readonly CollectionTile[] = []) =>
-      menuKey(() =>
-        buildCardMenu(tileTarget(tile, entryIdsOf(tile)), {
-          ...menuDeps,
-          picked: picked.map((one) => tileTarget(one, entryIdsOf(one))),
-        }),
-      ),
-    [menuKey, menuDeps, entryIdsOf],
-  );
 
   /**
    * The reader's own cabinet — the folders they made and named, and nothing the app owns.
@@ -1640,8 +1663,15 @@ export function CollectionPage() {
    * caret to whichever folder card's `⋯` {@link openerRef} happens to be holding.
    */
   const folderPanel = panel === null || panel.kind === "editCopy" ? null : panel;
+  /** Standing in the holding area, which is the one level whose wall is not its own children. */
+  const inRemoved = pinned.removed !== null && folderId === pinned.removed.id;
+  // `clearRemoved` goes with the level for `newFolder`'s reason: its trigger is drawn only inside
+  // `Recently removed`, so a question left open while the reader walked out would be a layer about
+  // a folder no longer on screen — and a confirm pressed there would clear a pile they cannot see.
   const openPanel =
-    flatten || (folderPanel?.kind === "newFolder" && folderPanel.parentId !== folderId)
+    flatten ||
+    (folderPanel?.kind === "newFolder" && folderPanel.parentId !== folderId) ||
+    (folderPanel?.kind === "clearRemoved" && !inRemoved)
       ? null
       : folderPanel;
 
@@ -1915,11 +1945,16 @@ export function CollectionPage() {
    * several questions, one answer.
    *
    * They are genuinely different questions — may a copy be dropped *into* this folder
-   * ({@link canMoveCopy}), may a new folder be created *inside* it ({@link canMakeFolder}), may a
-   * row filed *here* be stepped on the wall ({@link stepperByTile}) or in the table
-   * ({@link quantityBlocked}) — and they share an answer because they share a backend rule:
-   * `collection_folders.rs`'s `user_folder`, which every one of those writes calls and which
-   * refuses a deck group and `Recently removed` in words. A spelling of it per call site is a call
+   * ({@link canMoveCopy}), may a new folder be created *inside* it ({@link canMakeFolder}) — and
+   * they share an answer because they share a backend rule: `collection_folders.rs`'s
+   * `user_folder`, which both of those writes calls and which refuses a deck group and
+   * `Recently removed` in words.
+   *
+   * **Changing how many copies a row holds is not one of those questions any more** (issue #506).
+   * It used to ride this predicate too, and that fenced `Recently removed` for a reason that was
+   * never its own: the fence on a count exists for *deck custody*, and the holding area's copies
+   * belong to no deck. {@link countEditable} is that question, asked separately, and it is this
+   * predicate plus exactly one folder. A spelling of it per call site is a call
    * site per edit to keep in step with that function, and this page has already watched two
    * gestures drift apart once (`collection-folders.md` records the `Move to` whose settle set took
    * `["decks"]` while the drag's did not). Grep this name rather than trusting a count written
@@ -1943,21 +1978,52 @@ export function CollectionPage() {
   );
 
   /**
+   * **May the copies filed here have their count changed — stepped, stepped to zero, or removed
+   * from the right-click menu.** {@link readersOwnLevel} plus `Recently removed`, and nothing else.
+   *
+   * Issue #506. The fence on a count exists for **deck custody**: a copy in a deck's group is the
+   * deck's arithmetic, `collection::set_quantity` has no folder fence of its own, and a stepper
+   * there would change what a deck says it owns without the deck being touched — which is why
+   * those copies leave through `deck_to_collection` and nowhere else. `Recently removed` is the
+   * opposite case. Its copies are the ones a deck *let go of*, they belong to no deck, and changing
+   * their count changes no deck's list; fencing them made the holding area a pile the reader could
+   * sort out only by dragging every copy back into a binder first, including the ones they meant
+   * to throw away.
+   *
+   * **Its own predicate rather than a widening of {@link readersOwnLevel}**, because that one still
+   * answers two questions whose answer for the holding area is unchanged: nothing may be dropped
+   * *into* it and no folder may be made inside it (`user_folder` refuses both). Folding the two
+   * together would have turned those on along with this.
+   *
+   * **Written positively, for the same reason that one is**: a fifth
+   * `collection_folders.kind` added later is fenced here until somebody decides it should not be.
+   * And fenced until the census answers, for the same reason — `pinned.removed` is `null` while the
+   * folder list is empty, so a row in the holding area draws no stepper for one query and then
+   * grows one.
+   */
+  const countEditable = useCallback(
+    (id: number | null) => readersOwnLevel(id) || (id !== null && id === pinned.removed?.id),
+    [readersOwnLevel, pinned.removed],
+  );
+
+  /**
    * Which `collection_entries` row a press on a tile's stepper writes to — **the wall's twin of
    * {@link copiesByTile}**, and absent where the wall draws no stepper at all.
    *
    * # Why it is not beside its twin
    *
    * {@link copiesByTile} sits with {@link tiles} because both are pure over `rows`. This one is
-   * not: its fence is {@link readersOwnLevel}, which is built from the folder census read further
+   * not: its fence is {@link countEditable}, which is built from the folder census read further
    * down the page, so it can only be stated after the cabinet is. Reading it up there would be a
    * temporal dead zone rather than a style choice.
    *
    * # The fence
    *
-   * A stepper is drawn only where **every** row behind the art is at the root or in a drawer the
-   * reader made. Not *any*: the number the control shows is the tile's **sum**, so a tile mixing a
-   * copy in a binder with a copy in a deck's group would move a total that is partly untouchable —
+   * A stepper is drawn only where **every** row behind the art is at the root, in a drawer the
+   * reader made, or in `Recently removed` (issue #506 — see {@link countEditable} for why the
+   * holding area joined). Not *any*: the number the control shows is the tile's **sum**, so a
+   * tile mixing a copy in a binder with a copy in a deck's group would move a total that is partly
+   * untouchable —
    * the reader would press `−` on a 3 and watch it become a 2 while one of those three copies is
    * the deck's custody and `set_entry_folder`'s `ENTRY_IN_A_DECK` exists precisely to keep it
    * there. `canFile` takes the opposite rule for the opposite reason and says so at its own site:
@@ -2014,7 +2080,7 @@ export function CollectionPage() {
     for (const row of rows) {
       const key = tileKeyOf(row.cardId, row.finish);
       if (!first.has(key)) first.set(key, row);
-      if (!readersOwnLevel(row.folderId)) fenced.add(key);
+      if (!countEditable(row.folderId)) fenced.add(key);
     }
     const out = new Map<string, { row: CollectionRow; floor: number }>();
     for (const tile of tiles) {
@@ -2025,7 +2091,7 @@ export function CollectionPage() {
       out.set(tile.key, { row, floor: tile.copies - row.quantity });
     }
     return out;
-  }, [rows, tiles, readersOwnLevel]);
+  }, [rows, tiles, countEditable]);
 
   /**
    * Why one **table row's** copies cannot be stepped where they sit, or `null` for a row that can
@@ -2034,7 +2100,7 @@ export function CollectionPage() {
    * **One predicate, two drawings.** The table and the wall are the same list in two layouts, so a
    * row the wall will not let a reader step and a row the table will is not a difference a reader
    * can make any sense of — and it is a difference two independently-written fences arrive at the
-   * first time either moves. {@link readersOwnLevel} is the whole of the test on both sides;
+   * first time either moves. {@link countEditable} is the whole of the test on both sides;
    * everything below it is *words*, which is the only thing the two surfaces legitimately differ
    * in. The wall says it by drawing nothing (there is no room on a 170px tile for a sentence, and
    * the strip it would sit in is revealed on hover), where a table row has a whole cell and can
@@ -2047,13 +2113,19 @@ export function CollectionPage() {
    *
    * # Which sentence
    *
-   * Two of the three arms name what the folder *is*, because the way out differs: copies in a
-   * deck's group leave by being cut from the deck (`deck_to_collection`, which decrements
-   * `deck_cards` in the same transaction), and copies in `Recently removed` leave by being filed
-   * back. Both are the grammar {@link blockedReason} already uses for the picker's greyed rows —
-   * where you are, then what to do — so this feature speaks with one voice about a refusal.
+   * The first arm names what the folder *is*, because it names the way out: copies in a deck's
+   * group leave by being cut from the deck (`deck_to_collection`, which decrements `deck_cards` in
+   * the same transaction). That is the grammar {@link blockedReason} already uses for the picker's
+   * greyed rows — where you are, then what to do — so this feature speaks with one voice about a
+   * refusal.
    *
-   * **The third arm names no mechanism, on purpose.** It is reached by a fourth
+   * **There were three arms until issue #506**, and the one that went said *In Recently removed.
+   * Move it back to your collection to change how many you hold.* It was true about the fence and
+   * wrong about the reason for it: the holding area's copies belong to no deck, so there was never
+   * custody to protect, only a pile the reader could not thin without refiling it first. Those rows
+   * are inside {@link countEditable} now and reach this function's first line.
+   *
+   * **The other arm names no mechanism, on purpose.** It is reached by a fourth
    * `collection_folders.kind` — the reason the fence is written positively at all — and a fourth
    * kind wearing the deck sentence would tell the reader to cut a card from a deck that does not
    * exist. So it says only what is certainly true of anything that is not the reader's own filing:
@@ -2063,7 +2135,7 @@ export function CollectionPage() {
    * **It is also, for the length of one query, what a row in the reader's own binder gets**, and
    * that is the cost of the fence failing closed. `useCollectionFolderList` starts empty and
    * "empty" is a cabinet nobody has filed as well as one that has not loaded, so until it answers
-   * every filed row is outside {@link readersOwnLevel} and reads a sentence that is wrong about a
+   * every filed row is outside {@link countEditable} and reads a sentence that is wrong about a
    * drawer the reader made. Accepted over the alternative, which is a live stepper standing over a
    * deck's copies for the same window against a `collection::set_quantity` that has **no folder
    * fence of its own** — a briefly wrong sentence self-corrects and a written quantity does not.
@@ -2071,16 +2143,81 @@ export function CollectionPage() {
    */
   const quantityBlocked = useCallback(
     (row: CollectionRow): string | null => {
-      if (readersOwnLevel(row.folderId)) return null;
+      if (countEditable(row.folderId)) return null;
       if (row.folderId !== null && deckGroupIds.has(row.folderId)) {
         return `In ${row.folderName ?? "a deck"}. Cut the card from the deck to change how many you hold.`;
       }
-      if (row.folderId === pinned.removed?.id) {
-        return "In Recently removed. Move it back to your collection to change how many you hold.";
-      }
       return `In ${row.folderName ?? "a folder you did not make"}. Move it into one of your own folders to change how many you hold.`;
     },
-    [readersOwnLevel, deckGroupIds, pinned.removed],
+    [countEditable, deckGroupIds],
+  );
+
+  /**
+   * Whether every copy behind a menu's target — and behind every picked target beside it — may
+   * have its count changed, which is the whole of when the menu offers `Remove from collection`.
+   *
+   * **Every, not any**, {@link stepperByTile}'s rule and for its reason: the menu's press takes
+   * *all* the ids it reaches in one write, so a pick that reached one copy in a deck's group would
+   * take the deck's custody along with the rest. {@link canFile}'s "any" is right for a drag
+   * because a drag asks which copies move; this press asks nothing.
+   */
+  const allCountEditable = useCallback(
+    (copies: readonly { folderId: number | null }[]) =>
+      copies.every((copy) => countEditable(copy.folderId)),
+    [countEditable],
+  );
+
+  /**
+   * The card menu's handlers, built here rather than beside {@link menuDeps} because two of the
+   * four ask {@link countEditable}, which the folder census further up the page has to state
+   * first — the same temporal dead zone {@link stepperByTile} records.
+   *
+   * A row's deps carry `removeCopies` when its own copies are {@link countEditable}. The item list
+   * is a **thunk** inside `menu`, so a list of a thousand pays for nothing until a reader actually
+   * right-clicks one of them.
+   */
+  const rowDeps = useCallback(
+    (row: CollectionRow): CardMenuDeps =>
+      countEditable(row.folderId) ? { ...menuDeps, removeCopies } : menuDeps,
+    [countEditable, menuDeps, removeCopies],
+  );
+  const rowMenu = useCallback(
+    (row: CollectionRow) => menu(() => buildCardMenu(rowTarget(row), rowDeps(row))),
+    [menu, rowDeps],
+  );
+  /** The same menu on Shift+F10 and the ContextMenu key — wired everywhere its pointer twin is,
+   *  because a menu only a mouse can open is a menu half this app's readers do not have. */
+  const rowMenuKey = useCallback(
+    (row: CollectionRow) => menuKey(() => buildCardMenu(rowTarget(row), rowDeps(row))),
+    [menuKey, rowDeps],
+  );
+  /**
+   * A tile's deps: the picked set as targets, and `removeCopies` only when the target **and every
+   * picked tile** stand for copies {@link allCountEditable} allows — the menu takes the ids of
+   * both, so the fence has to be asked of both.
+   */
+  const tileDeps = useCallback(
+    (tile: CollectionTile, picked: readonly CollectionTile[]): CardMenuDeps => {
+      const editable = [tile, ...picked].every((one) =>
+        allCountEditable(copiesByTile.get(one.key) ?? []),
+      );
+      return {
+        ...menuDeps,
+        ...(editable ? { removeCopies } : {}),
+        picked: picked.map((one) => tileTarget(one, entryIdsOf(one))),
+      };
+    },
+    [menuDeps, removeCopies, allCountEditable, copiesByTile, entryIdsOf],
+  );
+  const tileMenu = useCallback(
+    (tile: CollectionTile, picked: readonly CollectionTile[] = []) =>
+      menu(() => buildCardMenu(tileTarget(tile, entryIdsOf(tile)), tileDeps(tile, picked))),
+    [menu, tileDeps, entryIdsOf],
+  );
+  const tileMenuKey = useCallback(
+    (tile: CollectionTile, picked: readonly CollectionTile[] = []) =>
+      menuKey(() => buildCardMenu(tileTarget(tile, entryIdsOf(tile)), tileDeps(tile, picked))),
+    [menuKey, tileDeps, entryIdsOf],
   );
 
   /**
@@ -2337,6 +2474,8 @@ export function CollectionPage() {
   const bannerFailure = writeFailure([
     setQuantity,
     remove,
+    removeMany,
+    clearRemoved,
     setFolder,
     // The sidebar's drop, which is a write this screen makes and shares the banner for the
     // reason the folder writes do: everything here is a change to the reader's collection. The
@@ -2372,8 +2511,6 @@ export function CollectionPage() {
    * a level with nothing in it.
    */
   const filed = !flatten && childFolders.length > 0;
-  /** Standing in the holding area, which is the one level whose wall is not its own children. */
-  const inRemoved = pinned.removed !== null && folderId === pinned.removed.id;
   /**
    * The folders drawn over the cards at this level.
    *
@@ -2387,6 +2524,18 @@ export function CollectionPage() {
    * wall of drawers that every ring refuses would be an invitation to a gesture that does nothing.
    */
   const wall = inRemoved ? nodes : childFolders;
+
+  /**
+   * How many copies `Recently removed` holds, from the folder summary — or `null` before it has
+   * answered, {@link pinnedTotals}' own reading of a miss. **The folder's number and never the
+   * list's**: `Clear…` takes every copy filed there whatever the filters are hiding, so the
+   * question has to state that figure rather than the one on screen.
+   */
+  const removedCards =
+    pinned.removed === null ? null : (pinnedTotals(pinned.removed)?.cards ?? null);
+  /** Whether `Clear…` has anything to take: the summary's count once it has one, and until then
+   *  whether any row is on screen at all. */
+  const canClearRemoved = inRemoved && (removedCards === null ? !empty : removedCards > 0);
 
   /**
    * The level the wall is drawing: the parent every card on it is a child of, and that level's
@@ -2852,7 +3001,9 @@ export function CollectionPage() {
               deleting have no such tile: the answer to "into which folder" is a list of the *other*
               folders, and the answer to "delete this?" is a sentence about what happens to the cards
               inside. Neither fits on a 62px card, and neither is a name typed on a line. */}
-          {(openPanel?.kind === "moveFolder" || openPanel?.kind === "deleteFolder") && (
+          {(openPanel?.kind === "moveFolder" ||
+            openPanel?.kind === "deleteFolder" ||
+            openPanel?.kind === "clearRemoved") && (
             <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
               {openPanel.kind === "moveFolder" && (
                 <MoveToFolder
@@ -2890,6 +3041,20 @@ export function CollectionPage() {
                   name={folderNameOf(openPanel.folderId) ?? "this folder"}
                   pending={folders.remove.isPending}
                   onConfirm={() => folders.remove.mutate(openPanel.folderId, { onSuccess: dismiss })}
+                  onCancel={dismiss}
+                  onClose={close}
+                />
+              )}
+
+              {/* The wishlist's `Clear…` (issue #471) one cabinet over, and in this strip for its
+                  reason: "clear this?" is a sentence about which cards go, and it fits on no tile.
+                  A refusal leaves the question open and the banner under the header says why —
+                  the folder delete's behaviour, since the two share that banner. */}
+              {openPanel.kind === "clearRemoved" && (
+                <ClearRemovedConfirm
+                  cards={removedCards}
+                  pending={clearRemoved.isPending}
+                  onConfirm={() => clearRemoved.mutate(undefined, { onSuccess: dismiss })}
                   onCancel={dismiss}
                   onClose={close}
                 />
@@ -2943,10 +3108,36 @@ export function CollectionPage() {
               the wall this sentence is about — a caption for a row of folder cards that is not on
               screen. It rides {@link cabinet} for exactly that reason rather than a fourth
               condition of its own. */}
-          {cabinet && inRemoved && wall.length > 0 && !empty && (
-            <p className="shrink-0 text-xs text-dim">
-              Drag a card onto a folder to file it back into your collection.
-            </p>
+          {/* **`Clear…` shares the line, and rides the cabinet for the sentence's own reason**
+              (issue #506): with the list flattened the reader is not *in* the holding area as far
+              as anything on screen says, so a press that empties it would be a write about a
+              folder nobody can see. It is drawn only while the folder holds cards — by the
+              summary's count, which is the folder's and not the filtered list's, so a filter that
+              hides every row does not hide the control that would clear them. Before the summary
+              answers the rows on screen stand in, which can only under-promise. */}
+          {cabinet && inRemoved && ((wall.length > 0 && !empty) || canClearRemoved) && (
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+              {wall.length > 0 && !empty ? (
+                <p className="text-xs text-dim">
+                  Drag a card onto a folder to file it back into your collection.
+                </p>
+              ) : (
+                <span />
+              )}
+              {canClearRemoved && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    clearRemoved.reset();
+                    open({ kind: "clearRemoved" }, e.currentTarget);
+                  }}
+                  aria-expanded={openPanel?.kind === "clearRemoved"}
+                  className={CONFIRM_CANCEL}
+                >
+                  Clear…
+                </button>
+              )}
+            </div>
           )}
 
           {/* Drawn wherever the cabinet is *and* there is something to put in it — a folder card, or
@@ -3698,6 +3889,95 @@ function DeleteFolderConfirm({
           )}
         >
           Delete folder
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className={cn(
+            "rounded-md border border-border px-2 py-1 text-dim",
+            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Emptying `Recently removed` — issue #506, and the one question on this page whose answer takes
+ * copies out of the collection rather than moving them around inside it.
+ *
+ * **It states its number, where {@link DeleteFolderConfirm} does not**, and the difference is the
+ * one the wishlist's `ClearFolderConfirm` draws: a delete moves the cards somewhere the reader can
+ * still find them, so the figure on the folder card is reassurance enough, but a clear *ends*
+ * them, and a reader deciding whether to lose forty cards should read "40" in the sentence they
+ * are answering. `cards` is `null` before the summary has answered, and the sentence then says
+ * which cards without guessing how many.
+ *
+ * **"This cannot be undone" is literally true and so it is said**: `collection_removed_clear`
+ * deletes the rows, and the holding area is the only place a copy goes on its way *out* — there
+ * is no second holding area behind it.
+ *
+ * `DeleteFolderConfirm`'s landing pad, blur rule and buttons verbatim, so the two questions this
+ * strip can ask behave identically under the caret.
+ */
+function ClearRemovedConfirm({
+  cards,
+  pending,
+  onConfirm,
+  onCancel,
+  onClose,
+}: {
+  /** The copies filed in `Recently removed`, or `null` before the summary has answered. */
+  cards: number | null;
+  pending: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onClose: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, []);
+
+  const which =
+    cards === null
+      ? "every card in Recently removed"
+      : cards === 1
+        ? "the 1 card in Recently removed"
+        : `all ${cards.toLocaleString("en")} cards in Recently removed`;
+
+  return (
+    <div
+      ref={panelRef}
+      tabIndex={-1}
+      role="group"
+      aria-label="Clear Recently removed"
+      // No `FOCUS`, {@link DeleteFolderConfirm}'s reason: a landing pad, not a control.
+      className={cn("rounded-md")}
+      onBlur={(e) => {
+        if (pending) return;
+        if (!panelRef.current?.contains(e.relatedTarget)) onClose();
+      }}
+    >
+      <p>Remove {which} from your collection?</p>
+      <p className="mt-1 leading-relaxed text-dim">This cannot be undone.</p>
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={pending}
+          className={cn(
+            "rounded-md border border-destructive px-2 py-1 text-destructive",
+            "transition-colors duration-150 hover:bg-destructive hover:text-bg",
+            "disabled:opacity-50 motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          Clear Recently removed
         </button>
         <button
           type="button"

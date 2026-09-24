@@ -75,6 +75,7 @@ const MADE: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   tokensOpen: false,
+  tokenStack: false,
   // `true` where its neighbour above is `false` — `decks.stats_open` is `NOT NULL
   // DEFAULT 1`, because every deck that exists today draws the Deck stats band and has
   // no control to hide it.

@@ -45,6 +45,7 @@ import {
   LibraryBig,
   Pencil,
   Plus,
+  Trash2,
 } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
@@ -240,6 +241,23 @@ export interface CardMenuDeps {
    */
   editCopy?: (entryId: number) => void;
   /**
+   * Take the copies behind the target out of the collection — every entry id the press reaches, in
+   * one call.
+   *
+   * **Wired only where those copies may have their count changed, and that fence is the
+   * surface's, not this file's.** The collection page passes it for a target whose every row is at
+   * the root, in a folder the reader made, or in `Recently removed` — and never for one in a
+   * deck's group, whose copies leave by being cut from the deck: removing them here would leave the
+   * deck listing a card whose copies had walked off, the {@link toDeck} paragraph's argument read
+   * from the other direction. The menu asks two things only — is it wired, and are there entry
+   * ids — and builds no row when either answer is no.
+   *
+   * **Plural always, and without a question**, which is where it parts from {@link moveToFolder}
+   * and {@link pickCopies}: a move has to ask *where* each of several copies goes, and a removal
+   * has only one destination, so a tile's ids go whole.
+   */
+  removeCopies?: (entryIds: readonly number[]) => void;
+  /**
    * The collection's filing cabinet, flat, as the host page already holds it.
    *
    * **A value and not a query**, {@link wishlistFolders}' shape and for its reason: every host
@@ -326,7 +344,7 @@ export interface CardMenuDeps {
    * ## Which rows read it
    *
    * The **writes** do: `Add to → Collection`, `Add to → Wishlist`, `Add to → Deck`, and the
-   * collection's `Move to`. Each is a per-card write over an address the target already carries,
+   * collection's `Move to` and `Remove from collection`. Each is a per-card write over an address the target already carries,
    * so plural is a loop and the label is the only thing that has to change.
    *
    * **`Copy card name`, `Copy card image`, `Open on` and `View all printings` stay about the one
@@ -487,10 +505,10 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
     // {@link CardMenuTarget.entryId} for why that is an absence rather than a greyed row.
     ...toItems(moveItem(rows, deps)),
     // Ruled off from the two filing rows above it, because it is a different question about the
-    // same cardboard: those two say where a copy *goes*, this one says what it *is*. Built as a
-    // pair so the rule arrives with the row — a separator with nothing under it is a menu that
-    // looks broken, and every surface that can name no row gets neither.
-    ...editItems(target, deps),
+    // same cardboard: those two say where a copy *goes*, these say what it *is* and whether it is
+    // still kept. Built as a group so the rule arrives with its rows — a separator with nothing
+    // under it is a menu that looks broken, and every surface that can name no row gets neither.
+    ...copyItems(target, rows, deps),
   ];
 }
 
@@ -789,7 +807,27 @@ function movableEntryIds(rows: readonly CardMenuTarget[]): number[] {
 }
 
 /**
- * "Edit copy…" — the rule and, where it is offered, the separator above it.
+ * The last group of a collection card's menu — `Edit copy…` then `Remove from collection` — with
+ * the rule above it, **or nothing at all**.
+ *
+ * One separator for the group rather than one per row, because the two are fenced differently
+ * ({@link editItem} on the target's own `entryId`, {@link removeItem} on every id the press
+ * reaches) and either can be present without the other. A rule owned by a row would be doubled
+ * when both are drawn, or left dangling above nothing when only the other is. The id is still
+ * `sep-edit`, the id the rule had when `Edit copy…` was the group's only member.
+ */
+function copyItems(
+  target: CardMenuTarget,
+  rows: readonly CardMenuTarget[],
+  deps: CardMenuDeps,
+): MenuItem[] {
+  const group = [...toItems(editItem(target, deps)), ...toItems(removeItem(rows, deps))];
+  if (group.length === 0) return [];
+  return [{ kind: "separator", id: "sep-edit" }, ...group];
+}
+
+/**
+ * "Edit copy…".
  *
  * **Fenced on {@link CardMenuTarget.entryId}, the *field* and not a count**, which is the whole
  * of the difference from `Move to` directly above it. That row reads `entryId` **and**
@@ -815,23 +853,53 @@ function movableEntryIds(rows: readonly CardMenuTarget[]): number[] {
  * whether it still exists; the host looks all of that up against the list it is drawing, which is
  * the same division `pickCopies` uses for the card's name.
  */
-function editItems(target: CardMenuTarget, deps: CardMenuDeps): MenuItem[] {
+function editItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem | null {
   const edit = deps.editCopy;
   const { entryId } = target;
-  if (edit === undefined || entryId === undefined) return [];
-  return [
-    { kind: "separator", id: "sep-edit" },
-    {
-      kind: "action",
-      id: "edit-copy",
-      // The ellipsis is the app's mark for a row that opens a surface rather than making a
-      // write — the folder card's `Rename…`, `Move to folder…` and `Delete…` all wear it, and
-      // this row is the first on a *card* menu that does.
-      label: "Edit copy…",
-      Icon: Pencil,
-      onSelect: () => edit(entryId),
-    },
-  ];
+  if (edit === undefined || entryId === undefined) return null;
+  return {
+    kind: "action",
+    id: "edit-copy",
+    // The ellipsis is the app's mark for a row that opens a surface rather than making a
+    // write — the folder card's `Rename…`, `Move to folder…` and `Delete…` all wear it, and
+    // this row is the first on a *card* menu that does.
+    label: "Edit copy…",
+    Icon: Pencil,
+    onSelect: () => edit(entryId),
+  };
+}
+
+/**
+ * "Remove from collection" — every entry the press reaches, gone in one write.
+ *
+ * **The ids are `Move to`'s, exactly** — {@link movableEntryIds} over the same rows, so the
+ * target plus a picked set, deduped, and only the members that name a stored row. Unlike
+ * `Edit copy…` it reads `entryIds` too: removing several rows asks nothing a reader has not
+ * already answered by pointing, where editing them would have to invent "the" grade of three.
+ *
+ * **Absent rather than greyed, `moveItem`'s rule**: no dep wired, or no ids, and the row is not
+ * built. The menu fences nothing else, and that is the division of labour rather than a gap —
+ * **which targets may lose copies is the surface's decision**, made when it chooses to pass
+ * {@link CardMenuDeps.removeCopies} at all (see there).
+ *
+ * **No confirmation, and no ellipsis**: the press is the write. The stepper walked to zero is the
+ * same write with no dialog in front of it, and the activity feed records both.
+ */
+function removeItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem | null {
+  const remove = deps.removeCopies;
+  const entryIds = movableEntryIds(rows);
+  if (remove === undefined || entryIds.length === 0) return null;
+  return {
+    kind: "action",
+    id: "remove-copies",
+    // Counted in entries, `Move to`'s unit and for its reason.
+    label:
+      entryIds.length > 1
+        ? `Remove ${manyCards(entryIds.length)} from collection`
+        : "Remove from collection",
+    Icon: Trash2,
+    onSelect: () => remove(entryIds),
+  };
 }
 
 /**

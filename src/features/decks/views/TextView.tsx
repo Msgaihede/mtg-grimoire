@@ -41,6 +41,7 @@ import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { packColumns, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
+import { hasTokenPile, TokenTextPile, type TokenPile } from "./TokenPile";
 
 /** Row pitch and header height, for the packer. Read off the classes below. */
 const ROW_HEIGHT = 22;
@@ -100,6 +101,7 @@ export function TextView({
   actions,
   selectedSlot,
   landed,
+  tokenPile,
   columnHeight = 640,
   className,
 }: {
@@ -168,6 +170,10 @@ export function TextView({
    * a prop because a story is allowed to ask for narrow columns to show what packing does.
    */
   columnHeight?: number;
+  /** The deck's tokens and emblems, drawn as the last group of the rail (issue #507) — the
+   *  Stacks view's place for them, so the two column views agree. Absent, or with no tokens, the
+   *  view is exactly what it was. See `TokenPile.tsx`. */
+  tokenPile?: TokenPile;
   className?: string;
 }) {
   // The Sideboard, the Maybeboard and every pile the reader has switched off are lifted out before
@@ -286,7 +292,7 @@ export function TextView({
           (added 2026-08-17): those piles arrive dimmed by the same route, and switching one back on
           returns it to the pack at its own `sortOrder`, because `splitRail` is derived per render
           and nothing here remembers where a pile was drawn last. */}
-      {rail.length > 0 && (
+      {(rail.length > 0 || hasTokenPile(tokenPile)) && (
         <div
           {...{ [RAIL_ATTR]: "" }}
           style={{ width: COLUMN_WIDTH, flex: `0 0 ${COLUMN_WIDTH}` }}
@@ -315,6 +321,8 @@ export function TextView({
               landed={landed}
             />
           ))}
+          {/* The tokens, last in the rail as they are in `StackView`'s — see `TokenPile.tsx`. */}
+          {hasTokenPile(tokenPile) && <TokenTextPile pile={tokenPile} />}
         </div>
       )}
     </div>
