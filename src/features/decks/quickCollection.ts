@@ -28,8 +28,51 @@
  * counts as a fork is a *count* and never a comparison against the shortfall — see
  * {@link choosePull}.
  */
-import type { DeckCard, DeckPullPick, DeckPullRow, DeckQuickAddWish } from "@/lib/ipc";
+import type {
+  DeckCard,
+  DeckMissingPick,
+  DeckPullPick,
+  DeckPullRow,
+  DeckQuickAddWish,
+} from "@/lib/ipc";
 import { NO_CHOICE, planPull, pullKey } from "./pullPlan";
+
+/**
+ * One row a quick add is pressed for, and the count its menu label quoted — issue #510.
+ *
+ * **The count travels with the row rather than being re-derived at the surface**, which is the
+ * rule the single-card press has always had: {@link quickAddShort} is the one spelling of a
+ * shortfall, so the number the write files is the number the menu quoted.
+ */
+export interface QuickAddTarget {
+  card: DeckCard;
+  copies: number;
+}
+
+/**
+ * A picked set's quick add, as the deck-wide write's picks — `deck_missing_to_collection`, which
+ * is one transaction and one history row for the whole press rather than one per card.
+ *
+ * **Folded on {@link pullKey}**, because that command's grain is `(cardId, finish)` and a printing
+ * short in two piles is two deck rows but one address: sending both would be two picks for one
+ * address. The copies are summed, which is what the two rows' chins say between them.
+ *
+ * Order is first appearance, so the write reads the set in the order the reader picked it.
+ */
+export function missingPicks(targets: readonly QuickAddTarget[]): DeckMissingPick[] {
+  const byKey = new Map<string, DeckMissingPick>();
+  for (const { card, copies } of targets) {
+    if (copies <= 0) continue;
+    const key = pullKey(card);
+    const held = byKey.get(key);
+    if (held === undefined) {
+      byKey.set(key, { cardId: card.cardId, finish: card.finish, quantity: copies });
+    } else {
+      held.quantity += copies;
+    }
+  }
+  return [...byKey.values()];
+}
 
 /**
  * What the row the reader right-clicked is short of — exactly the red `3/4` a stacked card's
@@ -225,4 +268,33 @@ export function choosePull(rows: readonly DeckPullRow[], card: DeckCard): PullCh
   // takes a mutable `DeckPullPick[]` — it is the wire type — and the array it is given belongs
   // to a plan a dialog may still be drawing from.
   return { kind: "take", picks: [...picks] };
+}
+
+/**
+ * {@link choosePull} over a picked set — issue #510.
+ *
+ * **Silent only when every member is**: each distinct {@link pullKey} is asked the one-card
+ * question, and a single `ask` among them opens the dialog over the whole set, where the
+ * unambiguous rows arrive pre-picked beside the ones that need the reader. Taking the easy half
+ * silently and asking about the rest would split one press into a write and a question about a
+ * different number than the menu quoted.
+ *
+ * Deduplicated by key, because a printing short in two piles is one row of the plan and taking
+ * its picks twice would ask the backend for copies twice over.
+ */
+export function choosePullFor(
+  rows: readonly DeckPullRow[],
+  cards: readonly DeckCard[],
+): PullChoiceForCard {
+  const seen = new Set<string>();
+  const picks: DeckPullPick[] = [];
+  for (const card of cards) {
+    const key = pullKey(card);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const choice = choosePull(rows, card);
+    if (choice.kind === "ask") return { kind: "ask" };
+    picks.push(...choice.picks);
+  }
+  return picks.length === 0 ? { kind: "ask" } : { kind: "take", picks };
 }
