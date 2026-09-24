@@ -16119,6 +16119,124 @@ describe("the price movers", () => {
 });
 
 /**
+ * `price_history` — one printing's line for the movers popup: a point per UTC day before today,
+ * oldest first, and today's live figure beside it.
+ *
+ * The fixture is the movers block's own foil-only Sphinx, so `now` is a known number. Today is
+ * **2026-08-09**, {@link CLOCK_BASE}'s calendar day, and it is spelt here as a date rather than
+ * derived from the constant, so a handler that floored the clock wrongly cannot agree with itself.
+ */
+describe("the price history", () => {
+  const DAY = 86_400;
+  const TODAY = Date.UTC(2026, 7, 9) / 1_000;
+  const NOW = readHandlers(makeDb()).card_detail({ id: FOIL_ONLY.id })!.finishPrices.foil!;
+
+  function snap(price: number, takenAt: number, over: Partial<FakePriceSnapshot> = {}) {
+    return {
+      marketplace: "tcgplayer" as MarketplaceId,
+      cardId: FOIL_ONLY.id,
+      finish: "foil" as const,
+      price,
+      takenAt,
+      ...over,
+    };
+  }
+
+  const ask = (db: FakeDb, cardId = FOIL_ONLY.id, finish = "foil", marketplace?: string) =>
+    readHandlers(db).price_history({ cardId, finish, marketplace });
+
+  /** One per day, the later snapshot of a day winning **by time rather than by array order**, and
+   *  nothing from today — neither a snapshot at midnight nor one after the clock. */
+  it("answers one point per UTC day before today, oldest first, the day's latest price", () => {
+    const db = makeDb({
+      priceHistory: [
+        snap(20, TODAY - DAY + 9 * 3_600),
+        snap(31, TODAY - 2 * DAY + 10 * 3_600),
+        snap(30, TODAY - 2 * DAY + 8 * 3_600),
+        snap(NOW, TODAY),
+        snap(NOW, CLOCK_BASE),
+        snap(99, TODAY + 3_600),
+        snap(10, TODAY - 3 * DAY + 9 * 3_600),
+        snap(21, TODAY - 1),
+      ],
+    });
+
+    expect(ask(db)).toEqual({
+      points: [
+        { day: TODAY - 3 * DAY, price: 10 },
+        { day: TODAY - 2 * DAY, price: 31 },
+        { day: TODAY - DAY, price: 21 },
+      ],
+      now: NOW,
+      today: TODAY,
+    });
+  });
+
+  /** Another marketplace's, another finish's and another card's rows are not this line's. */
+  it("keeps to one marketplace, one finish and one card", () => {
+    const db = makeDb({
+      priceHistory: [
+        snap(1, TODAY - DAY),
+        snap(2, TODAY - DAY, { marketplace: "cardmarket" }),
+        snap(3, TODAY - DAY, { finish: "nonfoil" }),
+        snap(4, TODAY - DAY, { cardId: BOLT_2X2.id }),
+      ],
+    });
+
+    expect(ask(db).points).toEqual([{ day: TODAY - DAY, price: 1 }]);
+    expect(ask(db, FOIL_ONLY.id, "foil", "cardmarket").points).toEqual([
+      { day: TODAY - DAY, price: 2 },
+    ]);
+    expect(ask(db, FOIL_ONLY.id, "nonfoil").points).toEqual([{ day: TODAY - DAY, price: 3 }]);
+  });
+
+  /** `Marketplace::from_id`: absent, unknown and unpriced all read TCGplayer's history. */
+  it("reads an absent, unknown or unpriced marketplace as TCGplayer", () => {
+    const db = makeDb({
+      priceHistory: [snap(1, TODAY - DAY), snap(2, TODAY - DAY, { marketplace: "cardmarket" })],
+    });
+    const tcgplayer = ask(db, FOIL_ONLY.id, "foil", "tcgplayer");
+
+    expect(tcgplayer.points).toEqual([{ day: TODAY - DAY, price: 1 }]);
+    expect(ask(db)).toEqual(tcgplayer);
+    expect(ask(db, FOIL_ONLY.id, "foil", "ebay")).toEqual(tcgplayer);
+    expect(ask(db, FOIL_ONLY.id, "foil", "cardtrader")).toEqual(tcgplayer);
+  });
+
+  /** `now` is the collection's own price and `null` is an answer: a finish the marketplace does
+   *  not quote, or a card nobody has heard of. */
+  it("answers today's price as now, and null where there is none", () => {
+    const db = makeDb({ priceHistory: [] });
+
+    expect(ask(db)).toEqual({ points: [], now: NOW, today: TODAY });
+    // Cardmarket has no `eur_etched` key at all.
+    expect(ask(db, FOIL_ONLY.id, "etched", "cardmarket").now).toBeNull();
+    expect(ask(db, "no-such-card")).toEqual({ points: [], now: null, today: TODAY });
+  });
+
+  it("refuses a finish it does not know", () => {
+    expect(() => ask(makeDb(), FOIL_ONLY.id, "shiny")).toThrow(/is not a finish/);
+  });
+
+  /** The derived history carries a snapshot *at* today, and the line still stops before it. */
+  it("draws the starter collection's derived history up to yesterday, and nothing for empty", () => {
+    const db = seed("starter");
+    const owned = db.collectionEntries.find(
+      (e) => e.quantity > 0 && ask(db, e.cardId, e.finish).now !== null,
+    )!;
+    const got = ask(db, owned.cardId, owned.finish);
+
+    expect(
+      db.priceHistory.some((s) => s.cardId === owned.cardId && s.takenAt >= TODAY),
+    ).toBe(true);
+    expect(got.points.length).toBeGreaterThan(1);
+    expect(got.points.every((p) => p.day < TODAY)).toBe(true);
+    expect(got.points.every((p, i) => i === 0 || got.points[i - 1].day < p.day)).toBe(true);
+    expect(ask(seed("empty"), owned.cardId, owned.finish).points).toEqual([]);
+  });
+});
+
+/**
  * `new_printings` — the reprints of what the watched decks hold, and the cursor beside them.
  *
  * **The corpus is the test's own here where every other block in this file reads the fixture's**,

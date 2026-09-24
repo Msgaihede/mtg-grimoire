@@ -2922,6 +2922,20 @@ describe("ipc argument names match the Rust command signatures", () => {
       declares(priceHistoryRs, "price_movers", param);
     }
 
+    // The movers popup's read (issue #515) — `record_recent_card`'s trap and `price_movers`' at
+    // once: the card id must reach `card_id`, and `finish` and `marketplace` are bare strings side
+    // by side, so a wrapper that swapped them type-checks and answers an unpriced history.
+    invoke.mockResolvedValue({ points: [], now: null, today: 0 });
+    await ipc.priceHistory("bolt-lea", "foil", "cardkingdom");
+    expect(invoke).toHaveBeenCalledWith("price_history", {
+      cardId: "bolt-lea",
+      finish: "foil",
+      marketplace: "cardkingdom",
+    });
+    for (const param of ["card_id", "finish", "marketplace"]) {
+      declares(priceHistoryRs, "price_history", param);
+    }
+
     /**
      * **Eight arguments, three of them bare booleans side by side** — `price_movers`' own trap
      * one worse. A wrapper that swapped `includeTheory` and `includeBasics` type-checks, is
@@ -4776,6 +4790,14 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["StickyNote", stickyNotesRs, "StickyNoteRow"],
     ["PriceMover", priceHistoryRs, "PriceMover"],
     ["PriceMovers", priceHistoryRs, "PriceMovers"],
+    // **The movers popup's two** (issue #515), nested for `PriceMovers`' reason: a field renamed
+    // inside `PricePoint` leaves `PriceHistory` agreeing while every point of the line reads
+    // `undefined`. Both are the quiet kind. A renamed `day` or `price` gives the chart `NaN`s and
+    // an empty plot that looks exactly like a printing with no history; a renamed `now` is
+    // `undefined`, which is not `null`, so an unpriced today can no longer be told apart; and
+    // a renamed `today` leaves the page no day to place the live point on.
+    ["PricePoint", priceHistoryRs, "PricePoint"],
+    ["PriceHistory", priceHistoryRs, "PriceHistory"],
     // **The tenth widget's three**, and they are nested two deep for `PriceMovers`' reason: a
     // field renamed inside `NewPrintingDeck` leaves both structs above it agreeing while every
     // row of the drill-down popover reads `undefined`.

@@ -6573,6 +6573,30 @@ export interface PriceMovers {
   days: number;
 }
 
+/** One day of one printing's price — `price_history.rs`'s `PricePoint`. */
+export interface PricePoint {
+  /** Unix seconds of that day's UTC midnight — the day the snapshot was taken, not its instant. */
+  day: number;
+  price: number;
+}
+
+/**
+ * One printing's price over time at one marketplace — `price_history.rs`'s `PriceHistory`.
+ *
+ * **`points` stops before today**, oldest first and one per day: today's figure is `now`, read
+ * live through `sorting::price_expr` — the same number {@link PriceMover}'s `now` is — so the
+ * popup's latest figure is the price the widget row showed rather than a snapshot that can lag it
+ * by a feed. `now` is `null` when this marketplace has no price for the printing today, which
+ * is an answer and never a reason to reach for another marketplace's. `today` is the database's
+ * own `unixepoch(date('now'))`, so the page places the last point without a clock of its own —
+ * one clock for the whole answer, and a test that can pin it.
+ */
+export interface PriceHistory {
+  points: PricePoint[];
+  now: number | null;
+  today: number;
+}
+
 /**
  * One of the reader's own sticky notes — `sticky_notes.rs`'s `StickyNoteRow` (user schema v46).
  *
@@ -9311,6 +9335,14 @@ export const ipc = {
     marketplace: MarketplaceId,
     limit: number,
   ) => invoke<PriceMovers>("price_movers", { window, direction, marketplace, limit }),
+  /**
+   * One printing's daily price at `marketplace` and `finish`, before today and oldest first,
+   * beside today's live figure — the Price movers popup's read. The points are `price_snapshots`'
+   * rows, which are only ever taken of **owned** printings, so a printing never owned answers no
+   * points and may still answer a `now`. See {@link PriceHistory}.
+   */
+  priceHistory: (cardId: string, finish: Finish, marketplace: MarketplaceId) =>
+    invoke<PriceHistory>("price_history", { cardId, finish, marketplace }),
   /**
    * Every sticky note, `ORDER BY sort_order, id` — see {@link StickyNote}.
    *

@@ -1,8 +1,11 @@
 //! What the reader's cards cost on each day this app has looked — and which of them moved.
 //!
-//! **The home page's Price movers widget, both halves**: [`snapshot`] records today's price for
-//! every printing the collection owns, in every priced marketplace, into `price_snapshots` (user
-//! schema v45); [`movers`] compares today's live price against the snapshot a window ago.
+//! **The home page's Price movers widget, both halves, and the detail a mover opens**:
+//! [`snapshot`] records today's price for every printing the collection owns, in every priced
+//! marketplace, into `price_snapshots` (user schema v45); [`movers`] compares today's live price
+//! against the snapshot a window ago; [`history`] answers one printing's every kept snapshot, for
+//! the chart in that detail. The third only reads what the first wrote, so the rules below are
+//! its too.
 //!
 //! # The rules
 //!
@@ -456,6 +459,114 @@ pub async fn price_movers(
     .map_err(|e| format!("price movers could not be read: {e}"))?
 }
 
+/// One kept snapshot of one printing's price.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PricePoint {
+    /// Unix seconds of the snapshot's UTC midnight — `unixepoch(day)`.
+    pub day: i64,
+    pub price: f64,
+}
+
+/// One printing's remembered prices at one marketplace, with today's beside them.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PriceHistory {
+    /// Every kept snapshot for this printing, finish and marketplace **before today**, oldest
+    /// first.
+    pub points: Vec<PricePoint>,
+    /// Today's live price at the asked marketplace — the number [`movers`] calls `now` — or
+    /// `None` when that finish is unpriced there or the card is not in the corpus.
+    pub now: Option<f64>,
+    /// Unix seconds of today's UTC midnight — `unixepoch(date('now'))`, so the page never reads
+    /// a clock of its own for "today".
+    pub today: i64,
+}
+
+/// [`history`]'s points. Bound: marketplace key, card id, finish, and today's `YYYY-MM-DD`.
+const HISTORY_SQL: &str = "SELECT unixepoch(day), price FROM price_snapshots
+     WHERE marketplace = ?1 AND card_id = ?2 AND finish = ?3 AND day < ?4
+     ORDER BY day";
+
+/// One printing's history at `market`: every kept snapshot before today, oldest first, and the
+/// live price beside it.
+///
+/// * **Today is `now`'s and never a point**, `Window::All`'s rule: today's snapshot is an earlier
+///   reading of the same day's live price, and a chart holding both draws one day twice.
+///   The day is read **once**, by the first statement, and bound into the second, so a read
+///   straddling UTC midnight cannot answer a point that is not before its own `today`.
+/// * **`now` is [`sorting::price_expr`] against the `cards` row, with the finish bound as `?2`**
+///   rather than written into the SQL — a scalar subquery, so an id the corpus does not hold is a
+///   NULL rather than no row. It is **not** gated on ownership: a price is a fact about the
+///   printing, and a mover the reader has since sold may still be open on the page.
+/// * **An unknown card id is not an error.** `now` is `None`, and the points are whatever history
+///   the table holds for that id — `card_id` is a soft reference, so a printing gone from the
+///   corpus keeps its snapshots until [`prune`] ages them out.
+/// * **A finish outside [`crate::schema::FINISHES`] is refused** in `collection`'s sentence.
+///
+/// **A seek, not a scan**: `idx_price_snapshots_printing` is `(marketplace, card_id, finish, day)`,
+/// so the three equalities and the day bound are one index range already in day order. The index
+/// carries the key and not the price, so each point costs one primary-key probe — at most
+/// [`DAILY_DAYS`] daily rows plus one a week back to [`KEEP_DAYS`], about ninety, because
+/// [`prune`] bounds them. `a_history_read_seeks_the_printing_index` pins the plan.
+pub fn history(
+    conn: &Connection,
+    card_id: &str,
+    finish: &str,
+    market: Marketplace,
+) -> Result<PriceHistory, String> {
+    let finish = crate::collection::valid_finish(finish)?;
+    let (day, today, now): (String, i64, Option<f64>) = conn
+        .query_row(
+            &format!(
+                "SELECT date('now'), unixepoch(date('now')),
+                        (SELECT {price} FROM cards c WHERE c.id = ?1)",
+                price = sorting::price_expr(market, "?2"),
+            ),
+            params![card_id, finish],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare(HISTORY_SQL).map_err(|e| e.to_string())?;
+    let points = stmt
+        .query_map(params![market_key(market), card_id, finish, day], |r| {
+            Ok(PricePoint {
+                day: r.get(0)?,
+                price: r.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+
+    Ok(PriceHistory { points, now, today })
+}
+
+/// A mover's detail: one printing's kept history at one marketplace, and its live price.
+/// **Read-only** connection, blocking pool, and the marketplace taken as [`price_movers`] takes
+/// it — an absent or unknown id is TCGplayer, never a refusal.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn price_history(
+    state: tauri::State<'_, Arc<AppState>>,
+    card_id: String,
+    finish: String,
+    marketplace: Option<Marketplace>,
+) -> Result<PriceHistory, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        history(
+            &crate::sync::lock_db_read(&state),
+            &card_id,
+            &finish,
+            marketplace.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|e| format!("price history could not be read: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -893,6 +1004,170 @@ mod tests {
         assert_eq!(
             out.days, 1,
             "the history is still there; it just moves nothing owned"
+        );
+    }
+
+    /// `unixepoch` of the day `ago` days back, SQLite's own clock — what a point's `day` holds.
+    fn day(conn: &Connection, ago: i64) -> i64 {
+        conn.query_row(
+            "SELECT unixepoch(date('now', '-' || ?1 || ' days'))",
+            [ago],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn points(h: &PriceHistory) -> Vec<(i64, f64)> {
+        h.points.iter().map(|p| (p.day, p.price)).collect()
+    }
+
+    /// Oldest first, today's own row left to `now`, and `today` SQLite's midnight rather than
+    /// anybody's clock.
+    #[test]
+    fn a_history_is_every_day_before_today_oldest_first() {
+        let conn = conn();
+        past(&conn, 8, "tcgplayer", "bolt", "nonfoil", 7.0);
+        past(&conn, 1, "tcgplayer", "bolt", "nonfoil", 9.0);
+        past(&conn, 30, "tcgplayer", "bolt", "nonfoil", 4.0);
+        past(&conn, 0, "tcgplayer", "bolt", "nonfoil", 9.5); // today: `now`'s, not a point
+
+        let h = history(&conn, "bolt", "nonfoil", Marketplace::Tcgplayer).unwrap();
+
+        assert_eq!(
+            points(&h),
+            [
+                (day(&conn, 30), 4.0),
+                (day(&conn, 8), 7.0),
+                (day(&conn, 1), 9.0)
+            ]
+        );
+        assert_eq!(h.now, Some(10.0), "the live blob price, not today's row");
+        assert_eq!(h.today, day(&conn, 0));
+    }
+
+    /// Another marketplace's rows and another finish's rows are someone else's history.
+    #[test]
+    fn a_history_is_one_marketplace_and_one_finish() {
+        let conn = conn();
+        past(&conn, 8, "tcgplayer", "bolt", "nonfoil", 7.0);
+        past(&conn, 8, "tcgplayer", "bolt", "foil", 45.0);
+        past(&conn, 8, "cardmarket", "bolt", "nonfoil", 6.0);
+        past(&conn, 8, "tcgplayer", "ring", "nonfoil", 90.0);
+
+        let tcg = history(&conn, "bolt", "nonfoil", Marketplace::Tcgplayer).unwrap();
+        assert_eq!(points(&tcg), [(day(&conn, 8), 7.0)]);
+        let foil = history(&conn, "bolt", "foil", Marketplace::Tcgplayer).unwrap();
+        assert_eq!(points(&foil), [(day(&conn, 8), 45.0)]);
+        assert_eq!(foil.now, Some(50.0), "priced at its own finish");
+        let cm = history(&conn, "bolt", "nonfoil", Marketplace::Cardmarket).unwrap();
+        assert_eq!(points(&cm), [(day(&conn, 8), 6.0)]);
+        assert_eq!(cm.now, Some(8.0));
+        let mp = history(&conn, "bolt", "nonfoil", Marketplace::Manapool).unwrap();
+        assert!(mp.points.is_empty());
+        assert_eq!(mp.now, None, "no feed row is no price, never a neighbour's");
+    }
+
+    /// `now` goes through the one price builder, so a feed-backed marketplace reads its own
+    /// table, the etched hole in Cardmarket is a hole here too, and ownership is not asked.
+    #[test]
+    fn now_is_the_live_price_at_the_asked_marketplace() {
+        let conn = conn();
+        let now = |id: &str, finish: &str, market: Marketplace| {
+            history(&conn, id, finish, market).unwrap().now
+        };
+        assert_eq!(now("bolt", "nonfoil", Marketplace::Cardkingdom), Some(12.5));
+        assert_eq!(now("bolt", "foil", Marketplace::Cardkingdom), None);
+        assert_eq!(
+            now("bolt", "foil", Marketplace::Cardmarket),
+            None,
+            "no eur_foil"
+        );
+        assert_eq!(
+            now("ring", "etched", Marketplace::Tcgplayer),
+            None,
+            "no usd_etched"
+        );
+        assert_eq!(now("ring", "etched", Marketplace::Cardmarket), None);
+        assert_eq!(now("free", "nonfoil", Marketplace::Tcgplayer), None);
+        assert_eq!(
+            now("lonely", "nonfoil", Marketplace::Tcgplayer),
+            Some(3.0),
+            "a price is a fact about the printing, owned or not"
+        );
+    }
+
+    /// An id the corpus does not hold is no price and no refusal — and its history, if the table
+    /// kept one, is still answered, because `card_id` is a soft reference.
+    #[test]
+    fn an_unknown_card_is_no_price_and_no_error() {
+        let conn = conn();
+        let none = history(&conn, "nowhere", "nonfoil", Marketplace::Tcgplayer).unwrap();
+        assert!(none.points.is_empty());
+        assert_eq!(none.now, None);
+        assert_eq!(none.today, day(&conn, 0));
+
+        past(&conn, 3, "tcgplayer", "gone", "foil", 2.0);
+        let gone = history(&conn, "gone", "foil", Marketplace::Tcgplayer).unwrap();
+        assert_eq!(points(&gone), [(day(&conn, 3), 2.0)]);
+        assert_eq!(gone.now, None);
+    }
+
+    #[test]
+    fn a_finish_outside_the_three_is_refused_in_the_collections_words() {
+        let conn = conn();
+        let err = history(&conn, "bolt", "gilded", Marketplace::Tcgplayer).unwrap_err();
+        assert_eq!(
+            err,
+            crate::collection::valid_finish("gilded").unwrap_err(),
+            "one sentence for one refusal"
+        );
+        assert!(history(&conn, "bolt", "", Marketplace::Tcgplayer).is_err());
+        assert!(history(&conn, "bolt", "Foil", Marketplace::Tcgplayer).is_err());
+    }
+
+    /// The seek [`history`]'s doc promises: a range on the printing index, already in day order.
+    #[test]
+    fn a_history_read_seeks_the_printing_index() {
+        let conn = conn();
+        let mut stmt = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {HISTORY_SQL}"))
+            .unwrap();
+        let plan: Vec<String> = stmt
+            .query_map(params!["tcgplayer", "bolt", "nonfoil", "2026-09-24"], |r| {
+                r.get(3)
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|d| d.contains("idx_price_snapshots_printing")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|d| d.contains("TEMP B-TREE")),
+            "no sort of its own: {plan:?}"
+        );
+    }
+
+    #[test]
+    fn the_history_serialises_under_the_names_the_page_reads() {
+        let v = serde_json::to_value(PriceHistory {
+            points: vec![PricePoint {
+                day: 1_800_000_000,
+                price: 1.5,
+            }],
+            now: None,
+            today: 1_800_086_400,
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({
+                "points": [{ "day": 1_800_000_000, "price": 1.5 }],
+                "now": null,
+                "today": 1_800_086_400
+            })
         );
     }
 
