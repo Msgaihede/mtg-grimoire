@@ -11263,6 +11263,9 @@ export function readHandlers(db: FakeDb) {
         promoTypes: p.promoTypes,
         finishes: p.finishes,
         lang: p.lang,
+        // `front_face_map`'s answer, through the one fold every other picture-carrying row here
+        // uses — so `imageUrisMissing` empties this feed's thumbs exactly as it empties a wall's.
+        imageUris: frontFaceImageUris(db, p.id),
         decks: [...(holders.get(p.oracleId)?.values() ?? [])].sort(
           (a, b) => cmp(a.name, b.name) || a.deckId - b.deckId,
         ),

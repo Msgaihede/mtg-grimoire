@@ -907,8 +907,10 @@ background.
 
 [Issue #462](https://github.com/Msgaihede/mtg-grimoire/issues/462), raised from the Luminia Discord
 on 2026-09-14. Reverse-chronological reprints, grouped by release day, of cards the decks a reader
-watches already hold; a row opens a popover of the decks holding that card, and a deck there opens
-the card in that deck. The design is
+watches already hold; a row opens the printing, drawn large, beside the decks holding that card, and
+a deck there opens the card in that deck. (The row opened a popover of the decks alone until
+[issue #514](https://github.com/Msgaihede/mtg-grimoire/issues/514) — see the last subsection.) The
+design is
 [`2026-09-20-new-printings-widget-design.md`](../superpowers/specs/2026-09-20-new-printings-widget-design.md)
 with five artboards beside it, and **three of its decisions were superseded on the way in** — each
 is recorded below rather than left for a reader to discover by diffing.
@@ -1090,17 +1092,19 @@ by adding two to 172.
 
 `src/lib/ipc.test.ts` carries three mirror rows (`NewPrintingDeck`, `NewPrinting`, `NewPrintings` —
 nested two deep, `PriceMovers`' reason: a field renamed inside the deck entry leaves both structs
-above it agreeing while every popover row reads `undefined`) and two `declares` cases. The fence was
+above it agreeing while every deck row in the dialog reads `undefined`) and two `declares` cases. The fence was
 checked rather than trusted: renaming `seen_at` to `seen_when` in the crate turns the `NewPrintings`
 row red.
 
-### Two limitations worth writing down
+### Limitations worth writing down
 
-**A row's thumb is blank on the web and Android targets.** `NewPrinting` carries no `imageUris`, so
-`cardArtSrc` — which on those targets answers the *supplied* URL and ignores the `mtgimg://` one —
-has nothing to draw. **This is shared with `recentCards`**, whose `RecentCard` carries none either
-and whose tiles are entirely card art, so it is a standing property of the home page's card
-pictures rather than something this kind introduced. Closing it means the field on both commands.
+**A row's thumb was blank on the web and Android targets, and for this kind that is closed**
+(issue #514, 2026-09-24). `NewPrinting` carried no `imageUris`, so `cardArtSrc` — which on those
+targets answers the *supplied* URL and ignores the `mtgimg://` one — had nothing to draw. It
+carries `image_uri::front_face_map`'s answer now, and the thumb passes its `display` entry, because
+`LIST_VARIANTS` is `display` and `art` and no `thumb` travels. **`recentCards` still has the gap**:
+its `RecentCard` carries none, and its tiles are entirely card art, so closing it there is the same
+field on that command.
 
 **The Storybook corpus cannot exercise the language rule, and one story is deliberately absent.**
 The fake's only two-language card is Lightning Bolt's Japanese `sta 105`, released 2021-04-23 —
@@ -1111,4 +1115,71 @@ a `scripts/gen-storybook-cards.mjs` selection change, deliberately not made mid-
 is generated wholesale and adding rows moves counts across `db.test.ts` and other files' plays.
 The same corpus yields at most **two** rows — one at 90 days, two at 365 — which is why the story
 set is `Default`, `Band`, `Tall`, `NoDecks`, `NothingReprinted` and `Chosen` rather than the
-design's table.
+design's table — with `PrintingOpen` beside them since issue #514, the one story that presses a
+row.
+
+### A row opens the printing, drawn by the card modal (issue #514, 2026-09-24)
+
+[Issue #514](https://github.com/Msgaihede/mtg-grimoire/issues/514), from the same Discord, asked for
+a popup with a large preview of the card and the reader's decks that include it — and was filed as
+a *possible regression of #462*, which had shipped a popup already. It had, and the report was fair
+anyway: the row opened a 248px `AnchoredPopup` of decks alone, `absolute` inside the row, and the
+row is inside the widget body's scroller (`overflow-x-hidden`, `overflow-y-auto`). A 2 × 2 tile is
+**220px** wide at the grid's target cell (`spanPx(2, 104)`), so a 248px panel pinned by its right
+edge (`align="end"`) reaches past the scroller's left edge, which clips it — read off the code and
+the arithmetic, not driven, since the popover was gone by the live pass. §6 of the design (*"the
+popover is the reason `WidgetCard` does not clip and this body must not either"*) was right about
+the card and wrong about the body: the body **is** the scroller.
+
+**It is a `components/Dialog` now** — `NewPrintingDialog.tsx`, mounted by the body on
+`StickyNoteDialog`'s precedent — and it is drawn from the card modal's own parts, because the reader
+asked for the preview to look like the card details popup and the way two surfaces stay alike is by
+being one drawing: `CardModalTitle` (moved out of `CardDetailModal` for it — and, since the merge
+with #515's price history dialog, which exported the same heading in place on the same day, the
+one heading all three dialogs draw), `CardModalArt` whole —
+the bordered frame, the chin, *View as foil*, one price cell per finish — the rail's left rule,
+accented heading and `RAIL_ENTRY` rows for the decks, and the modal's footer row with its credit,
+its `pricesAsOf` line and an `ACTION` button, *Open card details*. The card is read at
+`cardDetailKey`, so that press paints the modal from the entry the dialog filled.
+
+Driven in the shipped window (dev build, 1920×1080, the main checkout's data copied in):
+
+| Case | Measured |
+| --- | --- |
+| A row pressed at 100% | panel **704 × 743** at `608,168`, footer row included; picture **298 × 417** (the `display` variant, `naturalWidth` 672); caret on the panel |
+| Beside the card modal on the same printing | the left columns are one drawing — frame, chin `TRK · 278 · Star Trek`, *View as foil*, the two price cells, the title with its type line |
+| *Open card details*, then Escape out of the modal | the caret lands on the **row**: the press hands it back to the row in the same handler that selects the card, and the modal remembers what held the caret when it mounted — the order of those two lines is not what does it, since React commits after the handler |
+| A deck pressed | `activeView: decks`, the deck's id, the printing selected — the modal opens over the deck, which is #462's second half |
+| 1024 × 700, the app's floor | panel 704 × 630 just under the title bar; the body scrolls **598 over 485** with the footer pinned; `scrollWidth` 1024 |
+| 390 wide | full bleed, picture **338 × 473** over the decks and the footer, no horizontal scroll |
+| The dashboard at **150%** | before `AppScale`, the panel drew **1056** wide — 1.5 × 704 — beside a card modal that never scales; after it, **704** and **298 × 417** again |
+
+**Two traps, both found on this pass.** ⚠️ **The row carries `aria-haspopup="dialog"` and never
+`aria-expanded`**: `WidgetCard`'s `LAYER.raisedWhenPopupOpen` lifts the card to `z-10` whenever
+anything inside it says `aria-expanded="true"`, and a card with a z-index is a stacking context that
+would cap this dialog's scrim at the card's layer. The suite pins the attribute's absence, because
+jsdom has no opinion about a z-index. **And the grid's Ctrl+scroll `zoom` reaches a `fixed`
+descendant**: §4 measured the two things that cross the zoom boundary and ruled that the tooltip
+"stays at app scale, which is right — a tooltip is chrome", and a window-wide modal is chrome in the
+same sense. `features/home/AppScale.tsx` is a `display: contents` wrapper carrying `zoom: 1 / home`;
+`zoom` compounds by multiplication and is resolved through the element tree rather than the box
+tree, so the wrapper cancels the grid's without taking a flex slot — checked in the window, since
+jsdom lays out neither. **`StickyNoteDialog` has the same inheritance and was left alone** — it is
+another kind's surface, and it was not driven on this pass — so by the same mechanism a note opened
+at 150% should still be drawn at 150%. Wrapping its mount in `AppScale` is the whole of the fix.
+
+**A review before the PR found three more, and the first had been shipping since #462.**
+`new_printings::feed` attached the decks with `by_oracle.remove(&oracle_id)`, so the **first**
+printing of a card on the page took them and every later one — a showcase variant, a second set, a
+second language under *Every language* — read `decks: []`: a `0 decks` row, and now a dialog
+opening on an empty *In 0 watched decks* under a card the reader's decks plainly hold. Neither
+suite could see it: the fake reads `holders.get`, so every printing got its decks there, and no
+Rust case put two printings of one card on the page and looked at the second's decks. It clones now,
+and `two_reprints_of_one_card_both_carry_its_decks` fails under the old `remove`. The other two were
+the dialog's own. **A failed background refetch took it down** — mounted only in the list's branch,
+it unmounted with no fade when `isError` flipped and reopened by itself on the next good read,
+because `open` was still true; the body is now `content` then `dialog` in every branch, so it is one
+instance whatever the list is doing. **And a row pressed during the 180ms close fade revived the
+fading panel** rather than mounting one, leaving the caret on the row outside an `aria-modal`
+dialog; the dialog is keyed on a per-press `opening`. Each has a case that goes red when the fix is
+taken out, checked by taking it out.

@@ -271,3 +271,30 @@ export const Chosen: Story = {
     );
   },
 };
+
+/**
+ * A row pressed: the printing, large, drawn by the card modal's own parts — `CardModalTitle` over
+ * `CardModalArt`, the bordered frame with its chin, its foil control and one price cell per finish —
+ * with the watched decks that hold the card beside it (issue #514).
+ *
+ * **Its own frame on the docs page**, for `StickyNoteDialog`'s reason: the scrim is `fixed inset-0`,
+ * so drawn inline it would cover the whole page and every story under it.
+ */
+export const PrintingOpen: Story = {
+  parameters: { docs: { story: { inline: false, height: "760px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = within(await canvas.findByRole("region", { name: "New printings" }));
+
+    await userEvent.click(await card.findByRole("button", { name: /^Swords to Plowshares/ }));
+
+    const dialog = within(
+      await canvas.findByRole("dialog", { name: /^Swords to Plowshares/ }, POPOVER_TIMEOUT),
+    );
+    await expect(
+      await dialog.findByRole("img", { name: "Swords to Plowshares" }, POPOVER_TIMEOUT),
+    ).toBeInTheDocument();
+    await expect(dialog.getByRole("region", { name: "In 1 watched deck" })).toBeInTheDocument();
+    await expect(dialog.getByRole("button", { name: "Open card details" })).toBeInTheDocument();
+  },
+};

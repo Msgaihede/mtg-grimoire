@@ -97,8 +97,12 @@ const VARIANT_LABEL: Record<DeckVariant, string> = { live: "Actual", theory: "Th
  * {@link PRESS_SOFT} rather than {@link import("@/lib/motion").PRESS}, for its own documented
  * reason — these are as wide as the column they sit in, and a full-width row dipping 3% reads as
  * the panel moving rather than as a button going down.
+ *
+ * Exported for `NewPrintingDialog` (issue #514), which was asked to look like this modal: its
+ * deck rows are rail entries in everything but the list they are in, and a copied class string is
+ * the drift this repo has already paid for twice.
  */
-const RAIL_ENTRY = cn(
+export const RAIL_ENTRY = cn(
   // `px-5` rather than the `px-3` this shipped with: the mockup draws these at 22px and the
   // tighter inset read as cramped against a 44px-tall control. It also lifts the column's own
   // `max-content` contribution, which is why the rail's track carries a floor rather than a

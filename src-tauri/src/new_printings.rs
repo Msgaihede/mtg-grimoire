@@ -12,7 +12,8 @@
 //!
 //! **No schema change.** Every column this reads already exists: `cards.released_at`,
 //! `cards.oracle_id` (narrowed by `idx_cards_oracle`), `cards.is_paper`, `cards.lang`,
-//! `cards.type_line`, `deck_cards.{card_id,deck_id,quantity,variant}` and `decks.virtual_only`.
+//! `cards.type_line`, `cards.{image_uris,face_image_uris}` (read through [`crate::image_uri`]),
+//! `deck_cards.{card_id,deck_id,quantity,variant}` and `decks.virtual_only`.
 //! `cards` is named unqualified because the corpus is `ATTACH`ed — every query in this crate
 //! names it that way, and a `corpus.cards` here would be the one statement that disagreed.
 //!
@@ -55,7 +56,7 @@
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
@@ -167,6 +168,12 @@ pub struct NewPrinting {
     /// every language gets one row per language of a reprint, and without this they are
     /// identical-looking rows that read as a duplicated list.
     pub lang: String,
+    /// The printing's front-face picture per variant, from [`crate::image_uri::front_face_map`] —
+    /// the crate's one rule for which column, which face and which host, read here rather than
+    /// respelled. **On the wire because the web and Android targets draw only a URL they are
+    /// handed** — `cardArtSrc` ignores the `mtgimg://` route there — so without it their thumb is
+    /// blank. `None` for a printing with no fetchable picture anywhere, never an empty map.
+    pub image_uris: Option<BTreeMap<String, String>>,
     /// The watched decks holding this card, by deck name.
     pub decks: Vec<NewPrintingDeck>,
 }
@@ -290,6 +297,14 @@ pub fn feed(conn: &Connection, ask: &Ask) -> Result<NewPrintings, String> {
     let langs_json = serde_json::to_string(&langs).map_err(|e| e.to_string())?;
     let watched = watched_cte(&ask.scope);
 
+    /// Where the page's image expressions start — one past `p.lang`, the last named column.
+    /// Named for `deck_notes::attachments_by_note`'s reason: a number left behind when a named
+    /// column lands reads one slot's URL as another's and nothing errors. A read one column
+    /// *early* still answers a real URL — the card-level picture where the face's belongs — so
+    /// `tests::a_printing_carries_its_front_face_picture` carries a different URL in each slot.
+    const IMAGE_COL: usize = 11;
+    let images = crate::image_uri::front_face_selects("p").join(", ");
+
     // Statement 1 — the page. `held` is the distinct oracle ids the watched decks hold, and the
     // basics switch is applied *there* rather than on the page: a type line is a fact about the
     // oracle card, so both ends give the same answer, and narrowing the held set is the cheaper
@@ -308,7 +323,8 @@ pub fn feed(conn: &Connection, ask: &Ask) -> Result<NewPrintings, String> {
                 AND (?4 OR coalesce(c.type_line, '') NOT LIKE ?9)
          )
          SELECT p.id, p.oracle_id, p.name, p.set_code, p.set_name, p.collector_number,
-                p.released_at, p.rarity, p.promo_types, p.finishes, p.lang
+                p.released_at, p.rarity, p.promo_types, p.finishes, p.lang,
+                {images}
            FROM cards p
            JOIN held h ON h.oracle_id = p.oracle_id
           WHERE p.is_paper = 1
@@ -345,6 +361,7 @@ pub fn feed(conn: &Connection, ask: &Ask) -> Result<NewPrintings, String> {
                     promo_types: r.get(8)?,
                     finishes: r.get(9)?,
                     lang: r.get(10)?,
+                    image_uris: crate::image_uri::front_face_map(|i| r.get(IMAGE_COL + i))?,
                     decks: Vec::new(),
                 })
             },
@@ -354,10 +371,15 @@ pub fn feed(conn: &Connection, ask: &Ask) -> Result<NewPrintings, String> {
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
 
-    let mut by_oracle = decks_holding(conn, &watched, ask, &printings)?;
+    // **Cloned onto every printing of the card, never moved onto the first.** The decks hold the
+    // *card*, so a showcase variant, a second set or a second language of one reprint on the same
+    // page holds exactly the same decks — and a `remove` here handed them to the first row and left
+    // every later one reading *0 decks*, which on the row dialog is an empty *In 0 watched decks*
+    // under a card the reader's decks plainly hold (issue #514's review).
+    let by_oracle = decks_holding(conn, &watched, ask, &printings)?;
     for printing in &mut printings {
-        if let Some(decks) = by_oracle.remove(&printing.oracle_id) {
-            printing.decks = decks;
+        if let Some(decks) = by_oracle.get(&printing.oracle_id) {
+            printing.decks = decks.clone();
         }
     }
 
@@ -653,6 +675,37 @@ mod tests {
         );
     }
 
+    /// **Every printing of a card on the page carries the card's decks, not only the first.** Two
+    /// reprints of one oracle card inside the window — a second set here; a showcase variant or a
+    /// second language is the same shape — are held by the same decks, because a deck holds the
+    /// card. The attach step moved the decks onto the first row and left the second empty.
+    #[test]
+    fn two_reprints_of_one_card_both_carry_its_decks() {
+        let c = conn();
+        printing(&c, "old", "o1", "Sol Ring", "LEA", 900, "en", "Artifact");
+        printing(&c, "newer", "o1", "Sol Ring", "SLD", 5, "en", "Artifact");
+        printing(&c, "new", "o1", "Sol Ring", "CMM", 10, "en", "Artifact");
+        deck(&c, 1, "Atraxa", false);
+        holds(&c, 1, "old", 1, "live");
+        let out = feed(&c, &ask()).unwrap();
+        assert_eq!(
+            out.printings
+                .iter()
+                .map(|p| p.printing_id.as_str())
+                .collect::<Vec<_>>(),
+            ["newer", "new"],
+            "both reprints are on the page, newest first"
+        );
+        for p in &out.printings {
+            assert_eq!(
+                p.decks.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+                ["Atraxa"],
+                "{} carries the card's deck",
+                p.printing_id
+            );
+        }
+    }
+
     /// The quantity is summed across a deck's categories, so a deck holding a card in both a live
     /// and a theory category is **one** entry with the total rather than two entries.
     #[test]
@@ -905,6 +958,81 @@ mod tests {
         assert!(feed(&c, &ask()).unwrap().printings.is_empty());
     }
 
+    /// A reprint carries its front-face picture through `image_uri`'s one rule, and a printing
+    /// with no blob carries `None` rather than an empty map.
+    ///
+    /// **`meld` carries a different URL in each of its four slots** — `display` and `art`,
+    /// card-level and face 0 — because that is the only shape an `IMAGE_COL` one column early
+    /// fails on: the pair is (top-level, face) and `for_face` prefers the face, so the shear
+    /// slides each card-level URL into the face slot and answers a real, versioned, on-host URL.
+    /// `plain` is the ordinary card, whose picture is in the top-level blob alone and which
+    /// that shear reads correctly by accident.
+    #[test]
+    fn a_printing_carries_its_front_face_picture() {
+        let c = conn();
+        printing(&c, "old", "o1", "Sol Ring", "LEA", 900, "en", "Artifact");
+        printing(&c, "plain", "o1", "Sol Ring", "SLD", 10, "en", "Artifact");
+        printing(&c, "meld", "o1", "Sol Ring", "CMR", 10, "en", "Artifact");
+        printing(&c, "bare", "o1", "Sol Ring", "LTC", 10, "en", "Artifact");
+        // An UPDATE rather than two more arguments on `printing`, which every other test calls
+        // and none of them about pictures.
+        c.execute(
+            "UPDATE cards SET image_uris = json_object(
+                 'thumb','https://cards.scryfall.io/thumb/front/p/l/plain.webp?1700000000',
+                 'grid','https://cards.scryfall.io/grid/front/p/l/plain.webp?1700000000',
+                 'display','https://cards.scryfall.io/display/front/p/l/plain.webp?1700000000',
+                 'art','https://cards.scryfall.io/art/front/p/l/plain.webp?1700000000')
+             WHERE id = 'plain'",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "UPDATE cards SET
+                 image_uris = json_object(
+                   'display','https://cards.scryfall.io/display/CARD.webp?1',
+                   'art','https://cards.scryfall.io/art/CARD.webp?1'),
+                 face_image_uris = json_array(
+                   json_object('display','https://cards.scryfall.io/display/FACE.webp?1',
+                               'art','https://cards.scryfall.io/art/FACE.webp?1'))
+             WHERE id = 'meld'",
+            [],
+        )
+        .unwrap();
+        deck(&c, 1, "Atraxa", false);
+        holds(&c, 1, "old", 1, "live");
+
+        let out = feed(&c, &ask()).unwrap();
+        assert_eq!(out.printings.len(), 3);
+        let images = |id: &str| {
+            out.printings
+                .iter()
+                .find(|p| p.printing_id == id)
+                .unwrap_or_else(|| panic!("`{id}` is on the page"))
+                .image_uris
+                .clone()
+        };
+
+        let plain = images("plain").expect("a top-level blob is a picture");
+        assert_eq!(
+            plain["display"],
+            "https://cards.scryfall.io/display/front/p/l/plain.webp?1700000000"
+        );
+        assert_eq!(
+            plain["art"],
+            "https://cards.scryfall.io/art/front/p/l/plain.webp?1700000000"
+        );
+
+        // The face wins over the card for both variants, and each variant reads its own pair.
+        let meld = images("meld").expect("both columns are a picture");
+        assert_eq!(
+            meld["display"],
+            "https://cards.scryfall.io/display/FACE.webp?1"
+        );
+        assert_eq!(meld["art"], "https://cards.scryfall.io/art/FACE.webp?1");
+
+        assert_eq!(images("bare"), None, "no blob is no picture, never `{{}}`");
+    }
+
     /// The window is the caller's, inside `1..=365`, so a hand-edited `config` cannot ask for the
     /// whole corpus — and a negative is not "no limit", which is the trap `deck_audit`'s clamp
     /// exists for and which SQLite reads as *unlimited*.
@@ -1078,6 +1206,10 @@ mod tests {
                 promo_types: None,
                 finishes: None,
                 lang: "en".into(),
+                image_uris: Some(BTreeMap::from([(
+                    "display".to_owned(),
+                    "https://cards.scryfall.io/display/front/p/p/p.webp?1".to_owned(),
+                )])),
                 decks: vec![NewPrintingDeck {
                     deck_id: 3,
                     name: "Atraxa".into(),
@@ -1099,6 +1231,9 @@ mod tests {
                     "printingId": "p", "oracleId": "o", "name": "Sol Ring", "setCode": "sld",
                     "setName": null, "collectorNumber": "1", "releasedAt": "2026-09-01",
                     "rarity": "rare", "promoTypes": null, "finishes": null, "lang": "en",
+                    "imageUris": {
+                        "display": "https://cards.scryfall.io/display/front/p/p/p.webp?1"
+                    },
                     "decks": [{ "deckId": 3, "name": "Atraxa", "quantity": 2,
                                 "variant": "live", "virtualOnly": false }]
                 }],

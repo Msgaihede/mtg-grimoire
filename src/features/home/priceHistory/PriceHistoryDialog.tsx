@@ -14,7 +14,7 @@
  * The reader asked for the preview to *look like the card details popup*, and a resemblance is N
  * independent decisions that happen to agree today (`src/CLAUDE.md`, on `Dialog`). So the pieces
  * are the modal's own rather than lookalikes: the left column **is** `CardModalArt` — the frame,
- * the chin, the view controls and the per-finish price cells — the heading is the modal's `Title`,
+ * the chin, the view controls and the per-finish price cells — the heading is `CardModalTitle`,
  * the footer buttons are `actionButtons.ts`' two strings, the ceiling is its `PANEL_MAX_H`, and
  * the credit is its `artistOf`. What is this file's own is the right-hand column: the range, the
  * figures, where today sits, and the line.
@@ -33,7 +33,8 @@ import { TrendingDown, TrendingUp } from "lucide-react";
 import { Dialog } from "@/components/Dialog";
 import { ACTION, ACTION_PRIMARY } from "@/features/card/actionButtons";
 import { cardDetailKey } from "@/features/card/cardDetailKey";
-import { artistOf, PANEL_MAX_H, Title } from "@/features/card/CardDetailModal";
+import { artistOf, PANEL_MAX_H } from "@/features/card/CardDetailModal";
+import { CardModalTitle } from "@/features/card/CardModalTitle";
 import { CardModalArt } from "@/features/card/CardModalArt";
 import { openMarketplaceForCard } from "@/features/card/openMarketplace";
 import { plural } from "@/lib/counts";
@@ -184,7 +185,7 @@ export function PriceHistoryDialog(): ReactElement {
     <Dialog
       open={request !== null}
       // The card modal's panel — it puts `@container/card` on the panel, which is what every
-      // `@min-[…]/card:` class in `CardModalArt`, `Title` and the footer buttons is asking about.
+      // `@min-[…]/card:` class in `CardModalArt`, `CardModalTitle` and the footer buttons is asking about.
       container
       size={PANEL_SIZE}
       title={
@@ -196,7 +197,7 @@ export function PriceHistoryDialog(): ReactElement {
               the words on screen, and a space *between* the two elements rather than inside the
               first, because the name computation trims each element's contribution. */}
           <span className="sr-only">Price history of</span>{" "}
-          <Title card={detail} pending={card.isPending} />
+          <CardModalTitle card={detail} pending={card.isPending} />
         </>
       }
       // **No `subtitle`, and its absence is what keeps the picture the card modal's size.** It

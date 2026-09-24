@@ -85,7 +85,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { AnchoredPopup } from "@/components/AnchoredPopup";
 import { CardArt } from "@/components/CardArt";
 import { MultiDropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -99,7 +98,6 @@ import {
   type DeckRow,
   type HomeWidget,
   type NewPrinting,
-  type NewPrintingDeck,
   type NewPrintings,
 } from "@/lib/ipc";
 import { isKnownLanguage, LANGUAGE_CODES, languageHint, languageName } from "@/lib/languages";
@@ -109,6 +107,7 @@ import { useAppStore } from "@/lib/store";
 import { cardTreatments, treatmentName } from "@/lib/treatment";
 import { cn } from "@/lib/utils";
 
+import { AppScale } from "../AppScale";
 import type { WidgetFit } from "../fit";
 import { deckListKey, newPrintingsKey, NEW_PRINTINGS_ROOT } from "../keys";
 import { widgetConfig } from "../layout";
@@ -116,6 +115,7 @@ import { WidgetFooter, WidgetMessage, WidgetRowList } from "../WidgetParts";
 import type { WidgetBodyProps, WidgetSettingsProps } from "../widgetProps";
 import { pickOf, toggleOnOf } from "../widgetSettings";
 import { widgetMeta } from "../widgets";
+import { NewPrintingDialog } from "./NewPrintingDialog";
 
 /** How many printings the widget reads — `new_printings`' own clamp. See the module doc. */
 export const NEW_PRINTINGS_READ = 100;
@@ -193,7 +193,7 @@ const DAY_IN_WORDS = new Intl.DateTimeFormat("en-GB", {
 /** Stable identity for "nothing read yet", so {@link printingDays} is not re-run over a fresh
  *  empty array on every render of a card that is still waiting. */
 const NONE: readonly NewPrinting[] = [];
-/** The same, for the deck list the popover reads its covers off. */
+/** The same, for the deck list the settings' deck picker is built from. */
 const NO_DECK_ROWS: readonly DeckRow[] = [];
 
 /** One release day, and the printings that landed on it. */
@@ -483,6 +483,11 @@ export function NewPrintingsWidget({ widget, fit, still }: WidgetBodyProps): Rea
   const [seenAt, setSeenAt] = useState<number | null | undefined>(undefined);
   if (seenAt === undefined && query.data !== undefined) setSeenAt(query.data.seenAt);
 
+  // The row dialog's state — see {@link openRow}. Above every early return, for the rules of hooks.
+  const [pressed, setPressed] = useState<{ printing: NewPrinting; opening: number } | null>(null);
+  const [open, setOpen] = useState(false);
+  const opener = useRef<HTMLButtonElement | null>(null);
+
   /**
    * Move the cursor, once, as soon as there is a list to have seen.
    *
@@ -519,86 +524,179 @@ export function NewPrintingsWidget({ widget, fit, still }: WidgetBodyProps): Rea
    * survives.
    */
   const openDeck = (deckId: number, printingId: string) => {
+    setOpen(false);
     setActiveView("decks");
     setOpenDeckId(deckId);
     setSelectedCardId(printingId);
   };
 
-  // **The refusal is read before the emptiness**, which is `ActivityWidget`'s rule and its reason:
-  // a failed read has no rows either, and calling it "nothing has been reprinted" tells a reader
-  // with six decks that the game has stopped printing cards.
-  if (query.isError) {
-    return (
-      <WidgetMessage tone="destructive">
-        Could not read recent printings — {ipcError(query.error)}
-      </WidgetMessage>
-    );
-  }
-  if (query.isPending) return <WidgetMessage>{PENDING}</WidgetMessage>;
-
-  const answer = query.data;
-  const empty = emptySentence(answer, days);
-  if (empty !== null) return <WidgetMessage>{empty}</WidgetMessage>;
+  /**
+   * The printing a row opened, and whether its dialog is up — **two pieces of state rather than a
+   * nullable one**, because `Dialog` outlives `open` by the length of its fade and needs a card to
+   * draw while it goes. The printing is latched as the row had it, so a refetch that reorders the
+   * list under an open dialog cannot swap the card inside it.
+   *
+   * The opener is kept so Escape and the ✕ can hand the caret back to the row, which is what
+   * `Dialog` asks of its host; a scrim press does not, on that shell's rule that the reader is
+   * already somewhere else.
+   *
+   * ⚠️ **Every press is a new `opening`, and the dialog is keyed on it.** The scrim stops taking the
+   * pointer the moment its fade out starts, so a row can be pressed during those 180ms — and
+   * without a new key `AnimatePresence` revives the *fading* panel rather than mounting one: the
+   * panel's mount-only focus never runs again, so the caret stays on the row outside an
+   * `aria-modal` dialog, and the body's state (which face is up) carries over to a different card.
+   * A new key throws the fading one away and mounts the next clean.
+   */
+  const openRow = (printing: NewPrinting, from: HTMLButtonElement) => {
+    opener.current = from;
+    setPressed((was) => ({ printing, opening: (was?.opening ?? 0) + 1 }));
+    setOpen(true);
+  };
+  const dismiss = () => {
+    setOpen(false);
+    opener.current?.focus();
+  };
+  /**
+   * *Open card details* — the card modal, on this printing, over the home page.
+   *
+   * **The press hands the caret back to the row as well as selecting the card**, and the hand-back
+   * is the part that matters: the card modal remembers whatever holds the caret when it mounts and
+   * returns it there when it closes. Without `dismiss`'s `focus()` the caret would still be in this
+   * dialog's panel — a node on its way out of the document — and the reader would land on `<body>`
+   * after both layers are gone. **The order of the two lines is not what does it**: both run in
+   * one handler and React commits after the handler returns, so the modal mounts after the row
+   * already holds the caret either way. Measured in the shipped window on 2026-09-24: Escape out of
+   * the card modal left the caret on the row.
+   */
+  const openCard = (printingId: string) => {
+    dismiss();
+    setSelectedCardId(printingId);
+  };
 
   /**
-   * The furniture, budgeted before the rows are laid in — spec §5's rule, so a card one pixel short
-   * of a rule drops a row rather than clipping the rule.
+   * The row dialog — **drawn beside every sentence the body can answer with, not only the list.**
+   * A background refetch that fails (the window came back into focus past `staleTime`) turns
+   * `isError` on while the dialog is up, and a dialog mounted only in the list's branch vanished
+   * with no fade, dropped the caret on `<body>` and then reopened on its own when the next read
+   * succeeded, because `open` was still true. The printing it shows is latched, so it goes on
+   * drawing the card the reader pressed whatever the list is doing.
    *
-   * **Two passes, and the second can only shrink.** How many rules there are depends on which
-   * groups fit, and which groups fit depends on the rules; fitting once, counting the rules that
-   * landed and re-fitting against them settles it in one step, and because the second list is a
-   * prefix of the first its rules are a subset of what was reserved. Nothing is ever drawn into
-   * space nothing budgeted.
+   * Mounted inside the body, `StickyNoteDialog`'s precedent: the scrim is `fixed` and the home page
+   * has no containment, so it is drawn against the window wherever it sits in the tree.
+   * **`AppScale` is what that precedent lacks** — the grid's Ctrl+scroll `zoom` reaches a `fixed`
+   * descendant too, and a dialog is chrome rather than dashboard. Never while `still` — a catalogue
+   * preview has no rows to press.
    */
-  const exhaustible = answer.printings.length < NEW_PRINTINGS_READ && answer.oldest !== null;
-  const closing = fit.h >= CLOSING_FROM_H && exhaustible;
-  const base = FOOTER_PX + (closing ? CLOSING_PX : 0);
-  const ruleOpts = {
-    months: fit.h >= MONTH_RULE_FROM_H,
-    seen: fit.h >= SEEN_RULE_FROM_H,
-    seenAt: seenAt ?? null,
-  };
-  const first = fitGroups(grouped, fit, base);
-  const firstMarks = ruleMarks(first, ruleOpts);
-  const ruleCount = firstMarks.months.length + (firstMarks.seenAt === null ? 0 : 1);
-  const shown =
-    ruleCount === 0 ? first : fitGroups(grouped, fit, base + ruleCount * (RULE_PX + fit.rowGap));
-  const marks = ruleMarks(shown, ruleOpts);
-  const drawn = shown.reduce((sum, day) => sum + day.printings.length, 0);
+  const dialog =
+    pressed !== null && !still ? (
+      <AppScale>
+        <NewPrintingDialog
+          key={pressed.opening}
+          printing={pressed.printing}
+          open={open}
+          onDismiss={dismiss}
+          onClose={() => setOpen(false)}
+          onOpenDeck={openDeck}
+          onOpenCard={openCard}
+        />
+      </AppScale>
+    ) : null;
+
+  /**
+   * What the body draws above the dialog: the refusal, the pending line, the empty sentence or the
+   * list.
+   *
+   * **One expression rather than four early returns, and the reason is the dialog's position in the
+   * tree.** Returned from each branch beside that branch's own content, it sat at a different
+   * index of a different fragment in each, so React unmounted it and mounted another the moment a
+   * background refetch failed under it — no fade, the caret re-taken by a new panel. With the
+   * branches folded into this, the body is always `content` then `dialog`, and the dialog is one
+   * instance whatever the list is doing.
+   */
+  const content = ((): ReactElement => {
+    // **The refusal is read before the emptiness**, which is `ActivityWidget`'s rule and its
+    // reason: a failed read has no rows either, and calling it "nothing has been reprinted" tells
+    // a reader with six decks that the game has stopped printing cards.
+    if (query.isError) {
+      return (
+        <WidgetMessage tone="destructive">
+          Could not read recent printings — {ipcError(query.error)}
+        </WidgetMessage>
+      );
+    }
+    if (query.isPending) return <WidgetMessage>{PENDING}</WidgetMessage>;
+
+    const answer = query.data;
+    const empty = emptySentence(answer, days);
+    if (empty !== null) return <WidgetMessage>{empty}</WidgetMessage>;
+
+    /**
+     * The furniture, budgeted before the rows are laid in — spec §5's rule, so a card one pixel short
+     * of a rule drops a row rather than clipping the rule.
+     *
+     * **Two passes, and the second can only shrink.** How many rules there are depends on which
+     * groups fit, and which groups fit depends on the rules; fitting once, counting the rules that
+     * landed and re-fitting against them settles it in one step, and because the second list is a
+     * prefix of the first its rules are a subset of what was reserved. Nothing is ever drawn into
+     * space nothing budgeted.
+     */
+    const exhaustible = answer.printings.length < NEW_PRINTINGS_READ && answer.oldest !== null;
+    const closing = fit.h >= CLOSING_FROM_H && exhaustible;
+    const base = FOOTER_PX + (closing ? CLOSING_PX : 0);
+    const ruleOpts = {
+      months: fit.h >= MONTH_RULE_FROM_H,
+      seen: fit.h >= SEEN_RULE_FROM_H,
+      seenAt: seenAt ?? null,
+    };
+    const first = fitGroups(grouped, fit, base);
+    const firstMarks = ruleMarks(first, ruleOpts);
+    const ruleCount = firstMarks.months.length + (firstMarks.seenAt === null ? 0 : 1);
+    const shown =
+      ruleCount === 0 ? first : fitGroups(grouped, fit, base + ruleCount * (RULE_PX + fit.rowGap));
+    const marks = ruleMarks(shown, ruleOpts);
+    const drawn = shown.reduce((sum, day) => sum + day.printings.length, 0);
+
+    return (
+      <>
+        <div className="flex flex-col" style={{ gap: GROUP_GAP_PX }}>
+          {shown.map((day, index) => (
+            // A `Fragment` and not a `display: contents` wrapper: the rules and the group are
+            // siblings of each other in the body's own gapped column, and `contents` is a box
+            // Chromium has mistreated in the accessibility tree before (`src/CLAUDE.md`).
+            <Fragment key={day.key}>
+              {marks.months.includes(index) && <Rule label={day.month} heading />}
+              {marks.seenAt === index && <Rule label="Seen already" />}
+              <Section
+                day={day}
+                fit={fit}
+                tier={fit.tier}
+                showLang={showLang}
+                seen={daySeen(day, seenAt ?? null)}
+                still={still}
+                onOpen={openRow}
+              />
+            </Fragment>
+          ))}
+        </div>
+        {/* Drawn only when everything the read answered is on screen: a list that is still scrolling
+            has not run out of window, it has run out of card. */}
+        {closing && drawn === answer.printings.length && answer.oldest !== null && (
+          <p className="m-0 shrink-0 pt-1.5 text-center text-xs text-dim">
+            Nothing older than {DAY_IN_WORDS.format(new Date(`${answer.oldest}T00:00:00Z`))} in this
+            window.
+          </p>
+        )}
+        <WidgetFooter>
+          {footerLine(fit.tier, answer.decksWatched, days, langs, flags)}
+        </WidgetFooter>
+      </>
+    );
+  })();
 
   return (
     <>
-      <div className="flex flex-col" style={{ gap: GROUP_GAP_PX }}>
-        {shown.map((day, index) => (
-          // A `Fragment` and not a `display: contents` wrapper: the rules and the group are
-          // siblings of each other in the body's own gapped column, and `contents` is a box
-          // Chromium has mistreated in the accessibility tree before (`src/CLAUDE.md`).
-          <Fragment key={day.key}>
-            {marks.months.includes(index) && <Rule label={day.month} heading />}
-            {marks.seenAt === index && <Rule label="Seen already" />}
-            <Section
-              day={day}
-              fit={fit}
-              tier={fit.tier}
-              showLang={showLang}
-              seen={daySeen(day, seenAt ?? null)}
-              still={still}
-              onOpenDeck={openDeck}
-            />
-          </Fragment>
-        ))}
-      </div>
-      {/* Drawn only when everything the read answered is on screen: a list that is still scrolling
-          has not run out of window, it has run out of card. */}
-      {closing && drawn === answer.printings.length && answer.oldest !== null && (
-        <p className="m-0 shrink-0 pt-1.5 text-center text-xs text-dim">
-          Nothing older than {DAY_IN_WORDS.format(new Date(`${answer.oldest}T00:00:00Z`))} in this
-          window.
-        </p>
-      )}
-      <WidgetFooter>
-        {footerLine(fit.tier, answer.decksWatched, days, langs, flags)}
-      </WidgetFooter>
+      {content}
+      {dialog}
     </>
   );
 }
@@ -669,7 +767,7 @@ function Section({
   showLang,
   seen,
   still,
-  onOpenDeck,
+  onOpen,
 }: {
   day: PrintingDay;
   fit: WidgetFit;
@@ -677,7 +775,7 @@ function Section({
   showLang: boolean;
   seen: boolean;
   still: boolean;
-  onOpenDeck: (deckId: number, printingId: string) => void;
+  onOpen: (printing: NewPrinting, from: HTMLButtonElement) => void;
 }): ReactElement {
   return (
     <section className="flex flex-col" style={{ gap: fit.rowGap }}>
@@ -704,7 +802,7 @@ function Section({
             showLang={showLang}
             unseen={!seen}
             still={still}
-            onOpenDeck={onOpenDeck}
+            onOpen={onOpen}
           />
         ))}
       </WidgetRowList>
@@ -718,15 +816,19 @@ const ROW_BOX =
   "flex w-full items-center gap-2 rounded-md border border-border px-1.5 py-[3px] text-left";
 
 /**
- * One reprinted printing, and the popover of decks holding the card.
+ * One reprinted printing — and the press that opens it, large, over the page.
  *
- * The whole row is the popover's trigger rather than a button beside one: the row *is* the
- * question, and a second control inside it would be two tab stops per printing on a card that can
- * draw thirty-two of them. `AnchoredPopup` with a `triggerContent` draws no box of its own, so the
- * row's own box is what the trigger wears.
+ * **The whole row is the press** rather than a button beside one: the row *is* the question, and a
+ * second control inside it would be two tab stops per printing on a card that can draw thirty-two
+ * of them. What it opens is `NewPrintingDialog`, which the body mounts — see that file for why this
+ * stopped being an anchored popover (issue #514).
  *
- * **`align="end"`**, because the deck count and the unseen dot sit at the row's right edge and a
- * panel has to grow from the corner it is pinned by — `src/CLAUDE.md`'s anchored-popup rule.
+ * ⚠️ **`aria-haspopup="dialog"` and no `aria-expanded`**, and the second half is load-bearing
+ * rather than an omission. `WidgetCard` lifts itself to `LAYER.raised` whenever anything inside it
+ * carries `aria-expanded="true"` — the rule its own two popovers need — and a card with a z-index
+ * is a stacking context, which would cap this row's dialog, scrim and all, at that rung of the
+ * page's. A dialog opener is not a disclosure anyway: the dialog takes the caret, and the row it
+ * came from is behind a scrim until it closes.
  */
 function PrintingRow({
   printing,
@@ -734,14 +836,14 @@ function PrintingRow({
   showLang,
   unseen,
   still,
-  onOpenDeck,
+  onOpen,
 }: {
   printing: NewPrinting;
   tier: number;
   showLang: boolean;
   unseen: boolean;
   still: boolean;
-  onOpenDeck: (deckId: number, printingId: string) => void;
+  onOpen: (printing: NewPrinting, from: HTMLButtonElement) => void;
 }): ReactElement {
   const inner = <RowFace printing={printing} tier={tier} showLang={showLang} unseen={unseen} />;
   if (still) {
@@ -753,17 +855,15 @@ function PrintingRow({
   }
   return (
     <li>
-      <AnchoredPopup
-        label={rowName(printing, showLang, unseen)}
-        panelLabel={`${printing.name} is in`}
-        align="end"
-        className="relative block w-full"
-        triggerClassName={cn(ROW_BOX, "hover:border-dim hover:bg-surface", PRESS)}
-        triggerContent={inner}
-        panelClassName="w-[248px]"
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        aria-label={rowName(printing, showLang, unseen)}
+        onClick={(e) => onOpen(printing, e.currentTarget)}
+        className={cn(ROW_BOX, "hover:border-dim hover:bg-surface", PRESS, FOCUS)}
       >
-        <PrintingDecks printing={printing} onOpenDeck={onOpenDeck} />
-      </AnchoredPopup>
+        {inner}
+      </button>
     </li>
   );
 }
@@ -810,11 +910,17 @@ function RowFace({
         {/* **A whole printed card, never the `art` crop.** A crop has no printed frame, so wherever
             one is shown its illustrator must be named; a `thumb` carries the credit printed on the
             card itself, which is Scryfall's second arm met by construction in a 33px frame with no
-            room for a credit line. Decorative: the name is the line beside it. */}
+            room for a credit line. Decorative: the name is the line beside it.
+
+            **`imageUrl` is the web and Android builds' picture** and is ignored on the desktop,
+            where the local cache's `thumb` wins (`cardArtSrc`). It is the `display` URL because
+            that is what the wire carries — `image_uri::LIST_VARIANTS` is `display` and `art` —
+            and a 672px card drawn at 33 is still the card; an empty frame was not (issue #514). */}
         <CardArt
           cardId={printing.printingId}
           name=""
           variant="thumb"
+          imageUrl={printing.imageUris?.display}
           loading="lazy"
           className="rounded-[3px]"
         />
@@ -860,87 +966,6 @@ function RowFace({
         {unseen && <span aria-hidden="true" className="block size-[5px] rounded-full bg-accent" />}
       </span>
     </>
-  );
-}
-
-/**
- * The decks holding this card, in the popover.
- *
- * **Mounted with the panel and not before it**, which is what keeps the deck read out of a card
- * that nobody has pressed: `AnchoredPopup` renders its children only while open. The key is
- * `deckListKey` — the gallery's own — so a page that already draws a Decks widget pays nothing for
- * the covers, and a page that does not pays one read the first time a row is opened.
- */
-function PrintingDecks({
-  printing,
-  onOpenDeck,
-}: {
-  printing: NewPrinting;
-  onOpenDeck: (deckId: number, printingId: string) => void;
-}): ReactElement {
-  const decksQuery = useQuery({ queryKey: deckListKey, queryFn: () => ipc.deckList() });
-  const rows = decksQuery.data ?? NO_DECK_ROWS;
-  const covers = new Map(rows.map((deck) => [deck.id, deck]));
-  return (
-    <ul className="m-0 flex list-none flex-col gap-1 p-0">
-      {printing.decks.map((deck) => (
-        <li key={deck.deckId}>
-          <DeckLine
-            deck={deck}
-            cover={covers.get(deck.deckId)}
-            onPress={() => onOpenDeck(deck.deckId, printing.printingId)}
-          />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/** One deck in the popover: its cover, its name, and how many copies — or a `theory` chip where the
- *  copies are planned rather than sleeved. */
-function DeckLine({
-  deck,
-  cover,
-  onPress,
-}: {
-  deck: NewPrintingDeck;
-  cover: DeckRow | undefined;
-  onPress: () => void;
-}): ReactElement {
-  const held =
-    deck.variant === "theory" ? "planned" : `${deck.quantity} ${deck.quantity === 1 ? "copy" : "copies"}`;
-  return (
-    <button
-      type="button"
-      aria-label={`${deck.name} · ${held}`}
-      onClick={onPress}
-      className={cn(
-        "flex w-full items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-bg",
-        PRESS,
-        FOCUS,
-      )}
-    >
-      <span className="w-[18px] flex-none overflow-hidden rounded-[3px] border border-border">
-        {/* `hasCover`'s test, `DeckTile`'s and `DecksWidget`'s: `coverArtist` is `null` exactly when
-            the cover printing has left `cards`, so a request that could only miss is not made. A
-            deck with no cover draws the empty frame, which is `CardArt`'s own fallback. */}
-        <CardArt
-          cardId={cover?.coverArtist != null ? cover.coverCardId : null}
-          name=""
-          variant="thumb"
-          imageUrl={cover?.imageUris?.thumb}
-          loading="lazy"
-        />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-sm text-text">{deck.name}</span>
-      {deck.variant === "theory" ? (
-        <span className="flex-none rounded border border-border px-1 text-[0.6875rem] leading-4 text-dim">
-          theory
-        </span>
-      ) : (
-        <span className="flex-none font-mono text-xs tabular-nums text-dim">×{deck.quantity}</span>
-      )}
-    </button>
   );
 }
 
