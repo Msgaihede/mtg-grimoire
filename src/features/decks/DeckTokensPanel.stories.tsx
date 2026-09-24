@@ -1,10 +1,53 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { useState } from "react";
+import { useState, type JSX } from "react";
 import { expect, fn, userEvent, within } from "storybook/test";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
+import type { DeckVariant } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { STACK_CARD_WIDTH, stackCardWidth } from "./CardStack";
 import { DeckTokensPanel, TOKENS_HEADING } from "./DeckTokensPanel";
+import { TokenArtPicker } from "./TokenArtPicker";
+import { tokenCountWords } from "./TokenCountPill";
+import { useDeckTokens } from "./useDeckTokens";
+
+interface TokensBandProps {
+  deckId: number;
+  variant: DeckVariant;
+  open: boolean;
+  onToggle: (next: boolean) => void;
+}
+
+/**
+ * The band as `DeckEditor` hosts it: **one `useDeckTokens` call and one art picker**, handed to
+ * the band as props.
+ *
+ * The band stopped calling the hook itself on 2026-09-24 (issue #507), because a deck with
+ * `tokenStack` on draws the same tokens a second time as a pile in the deck views, and the two
+ * drawings — and the one picker both open — have to share one answer. So a story is the host's
+ * half as well as the band's, which is what keeps every story below driven end to end by the
+ * fake rather than by a hand-built `DeckTokens`.
+ */
+function TokensBand({ deckId, variant, open, onToggle }: TokensBandProps): JSX.Element {
+  const tokens = useDeckTokens(deckId, variant);
+  const [picking, setPicking] = useState<string | null>(null);
+  const picked = tokens.tokens.find((view) => view.oracleId === picking) ?? null;
+  const zoom = useAppStore((s) => s.cardZoom.deck);
+  return (
+    <>
+      <DeckTokensPanel tokens={tokens} open={open} onToggle={onToggle} onPick={setPicking} />
+      <TokenArtPicker
+        token={picked}
+        zoom={zoom}
+        onPick={(cardId) => {
+          if (picked !== null) tokens.setPrinting(picked.oracleId, cardId);
+          setPicking(null);
+        }}
+        onDismiss={() => setPicking(null)}
+        onClose={() => setPicking(null)}
+      />
+    </>
+  );
+}
 
 /**
  * The wall's tiles in the order they are drawn, by the one string that tells two of them apart.
@@ -65,7 +108,11 @@ const SUBTITLE = {
  */
 const meta = {
   title: "Decks/DeckTokensPanel",
-  component: DeckTokensPanel,
+  // The host wrapper rather than the band, because the band takes the hook's whole answer as a
+  // prop — see {@link TokensBand}. The args are the deck and the disclosure, which is what a
+  // story actually varies.
+  component: TokensBand,
+  subcomponents: { DeckTokensPanel },
   tags: ["autodocs"],
   args: { deckId: 1, variant: "live", open: true, onToggle: fn() },
   // The band sits at the foot of the editor's column, which is the only scroller in it — so it
@@ -99,7 +146,7 @@ const meta = {
           "is only what the reader changed — which art, how many, and whether it is on the wall " +
           "at all. So a deck nobody has touched still has a full wall, and a token that stops " +
           "being made simply stops being drawn.\n\n" +
-          "**The heading is “Tokens & emblems” and never bare “Tokens”**, which the deck " +
+          "**The heading is “Tokens & Emblems” and never bare “Tokens”**, which the deck " +
           "editor already uses for an auto-category of cards that *make* tokens — the opposite " +
           "meaning of the same word.\n\n" +
           "**Emblems sort last.** An emblem is a one-off a deck may make once in a game; a pile " +
@@ -108,7 +155,7 @@ const meta = {
       },
     },
   },
-} satisfies Meta<typeof DeckTokensPanel>;
+} satisfies Meta<typeof TokensBand>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -130,7 +177,8 @@ export const Collapsed: Story = {
   play: async ({ canvas, args }) => {
     const disclosure = await canvas.findByRole("button", { name: TOKENS_HEADING });
     await expect(disclosure).toHaveAttribute("aria-expanded", "false");
-    await expect(await canvas.findByText("4 to bring")).toBeInTheDocument();
+    // The pill: a bare `4` for the eye and the whole phrase for a screen reader.
+    await expect(await canvas.findByText(tokenCountWords(4))).toBeInTheDocument();
 
     // Nothing of the wall is mounted while it is shut — no picture, no tile, no stepper.
     await expect(canvas.queryByRole("button", { name: /^Change the art for / })).toBeNull();
@@ -239,7 +287,7 @@ export const NothingToMake: Story = {
     // The heading is still there — it is the area's name, not a control — and it is not a button.
     await expect(canvas.getByText(TOKENS_HEADING)).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: TOKENS_HEADING })).toBeNull();
-    // No count either: a bare `0 to bring` beside a sentence saying so is the same fact twice.
+    // No count either: a `0` pill beside a sentence saying so is the same fact twice.
     await expect(canvas.queryByText(/to bring$/)).toBeNull();
   },
 };
@@ -294,7 +342,7 @@ export const DismissedRevealed: Story = {
     ).toBeInTheDocument();
 
     // Unmoved, and deliberately: a dismissal is not one of the tokens this deck brings.
-    await expect(within(region).getByText("4 to bring")).toBeInTheDocument();
+    await expect(within(region).getByText(tokenCountWords(4))).toBeInTheDocument();
   },
 };
 
@@ -325,7 +373,7 @@ function ZoomedBand() {
   useState(() => {
     useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, deck: 1.5 } });
   });
-  return <DeckTokensPanel deckId={1} variant="live" open onToggle={fn()} />;
+  return <TokensBand deckId={1} variant="live" open onToggle={fn()} />;
 }
 
 export const Zoomed: Story = {

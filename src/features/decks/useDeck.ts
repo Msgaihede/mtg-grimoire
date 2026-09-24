@@ -537,7 +537,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * The deck itself: its name, its format, its cover, whether it is archived.
    *
    * **It takes a whole {@link DeckPatch} and names no field, which is what makes a new column
-   * free here.** `tokensOpen` — whether the editor's Tokens & emblems area is expanded — was
+   * free here.** `tokensOpen` — whether the editor's Tokens & Emblems area is expanded — was
    * added to that struct and reached this mutation with no edit at all, exactly as
    * `separateXGroup` and `bracket` did; a per-field arm would be a second definition of what the
    * command already accepts, and the one thing this mutation does branch on (`theoryEnabled`,

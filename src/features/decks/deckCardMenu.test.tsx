@@ -610,16 +610,15 @@ describe("buildDeckCardMenu", () => {
       ).items;
 
       (find(rows, "Quick add 3 copies") as MenuAction).onSelect();
-      expect(quickAdd).toHaveBeenCalledWith(row, 3);
+      expect(quickAdd).toHaveBeenCalledWith([{ card: row, copies: 3 }]);
 
       (find(rows, "Quick add 3 and remove from wishlist") as MenuAction).onSelect();
-      expect(quickAddAndUnwish).toHaveBeenCalledWith(row, 3);
+      expect(quickAddAndUnwish).toHaveBeenCalledWith([{ card: row, copies: 3 }]);
 
       // No count: the pull moves cardboard that exists, so what it can take is decided by what
       // the binder holds rather than by the shortfall.
       (find(rows, "Pull 3 from your collection") as MenuAction).onSelect();
-      expect(pullCard).toHaveBeenCalledWith(row);
-      expect(pullCard.mock.calls[0]).toHaveLength(1);
+      expect(pullCard).toHaveBeenCalledWith([row]);
     });
 
     /**
@@ -1210,29 +1209,77 @@ describe("buildDeckCardMenu with a picked set", () => {
   });
 
   /**
-   * **`Collection ▸` stays about the one card that was right-clicked**, and the count in every
-   * one of its labels is why: three rows short by three different amounts have no one number to
-   * name, so a plural row could only quote a total no card on screen is wearing — or file
-   * whichever member the label happened to be about.
+   * **`Collection link ▸` acts on the whole set and quotes its total** (issue #510). With eleven
+   * cards picked it used to read `Quick add 1 copy` — the right-clicked card's own number — and a
+   * press filed that one card and ignored the other ten.
    */
-  it("keeps the Collection rows about the right-clicked card under a set", () => {
+  it("sums the picked rows' shortfalls and presses every one of them", () => {
     const quickAdd = vi.fn();
+    const quickAddAndUnwish = vi.fn();
+    const pullCard = vi.fn();
     const pressed = card({ name: "Lightning Bolt", quantity: 4, ownedQuantity: 1 });
     const other = card({ name: "Bear", quantity: 3, ownedQuantity: 0 });
     const items = buildDeckCardMenu(
       pressed,
-      collectionDeps({ picked: [pressed, other], quickAdd }),
+      collectionDeps({ picked: [pressed, other], quickAdd, quickAddAndUnwish, pullCard }),
     );
-    const rows = (find(items, "Collection link") as MenuSubmenu).items;
+    const rows = (find(items, "Collection link for 2 cards") as MenuSubmenu).items;
 
-    // The right-clicked row's own shortfall, and never the set's total of six.
     expect(labels(rows)).toEqual([
-      "Quick add 3 copies",
-      "Quick add 3 and remove from wishlist",
-      "Pull 3 from your collection",
+      "Quick add 6 copies",
+      "Quick add 6 and remove from wishlist",
+      "Pull 6 from your collection",
     ]);
-    (find(rows, "Quick add 3 copies") as MenuAction).onSelect();
-    expect(quickAdd.mock.calls).toEqual([[pressed, 3]]);
+    const targets = [
+      { card: pressed, copies: 3 },
+      { card: other, copies: 3 },
+    ];
+    (find(rows, "Quick add 6 copies") as MenuAction).onSelect();
+    expect(quickAdd.mock.calls).toEqual([[targets]]);
+    (find(rows, "Quick add 6 and remove from wishlist") as MenuAction).onSelect();
+    expect(quickAddAndUnwish.mock.calls).toEqual([[targets]]);
+    (find(rows, "Pull 6 from your collection") as MenuAction).onSelect();
+    expect(pullCard.mock.calls).toEqual([[[pressed, other]]]);
+  });
+
+  /** A picked row with nothing to file is passed over, not a reason to grey the set — the
+   *  `Category` rule of greying only when nothing is left to do. */
+  it("passes over picked rows that are not short, and counts only the ones that are", () => {
+    const quickAdd = vi.fn();
+    const stocked = card({ name: "Lightning Bolt", quantity: 4, ownedQuantity: 4 });
+    const short = card({ name: "Bear", quantity: 3, ownedQuantity: 1 });
+    const parked = card({ name: "Ponder", quantity: 2, ownedQuantity: 0, categoryActive: false });
+    const items = buildDeckCardMenu(
+      stocked,
+      collectionDeps({ picked: [stocked, short, parked], quickAdd }),
+    );
+    const rows = (find(items, "Collection link for 3 cards") as MenuSubmenu).items;
+
+    const add = find(rows, "Quick add 2 copies") as MenuAction;
+    expect(add.disabled).toBeUndefined();
+    add.onSelect();
+    expect(quickAdd.mock.calls).toEqual([[[{ card: short, copies: 2 }]]]);
+  });
+
+  it("greys the set's rows only when no picked row can be pressed", () => {
+    const quickAdd = vi.fn();
+    const a = card({ name: "Lightning Bolt", quantity: 4, ownedQuantity: 4 });
+    const b = card({ name: "Bear", quantity: 1, ownedQuantity: 0, categoryActive: false });
+    const rows = (
+      find(
+        buildDeckCardMenu(a, collectionDeps({ picked: [a, b], quickAdd })),
+        "Collection link for 2 cards",
+      ) as MenuSubmenu
+    ).items;
+    const actions = rows.filter((i): i is MenuAction => i.kind === "action");
+
+    expect(labels(rows)[0]).toBe("Quick add 0 copies");
+    for (const row of actions) {
+      expect(row.disabled).toBe(true);
+      expect(row.reason).toBe("nothing missing");
+      row.onSelect();
+    }
+    expect(quickAdd).not.toHaveBeenCalled();
   });
 
   it("labels every picked card on one press", () => {

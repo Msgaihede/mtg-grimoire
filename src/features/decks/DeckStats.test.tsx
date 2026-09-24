@@ -15,6 +15,7 @@ import {
   type DeckStatsSummary,
   type MissingWrite,
 } from "./DeckStats";
+import { HIDE_COLORLESS_LABEL } from "./stats/ManaPips";
 
 /**
  * The two folders this file's stand-in offers.
@@ -1202,6 +1203,46 @@ describe("DeckStats", () => {
     expect(within(statsCard("Mana pips")).getByText(/^Sources:/)).toHaveTextContent(
       "Sources: White 42%, Blue 42%, Red 8%, Green 8%.",
     );
+  });
+
+  /**
+   * **Issue #513: colourless can be taken out of both bands.** Hidden, it leaves the
+   * denominators too — so red goes from half of each band to all of it, and the red tile's share
+   * agrees with the band above it rather than with a total that still counts colourless. The
+   * Colourless tile stays, with its counts true and both shares an em dash.
+   *
+   * Asserted both ways round, so a toggle that only ever hides passes neither half.
+   */
+  it("leaves colorless out of both bands and their totals when the toggle is pressed", async () => {
+    strip([
+      card({ name: "Bolt", manaCost: "{R}", colors: "R", cmc: 1, quantity: 4, producedMana: "" }),
+      card({ name: "Eldrazi", manaCost: "{C}{C}", colors: "", cmc: 2, quantity: 2, producedMana: "" }),
+      dual("Mountain", "R", 4),
+      dual("Wastes", "C", 4),
+    ]);
+    const pips = statsCard("Mana pips");
+    const toggle = within(pips).getByRole("button", { name: HIDE_COLORLESS_LABEL });
+
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(within(pips).getByText(/^Cost:/)).toHaveTextContent("Cost: Red 50%, Colorless 50%.");
+    expect(within(pips).getByText(/^Sources:/)).toHaveTextContent(
+      "Sources: Red 50%, Colorless 50%.",
+    );
+
+    await userEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(within(pips).getByText(/^Cost:/)).toHaveTextContent("Cost: Red 100%.");
+    expect(within(pips).getByText(/^Sources:/)).toHaveTextContent("Sources: Red 100%.");
+    expect(pipTile("Red")).toHaveTextContent("100%");
+    expect(pipTile("Colorless")).toHaveTextContent("4 pips · 2 cards");
+    expect(pipTile("Colorless")).toHaveTextContent("4 sources");
+    expect(pipTile("Colorless")).not.toHaveTextContent("%");
+
+    await userEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(within(pips).getByText(/^Cost:/)).toHaveTextContent("Cost: Red 50%, Colorless 50%.");
   });
 
   /**

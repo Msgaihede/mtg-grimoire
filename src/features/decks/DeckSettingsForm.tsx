@@ -94,6 +94,19 @@ export interface DeckSettingsValue {
    * sends nothing, which is exactly what a deck with no categories yet can honestly answer.
    */
   defaultCategoryId: number;
+  /**
+   * Whether the deck's four views draw the **Tokens & Emblems** pile — the same tokens the band
+   * under the desk lists, laid out as one more pile at the end of Stacks, Grid, Text and Table
+   * ([issue #507](https://github.com/Msgaihede/mtg-grimoire/issues/507)). Off by default.
+   *
+   * A *reading* preference and nothing more: the pile is appended in the view layer and never
+   * enters the deck's cards, so no size, total, ledger figure or validation rule can see it.
+   *
+   * **Required on the value although only the edit host draws a control for it** —
+   * {@link DeckSettingsValue.defaultCategoryId}'s rule again. `DeckInput` carries no such field,
+   * so the create draft holds `false`, sends nothing, and the column's `DEFAULT 0` agrees.
+   */
+  tokenStack: boolean;
 }
 
 export interface DeckSettingsFormProps {
@@ -201,6 +214,17 @@ export interface DeckSettingsFormProps {
    * draft holds `true` for all three and sends none of them.
    */
   canSetTheoryMarks?: boolean;
+  /**
+   * Whether the **Tokens & Emblems** switch has anywhere to be written — absent (or `false`) for
+   * a host asking about a deck that does not exist yet, and then the row is not drawn.
+   *
+   * {@link DeckSettingsFormProps.canSetTheoryMarks}' argument word for word, and a prop of its own
+   * for that prop's own reason: `DeckInput` has no `tokenStack`, so a press at create would reach
+   * nothing and the deck would be born with the pile off whatever the switch said. The two hosts
+   * answer this and the marks the same way today, and they are still two questions — the day
+   * `deck_create` learns one and not the other, one prop standing for both would be wrong.
+   */
+  canSetTokenStack?: boolean;
   cover: DeckCoverPickerProps;
   idPrefix: string;
 }
@@ -225,7 +249,7 @@ export interface DeckSettingsFormProps {
  * | Control | `onChange` | `onCommit` |
  * | --- | --- | --- |
  * | Name, Description | every keystroke | on blur — and Enter blurs the name field, unless a host took Enter for {@link DeckSettingsFormProps.onSubmit} |
- * | Game, Format, Deck kind, Folder, the cover | on the one act that settles them | never |
+ * | Game, Format, Deck kind, the switches, Folder, the cover | on the one act that settles them | never |
  *
  * A select, a switch and a tile all finish in a single act, so there is nothing for a second
  * callback to add. A text field does not, which is the whole reason the pair exists.
@@ -257,6 +281,8 @@ export function DeckSettingsForm({
   categories,
   // Absent is a host that cannot write the answer, which is the create dialog — see the prop.
   canSetTheoryMarks = false,
+  // Absent is the create dialog again — see the prop.
+  canSetTokenStack = false,
   cover,
   idPrefix,
 }: DeckSettingsFormProps): JSX.Element {
@@ -324,6 +350,18 @@ export function DeckSettingsForm({
               onName={(theoryMarkName) => onChange({ theoryMarkName })}
               onUnplanned={(theoryMarkUnplanned) => onChange({ theoryMarkUnplanned })}
               id={idPrefix}
+            />
+          )}
+          {/* One gate, the host's: whether the deck has a row to write to. Deliberately not the
+              kind — a Regular, a Theory + Actual and a Virtual deck all make tokens, and the
+              pile is a reading preference over whichever list is on screen. */}
+          {canSetTokenStack && (
+            <SettingSwitch
+              id={`${idPrefix}-token-stack`}
+              heading="Show Tokens & Emblems in the deck"
+              caption="Adds a Tokens & Emblems pile to Stacks, Grid, Text and Table. Tokens never count toward the deck's card total."
+              on={value.tokenStack}
+              onChange={(tokenStack) => onChange({ tokenStack })}
             />
           )}
           <FolderRow
@@ -796,9 +834,43 @@ function MarkSwitch({
 }
 
 /**
- * The switch this panel draws three times — one for each of the live list's three theory marks.
+ * A deck-level yes-or-no that is not a theory mark: its name, what it means, and the switch.
  *
- * One definition rather than three copies, because three controls that look alike today are
+ * {@link MarkSwitch}'s row character for character less the swatch, because the swatch is what
+ * makes a mark's row a statement about a *colour* and this one is not about any. The heading is
+ * the switch's name, so the two stay one grammar: `<heading> <Enabled|Disabled>`.
+ */
+function SettingSwitch({
+  id,
+  heading,
+  caption,
+  on,
+  onChange,
+}: {
+  id: string;
+  heading: string;
+  caption: string;
+  on: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="min-w-0 flex-1">
+        <p id={id} className="text-sm">
+          {heading}
+        </p>
+        <p className="mt-0.5 text-[0.6875rem] leading-snug text-dim">{caption}</p>
+      </div>
+      <SwitchButton on={on} headingId={id} onChange={onChange} />
+    </div>
+  );
+}
+
+/**
+ * The switch this panel draws for every yes-or-no on it — the live list's three theory marks and
+ * the Tokens & Emblems pile.
+ *
+ * One definition rather than four copies, because three controls that look alike today are
  * three independent decisions that agree today: the deck editor has already paid for that with
  * two scrim darknesses and three panel heights.
  *
