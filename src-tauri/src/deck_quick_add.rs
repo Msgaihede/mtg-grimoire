@@ -186,6 +186,9 @@ pub struct QuickAddOutcome {
 /// a reader who never wished for the card is not an error.
 const WISH_SQL: &str = "WHERE w.card_id = ?1
         AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)
+        -- A managed wishlist's wish is its deck's, rewritten by `crate::managed_wishlist` when
+        -- the card reaches the deck; taking it down by hand is a write the guard refuses.
+        AND f.managed_deck_id IS NULL
       ORDER BY (w.folder_id IS NOT NULL), f.sort_order, w.id";
 
 /// Every wish for **the card** — any printing, any finish — best first. The per-card menu's
@@ -205,9 +208,11 @@ const WISH_SQL: &str = "WHERE w.card_id = ?1
 /// **The order puts the exact match first**, so the pre-pick is the wish the narrow read would
 /// have chosen: the pressed printing, then a finish the copies satisfy, then [`WISH_SQL`]'s own
 /// root-then-folders ranking, then the row id — a primary key, so the walk is total.
-const CARD_WISH_SQL: &str = "WHERE w.card_id = ?1
+const CARD_WISH_SQL: &str = "WHERE (w.card_id = ?1
          OR (w.oracle_id IS NOT NULL
-             AND w.oracle_id = (SELECT oracle_id FROM cards WHERE id = ?1))
+             AND w.oracle_id = (SELECT oracle_id FROM cards WHERE id = ?1)))
+        -- Never a managed wishlist's wish — [`WISH_SQL`]'s reason.
+        AND f.managed_deck_id IS NULL
       ORDER BY (w.card_id IS NULL OR w.card_id <> ?1),
                (w.preferred_finish IS NOT NULL AND w.preferred_finish <> ?2),
                (w.folder_id IS NOT NULL), f.sort_order, w.id";

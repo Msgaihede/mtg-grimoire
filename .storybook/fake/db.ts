@@ -424,6 +424,9 @@ export interface FakeWishlistFolder {
   sortOrder: number;
   /** User schema v29's column — see {@link FakeDeckFolder.needsReview}. */
   needsReview?: string | null;
+  /** User schema v48's `managed_deck_id` — the deck this folder is the managed wishlist of,
+   *  absent or `null` for a folder the reader made. See {@link WishlistFolder.managedDeckId}. */
+  managedDeckId?: number | null;
 }
 
 /**
@@ -576,6 +579,8 @@ export interface FakeDeck {
   theoryMarkExact?: boolean;
   theoryMarkName?: boolean;
   theoryMarkUnplanned?: boolean;
+  /** v48's managed-wishlist switch — `NOT NULL DEFAULT 1`, so absent reads as on. */
+  managedWishlist?: boolean;
   /**
    * What the reader was last looking at in this deck's editor: which tab, grouped how, sorted
    * how. Written by {@link writeHandlers.deck_set_view_state} and by nothing else, so that
@@ -6929,7 +6934,13 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
  *  the same four fields as the table today, and a **copy** is what stops a caller mutating the
  *  store through a value it was handed back. */
 function toWishlistFolder(f: FakeWishlistFolder): WishlistFolder {
-  return { id: f.id, parentId: f.parentId, name: f.name, sortOrder: f.sortOrder };
+  return {
+    id: f.id,
+    parentId: f.parentId,
+    name: f.name,
+    sortOrder: f.sortOrder,
+    managedDeckId: f.managedDeckId ?? null,
+  };
 }
 
 /** `collection_folders::folder_row`, and a **copy** for {@link toWishlistFolder}'s reason.
@@ -7100,6 +7111,8 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     theoryMarkExact: d.theoryMarkExact ?? true,
     theoryMarkName: d.theoryMarkName ?? true,
     theoryMarkUnplanned: d.theoryMarkUnplanned ?? true,
+    // v48's, and `?? true` for the three lines above' reason: the column is `DEFAULT 1`.
+    managedWishlist: d.managedWishlist ?? true,
     // The three v12 ones that remember where the reader was. They ride the *gallery's* row
     // rather than a read of their own because the editor already has this row when it mounts —
     // a second command to ask "which tab was I on" would be a round trip between opening a deck
@@ -9313,7 +9326,13 @@ export function readHandlers(db: FakeDb) {
     wishlist_optimize_plan: (args: { query: WishlistQuery }): WishlistOptimizePlan => {
       const q = args.query;
       const mp = marketplaceOf(q.marketplace);
-      const rows = wishlistScope(db, q);
+      // Never a wish in a deck's managed wishlist (user schema v48) — `wishlist_optimize::plan`'s
+      // own `NOT IN` clause: that wish is the deck's printing, and repointing it is a hand edit
+      // refused in {@link MANAGED_WISHLIST}'s words. Left out of the scope rather than skipped,
+      // exactly as the crate's `WHERE` leaves it out, so it is not counted anywhere either.
+      const rows = wishlistScope(db, q).filter(
+        (w) => w.folderId === null || (wishFolderById(db, w.folderId)?.managedDeckId ?? null) === null,
+      );
       const moves: WishOptimizeMove[] = [];
       let alreadyCheapest = 0;
       let skipped = 0;
@@ -12860,6 +12879,33 @@ function wishFolderById(db: FakeDb, id: number): FakeWishlistFolder | undefined 
   return db.wishlistFolders.find((f) => f.id === id);
 }
 
+/**
+ * User schema v48's refusal (issue #512), **verbatim from the crate**: a deck's managed wishlist
+ * folder is written by the deck, and every hand write that would touch it — the folder itself, a
+ * sub-folder in it, a wish filed into or out of it, any edit to a wish inside it — is refused in
+ * these words. Spelled here as well as in `src/features/wishlist/managed.ts` for the reason every
+ * refusal in this file is: the fake is under `ipc.ts` and may import nothing from the app.
+ *
+ * **The fake refuses what the app refuses and no less**, which is the whole rule for this file: a
+ * story that could rename a managed folder would be documenting a press the reader never gets.
+ * What this fake does *not* do is the other half — Rust rewriting the folder after every deck
+ * write. The seeded rows stand in for its answer at rest; a story that edits deck 4 will not see
+ * its folder follow.
+ */
+const MANAGED_WISHLIST = "A managed wishlist follows its deck, so it can't be edited by hand.";
+
+/** Refuses a folder id that names a deck's managed wishlist. `null` — the root — never is one. */
+function refuseIfManagedFolder(db: FakeDb, id: number | null | undefined): void {
+  if (id == null) return;
+  if ((wishFolderById(db, id)?.managedDeckId ?? null) !== null) throw refuse(MANAGED_WISHLIST);
+}
+
+/** Refuses a wish filed in a deck's managed wishlist. A wish that is not there falls through to
+ *  the caller's own {@link WISH_GONE}, which is the better sentence for it. */
+function refuseIfManagedWish(db: FakeDb, id: number): void {
+  refuseIfManagedFolder(db, db.wishlistEntries.find((w) => w.id === id)?.folderId);
+}
+
 /** {@link nextFolderOrder} over the other filing tree, and `max + 1` **among siblings** for the
  *  same reason: the first child of a folder starts at 0 again rather than continuing the root's
  *  numbering. */
@@ -14038,6 +14084,9 @@ function setEntry(
  * function is never called for. See {@link writeHandlers.deck_missing_to_wishlist}.
  */
 function addWish(db: FakeDb, input: WishInput): EntryChange {
+  // First, so every add path — the `+`, a drop, a menu, both deck sweeps — refuses a deck's
+  // managed wishlist as a destination the one way. {@link MANAGED_WISHLIST}.
+  refuseIfManagedFolder(db, input.folderId);
   if (input.preferredFinish !== undefined) validFinish(input.preferredFinish);
   // A quantity below one is read as one rather than refused: this is the only add in the app
   // that does that, and it is `add_wish`'s own rule.
@@ -14160,8 +14209,13 @@ function quickAddWishes(
     w.id,
   ];
   return db.wishlistEntries
-    .filter((w) =>
-      scope === "card" ? wishIsForCard(db, w, cardId) : w.cardId === cardId && finishFits(w),
+    .filter(
+      (w) =>
+        (scope === "card" ? wishIsForCard(db, w, cardId) : w.cardId === cardId && finishFits(w)) &&
+        // **Never a wish in a deck's managed wishlist** (user schema v48): taking one down is a
+        // hand edit of a list the deck writes, refused in {@link MANAGED_WISHLIST}'s words, and
+        // the deck that keeps it rewrites it on its own once the copies change.
+        (w.folderId === null || (wishFolderById(db, w.folderId)?.managedDeckId ?? null) === null),
     )
     .sort((a, b) => {
       const ra = rank(a);
@@ -15485,6 +15539,7 @@ export function writeHandlers(db: FakeDb) {
      *  off their UI-only floor of one. */
     wishlist_set_quantity: (args: { id: number; quantity: number }): EntryChange => {
       refuseIfBusy(db);
+      refuseIfManagedWish(db, args.id);
       validQuantity(args.quantity, "wishlist quantity");
       if (args.quantity === 0) return removeWish(db, args.id);
       const row = db.wishlistEntries.find((w) => w.id === args.id);
@@ -15497,6 +15552,7 @@ export function writeHandlers(db: FakeDb) {
     /** `wishlist::remove_wish`. */
     wishlist_remove: (args: { id: number }): EntryChange => {
       refuseIfBusy(db);
+      refuseIfManagedWish(db, args.id);
       return removeWish(db, args.id);
     },
 
@@ -15581,6 +15637,7 @@ export function writeHandlers(db: FakeDb) {
       const cardId = nonblank(args.cardId);
       const wish = db.wishlistEntries.find((w) => w.id === args.id);
       if (!wish) throw refuse(WISH_GONE);
+      refuseIfManagedFolder(db, wish.folderId);
       const printing = cardId === null ? null : cardById(db, cardId);
       if (cardId !== null && printing === null) {
         throw refuse("no card with that id is in the card database");
@@ -15706,6 +15763,9 @@ export function writeHandlers(db: FakeDb) {
       if (args.folderId !== null && !wishFolderById(db, args.folderId)) throw refuse(FOLDER_GONE);
       const wish = db.wishlistEntries.find((w) => w.id === args.id);
       if (!wish) throw refuse(WISH_GONE);
+      // Both ends: into a deck's managed wishlist, and out of one.
+      refuseIfManagedFolder(db, args.folderId);
+      refuseIfManagedFolder(db, wish.folderId);
       const merged = mergeWishOnto(db, wish, { ...wish, folderId: args.folderId });
       if (merged) return merged;
       wish.folderId = args.folderId;
@@ -15740,6 +15800,7 @@ export function writeHandlers(db: FakeDb) {
       // `deck_folder_create`'s shape one table over, and `wishlist_folders::create_folder`'s
       // `require_folder` since 2026-09-09 — so the workbench cannot build a tree the app refuses.
       if (args.parentId !== null && !wishFolderById(db, args.parentId)) throw refuse(FOLDER_GONE);
+      refuseIfManagedFolder(db, args.parentId);
       const folder: FakeWishlistFolder = {
         id: nextId(db.wishlistFolders),
         parentId: args.parentId,
@@ -15755,6 +15816,8 @@ export function writeHandlers(db: FakeDb) {
       const name = validMetaName(args.name, "A folder");
       const folder = wishFolderById(db, args.id);
       if (!folder) throw refuse(FOLDER_GONE);
+      // A managed folder is named after its deck, and renamed with it — never by hand.
+      refuseIfManagedFolder(db, args.id);
       folder.name = name;
       return toWishlistFolder(folder);
     },
@@ -15794,6 +15857,9 @@ export function writeHandlers(db: FakeDb) {
     wishlist_folder_move: (args: { id: number; parentId: number | null }): WishlistFolder => {
       refuseIfBusy(db);
       if (args.parentId !== null && !wishFolderById(db, args.parentId)) throw refuse(FOLDER_GONE);
+      // The folder moved, or the drawer it would move into.
+      refuseIfManagedFolder(db, args.id);
+      refuseIfManagedFolder(db, args.parentId);
       let cursor = args.parentId;
       for (let hops = 0; cursor !== null; hops += 1) {
         if (cursor === args.id) throw refuse(FOLDER_CYCLE);
@@ -15818,8 +15884,12 @@ export function writeHandlers(db: FakeDb) {
     }): WishlistFolder[] => {
       refuseIfBusy(db);
       if (args.parentId !== null && !wishFolderById(db, args.parentId)) throw refuse(FOLDER_GONE);
+      refuseIfManagedFolder(db, args.parentId);
       for (const id of args.ids) {
         if (!wishFolderById(db, id)) throw refuse(FOLDER_GONE);
+        // Before the first write, like every fence here: a managed folder at either end of a
+        // reorder refuses the whole of it.
+        refuseIfManagedFolder(db, id);
         let cursor = args.parentId;
         for (let hops = 0; cursor !== null; hops += 1) {
           if (cursor === id) throw refuse(FOLDER_CYCLE);
@@ -15870,6 +15940,8 @@ export function writeHandlers(db: FakeDb) {
      */
     wishlist_folder_delete: (args: { id: number }): void => {
       refuseIfBusy(db);
+      // A deck's managed folder goes when its deck does, or when the deck's switch is turned off.
+      refuseIfManagedFolder(db, args.id);
       const doomed = wishFolderSubtree(db, args.id);
       // Ids rather than rows, taken before anything moves: a merge replaces `db.wishlistEntries`
       // with a filtered copy, so a held reference is a row that is no longer in the store.
@@ -15914,6 +15986,7 @@ export function writeHandlers(db: FakeDb) {
     wishlist_folder_clear: (args: { id: number }): number => {
       refuseIfBusy(db);
       if (!wishFolderById(db, args.id)) throw refuse(FOLDER_GONE);
+      refuseIfManagedFolder(db, args.id);
       const before = db.wishlistEntries.length;
       db.wishlistEntries = db.wishlistEntries.filter((w) => w.folderId !== args.id);
       return before - db.wishlistEntries.length;
@@ -15941,6 +16014,7 @@ export function writeHandlers(db: FakeDb) {
     wishlist_folder_delete_with_wishes: (args: { id: number }): number => {
       refuseIfBusy(db);
       if (!wishFolderById(db, args.id)) throw refuse(FOLDER_GONE);
+      refuseIfManagedFolder(db, args.id);
       const doomed = wishFolderSubtree(db, args.id);
       const before = db.wishlistEntries.length;
       db.wishlistEntries = db.wishlistEntries.filter(
@@ -16248,6 +16322,10 @@ export function writeHandlers(db: FakeDb) {
       if (unplanned !== undefined && unplanned !== markUnplannedWas) {
         field("theoryMarkUnplanned", markUnplannedWas, unplanned);
       }
+      const managedWas = before.managedWishlist ?? true;
+      if (patch.managedWishlist !== undefined && patch.managedWishlist !== managedWas) {
+        field("managedWishlist", managedWas, patch.managedWishlist);
+      }
       // v16's, and the second multi-word field name in that switch — `deck.rs` writes
       // `"defaultCategory"`, and the paragraph above applies word for word.
       //
@@ -16404,6 +16482,7 @@ export function writeHandlers(db: FakeDb) {
       deck.theoryMarkExact = patch.theoryMarkExact ?? deck.theoryMarkExact;
       deck.theoryMarkName = patch.theoryMarkName ?? deck.theoryMarkName;
       deck.theoryMarkUnplanned = patch.theoryMarkUnplanned ?? deck.theoryMarkUnplanned;
+      deck.managedWishlist = patch.managedWishlist ?? deck.managedWishlist;
       // `coalesce(?n, default_category_id)` again — and **`0` is a value here rather than an
       // absence**, which is the whole reason `??` is right and a truthiness test would be wrong:
       // `patch.defaultCategoryId === 0` is a reader asking to go back to Auto, and `||` would

@@ -50,6 +50,7 @@ const BURN: DeckRow = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
+  managedWishlist: true,
   // How the editor was last read — written by `deckSetViewState` and by nothing this hook
   // offers, since looking at a deck is not editing one.
   lastVariant: "live",
@@ -125,7 +126,7 @@ describe("useDecks invalidation", () => {
 
     await result.current.remove.mutateAsync(4);
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks", "wishlist"]));
   });
 });
 
@@ -201,7 +202,7 @@ describe("useDecks", () => {
    * a `deck_folders` row, which is the gallery's tree and not the collection's. The wishlist is
    * untouched by all five: no wish's `ownedQuantity` can move without a quantity moving.
    */
-  it("leaves the collection alone for a patch that is not a rename, and the wishlist always", async () => {
+  it("leaves the collection alone for a patch that is not a rename, and marks the wishlist", async () => {
     const { result } = renderHook(() => useDecks(), { wrapper });
     await waitFor(() => expect(result.current.decks).toEqual([BURN]));
     const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -212,7 +213,9 @@ describe("useDecks", () => {
     invalidate.mockClear();
     await result.current.setFolder.mutateAsync({ id: 4, folderId: 1 });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    // Every deck write marks the wishlist since user schema v48: a theory deck's managed
+    // wishlist is rewritten after it (issue #512).
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
   });
 
   /**

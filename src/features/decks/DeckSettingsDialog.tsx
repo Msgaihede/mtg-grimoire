@@ -396,6 +396,9 @@ function Settings({ deckId }: { deckId: number }) {
     if (patch.theoryMarkName !== undefined) update({ theoryMarkName: patch.theoryMarkName });
     if (patch.theoryMarkUnplanned !== undefined)
       update({ theoryMarkUnplanned: patch.theoryMarkUnplanned });
+    // The managed wishlist rides the same `deck_update`; the backend creates, refills or removes
+    // the folder in that write, so this host does nothing more than relay the press.
+    if (patch.managedWishlist !== undefined) update({ managedWishlist: patch.managedWishlist });
     // The Tokens & Emblems pile: one switch, one field, one write — a reading preference that
     // moves no card, the marks' kind of write.
     if (patch.tokenStack !== undefined) update({ tokenStack: patch.tokenStack });
@@ -457,6 +460,7 @@ function Settings({ deckId }: { deckId: number }) {
               theoryMarkExact: row.theoryMarkExact,
               theoryMarkName: row.theoryMarkName,
               theoryMarkUnplanned: row.theoryMarkUnplanned,
+              managedWishlist: row.managedWishlist,
               folderId: row.folderId,
               defaultCategoryId: row.defaultCategoryId,
               tokenStack: row.tokenStack,

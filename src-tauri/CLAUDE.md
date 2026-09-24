@@ -1148,6 +1148,20 @@ shared_cell` walks both into two databases and compares them column by column.
   gained a `New folder…` panel offering the whole tree as parents — the race stopped being
   theoretical. `deck_meta::move_folder` still has it, for the deck cabinet, and is deliberately
   left with it.
+- **A theory deck's managed wishlist folder is derived, per device, and written by
+  `managed_wishlist` alone** (user schema v48, issue #512). `wishlist_folders.managed_deck_id`
+  names the deck; the folder holds `deck_theory::wanted` — the Compare dialog's rows — and is
+  rewritten after every `sync::with_write` from **TEMP triggers** that mark a deck dirty, and at
+  every launch from `schema::prepare_database`. Three things bind a change near it. **Its writes
+  run inside `capture::suppressed` and the column is on no capture spec** — the rule above about
+  writes every device derives for itself. **A TEMP guard refuses any other write touching a
+  managed folder or wish** with `managed_wishlist::MANAGED`, so a new bulk wishlist write must
+  skip managed rows (as `reset::clear_wishlist` and the optimize preview do) or it fails whole;
+  its `UPDATE` guards name columns, so bookkeeping columns stay writable. **And a trigger body's
+  conflict clause is overridden by the outer statement's**, which is why the dirty table has no
+  key: an `INSERT OR IGNORE` fired by an UPSERT failed the deck add itself.
+  `db::CrossFileFence` ignores the `temp` schema for the same bookkeeping.
+  [wishlist-folders.md](../docs/reference/wishlist-folders.md) has the rest.
 - `needs_review` is a **sentence, not a flag** — the reconciler writes what happened, and
   the first message wins (a later sweep does not overwrite one). Non-NULL means "listed,
   counted, and asking to be looked at", never "hidden".

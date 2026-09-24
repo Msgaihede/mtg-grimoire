@@ -1186,3 +1186,43 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | `src/features/wishlist/WishDestination.tsx` | The destination dropdown both deck sweeps draw — the root, the full-path rows, and `New folder…` |
 | `src-tauri/src/deck_theory.rs` | `missing_to_wishlist`, the Compare dialog's write and its up-front folder check |
 | `src-tauri/src/deck.rs` | `missing_to_wishlist`, the live deck's, taking the same optional folder |
+
+## Managed wishlists — a folder a deck owns (user schema v48, 2026-09-24)
+
+[Issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512). A `Theory + Actual` deck with
+`decks.managed_wishlist` on (the default) keeps one wishlist folder, named after the deck, that
+holds exactly what its Compare dialog lists — `deck_theory::wanted`, which is
+`missing_to_wishlist`'s rows with the folder and the feed line taken off, so the dialog, its Send
+press and the folder cannot disagree about what "missing" means. The switch is drawn in Deck
+settings under the theory marks, and only for that kind: a regular deck has no plan to be short
+of and a virtual one owns no cardboard, so switching a deck to either removes its folder.
+
+- **Derived per device, never synced.** The switch syncs; the folder and its wishes do not.
+  `src-tauri/CLAUDE.md`'s rule is that a write every device derives for itself must not be
+  captured — two devices would each insert the same wish under two `sync_uid`s and the grain's
+  upsert would sum them — so `managed_wishlist::settle_deck` writes inside
+  `capture::suppressed`, and `wishlist_folders.managed_deck_id` is on no capture spec. It has no
+  foreign key either: `ON DELETE CASCADE` would surface the wishes at the root through
+  `wishlist_entries.folder_id`'s `SET NULL`, so a folder whose deck has gone is swept wishes
+  first. A unique index on the column is the one-folder-per-deck fence.
+- **"Whenever the deck changes" is per-connection `TEMP` triggers.** `managed_wishlist::arm`
+  installs them on the write connection the first time `sync::with_write` hands it out; they
+  mark a deck dirty on any write to its `deck_cards`, a category's switch or delete, and the
+  `decks` columns that decide eligibility or the folder's name. `with_write` settles the dirty
+  decks after the write's own transaction, so a folder is rewritten once per press, and sync's
+  `run_once` and the web routes go through the same door. `schema::prepare_database` runs
+  `settle_all` at every launch — that is what builds the folders `DEFAULT 1` promises every
+  theory deck that existed before the rung.
+- **⚠️ The dirty table has no key, on purpose.** A trigger body's conflict clause is overridden by
+  the outer statement's, so an `INSERT OR IGNORE` fired by `deck::add_card`'s UPSERT failed with
+  `UNIQUE constraint failed` — the add itself, not the bookkeeping. `settle` reads `DISTINCT`.
+- **The guard is a backstop, and it names columns.** `BEFORE` triggers refuse any hand-made
+  insert, update or delete touching a managed folder or a wish in one with
+  `managed_wishlist::MANAGED`, unless this module is the writer or sync's apply/reconcile is
+  (`sync_state.applying`). The `UPDATE` guards are `UPDATE OF <columns>`, so a `sync_uid` or
+  `needs_review` write is never refused. Two readers were narrowed rather than left to hit it:
+  `reset::clear_wishlist` sweeps everything but managed folders, and the optimize preview never
+  offers a managed wish.
+- **The frontend draws no editing control for a managed folder or wish**, and never offers one
+  as a destination; the deck hooks' `invalidate` helpers fire `["wishlist"]` with `["decks"]`
+  because every deck write can rewrite a folder.

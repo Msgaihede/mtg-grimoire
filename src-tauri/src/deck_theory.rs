@@ -946,6 +946,43 @@ pub fn missing_to_wishlist(
     Ok(touched)
 }
 
+/// One line of a deck's **managed wishlist** — what [`missing_to_wishlist`] would write for it,
+/// minus the folder and the feed line. See [`crate::managed_wishlist`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Wanted {
+    pub oracle_id: String,
+    pub card_id: String,
+    pub name: String,
+    /// The deck row's finish, NULL for the regular copy — [`missing_to_wishlist`]'s rule.
+    pub finish: Option<String>,
+    pub quantity: i64,
+}
+
+/// Everything the plan asks for that the live list has not got, as the wishes
+/// [`missing_to_wishlist`] would make of it — the same [`grouped_diff`], the same orphan skip,
+/// the same pinned printing and finish.
+///
+/// **One definition of "missing" for the Compare dialog, its Send press and the managed folder**,
+/// which is why this reads [`grouped_diff`] rather than a query of its own: a managed wishlist
+/// that disagreed with the dialog beside it would be a list nobody could check.
+pub(crate) fn wanted(conn: &Connection, deck_id: i64) -> Result<Vec<Wanted>, String> {
+    Ok(
+        grouped_diff(conn, deck_id, crate::sorting::Marketplace::default())?
+            .into_iter()
+            .filter_map(|g| {
+                let oracle_id = g.oracle_id?;
+                (g.row.quantity > 0).then_some(Wanted {
+                    oracle_id,
+                    card_id: g.row.card_id,
+                    name: g.row.name,
+                    finish: g.row.finish,
+                    quantity: g.row.quantity,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// What a write here says when its worker thread died under it.
 #[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {

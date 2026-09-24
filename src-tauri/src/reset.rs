@@ -323,18 +323,26 @@ pub fn clear_collection(conn: &Connection) -> Result<CollectionCleared, String> 
 pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // The copies, before the sweep — [`clear_collection`]'s reason one table over.
+    // **A deck's managed folder is not the reader's to clear** (user schema v48): it is derived
+    // from the deck and would be rebuilt by the next write anyway, and the guard in
+    // `crate::managed_wishlist` refuses the delete. So the sweep is everything else.
+    const MINE: &str = "(folder_id IS NULL OR folder_id NOT IN
+                          (SELECT id FROM wishlist_folders WHERE managed_deck_id IS NOT NULL))";
     let copies: i64 = tx
         .query_row(
-            "SELECT coalesce(sum(quantity), 0) FROM wishlist_entries",
+            &format!("SELECT coalesce(sum(quantity), 0) FROM wishlist_entries WHERE {MINE}"),
             [],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
     let entries = tx
-        .execute("DELETE FROM wishlist_entries", [])
+        .execute(&format!("DELETE FROM wishlist_entries WHERE {MINE}"), [])
         .map_err(|e| e.to_string())?;
-    tx.execute("DELETE FROM wishlist_folders", [])
-        .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM wishlist_folders WHERE managed_deck_id IS NULL",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     // One row for the whole wipe, and the folders swept beside it get none of their own.
     crate::activity::record(
         &tx,

@@ -68,6 +68,7 @@ import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { userWishFolders } from "./managed";
 import { useWishlistFolderList, useWishlistFolders } from "./useWishlistFolders";
 
 /**
@@ -199,13 +200,19 @@ export function WishDestination({
   const frameRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const known = useMemo(
-    () =>
-      minted !== null && !folders.some((folder) => folder.id === minted.id)
-        ? [...folders, minted]
-        : folders,
-    [folders, minted],
-  );
+  /**
+   * **The reader's drawers only — never a deck's managed folder** (issue #512). Every wish in one
+   * is written by the deck, and the backend refuses a send into it in words; a destination whose
+   * only outcome is that refusal is not one this control offers, and it is not offered as a parent
+   * for `New folder…` either, since a managed folder takes no sub-folder. The filter is here rather
+   * than at the two dialogs that draw this, so a third caller cannot forget it.
+   */
+  const known = useMemo(() => {
+    const mine = userWishFolders(folders);
+    return minted !== null && !mine.some((folder) => folder.id === minted.id)
+      ? [...mine, minted]
+      : mine;
+  }, [folders, minted]);
   /**
    * The cabinet as a tree, and the same tree as one path per folder.
    *

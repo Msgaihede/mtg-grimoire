@@ -63,9 +63,12 @@ function columnsFor({
   onAnyPrinting,
   folderNameOf,
   flattened,
+  readOnly,
   marketplace,
   tip,
 }: {
+  /** A wish in a deck's managed folder — see {@link WishlistTable}'s prop. */
+  readOnly: (row: WishRow) => boolean;
   folders: readonly WishlistFolder[];
   nodes: readonly FolderNode<WishlistFolder>[];
   onSetQuantity: (row: WishRow, quantity: number) => void;
@@ -162,23 +165,27 @@ function columnsFor({
               Keyed by the wish for the wall's reason: this list is virtualised, so scrolling
               re-binds a row to a different wish, and a panel carried across that would be pointed
               at a card the reader never opened it on. */}
-          <EditWishButton
-            key={row.id}
-            row={row}
-            folders={folders}
-            nodes={nodes}
-            onSetQuantity={onSetQuantity}
-            onRemove={onRemove}
-            onSetFolder={onSetFolder}
-            onChangePrinting={onChangePrinting}
-            onAnyPrinting={onAnyPrinting}
-            // The wall's recipe, minus its `static`: that class exists to hang the panel off the
-            // tile's caption rather than off a 20px control, and here the cell is already the
-            // anchor. Invisible until the row is hovered or holds the caret — a list of four
-            // hundred wishes is not a list of pencils — and always in the tab order, because
-            // "visible on hover" is not a state a keyboard has.
-            className={REVEAL_ON_HOVER}
-          />
+          {/* Not on a wish in a deck's managed folder: every write the panel reaches is refused
+              for one, and the folder's own line says why. */}
+          {!readOnly(row) && (
+            <EditWishButton
+              key={row.id}
+              row={row}
+              folders={folders}
+              nodes={nodes}
+              onSetQuantity={onSetQuantity}
+              onRemove={onRemove}
+              onSetFolder={onSetFolder}
+              onChangePrinting={onChangePrinting}
+              onAnyPrinting={onAnyPrinting}
+              // The wall's recipe, minus its `static`: that class exists to hang the panel off
+              // the tile's caption rather than off a 20px control, and here the cell is already
+              // the anchor. Invisible until the row is hovered or holds the caret — a list of
+              // four hundred wishes is not a list of pencils — and always in the tab order,
+              // because "visible on hover" is not a state a keyboard has.
+              className={REVEAL_ON_HOVER}
+            />
+          )}
         </>
       ),
     },
@@ -221,19 +228,23 @@ function columnsFor({
       // stops at one: a comment left asserting a reversed rule is green forever and reads as
       // the code being the thing that is wrong.
       interactive: true,
-      cell: (row) => (
-        <QuantityStepper
-          // The deck editor's table draws `xs` and this drew `sm`, which was the two lists
-          // disagreeing about one control in the one place they are the same shape (issue #348).
-          // `xs` is the app's size for a stepper in a dense row — the deck's table and text views
-          // both — and this row is 44px like theirs (`TABLE_ROW_HEIGHT`).
-          size="xs"
-          value={row.quantity}
-          min={0}
-          label={`Copies wanted of ${wishLabel(row)}`}
-          onChange={(next) => onSetQuantity(row, next)}
-        />
-      ),
+      cell: (row) =>
+        // A managed wish says its number and offers no way to change it — the deck decides it.
+        readOnly(row) ? (
+          <span className="px-2 font-mono tabular-nums">{row.quantity}</span>
+        ) : (
+          <QuantityStepper
+            // The deck editor's table draws `xs` and this drew `sm`, which was the two lists
+            // disagreeing about one control in the one place they are the same shape (issue
+            // #348). `xs` is the app's size for a stepper in a dense row — the deck's table and
+            // text views both — and this row is 44px like theirs (`TABLE_ROW_HEIGHT`).
+            size="xs"
+            value={row.quantity}
+            min={0}
+            label={`Copies wanted of ${wishLabel(row)}`}
+            onChange={(next) => onSetQuantity(row, next)}
+          />
+        ),
     },
     {
       key: "cost",
@@ -290,30 +301,39 @@ function columnsFor({
       // mean opposite things by deletion: losing a collection entry loses a record of
       // something owned, and crossing a line off a shopping list is what a shopping list is
       // *for*.
-      cell: (row) => (
-        <button
-          type="button"
-          onClick={() => onRemove(row)}
-          aria-label={`Remove ${wishLabel(row)} from your wishlist`}
-          // Redundant, not "only name": the button already carries its own `aria-label`, so
-          // the tooltip repeats it for the pointer alone. `describes: false` is what keeps a
-          // screen reader from hearing "Remove … from your wishlist" twice — the collection
-          // table's twin button was converted the same way in PR 1.
-          {...tip("Remove from your wishlist", { describes: false })}
-          className={cn(
-            REVEAL_ON_HOVER,
-            "grid size-6 place-items-center rounded-md border border-border text-dim",
-            "transition-colors duration-150 hover:border-destructive/60 hover:text-destructive",
-            FOCUS,
-            "motion-reduce:transition-none",
-          )}
-        >
-          <Trash2 className="size-3.5" aria-hidden="true" />
-        </button>
-      ),
+      //
+      // **Except a wish in a deck's managed folder**, which is crossed off by the deck and never
+      // by hand — the backend refuses the removal, so the cell is empty rather than a button that
+      // can only end in that sentence.
+      cell: (row) =>
+        readOnly(row) ? null : (
+          <button
+            type="button"
+            onClick={() => onRemove(row)}
+            aria-label={`Remove ${wishLabel(row)} from your wishlist`}
+            // Redundant, not "only name": the button already carries its own `aria-label`, so
+            // the tooltip repeats it for the pointer alone. `describes: false` is what keeps a
+            // screen reader from hearing "Remove … from your wishlist" twice — the collection
+            // table's twin button was converted the same way in PR 1.
+            {...tip("Remove from your wishlist", { describes: false })}
+            className={cn(
+              REVEAL_ON_HOVER,
+              "grid size-6 place-items-center rounded-md border border-border text-dim",
+              "transition-colors duration-150 hover:border-destructive/60 hover:text-destructive",
+              FOCUS,
+              "motion-reduce:transition-none",
+            )}
+          >
+            <Trash2 className="size-3.5" aria-hidden="true" />
+          </button>
+        ),
     },
   ];
 }
+
+/** The default `readOnly` — module scope so a caller passing none does not hand the column
+ *  builder a fresh function every render. */
+const NOTHING_READ_ONLY = (): boolean => false;
 
 /**
  * A row that is also the wish it lists, and — where there is a printing to carry — the card
@@ -343,6 +363,7 @@ function DraggableRow({
   cardId,
   name,
   typeLine,
+  fixed = false,
   children,
   ...rest
 }: {
@@ -351,11 +372,14 @@ function DraggableRow({
   cardId: string | null;
   name: string;
   typeLine: string | null;
+  /** A wish in a deck's managed folder, which is **not** a drag source — the wall's `tileDrag`
+   *  answers `null` for the same row, and carries the reason. */
+  fixed?: boolean;
 } & ComponentProps<"div">) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = ref.current;
-    if (!element) return;
+    if (!element || fixed) return;
     return wishDraggable({
       element,
       // `folderId` travels so a folder can refuse the wish already filed in it — the answer has
@@ -366,7 +390,7 @@ function DraggableRow({
       // and it is carried for exactly this (`ipc.ts`).
       card: () => (cardId === null ? null : { kind: "card", cardId, name, typeLine }),
     });
-  }, [wishId, folderId, cardId, name, typeLine]);
+  }, [wishId, folderId, cardId, name, typeLine, fixed]);
   return (
     <div ref={ref} {...rest}>
       {children}
@@ -390,6 +414,7 @@ export function WishlistTable({
   nodes,
   folderNameOf,
   flattened,
+  readOnly = NOTHING_READ_ONLY,
   onNeedNextPage,
   onSetQuantity,
   onRemove,
@@ -403,6 +428,13 @@ export function WishlistTable({
   rows: WishRow[];
   /** Wishes matching the filters, not wishes loaded — what assistive tech is told. */
   total: number;
+  /**
+   * Whether a wish is the **deck's** — filed in a managed folder (issue #512), where the backend
+   * refuses every edit. Such a row draws its count without a stepper, no pencil and no removal,
+   * and is not a drag source: the wall's `readOnly`, for the wall's reasons. Absent reads every
+   * wish as the reader's.
+   */
+  readOnly?: (row: WishRow) => boolean;
   /** Identity of the current list, so a new one starts at the top. */
   listKey: string;
   /** The columns the list is ordered by, first one deciding. */
@@ -476,6 +508,7 @@ export function WishlistTable({
         onAnyPrinting,
         folderNameOf,
         flattened,
+        readOnly,
         marketplace,
         tip,
       })}
@@ -514,6 +547,7 @@ export function WishlistTable({
             cardId={row.cardId}
             name={row.name}
             typeLine={row.typeLine}
+            fixed={readOnly(row)}
             tabIndex={0}
             // The menu goes on exactly the rows that open the card, and for the same reason:
             // both need a printing. A right-click is not an activation — `onClick` below is a
@@ -543,6 +577,7 @@ export function WishlistTable({
             cardId={null}
             name={row.name}
             typeLine={row.typeLine}
+            fixed={readOnly(row)}
           />
         )
       }

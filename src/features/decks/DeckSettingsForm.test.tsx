@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { DeckCategory, DeckFolder } from "@/lib/ipc";
@@ -52,6 +52,7 @@ const VALUE: DeckSettingsValue = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
+  managedWishlist: true,
   folderId: null,
   defaultCategoryId: AUTO_CATEGORY,
   // Off, which is `decks.token_stack`'s `DEFAULT 0` — every deck until a reader asks.
@@ -603,6 +604,32 @@ describe("DeckSettingsForm", () => {
     await userEvent.click(screen.getByRole("switch", { name: /not in the theory list/i }));
 
     expect(onChange).toHaveBeenLastCalledWith({ theoryMarkUnplanned: false });
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The managed wishlist (issue #512) sits under both of the marks' gates — it keeps the
+   * difference between the two lists, so a deck with no plan has nothing for it to hold, and the
+   * create host has no column to write it to — and reports its own field.
+   */
+  it("draws the managed wishlist switch only for a Theory + Actual deck in the edit host", async () => {
+    form({ value: { ...VALUE, theoryEnabled: false } });
+    expect(screen.queryByRole("switch", { name: /managed wishlist/i })).not.toBeInTheDocument();
+    cleanup();
+
+    form({ value: { ...VALUE, theoryEnabled: true }, canSetTheoryMarks: false });
+    expect(screen.queryByRole("switch", { name: /managed wishlist/i })).not.toBeInTheDocument();
+    cleanup();
+
+    const { onChange, onCommit } = form({ value: { ...VALUE, theoryEnabled: true } });
+    const toggle = screen.getByRole("switch", { name: "Managed wishlist Enabled" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    // Not a mark, so its heading carries no swatch.
+    expect(document.getElementById("s-managed-wishlist")?.querySelector("span")).toBeNull();
+
+    await userEvent.click(toggle);
+
+    expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: false });
     expect(onCommit).not.toHaveBeenCalled();
   });
 

@@ -32,11 +32,16 @@ export function useDecks() {
    * `Availability::ForDeck` pool on the plan since 2026-09-09 (issue #435). Only the queries actually mounted pay for a refetch, and at most
    * two of these are ever on screen.
    *
-   * **The wishlist is deliberately left alone** by all five: no quantity changes and no
-   * printing is added or dropped, so no wish's `ownedQuantity` can be different afterwards.
+   * **The wishlist is invalidated too since user schema v48**, and not for any wish's
+   * `ownedQuantity`: a rename, a kind switch, the managed-wishlist switch and a delete each
+   * rewrite or remove a theory deck's managed folder (issue #512).
    */
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
+    // A theory deck's managed wishlist (issue #512) is rewritten by Rust after every deck
+    // write, so the wishlist's reads go stale with the deck's. Only a mounted query refetches;
+    // an unmounted one is marked and read fresh the next time the wishlist opens.
+    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
   };
 
   /**

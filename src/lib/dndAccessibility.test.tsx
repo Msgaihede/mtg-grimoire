@@ -152,7 +152,7 @@ const COLLECTION_FOLDER: CollectionFolder = {
   syncUid: null,
 };
 
-const WISH_FOLDER: WishlistFolder = { id: 4, name: "Buy next", parentId: null, sortOrder: 4 };
+const WISH_FOLDER: WishlistFolder = { id: 4, name: "Buy next", parentId: null, sortOrder: 4, managedDeckId: null };
 
 function collectionNode(): FolderNode<CollectionFolder> {
   return { folder: COLLECTION_FOLDER, depth: 0, count: 0, children: [] };

@@ -341,6 +341,7 @@ const DECK: DeckRow = {
   // The third mark switch (2026-09-08), on as the column's own default is: a live row the plan
   // does not name wears the X. Every real row carries it, so the fixture does too.
   theoryMarkUnplanned: true,
+  managedWishlist: true,
   // How the editor was last read. The defaults, so a test that says nothing about them opens on
   // Live, grouped by category, sorted alphabetically — and a test about the memory overrides the
   // one field it is about through `detail()`.

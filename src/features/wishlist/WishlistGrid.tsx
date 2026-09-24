@@ -19,6 +19,10 @@ import { ElsewhereMark, WishFolderCaption } from "./wishMarks";
 /** One tile of the wall: a wish, and the printing there is a picture of. */
 interface WishTile extends GridCard {
   wish: WishRow;
+  /** The wish is in a deck's managed folder, so the tile edits nothing — see {@link tileDrag}
+   *  and the `column` slot. On the tile rather than asked per callback, so {@link tileDrag}
+   *  stays module scope, which `CardGrid` asks of every registered callback. */
+  managed: boolean;
 }
 
 /**
@@ -34,8 +38,9 @@ interface WishTile extends GridCard {
  * The set and number are carried anyway, from the *wish*, so the tile keeps a truthful pair for
  * anything that reads the shape — {@link tileCaption} is what actually draws them.
  */
-function toTile(wish: WishRow): WishTile {
+function toTile(wish: WishRow, managed: boolean): WishTile {
   return {
+    managed,
     id: wish.artCardId ?? "",
     // Never null: a wish carries its own name, because it outlives the printing it was made
     // from and may never have had one. It is the `alt`, and the whole of what an orphan's
@@ -165,7 +170,13 @@ function wallPrinting(wish: WishRow): string {
  * The type line files the card when it is let go somewhere with no column to point at — the
  * sidebar's Decks entry — and is the one thing `WishRow` carries that neither layout draws.
  */
-const tileDrag = (tile: WishTile): Record<string, unknown> => {
+const tileDrag = (tile: WishTile): Record<string, unknown> | null => {
+  // **A wish in a deck's managed folder is not picked up at all** (issue #512). Both halves of
+  // what it would carry end in a refusal or a surprise: the wish half files it out of a folder
+  // the backend will not let it leave, and a card half dropped on a deck would be a deck add made
+  // from the one list that is *derived* from a deck. `null` is `CardGrid`'s "cannot be picked
+  // up", decided before the registration rather than at `dragstart`.
+  if (tile.managed) return null;
   const wish = wishDragData({
     wishId: tile.wish.id,
     name: tile.wish.name,
@@ -259,6 +270,7 @@ export function WishlistGrid({
   nodes,
   folderNameOf,
   flattened,
+  readOnly,
   onNeedNextPage,
   onSetQuantity,
   onRemove,
@@ -272,6 +284,14 @@ export function WishlistGrid({
   rows: WishRow[];
   /** Identity of the current list, so a new one starts at the top. */
   listKey: string;
+  /**
+   * Whether a wish is the **deck's** rather than the reader's — filed in a managed folder (issue
+   * #512), where the backend refuses every edit. Such a tile draws no stepper and no pencil and
+   * cannot be dragged: absent controls rather than greyed ones, because each would only end in a
+   * refusal. Held still by the caller — it is in the tiles' memo. Absent reads every wish as the
+   * reader's.
+   */
+  readOnly?: (row: WishRow) => boolean;
   /** The flat folder rows and the tree built from them, both straight through to
    *  {@link EditWishButton} — see its own doc for why it wants two shapes of one read. */
   folders: readonly WishlistFolder[];
@@ -326,7 +346,10 @@ export function WishlistGrid({
   const narrowWindow = useNarrowWindow();
   const tip = useTooltip();
 
-  const tiles = useMemo(() => rows.map(toTile), [rows]);
+  const tiles = useMemo(
+    () => rows.map((row) => toTile(row, readOnly?.(row) ?? false)),
+    [rows, readOnly],
+  );
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return (
@@ -553,80 +576,84 @@ export function WishlistGrid({
       // same zoom, so those are constants and not readings taken at 1×. At `PHONE_TILE_WIDTH`'s
       // 141 it is 22% of the width — the first figure to check if this column is ever made
       // bigger.
-      column={(tile) => (
-        // `data-no-drag` needs a host. A wish tile is a drag source ({@link tileDrag}), the
-        // sensor asks `closest(NOT_A_DRAG)` at the press (`dnd.ts`), and `NOT_A_DRAG` excludes
-        // the stepper's `<input>` by tag but not its two `<button>`s — so unmarked, a press on
-        // `−` plus five pixels of travel is a drag of the whole wish instead of a decrement.
-        // `QuantityStepper` takes no `className` and no loose props, so the mark cannot go on
-        // the control; `closest` means one on the wrapper covers both buttons.
-        // `DeckCardControls` is the same wrapper around the same stepper for the same sentence
-        // (`features/decks/cardControl.tsx`).
-        //
-        // **Nothing here sets `position`, and nothing here may** — see the pencil above: the
-        // strip is what the 256px panel is anchored to, and a positioned box anywhere in that
-        // chain becomes the containing block instead.
-        <span
-          data-no-drag=""
-          className="flex flex-col items-center gap-[calc(0.25rem*var(--control-scale,1))]"
-        >
-          <QuantityStepper
-            // The deck stack's column, verbatim — the 36px box, standing on end, over art.
-            // `xs` and `card` are the two sizes drawn on a card face and both follow the
-            // reader's zoom; this is the larger, and the arithmetic for it against a 170px tile
-            // is on the slot above.
-            size="card"
-            orientation="vertical"
-            // Drawn over an illustration, inside a frame that clips its own corners — the deck
-            // tile's two answers, for the deck tile's two reasons: a 1px outline with nothing
-            // behind it disappears over art of any brightness, and an outset focus ring on a
-            // clipped box loses the half that lands outside.
-            tone="art"
-            focus="inset"
-            value={tile.wish.quantity}
-            // **Zero is the floor and zero removes the wish** — a real press, and the wall's
-            // and the table's answer alike since issue #284.
-            //
-            // `wishlist.rs`'s `set_wish_quantity` has always returned `remove_wish` at zero,
-            // because `wishlist_entries.quantity` carries `CHECK (quantity > 0)`: a wish for
-            // none of something is not a wish, which is where this list differs from the
-            // collection's, where a zeroed row keeps its condition and its purchase story. The
-            // floor of `1` this had until then was a UI-only guard on the argument that a
-            // stepper which deleted the row when held down is a one-way door. What overruled it
-            // is that the collection's wall reaches zero and deletes there, so the same gesture
-            // on two walls of one app meant two different things — and the guard was buying a
-            // reader who had over-counted a copy an extra press rather than an undo, which is
-            // not what the argument promised.
-            //
-            // **Removal keeps its named route**: `Remove from wishlist` in the pencil's panel is
-            // the explicit press, it says the word, and it is the one a keyboard finds by
-            // reading rather than by holding a button down.
-            min={0}
-            // The wish, not the card: two wishes for one card differ only by printing and
-            // finish, so `wishLabel` is what stops a wall of forty being forty controls a screen
-            // reader or a voice driver cannot tell apart. The same name the table's stepper and
-            // the panel's carry, because it names the same wish.
-            label={`Copies wanted of ${wishLabel(tile.wish)}`}
-            onChange={(next) => onSetQuantity(tile.wish, next)}
-          />
-          <EditWishButton
-            // Keyed by the wish, because the wall keys its tiles by *slot*: removing a wish
-            // re-binds this slot to the next one, and an open panel carried across that would be
-            // pointed at a card the reader never opened it on.
-            key={tile.wish.id}
-            row={tile.wish}
-            folders={folders}
-            nodes={nodes}
-            onSetQuantity={onSetQuantity}
-            onRemove={onRemove}
-            onSetFolder={onSetFolder}
-            onChangePrinting={onChangePrinting}
-            onAnyPrinting={onAnyPrinting}
-            size="card"
-            className="static"
-          />
-        </span>
-      )}
+      column={(tile) =>
+        // Nothing at all on a managed wish: the count it wants is still said in the corner, and
+        // the folder's own line says why there is nothing to change it with.
+        tile.managed ? null : (
+          // `data-no-drag` needs a host. A wish tile is a drag source ({@link tileDrag}), the
+          // sensor asks `closest(NOT_A_DRAG)` at the press (`dnd.ts`), and `NOT_A_DRAG` excludes
+          // the stepper's `<input>` by tag but not its two `<button>`s — so unmarked, a press on
+          // `−` plus five pixels of travel is a drag of the whole wish instead of a decrement.
+          // `QuantityStepper` takes no `className` and no loose props, so the mark cannot go on
+          // the control; `closest` means one on the wrapper covers both buttons.
+          // `DeckCardControls` is the same wrapper around the same stepper for the same sentence
+          // (`features/decks/cardControl.tsx`).
+          //
+          // **Nothing here sets `position`, and nothing here may** — see the pencil above: the
+          // strip is what the 256px panel is anchored to, and a positioned box anywhere in that
+          // chain becomes the containing block instead.
+          <span
+            data-no-drag=""
+            className="flex flex-col items-center gap-[calc(0.25rem*var(--control-scale,1))]"
+          >
+            <QuantityStepper
+              // The deck stack's column, verbatim — the 36px box, standing on end, over art.
+              // `xs` and `card` are the two sizes drawn on a card face and both follow the
+              // reader's zoom; this is the larger, and the arithmetic for it against a 170px tile
+              // is on the slot above.
+              size="card"
+              orientation="vertical"
+              // Drawn over an illustration, inside a frame that clips its own corners — the deck
+              // tile's two answers, for the deck tile's two reasons: a 1px outline with nothing
+              // behind it disappears over art of any brightness, and an outset focus ring on a
+              // clipped box loses the half that lands outside.
+              tone="art"
+              focus="inset"
+              value={tile.wish.quantity}
+              // **Zero is the floor and zero removes the wish** — a real press, and the wall's
+              // and the table's answer alike since issue #284.
+              //
+              // `wishlist.rs`'s `set_wish_quantity` has always returned `remove_wish` at zero,
+              // because `wishlist_entries.quantity` carries `CHECK (quantity > 0)`: a wish for
+              // none of something is not a wish, which is where this list differs from the
+              // collection's, where a zeroed row keeps its condition and its purchase story. The
+              // floor of `1` this had until then was a UI-only guard on the argument that a
+              // stepper which deleted the row when held down is a one-way door. What overruled it
+              // is that the collection's wall reaches zero and deletes there, so the same gesture
+              // on two walls of one app meant two different things — and the guard was buying a
+              // reader who had over-counted a copy an extra press rather than an undo, which is
+              // not what the argument promised.
+              //
+              // **Removal keeps its named route**: `Remove from wishlist` in the pencil's panel is
+              // the explicit press, it says the word, and it is the one a keyboard finds by
+              // reading rather than by holding a button down.
+              min={0}
+              // The wish, not the card: two wishes for one card differ only by printing and
+              // finish, so `wishLabel` is what stops a wall of forty being forty controls a screen
+              // reader or a voice driver cannot tell apart. The same name the table's stepper and
+              // the panel's carry, because it names the same wish.
+              label={`Copies wanted of ${wishLabel(tile.wish)}`}
+              onChange={(next) => onSetQuantity(tile.wish, next)}
+            />
+            <EditWishButton
+              // Keyed by the wish, because the wall keys its tiles by *slot*: removing a wish
+              // re-binds this slot to the next one, and an open panel carried across that would be
+              // pointed at a card the reader never opened it on.
+              key={tile.wish.id}
+              row={tile.wish}
+              folders={folders}
+              nodes={nodes}
+              onSetQuantity={onSetQuantity}
+              onRemove={onRemove}
+              onSetFolder={onSetFolder}
+              onChangePrinting={onChangePrinting}
+              onAnyPrinting={onAnyPrinting}
+              size="card"
+              className="static"
+            />
+          </span>
+        )
+      }
       cardMenu={rowMenu && ((tile) => rowMenu(tile.wish))}
       cardMenuKey={rowMenuKey && ((tile) => rowMenuKey(tile.wish))}
       // `dragRecord` rather than `dragPayload`, because a wish tile's drag is two marks in one

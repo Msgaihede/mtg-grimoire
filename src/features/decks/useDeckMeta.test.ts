@@ -185,7 +185,7 @@ describe("useDeckMeta invalidation", () => {
 
     await result.current.setCategoryActive.mutateAsync({ id: 3, isActive: false });
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
   });
 
   /**
@@ -202,7 +202,7 @@ describe("useDeckMeta invalidation", () => {
 
     await result.current.deleteCategory.mutateAsync({ id: 2, moveToCategoryId: null });
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks", "wishlist"]));
   });
 
   /**
@@ -217,7 +217,7 @@ describe("useDeckMeta invalidation", () => {
 
     await result.current.deleteCategory.mutateAsync({ id: 2, moveToCategoryId: 1 });
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
   });
 });
 

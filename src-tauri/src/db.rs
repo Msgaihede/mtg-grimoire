@@ -247,7 +247,15 @@ impl CrossFileFence {
     }
 
     /// From inside the update hook. `db` is SQLite's own schema name for the write.
+    ///
+    /// **`temp` is not a file this fence is about.** The per-connection bookkeeping
+    /// [`crate::managed_wishlist`] keeps there (a list of decks to revisit) is advisory and dies
+    /// with the connection, so a commit that lost it would lose nothing a reader owns — and every
+    /// deck write makes one, beside its own row in `main`.
     pub fn note(&self, db: &str) {
+        if db == "temp" {
+            return;
+        }
         let bit = if db == "main" {
             Self::MAIN
         } else {
