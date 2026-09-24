@@ -1640,7 +1640,7 @@ pub fn call(
             let conn = crate::sync::lock_db_read(state);
             encode(
                 command,
-                crate::deck_quick_add::wishes(&conn, &card_id, finish.as_deref())
+                crate::deck_quick_add::card_wishes(&conn, &card_id, finish.as_deref())
                     .map_err(RouteError::Failed)?,
             )
         }

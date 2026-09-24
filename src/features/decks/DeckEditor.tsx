@@ -749,7 +749,7 @@ type Layer =
   | { kind: "addMissing" }
   /**
    * **Which wish these copies come off** — a deck card's `Collection ▸ Quick add N and remove
-   * from wishlist`, on the one press where the answer is ambiguous (issue #350).
+   * from wishlist`, whenever the card has a line on the wishlist at all (issues #350 and #511).
    *
    * **Every field is frozen on purpose, which is `quickCategory`'s exception rather than
    * `export`'s rule.** The arms that carry an id name a row the editor re-reads the deck into;
@@ -757,9 +757,9 @@ type Layer =
    * one number off it, and `deck_quick_add_wishes` has already answered for that printing and
    * finish. Looking any of it back up would be looking up the answer the reader was shown.
    *
-   * `wishes` is `many` and only `many` — {@link chooseWish} writes outright for none and for
-   * one, so this layer is opened for two or more and the dialog never asks a question with one
-   * answer in it.
+   * `wishes` is never empty — {@link chooseWish} writes outright for none and asks for one or
+   * more, because the read answers every printing and finish of the card and a lone line is not
+   * certainly the cardboard just recorded.
    */
   | { kind: "quickUnwish"; card: DeckCard; copies: number; wishes: readonly DeckQuickAddWish[] }
   | { kind: "history" }
@@ -2394,14 +2394,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
-   * **Quick add N and remove from wishlist** — the same record, then take the copies off a wish
-   * that was asking for this exact printing.
+   * **Quick add N and remove from wishlist** — the same record, then take the copies off the
+   * wishlist line the reader picks.
    *
-   * **A prompt only when the answer is ambiguous**, which is `chooseWish`'s whole job and
-   * deliberately not this callback's: no matching wish and one matching wish both write straight
-   * through, because a dialog with nothing to decide is a dialog that made the reader press
-   * twice. Two or more open {@link QuickUnwishDialog}, because which of two lists a purchase
-   * satisfies is a thing only the reader knows.
+   * **A prompt whenever the card is wished for at all** (issue #511), which is `chooseWish`'s
+   * whole job and deliberately not this callback's. The read answers every wish for the card —
+   * any printing, any finish — so {@link QuickUnwishDialog} lists them with their folders and the
+   * reader says which one this purchase settles. No wish at all writes straight through.
    *
    * **A failed read reaches the banner and never nothing.** This is a read the reader pressed
    * for, inside an act they were promised, and the menu that made the press has closed — so a
@@ -2441,15 +2440,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           return;
         }
         const choice = chooseWish(wishes);
-        if (choice.kind === "many") {
+        if (choice.kind === "ask") {
           openLayer({ kind: "quickUnwish", card, copies, wishes: choice.wishes }, handBack);
           return;
         }
-        writeQuickAdd({
-          card,
-          quantity: copies,
-          wishId: choice.kind === "one" ? choice.wish.id : null,
-        });
+        writeQuickAdd({ card, quantity: copies, wishId: null });
       })();
     },
     [openLayer, queryClient, writeQuickAdd, writeMissing],

@@ -2608,18 +2608,16 @@ export interface DeckPullOutcome {
  * One wishlist line a quick add could take copies off — `deck_quick_add::QuickAddWish`, the whole
  * of what {@link ipc.deckQuickAddWishes} answers.
  *
- * **The match is on the printing and the finish, never on the oracle card.** The predicate is
- * `wishlist::OWNED_SQL`'s own first arm with the any-printing arm dropped — `w.card_id = :cardId
- * AND (w.preferred_finish IS NULL OR w.preferred_finish = :finish)` — rather than a second
- * opinion about what fills a wish. So a wish for *any* printing of the card is left standing,
- * exactly as the pull leaves an Alpha Bolt out of an M10 line and for the same trade: nothing is
- * ever taken off a shopping list that is not the piece of cardboard the reader just recorded. A
- * `preferred_finish` of `null` still matches, because the list itself says a wish naming no
- * finish takes any of them, and excluding it would refuse the commonest wish there is.
+ * **Two reads answer this shape, and they match differently.** {@link ipc.deckQuickAddWishes}
+ * (`deck_quick_add::card_wishes`, issue #511) answers **every** wish for the card — another
+ * printing, another finish, or any printing at all — because the per-card press always opens a
+ * picker and the reader chooses which line the copies came off. {@link DeckMissingRow.wishes}
+ * (`deck_quick_add::wishes`) is the narrow read — the exact printing, and a finish the copies
+ * satisfy — because the deck-wide batch clears a lone match *without* asking.
  *
- * **The order is the pre-pick**, {@link DeckPullCandidate}'s rule one table over: the root first,
- * then the reader's own folders in their `sortOrder`, oldest row first inside a tie. A dialog
- * that has to ask opens on the head of the list.
+ * **The order is the pre-pick.** The wide read puts the pressed printing first and a satisfied
+ * finish second; both then rank the root first, the reader's own folders in their `sortOrder`,
+ * and the oldest row inside a tie. A dialog opens on the head of the list.
  */
 export interface DeckQuickAddWish {
   /** `wishlist_entries.id` — what {@link ipc.deckQuickAddToCollection}'s `wishId` points at. */
@@ -2631,6 +2629,19 @@ export interface DeckQuickAddWish {
   folderId: number | null;
   /** What to call that place, or `null` at the root — which the UI words, not the backend. */
   folderName: string | null;
+  /** The printing the wish names, or `null` for a wish that takes any printing of the card. */
+  cardId: string | null;
+  /** The wish's stored name — the one name every wish has. */
+  name: string;
+  /** The printing's set code and collector number as the wish stored them, `null` on an
+   *  any-printing wish. */
+  setCode: string | null;
+  collectorNumber: string | null;
+  /** The finish the wish asks for in the **wishlist's** spelling, or `null` for any finish. */
+  preferredFinish: "nonfoil" | "foil" | "etched" | null;
+  /** The named printing's picture, front face, exactly as {@link CardSummary.imageUris} — for the
+   *  web build, which cannot draw from the `mtgimg:` cache. */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -8647,8 +8658,9 @@ export const ipc = {
   deckPullFromCollection: (deckId: number, picks: DeckPullPick[]) =>
     invoke<DeckPullOutcome>("deck_pull_from_collection", { deckId, picks }),
   /**
-   * Which wishlist lines a quick add of this printing could take copies off — the read half of
-   * {@link ipc.deckQuickAddToCollection}'s second arm.
+   * Every wishlist line for this printing's **card** — any printing, any finish — that a quick
+   * add could take copies off: the read half of {@link ipc.deckQuickAddToCollection}'s second arm
+   * (issue #511).
    *
    * **It names no deck**, and that is the shape rather than an omission: a wish is a fact about
    * the reader's shopping list and about a printing, never about which deck the press came from.
@@ -8660,8 +8672,8 @@ export const ipc = {
    * the key from, so the two cannot disagree about it.
    *
    * **An empty array is the ordinary answer** — most cards a reader records are on no shopping
-   * list — and one row is the answer that needs no dialog at all. See {@link DeckQuickAddWish}
-   * for the predicate, which is deliberately narrower than what fills a wish.
+   * list. One row or more opens the picker, because which line a purchase settles is the
+   * reader's call. See {@link DeckQuickAddWish} for the predicate and the order.
    */
   deckQuickAddWishes: (cardId: string, finish: DeckFinish) =>
     invoke<DeckQuickAddWish[]>("deck_quick_add_wishes", { cardId, finish }),

@@ -10,7 +10,18 @@ import {
 /** One wishlist line as `deck_quick_add_wishes` answers one — at the root, which is the
  *  commonest place a wish sits and the one whose name the *page* has to supply. */
 function wish(over: Partial<DeckQuickAddWish> = {}): DeckQuickAddWish {
-  return { id: 1, quantity: 4, folderId: null, folderName: null, ...over };
+  return {
+    id: 1,
+    quantity: 4,
+    folderId: null,
+    folderName: null,
+    cardId: "bolt",
+    name: "Lightning Bolt",
+    setCode: "lea",
+    collectorNumber: "161",
+    preferredFinish: null,
+    ...over,
+  };
 }
 
 /**
