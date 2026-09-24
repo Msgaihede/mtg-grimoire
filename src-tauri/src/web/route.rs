@@ -287,6 +287,10 @@ pub const COMMANDS: &[&str] = &[
     // `schema::prepare_database` and `marketplace_feed::store`, both of which a browser reaches.
     "set_completion",
     "price_movers",
+    // **A mover's detail**, one printing's kept snapshots and its live price — the same table and
+    // the same `date('now')`. A browser that routed the widget and not this would answer the
+    // reader's click on a mover with an error.
+    "price_history",
     // **The New printings widget's read and its cursor.** Both are connection-only: the read is
     // two `SELECT`s over `deck_cards` and the corpus whose only clock is SQLite's `date('now')`,
     // and the write takes `at` from the caller for `record_recent_card`'s reason. A browser that
@@ -2416,6 +2420,26 @@ pub fn call(
             )
         }
 
+        // `price_movers`' two choices for the marketplace again. `finish` is `field`: a history
+        // is of one finish, and a word outside the three is the module's refusal, in words.
+        "price_history" => {
+            let card_id: String = field(command, args, "cardId")?;
+            let finish: String = field(command, args, "finish")?;
+            let marketplace: Option<crate::sorting::Marketplace> =
+                optional(command, args, "marketplace")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::price_history::history(
+                    &conn,
+                    &card_id,
+                    &finish,
+                    marketplace.unwrap_or_default(),
+                )
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
         // The New printings pair. **`langs` is `field` and not `optional`**, because an absent
         // language list and an empty one mean different things on the way in and only the empty
         // one is a legal answer — empty is *every language*, so a caller that forgot the argument
@@ -3600,6 +3624,58 @@ mod tests {
         assert!(call(&s, "price_movers", &absent).is_ok());
     }
 
+    /// **A mover's history through the route**, under `ipc.ts`'s names — `cardId` camel-cased,
+    /// which a `field` lookup spelled in snake would miss. The live price and a kept snapshot
+    /// both reach the wire, an absent marketplace quotes TCGplayer as `price_movers` does, and a
+    /// finish outside the three is the module's refusal rather than an argument error.
+    #[test]
+    fn a_movers_history_answers_through_the_route() {
+        assert!(COMMANDS.contains(&"price_history"));
+        let s = state("web-route-price-history");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.execute_batch(
+                r#"UPDATE cards SET prices = '{"usd":"2.50"}' WHERE id = '1';
+                   INSERT INTO price_snapshots (day, marketplace, card_id, finish, price)
+                     VALUES (date('now', '-3 days'), 'tcgplayer', '1', 'nonfoil', 2.0);"#,
+            )
+            .unwrap();
+        }
+        let today: i64 = crate::db::lock_blocking(&s.db)
+            .query_row("SELECT unixepoch(date('now'))", [], |r| r.get(0))
+            .unwrap();
+
+        let args = json!({ "cardId": "1", "finish": "nonfoil", "marketplace": "tcgplayer" });
+        let out = call(&s, "price_history", &args).unwrap();
+        assert_eq!(
+            out,
+            json!({
+                "points": [{ "day": today - 3 * 86_400, "price": 2.0 }],
+                "now": 2.5,
+                "today": today
+            })
+        );
+        let absent = json!({ "cardId": "1", "finish": "nonfoil" });
+        assert_eq!(call(&s, "price_history", &absent).unwrap(), out);
+
+        assert!(matches!(
+            call(
+                &s,
+                "price_history",
+                &json!({ "cardId": "1", "finish": "gilded" })
+            ),
+            Err(RouteError::Failed(_))
+        ));
+        assert!(matches!(
+            call(
+                &s,
+                "price_history",
+                &json!({ "card_id": "1", "finish": "nonfoil" })
+            ),
+            Err(RouteError::Args { .. })
+        ));
+    }
+
     /// **The new printings feed and its cursor, both routed.** A browser that could read the feed
     /// and not move the cursor would draw a widget whose gold dots never go out; one that could
     /// read neither would draw the tenth widget as an error on two of the three targets. Neither
@@ -4050,9 +4126,13 @@ mod tests {
         // above landed within a day of each other, which is exactly the case that makes the
         // arithmetic wrong and is why this comment has now warned about it seven times. If a
         // later merge turns this red, take the number from `left`.
+        //
+        // **181 since a mover's detail routed `price_history`**, counted with that `awk` over the
+        // array as it stands here — which answered 180 before it, not the 179 above, so the
+        // literal had already moved once without this paragraph.
         assert_eq!(
             COMMANDS.len(),
-            180,
+            181,
             "update this number when a command is added"
         );
     }

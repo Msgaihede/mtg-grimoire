@@ -12,7 +12,7 @@ import { applySelect, EMPTY_SELECTION, type Selection, type SelectModifiers } fr
 import { defaultFields } from "@/features/transfer/fields";
 import type { TransferFieldId, TransferSurface } from "@/features/transfer/fields";
 import type { ExportFormat } from "@/features/transfer/formats";
-import type { DeckFinish, DeckVariant, ScannerTrayChoice } from "./ipc";
+import type { DeckFinish, DeckVariant, PriceMoverWindow, ScannerTrayChoice } from "./ipc";
 
 /**
  * The eleven top-level destinations in the sidebar.
@@ -913,6 +913,30 @@ interface AppState {
   /** Close it. */
   closeCardOverlay: () => void;
   /**
+   * The Price movers widget's popup: which owned printing, at which finish, opened on which range.
+   *
+   * **A question rather than a card, so it is not {@link selectedCardId}.** A mover is one
+   * printing *at one finish* — a foil and a nonfoil copy of one printing are two rows, because
+   * their prices move apart — and the range is the widget's own window, so the popup opens on the
+   * span the reader was already looking at. It carries a payload for {@link cardOverlay}'s own
+   * test: an opener that has to say something beyond which surface to show needs one.
+   *
+   * **In the store and mounted at `App` level** for {@link printingsRequest}'s reason, with a
+   * sharper edge: the home grid is a CSS `zoom`, so a dialog mounted in a widget row would inherit
+   * the dashboard's scale, and whether that zoom also traps a `fixed` scrim is recorded in
+   * `home-page.md` as still open. The widget writes this field and the dialog reads it from out
+   * there, where neither question arises.
+   *
+   * **{@link setActiveView} clears it, where it leaves the printings modal alone.** This is a
+   * question about a row of a home-page widget, and a popup outliving the page would be a price
+   * history for a row nobody can see any more.
+   */
+  priceHistory: PriceHistoryRequest | null;
+  /** Open the price history popup. Writes one field, like {@link openAllPrintings}. */
+  openPriceHistory: (request: PriceHistoryRequest) => void;
+  /** Close it. */
+  closePriceHistory: () => void;
+  /**
    * **The list the reader is standing in**, in the order it is drawn — the open deck's cards,
    * the search results, the collection, the wishlist — or an empty walk when whatever is on
    * screen has no list of cards on it.
@@ -1120,6 +1144,23 @@ export interface PrintingsRequest {
 }
 
 /**
+ * The question the price history popup is open on — see {@link AppState.priceHistory}, the only
+ * field of this shape and where every part of it is argued.
+ *
+ * Named and exported for {@link PrintingsRequest}'s reason: it is written down in more than one
+ * place that must not drift — the store's field, the widget row that opens it, and the dialog
+ * that reads it.
+ */
+export interface PriceHistoryRequest {
+  /** The owned printing whose price is charted. */
+  cardId: string;
+  /** Which of its finishes — a foil and a nonfoil copy of one printing are two price lines. */
+  finish: Finish;
+  /** The range the popup opens on: the widget's own window, so it starts on what was on screen. */
+  window: PriceMoverWindow;
+}
+
+/**
  * One stop on {@link AppState.cardWalk}: **very nearly the shape
  * {@link AppState.openAllPrintings} takes**, so a step is one call and nothing between the
  * drawing surface and the modal has to reassemble a request.
@@ -1240,6 +1281,9 @@ export const useAppStore = create<AppState>((set) => ({
         // the line above, so it cannot outlive it — a legality grid left standing over an empty
         // Settings page would be a popup with no card behind it and no modal to close back to.
         cardOverlay: null,
+        // And the Price movers popup, for the same reason one page over: it is a question about a
+        // row of a home-page widget, so it cannot outlive the page that row is drawn on.
+        priceHistory: null,
         cardSelection: null,
         paneDeckContext: null,
         // Every navigation spends the return stack — see {@link AppState.paneReturns}.
@@ -1603,6 +1647,13 @@ export const useAppStore = create<AppState>((set) => ({
   // a question about is `selectedCardId`, which every opener already owns.
   openCardOverlay: (cardOverlay) => set({ cardOverlay }),
   closeCardOverlay: () => set({ cardOverlay: null }),
+  // Nothing open until a reader presses a mover, and closed again by `setActiveView` on the way off
+  // the page — see the interface.
+  priceHistory: null,
+  // One field, like `openAllPrintings` above: a popup drawn over the page is not a navigation, so
+  // nothing here has an opinion about the view, the open card or the open deck.
+  openPriceHistory: (priceHistory) => set({ priceHistory }),
+  closePriceHistory: () => set({ priceHistory: null }),
   // No walk until a surface with a list of cards on it publishes one, and back to this the
   // moment that surface unmounts.
   cardWalk: NO_WALK,

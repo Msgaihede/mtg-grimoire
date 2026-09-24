@@ -709,6 +709,49 @@ describe("the card a reader asked to see every printing of", () => {
 });
 
 /**
+ * The Price movers widget's popup — a printing, a finish and the widget's window, written by the
+ * row and read by a dialog mounted at `App` level, with nothing between them but this field.
+ */
+describe("the price history a mover was pressed for", () => {
+  const FOIL_BOLT = { cardId: "bolt-sld", finish: "foil", window: "30d" } as const;
+
+  it("has nothing open until a mover is pressed", () => {
+    expect(useAppStore.getState().priceHistory).toBeNull();
+  });
+
+  it("opens on the printing, the finish and the window, and closes to null", () => {
+    useAppStore.getState().openPriceHistory(FOIL_BOLT);
+    expect(useAppStore.getState().priceHistory).toEqual(FOIL_BOLT);
+
+    useAppStore.getState().closePriceHistory();
+    expect(useAppStore.getState().priceHistory).toBeNull();
+  });
+
+  /** One field, `openAllPrintings`' shape: a popup over the page is not a navigation. */
+  it("moves nothing else", () => {
+    useAppStore.setState({ activeView: "home", selectedCardId: "card-1" });
+
+    useAppStore.getState().openPriceHistory(FOIL_BOLT);
+
+    const s = useAppStore.getState();
+    expect(s.activeView).toBe("home");
+    expect(s.selectedCardId).toBe("card-1");
+  });
+
+  /**
+   * The popup is about a row of a home-page widget, so it goes with the page — where the printings
+   * modal, which is opened from card menus all over the app, is deliberately left standing.
+   */
+  it("closes when the reader leaves the page", () => {
+    useAppStore.getState().openPriceHistory(FOIL_BOLT);
+
+    useAppStore.getState().setActiveView("collection");
+
+    expect(useAppStore.getState().priceHistory).toBeNull();
+  });
+});
+
+/**
  * The list the reader is standing in, in the order it is drawn, published by whichever surface
  * is drawing it — the deck editor's desk, the search results, the collection, the wishlist.
  *
