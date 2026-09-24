@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
@@ -298,9 +298,37 @@ export function cardTarget(card: CardSummary): CardMenuTarget {
  * — ~117 k rows — and the page opens on exactly that.
  */
 export function SearchPage() {
-  const search = useCardSearch();
+  /**
+   * **The set another surface asked this page to show** — `store.ts`'s `pendingSearchSet`, whose
+   * one writer is the card modal's set name (issue #503).
+   *
+   * Two ways in, because the press lands on this page in two states. **Mounting**, which is the
+   * usual case — the reader was on another view — it is a seed: `initialSet` below, so the first
+   * request is already the set's. **Already mounted**, from a card opened off this page's own
+   * wall, it is a render-phase adjustment rather than an effect, for `CollectionPage`'s
+   * `pendingFolder` reasons: the wall changes in one pass, and a `setState` inside an effect body
+   * is a lint failure here.
+   *
+   * `appliedSet` is the guard that makes the adjustment terminate — the hand-off stays in the
+   * store until the effect below spends it, so a render in between must not apply it twice — and
+   * it is seeded with the hand-off the page mounted on, which the seed has already applied. It
+   * goes back to `null` once the store has, so pressing the same set's name again still lands.
+   */
+  const pendingSet = useAppStore((s) => s.pendingSearchSet);
+  const clearPendingSet = useAppStore((s) => s.clearPendingSearchSet);
+  const search = useCardSearch({ initialSet: pendingSet });
   const { query, searchKey } = search;
   const view = useAppStore((s) => s.searchView);
+  const [appliedSet, setAppliedSet] = useState(pendingSet);
+  if (pendingSet !== null && pendingSet !== appliedSet) {
+    setAppliedSet(pendingSet);
+    search.showOnlySet(pendingSet);
+  } else if (pendingSet === null && appliedSet !== null) {
+    setAppliedSet(null);
+  }
+  useEffect(() => {
+    if (pendingSet !== null) clearPendingSet();
+  }, [pendingSet, clearPendingSet]);
 
   // Warm the images for the page that just landed, so its first paint is not a wall of
   // empty frames. The grid's own overscan mounts two rows of off-screen `<img>`s, which
