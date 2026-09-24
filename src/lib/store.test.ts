@@ -281,6 +281,36 @@ describe("the folder a page was asked to open", () => {
 });
 
 /**
+ * The set the card modal asked Search to show (issue #503) — `pendingFolder`'s one-shot shape,
+ * with the ordering the case above pins folded into one action so no caller can get it wrong.
+ */
+describe("the set Search was asked to show", () => {
+  it("goes to Search, closes the open card, and leaves the set for the page to read", () => {
+    useAppStore.getState().setActiveView("collection");
+    useAppStore.getState().setSelectedCardId("p1");
+
+    useAppStore.getState().showSetInSearch("lea");
+
+    const s = useAppStore.getState();
+    expect(s.activeView).toBe("search");
+    // The modal is drawn off `selectedCardId`, so this is the press closing it.
+    expect(s.selectedCardId).toBeNull();
+    expect(s.pendingSearchSet).toBe("lea");
+
+    s.clearPendingSearchSet();
+    expect(useAppStore.getState().pendingSearchSet).toBeNull();
+  });
+
+  it("is spent by a later view change, read or not", () => {
+    useAppStore.getState().showSetInSearch("lea");
+
+    useAppStore.getState().setActiveView("decks");
+
+    expect(useAppStore.getState().pendingSearchSet).toBeNull();
+  });
+});
+
+/**
  * Which deck row the open card came from — the whole of what the pane's "Use this printing"
  * needs, and the one piece of app state that is about *two* views at once.
  *

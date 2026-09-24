@@ -11,6 +11,7 @@ import {
 import { FoilOverlay } from "@/components/CardArt";
 import { CardImage } from "@/components/CardImage";
 import { RarityGem } from "@/components/RarityGem";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FINISH_LABEL, parseFinishes, soleFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
@@ -153,6 +154,7 @@ export function CardModalArt({
   openedAs,
   onToggleFoil,
   meld,
+  onShowSet,
 }: {
   card: CardDetail;
   /** Which face the picture is of — 0 is the front. */
@@ -196,7 +198,14 @@ export function CardModalArt({
   onToggleFoil: (next: DeckFinish) => void;
   /** The meld counterparts and what a press does about them — see {@link MeldTarget}. */
   meld: MeldTarget;
+  /**
+   * The reader pressed the set's name under the picture: show them every card in that set. The
+   * argument is the lower-case Scryfall code the Set filter holds. The host decides what showing
+   * means — this file is presentational and never reaches the store (issue #503).
+   */
+  onShowSet: (setCode: string) => void;
 }): JSX.Element {
+  const tip = useTooltip();
   const sides = faceCount(card.layout, card.faces.length);
   const finishes = parseFinishes(card.finishes);
   const foilable = foilViewFinish(card.finishes);
@@ -511,7 +520,24 @@ export function CardModalArt({
           <span className="shrink-0 font-mono">
             {card.setCode.toUpperCase()} · {card.collectorNumber}
           </span>
-          {card.setName && <span className="ml-auto min-w-0 truncate">{card.setName}</span>}
+          {/* **A way to the rest of the set, not a caption** (issue #503): the press closes the
+              modal and opens Search on this set alone. The name is the target rather than the
+              code beside it because the name is the half a reader recognises, and it stays the
+              elastic half — `min-w-0 truncate` on the button, so a long name still gives way.
+              An orphan printing with no name draws nothing to press, as it always drew nothing. */}
+          {card.setName && (
+            <button
+              type="button"
+              onClick={() => onShowSet(card.setCode)}
+              {...tip("Search every card in this set")}
+              className={cn(
+                "ml-auto min-w-0 truncate rounded-sm hover:text-text hover:underline",
+                FOCUS,
+              )}
+            >
+              {card.setName}
+            </button>
+          )}
         </p>
       </div>
 
