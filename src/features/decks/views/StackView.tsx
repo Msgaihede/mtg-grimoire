@@ -29,7 +29,7 @@ import type { CardGroup } from "../grouping";
 import { masonryRowSpan, useMasonryRowSpan } from "../masonry";
 import type { TheoryPlan } from "../theoryMatch";
 import type { ValidationIssue } from "../validation/types";
-import { RAIL_ATTR, splitRail } from "./columns";
+import { isBeside, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 import { nextStackPosition, type StackPosition } from "./stackNav";
 
@@ -407,23 +407,32 @@ export function StackView({
   // the kind is tested before the switch, why the rail is not sorted here, and why there is no
   // grouping-mode check beside any of those words: {@link splitRail}.
   const { command, flow, rail } = splitRail(groups);
-  // **Every pile a reader may drag, in the order they are drawn** — the flow's own, so the rail
-  // is out by construction rather than by a second test, and a derived heading ("Mana value 3")
-  // is out because it has no id to move.
+  // **Every flowing pile a reader may drag, in the order they are drawn** — the flow's own, so a
+  // railed pile is out of it by construction rather than by a second test (the rail's two runs are
+  // lists of their own, just below), and a derived heading ("Mana value 3") is out because it has
+  // no id to move.
   //
-  // **The command zone is out for a third reason, and it is the point of the box rather than an
+  // **The command zone is in no run at all, and it is the point of the box rather than an
   // omission**: its place is fixed. A commander and a companion are pinned to the head of the desk
   // in all three grouping modes, so there is no position a reorder could move them to and nothing
   // for `n of N` to count them among. The fence is not written here either — those piles are drawn
-  // without a `flowWidth`, which is `StackGroup`'s own off switch for the grip, the row span and
-  // the reorder drop all at once.
+  // without a `reorderIds`, which is `StackGroup`'s own off switch for the grip and the reorder
+  // drop at once.
   //
   // It is what the grip's `n of N` counts and what the arrows **on a grip** step through — not
   // the ones that move the caret, which walk `walk` below and reach both other boxes — and it is
   // deliberately the *drawn* order rather than the deck's: a reader pressing ArrowRight on a grip
   // is asking for the pile they can see to the right, and the piles the deck holds that this desk
   // is not drawing are the editor's to thread back in ({@link DeckCardActions.moveCategory}).
-  const flowIds = flow.flatMap((group) => (group.categoryId === null ? [] : [group.categoryId]));
+  const flowIds = categoryIdsOf(flow);
+  // **The rail's piles are reordered too, within their own run** (issue #508, 2026-09-24). Which
+  // run a railed pile is in is fixed by its kind and its switch — the Sideboard and the Maybeboard
+  // head the rail, the reader's switched-off piles follow — but where it sits *inside* that run is
+  // the reader's own `sortOrder`, which is an arrangement and so something a grip may change. Each
+  // run is its own list, for the flow's reason: a switched-off pile dragged above the Sideboard
+  // would write a new order and still be drawn under it, so it is refused rather than ignored.
+  const besideIds = categoryIdsOf(rail.filter(isBeside));
+  const offIds = categoryIdsOf(rail.filter((group) => !isBeside(group)));
   // **Every card the arrows walk, in the order they are drawn** — the command zone, then the
   // flow, then the rail, each pile's cards in the order it already holds them. It is the same
   // `splitRail` answer the view is drawn from and deliberately not a second derivation of it: a
@@ -729,7 +738,7 @@ export function StackView({
             landed={landed}
             zoom={cardZoom}
             flowWidth={columnWidth}
-            flowIds={flowIds}
+            reorderIds={flowIds}
           />
         ))}
       </div>
@@ -794,12 +803,18 @@ export function StackView({
               selectedSlot={selectedSlot}
               landed={landed}
               zoom={cardZoom}
+              reorderIds={isBeside(group) ? besideIds : offIds}
             />
           ))}
         </div>
       )}
     </div>
   );
+}
+
+/** The category ids of one run, in the order it is drawn — a derived heading has none to move. */
+function categoryIdsOf(groups: readonly CardGroup[]): number[] {
+  return groups.flatMap((group) => (group.categoryId === null ? [] : [group.categoryId]));
 }
 
 /**
@@ -839,12 +854,13 @@ export function StackView({
  * emits no rule at all.
  *
  * **The piles inside carry no `flowWidth`, exactly as the rail's do**, and that one absence is
- * four answers: no width of their own (this box holds it for both), no {@link STACK_ATTR} (they
- * are not piles drawn in the flow — this box is), no row span (a grid row means nothing inside a
- * flex column), and no reorder drag. The last is the deliberate one: a grip on a pinned zone would
- * offer a reader a move with nowhere to move to, since the head of the desk is where both of these
- * are in every grouping mode. **The drop target is untouched** — `useCategoryDrop` reads a
- * `categoryId` and has never read `flowWidth` — so a card dragged onto the commander still lands
+ * three answers: no width of their own (this box holds it for both), no {@link STACK_ATTR} (they
+ * are not piles drawn in the flow — this box is), and no row span (a grid row means nothing inside
+ * a flex column). **They carry no `reorderIds` either, and that one is where they part from the
+ * rail** (issue #508): a grip on a pinned zone would offer a reader a move with nowhere to move to,
+ * since the head of the desk is where both of these are in every grouping mode, while a railed
+ * pile's order inside the rail is the reader's own. **The drop target is untouched** —
+ * `useCategoryDrop` reads a `categoryId` and never a run — so a card dragged onto the commander still lands
  * in it, which is the one affordance this box could not afford to cost.
  */
 function CommandZone({
@@ -975,7 +991,7 @@ function StackGroup({
   landed,
   zoom,
   flowWidth,
-  flowIds,
+  reorderIds,
 }: {
   group: CardGroup;
   marketplace: Marketplace;
@@ -1002,26 +1018,30 @@ function StackGroup({
    *
    * **Absent in both of the other boxes, and that is what tells the three apart here.** The rail
    * and the command zone are each a `flex-col` box carrying the width for every pile in it, so a
-   * pile in either is a plain block — no width of its own, no `STACK_ATTR`, no row span (a grid row
-   * means nothing in a flex column), and no reorder drag. One prop answers all five, which is what
-   * keeps a pile drawn somewhere other than the flow from being a second, quietly different kind
-   * of pile. The two absences are not the same argument: the rail's is a layout fact (the box holds
-   * the width), the command zone's is that too **and** a decision — a zone pinned to the head of
-   * every grouping has no position a reorder could move it to. See {@link CommandZone}.
+   * pile in either is a plain block — no width of its own, no `STACK_ATTR` and no row span (a grid
+   * row means nothing in a flex column). One prop answers all three, which is what keeps a pile
+   * drawn somewhere other than the flow from being a second, quietly different kind of pile.
+   * Whether a pile may be *reordered* is `reorderIds`' question, not this one's: since issue #508
+   * the rail's piles are, and the command zone's still are not.
    */
   flowWidth?: number;
-  /** Every draggable pile of the flow, in the order they are drawn — see {@link StackView}. The
-   *  rail and the command zone are handed none, which is the other half of what `flowWidth`
-   *  says. */
-  flowIds?: readonly number[];
+  /**
+   * The run this pile is reordered within — every draggable pile of it, in the order they are
+   * drawn. See {@link StackView}. The flow is one run and the rail two (the piles played beside
+   * the deck, then the switched-off ones), so a grip steps and a drop lands only among its own.
+   *
+   * **The command zone is handed none, and that is a decision rather than an omission**: a zone
+   * pinned to the head of every grouping has no position a reorder could move it to. Absent is
+   * the grip's and the reorder drop's off switch, both at once. See {@link CommandZone}.
+   */
+  reorderIds?: readonly number[];
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
   const inFlow = flowWidth !== undefined;
-  // **Only a pile in the flow may be moved**, and the fence is the same prop that says it is one
-  // — the reader's Sideboard and Maybeboard stay where the rail puts them, and the commander and
-  // the companion stay at the head of the desk. `undefined` here is `useCategoryReorderDrop`'s own
-  // off switch, so a pile in either of those boxes registers nothing at all.
-  const moveCategory = inFlow ? actions?.moveCategory : undefined;
+  // **Only a pile handed a run may be moved** — the flow's piles and the rail's, never the
+  // commander and the companion, which stay at the head of the desk. `undefined` here is
+  // `useCategoryReorderDrop`'s own off switch, so a pile in the command zone registers nothing.
+  const moveCategory = reorderIds !== undefined ? actions?.moveCategory : undefined;
   // Destructured under names of its own rather than kept as one object, for `useCategoryDrop`'s
   // reason one line up: React's ref lint reads a hook result whose `attach` reaches a `ref=` as a
   // ref, and every read of a sibling field beside it as a ref access during render.
@@ -1029,9 +1049,9 @@ function StackGroup({
     attach: attachReorder,
     over: reorderOver,
     eligible: reorderEligible,
-  } = useCategoryReorderDrop(group.categoryId, moveCategory);
+  } = useCategoryReorderDrop(group.categoryId, moveCategory, reorderIds);
   // The heading is what a pile is picked up by, and the grip inside it is where the press has to
-  // start. `null` in the rail and under a derived grouping, which registers nothing.
+  // start. `null` in the command zone and under a derived grouping, which registers nothing.
   const { attachSource, attachHandle } = useCategoryDragSource(
     moveCategory ? group.categoryId : null,
   );
@@ -1153,12 +1173,12 @@ function StackGroup({
             id={`group-${group.key}`}
             className="px-1 pb-1.5"
             handle={
-              moveCategory && group.categoryId !== null && flowIds !== undefined ? (
+              moveCategory && group.categoryId !== null && reorderIds !== undefined ? (
                 <CategoryGrip
                   ref={attachHandle}
                   categoryId={group.categoryId}
                   name={group.name}
-                  flowIds={flowIds}
+                  runIds={reorderIds}
                   onMove={moveCategory}
                 />
               ) : undefined
@@ -1260,7 +1280,7 @@ function CategoryGrip({
   ref,
   categoryId,
   name,
-  flowIds,
+  runIds,
   onMove,
 }: {
   /** {@link useCategoryDragSource}'s `attachHandle` — the press this grip takes is the one the
@@ -1270,13 +1290,13 @@ function CategoryGrip({
   /** The pile's own heading, so a deck of fifteen grips is fifteen addressable controls rather
    *  than one repeated fifteen times. */
   name: string;
-  flowIds: readonly number[];
+  runIds: readonly number[];
   onMove: (categoryId: number, targetId: number) => void;
 }) {
   const tip = useTooltip();
-  const index = flowIds.indexOf(categoryId);
+  const index = runIds.indexOf(categoryId);
   const step = (to: number) => {
-    const target = flowIds[to];
+    const target = runIds[to];
     if (target !== undefined) onMove(categoryId, target);
   };
 
@@ -1294,7 +1314,7 @@ function CategoryGrip({
           step(index + 1);
         }
       }}
-      aria-label={`Move ${name}, ${index + 1} of ${flowIds.length}`}
+      aria-label={`Move ${name}, ${index + 1} of ${runIds.length}`}
       {...tip("Drag to reorder, or press the left and right arrow keys")}
       className={cn(
         "shrink-0 cursor-grab rounded-sm text-dim",
