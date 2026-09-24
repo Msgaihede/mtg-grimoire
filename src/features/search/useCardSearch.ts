@@ -623,6 +623,18 @@ export interface CardSearchOptions {
    * nothing to notice.
    */
   availableForDeck?: number | null;
+  /**
+   * A set to **open** on, alone and at `Any card` — `SearchPage` passing the card modal's
+   * hand-off when that press is what mounted it (issue #503). Read once, by the `useState` seeds,
+   * and ignored after.
+   *
+   * A seed rather than a {@link showOnlySet} call on the first render, and that is measured
+   * rather than tidy: a state change made while the page is *mounting* reaches the query too
+   * late, because React Query builds its observer from the first render's options and fetches
+   * with those on subscribe. The unfiltered browse went out first, and the set's request second.
+   * `defaultFormat`'s seed above is the same fix for the same reason.
+   */
+  initialSet?: string | null;
 }
 
 export function useCardSearch(options: CardSearchOptions = {}) {
@@ -662,7 +674,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // makes is already the filtered one — an empty seed corrected afterwards would send the
   // unfiltered search first and answer it, which is a wall of illegal cards and a second round
   // trip to replace it.
-  const [format, setFormat] = useState(defaultFormatValue);
+  // `Any card` when opening on a set, for {@link showOnlySet}'s reason.
+  const [format, setFormat] = useState(options.initialSet ? ANY_CARD : defaultFormatValue);
   /**
    * The default this filter is currently *sitting on*, so a changed default can be told from a
    * reader who happens to have picked the same key.
@@ -695,7 +708,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // The eight card-type chips — {@link CARD_TYPES}, ORed with each other and ANDed with
   // everything else, which is the rarity chips' shape exactly.
   const [types, setTypes] = useState<readonly string[]>([]);
-  const [sets, setSets] = useState<readonly string[]>([]);
+  const [sets, setSets] = useState<readonly string[]>(() =>
+    options.initialSet ? [options.initialSet] : [],
+  );
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   // The other half of the mana-value question, and **additive rather than exclusive**:
   // Scryfall's `cmc` already counts `{X}` as zero, so `{X}{B}{B}{B}` answers the `3` chip and
@@ -1592,6 +1607,36 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       // Cleared although it is not counted above, and the asymmetry is the point: Reset all
       // means "no filters", and a strict flag left standing over an empty colour row is exactly
             setSets([]);
+      setTypes([]);
+      setManaValues([]);
+      setManaX(false);
+      setOwned(undefined);
+      setRarities([]);
+      setPriceMin(undefined);
+      setPriceMax(undefined);
+    },
+    /**
+     * Show every card in one set and nothing else — the card modal's set name (issue #503),
+     * arriving through `store.ts`'s `pendingSearchSet`.
+     *
+     * Every filter {@link resetAll} clears is cleared here too, because "the cards in this set" is
+     * the whole question: a colour row or a typed word left standing from the reader's last search
+     * would answer a narrower one while the Set chip claimed the set.
+     *
+     * **`Any card` rather than `resetAll`'s `Any format`**, and that is the one place the two
+     * differ. The reader asked for a *set*, which is a fact about the cardboard rather than about
+     * any format: every other row of the select narrows to printings some format allows
+     * ({@link formatParams}), which would drop an Un-set's acorn cards or a set's art cards from a
+     * wall that is supposed to be that set. The select says so, and one press puts it back.
+     *
+     * The layout, the sort and `allPrintings` are views rather than filters and stay where the
+     * reader left them — `resetAll`'s own rule.
+     */
+    showOnlySet: (code: string) => {
+      setText("");
+      setFormat(ANY_CARD);
+      setColorFilter(NO_COLORS);
+      setSets([code]);
       setTypes([]);
       setManaValues([]);
       setManaX(false);
