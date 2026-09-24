@@ -29,6 +29,7 @@ import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { useSearchOpen } from "@/features/search/useSearchOpen";
+import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import {
@@ -84,6 +85,9 @@ import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
 import { DeckTokensPanel } from "./DeckTokensPanel";
+import { TokenArtPicker } from "./TokenArtPicker";
+import { useDeckTokens } from "./useDeckTokens";
+import type { TokenPile } from "./views/TokenPile";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
@@ -112,7 +116,12 @@ import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
 // directory, and a case-insensitive filesystem resolves `./quickAdd` to whichever of the two the
 // resolver reaches first. `tsc` refuses the whole program with TS1149 and a suite that got past
 // it went red with `quickAddShort is not a function`, having imported the component.
-import { chooseWish, choosePull } from "./quickCollection";
+import {
+  chooseWish,
+  choosePullFor,
+  missingPicks,
+  type QuickAddTarget,
+} from "./quickCollection";
 import { QuickAdd } from "./QuickAdd";
 import { QuickUnwishDialog } from "./QuickUnwishDialog";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
@@ -706,8 +715,12 @@ type Layer =
    *
    * `null` for the opener on the theory tab is unchanged and is still not a disabled button:
    * there is no question to ask there, rather than a question with an empty answer.
+   *
+   * **`cards` since issue #510**, where it was one `card`: a picked set's `Pull N from your
+   * collection` opens the same dialog over every picked row that is short, and one card is a set
+   * of one.
    */
-  | { kind: "pull"; card?: DeckCard }
+  | { kind: "pull"; cards?: readonly DeckCard[] }
   /**
    * **Add missing to collection** — the copies the reader has just bought, recorded into this
    * deck's own group.
@@ -851,10 +864,11 @@ export function layerMatches(open: Layer, target: NonNullable<Layer>): boolean {
     // comparison below is a courtesy rather than a case anything reaches, and it is by
     // {@link pullKey} rather than by object identity because a `DeckCard` is a fresh object on
     // every `deck_get`.
-    if (open.card === undefined || target.card === undefined) {
-      return open.card === undefined && target.card === undefined;
+    if (open.cards === undefined || target.cards === undefined) {
+      return open.cards === undefined && target.cards === undefined;
     }
-    return pullKey(open.card) === pullKey(target.card);
+    const keys = (cards: readonly DeckCard[]) => cards.map(pullKey).join("\n");
+    return keys(open.cards) === keys(target.cards);
   }
   return true;
 }
@@ -1467,6 +1481,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     // exists for. What it records is the copies a deck row is short of, so "a write to what is
     // in the deck" is true of it in every sense but the table it touches.
     deck.quickAddToCollection,
+    // **The deck-wide record, for the same reason since issue #510**: a picked set's quick add
+    // presses it straight from a card's right-click, whose menu has closed by the time a refusal
+    // arrives. The stats band's dialog still says its own refusal inside its panel.
+    deck.addMissingToCollection,
   ] as const;
   // **The undo hook's own refusal joins this banner rather than drawing a second one.** Its
   // two mutations are writes to what is in the deck like any other, and its commonest refusal
@@ -2192,8 +2210,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // deck changing *under* an editor that is already open, which a sync from another device can do.
   const pullPlan = usePullPlan(deckId, tracks && layer?.kind === "pull");
 
-  /** The one card an open pull is about, or `null` for the deck-wide press. */
-  const pulledCard = layer?.kind === "pull" ? (layer.card ?? null) : null;
+  /** The cards an open pull is about, or `null` for the deck-wide press. */
+  const pulledCards = layer?.kind === "pull" ? (layer.cards ?? null) : null;
+
+  /** The subtitle's scope: the card's own name, or `N cards` for a picked set. */
+  const pulledName =
+    pulledCards === null
+      ? null
+      : pulledCards.length === 1
+        ? pulledCards[0].name
+        : plural(pulledCards.length, "card");
 
   /**
    * What the pull dialog draws: the whole plan, or the rows for one card.
@@ -2206,15 +2232,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * `pullKey` is `(cardId, finish)`, which is the grain the plan is folded to — the same card
    * short in two piles is one row of it — so a deck card's key matches at most one row and the
-   * filter is a lookup rather than a subset.
+   * filter is a lookup rather than a subset — once per picked card.
    */
   const pulledRows = useMemo(() => {
     const rows = pullPlan.data;
     if (rows === undefined) return null;
-    if (pulledCard === null) return rows;
-    const wanted = pullKey(pulledCard);
-    return rows.filter((planRow) => pullKey(planRow) === wanted);
-  }, [pullPlan.data, pulledCard]);
+    if (pulledCards === null) return rows;
+    const wanted = new Set(pulledCards.map(pullKey));
+    return rows.filter((planRow) => wanted.has(pullKey(planRow)));
+  }, [pullPlan.data, pulledCards]);
 
   /**
    * **Add missing to collection** — the second layer opened from the stats band, and the third
@@ -2335,6 +2361,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const writeQuickAdd = deck.quickAddToCollection.mutate;
   const writePull = deck.pullFromCollection.mutate;
+  /** The deck-wide record, which is what a picked set's quick add presses (issue #510): one
+   *  transaction and one history row for the whole set, rather than one per card. */
+  const writeMissing = deck.addMissingToCollection.mutate;
 
   /**
    * **Quick add N copies** — record what this row is short of into the deck's own group, and ask
@@ -2344,13 +2373,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * from the menu (it is `quickAddShort` over the row that was right-clicked, so it is exactly
    * the `3/4` the card is wearing) and `wishId: null` says this press is not about the wishlist
    * at all. A reader who wanted the wishlist half pressed the row below it.
+   *
+   * **A picked set goes through `deck_missing_to_collection`** (issue #510), the stats band's
+   * `Add missing to collection` write with the plan narrowed to the picked rows: all or nothing,
+   * one history row, and no wish touched. Looping the one-card write instead would be a
+   * transaction, an invalidation and a history line per card for one press.
    */
   const quickAdd = useCallback(
-    (card: DeckCard, copies: number) => {
+    (targets: readonly QuickAddTarget[]) => {
       setPressReadFailure(null);
-      writeQuickAdd({ card, quantity: copies, wishId: null });
+      if (targets.length === 1) {
+        const [{ card, copies }] = targets;
+        writeQuickAdd({ card, quantity: copies, wishId: null });
+        return;
+      }
+      const picks = missingPicks(targets);
+      if (picks.length > 0) writeMissing({ picks, clearWishes: false });
     },
-    [writeQuickAdd],
+    [writeQuickAdd, writeMissing],
   );
 
   /**
@@ -2373,14 +2413,25 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * `run` focuses the opener before it calls a row, so the caret is right *now* — where by the
    * time the round trip lands the reader may have moved on, and the element read here is still
    * the honest destination.
+   *
+   * **A picked set asks nothing** (issue #510): it is the deck-wide record with `clearWishes`
+   * on, which takes copies off every row's wish where exactly one matches and leaves the
+   * ambiguous ones standing — a press over eleven cards cannot ask eleven questions, which is
+   * `Add missing to collection`'s own rule.
    */
   const quickAddAndUnwish = useCallback(
-    (card: DeckCard, copies: number) => {
+    (targets: readonly QuickAddTarget[]) => {
+      setPressReadFailure(null);
+      if (targets.length !== 1) {
+        const picks = missingPicks(targets);
+        if (picks.length > 0) writeMissing({ picks, clearWishes: true });
+        return;
+      }
+      const [{ card, copies }] = targets;
       const opener = document.activeElement;
       const handBack = () => {
         if (opener instanceof HTMLElement) opener.focus();
       };
-      setPressReadFailure(null);
       void (async () => {
         let wishes: DeckQuickAddWish[];
         try {
@@ -2401,7 +2452,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         });
       })();
     },
-    [openLayer, queryClient, writeQuickAdd],
+    [openLayer, queryClient, writeQuickAdd, writeMissing],
   );
 
   /**
@@ -2420,9 +2471,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * the cache the dialog then draws from and the two can never disagree about the key. The
    * filtering is done at the render site off the **live** query rather than frozen into the
    * layer: the arm carries the card, and the plan is re-read after every write.
+   *
+   * **A picked set is one press over every picked row that is short** (issue #510):
+   * `choosePullFor` takes them all silently where each has one answer, and opens the dialog over
+   * the whole set where any one of them needs the reader.
    */
   const pullCard = useCallback(
-    (card: DeckCard) => {
+    (cards: readonly DeckCard[]) => {
+      if (cards.length === 0) return;
       const opener = document.activeElement;
       const handBack = () => {
         if (opener instanceof HTMLElement) opener.focus();
@@ -2436,12 +2492,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           setPressReadFailure(ipcError(error));
           return;
         }
-        const choice = choosePull(rows, card);
+        const choice = choosePullFor(rows, cards);
         if (choice.kind === "take") {
           writePull(choice.picks);
           return;
         }
-        openLayer({ kind: "pull", card }, handBack);
+        openLayer({ kind: "pull", cards }, handBack);
       })();
     },
     [deckId, openLayer, queryClient, writePull],
@@ -3865,10 +3921,69 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     ],
   );
 
+  /**
+   * The tokens and emblems this deck makes — **read once, here, for every surface that draws
+   * them** (issue #507). The Tokens & Emblems band and, on a deck with `tokenStack` on, the pile
+   * each view appends are two drawings of one answer: a quantity stepped on one is the number the
+   * other draws, and a dismissal made on the band takes the token out of the pile. A hook call per
+   * surface would be two `showDismissed` switches and two write observers, each free to own a
+   * refusal the other never hears about.
+   */
+  const deckTokens = useDeckTokens(deckId, variant);
+
+  /**
+   * Which token's art is being picked, by `oracle_id` — **one picker for the band's tiles and the
+   * views' pile alike**, so a press on either opens the same dialog and a pick from either writes
+   * the same row.
+   *
+   * **An id and never the view**, which is the `Layer` union's rule: the tokens are re-derived
+   * after every write, so a frozen view would answer about the token as it was when it was
+   * pressed — a printing swap would leave the dialog marking the printing the deck has just
+   * stopped bringing. Looked up in `deckTokens.tokens`, which is every token either surface can
+   * draw: the pile draws a subset of it (never a dismissed one) and the band draws all of it.
+   */
+  const [pickingToken, setPickingToken] = useState<string | null>(null);
+  const pickedToken = deckTokens.tokens.find((view) => view.oracleId === pickingToken) ?? null;
+  /** The size the band and the pile both draw a token at, which the picker has to agree with or
+   *  a swap does not read as one — `DeckTokensPanel`'s header has the whole argument. */
+  const tokenZoom = useAppStore((s) => s.cardZoom.deck);
+
+  /**
+   * The pile each view appends after every other pile, or `undefined` — which is the whole of
+   * the off switch, since a view handed nothing draws exactly what it drew before `tokenStack`.
+   *
+   * **Never a dismissed token, whatever the band's `Show dismissed` says.** That switch is the
+   * band's own tool for finding a token to put back, and a pile on the desk is a statement of what
+   * the deck brings, which a dismissed token is not.
+   *
+   * **Nothing here enters `groups`, `deck.cards` or `buildGroups`**, and that is what keeps a
+   * token out of the deck's size, every pile total, the ledger, the stats and validation — the
+   * views append it in their own layer, after the groups this editor hands them.
+   *
+   * Memoised on the tokens and a `setQuantity` that `useDeckTokens` keeps stable while the rows
+   * are, so a keystroke anywhere in the editor does not hand four views a new pile.
+   */
+  const tokenStack = row?.tokenStack === true;
+  const tokenList = deckTokens.tokens;
+  const setTokenQuantity = deckTokens.setQuantity;
+  const tokenPile = useMemo<TokenPile | undefined>(
+    () =>
+      tokenStack
+        ? {
+            tokens: tokenList.filter((view) => view.state !== "hidden"),
+            setQuantity: setTokenQuantity,
+            pickArt: setPickingToken,
+          }
+        : undefined,
+    [tokenStack, tokenList, setTokenQuantity],
+  );
+
   const viewProps = {
     groups,
     marketplace,
     violations,
+    // The tokens and emblems as a pile of their own, or nothing — see {@link tokenPile}.
+    tokenPile,
     // Which cards a note names, handed down whole beside `violations` and for its reason: one
     // answer about the deck that every card drawn is tested against, where a per-card lookup
     // would be a hundred answers to one question. **All four views**, so a card marked in Stacks
@@ -4862,12 +4977,33 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // the token wall in front of them is an answer about a *particular* deck, and a
         // `useState` here would ask it again every time they opened one.
         <DeckTokensPanel
-          deckId={deckId}
-          variant={variant}
+          tokens={deckTokens}
           open={row.tokensOpen}
           onToggle={(next) => deck.update.mutate({ tokensOpen: next })}
+          onPick={setPickingToken}
         />
       )}
+
+      {/* The one art picker the band's tiles and the views' token pile both open — see
+          {@link pickingToken}.
+
+          **Mounted in this column, and the check that makes that legal is written down rather
+          than assumed.** `Dialog`'s scrim is a bare `fixed inset-0` and corrects for nothing, so
+          a dialog opened from inside a box that is transformed, filtered or
+          `container-type: inline-size` stretches to *that box* instead of to the window. This
+          editor's root is `relative flex h-full min-h-0 flex-col`, and `relative` is not a
+          containing block for `fixed`. It lived inside the band until 2026-09-24 on the same
+          reasoning; the rule to keep is that a container query may never be added above it. */}
+      <TokenArtPicker
+        token={pickedToken}
+        zoom={tokenZoom}
+        onPick={(cardId) => {
+          if (pickedToken !== null) deckTokens.setPrinting(pickedToken.oracleId, cardId);
+          setPickingToken(null);
+        }}
+        onDismiss={() => setPickingToken(null)}
+        onClose={() => setPickingToken(null)}
+      />
 
       {row && (
         // What the deck adds up to — the foot of the page, and the last band on it.
@@ -4890,7 +5026,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // them would leave a reader dragging a card the height of four charts to reach the one
         // drop that takes it out.
         //
-        // **And below the Tokens & emblems band since 2026-09-08**, where it was above it. That
+        // **And below the Tokens & Emblems band since 2026-09-08**, where it was above it. That
         // band is a wall of cards; this one is four charts. A reader scanning down the page
         // reads the deck, then what the deck puts on the table beside it, then what it all adds
         // up to — and the charts, which nothing is dragged into and nothing is pressed on, are
@@ -5305,7 +5441,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       <PullFromCollectionDialog
         open={layer?.kind === "pull"}
         deckName={row?.name ?? ""}
-        cardName={pulledCard?.name ?? null}
+        cardName={pulledName}
         rows={pulledRows}
         loading={pullPlan.isLoading}
         readError={pullPlan.isError ? ipcError(pullPlan.error) : null}

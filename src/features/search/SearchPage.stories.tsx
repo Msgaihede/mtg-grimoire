@@ -106,7 +106,7 @@ const meta = {
           "middle steps did not exist for the first measurement — again on 2026-08-22, when " +
           "five layout fixtures joined the corpus for the card pane's turn controls and the " +
           "`planar` one became the fourth printing no format allows, and again on 2026-09-07, " +
-          "when seven token and emblem rows joined it for the deck editor's Tokens & emblems " +
+          "when seven token and emblem rows joined it for the deck editor's Tokens & Emblems " +
           "band. **`37` did not move that last time and that is the point of the chain**: a " +
           "token is legal in no format, so all seven fall at the `playableOnly` step, and only " +
           "the two figures either side of it — the paper total and the `Any card` count — " +
