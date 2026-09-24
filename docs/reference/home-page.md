@@ -839,7 +839,14 @@ the oldest one for `all`) and the same refusal to fall back to a younger one, so
 presentational — every fact a prop, every write a callback — so the popup mounts it with no deck
 row and no meld, inside a `Dialog` with `container` and the modal's own art-column widths per
 rung, and the frame, the chin, the flip and turn controls and the per-finish cells are one
-component on two surfaces. The footer carries the modal's two footnotes for the modal's reason:
+component on two surfaces. **The picture is the same size as the modal's, and two things had to
+give for that** — measured in the shipped window on 2026-09-24 (debug build, one card in both
+dialogs): 258×361 at 1024×768, 276×387 at 1280×800 and 374×524 at 1920×1080, identical in each. The
+popup gained the modal's 23.5rem art rung, keyed on its *own* panel (`@min-[960px]/card`, because
+its widest panel is 62rem and a container query reads the 990px content box, so the modal's
+`1200px` never fires); and it lost a header subtitle, which the fit-to-height sizer had been paying
+for out of the card (264×370 against 276×387). The chart sits directly under *Now* and the change
+for the same measured reason: listed last, it started below the column's fold at 1280×800. The footer carries the modal's two footnotes for the modal's reason:
 the artist and the source have to be identifiable wherever the art is shown. The popup is mounted
 at `App` level beside the card modal, never inside the widget: the grid spends the reader's zoom as
 a CSS `zoom` on its box and `zoom` is inherited whatever a descendant's `position`, so a dialog

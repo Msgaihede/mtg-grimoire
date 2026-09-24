@@ -78,8 +78,9 @@ import {
  * panel asking its own width to decide its own width; and a named `sm:` beside arbitrary
  * `min-[…]`s is emitted in a later group and silently wins at every width.
  *
- * **The same two rungs the art column folds at, and the same art widths**: `18.75rem` from 640 and
- * `20rem` from 900, so the picture is the size it is in the card modal at the same window.
+ * **The same three rungs the art column folds at, and the same art widths**: `18.75rem` from 640,
+ * `20rem` from 900 and `23.5rem` from 1200, so the picture is the size it is in the card modal at
+ * the same window.
  *
  * * **640: `47.75rem`, the card modal's own 640 width.** That rung is two columns in both popups
  *   (the modal puts its rail under the middle column there), so the two draw one panel.
@@ -89,8 +90,12 @@ import {
  *   figures and the line: two figure cells at ~265px each, which holds `$1,234.56` beside a date
  *   without truncating, and a month of daily points at ~18px apiece. Wider buys a chart with more
  *   air and no more information.
- * * **No 1200 rung.** The modal's 23.5rem art column is reached by a 77.5rem panel; a two-column
- *   price popup that wide is ~48rem of chart for thirty points.
+ * * **1200: `62rem`, which is the 900 rung's chart column again beside the modal's 23.5rem art.**
+ *   There was no 1200 rung at first, on the argument that the modal's 77.5rem panel would be ~48rem
+ *   of chart for thirty points — true, and the wrong question: without the rung the picture stayed
+ *   at 20rem while the card modal drew the same card at 23.5rem, **320px against 374px** measured in
+ *   the shipped window at 1920×1080 (2026-09-24), and "look like the card details popup" is the
+ *   brief. So the art column follows the modal and the panel grows only by the art's extra 3.5rem.
  *
  * **The heights are the modal's floors**, `min(…,80vh,825px)` at each rung — the height is what
  * sizes the picture (`CardModalArt`'s sizer fits the card to the row), so the same floor is what
@@ -101,6 +106,7 @@ const PANEL_SIZE =
   "w-full h-full " +
   "min-[640px]:w-[47.75rem] min-[640px]:h-auto min-[640px]:min-h-[min(52.5rem,80vh,825px)] " +
   "min-[900px]:w-[58rem] min-[900px]:min-h-[min(47.5rem,80vh,825px)] " +
+  "min-[1200px]:w-[62rem] min-[1200px]:min-h-[min(50rem,80vh,825px)] " +
   PANEL_MAX_H;
 
 /**
@@ -193,17 +199,12 @@ export function PriceHistoryDialog(): ReactElement {
           <Title card={detail} pending={card.isPending} />
         </>
       }
-      subtitle={
-        shown === null
-          ? undefined
-          : [
-              detail?.setCode.toUpperCase(),
-              copyWord(detail, shown.finish),
-              `${marketplace.label} prices`,
-            ]
-              .filter((part) => part !== undefined)
-              .join(" · ")
-      }
+      // **No `subtitle`, and its absence is what keeps the picture the card modal's size.** It
+      // named the set, the copy and the marketplace, and it cost the header one line — which the
+      // art column's fit-to-height sizer paid for out of the card: 264×370 here against the
+      // modal's 276×387 at 1280×800, measured in the shipped window (2026-09-24). The set is on
+      // the art's chin already and the marketplace in the footer, so only the copy's name moved,
+      // to the line beside the range switch (`Body`).
       closeLabel="Close price history"
       onDismiss={dismiss}
       onClose={closePriceHistory}
@@ -290,6 +291,17 @@ function Body({
             // The modal's art widths at the modal's rungs, so the picture is the modal's picture.
             "@min-[640px]/card:grid-cols-[18.75rem_1fr]",
             "@min-[900px]/card:grid-cols-[20rem_1fr]",
+            // **`960px` and not the modal's `1200px`, because a container query measures the
+            // panel and this panel is narrower than the modal's.** The modal's 1200 art width is
+            // asked of a 77.5rem panel; this one's widest is `PANEL_SIZE`'s 62rem, which a
+            // `@min-[1200px]/card` would never reach — the picture would stay at 20rem beside a
+            // modal drawing it at 23.5rem, the mismatch the 1200 rung exists to close. And not
+            // `992px` (62rem) either, which was written first and **never fired**: the query reads
+            // the panel's *content* box, 990px inside its two 1px borders (measured live,
+            // 2026-09-24). 960 sits between the 900 rung's 926px and this rung's 990px, so it fires
+            // exactly when `min-[1200px]:w-[62rem]` does. One unit throughout, because Tailwind
+            // orders arbitrary container variants by value and the 900 rung must come first.
+            "@min-[960px]/card:grid-cols-[23.5rem_1fr]",
           )}
         >
           <div
@@ -338,7 +350,16 @@ function Body({
               "scrollbar-slim @min-[640px]/card:min-h-0 @min-[640px]/card:overflow-y-auto",
             )}
           >
-            <RangeSwitch value={range} onChange={setRange} />
+            {/* The switch, and which copy at which marketplace the line below is about — the
+                header's subtitle until it cost the picture its size. It matters on a printing
+                sold in more than one finish, where the art column prices every finish and only
+                this says which one the line is drawn for. */}
+            <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <RangeSwitch value={range} onChange={setRange} />
+              <p className="m-0 min-w-0 truncate text-xs text-dim">
+                {copyWord(card, request.finish)} · {marketplace.label} prices
+              </p>
+            </div>
             <HistoryFigures
               history={history.data ?? null}
               pending={history.isPending}
@@ -593,6 +614,12 @@ function HistoryFigures({
     );
   }
 
+  // **The headline, the line, then the detail — a stock page's order, and a measured one.** The
+  // figures used to come first and the chart last, and at the app's own 1280×800 window the chart
+  // started below the column's fold (the column scrolls at that height, `CardModalArt`'s rule for
+  // the picture beside it): the one thing the popup exists to draw was the one thing a reader had
+  // to go looking for. Now and the change stay above the line because they are what the line
+  // *says*; low, high, where today sits and how long it has been watched are its footnotes.
   return (
     <>
       <dl className="grid grid-cols-2 gap-2">
@@ -605,6 +632,21 @@ function HistoryFigures({
         <Cell label={`Change over ${rangePhrase(range)}`}>
           <ChangeValue stats={stats} range={range} currency={currency} />
         </Cell>
+      </dl>
+
+      {series.points.length >= 2 ? (
+        <PriceChart
+          points={series.points}
+          currency={currency}
+          summary={chartSummary(chartName, range, series.points, stats, money)}
+        />
+      ) : (
+        <p className="text-sm text-dim">
+          Not enough history to draw a line yet — it needs two days of prices.
+        </p>
+      )}
+
+      <dl className="grid grid-cols-2 gap-2">
         {/* Low on the left and high on the right, the way the bar below runs. */}
         <Cell label="Low">
           <dd className={VALUE}>
@@ -646,18 +688,6 @@ function HistoryFigures({
           </dd>
         </Cell>
       </dl>
-
-      {series.points.length >= 2 ? (
-        <PriceChart
-          points={series.points}
-          currency={currency}
-          summary={chartSummary(chartName, range, series.points, stats, money)}
-        />
-      ) : (
-        <p className="text-sm text-dim">
-          Not enough history to draw a line yet — it needs two days of prices.
-        </p>
-      )}
     </>
   );
 }

@@ -19,8 +19,8 @@ const ALPHA_BOLT = printing("lea", "161").id;
 
 /**
  * **The Mystical Archive Bolt, `sta 105`, etched** — the seed's one etched copy and a Japanese
- * printing sold three ways, so the art column draws three price cells and the subtitle names the
- * copy by its finish rather than assuming foil.
+ * printing sold three ways, so the art column draws three price cells and the line beside the
+ * range switch names the copy by its finish rather than assuming foil.
  */
 const ARCHIVE_BOLT = printing("sta", "105").id;
 
@@ -156,7 +156,8 @@ export const Phone: Story = {
 };
 
 /**
- * An etched copy over a week. The subtitle names the finish the row was about, the art column
+ * An etched copy over a week. The line beside the range switch names the finish the row was
+ * about, the art column
  * opens on the etched sheen (`openedAs`), and its three price cells sit under the picture beside
  * the history's own.
  */
