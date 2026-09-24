@@ -781,6 +781,8 @@ function Body({
    * what this setter does (see the store).
    */
   const openCard = useAppStore((s) => s.setSelectedCardId);
+  /** The set name's press — Search, on that set alone (issue #503). See `pendingSearchSet`. */
+  const showSetInSearch = useAppStore((s) => s.showSetInSearch);
   /**
    * The finish the surface that opened this card named, or `null` — `CardModalArt`'s foil seed.
    *
@@ -1639,6 +1641,9 @@ function Body({
                 // foot of the panel has to name the illustrator of the face on screen, and it is
                 // drawn down there. See {@link artistOf}.
                 meld={{ relations, melded, onMeld: setMelded, onOpen: openCard }}
+                // A navigation, so the modal goes with it: `setActiveView` clears the open card
+                // on its way to Search, which is what closes this panel (issue #503).
+                onShowSet={showSetInSearch}
               />
             </div>
 

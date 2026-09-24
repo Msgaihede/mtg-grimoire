@@ -1799,3 +1799,52 @@ describe("needsNextPage", () => {
     expect(needsNextPage(-1, 0)).toBe(false);
   });
 });
+
+/**
+ * Issue #503: the card modal's set name opens this page on that set alone, through the store's
+ * one-shot `pendingSearchSet`. The modal's half is `CardModalArt.test.tsx`'s; this is the half
+ * that turns the hand-off into a request.
+ */
+describe("SearchPage — a set handed over by the card modal", () => {
+  afterEach(() => {
+    useAppStore.setState({ pendingSearchSet: null });
+  });
+
+  it("opens on that set alone, at Any card, and spends the hand-off", async () => {
+    useAppStore.setState({ pendingSearchSet: "lea" });
+    wrap(<SearchPage />);
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    // Every request is the set's, the first included: the hand-off seeds the hook, so the page
+    // never asks for the unfiltered browse it would otherwise open on. (A render-phase
+    // adjustment on mount was tried first and sent that browse ahead of the set's request.)
+    for (const [req] of searchCards.mock.calls) expect(req).toMatchObject({ sets: ["lea"] });
+    // `Any card`, so an Un-set's acorns and a set's art cards are on the wall: no `playableOnly`,
+    // which every other row of the format select sends.
+    expect(lastRequest().playableOnly).toBeUndefined();
+    expect(lastRequest().format).toBeUndefined();
+    await waitFor(() => expect(useAppStore.getState().pendingSearchSet).toBeNull());
+  });
+
+  it("replaces the search already on screen, and lands again on a second press", async () => {
+    wrap(<SearchPage />);
+    const box = screen.getByPlaceholderText(/search cards/i);
+    await userEvent.type(box, "bolt");
+    await waitFor(() => expect(lastRequest().text).toBe("bolt"));
+
+    act(() => useAppStore.getState().showSetInSearch("lea"));
+
+    // The typed word goes with every other filter: "the cards in this set" is the whole question.
+    await waitFor(() => expect(lastRequest()).toMatchObject({ sets: ["lea"], text: undefined }));
+    expect(box).toHaveValue("");
+    await waitFor(() => expect(useAppStore.getState().pendingSearchSet).toBeNull());
+
+    // The reader wanders off the set and presses the same name again, from a card opened here.
+    // The page must not remember having applied `lea` already.
+    await userEvent.type(box, "bolt");
+    await waitFor(() => expect(lastRequest()).toMatchObject({ text: "bolt" }));
+    act(() => useAppStore.getState().showSetInSearch("lea"));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ sets: ["lea"], text: undefined }));
+    expect(box).toHaveValue("");
+  });
+});
