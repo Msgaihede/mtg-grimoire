@@ -312,7 +312,9 @@ function bulkAddLine(p: Record<string, unknown>, cabinet: Cabinet): ActivityLine
  * The one row a clear writes, which are the other half of the bulk rule above —
  * `reset::clear_collection` and `clear_wishlist` for a whole cabinet, and since issue #471 the
  * wishlist's two folder presses that delete wishes: a folder's `Clear…`, and a delete that takes
- * the wishes with it.
+ * the wishes with it. Since issue #506 the collection has one of those too —
+ * `collection_folders::clear_removed`, which empties `Recently removed` and writes the same shape,
+ * so it reads `Cleared 6 cards from your collection` / `in Recently removed` with no branch here.
  *
  * **The folder is the detail, {@link bulkAddLine}'s `in` clause**, so a drawer's clear reads
  * `Cleared 4 cards from your wishlist` / `in Ordered` and a whole-list wipe — whose payload carries
