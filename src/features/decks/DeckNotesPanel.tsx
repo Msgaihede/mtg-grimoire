@@ -77,6 +77,7 @@ import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, META_SUBMIT } from "./metaRows";
 import { NOTE_GAP, NoteCard, type NoteFocus } from "./NoteCard";
 import { NoteCardsDialog } from "./NoteCardsDialog";
 import { NoteEditorDialog } from "./NoteEditorDialog";
+import { movedTo } from "./noteDrag";
 import { useDeckNotes } from "./useDeckNotes";
 
 /**
@@ -270,6 +271,11 @@ export function DeckNotesPanel({
    *
    * **`onRequestHandled` is called here** — see {@link DeckNotesPanelProps.onRequestHandled}.
    */
+  /** Stable, because every card's drop registration names it — a new function per render would
+   *  unregister and re-register every note's drag on each re-render of the editor. */
+  const startReorder = notes.reorder.mutate;
+  const reorderNotes = useCallback((ids: number[]) => startReorder(ids), [startReorder]);
+
   const acted = useRef<DeckNoteRequest | null>(null);
   useEffect(() => {
     if (taken === null || acted.current === taken) return;
@@ -305,6 +311,7 @@ export function DeckNotesPanel({
       onDelete={(id) => notes.remove.mutate(id)}
       onAttach={(noteId, oracleId) => notes.attach.mutate({ noteId, oracleId })}
       onDetach={(noteId, oracleId) => notes.detach.mutate({ noteId, oracleId })}
+      onReorder={reorderNotes}
     />
   );
 }
@@ -365,6 +372,14 @@ export interface NotesBandProps {
   onDelete: (id: number) => void;
   onAttach: (noteId: number, oracleId: string) => void;
   onDetach: (noteId: number, oracleId: string) => void;
+  /**
+   * The notes in a new order, every id — `deck_note_reorder`'s argument (issue #509).
+   *
+   * **Optional, and absent draws no grip on any card**, so a workbench state that has not wired it
+   * shows the band exactly as it was. A band with one note draws none either: there is nowhere for
+   * it to go.
+   */
+  onReorder?: (ids: number[]) => void;
 }
 
 /**
@@ -416,9 +431,33 @@ export function NotesBand({
   onDelete,
   onAttach,
   onDetach,
+  onReorder,
 }: NotesBandProps): JSX.Element {
   const bodyId = useId();
   const [panel, setPanel] = useState<NotePanel>(null);
+
+  /** Every note's id in the order the band draws them — what a move is expressed over. */
+  const ids = useMemo(() => notes.map((note) => note.id), [notes]);
+
+  /**
+   * One note to one position, refused when it would change nothing — a drop on its own place, or
+   * an arrow at either end, is a gesture and not an edit, and must not write a history row.
+   */
+  const write = useCallback(
+    (next: number[]) => {
+      if (onReorder === undefined) return;
+      if (next.every((id, at) => id === ids[at])) return;
+      onReorder(next);
+    },
+    [ids, onReorder],
+  );
+
+  /** A note dropped on another takes its place — `useCategoryReorderDrop`'s *land where this one
+   *  is*, which is also what one arrow press means. */
+  const moveOnto = useCallback(
+    (dragged: number, targetId: number) => write(movedTo(ids, dragged, ids.indexOf(targetId))),
+    [ids, write],
+  );
 
   /**
    * The panel's note as the read currently holds it — `null` once it has gone, which shuts the
@@ -717,10 +756,20 @@ export function NotesBand({
                   rowGap: 0,
                 }}
               >
-                {notes.map((note) => (
+                {notes.map((note, index) => (
                   <NoteCard
                     key={note.id}
                     note={note}
+                    reorder={
+                      onReorder === undefined || notes.length < 2
+                        ? undefined
+                        : {
+                            index,
+                            total: notes.length,
+                            onMove: moveOnto,
+                            onStep: (delta) => write(movedTo(ids, note.id, index + delta)),
+                          }
+                    }
                     // The focus object itself and never a boolean: two presses on one note are
                     // two objects and one `true`, so a boolean would bring the card into view the
                     // first time and do nothing the second — which is exactly the press a reader

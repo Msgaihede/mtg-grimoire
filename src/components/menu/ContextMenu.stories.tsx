@@ -511,9 +511,10 @@ export const AddToDeck: Story = {
     await waitFor(async () => await expect(addTo).toBeVisible(), { timeout: FRAME_WAIT });
 
     await userEvent.click(addTo);
-    // Two finishes on this printing, so Collection asks rather than adding silently.
+    // Two finishes on this printing, and Collection still adds in one press — the finish on screen
+    // is the answer, never a question (issue #504).
     const collection = await canvas.findByRole("menuitem", { name: "Collection" });
-    await expect(collection).toHaveAttribute("aria-haspopup", "menu");
+    await expect(collection).not.toHaveAttribute("aria-haspopup");
     await expect(canvas.getByRole("menuitem", { name: "Wishlist" })).toBeInTheDocument();
 
     await userEvent.click(await canvas.findByRole("menuitem", { name: "Deck" }));
@@ -726,7 +727,7 @@ export const GreyedCommander: Story = {
 };
 
 /**
- * **Move to**, over every pile the deck has — including the one the card is already in.
+ * **Category** (`Move to` until issue #505), over every pile the deck has — including the one the card is already in.
  *
  * Built from `DeckEditor`'s own `categories` array and never from the groups a view drew, which
  * is what lets it reach a pile with **no heading on the desk**: an `auto` pile that has gone empty
@@ -741,7 +742,7 @@ export const MoveToPile: Story = {
   args: { build: (act) => buildDeckCardMenu(DECK_CARD, deckCardDeps(act)) },
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
-    const row = await canvas.findByRole("menuitem", { name: "Move to" });
+    const row = await canvas.findByRole("menuitem", { name: "Category" });
     await waitFor(async () => await expect(row).toBeVisible(), { timeout: FRAME_WAIT });
 
     await userEvent.click(row);

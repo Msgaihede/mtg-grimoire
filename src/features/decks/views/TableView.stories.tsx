@@ -163,7 +163,7 @@ export const TheoryMatches: Story = {
     // out rather than taken off `THEORY_UNPLANNED_LABEL`, because a constant on both sides of an
     // assertion agrees with a reword by construction, and this is the one place the third tier's
     // sentence is in the tree as text rather than folded into a control's name.
-    expect(canvas.getAllByText("Not in the theory list")).toHaveLength(6);
+    expect(canvas.getAllByText("No Match")).toHaveLength(6);
 
     // **Two of the four planned rows are counts rather than ticks** (issue #212), and the twin is
     // where this view earns its keep: `+2` and `-1` are two characters that mean nothing spoken,

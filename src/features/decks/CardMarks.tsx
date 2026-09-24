@@ -100,7 +100,7 @@ import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { labelColorCss, labelFgCss } from "./labelColors";
-import type { TheoryTier } from "./theoryMatch";
+import { THEORY_TIER_NAMES, type TheoryTier } from "./theoryMatch";
 
 /**
  * The one label a card wears, as an 8px chip in its own colour with the name one hover away.
@@ -370,47 +370,34 @@ export function QuantityTag({
  * What the check means, in words, said once so that the chip's tooltip, the table's `sr-only`
  * twin and `deckCardName`'s clause cannot drift apart.
  *
- * "In the theory list" and not "Planned", "Matches theory" or a tick's worth of nothing: the
- * reader has a tab called **Theory** two inches above the card, and the sentence that costs them
- * no learning is the one naming it. It is also the sentence that does *not* read as a verdict —
- * "matches" invites the question *matches what, and is that good* — which matters more here than
- * anywhere else on the card, because the glyph is a tick and a tick beside a red mark is the one
- * thing this mark must never be mistaken for. See {@link TheoryMatchMark}.
+ * **Since issue #502 (2026-09-24) the three tiers are named in the reader's own words** —
+ * `Exact Match`, `Art Mismatch`, `No Match` — and they are the headings of the `Matches theory`
+ * grouping too, so a card filed under `Art Mismatch` wears a mark that says `Art Mismatch`. The
+ * strings live in `theoryMatch.ts`'s {@link THEORY_TIER_NAMES}, because `grouping.ts` needs them
+ * and must not import a component file to get them; these three constants are that table read
+ * out, kept so that every existing caller and test names a tier rather than a record key.
+ *
+ * It replaced "In the theory list", "… · a different printing" and "Not in the theory list".
+ * Those were one sentence, extended and negated; these are three names, so none is built from
+ * another — `Art Mismatch` is not `Exact Match` plus a clause.
  */
-export const THEORY_MATCH_LABEL = "In the theory list";
+export const THEORY_MATCH_LABEL = THEORY_TIER_NAMES.exact;
 
 /**
- * The whole of what blue adds to that sentence — the loose tier said in words.
- *
- * A `name` match is the same *card* in a printing the plan did not name, and
- * {@link THEORY_MATCH_LABEL} alone is true of it: it really is in the theory list. That is exactly
- * why the extra clause is needed rather than optional — the sentence a reader hears would be
- * **identical** on a green mark and a blue one, so the colour would be the only thing carrying the
- * distinction and a reader who cannot see it would be told nothing at all about why this row is
- * not the other one. `theoryMatch.ts` has what the two tiers mean.
- *
- * **Built from {@link THEORY_MATCH_LABEL} rather than written out**, because the exact tier's
- * sentence is the prefix of this one by construction: a reword of the base has to reach both, and
- * two literals sharing four words is two literals that agree until somebody edits one.
+ * The loose tier said in words — the same *card* in a printing the plan did not name. A name of
+ * its own rather than green's plus a clause, so the colour is never the only thing carrying the
+ * distinction for a reader who cannot see it. `theoryMatch.ts` has what the tiers mean.
  */
-export const THEORY_MATCH_NAME_LABEL = `${THEORY_MATCH_LABEL} · a different printing`;
+export const THEORY_MATCH_NAME_LABEL = THEORY_TIER_NAMES.name;
 
 /**
  * The third tier said in words — a live row the plan does not ask for at all (2026-09-08).
  *
- * **Written out rather than built from {@link THEORY_MATCH_LABEL}**, which is the opposite call
- * from {@link THEORY_MATCH_NAME_LABEL} one line up and is made for that constant's own reason.
- * Blue's sentence is green's *plus a clause*, so composing it is what keeps a reword reaching
- * both. This one is green's sentence **negated**, and a negation assembled out of the thing it
- * negates (`Not ${THEORY_MATCH_LABEL.toLowerCase()}`) is a string whose meaning flips on a
- * capital letter — the one edit nobody reviewing a palette or a wording change would look at
- * twice.
- *
  * It carries **no count clause ever**, unlike the other two: there is no order to be short of or
- * over on, so the sentence is the whole of what this tier has to say. {@link theoryMatchLabel}
+ * over on, so the name is the whole of what this tier has to say. {@link theoryMatchLabel}
  * is where that is enforced, in one arm that never reads the delta.
  */
-export const THEORY_UNPLANNED_LABEL = "Not in the theory list";
+export const THEORY_UNPLANNED_LABEL = THEORY_TIER_NAMES.unplanned;
 
 /**
  * What a mark means, in words — the tier and then the count difference, said once so that the
@@ -444,7 +431,7 @@ export const THEORY_UNPLANNED_LABEL = "Not in the theory list";
  * planned, so there is no order to be short of: `theoryMatchMark` always hands that tier a `0`,
  * and the early return is what makes the sentence true of a caller that passes something else —
  * a story, a Storybook control, a future arm that computes a number for a different reason.
- * "Not in the theory list · 3 to add" would be a sentence about an order the plan does not carry.
+ * "No Match · 3 to add" would be a sentence about an order the plan does not carry.
  */
 export function theoryMatchLabel(tier: TheoryTier, delta: number): string {
   if (tier === "unplanned") return THEORY_UNPLANNED_LABEL;

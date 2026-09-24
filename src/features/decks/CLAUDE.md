@@ -589,6 +589,13 @@ layer.
   never owned, and `useDeck` fires `["collection"]` only when copies actually moved. `query.ts`
   caches 30 s, so a missing invalidation there is a ghost row on the collection page rather than a
   stale one.
+- **The deck card menu is three groups since issue #505 (2026-09-24), and two of its rows were
+  renamed.** `Add to` is followed directly by **`Collection link ▸`** (the `Collection ▸` below —
+  both write to the binder or the wishlist rather than to the deck); under the deck's rule come
+  **`Category ▸`** (what this page still calls the card's `Move to` in many places) and
+  `Label card ▸`, which both file the card; and under a rule of their own, `Set as commander`,
+  `Set as companion` and `Set as foil`. Read older prose here with that mapping —
+  `deckCardMenu.tsx`'s header is the current picture.
 - **`Collection ▸` is the card menu's one write to the reader's _binder_ rather than to their
   list, and it is three rows** (issue #350, 2026-09-03). `Quick add N copies`, `Quick add N and
   remove from wishlist`, then — under a separator — `Pull N from your collection`. The first two
@@ -1117,7 +1124,8 @@ layer.
   never carries a number.** `unplanned` draws lucide's **`X`** — never a digit, because there is
   no arithmetic left to do: the plan asks for none of this card, so a signed count would be a
   subtraction against nothing, and `data-theory-match="unplanned"` is what a test or a live pass
-  addresses it by. Its words are **"Not in the theory list"** everywhere the other two tiers put
+  addresses it by. Its words are **"No Match"** (since issue #502; "Not in the theory list"
+  before it) everywhere the other two tiers put
   their sentence — the tooltip, the table's `sr-only` twin, the card's accessible name — and they
   are the whole of the mark's meaning: *the plan does not ask for this*, which is a fact and not a
   verdict, exactly as the other two are.
@@ -1428,8 +1436,24 @@ layer.
   a sort across the whole deck (the most expensive card, not the most expensive per pile). Nothing
   in Rust moved: `last_group_by` is stored verbatim and `asGroupBy` accepts the new words because
   it is derived from `GROUP_BY_OPTIONS`.
-- **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with five
-  `Group by` modes (`category | manaValue | type | label | deck`) and four sorts (`alphabetical |
+- **`Matches theory` joined the picker on 2026-09-24** ([issue
+  #502](https://github.com/Msgaihede/mtg-grimoire/issues/502)), stored as `theory`: a derived mode
+  with three headings, `Exact Match`, `Art Mismatch` and `No Match` — `theoryMatch.ts`'s
+  `THEORY_TIER_NAMES`, which are also the words every theory mark's tooltip, `sr-only` twin and
+  accessible-name clause say, so a heading and the marks under it cannot disagree. Three rules:
+  - **It is offered only on the Actual list of a Theory + Actual deck** (`theoryGroupable`).
+    Elsewhere the row is left out of the picker and a remembered `theory` draws as `category`
+    **without being written back**, so pressing `Actual` again brings it back.
+  - **It buckets by `theoryTier`, never by `theoryMatchMark`**: a heading cannot go silent the way
+    a mark can, so a card whose tier's switch is off in Deck settings still files under its tier.
+  - **No plan answered yet is `category`**, not a wall of `No Match` — `buildGroups` takes the plan
+    as its last, optional argument and falls back when it is absent.
+
+  The Deck settings and Settings → Appearance switch headings (`Matching printing`, `Different
+  printing`, `Not in the theory list`) were deliberately **not** renamed: they name the switch,
+  and the issue asked for the marks' words.
+- **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with six
+  `Group by` modes (`category | manaValue | type | label | deck | theory`) and four sorts (`alphabetical |
   manaCost | price | type`). An **inactive category stays its own group in every grouping mode** — as long
   as it holds cards — and it stays that group _whole_: `buildGroups` appends it carrying its own
   `kind`, so a switched-off
@@ -4235,6 +4259,17 @@ The storage side, the eight commands and the undo `Op` are
 - **A hard break travels as `"\n"` inside a text run**, because `Inline` has no break member. Any
   renderer of these blocks sets `whitespace-pre-line` or every break a reader typed draws as a
   space.
+- **A note is moved by the grip in its title row and by nothing else** (issue #509,
+  `noteDrag.ts`). The card is the drag source and the drop target; the grip is the dnd-kit
+  `handle`, because the band is `select-text` and a press in a note's body has to stay a text
+  selection. The arrow keys on the grip are the keyboard's route: up or left moves the note one
+  place earlier, down or right one place later, because the masonry fills row by row. A drop
+  means *land where this one is*, `categoryDrag.ts`' rule, and `movedTo` is reused from there.
+  `useDeckNotes.reorder` redraws the cache before `deck_note_reorder` answers. A move that
+  changes nothing writes nothing, and a band with one note draws no grip. Driven in the shipped
+  window 2026-09-24 (debug build, a copy of the real db): two drags wrote two `reorder` history
+  rows, a plain click on the grip wrote none, and a press in the body text selected text and
+  started no drag.
 
 ### ⚠️ The card menu's note rows are opt-in, and that is how they shipped unreachable
 

@@ -478,11 +478,12 @@ const captionFor =
  * The entries' finishes for one printing, in the app's own order, as stored JSON.
  *
  * `FINISHES` order (nonfoil, foil, etched) rather than the order the rows arrived in: it is
- * Scryfall's, it is what every finish picker in this app reads in, and a submenu whose two rows
- * swapped places depending on which entry the backend sorted first would be a picker that moves
- * under the pointer. Unrecognised words are dropped — `finish` is TEXT with a CHECK rather than
- * an enum this side knows — and a tile left with nothing falls to the menu's unknown-list rule,
- * which is the honest answer for an entry whose finish this build cannot name.
+ * Scryfall's, it is what every finish picker in this app reads in, and the card menu's
+ * "Add to → Collection" records the list's first finish — so an order that depended on which
+ * entry the backend sorted first would file a different finish from one render to the next.
+ * Unrecognised words are dropped — `finish` is TEXT with a CHECK rather than an enum this side
+ * knows — and a tile left with nothing falls to the menu's unknown-list rule, which is the honest
+ * answer for an entry whose finish this build cannot name.
  *
  * Every entry counts, including one emptied to zero: the wall draws a tile for it, the table
  * keeps the row with its condition and its purchase story, and it is still a finish the reader

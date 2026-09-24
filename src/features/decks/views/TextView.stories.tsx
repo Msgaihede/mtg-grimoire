@@ -311,15 +311,15 @@ export const TheoryMatches: Story = {
 
     // The card that is both in the plan and breaking a rule, in one sentence.
     const both = canvas.getByRole("button", { name: new RegExp(`^${BROKEN}`) });
-    expect(both).toHaveAccessibleName(expect.stringContaining("in the theory list"));
+    expect(both).toHaveAccessibleName(expect.stringContaining("exact match"));
     expect(both).toHaveAccessibleName(expect.stringContaining("rule break:"));
 
     // And a line the plan does not ask for says so, in words — it is a *statement* now rather
     // than a silence. The negatives are what keep it the third tier's sentence and not a planned
     // one: green's own words are the prefix of blue's, and neither of them is this.
     const missing = canvas.getByRole("button", { name: /^Dismember/ });
-    expect(missing).toHaveAccessibleName(expect.stringContaining("not in the theory list"));
-    expect(missing).toHaveAccessibleName(expect.not.stringContaining("in the theory list ·"));
+    expect(missing).toHaveAccessibleName(expect.stringContaining("no match"));
+    expect(missing).toHaveAccessibleName(expect.not.stringContaining("exact match ·"));
     expect(missing).toHaveAccessibleName(expect.not.stringContaining("to add"));
     expect(missing).toHaveAccessibleName(expect.not.stringContaining("to remove"));
   },

@@ -1546,9 +1546,10 @@ describe("the card menu", () => {
 
   /**
    * The other half of the finish rule, and the counterpart to the collection's row: a search
-   * row is a *printing* rather than a copy, so it names no finish and the menu has to ask.
+   * row is a *printing* rather than a copy, so it names no finish — and since issue #504 the menu
+   * does not ask either. It records the printing's default finish, the one the row draws.
    */
-  it("asks which finish, because a search row is a printing and names none", async () => {
+  it("adds the printing's default finish in one press, because a search row names none", async () => {
     const user = userEvent.setup();
     wrap(<SearchPage />);
     rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
@@ -1556,21 +1557,20 @@ describe("the card menu", () => {
     await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
 
     const collection = await screen.findByRole("menuitem", { name: "Collection" });
-    expect(collection).toHaveAttribute("aria-haspopup", "menu");
+    expect(collection).not.toHaveAttribute("aria-haspopup");
 
     await user.click(collection);
-    await user.click(await screen.findByRole("menuitem", { name: "Foil" }));
 
     await waitFor(() =>
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "1",
-        finish: "foil",
+        finish: "nonfoil",
         // The constant rather than the grade: a one-press add makes no decision about a copy's
         // condition, and this suite must go red the day it starts making one again.
         condition: MENU_CONDITION,
         quantity: 1,
-        // The root: this reader has no collection folders, so the finish submenu asserted
-        // above is the whole of the cascade and no folder was ever named (v24).
+        // The root: this reader has no collection folders, so the single press asserted above
+        // is the whole of the cascade and no folder was ever named (v24).
         folderId: null,
       }),
     );
@@ -1797,5 +1797,54 @@ describe("needsNextPage", () => {
 
   it("never triggers on an empty list", () => {
     expect(needsNextPage(-1, 0)).toBe(false);
+  });
+});
+
+/**
+ * Issue #503: the card modal's set name opens this page on that set alone, through the store's
+ * one-shot `pendingSearchSet`. The modal's half is `CardModalArt.test.tsx`'s; this is the half
+ * that turns the hand-off into a request.
+ */
+describe("SearchPage — a set handed over by the card modal", () => {
+  afterEach(() => {
+    useAppStore.setState({ pendingSearchSet: null });
+  });
+
+  it("opens on that set alone, at Any card, and spends the hand-off", async () => {
+    useAppStore.setState({ pendingSearchSet: "lea" });
+    wrap(<SearchPage />);
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    // Every request is the set's, the first included: the hand-off seeds the hook, so the page
+    // never asks for the unfiltered browse it would otherwise open on. (A render-phase
+    // adjustment on mount was tried first and sent that browse ahead of the set's request.)
+    for (const [req] of searchCards.mock.calls) expect(req).toMatchObject({ sets: ["lea"] });
+    // `Any card`, so an Un-set's acorns and a set's art cards are on the wall: no `playableOnly`,
+    // which every other row of the format select sends.
+    expect(lastRequest().playableOnly).toBeUndefined();
+    expect(lastRequest().format).toBeUndefined();
+    await waitFor(() => expect(useAppStore.getState().pendingSearchSet).toBeNull());
+  });
+
+  it("replaces the search already on screen, and lands again on a second press", async () => {
+    wrap(<SearchPage />);
+    const box = screen.getByPlaceholderText(/search cards/i);
+    await userEvent.type(box, "bolt");
+    await waitFor(() => expect(lastRequest().text).toBe("bolt"));
+
+    act(() => useAppStore.getState().showSetInSearch("lea"));
+
+    // The typed word goes with every other filter: "the cards in this set" is the whole question.
+    await waitFor(() => expect(lastRequest()).toMatchObject({ sets: ["lea"], text: undefined }));
+    expect(box).toHaveValue("");
+    await waitFor(() => expect(useAppStore.getState().pendingSearchSet).toBeNull());
+
+    // The reader wanders off the set and presses the same name again, from a card opened here.
+    // The page must not remember having applied `lea` already.
+    await userEvent.type(box, "bolt");
+    await waitFor(() => expect(lastRequest()).toMatchObject({ text: "bolt" }));
+    act(() => useAppStore.getState().showSetInSearch("lea"));
+    await waitFor(() => expect(lastRequest()).toMatchObject({ sets: ["lea"], text: undefined }));
+    expect(box).toHaveValue("");
   });
 });

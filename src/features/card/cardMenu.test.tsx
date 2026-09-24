@@ -535,12 +535,24 @@ describe("buildCardMenu", () => {
     expect(addToCollection).toHaveBeenCalledWith(BOLT, "nonfoil", null);
   });
 
-  it("offers a finish submenu when the printing has more than one and the surface named none", () => {
+  /** Issue #504: the finish on screen is the answer, so a printing sold two ways is not a
+   *  question — it is the printing's own first finish, the one its tile draws. */
+  it("adds the printing's default finish without asking when the surface named none", () => {
+    const addToCollection = vi.fn();
     const target = { ...BOLT, finishes: '["nonfoil","foil"]' };
-    const addTo = find(buildCardMenu(target, deps()), "Add to") as MenuSubmenu;
-    const collection = find(addTo.items, "Collection") as MenuSubmenu;
-    expect(collection.kind).toBe("submenu");
-    expect(labels(collection.items)).toEqual(["Nonfoil", "Foil"]);
+    const addTo = find(buildCardMenu(target, deps({ addToCollection })), "Add to") as MenuSubmenu;
+    const collection = find(addTo.items, "Collection");
+    expect(collection.kind).toBe("action");
+    (collection as MenuAction).onSelect();
+    expect(addToCollection).toHaveBeenCalledWith(target, "nonfoil", null);
+  });
+
+  it("adds a foil-only printing as foil without asking", () => {
+    const addToCollection = vi.fn();
+    const target = { ...BOLT, finishes: '["foil","etched"]' };
+    const addTo = find(buildCardMenu(target, deps({ addToCollection })), "Add to") as MenuSubmenu;
+    (find(addTo.items, "Collection") as MenuAction).onSelect();
+    expect(addToCollection).toHaveBeenCalledWith(target, "foil", null);
   });
 
   it("uses the surface's own finish without asking", () => {
@@ -675,20 +687,17 @@ describe("buildCardMenu", () => {
     expect(decksPlaying).not.toHaveBeenCalled();
   });
 
-  it("asks for the finish first and the folder second when the printing has two", () => {
+  it("asks only for the folder, filing the named finish, when the printing has two", () => {
     const addToCollection = vi.fn();
-    const target = { ...BOLT, finishes: '["nonfoil","foil"]' };
+    const target: CardMenuTarget = { ...BOLT, finishes: '["nonfoil","foil"]', finish: "foil" };
     const addTo = find(
       buildCardMenu(target, deps({ addToCollection, collectionFolders: [binder(1, "Binder")] })),
       "Add to",
     ) as MenuSubmenu;
     const collection = find(addTo.items, "Collection") as MenuSubmenu;
-    expect(labels(collection.items)).toEqual(["Nonfoil", "Foil"]);
-
-    const foil = find(collection.items, "Foil") as MenuSubmenu;
-    expect(foil.kind).toBe("submenu");
-    expect(labels(foil.items)).toEqual(["Collection", "Binder"]);
-    (foil.items[2] as MenuAction).onSelect();
+    expect(collection.kind).toBe("submenu");
+    expect(labels(collection.items)).toEqual(["Collection", "Binder"]);
+    (collection.items[2] as MenuAction).onSelect();
     expect(addToCollection).toHaveBeenCalledWith(target, "foil", 1);
   });
 
