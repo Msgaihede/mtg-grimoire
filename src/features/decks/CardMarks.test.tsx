@@ -118,14 +118,14 @@ async function tooltipOf(anchor: Element): Promise<HTMLElement> {
 }
 
 describe("theoryMatchLabel", () => {
-  it("keeps the exact tier's sentence exactly as it was", () => {
-    expect(theoryMatchLabel("exact", 0)).toBe("In the theory list");
+  it("names the exact tier Exact Match", () => {
+    expect(theoryMatchLabel("exact", 0)).toBe("Exact Match");
   });
 
   it("says which one a name match is", () => {
-    expect(theoryMatchLabel("name", 0)).toBe("In the theory list · a different printing");
-    // The constant is the same sentence, built from the exact tier's rather than written twice.
-    expect(THEORY_MATCH_NAME_LABEL).toBe("In the theory list · a different printing");
+    expect(theoryMatchLabel("name", 0)).toBe("Art Mismatch");
+    // The constant is the same name — issue #502 named the three tiers in the reader's words.
+    expect(THEORY_MATCH_NAME_LABEL).toBe("Art Mismatch");
   });
 
   /**
@@ -134,13 +134,13 @@ describe("theoryMatchLabel", () => {
    * tiers, because a `Math.abs` with the words swapped would pass half of these.
    */
   it("words the count as the action to take, after the tier's own clause, on both tiers", () => {
-    expect(theoryMatchLabel("exact", 2)).toBe("In the theory list · 2 to add");
-    expect(theoryMatchLabel("exact", -3)).toBe("In the theory list · 3 to remove");
+    expect(theoryMatchLabel("exact", 2)).toBe("Exact Match · 2 to add");
+    expect(theoryMatchLabel("exact", -3)).toBe("Exact Match · 3 to remove");
     expect(theoryMatchLabel("name", 6)).toBe(
-      "In the theory list · a different printing · 6 to add",
+      "Art Mismatch · 6 to add",
     );
     expect(theoryMatchLabel("name", -1)).toBe(
-      "In the theory list · a different printing · 1 to remove",
+      "Art Mismatch · 1 to remove",
     );
   });
 
@@ -161,12 +161,11 @@ describe("theoryMatchLabel", () => {
    * component or a story that hands it something else must still get the one sentence.
    */
   it("says the third tier's one sentence at every count", () => {
-    expect(theoryMatchLabel("unplanned", 0)).toBe("Not in the theory list");
-    expect(theoryMatchLabel("unplanned", 3)).toBe("Not in the theory list");
-    expect(theoryMatchLabel("unplanned", -8)).toBe("Not in the theory list");
-    // The constant is the same literal, spelled out rather than negated from the exact tier's —
-    // see its own doc for why that composition is the one this file refuses to make.
-    expect(THEORY_UNPLANNED_LABEL).toBe("Not in the theory list");
+    expect(theoryMatchLabel("unplanned", 0)).toBe("No Match");
+    expect(theoryMatchLabel("unplanned", 3)).toBe("No Match");
+    expect(theoryMatchLabel("unplanned", -8)).toBe("No Match");
+    // The constant is the same literal, and never assembled out of the exact tier's name.
+    expect(THEORY_UNPLANNED_LABEL).toBe("No Match");
   });
 });
 
