@@ -504,6 +504,31 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **`Recently removed`'s clear, pinned on the day it was written** (issue #506) — the
+   * collection's counterpart of the wishlist drawer's clear above, and the one command in
+   * `collection_folders.rs` that takes **no** argument. That absence is the trap: its neighbours
+   * all take a bare `id`, so a wrapper copied from `collectionFolderDelete` would send `{ id }` to
+   * a command that has no such parameter, and a Rust side that grew one would be a clear the
+   * page could no longer reach. Both ends are read: the wire name, the empty parameter list, and
+   * the desktop registration — an unregistered command is a wrapper invoking nothing.
+   */
+  it("sends the Recently removed clear with no arguments under the name its command declares", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(collectionFoldersRs.length, "collection_folders.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue(6);
+    // The count travels verbatim: it is what the confirmation tells the reader went.
+    await expect(ipc.collectionRemovedClear()).resolves.toBe(6);
+    expect(invoke).toHaveBeenLastCalledWith("collection_removed_clear");
+
+    expect(
+      collectionFoldersRs,
+      "`collection_removed_clear` takes something other than the app state",
+    ).toMatch(/fn collection_removed_clear\(\s*state: tauri::State<'_, Arc<AppState>>,?\s*\)/);
+    expect(desktopRs).toContain("collection_folders::collection_removed_clear,");
+  });
+
+  /**
    * **The home page's five reads, pinned on the day they were written** — `wishlist_summary`,
    * `collection_breakdown`, `wishlist_breakdown`, `deck_values` and `activity_recent`. They are
    * one case rather than five because they are one page's worth of wire, and because three of the
