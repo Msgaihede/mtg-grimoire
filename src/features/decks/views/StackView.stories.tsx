@@ -824,8 +824,8 @@ export const CommandZone: Story = {
 };
 
 /**
- * **The reader arranging their own columns** — a grip in every flowing heading, and none in the
- * rail.
+ * **The reader arranging their own columns** — a grip in every flowing heading and every railed
+ * one, and none in the command zone.
  *
  * The gesture is a drag from the grip onto another pile, and the arrow keys on that same grip
  * are the whole of the keyboard's way to make the same move: a handle a mouse can drag and a
@@ -833,13 +833,12 @@ export const CommandZone: Story = {
  *
  * **Where a pile is drawn and where a pile *sits* are two questions, and only the second is the
  * reader's to answer here.** The Sideboard and the Maybeboard are held against the right edge by
- * their `kind`, so their position is not an arrangement anybody made — which is why they carry no
- * grip even though they carry a `sortOrder` like every other pile. The Commander is the same
- * answer from the head of the desk: a command zone is pinned first in all three grouping modes, so
- * there is no position a drag could move it to, and the box it is drawn in hands its piles no
- * `flowWidth` — which is `StackGroup`'s one off switch for the grip, the row span and the reorder
- * drop together. The Categories dialog is where *those* three are reordered relative to each
- * other, and it draws every row of the deck.
+ * their `kind`, and no grip moves them off it — but their order *within* the rail is the reader's
+ * own `sortOrder`, so since issue #508 they carry grips that reorder among each other and nothing
+ * else. The Commander is pinned first in all three grouping modes, so there is no position a drag
+ * could move it to, and the box it is drawn in hands its piles no `reorderIds` — `StackGroup`'s
+ * off switch for the grip and the reorder drop together. The Categories dialog still reorders
+ * every row of the deck against every other.
  *
  * `moveCategory` is what the editor hands down only while the deck is grouped by category; a view
  * given none draws no grip at all, which is every other story in this file.
@@ -858,15 +857,16 @@ export const Reorderable: Story = {
     const [rail] = canvasElement.querySelectorAll<HTMLElement>(`[${RAIL_ATTR}]`);
     const [command] = canvasElement.querySelectorAll<HTMLElement>(`[${COMMAND_ATTR}]`);
 
-    // Five flowing piles, five grips — and the count in each name is the flow's rather than the
-    // deck's eight, because neither the two railed piles nor the Commander is part of the order
-    // this moves things in. Both boxes are asserted, because the two absences have different
-    // causes and a regression would take one at a time: the rail's piles are a `kind` the split
-    // pins to the right, the command zone's is a `kind` it pins to the head, and only the second
-    // one has ever been in the flow.
+    // Five flowing piles and two railed ones, seven grips — and the count in each name is its own
+    // run's rather than the deck's eight: the flow reads `of 5` and the rail `of 2`, because a
+    // railed pile moves only among railed piles. The command zone is asserted empty, because its
+    // absence is a decision (a pinned zone has nowhere to go) that a regression could quietly undo.
     const grips = canvas.getAllByRole("button", { name: /^Move / });
-    expect(grips).toHaveLength(5);
-    expect(within(rail).queryByRole("button", { name: /^Move / })).toBeNull();
+    expect(grips).toHaveLength(7);
+    expect(within(rail).getAllByRole("button", { name: /^Move / })).toHaveLength(2);
+    expect(within(rail).getAllByRole("button", { name: /^Move / })[0]).toHaveAccessibleName(
+      /, 1 of 2$/,
+    );
     expect(within(command).queryByRole("button", { name: /^Move / })).toBeNull();
     expect(grips[0]).toHaveAccessibleName("Move Ramp, 1 of 5");
 

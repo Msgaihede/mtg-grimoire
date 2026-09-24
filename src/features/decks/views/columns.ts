@@ -240,10 +240,21 @@ export function splitRail<T extends { kind: CategoryKind | null; isActive: boole
     // tests like any other.
     if (group.isActive && (group.kind === "commander" || group.kind === "companion"))
       command.push(group);
-    else if (group.kind === "side" || group.kind === "maybe") beside.push(group);
+    else if (isBeside(group)) beside.push(group);
     else if (!group.isActive) off.push(group);
     else flow.push(group);
   }
 
   return { command, flow, rail: [...beside, ...off] };
+}
+
+/**
+ * Whether a pile is one of the two played *beside* the deck — the head run of the rail, on the kind
+ * and nothing else. `splitRail` files by it, and `StackView` scopes a railed pile's reorder by it
+ * (issue #508): the rail is two runs placed by different rules, so a switched-off pile moved above
+ * the Sideboard would change its `sortOrder` and still be drawn under it. One definition, so the
+ * run a grip reorders within cannot drift from the run the pile is drawn in.
+ */
+export function isBeside(group: { kind: CategoryKind | null }): boolean {
+  return group.kind === "side" || group.kind === "maybe";
 }
