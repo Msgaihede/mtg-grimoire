@@ -442,7 +442,7 @@ export const Flattened: Story = {
 };
 
 /**
- * **A deck's managed wishlist** (user schema v47, issue #512) — deck 4's, which `starter` seeds
+ * **A deck's managed wishlist** (user schema v48, issue #512) — deck 4's, which `starter` seeds
  * because a `Theory + Actual` deck with the switch on (its default) keeps one.
  *
  * Two things are on screen that are the issue's own words. **A separate section with a special

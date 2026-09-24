@@ -76,7 +76,7 @@ pub struct WishlistFolder {
     pub parent_id: Option<i64>,
     pub name: String,
     pub sort_order: i64,
-    /// The deck this folder is the **managed wishlist** of — schema v47, and `None` for every
+    /// The deck this folder is the **managed wishlist** of — schema v48, and `None` for every
     /// folder the reader made. [`crate::managed_wishlist`] owns such a folder: it is always at
     /// the root, named after its deck, and every hand-made write to it or to a wish inside it is
     /// refused with [`crate::managed_wishlist::MANAGED`].

@@ -125,7 +125,7 @@ const meta = {
           "here.** The fake backend derives `list_sets` from the 59 fixture printings, which is " +
           "**42 sets with a paper printing** (measured by the `Open` story's own assertion; it " +
           "was 36 over 52 printings until the seven token and emblem rows joined the corpus for " +
-          "the deck editor's Tokens & emblems band, which brought six token sets with them): " +
+          "the deck editor's Tokens & Emblems band, which brought six token sets with them): " +
           "too few for the `Showing N of M` footer *and the `Show 50 more` button beside it* — " +
           "they appear and disappear together — which need more than the 100 options " +
           "`MAX_OPTIONS` renders, and far too few for the ceiling sentence, which needs " +

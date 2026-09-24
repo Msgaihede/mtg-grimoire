@@ -129,7 +129,7 @@ const SHARE_WRITES: readonly string[] = ["shareCreate", "shareRefresh", "shareRe
  *   (`ipc.wishlistFolderList`), no argument, no callback, so nothing here can steer it — and
  *   using it is what keeps the app's folder list one query instead of two cache entries.
  * * `userWishFolders` — `features/wishlist/managed`. A pure filter over that list, which drops a
- *   deck's managed wishlist folder (user schema v47, issue #512) from the want list's
+ *   deck's managed wishlist folder (user schema v48, issue #512) from the want list's
  *   destinations, since the backend refuses a hand add into one. The module imports nothing but
  *   a type, so it reaches no command.
  *

@@ -94,7 +94,7 @@ type Story = StoryObj<typeof meta>;
 
 /**
  * The seeded wishlist, sliced by rarity — thirteen wishes since deck 4's managed wishlist joined
- * `starter` (user schema v47), which is also what priced the `Rare` bucket that used to be this
+ * `starter` (user schema v48), which is also what priced the `Rare` bucket that used to be this
  * story's hole: the managed wishes put priced rares in it.
  *
  * `Common` is still the money (`$140.48` over two copies). The copies no marketplace quotes are

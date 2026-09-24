@@ -1333,7 +1333,7 @@ function deckLevel(
  * back zero and nothing here reads one: a folder is a *destination*, and how many wishes are
  * already in it has no bearing on whether a reader may file the fortieth there.
  *
- * **Only the reader's own folders are offered** — a deck's managed wishlist (user schema v47,
+ * **Only the reader's own folders are offered** — a deck's managed wishlist (user schema v48,
  * issue #512) is written by the deck and refuses every hand add in words, so it is filtered out
  * here, `buildCollectionTargetItems`' `userFolders` rule on this cabinet. Absent rather than
  * greyed: a row whose only outcome is a refusal teaches nothing, and it is the whole of the

@@ -4,7 +4,7 @@ import type { WishlistFolder } from "@/lib/ipc";
 import { ManagedFolderNote, ManagedWishFolders } from "./ManagedWishFolders";
 
 /**
- * The decks' managed wishlist folders (user schema v47, issue #512), as the wishlist page draws
+ * The decks' managed wishlist folders (user schema v48, issue #512), as the wishlist page draws
  * them after the reader's own wall — `PinnedFolders`' shape one cabinet over: a heading, `Layers`
  * on every door, a solid border where a reader's drawer is dashed, and nothing that writes.
  */

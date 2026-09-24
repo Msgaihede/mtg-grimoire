@@ -521,7 +521,18 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// emit rows a device on this build refuses at the constraint, and a refused row is a failed
 /// apply rather than a note that arrives looking wrong. Rust stores the string it is handed and
 /// the page maps a word it does not know to `slate`.
-pub const USER_SCHEMA_VERSION: i64 = 47;
+///
+/// **47 (2026-09-24, [#507](https://github.com/Msgaihede/mtg-grimoire/issues/507)) is
+/// `decks.token_stack`** — whether the deck views draw the deck's tokens and emblems as a
+/// trailing pile. One `ADD COLUMN`, v42's shape, `NOT NULL DEFAULT 0` because the pile is new
+/// and off is today's behaviour. On the `decks` capture spec like every other deck setting; on
+/// no history row and no undo list, like the disclosures; **carried by `duplicate_deck`**, like
+/// `separate_x_group`, because it is a setting rather than a band the reader happened to open.
+///
+/// **48 (2026-09-24, [#512](https://github.com/Msgaihede/mtg-grimoire/issues/512)) is the
+/// managed wishlist** — `decks.managed_wishlist` and `wishlist_folders.managed_deck_id`,
+/// written as 47 and renumbered the same day because `token_stack` landed on `main` first.
+pub const USER_SCHEMA_VERSION: i64 = 48;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -3897,7 +3908,7 @@ CREATE TABLE {schema}.decks (
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              , folder_id INTEGER
-                REFERENCES deck_folders(id) ON DELETE SET NULL, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1, virtual_only INTEGER NOT NULL DEFAULT 0, stats_open INTEGER NOT NULL DEFAULT 1, notes_open INTEGER NOT NULL DEFAULT 0, managed_wishlist INTEGER NOT NULL DEFAULT 1);
+                REFERENCES deck_folders(id) ON DELETE SET NULL, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1, virtual_only INTEGER NOT NULL DEFAULT 0, stats_open INTEGER NOT NULL DEFAULT 1, notes_open INTEGER NOT NULL DEFAULT 0, token_stack INTEGER NOT NULL DEFAULT 0, managed_wishlist INTEGER NOT NULL DEFAULT 1);
 
 CREATE TABLE {schema}.app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -4976,7 +4987,7 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     }
     // Logged and left owing, the same reason again: a managed wishlist that is a launch behind
     // is a folder that catches up at the next write to its deck. At launch at all because the
-    // v47 rung's `DEFAULT 1` promises every existing theory deck a folder, and a reader who
+    // v48 rung's `DEFAULT 1` promises every existing theory deck a folder, and a reader who
     // opens the wishlist before touching a deck must find it there.
     if let Err(e) = crate::managed_wishlist::settle_all(conn) {
         eprintln!(
@@ -6556,7 +6567,27 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
-    // v47: a theory deck's **managed wishlist** — a wishlist folder that holds exactly what the
+    // v47 (2026-09-24, [#507](https://github.com/Msgaihede/mtg-grimoire/issues/507)):
+    // `decks.token_stack` — whether the deck views draw the deck's tokens and emblems as a
+    // trailing **Tokens & Emblems** pile. v42's shape, one `ADD COLUMN`, so it needs no trigger
+    // drop (v43's move was for a `DROP COLUMN`) and owes [`tests::UNDO_V47`] for
+    // [`tests::UNDO_V13`]'s loud reason.
+    //
+    // **`DEFAULT 0`**, v40's argument: the pile is new, so off is today's behaviour and the
+    // upgrade changes nothing on screen. It is a *setting* rather than a disclosure, so unlike
+    // the three `*_open` columns beside it [`crate::deck::duplicate_deck`] carries it; like them
+    // it is on no history row and no `deck_undo::DECK_FIELDS`.
+    if v < 47 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch("ALTER TABLE decks ADD COLUMN token_stack INTEGER NOT NULL DEFAULT 0;")?;
+        // Literal `47`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA main.user_version = 47;")?;
+        tx.commit()?;
+    }
+
+    // (Written as v47 and renumbered to 48 the same day: `token_stack` above landed on
+    // `main` first, and a shipped number is spent.)
+    // v48: a theory deck's **managed wishlist** — a wishlist folder that holds exactly what the
     // deck's Compare dialog lists, rewritten by [`crate::managed_wishlist`] after every write
     // that changes the deck (2026-09-24, [#512](https://github.com/Msgaihede/mtg-grimoire/issues/512)).
     //
@@ -6576,15 +6607,15 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     //
     // **The unique index is the one-folder-per-deck fence**; NULLs are distinct in a UNIQUE
     // index, so every folder the reader made is untouched by it.
-    if v < 47 {
+    if v < 48 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(
             "ALTER TABLE decks ADD COLUMN managed_wishlist INTEGER NOT NULL DEFAULT 1;
              ALTER TABLE wishlist_folders ADD COLUMN managed_deck_id INTEGER;
              CREATE UNIQUE INDEX idx_wishlist_folders_managed ON wishlist_folders (managed_deck_id);",
         )?;
-        // Literal `47`, for the reason every step before it writes its own.
-        tx.execute_batch("PRAGMA main.user_version = 47;")?;
+        // Literal `48`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA main.user_version = 48;")?;
         tx.commit()?;
     }
 
@@ -8105,7 +8136,7 @@ pub(crate) mod tests {
         assert_eq!(
             want.len(),
             81,
-            "thirty tables, forty-eight indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three was eighty, and v47's `idx_wishlist_folders_managed` makes it forty-eight and eighty-one. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
+            "thirty tables, forty-eight indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three was eighty, and v48's `idx_wishlist_folders_managed` makes it forty-eight and eighty-one. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -8330,14 +8361,22 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v47's managed wishlist — the rewind directly above [`UNDO_V46`], and like [`UNDO_V43`]
+    /// v48's managed wishlist — the rewind directly above [`UNDO_V47`], and like [`UNDO_V43`]
     /// it runs first because every fixture rewinds newest first. Both `ADD COLUMN`s are not
     /// idempotent, so a fixture that left them standing dies at `duplicate column name`.
-    const UNDO_V47: &str = "DROP INDEX IF EXISTS idx_wishlist_folders_managed;
+    const UNDO_V48: &str = "DROP INDEX IF EXISTS idx_wishlist_folders_managed;
          ALTER TABLE wishlist_folders DROP COLUMN managed_deck_id;
          ALTER TABLE decks DROP COLUMN managed_wishlist;";
 
-    /// v46's sticky notes — the newest rewind on the user ladder.
+    /// v47's token pile setting — the newest rewind on the user ladder.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V42`]'s exactly: `ALTER TABLE decks ADD
+    /// COLUMN` is not idempotent, so a fixture that kept the column dies at `duplicate column
+    /// name` on the way back up. **It runs first, before [`UNDO_V46`]**, because a rewind walks
+    /// the ladder backwards.
+    const UNDO_V47: &str = "ALTER TABLE decks DROP COLUMN token_stack;";
+
+    /// v46's sticky notes — the rewind directly under [`UNDO_V47`].
     ///
     /// Owed for [`UNDO_V14`]'s **quiet** reason, v45's and v44's exactly: the rung is
     /// `CREATE TABLE IF NOT EXISTS`, so a fixture that left `sticky_notes` standing would climb
@@ -8757,7 +8796,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -8789,7 +8828,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -8816,7 +8855,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -8843,7 +8882,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -8867,7 +8906,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -8888,7 +8927,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -8909,7 +8948,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
         ))
         .unwrap();
         conn
@@ -8930,7 +8969,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
         ))
         .unwrap();
         conn
@@ -8961,7 +9000,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
         ))
         .unwrap();
         conn
@@ -8982,7 +9021,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
         ))
         .unwrap();
         conn
@@ -8997,7 +9036,19 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// A user file at 46 — the shape every machine carries the day before a deck could draw its
+    /// tokens as a pile in the views, and the only population the v47 rung is *for*.
+    fn user_file_at_46() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
         ))
         .unwrap();
         conn
@@ -9047,7 +9098,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -9204,7 +9255,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -9261,7 +9312,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -9639,7 +9690,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 47);
+        assert_eq!(USER_SCHEMA_VERSION, 48);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -10619,7 +10670,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -10706,7 +10757,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 47);
+        assert_eq!(version, 48);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -11017,7 +11068,7 @@ pub(crate) mod tests {
         // edited only the four this comment then named and left v43's red. **Do not trust this
         // list.** Bump what you can find, run `cargo test --lib schema::tests`, and every one
         // you missed names itself in a `left: <head>, right: <old>` panic.
-        assert_eq!(version, 47);
+        assert_eq!(version, 48);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -11039,7 +11090,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 47);
+        assert_eq!(version, 48);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -11480,7 +11531,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v41 — `migrate_user` climbs the whole ladder. One of the five the v36
         // block's ⚠️ warns about; this one is why that warning exists.
-        assert_eq!(v, 47);
+        assert_eq!(v, 48);
         conn.execute(
             "INSERT INTO collection_shares
                  (id, folder_uid, title, owner_name, url, fields, state, updated_at)
@@ -11716,7 +11767,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v43 — `migrate_user` climbs the whole ladder. The fifth of the five the
         // v36 block's ⚠️ warns about, and the one v46 missed.
-        assert_eq!(v, 47);
+        assert_eq!(v, 48);
 
         assert_eq!(
             has_column(&conn, "decks", "notes"),
@@ -12148,6 +12199,68 @@ pub(crate) mod tests {
         );
     }
 
+    /// **v47's column, and the deck that already existed when the rung ran.** Seeded before the
+    /// climb, v42's argument: a row inserted at head takes its default from the frozen
+    /// [`USER_SCHEMA_SQL`] and would pass whatever the rung wrote. `DEFAULT 0` is the rung —
+    /// the pile is new, so an existing deck must not start drawing one on the upgrade.
+    #[test]
+    fn v47_leaves_every_existing_deck_without_a_token_pile() {
+        let conn = user_file_at_46();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, stats_open, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 1, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 48);
+        assert_eq!(has_column(&conn, "decks", "token_stack"), 1);
+        let (stack, stats): (i64, i64) = conn
+            .query_row(
+                "SELECT token_stack, stats_open FROM decks WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            stack, 0,
+            "an existing deck draws no token pile after the rung"
+        );
+        // `stats_open` is the neighbour defaulting `1`, so an ALTER that landed on the wrong
+        // column moves exactly one of these two numbers.
+        assert_eq!(stats, 1, "the column beside it is untouched");
+
+        // Twice is the same as once: the stamp is the only thing that makes a second launch
+        // survive a non-idempotent `ADD COLUMN`.
+        migrate_user(&conn).unwrap();
+    }
+
+    /// The fixture is a real v46 file and not head wearing a v46 label: the column is gone and
+    /// `sticky_notes` — v46's own table — is still there, so a chain that also ran
+    /// [`UNDO_V46`] is caught too.
+    #[test]
+    fn the_v46_fixture_carries_none_of_v47() {
+        let conn = user_file_at_46();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 46);
+        assert_eq!(has_column(&conn, "decks", "token_stack"), 0);
+        let sticky: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sticky_notes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sticky, 1, "a v46 file still has v46's own table");
+    }
+
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
     #[test]
     fn migrating_a_v28_user_file_keeps_its_rows_and_is_idempotent() {
@@ -12238,7 +12351,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();

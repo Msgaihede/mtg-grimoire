@@ -878,6 +878,10 @@ describe("ipc argument names match the Rust command signatures", () => {
     // column, and its absence is fenced by this literal and nothing else.
     await ipc.deckUpdate(4, { notesOpen: true });
     expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { notesOpen: true } });
+    // User schema v47's view setting rides the same patch, and a misspelt key is the same quiet
+    // failure: a Deck settings switch that never draws the token pile.
+    await ipc.deckUpdate(4, { tokenStack: true });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { tokenStack: true } });
 
     invoke.mockResolvedValue(undefined);
     await ipc.deckDelete(4);

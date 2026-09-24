@@ -58,6 +58,7 @@ const BURN: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   tokensOpen: false,
+  tokenStack: false,
   statsOpen: true,
   defaultCategoryId: 0,
   bracket: 0,
@@ -212,7 +213,7 @@ describe("useDecks", () => {
     invalidate.mockClear();
     await result.current.setFolder.mutateAsync({ id: 4, folderId: 1 });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
-    // Every deck write marks the wishlist since user schema v47: a theory deck's managed
+    // Every deck write marks the wishlist since user schema v48: a theory deck's managed
     // wishlist is rewritten after it (issue #512).
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
   });

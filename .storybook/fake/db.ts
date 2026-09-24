@@ -422,7 +422,7 @@ export interface FakeWishlistFolder {
   sortOrder: number;
   /** User schema v29's column — see {@link FakeDeckFolder.needsReview}. */
   needsReview?: string | null;
-  /** User schema v47's `managed_deck_id` — the deck this folder is the managed wishlist of,
+  /** User schema v48's `managed_deck_id` — the deck this folder is the managed wishlist of,
    *  absent or `null` for a folder the reader made. See {@link WishlistFolder.managedDeckId}. */
   managedDeckId?: number | null;
 }
@@ -577,7 +577,7 @@ export interface FakeDeck {
   theoryMarkExact?: boolean;
   theoryMarkName?: boolean;
   theoryMarkUnplanned?: boolean;
-  /** v47's managed-wishlist switch — `NOT NULL DEFAULT 1`, so absent reads as on. */
+  /** v48's managed-wishlist switch — `NOT NULL DEFAULT 1`, so absent reads as on. */
   managedWishlist?: boolean;
   /**
    * What the reader was last looking at in this deck's editor: which tab, grouped how, sorted
@@ -617,7 +617,7 @@ export interface FakeDeck {
    */
   separateXGroup?: boolean;
   /**
-   * `decks.tokens_open` (schema v37): whether the editor's **Tokens & emblems** area is
+   * `decks.tokens_open` (schema v37): whether the editor's **Tokens & Emblems** area is
    * expanded.
    *
    * **Optional for {@link separateXGroup}'s reason, and this is the fifth column on that
@@ -665,6 +665,16 @@ export interface FakeDeck {
    * handful of audited writes over a deck's whole life.
    */
   notesOpen?: boolean;
+  /**
+   * `decks.token_stack` (user schema v47): whether the deck views draw the deck's tokens and
+   * emblems as a trailing **Tokens & Emblems** pile. `NOT NULL DEFAULT 0`, so {@link toDeckRow}
+   * resolves the absence to `false`.
+   *
+   * **A setting rather than a disclosure**, though it rides the same `deck_update` with no
+   * history row: `duplicate_deck` carries it, {@link separateXGroup}'s footing, which the
+   * `deck_duplicate` spread already does.
+   */
+  tokenStack?: boolean;
   /**
    * `decks.default_category_id` (schema v16): which of this deck's categories an add that names
    * no pile lands in, and `AUTO_CATEGORY` (`0`) for "by what the card does".
@@ -7099,7 +7109,7 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     theoryMarkExact: d.theoryMarkExact ?? true,
     theoryMarkName: d.theoryMarkName ?? true,
     theoryMarkUnplanned: d.theoryMarkUnplanned ?? true,
-    // v47's, and `?? true` for the three lines above' reason: the column is `DEFAULT 1`.
+    // v48's, and `?? true` for the three lines above' reason: the column is `DEFAULT 1`.
     managedWishlist: d.managedWishlist ?? true,
     // The three v12 ones that remember where the reader was. They ride the *gallery's* row
     // rather than a read of their own because the editor already has this row when it mounts —
@@ -7112,7 +7122,7 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // `NOT NULL DEFAULT 0`, so a deck that has never been asked is a deck that says no.
     separateXGroup: d.separateXGroup ?? false,
     // v35's, and the same shape one column over — `NOT NULL DEFAULT 0`, so a deck that has never
-    // been opened is a deck whose Tokens & emblems area is collapsed, which is the state every
+    // been opened is a deck whose Tokens & Emblems area is collapsed, which is the state every
     // existing deck is in.
     tokensOpen: d.tokensOpen ?? false,
     // Its twin one column over, and **`?? true` rather than `?? false`** — the one line in this
@@ -7129,6 +7139,9 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // `1` was protecting a band already on every screen. `tokensOpen` two lines up is the
     // precedent character for character.
     notesOpen: d.notesOpen ?? false,
+    // v47's, `?? false` for `token_stack INTEGER NOT NULL DEFAULT 0` — the pile is new, so a
+    // deck nobody has asked draws none.
+    tokenStack: d.tokenStack ?? false,
     // v16's, and the same shape of answer: absent is `AUTO_CATEGORY`, which is what the column's
     // `DEFAULT 0` says about a deck nobody has asked.
     defaultCategoryId: d.defaultCategoryId ?? 0,
@@ -9311,7 +9324,7 @@ export function readHandlers(db: FakeDb) {
     wishlist_optimize_plan: (args: { query: WishlistQuery }): WishlistOptimizePlan => {
       const q = args.query;
       const mp = marketplaceOf(q.marketplace);
-      // Never a wish in a deck's managed wishlist (user schema v47) — `wishlist_optimize::plan`'s
+      // Never a wish in a deck's managed wishlist (user schema v48) — `wishlist_optimize::plan`'s
       // own `NOT IN` clause: that wish is the deck's printing, and repointing it is a hand edit
       // refused in {@link MANAGED_WISHLIST}'s words. Left out of the scope rather than skipped,
       // exactly as the crate's `WHERE` leaves it out, so it is not counted anywhere either.
@@ -10371,7 +10384,7 @@ export function readHandlers(db: FakeDb) {
           (w) =>
             w.cardId === args.cardId &&
             (w.preferredFinish === null || w.preferredFinish === wanted) &&
-            // **Never a wish in a deck's managed wishlist** (user schema v47): taking one down is
+            // **Never a wish in a deck's managed wishlist** (user schema v48): taking one down is
             // a hand edit of a list the deck writes, refused in {@link MANAGED_WISHLIST}'s words,
             // and the deck that keeps it rewrites it on its own once the copies change.
             (w.folderId === null ||
@@ -12875,7 +12888,7 @@ function wishFolderById(db: FakeDb, id: number): FakeWishlistFolder | undefined 
 }
 
 /**
- * User schema v47's refusal (issue #512), **verbatim from the crate**: a deck's managed wishlist
+ * User schema v48's refusal (issue #512), **verbatim from the crate**: a deck's managed wishlist
  * folder is written by the deck, and every hand write that would touch it — the folder itself, a
  * sub-folder in it, a wish filed into or out of it, any edit to a wish inside it — is refused in
  * these words. Spelled here as well as in `src/features/wishlist/managed.ts` for the reason every
@@ -16036,6 +16049,9 @@ export function writeHandlers(db: FakeDb) {
         // shut. It holds no notes to draw — `DeckInput` carries no prose at all any more, and a
         // note is written *after* the deck exists, one at a time, through `deck_note_create`.
         notesOpen: false,
+        // `token_stack INTEGER NOT NULL DEFAULT 0`: a deck being born draws no token pile, and
+        // `DeckInput` does not ask.
+        tokenStack: false,
         updatedAt: stamp(db),
       };
       db.decks.push(row);
@@ -16189,7 +16205,7 @@ export function writeHandlers(db: FakeDb) {
       // **`tokensOpen` and `statsOpen` have no arm here, deliberately, and that absence is the
       // mirror rather than a gap in it.** Both columns ride this patch and both are written
       // above — the two disclosures are the only fields `deck_update` moves without recording
-      // anything.
+      // anything. (`notesOpen` and v47's `tokenStack` have none either, on the same terms.)
       //
       // This used to carry a `field("tokensOpen", …)` arm under a comment saying the word was a
       // guess because `deck.rs` did "not carry `tokens_open` in `record_deck_edit` **yet**".
@@ -16387,6 +16403,9 @@ export function writeHandlers(db: FakeDb) {
       // was never written reads, which is a different question from what a patch that says
       // nothing does to a row that was.
       deck.notesOpen = patch.notesOpen ?? deck.notesOpen;
+      // `coalesce(?21, token_stack)`, and **nothing else happens**: the pile is drawn in the
+      // view layer from the tokens answer on every read, so the switch writes one column.
+      deck.tokenStack = patch.tokenStack ?? deck.tokenStack;
       // `coalesce(?16, ?17, ?18, …)` — three reading preferences, and **nothing else happens**
       // for `separateXGroup`'s reason: which of the three tiers a deck marks changes what is
       // drawn over its live rows and moves not one `deck_cards` row. `??` against the *stored*

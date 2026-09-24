@@ -107,6 +107,7 @@ const DECK: DeckRow = {
   // asserted on.
   separateXGroup: false,
   tokensOpen: false,
+  tokenStack: false,
   statsOpen: true,
   defaultCategoryId: 0,
   bracket: 0,
@@ -1039,7 +1040,7 @@ describe("useDeck", () => {
       quantity: 3,
     });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
-    // Every deck write marks the wishlist since user schema v47: a theory deck's managed
+    // Every deck write marks the wishlist since user schema v48: a theory deck's managed
     // wishlist is rewritten after it (issue #512).
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["cards", "search"] });

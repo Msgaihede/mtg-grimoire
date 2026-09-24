@@ -32,7 +32,7 @@ export function useDecks() {
    * `Availability::ForDeck` pool on the plan since 2026-09-09 (issue #435). Only the queries actually mounted pay for a refetch, and at most
    * two of these are ever on screen.
    *
-   * **The wishlist is invalidated too since user schema v47**, and not for any wish's
+   * **The wishlist is invalidated too since user schema v48**, and not for any wish's
    * `ownedQuantity`: a rename, a kind switch, the managed-wishlist switch and a delete each
    * rewrite or remove a theory deck's managed folder (issue #512).
    */

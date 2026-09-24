@@ -170,7 +170,7 @@ describe("WishDestination", () => {
   });
 
   /**
-   * **A deck's managed wishlist is never a destination** (user schema v47, issue #512): the deck
+   * **A deck's managed wishlist is never a destination** (user schema v48, issue #512): the deck
    * writes it and the backend refuses a send into it, so the row is absent rather than a choice
    * ending in a refusal — here, and so in both deck dialogs that draw this control.
    */

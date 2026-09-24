@@ -1209,7 +1209,7 @@ export function WishlistPage() {
    * **A card off the search column has no such refusal to make, and that is a fact about it
    * rather than a gap here.** It is on nobody's list, so there is no `folderId` to compare a
    * destination against — every drawer is somewhere it is not already, so every drawer takes it.
-   * **The ownership clause arrived with user schema v47's managed folders** (issue #512), which
+   * **The ownership clause arrived with user schema v48's managed folders** (issue #512), which
    * are the decks' rather than the reader's — `CollectionPage`'s twin has had one all along for its
    * deck groups and `Recently removed`. Both ends of a drop are fenced, because the backend refuses
    * both in `MANAGED_REFUSAL`'s words (`./managed.ts`): a wish may not be filed *into* a deck's
@@ -1256,7 +1256,7 @@ export function WishlistPage() {
    * made, because `collection_folders.kind` makes some of that table the app's — one row per deck
    * plus the single `Recently removed` — and `collection_folders::reorder_folders` answers
    * `FOLDER_NOT_YOURS` for either at either end. `wishlist_folders` carries no `kind` column, but
-   * since user schema v47 it does carry rows the app owns — a deck's **managed** folder — and
+   * since user schema v48 it does carry rows the app owns — a deck's **managed** folder — and
    * `wishlist_folder_reorder` refuses one at either end. **The clause is structural here rather
    * than a check**: every card on this wall is drawn from `userNodes`, so `target` and the level
    * `childFolders` names are the reader's by construction, and a managed folder is never a drag

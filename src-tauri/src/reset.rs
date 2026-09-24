@@ -323,7 +323,7 @@ pub fn clear_collection(conn: &Connection) -> Result<CollectionCleared, String> 
 pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // The copies, before the sweep — [`clear_collection`]'s reason one table over.
-    // **A deck's managed folder is not the reader's to clear** (user schema v47): it is derived
+    // **A deck's managed folder is not the reader's to clear** (user schema v48): it is derived
     // from the deck and would be rebuilt by the next write anyway, and the guard in
     // `crate::managed_wishlist` refuses the delete. So the sweep is everything else.
     const MINE: &str = "(folder_id IS NULL OR folder_id NOT IN

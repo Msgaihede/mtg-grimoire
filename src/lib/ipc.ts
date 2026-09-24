@@ -2278,7 +2278,7 @@ export interface WishlistFolder {
   sortOrder: number;
   /**
    * The deck this folder is the **managed wishlist** of, or `null` for a folder the reader made
-   * (user schema v47, [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512)).
+   * (user schema v48, [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512)).
    *
    * A managed folder holds exactly what that deck's Compare dialog lists — the theory list less
    * the actual list — and Rust rewrites it after every write that changes the deck. It is the
@@ -3370,7 +3370,7 @@ export interface DeckPatch {
    *  for the rules all three share. `decks.theory_mark_unplanned`, schema v39. */
   theoryMarkUnplanned?: boolean;
   /** Whether this deck keeps a **managed wishlist** folder. See {@link DeckRow.managedWishlist};
-   *  `decks.managed_wishlist`, schema v47. */
+   *  `decks.managed_wishlist`, schema v48. */
   managedWishlist?: boolean;
   /**
    * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
@@ -3379,7 +3379,7 @@ export interface DeckPatch {
    */
   separateXGroup?: boolean;
   /**
-   * Whether the editor's **Tokens & emblems** area is expanded. See
+   * Whether the editor's **Tokens & Emblems** area is expanded. See
    * {@link DeckRow.tokensOpen} — a per-deck reading preference, so switching it writes one
    * column and touches not one `deck_cards` row.
    *
@@ -3417,6 +3417,15 @@ export interface DeckPatch {
    * note is reaching for {@link ipc.deckNoteCreate}.
    */
   notesOpen?: boolean;
+  /**
+   * Whether the deck views draw the deck's tokens and emblems as a trailing **Tokens & Emblems**
+   * pile. See {@link DeckRow.tokenStack} — a setting chosen in Deck settings, so switching it
+   * writes one column and touches no `deck_cards` or `deck_tokens` row.
+   *
+   * **On this patch, with no history row and no undo step**, the three disclosures' terms above
+   * it — but unlike them it is carried by a duplicate, because it says how the deck is read.
+   */
+  tokenStack?: boolean;
   /**
    * Which of this deck's categories an add that names none lands in. See
    * {@link DeckRow.defaultCategoryId} — `0` is `AUTO_CATEGORY` and is a **value**, not an
@@ -3754,7 +3763,7 @@ export interface DeckRow {
    */
   separateXGroup: boolean;
   /**
-   * Whether the editor's **Tokens & emblems** area is expanded — `decks.tokens_open INTEGER NOT
+   * Whether the editor's **Tokens & Emblems** area is expanded — `decks.tokens_open INTEGER NOT
    * NULL DEFAULT 0`, schema v35, and `false` on every deck that has never been opened, which is
    * the state every existing deck is in.
    *
@@ -3820,7 +3829,7 @@ export interface DeckRow {
   /**
    * Whether this deck keeps a **managed wishlist** — a wishlist folder of its own holding exactly
    * what the Compare dialog lists, rewritten by Rust after every change to the deck
-   * (`decks.managed_wishlist`, user schema v47, `NOT NULL DEFAULT 1` —
+   * (`decks.managed_wishlist`, user schema v48, `NOT NULL DEFAULT 1` —
    * [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512)).
    *
    * **It only does anything on a `Theory + Actual` deck**: a regular deck has no plan to be
@@ -3829,6 +3838,20 @@ export interface DeckRow {
    * existed before the column gets a folder at the first launch after the upgrade.
    */
   managedWishlist: boolean;
+  /**
+   * Whether the deck views (Stacks, Grid, Text and Table) draw the deck's tokens and emblems as
+   * a trailing **Tokens & Emblems** pile — `decks.token_stack INTEGER NOT NULL DEFAULT 0`, user
+   * schema v47, and `false` on every deck that predates it, so the upgrade changes nothing on
+   * screen.
+   *
+   * **A setting, not a disclosure**, though it sits beside three of them: it is chosen in Deck
+   * settings, it is carried by `deck_duplicate` the way {@link separateXGroup} is, and it syncs
+   * with the rest of the row. Like the disclosures it writes no history row and is not undoable.
+   *
+   * The pile it switches on is drawn in the view layer from the same answer the band draws and
+   * never enters `deck.cards`, so it counts toward nothing — size, piles, stats or validation.
+   */
+  tokenStack: boolean;
   /**
    * Which of this deck's categories an add that names no pile lands in — `decks.default_category_id`,
    * schema v16, and **`AUTO_CATEGORY` (`0`) for "let the card's own text decide"**.

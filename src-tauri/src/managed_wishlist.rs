@@ -1,4 +1,4 @@
-//! A theory deck's **managed wishlist** — user schema v47,
+//! A theory deck's **managed wishlist** — user schema v48,
 //! [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512).
 //!
 //! A deck whose kind is `Theory + Actual` and whose `decks.managed_wishlist` is on keeps one
@@ -191,7 +191,7 @@ pub fn settle_logged(conn: &Connection) {
 }
 
 /// Every deck and every managed folder, settled — the launch pass, from
-/// [`crate::schema::prepare_database`]. It is what builds the folders the v47 rung's `DEFAULT 1`
+/// [`crate::schema::prepare_database`]. It is what builds the folders the v48 rung's `DEFAULT 1`
 /// promises every existing theory deck, and what sweeps a folder whose deck left while another
 /// build (or a sync with no connection armed) was running.
 pub fn settle_all(conn: &Connection) -> Result<(), String> {
@@ -626,7 +626,7 @@ mod tests {
     #[test]
     fn settle_all_builds_the_folders_an_upgrade_promises() {
         let conn = db();
-        // Marked and then forgotten — the shape of a database that has just climbed to v47 with
+        // Marked and then forgotten — the shape of a database that has just climbed to v48 with
         // theory decks already in it, written by a connection nothing armed.
         let d = deck(&conn, "Izzet", true);
         put(&conn, d, "theory", "ring", 1);

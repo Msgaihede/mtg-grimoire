@@ -1004,6 +1004,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   lastSortBy: "alphabetical",
   separateXGroup: false,
   tokensOpen: false,
+  tokenStack: false,
   // `true` where its neighbour above is `false` — `decks.stats_open` is `NOT NULL
   // DEFAULT 1`, because every deck that exists today draws the Deck stats band and has
   // no control to hide it.
@@ -1201,7 +1202,7 @@ describe("buildWishlistTargetItems", () => {
   });
 
   it("never offers a deck's managed wishlist folder", () => {
-    // User schema v47 (issue #512): the deck writes that folder, and the backend refuses a hand
+    // User schema v48 (issue #512): the deck writes that folder, and the backend refuses a hand
     // add into it — so it is absent from the picker rather than a row ending in a refusal.
     const items = buildWishlistTargetItems(
       [wishFolder(1, "Ordered"), { ...wishFolder(9, "Rhystic Testbed"), managedDeckId: 4 }],

@@ -463,7 +463,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * move between piles, a finish, a label — provably leaves `collection_entries` where it was,
    * and firing the collection's root as well would be a refetch per press of the stepper that can
    * only answer what is already on screen. **`["wishlist"]` rides every write since user schema
-   * v47**, because a theory deck's managed wishlist is rewritten by Rust after any change to the
+   * v48**, because a theory deck's managed wishlist is rewritten by Rust after any change to the
    * deck — see the line below.
    *
    * **{@link invalidateCollection} is the exception and it is a real one**, so read that one
@@ -542,7 +542,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * The deck itself: its name, its format, its cover, whether it is archived.
    *
    * **It takes a whole {@link DeckPatch} and names no field, which is what makes a new column
-   * free here.** `tokensOpen` — whether the editor's Tokens & emblems area is expanded — was
+   * free here.** `tokensOpen` — whether the editor's Tokens & Emblems area is expanded — was
    * added to that struct and reached this mutation with no edit at all, exactly as
    * `separateXGroup` and `bracket` did; a per-field arm would be a second definition of what the
    * command already accepts, and the one thing this mutation does branch on (`theoryEnabled`,

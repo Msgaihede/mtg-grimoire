@@ -1187,7 +1187,7 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | `src-tauri/src/deck_theory.rs` | `missing_to_wishlist`, the Compare dialog's write and its up-front folder check |
 | `src-tauri/src/deck.rs` | `missing_to_wishlist`, the live deck's, taking the same optional folder |
 
-## Managed wishlists — a folder a deck owns (user schema v47, 2026-09-24)
+## Managed wishlists — a folder a deck owns (user schema v48, 2026-09-24)
 
 [Issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512). A `Theory + Actual` deck with
 `decks.managed_wishlist` on (the default) keeps one wishlist folder, named after the deck, that

@@ -520,7 +520,7 @@ describe("the paper filter", () => {
     });
     // 59 fixture rows, 2 of them `isPaper: false` (Black Lotus `vma`, A-Vivi Ornitier
     // `fin`) — measured 2026-09-07 over `CARDS`. The seven token and emblem rows added with the
-    // deck editor's Tokens & emblems area are all paper, so they are on both sides of this.
+    // deck editor's Tokens & Emblems area are all paper, so they are on both sides of this.
     expect(withDigital.items).toHaveLength(59);
     expect(all.items).toHaveLength(57);
   });
@@ -3343,7 +3343,7 @@ describe("the wishlist's folders", () => {
     });
     // `Backordered` is in the answer despite being nobody's sibling on screen: the list is flat
     // and unscoped, and building the tree from `parentId` is `folderTree.ts`'s job.
-    // `managedDeckId: null` on every one — user schema v47's column, which a folder the reader
+    // `managedDeckId: null` on every one — user schema v48's column, which a folder the reader
     // made always answers `null` for.
     expect(readHandlers(db).wishlist_folder_list()).toEqual([
       { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null },
@@ -3353,7 +3353,7 @@ describe("the wishlist's folders", () => {
   });
 
   /**
-   * **A deck's managed wishlist refuses every hand write, in the crate's words** (user schema v47,
+   * **A deck's managed wishlist refuses every hand write, in the crate's words** (user schema v48,
    * issue #512) — the folder, a sub-folder in it, a wish filed into or out of it, and any edit to
    * a wish inside it. The fake is not allowed to be kinder than the app, so each door is tried and
    * the store is checked unchanged afterwards: a refusal that had written first would pass the
@@ -8150,6 +8150,25 @@ describe("the deck row itself", () => {
     });
     const born = writeHandlers(db).deck_create({ deck: { name: "Burn", formatKey: "modern" } });
     expect(born).toMatchObject({ notesOpen: false, statsOpen: true, tokensOpen: false });
+  });
+
+  /**
+   * `decks.token_stack` (user schema v47): off by default, moved by the ordinary patch with no
+   * history row, and **carried by a duplicate** — the crate's `duplicate_deck` names it in its
+   * INSERT, because it is a setting about how the deck is read rather than a band left open.
+   */
+  it("draws no token pile by default, patches it, and carries it to a copy", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    expect(readHandlers(db).deck_list()[0]).toMatchObject({ tokenStack: false });
+    const born = writeHandlers(db).deck_create({ deck: { name: "Burn", formatKey: "modern" } });
+    expect(born).toMatchObject({ tokenStack: false });
+
+    const on = writeHandlers(db).deck_update({ id: 1, patch: { tokenStack: true } });
+    expect(on).toMatchObject({ tokenStack: true });
+    expect(writeHandlers(db).deck_update({ id: 1, patch: {} })).toMatchObject({
+      tokenStack: true,
+    });
+    expect(writeHandlers(db).deck_duplicate({ id: 1 })).toMatchObject({ tokenStack: true });
   });
 
   /**
@@ -12983,7 +13002,7 @@ describe("categories, labels, folders, history and the plan", () => {
   /** `starterWishFolders`' first drawer, which the seed already files two wishes into — so a
    *  press aimed at it is aimed somewhere a story can actually look. */
   const ORDERED = 1;
-  /** `starterWishFolders`' fourth row — deck 4's **managed** wishlist (user schema v47), which
+  /** `starterWishFolders`' fourth row — deck 4's **managed** wishlist (user schema v48), which
    *  the deck writes and no sweep may. */
   const MANAGED_FOLDER = 4;
   /** An id nothing answers to: the drawer the reader picked and another window deleted. */
@@ -13024,7 +13043,7 @@ describe("categories, labels, folders, history and the plan", () => {
     });
     // And the row the reader did not tick reached neither that folder nor the list at all. The
     // seed's own Sol Ring wish names no printing, so this is a question about *this* press — and
-    // about the reader's own list: deck 4's **managed** wishlist (folder 4, user schema v47)
+    // about the reader's own list: deck 4's **managed** wishlist (folder 4, user schema v48)
     // already holds the foil Sol Ring, written by the deck rather than by any sweep.
     expect(
       db.wishlistEntries.some((x) => x.cardId === ring.cardId && x.folderId !== MANAGED_FOLDER),

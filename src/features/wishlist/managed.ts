@@ -1,5 +1,5 @@
 /**
- * The **managed wishlist** as the frontend reads it (user schema v47, issue #512): a folder a
+ * The **managed wishlist** as the frontend reads it (user schema v48, issue #512): a folder a
  * `Theory + Actual` deck keeps, holding exactly what that deck's Compare dialog lists, rewritten by
  * Rust after every change to the deck.
  *
@@ -21,7 +21,7 @@ import type { WishlistFolder } from "@/lib/ipc";
 export const MANAGED_REFUSAL = "A managed wishlist follows its deck, so it can't be edited by hand.";
 
 /** Whether this folder is a deck's managed wishlist. `!= null` rather than `!== null`, so a fixture
- *  written before v47 that leaves the field out reads as the reader's own folder. */
+ *  written before v48 that leaves the field out reads as the reader's own folder. */
 export function isManaged(folder: Pick<WishlistFolder, "managedDeckId">): boolean {
   return folder.managedDeckId != null;
 }

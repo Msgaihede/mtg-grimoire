@@ -799,7 +799,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
           : "Stopped marking cards not in the theory list",
         detail: null,
       };
-    // The managed wishlist (user schema v47, issue #512): `deck.rs` records it under this word,
+    // The managed wishlist (user schema v48, issue #512): `deck.rs` records it under this word,
     // the switch's own heading lowercased into the sentence. No `detail`, for the marks' reason.
     case "managedWishlist":
       return {

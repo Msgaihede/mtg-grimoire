@@ -129,7 +129,7 @@ pub mod ingest;
 pub mod legalities;
 pub mod listview;
 pub mod maintenance;
-/// **A theory deck's managed wishlist** (user schema v47, issue #512) — a wishlist folder each
+/// **A theory deck's managed wishlist** (user schema v48, issue #512) — a wishlist folder each
 /// device derives from its own copy of the deck and rewrites after every write, and the guard
 /// that refuses a hand-made edit to it.
 pub mod managed_wishlist;

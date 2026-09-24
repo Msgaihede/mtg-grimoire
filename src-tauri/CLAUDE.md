@@ -1149,7 +1149,7 @@ shared_cell` walks both into two databases and compares them column by column.
   theoretical. `deck_meta::move_folder` still has it, for the deck cabinet, and is deliberately
   left with it.
 - **A theory deck's managed wishlist folder is derived, per device, and written by
-  `managed_wishlist` alone** (user schema v47, issue #512). `wishlist_folders.managed_deck_id`
+  `managed_wishlist` alone** (user schema v48, issue #512). `wishlist_folders.managed_deck_id`
   names the deck; the folder holds `deck_theory::wanted` — the Compare dialog's rows — and is
   rewritten after every `sync::with_write` from **TEMP triggers** that mark a deck dirty, and at
   every launch from `schema::prepare_database`. Three things bind a change near it. **Its writes

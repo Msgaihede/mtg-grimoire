@@ -32,6 +32,7 @@ function deck(over: Partial<DeckRow> & { name: string }): DeckRow {
     defaultCategoryId: 0,
     bracket: 0,
     tokensOpen: false,
+    tokenStack: false,
     statsOpen: true,
     ...over,
   };

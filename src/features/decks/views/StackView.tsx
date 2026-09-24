@@ -32,6 +32,7 @@ import type { ValidationIssue } from "../validation/types";
 import { isBeside, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 import { nextStackPosition, type StackPosition } from "./stackNav";
+import { hasTokenPile, TokenStackPile, type TokenPile } from "./TokenPile";
 
 /**
  * The group section's own `p-1.5`, one side — 6px, read off the class below.
@@ -296,6 +297,7 @@ export function StackView({
   actions,
   selectedSlot,
   landed,
+  tokenPile,
   className,
 }: {
   groups: readonly CardGroup[];
@@ -352,6 +354,13 @@ export function StackView({
   /** `deck_cards.id` → the nonce of the add that put it there, for the cards that have just
    *  landed. Handed down whole, like `violations`. */
   landed?: ReadonlyMap<number, number>;
+  /**
+   * The deck's tokens and emblems, drawn as the **last** pile of the rail (issue #507) — after the
+   * Sideboard, the Maybeboard and every switched-off pile. Absent, or with no tokens, the view is
+   * exactly what it was. It is not a `CardGroup`: it never enters `groups`, so no heading count,
+   * no total and not the arrow `walk` below can see it. See `TokenPile.tsx`.
+   */
+  tokenPile?: TokenPile;
   className?: string;
 }) {
   // **`deck`, and `GridView` reads this same key on purpose.** The two are one deck drawn two
@@ -396,7 +405,13 @@ export function StackView({
   //
   // Every group, not just `flow`: the rail is inside this same box, and a pile in it overflows
   // downward exactly as one in the flow does.
-  const liftRoom = groups.some((group) => group.cards.length > 1) ? stackLiftRoom(cardZoom) : 0;
+  const drawsTokens = hasTokenPile(tokenPile);
+  // The token pile fans the same way and pushes its tail no further than a deck pile does (a
+  // token card has no chin), so a token pile of two or more reserves the same room.
+  const liftRoom =
+    groups.some((group) => group.cards.length > 1) || (drawsTokens && tokenPile.tokens.length > 1)
+      ? stackLiftRoom(cardZoom)
+      : 0;
   // **The split happens before anything is drawn, and it has to.** The flow runs in the reader's
   // own order and never re-orders anything, so a sideboard, a maybeboard or a pile the reader has
   // switched off, left in that stream, lands wherever the line it fell on happened to end. A rail
@@ -783,7 +798,7 @@ export function StackView({
           `flex-col`, so a `flex: 0 0 224px` on a child would be read down the *main* axis and
           become a height — every railed pile 224px tall, its cards clipped or floating. The rail
           holds the width for both of them; a pile in it is a plain block filling that width. */}
-      {rail.length > 0 && (
+      {(rail.length > 0 || drawsTokens) && (
         <div
           {...{ [RAIL_ATTR]: "" }}
           style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
@@ -806,6 +821,10 @@ export function StackView({
               reorderIds={isBeside(group) ? besideIds : offIds}
             />
           ))}
+          {/* The tokens, last: not the deck, not played beside it, and not a pile a card can be
+              dropped into — so after everything that is. The rail is drawn for this alone on a
+              deck with nothing railed, which is the `drawsTokens` above. */}
+          {drawsTokens && <TokenStackPile pile={tokenPile} zoom={cardZoom} />}
         </div>
       )}
     </div>

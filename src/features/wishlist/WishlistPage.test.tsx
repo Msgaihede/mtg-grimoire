@@ -3689,7 +3689,7 @@ describe("the search column", () => {
 });
 
 /**
- * **A deck's managed wishlist** (user schema v47, issue #512): a folder a `Theory + Actual` deck
+ * **A deck's managed wishlist** (user schema v48, issue #512): a folder a `Theory + Actual` deck
  * keeps, holding what its Compare dialog lists and rewritten by Rust after every deck write. The
  * backend refuses every hand write that touches one, so what this page owes it is the issue's two
  * sentences — *a separate section with a special icon*, and *no editing by hand* — plus the rule

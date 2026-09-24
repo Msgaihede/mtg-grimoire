@@ -135,6 +135,8 @@ function Body({
     // `AUTO_CATEGORY` for a deck that does not exist — the column's own `DEFAULT 0`, and the
     // only answer a deck with no categories could honestly give.
     defaultCategoryId: row?.defaultCategoryId ?? AUTO_CATEGORY,
+    // Off for a deck that does not exist — `decks.token_stack`'s `DEFAULT 0`.
+    tokenStack: row?.tokenStack ?? false,
   }));
   /**
    * The cover, and **the artist goes with the card rather than surviving it**.
@@ -198,6 +200,9 @@ function Body({
         }}
         categories={categories}
         canSetTheoryMarks={canSetTheoryMarks}
+        // One flag serves both in this workbench, because both answer "is there a deck row to
+        // write to" and a story's deck either exists or does not. The form keeps them two props.
+        canSetTokenStack={canSetTheoryMarks}
         cover={coverProps}
         idPrefix={id}
       />
@@ -299,6 +304,8 @@ export const NewDeck: Story = {
     await expect(args.onSubmit).toHaveBeenCalledTimes(1);
     // One press, one event: the field is not blurred, so nothing commits alongside it.
     await expect(args.onCommit).not.toHaveBeenCalled();
+    // A deck that does not exist has no row for the Tokens & Emblems answer to be written to.
+    await expect(canvas.queryByRole("switch", { name: /tokens & emblems/i })).toBeNull();
     await expect(name).toHaveFocus();
   },
 };
@@ -463,6 +470,34 @@ export const KindTheoryAndActual: Story = {
     await expect(
       canvas.getByRole("switch", { name: /not in the theory list/i }),
     ).toBeInTheDocument();
+  },
+};
+
+/**
+ * **The Tokens & Emblems pile** (issue #507) — one switch, drawn on the edit shape only.
+ *
+ * Off by default. On, the deck's four views draw one more pile at the end — the tokens the band
+ * under the desk lists — and that pile counts toward nothing: not the deck's size, not a total,
+ * not validation. **New deck** draws no such row, because `DeckInput` has no field to carry it.
+ */
+export const TokensAndEmblems: Story = {
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await canvas.findByLabelText("Name");
+    const toggle = canvas.getByRole("switch", {
+      name: "Show Tokens & Emblems in the deck Disabled",
+    });
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+
+    await userEvent.click(toggle);
+
+    await expect(args.onChange).toHaveBeenLastCalledWith({ tokenStack: true });
+    await expect(
+      canvas.getByRole("switch", { name: "Show Tokens & Emblems in the deck Enabled" }),
+    ).toHaveAttribute("aria-checked", "true");
+    // A switch settles in one act, so nothing commits beside it.
+    await expect(args.onCommit).not.toHaveBeenCalled();
   },
 };
 

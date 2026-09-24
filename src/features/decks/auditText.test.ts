@@ -808,7 +808,7 @@ describe("auditSentence", () => {
     expect(deck({ field: "theoryMarkUnplanned", to: true }).text).not.toEqual(
       deck({ field: "theoryMarkExact", to: true }).text,
     );
-    // The managed wishlist (schema v47) — `deck.rs`'s `camelCase` word, never the column's.
+    // The managed wishlist (schema v48) — `deck.rs`'s `camelCase` word, never the column's.
     expect(deck({ field: "managedWishlist", from: false, to: true })).toEqual({
       text: "Turned the managed wishlist on",
       detail: null,
