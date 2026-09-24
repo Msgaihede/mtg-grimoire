@@ -1546,9 +1546,10 @@ describe("the card menu", () => {
 
   /**
    * The other half of the finish rule, and the counterpart to the collection's row: a search
-   * row is a *printing* rather than a copy, so it names no finish and the menu has to ask.
+   * row is a *printing* rather than a copy, so it names no finish — and since issue #504 the menu
+   * does not ask either. It records the printing's default finish, the one the row draws.
    */
-  it("asks which finish, because a search row is a printing and names none", async () => {
+  it("adds the printing's default finish in one press, because a search row names none", async () => {
     const user = userEvent.setup();
     wrap(<SearchPage />);
     rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
@@ -1556,21 +1557,20 @@ describe("the card menu", () => {
     await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
 
     const collection = await screen.findByRole("menuitem", { name: "Collection" });
-    expect(collection).toHaveAttribute("aria-haspopup", "menu");
+    expect(collection).not.toHaveAttribute("aria-haspopup");
 
     await user.click(collection);
-    await user.click(await screen.findByRole("menuitem", { name: "Foil" }));
 
     await waitFor(() =>
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "1",
-        finish: "foil",
+        finish: "nonfoil",
         // The constant rather than the grade: a one-press add makes no decision about a copy's
         // condition, and this suite must go red the day it starts making one again.
         condition: MENU_CONDITION,
         quantity: 1,
-        // The root: this reader has no collection folders, so the finish submenu asserted
-        // above is the whole of the cascade and no folder was ever named (v24).
+        // The root: this reader has no collection folders, so the single press asserted above
+        // is the whole of the cascade and no folder was ever named (v24).
         folderId: null,
       }),
     );
