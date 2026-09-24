@@ -925,19 +925,19 @@ mod tests {
     /// A reprint carries its front-face picture through `image_uri`'s one rule, and a printing
     /// with no blob carries `None` rather than an empty map.
     ///
-    /// **`new-meld` carries a different URL in each of its four slots** — `display` and `art`,
+    /// **`meld` carries a different URL in each of its four slots** — `display` and `art`,
     /// card-level and face 0 — because that is the only shape an `IMAGE_COL` one column early
     /// fails on: the pair is (top-level, face) and `for_face` prefers the face, so the shear
     /// slides each card-level URL into the face slot and answers a real, versioned, on-host URL.
-    /// `new-plain` is the ordinary card, whose picture is in the top-level blob alone and which
+    /// `plain` is the ordinary card, whose picture is in the top-level blob alone and which
     /// that shear reads correctly by accident.
     #[test]
     fn a_printing_carries_its_front_face_picture() {
         let c = conn();
         printing(&c, "old", "o1", "Sol Ring", "LEA", 900, "en", "Artifact");
-        printing(&c, "new-plain", "o1", "Sol Ring", "SLD", 10, "en", "Artifact");
-        printing(&c, "new-meld", "o1", "Sol Ring", "CMR", 10, "en", "Artifact");
-        printing(&c, "new-bare", "o1", "Sol Ring", "LTC", 10, "en", "Artifact");
+        printing(&c, "plain", "o1", "Sol Ring", "SLD", 10, "en", "Artifact");
+        printing(&c, "meld", "o1", "Sol Ring", "CMR", 10, "en", "Artifact");
+        printing(&c, "bare", "o1", "Sol Ring", "LTC", 10, "en", "Artifact");
         // An UPDATE rather than two more arguments on `printing`, which every other test calls
         // and none of them about pictures.
         c.execute(
@@ -946,7 +946,7 @@ mod tests {
                  'grid','https://cards.scryfall.io/grid/front/p/l/plain.webp?1700000000',
                  'display','https://cards.scryfall.io/display/front/p/l/plain.webp?1700000000',
                  'art','https://cards.scryfall.io/art/front/p/l/plain.webp?1700000000')
-             WHERE id = 'new-plain'",
+             WHERE id = 'plain'",
             [],
         )
         .unwrap();
@@ -958,7 +958,7 @@ mod tests {
                  face_image_uris = json_array(
                    json_object('display','https://cards.scryfall.io/display/FACE.webp?1',
                                'art','https://cards.scryfall.io/art/FACE.webp?1'))
-             WHERE id = 'new-meld'",
+             WHERE id = 'meld'",
             [],
         )
         .unwrap();
@@ -976,7 +976,7 @@ mod tests {
                 .clone()
         };
 
-        let plain = images("new-plain").expect("a top-level blob is a picture");
+        let plain = images("plain").expect("a top-level blob is a picture");
         assert_eq!(
             plain["display"],
             "https://cards.scryfall.io/display/front/p/l/plain.webp?1700000000"
@@ -987,11 +987,14 @@ mod tests {
         );
 
         // The face wins over the card for both variants, and each variant reads its own pair.
-        let meld = images("new-meld").expect("both columns are a picture");
-        assert_eq!(meld["display"], "https://cards.scryfall.io/display/FACE.webp?1");
+        let meld = images("meld").expect("both columns are a picture");
+        assert_eq!(
+            meld["display"],
+            "https://cards.scryfall.io/display/FACE.webp?1"
+        );
         assert_eq!(meld["art"], "https://cards.scryfall.io/art/FACE.webp?1");
 
-        assert_eq!(images("new-bare"), None, "no blob is no picture, never `{{}}`");
+        assert_eq!(images("bare"), None, "no blob is no picture, never `{{}}`");
     }
 
     /// The window is the caller's, inside `1..=365`, so a hand-edited `config` cannot ask for the
