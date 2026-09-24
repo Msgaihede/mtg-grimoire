@@ -955,8 +955,8 @@ layer.
   piles is two stops**, which is right rather than a duplicate: two `deck_cards` rows, two
   addresses, and a press in the modal writes to one of them. `[]` on the editor's unmount, or a
   stale walk would step a modal opened from the Collection into somebody's Sideboard.
-- **A pile can be dragged past its neighbours on the desk, and only in `StackView`'s flow**
-  (added 2026-08-17). A grip in each flowing heading (`GroupHeader`'s `handle` slot) is the drag
+- **A pile can be dragged past its neighbours on the desk, in `StackView`'s flow and — since
+  2026-09-24 — within its rail** (added 2026-08-17). A grip in each flowing heading (`GroupHeader`'s `handle` slot) is the drag
   source and the arrow keys on it are the keyboard's whole path — `CategoriesDialog`'s rule, kept
   verbatim, position in the accessible name included. **Left and right only, since 2026-08-21**
   ([#178](https://github.com/Msgaihede/mtg-grimoire/issues/178)): the desk answers two keys
@@ -970,14 +970,22 @@ layer.
     **not** `dnd.ts`'s: that one carries a **card** between piles, this one carries a **pile** past
     other piles, and each reader refuses anything without its own — so a card can never land as a
     reorder and a pile can never land as an add.
-  - **The rail is out, and so is the command zone; the fence is `StackGroup`'s existing
-    `flowWidth`** rather than a second kind check. Where the Sideboard, the Maybeboard and — since
-    2026-08-20 — the Commander and the Companion are drawn is decided by their `kind`
-    (`splitRail`), so their position is not an arrangement anybody made; the Categories dialog is
-    where those are reordered against each other, and it draws every row. The command zones grew
-    into this fence for free: they are drawn in a box of their own that carries the width, exactly
-    as the rail is, so `flowWidth` is absent on both and neither draws a grip. **Their drop target
-    is untouched** — a pile whose *place* is fixed is still a pile a card can be dragged into.
+  - **The rail reorders within itself; the command zone does not reorder at all** (the rail
+    changed 2026-09-24, [#508](https://github.com/Msgaihede/mtg-grimoire/issues/508)). The fence
+    is `StackGroup`'s `reorderIds` — the run a pile moves within, and absent is the grip's and the
+    reorder drop's off switch. Where a pile is drawn is decided by its `kind` and its switch
+    (`splitRail`) and no grip changes that; what a grip changes is its place *inside* its run,
+    which is the reader's own `sortOrder`. So there are **three runs**: the flow, the rail's
+    beside-the-deck piles (Sideboard, Maybeboard — `isBeside` in `columns.ts`, the one definition
+    `splitRail` files by too), and the rail's switched-off piles. **A drop from another run is
+    refused**, through `useCategoryReorderDrop`'s `scope`, because a flowing pile let go on the
+    Sideboard — or a switched-off pile on it — would write a new `sortOrder` and be drawn exactly
+    where it was: a drop that reads as ignored. The grip's `n of N` counts its run, and its keys
+    are the flow's Left and Right even though the rail is a column, for the one-pair-everywhere
+    reason below. The Commander and the Companion get no `reorderIds`: pinned to the head of every
+    grouping, they have no position a reorder could move them to. The Categories dialog still
+    reorders every row against every other. **Every drop target for a *card* is untouched** — a
+    pile whose *place* is fixed is still a pile a card can be dragged into.
   - **The drop target is a wrapper `<div>` inside the section, not the section**, and that
     **was** pdnd's constraint rather than a layout choice. ⚠️ **The constraint is gone and the
     arrangement stayed — corrected 2026-09-07, and this page was the last place in the repo still

@@ -90,10 +90,18 @@ export function movedTo(ids: readonly number[], id: number, to: number): number[
  * plus two questions. It costs nothing when a *card* is in the air: `readCategoryDrag` refuses a
  * card payload, so `accept` is false, the pile is skipped before it is measured, and both flags
  * stay down.
+ *
+ * **`scope` is the run this pile is reordered within, and a pile from any other run is refused**
+ * (added 2026-09-24, issue #508). The desk draws more than one run a grip can reach — the flow,
+ * and the rail's two — and which run a pile is in is decided by its `kind` and its switch, never by
+ * its `sortOrder`. So a flowing pile let go on the Sideboard would write a new `sortOrder` and be
+ * drawn exactly where it was: a drop that reads as ignored. Refusing it means the ring never
+ * lights there, which says the same thing before the reader lets go. Absent accepts every pile.
  */
 export function useCategoryReorderDrop(
   categoryId: number | null,
   onMove?: (categoryId: number, targetId: number) => void,
+  scope?: readonly number[],
 ) {
   const enabled = categoryId !== null && onMove !== undefined;
 
@@ -104,10 +112,14 @@ export function useCategoryReorderDrop(
   const { ref, attach } = useDndTargetRef();
 
   // The same question twice — "a pile is in the air and it is not this one" — asked once for the
-  // ring and once for the write. A pile dragged over itself lights nothing.
+  // ring and once for the write. A pile dragged over itself lights nothing, and neither does one
+  // from another run.
   const canDrop = useCallback(
-    (dragged: number) => categoryId !== null && dragged !== categoryId,
-    [categoryId],
+    (dragged: number) =>
+      categoryId !== null &&
+      dragged !== categoryId &&
+      (scope === undefined || scope.includes(dragged)),
+    [categoryId, scope],
   );
   const onDrop = useCallback(
     (dragged: number) => {
