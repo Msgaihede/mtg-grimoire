@@ -109,6 +109,20 @@ import type { DeckCard, TheorySlot } from "@/lib/ipc";
 /** Which of the three statements a mark is making about its row — see the module note's table. */
 export type TheoryTier = "exact" | "name" | "unplanned";
 
+/**
+ * Each tier's name, in the words the reader chose for it (issue #502, 2026-09-24): the mark's
+ * tooltip and the `Matches theory` grouping's headings both say these, so a card sitting under
+ * `Art Mismatch` wears a mark that says `Art Mismatch` too.
+ *
+ * Written here rather than in `CardMarks.tsx` because `grouping.ts` needs them and must not
+ * import a component file to get them.
+ */
+export const THEORY_TIER_NAMES: Readonly<Record<TheoryTier, string>> = {
+  exact: "Exact Match",
+  name: "Art Mismatch",
+  unplanned: "No Match",
+};
+
 /** What the plan says about one live row: which tier it is in and how far it is from the plan
  *  **at that tier's grain**. `0` is the tick; anything else is drawn as a signed number. */
 export interface TheoryMark {
@@ -389,6 +403,25 @@ export function theoryMatchMark(
   }
   if (!plan.marks.name) return null;
   return byName === undefined ? null : { tier: "name", delta: byName };
+}
+
+/**
+ * Which tier a live row is in **as a fact about the plan**, whatever the deck's mark switches say
+ * — the `Matches theory` grouping's bucket (issue #502).
+ *
+ * {@link theoryMatchMark} answers what to *draw*, so a switched-off tier re-resolves or goes
+ * silent there. A heading cannot do either: every active row has to land under exactly one of
+ * the three, or a card would vanish from the editor because a colour was turned off in Deck
+ * settings. So this reads the two maps alone, in the same order — the printing, then the name,
+ * then neither.
+ */
+export function theoryTier(
+  plan: TheoryPlan,
+  card: Pick<DeckCard, "cardId" | "finish" | "name">,
+): TheoryTier {
+  if (plan.exact.has(theorySlot(card))) return "exact";
+  if (plan.byName.has(theoryNameKey(card.name))) return "name";
+  return "unplanned";
 }
 
 /**

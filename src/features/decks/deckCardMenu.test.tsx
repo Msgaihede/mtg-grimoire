@@ -199,6 +199,22 @@ describe("buildDeckCardMenu", () => {
     ]);
   });
 
+  /** Issue #504: "Add to → Collection" records the finish this row plays, without asking, and a
+   *  regular row the printing's own default. */
+  it("adds the finish the deck row plays to the collection without asking", () => {
+    const addToCollection = vi.fn();
+    const both = '["nonfoil","foil"]';
+    const addOf = (c: DeckCard) => {
+      const items = buildDeckCardMenu(c, deps({ card: { ...CARD_DEPS, addToCollection } }));
+      const collection = find((find(items, "Add to") as MenuSubmenu).items, "Collection");
+      expect(collection.kind).toBe("action");
+      (collection as MenuAction).onSelect();
+      return addToCollection.mock.lastCall?.[1];
+    };
+    expect(addOf(bolt({ finishes: both, finish: "foil" }))).toBe("foil");
+    expect(addOf(bolt({ finishes: both, finish: null }))).toBe("nonfoil");
+  });
+
   /**
    * **The finish row, and the three shapes that question has** — `collectionItem`'s rule one
    * file over, for its reason: a choice with one answer is not a choice.

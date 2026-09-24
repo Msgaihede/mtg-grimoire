@@ -94,6 +94,7 @@ import {
   DEFAULT_GROUP_BY,
   GROUP_BY_OPTIONS,
   type GroupBy,
+  theoryGroupable,
 } from "./grouping";
 import type { ImportDestination } from "@/features/transfer/import/destination";
 import { deckDestination } from "@/features/transfer/import/destinations/deckInto";
@@ -147,6 +148,8 @@ import { TextView } from "./views/TextView";
  * is paid once per session rather than once per render of the largest component in the app.
  */
 const GROUP_BY_PICKER = sortOptions(GROUP_BY_OPTIONS, (o) => o.label);
+/** The picker on a list with no plan to match against — see `theoryGroupable`. */
+const GROUP_BY_PICKER_NO_THEORY = GROUP_BY_PICKER.filter((o) => o.value !== "theory");
 const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
 
 /**
@@ -491,7 +494,7 @@ export function exportSubject(
  * A tile in the docked search panel, as a card menu describes it.
  *
  * **No `finish`**, for the search wall's reason: a result is a *printing* and not a copy, so
- * "Add to → Collection" offers the finishes this printing exists in rather than choosing one.
+ * "Add to → Collection" records the printing's own default finish — the one the tile draws.
  * `typeLine` travels because `CardSummary` carries it and a menu add is filed by what the card
  * does — the same fact, off the same row, that this panel's drag payload already hands a drop.
  */
@@ -1781,6 +1784,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // own comment says why). What is left for this line is the case the restore is not part of:
   // the switch being turned off under an editor that is already reading the plan.
   if (row !== null && !theoryEnabled && variant !== "live") setVariant("live");
+
+  // `Matches theory` is offered only where there is a plan to match (issue #502). A remembered
+  // `theory` elsewhere draws as the default and is **not** written back, so pressing `Actual`
+  // again brings the grouping back with the tab.
+  const canGroupByTheory = theoryGroupable(theoryEnabled, variant);
+  const shownGroupBy: GroupBy =
+    groupBy === "theory" && !canGroupByTheory ? DEFAULT_GROUP_BY : groupBy;
 
   /**
    * The three toolbar controls the deck remembers, each writing **only the field that moved**.
@@ -3548,8 +3558,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     // because that marketplace is in `useDeck`'s query key. A switch therefore changes
     // `deck.cards` itself and this recomputes over the new answer, rather than picking a
     // different field out of the old one.
-    () => buildGroups(shown, categories, groupBy, sortBy, separateX, emptyGroupRules),
-    [shown, categories, groupBy, sortBy, separateX, emptyGroupRules],
+    () =>
+      buildGroups(shown, categories, shownGroupBy, sortBy, separateX, emptyGroupRules, theoryPlan),
+    [shown, categories, shownGroupBy, sortBy, separateX, emptyGroupRules, theoryPlan],
   );
 
   /**
@@ -3838,7 +3849,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // drawn without a `flowWidth` and so register no grip whatever this prop says. That second
       // exemption is not this gate's doing and does not want to be: a zone pinned to the head of
       // every grouping has no position for a drag to change, under `category` least of all.
-      moveCategory: groupBy === "category" ? moveCategory : undefined,
+      moveCategory: shownGroupBy === "category" ? moveCategory : undefined,
     }),
     [
       setQuantity,
@@ -3849,7 +3860,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       picked.selected,
       pickCard,
       renameCategoryField,
-      groupBy,
+      shownGroupBy,
       moveCategory,
     ],
   );
@@ -4476,9 +4487,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             <Dropdown
               id="deck-group-by"
               labelledBy="deck-group-by-label"
-              value={groupBy}
+              value={shownGroupBy}
               onChange={(value) => pickGroupBy(value as GroupBy)}
-              options={GROUP_BY_PICKER}
+              options={canGroupByTheory ? GROUP_BY_PICKER : GROUP_BY_PICKER_NO_THEORY}
             />
 
             {/* A modifier of the picker it stands beside, so it lives inside that cluster's
@@ -4497,7 +4508,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 action, and the name has to stand up read out of context — a screen reader gets
                 no picker beside it. It begins with the visible label all the same (WCAG 2.5.3),
                 so the chip is still addressable by what is written on it. */}
-            {groupBy === "manaValue" && (
+            {shownGroupBy === "manaValue" && (
               // `ToggleChip` (`components/FilterChips.tsx`) owns turning its `title` prop into
               // a `useTooltip()` binding internally — that file is outside this bucket, but the
               // prop's name and shape are unchanged, so this call needed no edit.

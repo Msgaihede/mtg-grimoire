@@ -99,6 +99,11 @@ export function deckCardTarget(card: DeckCard): CardMenuTarget {
     collectorNumber: card.collectorNumber,
     oracleId: card.oracleId,
     finishes: card.finishes,
+    // The finish this row plays and draws, so an "Add to → Collection" from here records the card
+    // on screen (issue #504). `DeckFinish`'s `null` is the regular copy and is left unnamed rather
+    // than spelt `nonfoil`: the menu then takes the printing's own first finish, which is the
+    // plain copy where one exists and the only one on a foil-only printing.
+    finish: card.finish ?? undefined,
     typeLine: card.typeLine,
   };
 }
@@ -927,7 +932,7 @@ function zoneItem(
  * The finishes are offered in the **printing's own order** — Scryfall's, which is what
  * `FINISHES` is written in — and deliberately not through `sortOptions`. The order *is* the
  * information (plain, then the premium treatments), which is one of the two exemptions
- * `src/CLAUDE.md` grants, and it is the same one the collection's finish picker takes.
+ * `src/CLAUDE.md` grants.
  */
 function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
   const choices = finishChoices(card.finishes);
