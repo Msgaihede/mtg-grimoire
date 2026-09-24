@@ -2,10 +2,15 @@ import type { JSX } from "react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { FOCUS } from "@/lib/focus";
-import type { DeckCategory, DeckFolder, DeckGame } from "@/lib/ipc";
+import type { DeckCategory, DeckFolder, DeckGame, ManagedWishlistMode } from "@/lib/ipc";
 import { compareLabels } from "@/lib/options";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, AUTO_CATEGORY_LABEL } from "./autoCategory";
+import {
+  MANAGED_WISHLIST_HINT,
+  MANAGED_WISHLIST_LABEL,
+  MANAGED_WISHLIST_MODES,
+} from "./managedWishlist";
 import { DeckCoverPicker, type DeckCoverPickerProps } from "./DeckCoverPicker";
 // The three kinds, their words and the patch that writes them — `deckKind.ts` is the one
 // place `theoryEnabled` and `virtualOnly` are read or written together, and this form is a
@@ -85,13 +90,12 @@ export interface DeckSettingsValue {
    */
   theoryMarkUnplanned: boolean;
   /**
-   * Whether this deck keeps a **managed wishlist** — a wishlist folder named after the deck that
-   * always holds what its Compare dialog lists (issue #512). Drawn and gated beside the three
-   * marks, because it too reads the live list against the plan: only a `Theory + Actual` deck
-   * has a difference to keep. Required for the marks' reason — the create draft holds `true`,
-   * the column's `DEFAULT 1`, and sends nothing.
+   * Which Compare view this deck's **managed wishlist** follows, or `off` (issue #512, user
+   * schema v49). Drawn and gated beside the three marks, because it too reads the live list
+   * against the plan: only a `Theory + Actual` deck has a difference to keep. Required for the
+   * marks' reason — the create draft holds `off`, the column's default, and sends nothing.
    */
-  managedWishlist: boolean;
+  managedWishlist: ManagedWishlistMode;
   folderId: number | null;
   /**
    * Which pile an add that names none lands in — `AUTO_CATEGORY` (`0`) for "by what the card
@@ -765,8 +769,8 @@ function TheoryMarkSwitches({
   onExact: (on: boolean) => void;
   onName: (on: boolean) => void;
   onUnplanned: (on: boolean) => void;
-  managedWishlist: boolean;
-  onManagedWishlist: (on: boolean) => void;
+  managedWishlist: ManagedWishlistMode;
+  onManagedWishlist: (mode: ManagedWishlistMode) => void;
   id: string;
 }) {
   return (
@@ -803,21 +807,64 @@ function TheoryMarkSwitches({
         on={unplanned}
         onChange={onUnplanned}
       />
-      {/* Not a mark, so no swatch — but the same subject: the folder holds the difference
+      {/* Not a mark — but the same subject: the folder holds one view of the difference
           between the two lists these marks are read across, so it shares their gate and indent. */}
-      <MarkSwitch
-        id={`${id}-managed-wishlist`}
-        heading="Managed wishlist"
-        caption="A wishlist folder named after this deck that always holds what the Compare dialog lists. It follows the deck and can't be edited by hand; turning this off removes the folder."
-        on={managedWishlist}
-        onChange={onManagedWishlist}
-      />
+      <ManagedWishlistGroup mode={managedWishlist} onPick={onManagedWishlist} id={id} />
     </div>
   );
 }
 
-/** One mark's row: its colour, its name, what it means, and the switch that draws it or not.
- *  The managed-wishlist row borrows it without a swatch. */
+/**
+ * Which Compare view the deck's managed wishlist follows — `Off`, `All`, `Missing` or
+ * `Different Printing`, one control, four exclusive presses.
+ *
+ * {@link DeckKindGroup}'s grammar exactly — `role="group"` over `aria-pressed` buttons, the joined
+ * box, the selected choice's caption underneath — because it is the same kind of question: one
+ * choice out of a closed set, where a switch could only say *whether*. The three view words are
+ * the Compare dialog's own tabs, so a reader who picks `Missing` here meets the same list there.
+ */
+function ManagedWishlistGroup({
+  mode,
+  onPick,
+  id,
+}: {
+  mode: ManagedWishlistMode;
+  onPick: (mode: ManagedWishlistMode) => void;
+  id: string;
+}) {
+  return (
+    <div>
+      <p id={`${id}-managed-wishlist`} className="text-sm">
+        Managed wishlist
+      </p>
+      <div
+        role="group"
+        aria-labelledby={`${id}-managed-wishlist`}
+        className="mt-1.5 flex w-fit overflow-hidden rounded-md border border-border"
+      >
+        {MANAGED_WISHLIST_MODES.map((m) => (
+          <button
+            key={m}
+            type="button"
+            aria-pressed={m === mode}
+            onClick={() => onPick(m)}
+            className={cn(
+              "h-8 px-2.5 text-xs",
+              "transition-colors duration-150 motion-reduce:transition-none",
+              m === mode ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
+              FOCUS,
+            )}
+          >
+            {MANAGED_WISHLIST_LABEL[m]}
+          </button>
+        ))}
+      </div>
+      <p className="mt-1 text-[0.6875rem] leading-snug text-dim">{MANAGED_WISHLIST_HINT[mode]}</p>
+    </div>
+  );
+}
+
+/** One mark's row: its colour, its name, what it means, and the switch that draws it or not. */
 function MarkSwitch({
   id,
   swatch,

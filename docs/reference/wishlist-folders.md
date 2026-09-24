@@ -1187,17 +1187,32 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | `src-tauri/src/deck_theory.rs` | `missing_to_wishlist`, the Compare dialog's write and its up-front folder check |
 | `src-tauri/src/deck.rs` | `missing_to_wishlist`, the live deck's, taking the same optional folder |
 
-## Managed wishlists — a folder a deck owns (user schema v48, 2026-09-24)
+## Managed wishlists — a folder a deck owns (user schema v48 and v49, 2026-09-24)
 
-[Issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512). A `Theory + Actual` deck with
-`decks.managed_wishlist` on (the default) keeps one wishlist folder, named after the deck, that
-holds exactly what its Compare dialog lists — `deck_theory::wanted`, which is
-`missing_to_wishlist`'s rows with the folder and the feed line taken off, so the dialog, its Send
-press and the folder cannot disagree about what "missing" means. The switch is drawn in Deck
-settings under the theory marks, and only for that kind: a regular deck has no plan to be short
-of and a virtual one owns no cardboard, so switching a deck to either removes its folder.
+[Issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512). A `Theory + Actual` deck whose
+`decks.managed_wishlist_mode` names one of the Compare dialog's three views keeps one wishlist
+folder, named after the deck, holding **that view's own copies** — `deck_theory::wanted(view)`
+over the same `grouped_diff` the dialog reads:
 
-- **Derived per device, never synced.** The switch syncs; the folder and its wishes do not.
+| Mode | The dialog's view | Each wish's quantity |
+| --- | --- | --- |
+| `off` (the default) | — | no folder |
+| `all` | All | the row's whole shortfall |
+| `missing` | Missing | `quantity − held_as_other_printing` — copies no printing in the deck covers |
+| `other` | Different printing | `held_as_other_printing` — copies to swap for the planned printing |
+
+The choice is a four-button group in Deck settings under the theory marks, drawn only for that
+kind: a regular deck has no plan to be short of and a virtual one owns no cardboard, so switching
+a deck to either removes its folder.
+
+**v48 shipped it as a boolean switch, on by default, and holding `All`** — which put a card the
+deck already plays in another printing on the shopping list. v49 replaced the column with
+`managed_wishlist_mode` under a **new name**: a v48 peer skips an unknown field, where a word in
+its INTEGER column would fail that device's `r.get::<bool>` and with it every deck read. Every deck
+reads `off` after v49, the ones v48 switched on unasked included, and the launch settle removes
+their folders.
+
+- **Derived per device, never synced.** The mode syncs; the folder and its wishes do not.
   `src-tauri/CLAUDE.md`'s rule is that a write every device derives for itself must not be
   captured — two devices would each insert the same wish under two `sync_uid`s and the grain's
   upsert would sum them — so `managed_wishlist::settle_deck` writes inside

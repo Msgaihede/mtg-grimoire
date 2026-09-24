@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { DeckCategory, DeckFolder } from "@/lib/ipc";
@@ -52,7 +52,7 @@ const VALUE: DeckSettingsValue = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
-  managedWishlist: true,
+  managedWishlist: "off",
   folderId: null,
   defaultCategoryId: AUTO_CATEGORY,
   // Off, which is `decks.token_stack`'s `DEFAULT 0` — every deck until a reader asks.
@@ -608,28 +608,42 @@ describe("DeckSettingsForm", () => {
   });
 
   /**
-   * The managed wishlist (issue #512) sits under both of the marks' gates — it keeps the
-   * difference between the two lists, so a deck with no plan has nothing for it to hold, and the
-   * create host has no column to write it to — and reports its own field.
+   * The managed wishlist (issue #512) sits under both of the marks' gates — it keeps a view of
+   * the difference between the two lists, so a deck with no plan has nothing for it to hold, and
+   * the create host has no column to write it to — and is a four-way choice: `Off` and the
+   * Compare dialog's three views.
    */
-  it("draws the managed wishlist switch only for a Theory + Actual deck in the edit host", async () => {
+  it("draws the managed wishlist group only for a Theory + Actual deck in the edit host", async () => {
     form({ value: { ...VALUE, theoryEnabled: false } });
-    expect(screen.queryByRole("switch", { name: /managed wishlist/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Managed wishlist" })).not.toBeInTheDocument();
     cleanup();
 
     form({ value: { ...VALUE, theoryEnabled: true }, canSetTheoryMarks: false });
-    expect(screen.queryByRole("switch", { name: /managed wishlist/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Managed wishlist" })).not.toBeInTheDocument();
     cleanup();
 
     const { onChange, onCommit } = form({ value: { ...VALUE, theoryEnabled: true } });
-    const toggle = screen.getByRole("switch", { name: "Managed wishlist Enabled" });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-    // Not a mark, so its heading carries no swatch.
-    expect(document.getElementById("s-managed-wishlist")?.querySelector("span")).toBeNull();
+    const group = screen.getByRole("group", { name: "Managed wishlist" });
+    const buttons = within(group).getAllByRole("button");
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      "Off",
+      "All",
+      "Missing",
+      "Different Printing",
+    ]);
+    // `off` is the default, and the only pressed one.
+    expect(buttons.map((b) => b.getAttribute("aria-pressed"))).toEqual([
+      "true",
+      "false",
+      "false",
+      "false",
+    ]);
+    expect(screen.getByText("No managed wishlist for this deck.")).toBeInTheDocument();
 
-    await userEvent.click(toggle);
-
-    expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: false });
+    await userEvent.click(within(group).getByRole("button", { name: "Missing" }));
+    expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "missing" });
+    await userEvent.click(within(group).getByRole("button", { name: "Different Printing" }));
+    expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "other" });
     expect(onCommit).not.toHaveBeenCalled();
   });
 

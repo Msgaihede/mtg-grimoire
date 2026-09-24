@@ -1,16 +1,16 @@
-//! A theory deck's **managed wishlist** — user schema v48,
+//! A theory deck's **managed wishlist** — user schema v48, and v49's mode,
 //! [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512).
 //!
-//! A deck whose kind is `Theory + Actual` and whose `decks.managed_wishlist` is on keeps one
-//! wishlist folder, named after the deck, holding exactly what its Compare dialog lists:
-//! [`crate::deck_theory::wanted`], which is [`crate::deck_theory::missing_to_wishlist`]'s rows
-//! with the folder and the feed line taken off. The folder is the **deck's**, not the reader's:
+//! A deck whose kind is `Theory + Actual` and whose `decks.managed_wishlist_mode` names one of the
+//! Compare dialog's three views — `all`, `missing` or `other` (Different printing) — keeps one
+//! wishlist folder, named after the deck, holding that view: [`crate::deck_theory::wanted`].
+//! `off`, the default since v49, is no folder. The folder is the **deck's**, not the reader's:
 //! this module is the only thing that writes to it, and every other write is refused in words
 //! ([`MANAGED`]).
 //!
 //! ## Derived per device, never synced
 //!
-//! The switch syncs — it is the reader's answer about a deck. The folder and its wishes do not:
+//! The mode syncs — it is the reader's answer about a deck. The folder and its wishes do not:
 //! they are a function of `deck_cards`, which syncs, and `src-tauri/CLAUDE.md`'s rule is that a
 //! write every device derives for itself must not be captured. Captured, two devices would each
 //! insert the same wish under two `sync_uid`s and the grain's upsert would sum them. So every
@@ -47,6 +47,48 @@ use std::collections::HashMap;
 /// What every refused hand-made write to a managed folder or wish says. The frontend's fake
 /// carries the same sentence.
 pub const MANAGED: &str = "A managed wishlist follows its deck, so it can't be edited by hand.";
+
+/// The four words `decks.managed_wishlist_mode` holds, `off` first — the frontend's
+/// `MANAGED_WISHLIST_MODES`, and the Compare dialog's `DiffView` words for the other three.
+pub const MODES: [&str; 4] = [OFF, "all", "missing", "other"];
+
+/// No managed wishlist — the column's default since v49.
+pub const OFF: &str = "off";
+
+/// What a patch naming a word outside [`MODES`] is told.
+pub const BAD_MODE: &str =
+    "A managed wishlist follows All, Missing, Different printing or nothing.";
+
+/// A stored mode, read **leniently**: a word this build does not know came from a newer peer
+/// (the column carries no CHECK, because it syncs) and reads as [`OFF`] — a folder this build
+/// cannot describe is better absent than guessed at.
+pub fn read_mode(stored: String) -> String {
+    if MODES.contains(&stored.as_str()) {
+        stored
+    } else {
+        OFF.to_owned()
+    }
+}
+
+/// A patched mode, read **strictly**: this build naming a word it does not know is its own bug.
+pub fn valid_mode(mode: &str) -> Result<&str, String> {
+    MODES
+        .iter()
+        .copied()
+        .find(|m| *m == mode)
+        .ok_or_else(|| BAD_MODE.to_owned())
+}
+
+/// The Compare view a stored mode names, or `None` for [`OFF`] and anything unknown.
+fn view_of(mode: &str) -> Option<crate::deck_theory::DiffView> {
+    use crate::deck_theory::DiffView;
+    match mode {
+        "all" => Some(DiffView::All),
+        "missing" => Some(DiffView::Missing),
+        "other" => Some(DiffView::Other),
+        _ => None,
+    }
+}
 
 /// The per-connection trigger set. `TEMP`, so it lives exactly as long as the connection and
 /// needs no schema rung: nothing about it is stored.
@@ -86,7 +128,7 @@ fn arm_sql() -> String {
              INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.id);
          END;
          CREATE TEMP TRIGGER IF NOT EXISTS mw_deck_upd
-             AFTER UPDATE OF name, theory_enabled, virtual_only, managed_wishlist ON main.decks
+             AFTER UPDATE OF name, theory_enabled, virtual_only, managed_wishlist_mode ON main.decks
          BEGIN
              INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.id);
          END;
@@ -191,8 +233,9 @@ pub fn settle_logged(conn: &Connection) {
 }
 
 /// Every deck and every managed folder, settled — the launch pass, from
-/// [`crate::schema::prepare_database`]. It is what builds the folders the v48 rung's `DEFAULT 1`
-/// promises every existing theory deck, and what sweeps a folder whose deck left while another
+/// [`crate::schema::prepare_database`]. It is what built the folders the v48 rung's `DEFAULT 1`
+/// promised every existing theory deck, what removes them now v49's `off` default has taken
+/// that back, and what sweeps a folder whose deck left while another
 /// build (or a sync with no connection armed) was running.
 pub fn settle_all(conn: &Connection) -> Result<(), String> {
     arm(conn)?;
@@ -206,16 +249,22 @@ pub fn settle_all(conn: &Connection) -> Result<(), String> {
     settle(conn)
 }
 
-/// Whether this deck should have a managed folder, and what it is called.
-fn eligible(conn: &Connection, deck_id: i64) -> Result<Option<String>, String> {
-    conn.query_row(
-        "SELECT name FROM decks
-          WHERE id = ?1 AND theory_enabled = 1 AND virtual_only = 0 AND managed_wishlist = 1",
-        params![deck_id],
-        |r| r.get(0),
-    )
-    .optional()
-    .map_err(|e| e.to_string())
+/// Whether this deck should have a managed folder: what it is called and which Compare view it
+/// holds. `None` for a deck that is gone, is not a theory deck, or is `off`.
+fn eligible(
+    conn: &Connection,
+    deck_id: i64,
+) -> Result<Option<(String, crate::deck_theory::DiffView)>, String> {
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT name, managed_wishlist_mode FROM decks
+              WHERE id = ?1 AND theory_enabled = 1 AND virtual_only = 0",
+            params![deck_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(row.and_then(|(name, mode)| view_of(&mode).map(|view| (name, view))))
 }
 
 /// The rows of `temp.managed_wishlist_open` are what switch the guard off; this is the one
@@ -254,8 +303,8 @@ fn settle_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
             )
             .optional()
             .map_err(|e| e.to_string())?;
-        let Some(name) = eligible(&tx, deck_id)? else {
-            // Gone, switched off, or no longer a theory deck: the wishes first, so
+        let Some((name, view)) = eligible(&tx, deck_id)? else {
+            // Gone, `off`, or no longer a theory deck: the wishes first, so
             // `wishlist_entries.folder_id`'s SET NULL has nothing to surface at the root.
             if let Some((id, _)) = folder {
                 tx.execute(
@@ -296,7 +345,7 @@ fn settle_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
         };
 
         let mut want: HashMap<Key, crate::deck_theory::Wanted> = HashMap::new();
-        for w in crate::deck_theory::wanted(&tx, deck_id)? {
+        for w in crate::deck_theory::wanted(&tx, deck_id, view)? {
             want.insert(
                 (w.oracle_id.clone(), w.card_id.clone(), w.finish.clone()),
                 w,
@@ -382,7 +431,9 @@ mod tests {
              VALUES ('bolt', 'o-bolt', 'Lightning Bolt', 'lea', '161', 'en', 'normal',
                      'Instant', '{}'),
                     ('ring', 'o-ring', 'Sol Ring', 'lea', '270', 'en', 'normal',
-                     'Artifact', '{}');",
+                     'Artifact', '{}'),
+                    ('bolt-m10', 'o-bolt', 'Lightning Bolt', 'm10', '146', 'en', 'normal',
+                     'Instant', '{}');",
         )
         .unwrap();
         arm(&conn).unwrap();
@@ -408,12 +459,27 @@ mod tests {
                 id,
                 &crate::deck::DeckPatch {
                     theory_enabled: Some(true),
+                    // `off` is the column's default, so a test that wants a folder asks for one.
+                    managed_wishlist: Some("missing".to_owned()),
                     ..Default::default()
                 },
             )
             .unwrap();
         }
         id
+    }
+
+    /// Point a deck's managed wishlist at another Compare view, through the real patch.
+    fn mode(conn: &Connection, deck_id: i64, mode: &str) {
+        crate::deck::update_deck(
+            conn,
+            deck_id,
+            &crate::deck::DeckPatch {
+                managed_wishlist: Some(mode.to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     }
 
     /// Add `qty` more copies to one list, through `deck::add_card`.
@@ -468,17 +534,112 @@ mod tests {
         assert_eq!(wishes(&conn, f), vec![("bolt".to_owned(), 2)]);
     }
 
+    /// **Missing**, not **All**: a card the deck already plays as another printing is not a card
+    /// to buy, so only the copies no printing covers are wished for.
+    #[test]
+    fn a_card_played_as_another_printing_is_not_missing() {
+        let conn = db();
+        let d = deck(&conn, "Izzet", true);
+        put(&conn, d, "theory", "bolt", 3);
+        put(&conn, d, "live", "bolt-m10", 1);
+        settle(&conn).unwrap();
+        let (f, _) = folder(&conn, d).unwrap();
+        assert_eq!(
+            wishes(&conn, f),
+            vec![("bolt".to_owned(), 2)],
+            "three planned, one already played as M10: two left to find"
+        );
+
+        put(&conn, d, "live", "bolt-m10", 2);
+        settle(&conn).unwrap();
+        assert_eq!(
+            wishes(&conn, f),
+            vec![],
+            "every planned copy is played in some printing, so nothing is missing"
+        );
+    }
+
+    /// Each view carries its own copies: **All** the whole shortfall, **Different printing** only
+    /// the copies the deck plays as another printing — the ones to swap.
+    #[test]
+    fn the_folder_follows_whichever_view_the_deck_names() {
+        let conn = db();
+        let d = deck(&conn, "Izzet", true);
+        put(&conn, d, "theory", "bolt", 3);
+        put(&conn, d, "theory", "ring", 1);
+        put(&conn, d, "live", "bolt-m10", 1);
+
+        mode(&conn, d, "all");
+        settle(&conn).unwrap();
+        let (f, _) = folder(&conn, d).unwrap();
+        assert_eq!(
+            wishes(&conn, f),
+            vec![("bolt".to_owned(), 3), ("ring".to_owned(), 1)]
+        );
+
+        mode(&conn, d, "other");
+        settle(&conn).unwrap();
+        assert_eq!(
+            wishes(&conn, f),
+            vec![("bolt".to_owned(), 1)],
+            "one Bolt is played as M10; the Ring is played in no printing at all"
+        );
+
+        mode(&conn, d, "missing");
+        settle(&conn).unwrap();
+        assert_eq!(
+            wishes(&conn, f),
+            vec![("bolt".to_owned(), 2), ("ring".to_owned(), 1)]
+        );
+    }
+
+    /// `off` is the default, and a word outside the four is refused by a patch but read as `off`
+    /// off the row, where it would have come from a newer peer.
+    #[test]
+    fn off_is_the_default_and_an_unknown_mode_is_refused_or_read_as_off() {
+        let conn = db();
+        let id = crate::deck::create_deck(
+            &conn,
+            &crate::deck::DeckInput {
+                name: "Fresh".to_owned(),
+                format_key: "modern".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let read = |conn: &Connection| {
+            crate::deck::read_deck(conn, id)
+                .unwrap()
+                .unwrap()
+                .managed_wishlist
+        };
+        assert_eq!(read(&conn), OFF);
+        let err = crate::deck::update_deck(
+            &conn,
+            id,
+            &crate::deck::DeckPatch {
+                managed_wishlist: Some("everything".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, BAD_MODE);
+        conn.execute(
+            "UPDATE decks SET managed_wishlist_mode = 'someday' WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        assert_eq!(read(&conn), OFF);
+    }
+
     #[test]
     fn a_regular_deck_and_a_switched_off_one_have_no_folder() {
         let conn = db();
         let regular = deck(&conn, "Plain", false);
         put(&conn, regular, "live", "bolt", 1);
         let off = deck(&conn, "Off", true);
-        conn.execute(
-            "UPDATE decks SET managed_wishlist = 0 WHERE id = ?1",
-            params![off],
-        )
-        .unwrap();
+        mode(&conn, off, "off");
         put(&conn, off, "theory", "bolt", 1);
         settle(&conn).unwrap();
         assert!(folder(&conn, regular).is_none());
@@ -493,11 +654,7 @@ mod tests {
         settle(&conn).unwrap();
         assert!(folder(&conn, d).is_some());
 
-        conn.execute(
-            "UPDATE decks SET managed_wishlist = 0 WHERE id = ?1",
-            params![d],
-        )
-        .unwrap();
+        mode(&conn, d, "off");
         settle(&conn).unwrap();
         assert!(folder(&conn, d).is_none());
         let loose: i64 = conn
@@ -505,11 +662,7 @@ mod tests {
             .unwrap();
         assert_eq!(loose, 0, "no wish surfaced at the root");
 
-        conn.execute(
-            "UPDATE decks SET managed_wishlist = 1 WHERE id = ?1",
-            params![d],
-        )
-        .unwrap();
+        mode(&conn, d, "missing");
         settle(&conn).unwrap();
         assert!(folder(&conn, d).is_some(), "switching back rebuilds it");
 

@@ -926,6 +926,10 @@ function starterDecks(): FakeDeck[] {
       coverCardId: null,
       coverKind: "card_art",
       archived: false,
+      // The one deck whose managed wishlist is on (user schema v49, where `off` is the default),
+      // following the Compare dialog's `Missing` view — which is what the folder seeded for it
+      // below holds. A folder beside a deck reading `off` is a state the app cannot produce.
+      managedWishlist: "missing",
       // Filed, so the root wall is still the three decks every gallery story was written
       // against — see {@link FILED_DECK_FOLDER}.
       folderId: FILED_DECK_FOLDER,

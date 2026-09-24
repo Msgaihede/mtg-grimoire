@@ -624,7 +624,7 @@ mod tests {
             theory_mark_exact: true,
             theory_mark_name: true,
             theory_mark_unplanned: true,
-            managed_wishlist: true,
+            managed_wishlist: "off".to_owned(),
             separate_x_group: false,
             default_category_id: 0,
             last_variant: "live".to_owned(),

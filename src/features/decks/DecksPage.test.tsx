@@ -141,7 +141,7 @@ const BURN: DeckRow = {
   theoryMarkExact: true,
   theoryMarkName: true,
   theoryMarkUnplanned: true,
-  managedWishlist: true,
+  managedWishlist: "off",
   // How the editor was last read. The gallery draws none of the three — they are here because
   // every real row carries them.
   lastVariant: "live",
