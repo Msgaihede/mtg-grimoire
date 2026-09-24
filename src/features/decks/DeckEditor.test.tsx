@@ -5463,14 +5463,14 @@ describe("layerMatches", () => {
    */
   it("tells the deck-wide pull from a card's", () => {
     const deckWide = { kind: "pull" } as const;
-    const perCard = { kind: "pull", card: bolt() } as const;
+    const perCard = { kind: "pull", cards: [bolt()] } as const;
 
     expect(layerMatches(deckWide, deckWide)).toBe(true);
     expect(layerMatches(perCard, deckWide)).toBe(false);
     expect(layerMatches(deckWide, perCard)).toBe(false);
-    expect(layerMatches(perCard, { kind: "pull", card: bolt() })).toBe(true);
+    expect(layerMatches(perCard, { kind: "pull", cards: [bolt()] })).toBe(true);
     expect(
-      layerMatches(perCard, { kind: "pull", card: bolt({ finish: "foil" }) }),
+      layerMatches(perCard, { kind: "pull", cards: [bolt({ finish: "foil" })] }),
     ).toBe(false);
   });
 });
@@ -6418,6 +6418,41 @@ describe("DeckEditor — the Collection submenu", () => {
       ),
     );
     expect(deckQuickAddWishes).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Issue #510: a picked set's quick add records every picked card's shortfall, in one write.**
+   * The label quotes the set's total and the press is `deck_missing_to_collection` over the picked
+   * rows — never the right-clicked card alone, which is what it used to file.
+   */
+  it("records the whole picked set's shortfall on one press", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT(), bear({ quantity: 3, ownedQuantity: 1 })]));
+    await open();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await user.keyboard("{Control>}");
+    await user.click(screen.getByRole("button", { name: /^Bear/ }));
+    await user.keyboard("{/Control}");
+
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt", null)}"]`,
+    );
+    fireEvent.contextMenu(el as HTMLElement);
+    await screen.findByRole("menu");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Collection link for 2 cards" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Quick add 6 copies" }));
+
+    await waitFor(() =>
+      expect(deckMissingToCollection).toHaveBeenCalledWith(
+        4,
+        [
+          { cardId: "c-Lightning Bolt", finish: null, quantity: 4 },
+          { cardId: "c-Bear", finish: null, quantity: 2 },
+        ],
+        false,
+      ),
+    );
+    expect(deckQuickAddToCollection).not.toHaveBeenCalled();
   });
 
   /**

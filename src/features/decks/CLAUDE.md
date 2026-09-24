@@ -612,12 +612,19 @@ layer.
   - **A submenu rather than three flat rows.** This menu is already long, and three more on every
     card of the surface a reader spends the longest in is a menu that has to be read instead of
     scanned.
-  - **All three stay singular under a picked set**, which is `finishItem`'s argument reached from
-    the other side. Every label names a **count**, and the count is one row's shortfall —
-    `quickAddShort`, `max(0, quantity − ownedQuantity)`, imported from `quickCollection.ts` rather
-    than respelled because it is exactly the `3/4` `CardStack` draws in the card's chin. A set of
-    four rows short by four different amounts has no one number to name, so a plural row could
-    only quote a total no card on screen is wearing.
+  - **All three act on the whole picked set since issue #510 (2026-09-24), and quote its total.**
+    The count is `quickAddShort` — `max(0, quantity − ownedQuantity)`, imported from
+    `quickCollection.ts` because it is exactly the `3/4` `CardStack` draws in the card's chin —
+    summed over every picked row that is not blocked, under a head reading
+    `Collection link for N cards`. **This reverses the issue #350 rule** that the rows stay about
+    the right-clicked card because "four rows short by four amounts have no one number to name":
+    the sum *is* the number the press files, and what the old rule shipped was `Quick add 1 copy`
+    under `Add 11 cards to`, filing one card and ignoring ten. A blocked member is passed over,
+    and the rows grey only when no member can be pressed. A set's two quick adds are one
+    `deck_missing_to_collection` write (`missingPicks` folds rows on `pullKey`), with
+    `clearWishes` on for the unwish row — so only unambiguous wishes are cleared and nothing is
+    asked, `Add missing to collection`'s own rule. A set's pull is `choosePullFor`: silent when
+    every member has one answer, and the dialog over the whole set when any one does not.
   - **Greyed _with_ a reason, where this menu's other two refusals are silent** — `a plan holds no
     cards` for a theory row, `this pile is switched off` for a row in an inactive category,
     `nothing missing` for a live one that is not short, all three in `QUICK_ADD_REASON` and keyed
@@ -787,12 +794,12 @@ layer.
     clicked is one press from a deck the reader did not mean to edit. It goes through
     `setQuantityAt(…, 0)` like every other removal here; there is still no remove mutation.
   - **The card menu goes plural for the writes and stays singular for what cannot mean anything
-    else.** `Add N cards to`, `Move N cards to`, `Label N cards`, `Remove N cards` act on the set;
-    `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`,
-    `Set as companion`, `Finish` and `Collection ▸`'s three stay about the one card that was
-    right-clicked. A finish belongs to a *printing* — the toggle, the submenu and the greyed row
-    are three shapes decided by what that printing is sold in — a deck has one commander, and
-    every `Collection ▸` label names a count that is one row's shortfall. **The set travels into
+    else.** `Add N cards to`, `Move N cards to`, `Label N cards`, `Remove N cards` and
+    `Collection link for N cards` (since issue #510) act on the set; `Copy card name`,
+    `Copy card image`, `Open on`, `View all printings`, `Set as commander`, `Set as companion` and
+    `Finish` stay about the one card that was right-clicked. A finish belongs to a *printing* —
+    the toggle, the submenu and the greyed row are three shapes decided by what that printing is
+    sold in — and a deck has one commander. **The set travels into
     `buildCardMenu` too**: it did not for one build, and the menu read `Move 2 cards to` under a
     singular `Add to`, which is one menu answering the same question two ways.
   - **The cost this accepts rather than solves: undo is per-audit-entry.** A four-card move writes
