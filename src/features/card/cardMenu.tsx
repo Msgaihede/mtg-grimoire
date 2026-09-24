@@ -63,7 +63,7 @@ import { playKey, useDecksPlaying } from "@/features/decks/useDeckPlays";
 import { useDecks } from "@/features/decks/useDecks";
 import { copyText } from "@/lib/clipboard";
 import { edhrecCardUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
-import { FINISH_LABEL, parseFinishes, type Finish } from "@/lib/finish";
+import { parseFinishes, type Finish } from "@/lib/finish";
 import {
   ipc,
   ipcError,
@@ -94,7 +94,11 @@ export interface CardMenuTarget {
   oracleId: string | null;
   /** The printing's finish list as stored JSON. Parse with `parseFinishes` from `@/lib/finish`. */
   finishes: string | null;
-  /** Only where the surface names one — a collection row, a wishlist row with a preference. */
+  /**
+   * The finish the reader is looking at, where the surface names one — a collection row, a
+   * wishlist row with a preference, a deck card playing a foil. Absent means the printing's own
+   * default, which is what "Add to → Collection" then records without asking.
+   */
   finish?: Finish;
   /**
    * The `collection_entries` row this target **is**, where the surface has one.
@@ -329,9 +333,6 @@ export interface CardMenuDeps {
    * card, and that is a statement rather than an omission.** A clipboard holds one image; a
    * browser tab opens one page; a printings modal lists one oracle card. There is no plural of
    * any of them that is not a different feature.
-   *
-   * **`Add to → Collection` drops its finish level for a group**, which is the one place the
-   * plural is narrower than the singular — see {@link collectionItem}.
    */
   picked?: readonly CardMenuTarget[];
 }
@@ -579,30 +580,23 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
 }
 
 /**
- * Which finish an "Add to collection" records, and whether the reader is asked.
+ * Which finish an "Add to collection" records — **and the reader is never asked** (issue #504).
  *
- * A collection row's identity includes its finish, so one has to be chosen. The surface's own
- * wins where it has one (a collection row *is* a finish; a wishlist row may prefer one).
- * Where it has none — a search tile, a printings row, a deck card — the printing's own list
- * decides: one finish is no question and adds silently, two or more is a submenu.
+ * A collection row's identity includes its finish, so one has to be chosen, and it is the one the
+ * reader is looking at. The surface's own wins where it names one: a collection row *is* a
+ * finish, a wishlist row may prefer one, and a deck card plays one. Where none is named — a
+ * search tile, a printings row — it is the printing's own first finish in Scryfall's order, which
+ * is the plain copy for all but the foil-only and etched-only printings and is the picture every
+ * wall draws.
  *
- * **A deck card carries one since schema v18 and still does not name it here**, which is a
- * decision rather than an oversight. `deck_cards.finish` says what a *deck* plays; a collection
- * entry says what the reader physically owns, and pre-filling the second from the first would
- * put a foil in somebody's binder because they had planned to buy one. The deck's own menu is
- * where that fact is edited (`deckCardMenu.tsx`'s `Set as foil`); this row asks its own
- * question.
+ * Until issue #504 this row opened a `Nonfoil / Foil / Etched` picker wherever a printing was sold
+ * more than one way, and deliberately ignored a deck card's finish. Both asked a reader who had
+ * already right-clicked the card they meant; a different finish is the collection's `Edit copy`
+ * after the add.
  *
  * `finishes` is `null` when the column is empty, which is **unknown** rather than "no
  * finishes". Nonfoil is the answer there, because it is the answer for all but a handful of
  * printings and because refusing to add a card over a missing column would be worse.
- *
- * The finishes are offered in the **printing's own order**, which is Scryfall's and is the
- * order `FINISHES` is written in — nonfoil, foil, etched. That is an exemption from
- * `sortOptions` of the same kind the condition grade is: the order carries the information
- * (plain, then the two premium treatments), and alphabetising it would draw "Etched, Foil,
- * Nonfoil" over a picker whose whole job is to be read at a glance. `src/CLAUDE.md` states the
- * test the exemptions are granted by; it deliberately keeps no list of them.
  */
 function collectionItem(
   target: CardMenuTarget,
@@ -655,19 +649,12 @@ function collectionItem(
         };
 
   /**
-   * **A group is recorded in each card's own plain finish, and the finish level is dropped.**
-   *
-   * This is the one row where the plural is narrower than the singular, and it is deliberate. A
-   * finish belongs to a *printing*: the choices differ card by card, so a group has no one list to
-   * offer — and a submenu built from the right-clicked card's finishes would either refuse the
-   * members that are not sold that way or, worse, record them in a finish nobody said they had.
-   * The collection is a record of cardboard the reader physically owns; inventing a foil in it is
-   * the one kind of wrong they cannot check against anything.
-   *
-   * So the group files each card in `finishChoices`' first answer — `nonfoil` for all but the
-   * 13 515 foil-only and 892 etched-only printings, which get their own only finish — and a reader
-   * who wants the shiny copy records that card on its own. The folder question survives whole,
-   * because a folder is about the reader's cabinet rather than about the cardboard.
+   * **A group files each card in its own finish, by the same rule as one card** — the finish its
+   * surface names, else `finishChoices`' first answer (`nonfoil` for all but the 13 515 foil-only
+   * and 892 etched-only printings, which get their own only finish). Finish belongs to a
+   * *printing*, so it is read off each row rather than off the right-clicked one: a foil deck card
+   * in a picked set stays foil and a plain one beside it stays plain. The folder question is asked
+   * once for the whole set, because a folder is about the reader's cabinet, not the cardboard.
    */
   if (rows.length > 1) {
     const fileAll = (folderId: number | null) => {
@@ -686,68 +673,22 @@ function collectionItem(
     };
   }
 
-  // A finish the surface named is the whole list: it is what that row **is**, and offering the
-  // printing's other two would be asking a question the surface has already answered.
-  const named = target.finish;
-  const choices = named !== undefined ? [named] : finishChoices(target.finishes);
-
-  const app = appTargets([target]);
-  if (choices.length === 1) {
-    const finish = choices[0];
-    if (folders.length === 0) {
-      return collectionRow(() => addToCollection(target, finish, null));
-    }
-    return {
-      kind: "submenu",
-      id: "add-collection",
-      label: "Collection",
-      Icon: LibraryBig,
-      items: buildCollectionTargetItems(
-        cabinet,
-        (folderId) => addToCollection(target, finish, folderId),
-        app,
-      ),
-    };
+  // The finish on screen, never a question — see the doc above.
+  const finish = target.finish ?? finishChoices(target.finishes)[0];
+  if (folders.length === 0) {
+    return collectionRow(() => addToCollection(target, finish, null));
   }
-  /**
-   * **Finish first, then folder** — the two questions compose rather than flattening into one
-   * list, because they are about different things: which piece of cardboard the reader is
-   * recording, and which drawer they keep it in. A flat "Nonfoil → Binder" list would be
-   * `finishes × folders` rows, and the count multiplies with every folder the reader makes.
-   */
   return {
     kind: "submenu",
     id: "add-collection",
     label: "Collection",
     Icon: LibraryBig,
-    items: choices.map((finish) =>
-      finishBranch(
-        finish,
-        folders,
-        cabinet,
-        (folderId) => addToCollection(target, finish, folderId),
-        app,
-      ),
+    items: buildCollectionTargetItems(
+      cabinet,
+      (folderId) => addToCollection(target, finish, folderId),
+      appTargets([target]),
     ),
   };
-}
-
-/** One finish of the picker above: a press where the collection files nothing, and the folder
- *  tree where it does. */
-function finishBranch(
-  finish: Finish,
-  /** The reader's own, for the one question this level asks: is there a cabinet at all? */
-  folders: readonly CollectionFolder[],
-  /** The whole list, for the builder — see {@link collectionItem}'s `cabinet`. */
-  cabinet: readonly CollectionFolder[],
-  choose: (folderId: number | null) => void,
-  app?: CollectionAppSection,
-): MenuItem {
-  const row = { id: `add-collection-${finish}`, label: FINISH_LABEL[finish] } as const;
-  if (folders.length === 0) {
-    return { kind: "action", ...row, onSelect: () => choose(null) };
-  }
-  return { kind: "submenu", ...row, items: buildCollectionTargetItems(cabinet, choose, app) };
 }
 
 function collectionRow(onSelect: () => void): MenuAction {
