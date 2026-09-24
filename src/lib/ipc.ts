@@ -7400,6 +7400,19 @@ export const ipc = {
    */
   collectionFolderDelete: (id: number) => invoke<void>("collection_folder_delete", { id }),
   /**
+   * Empty `Recently removed` — delete every entry filed in the one removed-cards folder — and
+   * answer how many **entries** went (issue #506). The folder stays; nothing else is touched —
+   * not the root, not a folder the reader made, not a deck's group, and never a deck's list.
+   *
+   * **The one folder write that throws cards away**, where {@link ipc.collectionFolderDelete}
+   * re-files every card it finds: what sits in the holding area has already left the collection,
+   * and this is the reader deciding it is not coming back. No argument, because there is exactly
+   * one such folder. A database without one is **refused in words**
+   * (`collection_alloc::NO_REMOVED_FOLDER`) rather than answered with a `0` that would claim a pile
+   * was emptied. The count is rows, not copies; the feed's line carries the copies.
+   */
+  collectionRemovedClear: () => invoke<number>("collection_removed_clear"),
+  /**
    * Set or clear a folder's own lock — a drawer set aside, {@link CollectionFolder.locked}.
    *
    * `rename_folder`'s shape exactly: one scalar, fenced to the reader's own folders, answering

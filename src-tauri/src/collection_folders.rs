@@ -34,6 +34,11 @@
 //! but every write here already refuses to touch one, in words, through [`FOLDER_NOT_YOURS`].
 //! A fence written after the thing it fences is a fence somebody has to remember to add.
 //!
+//! **One write here is about the `removed` folder rather than fenced from it**: [`clear_removed`]
+//! empties the holding area (issue #506). It names no folder id — there is exactly one such
+//! folder — and it is the only press in this cabinet that deletes cards, because what sits in
+//! that folder has already left the collection.
+//!
 //! **Nothing here writes history.** `deck_meta::delete_folder` is the one folder write in that
 //! module that records an audit row, because `decks` has a `deck_audit` to file it under. The
 //! collection has no audit log at all, so the asymmetry is the schema's rather than a gap left
@@ -129,6 +134,14 @@ pub(crate) const USER_KIND: &str = "user";
 /// one place a folder's kind decides something about the row *in* it rather than about the
 /// folder itself.
 const DECK_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
+
+/// And the holding area's — [`crate::schema::COLLECTION_FOLDER_KINDS`]`[2]`, by index for
+/// [`DECK_KIND`]'s reason.
+///
+/// Read by exactly one thing in this module, [`clear_removed`], which is the one write here that
+/// finds a folder by its kind rather than by the id a caller named: there is exactly one
+/// `removed` folder per database, so the kind *is* its name.
+const REMOVED_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
 
 /// How far [`move_folder`]'s cycle walk will climb before it calls the chain a cycle.
 ///
@@ -747,6 +760,93 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
     tx.commit().map_err(|e| e.to_string())
 }
 
+/// Empty `Recently removed` — delete every entry filed in the single `removed` folder — and
+/// answer how many **entries** went (issue #506).
+///
+/// **The one write in this module that throws the reader's cards away, and the folder is why it
+/// may.** Every other press here is a filing decision, and the module doc's rule is that no
+/// filing decision may lose a card: [`delete_folder`] re-files a whole sub-tree to the root
+/// rather than let one go. The holding area is the exception by construction. What lands there
+/// has already left the collection — cut from a deck
+/// ([`crate::collection_alloc::deck_to_collection`]), or orphaned by a deck's delete — and the
+/// folder is the app keeping the cardboard's record until the reader decides. This press is that
+/// decision, made once for the whole pile, where [`crate::collection::remove_entry`] makes it
+/// one row at a time.
+///
+/// **Nothing else is touched.** Not the root, not a folder the reader made, not a deck's group,
+/// and never `deck_cards`: the copies in `Recently removed` already belong to no deck, which is
+/// the whole of what being there means. The folder itself stays — it is the app's, schema v25
+/// made it, and [`crate::reset::clear_collection`] is the only press that ever rebuilds it.
+///
+/// **Found by kind, and a database without one is refused with
+/// [`crate::collection_alloc::NO_REMOVED_FOLDER`]** — the sentence the deck side already says
+/// about the same missing row. Schema v25 files one into every database and a partial unique
+/// index makes a second impossible, so this is a hand-edited database; answering `0` over it
+/// would say the pile had been emptied when there was never a pile to empty.
+///
+/// **Rows, not copies, is the answer**, the unit [`crate::reset::clear_collection`] answers in
+/// and the wishlist drawer's `clear_folder` too — and the feed's `cards` key carries the same number, while
+/// its signed `delta` is the copies, read inside the transaction before the `DELETE` takes them.
+/// One [`crate::activity`] `clear` row when anything went, naming the folder as it is called at
+/// the press; none when nothing did, [`delete_folder`]'s "a delete that found nothing deleted
+/// nothing" one step over. **One row for the press rather than one per entry** — the feed's bulk
+/// rule, which is exactly why this is one statement and not a loop over [`crate::collection::remove_entry`].
+///
+/// **Sync sees every row, and nothing here has to arrange that.** `collection_entries`' capture
+/// trigger is `AFTER DELETE … FOR EACH ROW` (`sync_engine::capture`), which is SQLite's only kind,
+/// so a `DELETE … WHERE folder_id = ?1` writes one tombstone per row exactly as
+/// [`crate::collection::remove_entry`]'s single delete writes one. The `WHERE` matters for the
+/// other listener too: an unconditional `DELETE` can take SQLite's truncate optimisation and fire
+/// no update hook at all (`src-tauri/CLAUDE.md`), and this statement is never unconditional.
+pub fn clear_removed(conn: &Connection) -> Result<i64, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The folder and its name — the name for the feed row, and the refusal before anything is
+    // read or written.
+    let (folder_id, name): (i64, String) = tx
+        .query_row(
+            "SELECT id, name FROM collection_folders WHERE kind = ?1",
+            params![REMOVED_KIND],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| crate::collection_alloc::NO_REMOVED_FOLDER.to_owned())?;
+    // The copies, before the `DELETE` takes them: it answers **rows**, and the feed's signed
+    // `delta` is copies — [`crate::reset::clear_collection`]'s reason, one folder rather than the
+    // whole binder.
+    let copies: i64 = tx
+        .query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries WHERE folder_id = ?1",
+            params![folder_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let entries = tx
+        .execute(
+            "DELETE FROM collection_entries WHERE folder_id = ?1",
+            params![folder_id],
+        )
+        .map_err(|e| e.to_string())? as i64;
+    if entries > 0 {
+        // [`crate::reset::clear_collection`]'s kind and `cards` key, plus `folder` — the
+        // wishlist drawer clear's shape (`wishlist_folders::record_clear`), which is what tells
+        // one folder emptied apart from the whole binder wiped. `activityText.ts` draws it as
+        // the `in` clause.
+        crate::activity::record(
+            &tx,
+            crate::activity::COLLECTION,
+            crate::activity::CLEAR,
+            None,
+            None,
+            &serde_json::json!({ "cards": entries, "folder": name }),
+            -copies,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(entries)
+}
+
 /// Move one entry into a folder, or — with `None` — back to the **root of the collection**.
 ///
 /// `None` is a real destination rather than an omission, [`crate::deck::set_folder`]'s point one
@@ -1305,6 +1405,28 @@ pub async fn collection_folder_delete(
     tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| delete_folder(c, id)))
         .await
         .map_err(unfinished)?
+}
+
+/// Empty `Recently removed` and answer how many entries went — see [`clear_removed`] for why this
+/// is the one press in the cabinet that may lose a card, and why a database with no holding area
+/// is a refusal rather than a zero.
+///
+/// **[`crate::collection_source::with_write_owned`], where [`collection_folder_delete`] takes
+/// `sync::with_write`**, and the difference is the one that paragraph draws: a delete re-files
+/// and every `card_id` survives, while this takes rows out of the table, and a card whose last
+/// copies were in the pile stops being owned. That is [`crate::collection::remove_entry`]'s
+/// wrapper's reason, so it is that wrapper's helper.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn collection_removed_clear(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<i64, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::collection_source::with_write_owned(&state, clear_removed)
+    })
+    .await
+    .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
 /// "Move to …", and "Move to the collection" — see [`set_entry_folder`] for the merge, which is
@@ -2752,6 +2874,162 @@ mod tests {
                 .unwrap(),
             0,
             "the collection log itself is untouched"
+        );
+    }
+
+    /* ----------------------------------------------------------------------------------
+     * clear_removed (issue #506) — emptying the holding area, and only the holding area.
+     * ---------------------------------------------------------------------------------- */
+
+    /// Every entry still in the table, as `(id, folder_id, quantity)` in id order.
+    fn entries(conn: &Connection) -> Vec<(i64, Option<i64>, i64)> {
+        conn.prepare("SELECT id, folder_id, quantity FROM collection_entries ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// **Only the pile goes.** A root row, a row in a drawer the reader made and a row in a
+    /// deck's group each hold a printing the pile holds too — the same `card_id` on four grains,
+    /// so a `DELETE` that matched on the card rather than the folder would take all four and a
+    /// test seeding four different cards could never see it.
+    #[test]
+    fn clear_removed_empties_the_holding_area_and_nothing_else() {
+        let conn = open();
+        let removed = removed_folder(&conn);
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let group = insert_system_folder(&conn, "deck", "Burn");
+        let root = insert_entry(&conn, "bolt", None, 1);
+        let filed = insert_entry(&conn, "bolt", Some(shelf.id), 2);
+        let in_deck = insert_entry(&conn, "bolt", Some(group), 3);
+        insert_entry(&conn, "bolt", Some(removed), 4);
+        insert_entry(&conn, "sol", Some(removed), 1);
+
+        assert_eq!(
+            clear_removed(&conn),
+            Ok(2),
+            "two entries, not five copies — the answer is rows"
+        );
+        assert_eq!(
+            entries(&conn),
+            vec![
+                (root, None, 1),
+                (filed, Some(shelf.id), 2),
+                (in_deck, Some(group), 3)
+            ],
+            "the root, the reader's drawer and the deck's group are exactly as they were"
+        );
+        assert_eq!(
+            removed_folder(&conn),
+            removed,
+            "the folder is the app's and stays — only what was in it goes"
+        );
+    }
+
+    /// One `clear` line for the press, carrying the row count, the folder's name and — in
+    /// `delta` — the copies, which differ from the rows by every playset in the pile.
+    #[test]
+    fn clearing_the_holding_area_records_one_row_with_the_copies_as_its_delta() {
+        let conn = open();
+        let removed = removed_folder(&conn);
+        insert_entry(&conn, "bolt", Some(removed), 4);
+        insert_entry(&conn, "sol", Some(removed), 1);
+        insert_entry(&conn, "path", None, 7);
+
+        clear_removed(&conn).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1, "one line for the press, not one per entry");
+        assert_eq!(rows[0].scope, crate::activity::COLLECTION);
+        assert_eq!(rows[0].kind, crate::activity::CLEAR);
+        assert_eq!(
+            rows[0].delta, -5,
+            "the copies in the pile, negative; the root's seven are not in it"
+        );
+        assert_eq!(rows[0].card_id, None);
+        assert_eq!(payload(&rows[0])["cards"], 2);
+        assert_eq!(payload(&rows[0])["folder"], "Recently removed");
+    }
+
+    /// An empty pile is a success that changed nothing, so it records nothing.
+    #[test]
+    fn clearing_an_empty_holding_area_answers_zero_and_records_nothing() {
+        let conn = open();
+        insert_entry(&conn, "bolt", None, 1);
+
+        assert_eq!(clear_removed(&conn), Ok(0));
+        assert!(feed(&conn).is_empty());
+        assert_eq!(entries(&conn).len(), 1, "the root row is untouched");
+    }
+
+    /// A database with no holding area is refused in the deck side's own words — the only way to
+    /// get one is a hand edit, and `0 cleared` over it would claim a pile that never existed.
+    #[test]
+    fn clear_removed_refuses_a_database_with_no_holding_area() {
+        let conn = open();
+        conn.execute("DELETE FROM collection_folders WHERE kind = 'removed'", [])
+            .unwrap();
+        insert_entry(&conn, "bolt", None, 1);
+
+        assert_eq!(
+            clear_removed(&conn),
+            Err(crate::collection_alloc::NO_REMOVED_FOLDER.to_owned())
+        );
+        assert_eq!(entries(&conn).len(), 1);
+        assert!(feed(&conn).is_empty(), "a refusal writes nothing");
+    }
+
+    /// **One tombstone per entry, the single delete's own shape.** `collection::remove_entry`
+    /// propagates through `collection_entries`' `AFTER DELETE` capture trigger and nothing else,
+    /// so the bulk statement must reach the same trigger once per row — which SQLite's
+    /// row-level triggers do, and which this pins so that a later rewrite (a truncate, a
+    /// `WITHOUT ROWID` shadow, an apply-guarded path) cannot quietly leave the other devices
+    /// holding cards this one threw away.
+    #[test]
+    fn clearing_the_holding_area_writes_one_sync_tombstone_per_entry() {
+        let conn = open();
+        crate::sync_engine::capture::install(&conn).unwrap();
+        // A device with no group records nothing, `capture`'s own tests' fixture.
+        conn.execute_batch(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'dev-a', x'00', x'01', 'A', 0);
+             INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+             VALUES (1, 'g', 0, x'02', 0);",
+        )
+        .unwrap();
+        let removed = removed_folder(&conn);
+        insert_entry(&conn, "bolt", Some(removed), 4);
+        insert_entry(&conn, "sol", Some(removed), 1);
+        insert_entry(&conn, "path", None, 2);
+        let uids: Vec<String> = conn
+            .prepare(
+                "SELECT sync_uid FROM collection_entries WHERE folder_id = ?1 ORDER BY sync_uid",
+            )
+            .unwrap()
+            .query_map(params![removed], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(uids.len(), 2, "the insert trigger minted a uid for each");
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        clear_removed(&conn).unwrap();
+
+        let tombstones: Vec<String> = conn
+            .prepare(
+                "SELECT uid FROM sync_ops
+                  WHERE tbl = 'collection_entries' AND kind = 'del' ORDER BY uid",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            tombstones, uids,
+            "one tombstone per cleared entry, and no other"
         );
     }
 }

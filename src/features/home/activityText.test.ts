@@ -182,6 +182,21 @@ describe("activityLine — the collection's eight", () => {
       detail: null,
     });
   });
+
+  /**
+   * **`Recently removed`'s clear names the folder** (issue #506) — `collection_folders::
+   * clear_removed` writes the whole-binder clear's kind and `cards` key plus `folder`, the
+   * wishlist drawer clear's shape, so it reads as the same act at a smaller grain rather than as
+   * the Danger Zone wipe above, which carries no `folder` and keeps its detail empty.
+   */
+  it("names Recently removed when the clear emptied only that folder", () => {
+    expect(
+      entryLine("collection", "clear", { cards: 6, folder: "Recently removed" }, -9),
+    ).toEqual({
+      text: "Cleared 6 cards from your collection",
+      detail: "in Recently removed",
+    });
+  });
 });
 
 describe("activityLine — the wishlist's eight", () => {
