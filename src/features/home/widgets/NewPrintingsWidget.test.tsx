@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -76,6 +76,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => {
 
 import { useAppStore } from "@/lib/store";
 import { makeFit, spanPx, type WidgetFit } from "../fit";
+import { NEW_PRINTINGS_ROOT } from "../keys";
 import {
   NEW_PRINTINGS_READ,
   NewPrintingsWidget,
@@ -974,9 +975,11 @@ describe("the printing dialog", () => {
   });
 
   /**
-   * *Open card details* is the card modal on this printing, over the home page — and the caret is
-   * handed to the row **before** the card is selected, so the modal remembers the row as its opener
-   * rather than this dialog's panel, which is on its way out of the document.
+   * *Open card details* is the card modal on this printing, over the home page — and the press
+   * hands the caret back to the row, so the modal remembers the row as its opener rather than this
+   * dialog's panel, which is on its way out of the document. What this pins is the hand-back; the
+   * *order* of the two writes is not observable, since React commits after the handler returns.
+   * That the modal then returns the caret to the row was measured in the shipped window.
    */
   it("opens the card modal on the printing, with the caret back on its row", async () => {
     const user = userEvent.setup();
@@ -994,6 +997,63 @@ describe("the printing dialog", () => {
     expect(useAppStore.getState().activeView).toBe("home");
     expect(row).toHaveFocus();
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  /**
+   * **A background refetch that fails does not take the dialog down.** The body answers a refusal
+   * with a sentence in place of the list, and the dialog used to be drawn in the list's branch
+   * alone — so it vanished with no fade, dropped the caret, and reopened by itself on the next good
+   * read because `open` was still true.
+   */
+  it("keeps the dialog up when a refetch under it fails", async () => {
+    const user = userEvent.setup();
+    heldTwice();
+
+    draw();
+    await user.click(await screen.findByRole("button", { name: /^Sol Ring/ }));
+    const dialog = await screen.findByRole("dialog", { name: /^Sol Ring/ });
+
+    newPrintings.mockRejectedValue("The card database is busy.");
+    await act(() => qc.invalidateQueries({ queryKey: NEW_PRINTINGS_ROOT }));
+
+    expect(
+      await screen.findByText("Could not read recent printings — The card database is busy."),
+    ).toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Atraxa · 2 copies" })).toBeInTheDocument();
+  });
+
+  /**
+   * **A second press is a fresh dialog, never the first one revived.** The real race is a row
+   * pressed during the 180ms close fade, when the scrim has stopped taking the pointer; jsdom
+   * never fades, so the case is staged the one way it can be — a second row pressed while the
+   * first dialog is up. Without the per-opening key the panel's mount-only focus does not run
+   * again and the caret stays on the row that was pressed, outside the `aria-modal` dialog.
+   */
+  it("mounts a fresh dialog, caret and all, for a second press", async () => {
+    const user = userEvent.setup();
+    newPrintings.mockResolvedValue(
+      answer({
+        printings: [
+          printing({ printingId: "sld-1", releasedAt: SEP18 }),
+          printing({ printingId: "cmm-1", releasedAt: SEP18, name: "Arcane Signet", setCode: "cmm" }),
+        ],
+        oldest: SEP18,
+      }),
+    );
+    // The heading is drawn from the card read, so each printing has to answer as its own card.
+    cardDetail.mockImplementation((id) =>
+      Promise.resolve(detail({ id, name: id === "cmm-1" ? "Arcane Signet" : "Sol Ring" })),
+    );
+
+    draw();
+    await user.click(await screen.findByRole("button", { name: /^Sol Ring/ }));
+    await screen.findByRole("dialog", { name: /^Sol Ring/ });
+
+    await user.click(screen.getByRole("button", { name: /^Arcane Signet/ }));
+
+    const second = await screen.findByRole("dialog", { name: /^Arcane Signet/ });
+    expect(second).toContainElement(document.activeElement as HTMLElement);
   });
 
   it("says so when the card cannot be read, and still lists the decks", async () => {

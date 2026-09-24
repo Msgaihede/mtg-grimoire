@@ -157,11 +157,15 @@ export function NewPrintingDialog({
 }: NewPrintingDialogProps): ReactElement {
   const { marketplace } = useMarketplace();
   // Read here rather than in the body because the heading needs it too, and `Dialog` draws the
-  // heading. The body mounts per opening; this query is keyed on the printing, so a second opening
-  // of the same row is a cache read.
+  // heading. Keyed on the printing, so a second opening of the same row paints from the cache.
+  // **`enabled: open`**, because the host keeps this mounted past the close for the exit fade and
+  // then simply leaves it: without the gate a closed dialog went on refetching the card every time
+  // the window came back into focus, for as long as the home page lived. Disabled keeps the data,
+  // so the fade still draws the card.
   const card = useQuery({
     queryKey: cardDetailKey(printing.printingId, marketplace.id),
     queryFn: () => ipc.cardDetail(printing.printingId, marketplace.id),
+    enabled: open,
   });
 
   return (

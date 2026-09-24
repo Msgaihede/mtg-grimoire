@@ -1115,7 +1115,7 @@ Driven in the shipped window (dev build, 1920×1080, the main checkout's data co
 | --- | --- |
 | A row pressed at 100% | panel **704 × 743** at `608,168`, footer row included; picture **298 × 417** (the `display` variant, `naturalWidth` 672); caret on the panel |
 | Beside the card modal on the same printing | the left columns are one drawing — frame, chin `TRK · 278 · Star Trek`, *View as foil*, the two price cells, the title with its type line |
-| *Open card details*, then Escape out of the modal | the caret lands on the **row**, because the dialog hands it back before selecting the card and the modal remembers what held it |
+| *Open card details*, then Escape out of the modal | the caret lands on the **row**: the press hands it back to the row in the same handler that selects the card, and the modal remembers what held the caret when it mounted — the order of those two lines is not what does it, since React commits after the handler |
 | A deck pressed | `activeView: decks`, the deck's id, the printing selected — the modal opens over the deck, which is #462's second half |
 | 1024 × 700, the app's floor | panel 704 × 630 just under the title bar; the body scrolls **598 over 485** with the footer pinned; `scrollWidth` 1024 |
 | 390 wide | full bleed, picture **338 × 473** over the decks and the footer, no horizontal scroll |
@@ -1134,3 +1134,19 @@ tree, so the wrapper cancels the grid's without taking a flex slot — checked i
 jsdom lays out neither. **`StickyNoteDialog` has the same inheritance and was left alone** — it is
 another kind's surface, and it was not driven on this pass — so by the same mechanism a note opened
 at 150% should still be drawn at 150%. Wrapping its mount in `AppScale` is the whole of the fix.
+
+**A review before the PR found three more, and the first had been shipping since #462.**
+`new_printings::feed` attached the decks with `by_oracle.remove(&oracle_id)`, so the **first**
+printing of a card on the page took them and every later one — a showcase variant, a second set, a
+second language under *Every language* — read `decks: []`: a `0 decks` row, and now a dialog
+opening on an empty *In 0 watched decks* under a card the reader's decks plainly hold. Neither
+suite could see it: the fake reads `holders.get`, so every printing got its decks there, and no
+Rust case put two printings of one card on the page and looked at the second's decks. It clones now,
+and `two_reprints_of_one_card_both_carry_its_decks` fails under the old `remove`. The other two were
+the dialog's own. **A failed background refetch took it down** — mounted only in the list's branch,
+it unmounted with no fade when `isError` flipped and reopened by itself on the next good read,
+because `open` was still true; the body is now `content` then `dialog` in every branch, so it is one
+instance whatever the list is doing. **And a row pressed during the 180ms close fade revived the
+fading panel** rather than mounting one, leaving the caret on the row outside an `aria-modal`
+dialog; the dialog is keyed on a per-press `opening`. Each has a case that goes red when the fix is
+taken out, checked by taking it out.

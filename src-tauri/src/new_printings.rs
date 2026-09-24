@@ -371,10 +371,15 @@ pub fn feed(conn: &Connection, ask: &Ask) -> Result<NewPrintings, String> {
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
 
-    let mut by_oracle = decks_holding(conn, &watched, ask, &printings)?;
+    // **Cloned onto every printing of the card, never moved onto the first.** The decks hold the
+    // *card*, so a showcase variant, a second set or a second language of one reprint on the same
+    // page holds exactly the same decks — and a `remove` here handed them to the first row and left
+    // every later one reading *0 decks*, which on the row dialog is an empty *In 0 watched decks*
+    // under a card the reader's decks plainly hold (issue #514's review).
+    let by_oracle = decks_holding(conn, &watched, ask, &printings)?;
     for printing in &mut printings {
-        if let Some(decks) = by_oracle.remove(&printing.oracle_id) {
-            printing.decks = decks;
+        if let Some(decks) = by_oracle.get(&printing.oracle_id) {
+            printing.decks = decks.clone();
         }
     }
 
@@ -668,6 +673,37 @@ mod tests {
             out.oldest.as_deref(),
             Some(out.printings[0].released_at.as_str())
         );
+    }
+
+    /// **Every printing of a card on the page carries the card's decks, not only the first.** Two
+    /// reprints of one oracle card inside the window — a second set here; a showcase variant or a
+    /// second language is the same shape — are held by the same decks, because a deck holds the
+    /// card. The attach step moved the decks onto the first row and left the second empty.
+    #[test]
+    fn two_reprints_of_one_card_both_carry_its_decks() {
+        let c = conn();
+        printing(&c, "old", "o1", "Sol Ring", "LEA", 900, "en", "Artifact");
+        printing(&c, "newer", "o1", "Sol Ring", "SLD", 5, "en", "Artifact");
+        printing(&c, "new", "o1", "Sol Ring", "CMM", 10, "en", "Artifact");
+        deck(&c, 1, "Atraxa", false);
+        holds(&c, 1, "old", 1, "live");
+        let out = feed(&c, &ask()).unwrap();
+        assert_eq!(
+            out.printings
+                .iter()
+                .map(|p| p.printing_id.as_str())
+                .collect::<Vec<_>>(),
+            ["newer", "new"],
+            "both reprints are on the page, newest first"
+        );
+        for p in &out.printings {
+            assert_eq!(
+                p.decks.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+                ["Atraxa"],
+                "{} carries the card's deck",
+                p.printing_id
+            );
+        }
     }
 
     /// The quantity is summed across a deck's categories, so a deck holding a card in both a live
