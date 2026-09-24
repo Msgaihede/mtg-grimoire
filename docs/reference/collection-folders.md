@@ -760,8 +760,8 @@ A guard on `deck::add_card` would have been a fence around a gesture nobody can 
 
 **`PinnedFolders.tsx` used *locked* first, and it means very nearly the opposite.** Its doc said the
 app's own folders were *"pinned, flat and locked"*, where locked meant no rename, no delete, no move
-and no `⋯` at all — because every write in `collection_folders.rs` refuses a folder that is not
-`kind = 'user'`. A folder locked under #365 is still the reader's own drawer: still theirs to
+and no `⋯` at all — because every write in `collection_folders.rs` that edits a *folder* refuses
+one that is not `kind = 'user'`. A folder locked under #365 is still the reader's own drawer: still theirs to
 rename, to move, to file cards into and out of, still dashed, still a drop target both ways, and
 still carrying its full menu.
 
@@ -1497,7 +1497,9 @@ carries that half.
 changed since the page shipped, and a reader in the view that opens by default had to switch views
 to fix a miscount. What came with it is a fence neither view had: **a stepper is drawn only where
 every copy behind it is at the root or in a folder the reader made.** A deck's group and `Recently
-removed` draw the number as plain text and say why.
+removed` drew the number as plain text and said why. **`Recently removed` left that fence on
+2026-09-24** ([issue #506](https://github.com/Msgaihede/mtg-grimoire/issues/506)) and a deck's group
+did not; [Managing `Recently removed`](#managing-recently-removed--issue-506) below is why.
 
 **Where it stands moved on 2026-09-03** —
 [issue #348](https://github.com/Msgaihede/mtg-grimoire/issues/348) reported that the walls matched
@@ -1519,11 +1521,18 @@ was considered and rejected: `set_quantity` is what the importer's `set` mode, t
 and `take_copies`' split all go through, and every one of them has a legitimate reason to write a
 number onto a row in a group.
 
-**The predicate is positive, never a blocklist.** `folderId === null || userFolderIds.has(folderId)`
-rather than "not a deck group and not `Recently removed`" — so a fourth `collection_folders.kind`
-added later defaults to *fenced* rather than to editable. It is the shape the page's
-`canMakeFolder` already had for the `New folder` card, and the two now read as one rule about what
-a folder the reader made is allowed to do.
+**The predicate is positive, never a blocklist.** It names what may be stepped — the root, a folder
+the reader made, and since issue #506 `Recently removed` — rather than "not a deck group", so a
+fourth `collection_folders.kind` added later defaults to *fenced* rather than to editable. **Until
+2026-09-24 it was `readersOwnLevel`**, `folderId === null || userFolderIds.has(folderId)`, the
+shape the page's `canMakeFolder` already had for the `New folder` card, and the two read as one
+rule about what a folder the reader made is allowed to do. **They are two predicates now, because
+they answer two questions.** `readersOwnLevel` still answers *may something be filed here* — the
+drop target and the `New folder` card — and `Recently removed` is still no destination, since
+filing a copy into it by hand would assert that it left the collection without the write that
+makes that true. The quantity predicate, `countEditable`, answers *may this count be changed from here*, and a copy
+in `Recently removed` belongs to no deck, so nothing about a deck is changed behind the reader's
+back by stepping it.
 
 **On the wall it is every copy behind the art, not any.** A tile is a printing in one finish, and
 folder is one of the terms that merges into it — so while Flatten is on, which is the default, one
@@ -1548,10 +1557,13 @@ here, and here is what to do instead":
 | Where the row is | What the table says |
 | --- | --- |
 | a deck's group | `In <deck>. Cut the card from the deck to change how many you hold.` |
-| `Recently removed` | `In Recently removed. Move it back to your collection to change how many you hold.` |
 | anything else fenced | `In <folder>. Move it into one of your own folders to change how many you hold.` |
 
-**The third arm names no mechanism, and that is the fence's positive spelling showing through.**
+**The table had a `Recently removed` row until 2026-09-24** — *"In Recently removed. Move it back
+to your collection to change how many you hold."* — and it was deleted rather than reworded,
+because since issue #506 a row there draws a stepper and has nothing to refuse.
+
+**The last arm names no mechanism, and that is the fence's positive spelling showing through.**
 It is reached only by a fourth `kind` — and a fourth kind wearing the deck sentence would tell the
 reader to cut a card from a deck that does not exist. It is also, for the length of one query, what
 a row in the reader's own binder gets: `useCollectionFolderList` starts empty, and "empty" is a
@@ -1565,6 +1577,54 @@ tooltip's `aria-describedby`: the panel opens on pointer-enter or on the **ancho
 `<span>` takes no focus, and the row's tab stop is the row — so the tooltip alone would have been
 pointer-only. `describes: false` then keeps an open panel from describing a sentence the
 accessibility tree already holds, which is the `<abbr>` cell's argument one column over.
+
+## Managing `Recently removed` — issue #506
+
+**2026-09-24, [issue #506](https://github.com/Msgaihede/mtg-grimoire/issues/506).** Until this date
+`Recently removed` was a folder a reader could look into and drag out of and do nothing else to: no
+stepper, no way to delete a copy there short of filing it back out first and deleting it where it
+landed, and no way to empty it. A holding area that only fills is a pile, so three controls came at
+once — and every one of them is fenced by the same distinction the copies control drew in the first
+place.
+
+**The fence was always about deck custody, and `Recently removed` holds no deck's cards.** A deck's
+count is a `sum()` over its group, so stepping a group's copy from the collection page changes what a
+deck holds from a screen that does not mention the deck — that is the whole of why the stepper was
+fenced. A copy in `Recently removed` has already left its deck: `deck_to_collection` or
+`delete_deck` cut the `deck_cards` row before filing it there, so no list reads it. Its count is the
+reader's to change like any binder's. The old sentence for it — *move it back to your collection* —
+sent the reader on a detour whose only purpose was to reach a control the fence had hidden for no
+reason.
+
+- **Steppers.** The quantity predicate grew `Recently removed` as a third positive arm (see
+  [the copies control](#the-copies-control-belongs-to-a-normal-folder-in-both-views)). Stepping a
+  copy there to zero deletes the entry, as it does anywhere — the same `collection_remove` write.
+  **Deck groups stay fenced**, with their sentence unchanged.
+- **`Remove from collection` in the card menu.** `cardMenu.tsx` takes an optional `removeCopies`
+  dep and draws `Remove from collection` — `Remove N cards from collection` over a pick — only when
+  it is wired; a surface that does not wire it draws no row, rather than a greyed one. The
+  collection page wires it only where the quantity predicate holds for **every** row behind the
+  target, and for every target in a pick: the root, the reader's folders and `Recently removed`,
+  never a deck group, and never a flattened tile that mixes one in. One press removes every entry
+  behind the tile through `collection_remove`, with no confirmation — it is the stepper taken to
+  zero in one gesture rather than a new kind of write, and the activity feed records it the same
+  way.
+- **`Clear…` inside `Recently removed`.** Standing in that level, not flattened, with cards in it,
+  a `Clear…` button sits beside the *Drag a card onto a folder…* sentence and opens a confirmation
+  strip — the strip's shape, the wishlist's `Clear…` from issue #471 being the precedent. Confirming
+  calls **`collection_removed_clear`** (`collection_folders::clear_removed`), which deletes every
+  entry filed in the removed folder in one transaction, answers the entry count, writes one
+  activity row for the whole clear, and refuses with `NO_REMOVED_FOLDER` when the folder is
+  missing. It touches nothing in a deck group, nothing in a reader's folder, and no `deck_cards` row
+  — a clear is not a way to change a deck. This one confirms where the menu row does not because it
+  is aimed at the whole folder, not at the cards the reader is pointing at.
+
+**`clear_removed` is the first write aimed *at* `Recently removed` by the reader, and it did not
+open the folder to edits.** The folder is still no destination (`readersOwnLevel` still answers the
+drop and the `New folder` card, and `set_entry_folder` still refuses a `removed` destination), still
+cannot be renamed, moved, deleted or locked, and the pinned strip still carries no `⋯`. What the
+reader may now do is empty it — which deletes entries, and leaves the folder standing for the next
+cut.
 
 ## `folder_summary` answers direct counts, and no row at all for an empty folder
 
@@ -1664,13 +1724,16 @@ about this cabinet rather than about the field.
 wall is drawn where `cabinet && (wall.length > 0 || canMakeFolder)`, and a deck group answers no
 to both — nothing nests under it, and `create_folder` refuses it as a parent — so there is no wall
 inside one and therefore nowhere for a field to open. `Recently removed` is the same. That is
-§"The copies control"'s positive predicate reaching a third control: a fourth
+`readersOwnLevel` reaching a third control — the filing predicate, which issue #506 split from the
+quantity one precisely so `Recently removed` could draw steppers and still grow no folder: a fourth
 `collection_folders.kind` added later gets **no** naming tile by default, rather than one whose
 only outcome is `FOLDER_NOT_YOURS`.
 
 **The pinned strip is untouched for the same reason it carries no `⋯`.** Its cards are the app's
-own folders and every write in `collection_folders.rs` refuses them, so there was never a rename
-on one to move — the argument is §"The app's own folders in the card menu"'s, unchanged.
+own folders and every write in `collection_folders.rs` that edits a folder refuses them, so there
+was never a rename on one to move — the argument is §"The app's own folders in the card menu"'s,
+unchanged. Issue #506's `Clear…` does not dent it: that button empties the folder's *entries*, and
+it stands in the level the reader has walked into, not on the pinned card.
 
 **A rename keeps `folderFace`'s figures line, em dash included.** `12 cards · $340.00` stays under
 the field, inside the same dashed edge with only its colour moved to `border-accent` — a folder
@@ -2135,10 +2198,13 @@ walking back out, and a section that moved as you navigated is not one anybody c
 position of. *Flat*, because `parent_id` is `NULL` on every row v25 creates and no command can nest
 anything under one, so there is no tree to build and the summary's **direct** count is the whole
 count: asking `subtotalsOf` to add up children here would be an answer computed from a tree these
-rows are deliberately not in. *Fixed*, because every write in `collection_folders.rs` refuses a
-folder that is not `kind = 'user'` — a `⋯` menu here would be three rows that each end in
-`FOLDER_NOT_YOURS`, and a control whose only outcome is a sentence explaining that it does not work
-teaches nothing its absence would not have.
+rows are deliberately not in. *Fixed*, because every write in `collection_folders.rs` that edits a
+folder — rename, move, delete, lock — refuses one that is not `kind = 'user'` — a `⋯` menu here
+would be rows that each end in `FOLDER_NOT_YOURS`, and a control whose only outcome is a sentence
+explaining that it does not work teaches nothing its absence would not have. **`clear_removed`
+(issue #506) is the one write in that file aimed at an app folder on purpose, and it is not a
+folder edit**: it deletes the entries filed in `Recently removed` and leaves the folder standing,
+and its button lives inside the level rather than on this strip, which still has no `⋯`.
 
 **That third word was *locked* until v33, and it was renamed rather than kept.** #365 gave the
 reader a lock of their own, and the two are very nearly opposites: a folder locked by a reader is

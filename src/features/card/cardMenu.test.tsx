@@ -886,6 +886,85 @@ describe("buildCardMenu", () => {
       expect(editCopy).toHaveBeenCalledTimes(1);
     });
   });
+
+  /**
+   * `Remove from collection` — fenced on `Move to`'s ids (`entryId` **or** `entryIds`) and on the
+   * dep being wired, and on nothing else. Which targets may lose copies is the surface's call,
+   * made by whether it passes `removeCopies` at all.
+   */
+  describe("Remove from collection", () => {
+    const REMOVE = "Remove from collection";
+    const separators = (items: MenuItem[]) =>
+      items.filter((i) => i.kind === "separator").map((i) => i.id);
+
+    it("leaves the row out where the surface wired no removal", () => {
+      const items = buildCardMenu({ ...BOLT, entryId: 42 }, deps());
+      expect(labels(items)).not.toContain(REMOVE);
+      expect(items.some((i) => i.id === "remove-copies")).toBe(false);
+    });
+
+    it("leaves the row out on a card that names no collection row", () => {
+      // A search tile: cardboard, not a copy anybody owns.
+      const items = buildCardMenu(BOLT, deps({ removeCopies: vi.fn() }));
+      expect(items.some((i) => i.id === "remove-copies")).toBe(false);
+      // And an empty tile reads the same — no ids is no row, not a row that removes nothing.
+      const empty = buildCardMenu({ ...BOLT, entryIds: [] }, deps({ removeCopies: vi.fn() }));
+      expect(empty.some((i) => i.id === "remove-copies")).toBe(false);
+    });
+
+    it("removes the one copy a table row is, on one press and without asking", () => {
+      const removeCopies = vi.fn();
+      const items = buildCardMenu({ ...BOLT, entryId: 42 }, deps({ removeCopies }));
+      const row = find(items, REMOVE) as MenuAction;
+      expect(row.id).toBe("remove-copies");
+      expect(row.kind).toBe("action");
+
+      row.onSelect();
+      expect(removeCopies).toHaveBeenCalledTimes(1);
+      expect(removeCopies).toHaveBeenCalledWith([42]);
+    });
+
+    it("removes every entry a wall tile stands for, in one call, counted on the label", () => {
+      const removeCopies = vi.fn();
+      const items = buildCardMenu({ ...BOLT, entryIds: [4, 9] }, deps({ removeCopies }));
+      expect(labels(items)).not.toContain(REMOVE);
+
+      (find(items, "Remove 2 cards from collection") as MenuAction).onSelect();
+      expect(removeCopies).toHaveBeenCalledTimes(1);
+      expect(removeCopies).toHaveBeenCalledWith([4, 9]);
+    });
+
+    it("stays singular for a tile that stands for exactly one entry", () => {
+      const removeCopies = vi.fn();
+      const items = buildCardMenu({ ...BOLT, entryIds: [4] }, deps({ removeCopies }));
+      (find(items, REMOVE) as MenuAction).onSelect();
+      expect(removeCopies).toHaveBeenCalledWith([4]);
+    });
+
+    it("is the last row, under Edit copy…, sharing its one rule", () => {
+      const items = buildCardMenu(
+        { ...BOLT, entryId: 42 },
+        deps({ editCopy: vi.fn(), removeCopies: vi.fn() }),
+      );
+      expect(items.slice(-3).map((i) => i.id)).toEqual(["sep-edit", "edit-copy", "remove-copies"]);
+      // One rule for the group, never one per row.
+      expect(separators(items).filter((id) => id === "sep-edit")).toHaveLength(1);
+    });
+
+    it("brings the rule itself where Edit copy… is not drawn", () => {
+      // A tile: `Edit copy…` is fenced on `entryId` and is absent, so the rule must not be.
+      const tile = buildCardMenu(
+        { ...BOLT, entryIds: [4, 9] },
+        deps({ editCopy: vi.fn(), removeCopies: vi.fn() }),
+      );
+      expect(tile.slice(-2).map((i) => i.id)).toEqual(["sep-edit", "remove-copies"]);
+
+      // And nothing at the foot at all where neither row can be offered.
+      const card = buildCardMenu(BOLT, deps({ editCopy: vi.fn(), removeCopies: vi.fn() }));
+      expect(separators(card)).not.toContain("sep-edit");
+      expect(card[card.length - 1].kind).not.toBe("separator");
+    });
+  });
 });
 
 /* ------------------------------------------------------------------------------------------ *
@@ -1960,5 +2039,22 @@ describe("buildCardMenu with a picked set", () => {
     (find(rowsOf(move), "Binder") as MenuAction).onSelect();
 
     expect(pickCopies).toHaveBeenCalledWith([3, 7], 1);
+  });
+
+  /** `Remove from collection` reads the picked set exactly as `Move to` does: every member that
+   *  names a stored row, each row once, and one call for all of them. */
+  it("removes the union of the picked rows' entries, each once, on one press", () => {
+    const removeCopies = vi.fn();
+    const items = buildCardMenu(
+      { ...BOLT, entryIds: [3, 7] },
+      deps({
+        picked: [{ ...BOLT, entryIds: [3, 7] }, { ...HELIX, entryId: 3 }, { ...PONDER, entryId: 11 }, BOLT],
+        removeCopies,
+      }),
+    );
+    (find(items, "Remove 3 cards from collection") as MenuAction).onSelect();
+
+    expect(removeCopies).toHaveBeenCalledTimes(1);
+    expect(removeCopies).toHaveBeenCalledWith([3, 7, 11]);
   });
 });

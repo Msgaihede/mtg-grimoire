@@ -14565,6 +14565,33 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `collection_folders::clear_removed` — **every entry filed in `Recently removed`, deleted;
+     * the folder stays** (issue #506). Answers how many **entries** went, not copies, and `0`
+     * for a pile that was already empty is an answer rather than a refusal.
+     *
+     * **The one folder write that throws cards away**, where {@link collection_folder_delete}
+     * one function up re-files every card it finds: what sits in the holding area has already
+     * left the collection. The root, the reader's drawers and every deck's group are untouched —
+     * a copy in a group is one a deck holds, and nothing here may take it.
+     *
+     * **A database with no holding area is refused in words** ({@link NO_REMOVED_FOLDER}, through
+     * {@link removedFolder}), because a `0` over it would claim a pile that never existed. No
+     * seed can reach that — every one carries the folder — so the refusal is the crate's shape
+     * kept rather than a state a story draws.
+     *
+     * **It files no {@link FakeDb.activity} row**, though the crate's twin records one — no write
+     * in this fake does, {@link collection_remove} included, and that table is the past the seeds
+     * carry.
+     */
+    collection_removed_clear: (): number => {
+      refuseIfBusy(db);
+      const pile = removedFolder(db).id;
+      const before = db.collectionEntries.length;
+      db.collectionEntries = db.collectionEntries.filter((e) => e.folderId !== pile);
+      return before - db.collectionEntries.length;
+    },
+
+    /**
      * `collection_folders::set_entry_folder` — "Move to …", and "Move to the collection".
      *
      * `folderId: null` is the **root of the collection**, a real destination rather than an

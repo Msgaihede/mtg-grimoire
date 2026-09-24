@@ -165,6 +165,7 @@ pub const COMMANDS: &[&str] = &[
     "collection_folder_move",
     "collection_folder_reorder",
     "collection_folder_delete",
+    "collection_removed_clear",
     "collection_set_folder",
     "collection_to_deck",
     "deck_to_collection",
@@ -1537,6 +1538,18 @@ pub fn call(
                     .map_err(RouteError::Failed)?,
             )
         }
+
+        // **`with_write_owned`, matching its wrapper, and here the "it touches entries" guess
+        // above would be right**: this press deletes rows outright, so a card whose last copies
+        // were in the pile stops being owned (issue #506). No arguments — there is one pile.
+        "collection_removed_clear" => encode(
+            command,
+            crate::collection_source::with_write_owned(
+                state,
+                crate::collection_folders::clear_removed,
+            )
+            .map_err(RouteError::Failed)?,
+        ),
 
         "collection_set_folder" => {
             let id: i64 = field(command, args, "id")?;
@@ -3277,6 +3290,63 @@ mod tests {
         assert_eq!(items[0]["quantity"], json!(1));
     }
 
+    /// **The collection's `Recently removed` clear (issue #506), routed and advertised** — no
+    /// arguments, a bare count of entries back, and only the pile's rows gone. Membership is
+    /// asserted for [`the_note_commands_are_both_routed_and_advertised`]'s reason: an arm left
+    /// out of `COMMANDS` answers a [`call`] and is still invisible to the page.
+    #[test]
+    fn the_holding_area_is_cleared_through_the_route() {
+        let s = state("web-route-collection-removed-clear");
+        assert!(
+            COMMANDS.contains(&"collection_removed_clear"),
+            "`collection_removed_clear` is an arm the page is never told about"
+        );
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            let removed: i64 = conn
+                .query_row(
+                    "SELECT id FROM collection_folders WHERE kind = 'removed'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            conn.execute(
+                "INSERT INTO collection_entries
+                    (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                     folder_id, created_at, updated_at)
+                 VALUES ('p1', 'lea', '161', 'en', 'nonfoil', 'NM', 4, ?1, 0, 0),
+                        ('p2', 'lea', '162', 'en', 'nonfoil', 'NM', 1, ?1, 0, 0),
+                        ('p3', 'lea', '163', 'en', 'nonfoil', 'NM', 2, NULL, 0, 0)",
+                rusqlite::params![removed],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            call(&s, "collection_removed_clear", &json!({})).unwrap(),
+            json!(2),
+            "two entries, not five copies"
+        );
+        assert_eq!(
+            call(&s, "collection_removed_clear", &json!({})).unwrap(),
+            json!(0),
+            "an empty pile is a success that cleared nothing"
+        );
+        let conn = crate::db::lock_blocking(&s.db);
+        let left: Vec<String> = conn
+            .prepare("SELECT card_id FROM collection_entries ORDER BY card_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            left,
+            vec!["p3".to_owned()],
+            "the root row is not the pile's"
+        );
+    }
+
     /// **A wishlist drawer's two deleting writes (issue #471), routed and advertised**, each
     /// reading the one `id` key and answering a bare count of wishes. Membership is asserted for
     /// [`the_note_commands_are_both_routed_and_advertised`]'s reason: an arm left out of
@@ -3982,7 +4052,7 @@ mod tests {
         // later merge turns this red, take the number from `left`.
         assert_eq!(
             COMMANDS.len(),
-            179,
+            180,
             "update this number when a command is added"
         );
     }

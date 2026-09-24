@@ -4252,6 +4252,50 @@ describe("the collection's folders", () => {
   });
 
   /**
+   * **`Recently removed`'s clear (issue #506) takes the pile and nothing else**, and the fixture
+   * puts the one printing on four grains so each boundary has a copy on both sides of it: the
+   * root, a drawer the reader made, a deck's group, and the pile itself. A handler that deleted
+   * by card would take all four; one that deleted by `kind !== "user"` would take the group.
+   */
+  it("clears every entry in Recently removed, and keeps the folder and everything else", () => {
+    const db = filed({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
+          locked: false },
+        { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
+          sortOrder: 2, locked: false },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: null }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 2, folderId: 1 }),
+        entry({ id: 3, cardId: BOLT.id, quantity: 3, folderId: 2 }),
+        entry({ id: 4, cardId: BOLT.id, quantity: 4, folderId: 3 }),
+        entry({ id: 5, cardId: BOLT_2X2.id, quantity: 1, folderId: 3 }),
+      ],
+    });
+    const w = writeHandlers(db);
+    // Entries, not copies — two rows holding five.
+    expect(w.collection_removed_clear()).toBe(2);
+    expect(db.collectionEntries.map((e) => e.id)).toEqual([1, 2, 3]);
+    expect(db.collectionFolders.map((f) => f.id)).toEqual([1, 2, 3]);
+    // A second press over an empty pile is an answer, not a refusal.
+    expect(w.collection_removed_clear()).toBe(0);
+    expect(db.collectionEntries).toHaveLength(3);
+  });
+
+  /** No seed lacks the holding area; a database that does is refused in the crate's words
+   *  rather than answered with a `0` that would claim a pile was emptied. */
+  it("refuses to clear Recently removed when there is no such folder, and changes nothing", () => {
+    const db = filed({ collectionEntries: [entry({ id: 1, quantity: 1, folderId: 1 })] });
+    expect(() => writeHandlers(db).collection_removed_clear()).toThrow(
+      /^There is no Recently removed folder to file these into\.$/,
+    );
+    expect(db.collectionEntries).toHaveLength(1);
+  });
+
+  /**
    * The delete **merges**, and the two shapes that make it have to.
    *
    * Un-filing a sub-tree rewrites the eleventh term of `collectionGrain` on every row in it, so a
@@ -10341,7 +10385,8 @@ describe("the busy fault", () => {
     // own on `main` while this branch was open — 115 → 116 there, 115 → 119 here — so neither
     // number survived and the figure below is the parse above re-run on the merged tree. That is
     // the case the paragraph above was written for, arriving before the ink was dry.
-    expect(names).toHaveLength(120);
+    // 120 → 121 on 2026-09-24 with `collection_removed_clear` (issue #506).
+    expect(names).toHaveLength(121);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

@@ -424,6 +424,7 @@ pub fn run() {
             collection_folders::collection_folder_move,
             collection_folders::collection_folder_reorder,
             collection_folders::collection_folder_delete,
+            collection_folders::collection_removed_clear,
             collection_folders::collection_set_folder,
             collection_folders::collection_folder_summary,
             // Publishing a binder as a read-only page, and reading somebody else's. Registered
