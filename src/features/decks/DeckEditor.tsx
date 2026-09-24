@@ -494,7 +494,7 @@ export function exportSubject(
  * A tile in the docked search panel, as a card menu describes it.
  *
  * **No `finish`**, for the search wall's reason: a result is a *printing* and not a copy, so
- * "Add to → Collection" offers the finishes this printing exists in rather than choosing one.
+ * "Add to → Collection" records the printing's own default finish — the one the tile draws.
  * `typeLine` travels because `CardSummary` carries it and a menu add is filed by what the card
  * does — the same fact, off the same row, that this panel's drag payload already hands a drop.
  */
