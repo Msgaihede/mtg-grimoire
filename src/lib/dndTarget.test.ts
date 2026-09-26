@@ -39,8 +39,8 @@ function boxed(element: HTMLElement, top: number, height = 40): HTMLElement {
   return element;
 }
 
-function mountSource(id: number): HTMLElement {
-  const element = boxed(document.createElement("div"), 0);
+function mountSource(id: number, top = 0): HTMLElement {
+  const element = boxed(document.createElement("div"), top);
   element.textContent = "a thing";
   document.body.append(element);
   const draggable = new Draggable(
@@ -60,6 +60,8 @@ interface Props {
   onDrop: (thing: Thing) => void;
   /** The shelves' opt-in: arm on a payload that was already in the air at mount. */
   armOnMount?: boolean;
+  /** The shelves' other opt-in: a collision only while the pointer is inside the target. */
+  pointerOnly?: boolean;
 }
 
 function mountTarget({
@@ -323,5 +325,64 @@ describe("useDragRecord", () => {
 
     expect(off.result.current).toBeNull();
     await held.cancel();
+  });
+});
+
+/**
+ * **A target that is over only while the pointer is inside it** — the shelves' opt-in, from the live
+ * pass's "Extra, found during 3". dnd-kit's default detector is `pointerIntersection ??
+ * shapeIntersection`, and the fallback compares the **dragged card's whole rectangle** with the
+ * target: a card carried over one shelf's tiles overlaps the next shelf's heading, which went over
+ * and took the drop. Measured in the shipped window: a card released on tile 50 of `Foils` filed
+ * into `Showcase`, 22px below.
+ *
+ * **Where the overlap is staged, and why there.** dnd-kit measures the carried card once, off the
+ * source's own box, and jsdom never re-runs the effect that would move that measurement with the
+ * pointer (`test-drag.ts`'s `settle` has the reading). So here the card's rectangle *is* the
+ * source's: a source at 230–270 overlaps the 200–240 target by 10px, and its centre — where the
+ * press lands — is 10px below the target. That is the shipped case exactly: the pointer outside, the
+ * card it carries reaching in. The pointer is then walked further off, so nothing is under it.
+ */
+describe("useDndDropTarget with pointerOnly", () => {
+  /** 10px of the carried card inside the 200–240 target; its centre 10px below it. */
+  const OVERLAPPING = 230;
+  /** Past the target and past the source: the pointer is over nothing at all. */
+  const OFF = { x: 100, y: 330 };
+
+  /** The fence for everybody who did not ask — the deck editor's piles, the sidebar, the quick
+   *  zones: a card whose rectangle overlaps a target still lands on it, as it always has. */
+  it("leaves a plain target taking a card that overlaps it with the pointer outside", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(7, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    expect(target.state.over).toBe(true);
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith({ id: 7 });
+  });
+
+  it("is not over, and takes nothing, while the pointer is outside it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(7, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    expect(target.state.armed).toBe(true);
+    expect(target.state.over).toBe(false);
+    await held.drop();
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  it("is over, and takes the drop, once the pointer is inside it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(7, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    await held.over(target.element);
+    expect(target.state.over).toBe(true);
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith({ id: 7 });
   });
 });

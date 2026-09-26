@@ -7,6 +7,16 @@
  * `useDndTargetRef`'s callback ref so a heading that swaps its element is re-registered rather than
  * orphaned.
  *
+ * **Anything lands on a shelf target only while the pointer is inside it** (`pointerOnly`, on both
+ * halves). Spec §6's targets are headings, empty boxes, the sticky bar and path segments — never
+ * tiles, table rows or blank wall — and dnd-kit's default detector falls back to the carried
+ * thing's *rectangle* when the pointer is in no target, which made the nearest heading take a card
+ * released on another shelf's tiles (live pass, "Extra, found during 3"). The folder half takes the
+ * same rule because the table view does not fold away during a folder drag, so a heading carried
+ * over card rows would land beside whichever heading it overlapped. What it gives up is the grid's
+ * folded wall landing a folder dropped in the 8px gap between two headings: there it now lands
+ * nowhere, and a reorder is aimed at a heading's top or bottom quarter instead.
+ *
  * **The results are named `attach` and `mark`, never `…Ref`**: the React Compiler lint reads a hook
  * result named like a ref as a ref object and flags every read beside it
  * (`features/home/stickyNoteDrag.ts` carries the finding).
@@ -101,6 +111,10 @@ export function useShelfDropTarget<T>(
     canDrop: card.canDrop,
     onDrop: card.onDrop,
     armOnMount: true,
+    // Over only while the pointer is inside this row, box or bar. Spec §6 names these targets and
+    // nothing else: a card released on a shelf's tiles or on blank wall files nowhere, where the
+    // default's shape fallback filed it into whichever heading the carried card overlapped.
+    pointerOnly: true,
   });
   const folders = useFolderDropTarget({
     ref,
@@ -109,6 +123,9 @@ export function useShelfDropTarget<T>(
     canDrop: folder?.canDrop ?? NEVER,
     onDrop: folder?.onDrop ?? NOTHING,
     armOnMount: true,
+    // The same rule for a folder: the table view does not fold away during a folder drag, so a
+    // heading carried over card rows would otherwise land beside whichever heading it overlapped.
+    pointerOnly: true,
   });
   return { attach, mark: shelfDropMark(cards, folders) };
 }

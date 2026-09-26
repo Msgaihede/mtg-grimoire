@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { pointerIntersection } from "@dnd-kit/collision";
 import { Draggable, Droppable, type DragEndEvent } from "@dnd-kit/dom";
 import { dndId, dndManager, registerNow } from "@/lib/dndManager";
 import { useDragRecord } from "@/lib/dndTarget";
@@ -290,6 +291,7 @@ export function useFolderDropTarget({
   canDrop,
   onDrop,
   armOnMount = false,
+  pointerOnly = false,
 }: {
   ref: RefObject<HTMLElement | null>;
   scope: FolderScope;
@@ -304,6 +306,21 @@ export function useFolderDropTarget({
    * folder target leaves it off and keeps the `dragstart` rule above.
    */
   armOnMount?: boolean;
+  /**
+   * `useDndDropTarget`'s other opt-in: a collision **only while the pointer is inside this
+   * target**, so a folder lands on it only from over it.
+   *
+   * **The default detector's shape fallback plus {@link folderEdge}'s "a point outside answers by
+   * the end it is past" is a landing nobody aimed at.** dnd-kit falls back to comparing the carried
+   * folder's whole rectangle when the pointer is in no target, so the target it overlaps becomes the
+   * operation's, and the edge rule then turns a pointer 100px below it into `"after"`. That is
+   * right for a tree row or a folder card, whose neighbours are the only things around them. It is
+   * wrong for a shelf heading laid between rows of card tiles that are not targets at all — the
+   * table view does not fold away during a folder drag, so a heading carried over card rows was
+   * filed beside whichever heading it overlapped (Folder Shelves live pass, "Extra, found during
+   * 3"). The shelf hook asks for it; every other folder target keeps the default detector.
+   */
+  pointerOnly?: boolean;
 }): { armed: boolean; edge: FolderEdge | null } {
   const [armed, setArmed] = useState(false);
   const [edge, setEdge] = useState<FolderEdge | null>(null);
@@ -339,6 +356,7 @@ export function useFolderDropTarget({
           const drag = read(source);
           return drag !== null && somehow(drag);
         },
+        ...(pointerOnly ? { collisionDetector: pointerIntersection } : {}),
       },
       dndManager,
     );
@@ -377,7 +395,7 @@ export function useFolderDropTarget({
       for (const stop of off) stop();
       droppable.destroy();
     };
-  }, [ref, scope, axis]);
+  }, [ref, scope, axis, pointerOnly]);
 
   if (!armOnMount) return { armed, edge };
   const drag = inFlight === null ? null : readFolderDrag(inFlight, scope);

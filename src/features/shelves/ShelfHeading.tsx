@@ -270,11 +270,14 @@ export function ShelfHeading({
           );
         })}
         {renaming !== undefined ? (
-          // The rename shape for both jobs: the create shape carries the tile wall's 62px floor, and
-          // a heading is 40px. The pair of ✓ / ✕ is absolute against this box.
-          <div className="relative min-w-0 flex-[0_1_16rem]">
+          // The rename shape for both jobs — the create shape carries the tile wall's 62px floor —
+          // and at heading size: a 36px frame in this row's 38px content box, with ✓ / ✕ centred
+          // on it against the field's own form rather than hung from its top (live pass §10, where
+          // the tile size stood 1px proud of the row and put the pair 3px above its centre line).
+          <div className="min-w-0 flex-[0_1_16rem]">
             <FolderNameField
               mode="rename"
+              size="heading"
               label={creating ? "Folder name" : `Rename ${shelf.name}`}
               initial={renaming.initial}
               submitLabel={creating ? "Create folder" : "Rename folder"}

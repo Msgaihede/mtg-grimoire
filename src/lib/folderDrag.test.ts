@@ -230,8 +230,8 @@ const BEFORE = { y: 0.1 };
 const INSIDE = { y: 0.5 };
 const AFTER = { y: 0.9 };
 
-function mountSource(folder: () => FolderDrag): HTMLElement {
-  const element = boxed(document.createElement("div"), 0);
+function mountSource(folder: () => FolderDrag, top = 0): HTMLElement {
+  const element = boxed(document.createElement("div"), top);
   element.textContent = "a folder";
   document.body.append(element);
   const stop = folderDraggable({ element, folder });
@@ -315,6 +315,7 @@ interface TargetProps {
   canDrop: (drag: FolderDrag, edge: FolderEdge) => boolean;
   onDrop: (drag: FolderDrag, edge: FolderEdge) => void;
   armOnMount?: boolean;
+  pointerOnly?: boolean;
 }
 
 function mountTarget({ top = TARGET_TOP, ...props }: Partial<TargetProps> & { top?: number } = {}) {
@@ -462,7 +463,8 @@ describe("useFolderDropTarget", () => {
    * The reason both callbacks are read through a ref: a folder list refetching mid-drag re-renders
    * every target on screen, and a target that registered its handlers into the library would go on
    * calling the render they were made in. The observable is the *newest* one being called; that a
-   * target does not tear itself down to get there is the deps array, `[ref, scope, axis]`.
+   * target does not tear itself down to get there is the deps array,
+   * `[ref, scope, axis, pointerOnly]` — none of them a callback.
    */
   it("acts on the newest onDrop, not the one it registered with", async () => {
     const registered = vi.fn();
@@ -642,5 +644,66 @@ describe("useFolderDropTarget with armOnMount", () => {
 
     expect(target.state.armed).toBe(false);
     await held.cancel();
+  });
+});
+
+/**
+ * **A folder target that lands a folder only while the pointer is inside it** — the shelves'
+ * opt-in, `useDndDropTarget`'s `pointerOnly` for the folder half. dnd-kit's default detector falls
+ * back to the **carried folder's whole rectangle** when the pointer is in no target, so a heading
+ * dragged over the table view's card rows (which do not fold away) became the target of whichever
+ * heading it overlapped, and `folderEdge` — which answers a point outside the box by the end it is
+ * past — turned that into a reorder beside a heading the pointer was nowhere near. The folder-drag
+ * half of the live pass's "Extra, found during 3".
+ *
+ * **The overlap is staged from the source's box**, for `dndTarget.test.ts`'s reason: jsdom measures
+ * the carried rectangle once, off the source, and never moves it with the pointer. A source at
+ * 230–270 overlaps the 200–240 target by 10px with its centre — where the press lands — 10px below
+ * it; the pointer is then walked off to where nothing is.
+ */
+describe("useFolderDropTarget with pointerOnly", () => {
+  /** 10px of the carried folder inside the 200–240 target; its centre 10px below it. */
+  const OVERLAPPING = TARGET_TOP + 30;
+  /** Past the target and past the source: the pointer is over nothing at all. */
+  const OFF = { x: 100, y: 330 };
+
+  /** The fence for everybody who did not ask — the deck tree and the deck folder cards: a folder
+   *  whose rectangle overlaps a target still lands beside it, as it always has. */
+  it("leaves a plain target landing a folder that overlaps it with the pointer outside", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(() => FOLDER, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    expect(target.state.edge).toBe("after");
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith(FOLDER, "after");
+  });
+
+  it("reports no landing, and files nothing, while the pointer is outside it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(() => FOLDER, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    expect(target.state.armed).toBe(true);
+    expect(target.state.edge).toBeNull();
+    await held.drop();
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  /** Inside, the three landings are exactly what they were: the pointer's quarter decides. */
+  it("reports the landing the pointer is over, and files there, once it is inside", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(() => FOLDER, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    await held.over(target.element, BEFORE);
+    expect(target.state.edge).toBe("before");
+    await held.over(target.element, INSIDE);
+    expect(target.state.edge).toBe("inside");
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith(FOLDER, "inside");
   });
 });

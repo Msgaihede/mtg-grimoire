@@ -437,4 +437,27 @@ describe("ShelfHeading", () => {
     await user.keyboard("Signed{Enter}");
     expect(onCommit).toHaveBeenCalledWith("Signed");
   });
+
+  /**
+   * Live pass §10: the tile-sized field stood 1px proud of this row top and bottom, and its ✓ / ✕
+   * centred 3px above the row's centre line — for Rename, for Add folder in a heading and for Add
+   * folder at the root, which is this same heading with `mode: "create"`. The row is `h-10` with a
+   * 1px border, a 38px content box; `FolderNameField`'s heading size is a 36px frame with its pair
+   * centred on it, and `FolderNameField.test.tsx` holds that half. This holds the pairing: the row
+   * is still the 40px it was sized against, and both jobs ask for the heading size.
+   */
+  it("draws the name field at heading size for Rename and for Add folder", () => {
+    for (const renaming of [RENAMING, { initial: "", onCommit, onCancel, mode: "create" as const }]) {
+      const view = mount({ renaming });
+
+      expect(row().classList.contains("h-10")).toBe(true);
+      expect(row().classList.contains("border")).toBe(true);
+      const frame = row().querySelector("form")!.firstElementChild!;
+      expect(frame.classList.contains("h-9")).toBe(true);
+      expect(row().querySelector("form .absolute.right-1")!.classList.contains("inset-y-0")).toBe(
+        true,
+      );
+      view.unmount();
+    }
+  });
 });

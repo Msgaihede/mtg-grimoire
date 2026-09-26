@@ -25,8 +25,8 @@ afterEach(() => {
   while (undo.length) undo.pop()!();
 });
 
-function source(register: (element: HTMLElement) => () => void): HTMLElement {
-  const element = boxed(document.createElement("div"), 0);
+function source(register: (element: HTMLElement) => () => void, top = 0): HTMLElement {
+  const element = boxed(document.createElement("div"), top);
   element.textContent = "a source";
   document.body.append(element);
   const release = register(element);
@@ -36,10 +36,10 @@ function source(register: (element: HTMLElement) => () => void): HTMLElement {
   });
   return element;
 }
-const cardSource = (id: number) =>
-  source((element) => dndDraggable({ element, data: () => ({ [KEY]: MARK, id }) }));
-const folderSource = (drag: FolderDrag) =>
-  source((element) => folderDraggable({ element, folder: () => drag }));
+const cardSource = (id: number, top = 0) =>
+  source((element) => dndDraggable({ element, data: () => ({ [KEY]: MARK, id }) }), top);
+const folderSource = (drag: FolderDrag, top = 0) =>
+  source((element) => folderDraggable({ element, folder: () => drag }), top);
 
 const FOILS: FolderDrag = { folderId: 12, name: "Foils", parentId: null, scope: "collection" };
 
@@ -146,6 +146,47 @@ describe("useShelfDropTarget", () => {
     await held.over(target);
     expect(target).toHaveAttribute("data-mark", "none");
     await held.cancel();
+  });
+
+  /**
+   * The live pass's "Extra, found during 3": a card released on one shelf's tiles, or on empty wall,
+   * was filed into the **nearest** heading — the carried card's rectangle overlapped it, and
+   * dnd-kit's default detector falls back to that overlap when the pointer is in no target. Spec §6
+   * names the targets; tiles and blank wall are not among them, so a release there does nothing.
+   *
+   * jsdom measures the carried card once, off the source's own box, so the overlap is staged
+   * there: a card at 230–270 reaches 10px into this 200–240 heading, and the pointer is then walked
+   * off to where nothing is (`dndTarget.test.ts`'s `pointerOnly` block has the reading, and the
+   * fence that a plain target *would* take this drop).
+   */
+  it("is not over, and files nothing, while the pointer is outside it however near the card is", async () => {
+    const onDrop = vi.fn();
+    render(<Target onDrop={onDrop} />);
+    const target = placed();
+    const held = await startPointerDrag(cardSource(7, 230));
+
+    await held.moveTo(100, 330);
+    expect(target).toHaveAttribute("data-mark", "armed");
+    await held.drop();
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The same stray drop for a **folder** heading. The collection's and the wishlist's table views do
+   * not fold away during a folder drag, so a heading carried over card rows overlapped the next
+   * heading down, and `folderEdge` turned a pointer below it into `"after"` — a reorder beside a
+   * heading the reader was not aiming at. Staged as the card case above is.
+   */
+  it("lands no folder, and files nothing, while the pointer is outside it however near the folder is", async () => {
+    const onFolderDrop = vi.fn();
+    render(<Target folder={{ scope: "collection", canDrop: () => true, onDrop: onFolderDrop }} />);
+    const target = placed();
+    const held = await startPointerDrag(folderSource(FOILS, 230));
+
+    await held.moveTo(100, 330);
+    expect(target).toHaveAttribute("data-mark", "armed");
+    await held.drop();
+    expect(onFolderDrop).not.toHaveBeenCalled();
   });
 });
 

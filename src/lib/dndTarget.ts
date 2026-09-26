@@ -111,6 +111,7 @@ export function useDndDropTarget<T>({
   onDrop,
   overlay,
   armOnMount = false,
+  pointerOnly = false,
 }: {
   ref: RefObject<HTMLElement | null>;
   /** This feature's payload out of the library's untyped store, or `null` for everything else. */
@@ -153,6 +154,25 @@ export function useDndDropTarget<T>({
    * {@link useDragRecord}.
    */
   armOnMount?: boolean;
+  /**
+   * A collision **only while the pointer is inside this target** — `overlay`'s detector without
+   * its priority.
+   *
+   * **The default's shape fallback is right for a pile and wrong for a thin target.** A deck pile
+   * is tall, the card carried over it is mostly inside it, and a card dropped half over a pile
+   * landing in it is what a reader means. A shelf heading is a 40px strip laid between rows of
+   * tiles, which are not targets at all: the carried card overlaps the heading below it while the
+   * pointer is on the tiles above, the fallback makes the heading the operation's target, and a
+   * release on one shelf's tiles files the card into the next shelf. Measured in the shipped window
+   * (Folder Shelves live pass, "Extra, found during 3"): a card released on tile 50 of `Foils` was
+   * added to `Showcase`, the heading 22px below; one released on empty wall went into the heading
+   * 100px below.
+   *
+   * No priority change, unlike `overlay`: a shelf target is not drawn over another one, so there
+   * is nothing to outrank — the pointer's own `High` is already what decides between two targets
+   * the pointer could be in. Off by default, so every other target keeps the default detector.
+   */
+  pointerOnly?: boolean;
 }): { armed: boolean; over: boolean } {
   const [armed, setArmed] = useState(false);
   const [over, setOver] = useState(false);
@@ -185,7 +205,9 @@ export function useDndDropTarget<T>({
         accept: (source) => taken(source) !== null,
         ...(overlay
           ? { collisionDetector: pointerIntersection, collisionPriority: CollisionPriority.Highest }
-          : {}),
+          : pointerOnly
+            ? { collisionDetector: pointerIntersection }
+            : {}),
       },
       dndManager,
     );
@@ -217,7 +239,7 @@ export function useDndDropTarget<T>({
       for (const stop of off) stop();
       droppable.destroy();
     };
-  }, [ref, overlay]);
+  }, [ref, overlay, pointerOnly]);
 
   if (!armOnMount) return { armed, over };
   const drop = inFlight === null ? null : read(inFlight);
