@@ -303,7 +303,7 @@ unrecorded for spec §10's reason.
 | What fails | What happens | Why that is the right answer |
 | --- | --- | --- |
 | `/rotate` refused or unreachable | The removal does not happen. The reader sees a refusal and can press again. | Better than today's rotation that reaches nobody. The group is exactly as it was. |
-| `/rotate` succeeds, the local commit fails | The relay holds epoch *N+1*; this device is still at *N*. Its own `/keys` check finds a blob addressed to it and adopts it. | Self-healing, because the remover is on its own manifest. |
+| `/rotate` succeeds, the local commit fails | The relay holds epoch *N+1*; this device is still at *N*. Its own `/keys` check finds a blob addressed to it and adopts it. | Self-healing, because the remover is on its own manifest — and only because `check_keys` also tries this device itself as the sealer. Excluding itself, the device failed every `/keys` check after a lost 2xx and never pushed again. |
 | A device is offline across two removals | `/keys` answers the current epoch and a blob for it, if it is still in the group. | The blob is per-epoch-current, not a chain, so no replay is needed. |
 | A device is offline across nine removals | Its auth is older than the eight epochs `/keys` keeps and it is refused. | Re-pair by hand. Nine removals with one device dark is not a case worth carrying state for, and the refusal says so rather than being silent. |
 | The reader removes the device that holds the refresh secret | The remaining devices keep working on the group auth; the entitlement stays bound to the same group. Connecting Patreon again on any device re-binds the same group and mints a fresh secret. | `/claim` already passes `row.group_id === group`. Selling a laptop must not cost the group. |

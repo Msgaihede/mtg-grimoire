@@ -63,8 +63,10 @@ pub enum WireError {
 ///
 /// **The epoch is in here and that is what makes revocation mean something on the wire.**
 /// Rotating the group key already stops a removed device reading anything new; binding the
-/// epoch stops the *reverse* — a blob written before the rotation being replayed at a device
-/// that has moved on, which the key alone cannot refuse because the ciphertext predates it.
+/// epoch ties a blob to its own epoch's key, so it opens under that key or not at all. Whether a
+/// device that has moved on still opens a blob from before the rotation is then decided by which
+/// superseded keys it keeps (`identity::supersede`) — across a join it does, and across a removal
+/// it keeps none, because the removed device holds them.
 ///
 /// `\0` between the fields rather than `|`, so a group id containing the separator cannot be
 /// read as a different `(group, device, epoch)` triple. **No test can tell the two apart and
