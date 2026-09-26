@@ -1675,31 +1675,11 @@ export interface FakeDb {
    */
   listView: Record<string, string>;
   /**
-   * `app_meta.flatten_state` — whether each page with a cabinet was last left ignoring its
-   * filing, as section name → flattened.
-   *
-   * The third row here whose value is an *object*, and the one that is **half of each** of the
-   * two shapes above it. Like {@link FakeDb.listView} the keys are whatever some build wrote, so
-   * it is `Record<string, boolean>` rather than `Record<FlattenSection, boolean>` — a page this
-   * build does not file cards in is a state a story wants. Unlike it, the *values* have no junk
-   * state at all: a `bool` off the IPC boundary is one of two things, which is
-   * {@link FakeDb.navCollapsed}'s whole argument arriving inside a map.
-   *
-   * `{}` for "nothing stored", and here that absence carries more than it does for its two
-   * neighbours: the two pages' defaults **differ** — the collection opens flattened and the
-   * wishlist does not — so an absent key is not "the same default as the other one" but the only
-   * way a story can stand in a switch nobody has pressed.
-   *
-   * **The read drops only what it cannot key and the write refuses only that** — see
-   * {@link readHandlers.flatten_state} and {@link writeHandlers.set_flatten_state}.
-   */
-  flattenState: Record<string, boolean>;
-  /**
    * `app_meta.mark_colors` — what colour the reader has each card mark drawn in, as mark name →
    * `#rrggbb`.
    *
    * The **fourth** row here whose value is an object, and it takes {@link FakeDb.listView}'s
-   * contract rather than {@link FakeDb.flattenState}'s beside it: both halves have a junk state.
+   * contract rather than {@link FakeDb.searchOpen}'s: both halves have a junk state.
    * The keys are whatever some build wrote — which *marks* exist is TypeScript's vocabulary, and
    * `isMarkColorKey` is what narrows them — while the values are text a hand-edited row really
    * can fill with something that is not a colour. `markcolors.rs` owns only that second half, and
@@ -1743,10 +1723,11 @@ export interface FakeDb {
    * open, as section name → open.
    *
    * The sixth row of the same key/value table and the **fourth** whose value is an object, so it
-   * is {@link FakeDb.flattenState}'s field with a different key: the keys are whatever some build
-   * wrote (`Record<string, boolean>` and not `Record<SearchSection, boolean>`, because a page this
-   * build has no column on is a state a story wants) and the values have no junk state at all, a
-   * `bool` off the IPC boundary being one of two things.
+   * is {@link FakeDb.listView}'s field with a `boolean` where the word is: the keys are whatever
+   * some build wrote (`Record<string, boolean>` and not `Record<SearchSection, boolean>`, because a
+   * page this build has no column on is a state a story wants) and the values have no junk state
+   * at all, a `bool` off the IPC boundary being one of two things —
+   * {@link FakeDb.navCollapsed}'s whole argument arriving inside a map.
    *
    * **It replaced a plain `boolean` called `deckSearchOpen`**, which was the deck editor's column
    * and only that one; the collection and the wishlist grew the same column on 2026-09-07 and
@@ -1755,7 +1736,7 @@ export interface FakeDb {
    * controls gets every column **open**, which is now `DEFAULT_SEARCH_OPEN`'s to say rather than
    * this field's — and that is exactly why `{}` is the seed.
    *
-   * `{}` for "nothing stored", and it carries what it carries for {@link FakeDb.flattenState}: an
+   * `{}` for "nothing stored", and it carries what it carries for {@link FakeDb.listView}: an
    * absent key is the only way a story can stand in a disclosure nobody has pressed, which for
    * this row is every column of a fresh install.
    *
@@ -1799,8 +1780,8 @@ export interface FakeDb {
    * the reader railed it down to icons.
    *
    * **The first row here whose value is a stored *object* rather than a map**, and that is the
-   * one thing to read before the shape makes sense. Its four object-valued neighbours
-   * ({@link FakeDb.cardZoom}, {@link FakeDb.listView}, {@link FakeDb.flattenState},
+   * one thing to read before the shape makes sense. Its three object-valued neighbours
+   * ({@link FakeDb.cardZoom}, {@link FakeDb.listView} and
    * {@link FakeDb.searchOpen}) are `Record`s because each holds one answer *per section*, and a
    * page this build has no column on is a state a story wants. This one holds two halves of a
    * single answer about a single pane, so the row is a JSON object with two fixed keys and the
@@ -3140,11 +3121,6 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // sections it cares about and leaves the rest out — an absent key is a wall nobody has zoomed.
     cardZoom: {},
     listView: {},
-    // Empty for the same reason a third time, and here the emptiness is what makes a fresh world
-    // draw the *store's* two defaults rather than one answer for both pages: the collection opens
-    // flattened, the wishlist opens on its root. A story that wants a restored session passes the
-    // page it cares about and leaves the other out.
-    flattenState: {},
     // Empty a fourth time, and this one is a reader who has chosen no colour at all: both theory
     // marks are drawn in `index.css`'s own, which is what every story that says nothing about
     // Appearance is standing in. A colour in here is a **press a story made** — `mutedTags`' rule
@@ -3157,8 +3133,8 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // `null` to stand in — see {@link FakeDb.navCollapsed}. Every story that says nothing about
     // the sidebar is standing in the expanded shell.
     navCollapsed: false,
-    // The sixth, and empty for `flattenState`'s reason a second time — the difference being that
-    // here the three defaults agree rather than differ. `search_open` answers only what it holds,
+    // The sixth, and empty for `listView`'s reason — the three columns' defaults agreeing with
+    // each other rather than being one per list. `search_open` answers only what it holds,
     // so an absent section is a disclosure nobody has pressed and the frontend's own
     // `DEFAULT_SEARCH_OPEN` draws it: every column open, which is what the app ships. A story that
     // wants one railed passes that one section and leaves the others out.
@@ -10997,37 +10973,13 @@ export function readHandlers(db: FakeDb) {
       ),
 
     /**
-     * `flatten::flatten_state` — every cabinet's remembered Flatten switch.
-     *
-     * The seventh `app_meta` setting and the third whose value is an object, so
-     * {@link readHandlers.list_view}'s per-entry rule applies unchanged: one unusable key costs
-     * that page its memory and leaves the other intact.
-     *
-     * **What is missing from the filter is the point.** Its two neighbours drop a bad *value* as
-     * well as a bad key — a zoom off the ladder, a word that is not a layout — because the row
-     * can hold text a build cannot place. This one cannot: `flatten.rs` stores a `bool` and the
-     * frontend reads a `bool`, so there is no third state to drop and a fake that invented one
-     * would be storying the app against a backend it does not have. The blank key is all that is
-     * left, and it is here for the same reason it is there — `set_flatten_state` refuses it, so a
-     * row holding one was hand-edited.
-     *
-     * The **section** name is unfiltered, exactly as the zoom's and the layout's are: which pages
-     * have a cabinet is TypeScript's vocabulary, and `isFlattenSection` on the frontend is what
-     * that split exists for.
-     *
-     * A read, so it answers through every second of a sync — the write below does not.
-     */
-    flatten_state: (): Record<string, boolean> =>
-      Object.fromEntries(Object.entries(db.flattenState).filter(([section]) => section !== "")),
-
-    /**
      * `markcolors::mark_colors` — every mark the reader has chosen a colour for.
      *
      * The eighth `app_meta` setting and the fourth whose value is an object, so
      * {@link readHandlers.list_view}'s per-entry rule applies unchanged: one hand-edited entry
      * costs that mark its colour and leaves the other standing. **Both halves of the filter are
      * back**, which is what puts it beside the layout rather than beside
-     * {@link readHandlers.flatten_state} — the blank key is dropped as everywhere here, and a
+     * {@link readHandlers.search_open} — the blank key is dropped as everywhere here, and a
      * value is dropped when it is not `#rrggbb`, because the row is text and a `bool` is not.
      *
      * **Folded on the way out**, which is `markcolors::stored`'s own `to_ascii_lowercase`: the
@@ -11075,11 +11027,12 @@ export function readHandlers(db: FakeDb) {
      * `searchopen::search_open` — every docked card-search column's remembered disclosure.
      *
      * The sixth `app_meta` setting and the **fourth** whose value is an object, so this is
-     * {@link readHandlers.flatten_state} with a different key and the same one-line filter: the
-     * blank key and nothing else, because `search_open` stores a `bool` and the frontend reads a
-     * `bool`, leaving no third state to drop. The **section** name is unfiltered for that
-     * handler's reason too — which pages have a search column is TypeScript's vocabulary, and
-     * `useSearchOpen`'s narrowing on the frontend is what the split exists for.
+     * {@link readHandlers.list_view}'s per-entry rule with half of its filter: the blank key and
+     * nothing else, because `search_open` stores a `bool` and the frontend reads a `bool`, leaving
+     * no third state to drop — a fake that invented one would be storying the app against a
+     * backend it does not have. The **section** name is unfiltered for the layout's reason too —
+     * which pages have a search column is TypeScript's vocabulary, and `useSearchOpen`'s narrowing
+     * on the frontend is what the split exists for.
      *
      * **The crate's legacy `deck_search_open` bridge has no counterpart here, deliberately.**
      * `searchopen::stored` falls back to that old row when the map carries no `deck` entry, which
@@ -11143,9 +11096,9 @@ export function readHandlers(db: FakeDb) {
      *
      * That puts this read **with** the narrowing reads above rather than against them, which is
      * the correction this comment carries: it said the opposite for one wave, on the reasoning
-     * that one JSON object parses or does not. `flatten_state` drops the one entry it cannot key
-     * and leaves the page beside it standing; this drops the one *field* it cannot use and
-     * leaves the field beside it standing. Same rule, one grain finer.
+     * that one JSON object parses or does not. `list_view` drops the one entry it cannot use and
+     * leaves the lists beside it standing; this drops the one *field* it cannot use and leaves
+     * the field beside it standing. Same rule, one grain finer.
      *
      * **Infallible like {@link readHandlers.nav_collapsed}**, and for its reason: nothing here
      * throws, because there is nothing useful a page can do with an error that is not "draw the
@@ -19161,38 +19114,6 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `flatten::set_flatten_state` — remember whether one page is showing its whole cabinet.
-     *
-     * **The blank section is the whole of the validation, and the absence of a second check is
-     * the note worth reading.** {@link writeHandlers.set_card_zoom} and
-     * {@link writeHandlers.set_list_view} each refuse a value as well, because the read beside
-     * them drops what it cannot use *in silence* — so a fake that accepted anything would let a
-     * story save a setting, read back nothing, and look like it worked. There is no third
-     * instance of that here: a `bool` off the IPC boundary has no junk state, Tauri's
-     * deserializer having refused anything that is not `true` or `false` before this handler is
-     * reached at all. {@link writeHandlers.set_nav_collapsed} makes the argument in full; this is
-     * the same argument inside a map, which is why one half of it survives and the other does
-     * not.
-     *
-     * The **section** is unchecked past being non-empty, for its neighbours' asymmetry: which
-     * pages have a cabinet is TypeScript's vocabulary and `flatten.rs` deliberately does not know
-     * it. And only the named section is touched, so the page beside it keeps its own answer —
-     * which matters more here than for the two rows above, because the two defaults differ.
-     *
-     * **`false` writes an entry rather than removing one**: a reader who flattens a page and then
-     * un-flattens it has made a second choice, not withdrawn the first, and on the collection
-     * that second choice is the only thing that can beat a `true` default.
-     *
-     * It honours `busy` like every other ordinary write — `flatten.rs` takes the write connection
-     * through `sync::with_write`, and the lock comes first.
-     */
-    set_flatten_state: (args: { section: string; flattened: boolean }): void => {
-      refuseIfBusy(db);
-      if (args.section === "") throw refuse("A flatten section cannot be blank.");
-      db.flattenState = { ...db.flattenState, [args.section]: args.flattened };
-    },
-
-    /**
      * `markcolors::set_mark_color` — remember one mark's colour, or, with `null`, **forget** it.
      *
      * {@link writeHandlers.set_list_view}'s three rules with a fourth of its own. The refusals are
@@ -19263,11 +19184,11 @@ export function writeHandlers(db: FakeDb) {
     /**
      * `searchopen::set_search_open` — remember whether one docked search column is open.
      *
-     * {@link writeHandlers.set_flatten_state}'s handler with a different key, down to which half
-     * of the validation survives: the **blank section is refused** and the value is not, a `bool`
-     * off the IPC boundary having no junk state for Tauri's deserializer to have let through. That
-     * asymmetry is argued in full at {@link writeHandlers.set_nav_collapsed}; this is the second
-     * place it lands inside a map.
+     * {@link writeHandlers.set_list_view}'s handler with a `bool` where the word is, and that
+     * decides which half of the validation survives: the **blank section is refused** and the
+     * value is not, a `bool` off the IPC boundary having no junk state for Tauri's deserializer to
+     * have let through. That asymmetry is argued in full at {@link writeHandlers.set_nav_collapsed};
+     * this is where it lands inside a map.
      *
      * The **section** is unchecked past being non-empty, deliberately — which pages have a search
      * column is TypeScript's vocabulary and `searchopen.rs` knows only the one word `deck`, and
@@ -19352,7 +19273,7 @@ export function writeHandlers(db: FakeDb) {
      * and why {@link FakeDb.deckFolderPane} has no half-written state to seed.
      *
      * **The width is refused and the collapse is not**, which is
-     * {@link writeHandlers.set_flatten_state}'s split drawn with a number where that one has a
+     * {@link writeHandlers.set_search_open}'s split drawn with a number where that one has a
      * section. The `boolean` has no junk state — Tauri's deserializer refused anything that is
      * not `true` or `false` before this handler was reached, the argument
      * {@link writeHandlers.set_nav_collapsed} makes in full. The **number** has one, and

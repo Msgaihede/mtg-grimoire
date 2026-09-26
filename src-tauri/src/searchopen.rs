@@ -6,9 +6,8 @@
 //! screens this crate never draws. All Rust owns is one `app_meta` row holding a JSON object of
 //! section name → whether that column is open.
 //!
-//! **This is [`crate::flatten`] with a different key**, which is itself [`crate::listview`] with a
-//! `bool` where the layout word is. Every rule below is those modules' rather than a fresh
-//! argument:
+//! **This is [`crate::listview`] with a `bool` where the layout word is.** Every rule below is
+//! that module's rather than a fresh argument:
 //!
 //! * **Reading can never fail**, [`crate::listview::stored`]'s rule at its widest. A missing row, a
 //!   row that is not JSON, a row holding an array or a bare scalar, an entry whose value is a
@@ -19,7 +18,7 @@
 //!   a blank section, [`crate::listview::store`]'s first refusal; it has no second, because
 //!   [`crate::listview`]'s other one polices a *vocabulary* and a `bool` has none. `serde` has
 //!   already refused everything that is not `true` or `false` before this function is reached, and
-//!   both of those are storable — [`crate::flatten`]'s observation about the same type.
+//!   both of those are storable.
 //! * **A write preserves entries this build does not understand**, [`crate::listview`]'s rule
 //!   verbatim and for its reason: the row is read back as a raw `serde_json::Map` and only the
 //!   section being written is touched, so a build that learns a fourth searchable page does not
@@ -83,7 +82,7 @@ fn stored_object(conn: &Connection) -> Map<String, Value> {
 /// An empty map is the honest answer for a database nobody has pressed a disclosure in, and it is
 /// what a fresh install returns.
 ///
-/// **`false` is not absence**, [`crate::flatten::stored`]'s distinction: a section that reads back
+/// **`false` is not absence**: a section that reads back
 /// `Some(false)` is a reader who shut a column, and a section that is missing is a reader who
 /// never touched it. They are the same picture on screen only until the frontend's default is
 /// anything but `false` — and all three of its defaults are `true`.
@@ -91,7 +90,7 @@ fn stored_object(conn: &Connection) -> Map<String, Value> {
 /// Entries are dropped one at a time rather than the row as a whole, [`crate::listview::stored`]'s
 /// rule: a single hand-edited value costs that column its memory and leaves the others intact.
 ///
-/// **The one thing here that is not [`crate::flatten`]'s: the legacy bridge.** Before this module
+/// **The one thing here that is not [`crate::listview`]'s: the legacy bridge.** Before this module
 /// there was `deck.rs`'s `deck_search_open` row, holding `"1"`/`"0"` for the deck editor's column.
 /// A map with no `"deck"` entry falls back to it, so a reader who shut that column before
 /// upgrading finds it still shut. Anything but those two spellings — a missing row, a hand-edit,

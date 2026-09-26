@@ -6,6 +6,8 @@ import { finishPrice, type Finish } from "@/lib/finish";
 import type { CollectionRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
+import { layoutShelves } from "@/lib/shelfLayout";
+import type { Shelf } from "@/lib/shelves";
 
 /** The default marketplace, and the as-of sentence it prints. Most of this file is about
  *  columns and rows rather than about which shop the number came from, so it names one and
@@ -45,8 +47,8 @@ function entry(card: FakeCard, finish: Finish, over: Partial<CollectionRow> = {}
     legalities: card.legalities,
     id: nextId++,
     cardId: card.id,
-    // Unfiled unless a story says otherwise, which is what most of a collection is: the Folder
-    // column draws an em dash for the root.
+    // Unfiled unless a story says otherwise, which is what most of a collection is: Not sorted's
+    // shelf, where the table is shelved.
     folderId: null,
     folderName: null,
     name: card.name,
@@ -223,6 +225,60 @@ export const Rows: Story = {
 };
 
 /**
+ * **The shelves as bands** (folder-shelves spec §3.10): the rows under the heading of the shelf
+ * they are filed in, a `Decks` label before the deck groups, and an empty folder's box. The
+ * headings here are plain words — the page hands `ShelfHeading` in — because what this story is
+ * about is where the table puts what it is given.
+ */
+export const Shelved: Story = {
+  args: {
+    rows: ROWS,
+    total: ROWS.length,
+    shelves: (() => {
+      const make = (id: number, name: string, over: Partial<Shelf> = {}): Shelf => ({
+        id,
+        kind: "folder",
+        group: "own",
+        name,
+        pathIds: [id],
+        path: [name],
+        depth: 0,
+        indent: 0,
+        lead: [],
+        leadIds: [],
+        headless: false,
+        collapsed: false,
+        locked: false,
+        ...over,
+      });
+      return {
+        layout: layoutShelves(
+          [
+            { shelf: make(0, "Not sorted", { kind: "unfiled" }), tileCount: 3 },
+            { shelf: make(4, "Trade binder"), tileCount: 1 },
+            { shelf: make(5, "Sealed"), tileCount: 0 },
+            { shelf: make(20, "Burn", { kind: "deck", group: "decks", collapsed: true }), tileCount: 0 },
+          ],
+          1,
+        ).rows,
+        rowsOf: (id: number) => (id === 0 ? ROWS.slice(0, 3) : id === 4 ? ROWS.slice(3, 4) : []),
+        renderHeading: (shelf: Shelf) => <strong className="text-sm">{shelf.name}</strong>,
+        renderLabel: () => <span className="text-xs uppercase text-dim">Decks</span>,
+        renderEmpty: () => <span className="text-xs text-dim">Empty — drag cards here</span>,
+        renderSticky: () => null,
+      };
+    })(),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("Trade binder")).toBeInTheDocument();
+    await expect(canvas.getByText("Decks")).toBeInTheDocument();
+    await expect(canvas.getByText("Empty — drag cards here")).toBeInTheDocument();
+    await expect(canvasElement.querySelectorAll("[data-band]").length).toBeGreaterThan(0);
+  },
+};
+
+/**
  * Nothing owned — and the table draws **no empty state of its own**.
  *
  * `CollectionPage` owns that sentence, because what an empty list means depends on why it is
@@ -240,58 +296,10 @@ export const Empty: Story = {
       "aria-rowcount",
       "1",
     );
-    // Six columns still, but the sixth is `Folder` since v24 — it carries where the copy is
-    // filed on *every* row, where the removal column it replaced drew nothing on all but the
-    // rare emptied one. Its header is visible rather than `srOnlyHeader` for the same reason a
-    // name was needed before: a column a reader cannot name is announced as "column 6".
+    // Six columns, and the sixth is the removal's `srOnlyHeader` strip again: a shelved table
+    // names each row's drawer in the band above it, so the `Folder` column went (spec §3.10).
     await expect(canvas.getAllByRole("columnheader")).toHaveLength(6);
-    await expect(canvas.getByRole("columnheader", { name: "Folder" })).toBeInTheDocument();
-  },
-};
-
-/**
- * A copy filed in a drawer the reader has **set aside**, and the drawer says so.
- *
- * The lock shipped in [#365](https://github.com/Msgaihede/mtg-grimoire/issues/365) as an
- * *absence*: the collection page asked its list with `excludeLocked: true`, so a locked drawer's
- * copies never reached this table at all.
- * [#436](https://github.com/Msgaihede/mtg-grimoire/issues/436) reversed that — a set-aside card
- * is still a card the reader owns, still worth what it is worth, and still counted in the header
- * above this table — so the fact had to move from the absence onto the row, and the Folder cell
- * is where it goes because the lock is a fact about the *drawer*.
- *
- * **`folderLocked` is the caller's answer and never this table's.** The lock inherits down the
- * tree, so the honest reading is a walk over the whole cabinet (`lockedFolderIds` in
- * `lib/folderTree.ts`) and a row carries one `folderId`. `CollectionPage` computes it once for
- * the wall and the table together; here it is spelled as the predicate that page would pass.
- *
- * The two rows beside it are the point of the story: a copy at the root and a copy in a deck's
- * group are both unlocked, so what a reader sees here is one marked drawer among unmarked ones
- * rather than a table wearing a glyph everywhere. What locking does **not** do is fence the row:
- * the stepper is live, and the copy drags in and out exactly as it did.
- */
-export const LockedFolder: Story = {
-  args: {
-    rows: [
-      entry(printing("lea", "232"), "nonfoil", { folderId: 9, folderName: "Display case" }),
-      entry(printing("2ed", "48"), "nonfoil"),
-      entry(printing("mh2", "259"), "nonfoil", { folderId: 4, folderName: "Burn" }),
-    ],
-    total: 3,
-    folderLocked: (row) => row.folderId === 9,
-  },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    // Named rather than found by its class: the glyph carries `role="img"` with `Locked` as its
-    // name, so what is asserted is the fact a screen reader gets.
-    const marks = canvas.getAllByRole("img", { name: "Locked" });
-    await expect(marks).toHaveLength(1);
-    await expect(marks[0].closest('[role="row"]')).toHaveTextContent("Display case");
-    // Still listed, and still editable — the lock stops the app *offering* a copy to a deck, and
-    // never stops the reader reaching it.
-    await expect(
-      canvas.getByRole("spinbutton", { name: "Quantity of Black Lotus (Nonfoil, NM)" }),
-    ).toBeInTheDocument();
+    await expect(canvas.queryByRole("columnheader", { name: "Folder" })).toBeNull();
   },
 };
 
@@ -391,11 +399,10 @@ export const Orphan: Story = {
     const orphan = canvas.getByText("LEA · 232").closest('[role="row"]');
     await expect(orphan).toHaveAttribute("aria-rowindex", "2");
     const row = within(orphan as HTMLElement);
-    // Exactly three em dashes, and they are three different holes: the name the card can no
-    // longer supply (`row.name ?? "—"`), the price of a finish of a printing that is not there
-    // (`usdPrice(null)`), and — since v24 — the folder, where the dash is not a hole at all but
-    // the root, which is where every card starts. Never `$0.00`, which is a price nobody quoted.
-    await expect(row.getAllByText("—")).toHaveLength(3);
+    // Exactly two em dashes, and they are two different holes: the name the card can no longer
+    // supply (`row.name ?? "—"`) and the price of a finish of a printing that is not there
+    // (`usdPrice(null)`). Never `$0.00`, which is a price nobody quoted.
+    await expect(row.getAllByText("—")).toHaveLength(2);
     // The one handle left. `Quantity of ${row.name ?? row.cardId}` falls back to the card id,
     // so the control is still addressable by something even though nothing can name the card.
     await expect(
@@ -547,11 +554,10 @@ export const InEuros: Story = {
 
     // The etched row: unpriced in euros, and its dollar figure is nowhere on screen.
     const etched = canvas.getByText("ACR · 211").closest('[role="row"]');
-    // Two dashes since v24 and they say different things: this one is the missing euro price,
-    // and the other is the Folder column's root. Counted rather than fetched singly, because
-    // `getByText` now finds both and throws — which reads like a missing price rather than an
-    // extra column.
-    await expect(within(etched as HTMLElement).getAllByText("—")).toHaveLength(2);
+    // One dash, and it is the missing euro price — the Folder column's root dash went with the
+    // column when shelves took it off (spec §3.10). Counted rather than fetched singly, so a
+    // second dash coming back would be named as one rather than throw as an ambiguous match.
+    await expect(within(etched as HTMLElement).getAllByText("—")).toHaveLength(1);
     const usd = finishPrice(printing("acr", "211").prices, "etched", "usd");
     await expect(canvas.queryByText(usdPrice(usd))).toBeNull();
 

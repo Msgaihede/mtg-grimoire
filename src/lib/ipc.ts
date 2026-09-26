@@ -67,26 +67,25 @@
  * `ScannerPrefs`, `ScannerTrayRow` and `ScannerTrayChoice` — because they are this app's stored
  * rows rather than the detector's JSON, and they sit on `plainMirrors` with every other one.
  *
- * **Twelve settings are one `app_meta` row each, and ten of them carry no struct at all.** (The
- * scanner's two rows, `scanner_prefs` and `scanner_tray`, are on top of those twelve and both
+ * **Eleven settings are one `app_meta` row each, and nine of them carry no struct at all.** (The
+ * scanner's two rows, `scanner_prefs` and `scanner_tray`, are on top of those eleven and both
  * carry structs; see {@link ScannerPrefs} and {@link ScannerTrayRow}.) Of the
- * ten: four answered as a
+ * nine: four answered as a
  * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
  * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`),
  * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) and
- * `startView`/`setStartView` (`src-tauri/src/startview.rs`) — five as a bare map,
+ * `startView`/`setStartView` (`src-tauri/src/startview.rs`) — four as a bare map,
  * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
- * (`src-tauri/src/listview.rs`), `flattenState`/`setFlattenState`
- * (`src-tauri/src/flatten.rs`), `markColors`/`setMarkColor`
+ * (`src-tauri/src/listview.rs`), `markColors`/`setMarkColor`
  * (`src-tauri/src/markcolors.rs`) and `searchOpen`/`setSearchOpen`
  * (`src-tauri/src/searchopen.rs`), and one as a
- * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). All twelve are
+ * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). All eleven are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * Nine of them are therefore typed loosely here rather than as their unions: the narrowing
+ * Eight of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
- * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows,
+ * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for its list-layout row,
  * `@/features/decks/deckSort`, `@/lib/useMarkColors`, `@/features/search/useSearchOpen`,
  * `@/features/home` for the start view), and a
  * row a newer build wrote
@@ -121,9 +120,9 @@
  * search-column row has one *kind* of value under keys this side invents, and this one has two
  * *different* values under names both sides already know, so a `Record<string, unknown>` here
  * would throw away the only thing worth checking. Being a struct is also what puts it on
- * `ipc.test.ts`' mirror table, where the ten below cannot be — a bare `boolean` has no fields
+ * `ipc.test.ts`' mirror table, where the nine below cannot be — a bare `boolean` has no fields
  * to compare — so it is one of the two stored settings whose *shape* cannot drift silently.
- * **`width` is nullable and `collapsed` is not**, which is the same asymmetry those ten turn on:
+ * **`width` is nullable and `collapsed` is not**, which is the same asymmetry those nine turn on:
  * how wide is a number a reader has to have produced, so a database nobody has dragged has
  * nothing honest to say and says `null`; folded-or-not has a default that is true of every
  * database from the first launch. `@/features/decks/useFolderPane` is where the `null` becomes a
@@ -140,20 +139,17 @@
  * struct puts it on the same mirror table, which is what its two declared fields are worth
  * checking for; nothing on this side can fence the rest, and nothing should try.
  *
- * The zoom row, the list-layout row, the flatten row, the mark-colour row and the search-column
- * row are the five of the ten whose *shape* is a map, and the difference is worth a sentence:
- * none has a single default to fall back on, because there are eight walls, four lists, two
- * cabinets, three search columns and a handful of marks, and each one has been touched or not. So
+ * The zoom row, the list-layout row, the mark-colour row and the search-column row are the four
+ * of the nine whose *shape* is a map, and the difference is worth a sentence:
+ * none has a single default to fall back on, because there are eight walls, four lists, three
+ * search columns and a handful of marks, and each one has been touched or not. So
  * the backend answers only what it has, and a section it says nothing about keeps the default the
  * store was built with — which for the mark colours is the one `index.css` draws, a default this
  * side does not hold as a value at all.
- * **The flatten row and the search-column row are the two where the keys are a vocabulary and
- * the values are not** — which
- * is the two arguments above meeting in one row rather than a third kind of setting: *which*
- * pages file cards is `@/lib/store`'s to say and *which* pages carry a search column is
- * `@/features/search/useSearchOpen`'s, while a `bool` has no junk state for a later build
- * to have widened. So `isFlattenSection` narrows the key, and the only thing `hydrateFlatten`
- * asks of the value is that it really is a boolean — which is a check on the *wire*, not on a
+ * **The search-column row is the one where the keys are a vocabulary and the values are not** —
+ * which pages carry a search column is `@/features/search/useSearchOpen`'s to say, while a `bool`
+ * has no junk state for a later build to have widened. So the key is narrowed on this side, and the
+ * only thing asked of the value is that it really is a boolean — a check on the *wire*, not on a
  * vocabulary: this file's `boolean` is a claim about what the far end sends, and a row that has
  * been hand-edited is exactly where a claim stops being true.
  *
@@ -9172,7 +9168,7 @@ export const ipc = {
    * How large each wall of cards was last left drawn, as section name → multiplier.
    *
    * The third `app_meta` setting and the **first** whose shape is a map — see this file's header,
-   * and {@link listView}, {@link flattenState} and {@link markColors}, each of which copies the
+   * and {@link listView} and {@link markColors}, each of which copies the
    * contract below.
    * **A section is absent rather than defaulted**: the ladder's stops are this side's
    * (`@/lib/cardZoom`), so a missing entry means the reader has never zoomed that wall, and the
@@ -9199,7 +9195,7 @@ export const ipc = {
    * they left it.
    *
    * The **fourth** `app_meta` setting and the first that is a bare `boolean` — see this file's
-   * header. It is also the one that needs no narrowing on this side: the other nine carry
+   * header. It is also the one that needs no narrowing on this side: the other eight carry
    * a vocabulary a newer build could have widened, and `true`/`false` has none, so there is no
    * third state to fall back from. **The far end is infallible**: a missing row, a row holding
    * something that is not a boolean, and a row that cannot be read at all all answer `false` —
@@ -9240,41 +9236,6 @@ export const ipc = {
    */
   setListView: (section: string, view: string) =>
     invoke<void>("set_list_view", { section, view }),
-  /**
-   * Whether each page with a cabinet was last left ignoring its filing, as section name →
-   * flattened.
-   *
-   * The **seventh** `app_meta` setting and the third whose shape is a map — see this file's
-   * header, and {@link listView} beside it, whose contract this copies whole. **A section is
-   * absent rather than defaulted**: which pages file cards is this side's (`@/lib/store`), and
-   * the two defaults differ (`collectionFlattened` opens `true`, `wishlistFlattened` `false`), so
-   * a missing entry means the reader has never touched that switch and the backend does not
-   * invent an answer it does not own. **Infallible by signature** — a whole unreadable row
-   * answers `{}`, which is a complete, drawable app.
-   *
-   * `Record<string, boolean>` and not `Record<FlattenSection, boolean>`, for {@link listView}'s
-   * reason on the key half only: the keys are whatever some build of this app wrote, so
-   * `isFlattenSection` narrows them in `@/lib/store`. The **values** have no vocabulary to
-   * narrow, which is why the type says `boolean` — and `hydrateFlatten` still checks it, because
-   * that word is a promise about the far end rather than a fact about the row.
-   */
-  flattenState: () => invoke<Record<string, boolean>>("flatten_state"),
-  /**
-   * Remember one page's switch, leaving the other entry in the row alone.
-   *
-   * Two arguments where most of its neighbours take one, and Tauri matches by name. Rejects a
-   * blank section and nothing else: a `bool` off the IPC boundary has no junk state for a
-   * validation to catch, so unlike {@link setListView} there is no word to refuse — the
-   * asymmetry {@link setNavCollapsed} spells out, on a row whose *keys* still belong to this
-   * side.
-   *
-   * Answers `collection::BUSY` under a running sync, like every other write, and the caller
-   * deliberately does not put the switch back when it does — {@link setNavCollapsed}'s trade, for
-   * its reason: a refusal costs the reader nothing they can see this session and only the next
-   * launch's starting state for that page.
-   */
-  setFlattenState: (section: string, flattened: boolean) =>
-    invoke<void>("set_flatten_state", { section, flattened }),
   /**
    * What colour the reader has each card mark drawn in, as mark name → `#rrggbb`.
    *
@@ -9323,7 +9284,7 @@ export const ipc = {
    *
    * It stands exactly where `deckSearchOpen` stood, having replaced it on 2026-09-07, and its
    * shape is a map. See this file's header,
-   * and {@link flattenState} beside it, whose contract this copies whole down to the value type.
+   * and {@link listView}, whose contract this copies with a `boolean` where the word is.
    * **A section is absent rather than defaulted**: which pages have a search column at all is
    * this side's (`@/features/search/useSearchOpen`), so a missing entry means the reader has
    * never touched that disclosure and the backend does not invent a preference it does not own.
@@ -9348,7 +9309,7 @@ export const ipc = {
    * Two arguments where some of its neighbours take one, and Tauri matches by name. Rejects a
    * blank section and nothing else: a `bool` off the IPC boundary has no junk state for a
    * validation to catch, so unlike {@link setListView} there is no word to refuse —
-   * {@link setFlattenState}'s asymmetry exactly, on a row whose *keys* also belong to this side.
+   * {@link setNavCollapsed}'s asymmetry, on a row whose *keys* belong to this side.
    *
    * Answers `collection::BUSY` under a running sync, like every other write, and the caller
    * deliberately does not put the column back when it does — {@link setNavCollapsed}'s trade,

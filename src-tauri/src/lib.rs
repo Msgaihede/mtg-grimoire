@@ -101,32 +101,31 @@ pub mod decksort;
 pub mod errors;
 pub mod feed;
 pub mod filters;
-/// **The resolution rule under the image cache, and the reason it is on this side of the
-/// map while [`images`] is not.** Two columns of `cards`, the precedence between them and
-/// one predicate over a string — no filesystem, no protocol handler, nothing a browser
-/// lacks. `search.rs` puts a card's URL on a result row from here, and `images` composes
-/// the same three pieces into a cached fetch.
-/// **The five view-state modules, four of them moved here on 2026-08-30.** `flatten`,
-/// `listview`, `nav`, `searchopen` and `zoom` each keep one setting in `app_meta` and answer it
-/// back - two commands apiece and no filesystem, no `tokio` and no `reqwest` between them. The
-/// first four were on the other side only because [`app_meta`] used to live inside the portable
-/// updater; PR 10a moved the store and this moves the modules that lean on it hardest.
-/// [`searchopen`] was born here, on 2026-09-07, when `deck.rs`'s one boolean row became a map
-/// three docked search columns share. **They are not the only ones of this shape in the crate** —
-/// [`deckpane`], [`decksort`] and [`markcolors`] are three more, filed where the page they belong
-/// to would be looked for rather than in this run; the run is a place in the alphabet, not the
-/// list of view-state modules.
-pub mod flatten;
 /// **[`markcolors`]'s shape with a document instead of a map.** One `app_meta` row, an
 /// infallible read that answers the default layout for anything it cannot parse, and a write
 /// that validates the document's *shape* and never its vocabulary — a widget kind this build
 /// has never heard of survives a round trip, which is what stops an older build quietly
 /// emptying a newer one's row.
 pub mod home;
+/// **The resolution rule under the image cache, and the reason it is on this side of the
+/// map while [`images`] is not.** Two columns of `cards`, the precedence between them and
+/// one predicate over a string — no filesystem, no protocol handler, nothing a browser
+/// lacks. `search.rs` puts a card's URL on a result row from here, and `images` composes
+/// the same three pieces into a cached fetch.
 pub mod image_uri;
 pub mod index;
 pub mod ingest;
 pub mod legalities;
+/// **The four view-state modules, three of them moved here on 2026-08-30.** `listview`,
+/// `nav`, `searchopen` and `zoom` each keep one setting in `app_meta` and answer it
+/// back - two commands apiece and no filesystem, no `tokio` and no `reqwest` between them.
+/// `listview`, `nav` and `zoom` were on the other side only because [`app_meta`] used to live
+/// inside the portable updater; PR 10a moved the store and this moves the modules that lean on it
+/// hardest. [`searchopen`] was born here, on 2026-09-07, when `deck.rs`'s one boolean row became a
+/// map three docked search columns share. **They are not the only ones of this shape in the
+/// crate** — [`deckpane`], [`decksort`] and [`markcolors`] are three more, filed where the page
+/// they belong to would be looked for rather than in this run; the run is a place in the
+/// alphabet, not the list of view-state modules.
 pub mod listview;
 pub mod maintenance;
 /// **A theory deck's managed wishlist** (user schema v48, issue #512) — a wishlist folder each

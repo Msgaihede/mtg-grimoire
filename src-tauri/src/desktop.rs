@@ -21,8 +21,8 @@ use crate::sync::AppState;
 use crate::{
     activity, camera, card, collection, collection_alloc, collection_folders, combos, db, deck,
     deck_audit, deck_meta, deck_missing, deck_notes, deck_pull, deck_quick_add, deck_theory,
-    deck_tokens, deck_undo, deckpane, decksort, errors, export, flatten, home, images, import,
-    index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, new_printings, paths,
+    deck_tokens, deck_undo, deckpane, decksort, errors, export, home, images, import, index,
+    listview, markcolors, marketplace, marketplace_feed, mirror, nav, new_printings, paths,
     price_history, recent_cards, reset, scanner, schema, scryfall, search, searchopen,
     set_completion, share, shelffolds, startup, startview, sticky_notes, sync, sync_engine,
     sync_pair, tags, update, value_history, wishlist, wishlist_folders, wishlist_optimize, zoom,
@@ -601,8 +601,6 @@ pub fn run() {
             // shut it down to a rail. One row and one pair, beside the deck gallery's own order.
             deckpane::deck_folder_pane,
             deckpane::set_deck_folder_pane,
-            flatten::flatten_state,
-            flatten::set_flatten_state,
             // The home page's own two pairs, beside the other `app_meta` view state: which
             // widgets the reader has and how they are arranged, and which view the app opens
             // on. Both reads are infallible by signature — see each module's doc.

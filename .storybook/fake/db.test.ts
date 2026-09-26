@@ -9855,12 +9855,6 @@ describe("the busy fault", () => {
       // write validates. Valid all the same, for `zoom`'s reason: a handler that validated before
       // taking the lock would fail this loop by answering `Ok` instead of BUSY.
       view: "grid",
-      // `set_flatten_state`'s second argument, and the **third** write to share the `section`
-      // above — which is why that key carries three values beside it rather than three sections.
-      // `"deck"` is a section name none of the three validates, so all three are valid here for
-      // `zoom`'s reason: a handler that validated before taking the lock would fail this loop by
-      // answering `Ok` instead of BUSY.
-      flattened: true,
       // `set_mark_color`'s own key. It is the **fourth** write to take two arguments of its own,
       // and the one collision it brings is `color` above — which belongs to the three label
       // writes and is `"ember"`, a word this write would refuse. That is harmless for the reason
@@ -10194,7 +10188,8 @@ describe("the busy fault", () => {
     // **third** write to take two arguments of its own and the third to share `section`, and it
     // is the first of those three whose body is a spread with only *half* a validation: the
     // section can be blank and the value cannot be junk, because a `bool` off the IPC boundary
-    // has no junk state.
+    // has no junk state. It went again on 2026-09-26 with folder shelves, and the figure below is
+    // one lower for it.
     // Folder reordering then added **three**, 70 -> 73 — one per cabinet
     // (`deck_folder_reorder`, `collection_folder_reorder`, `wishlist_folder_reorder`), and for
     // once the handler count and the delta are the same figure. All three take
@@ -10486,7 +10481,8 @@ describe("the busy fault", () => {
     // 121 → 122 on 2026-09-26 with `set_shelf_folds` — an `app_meta` write through
     // `sync::with_write`, whose read half `shelf_folds` is not in this table. Re-measure after a
     // merge by reading `left`; never add to this figure.
-    expect(names).toHaveLength(122);
+    // Recounted on 2026-09-26: folder shelves took `set_flatten_state` out.
+    expect(names).toHaveLength(121);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -11002,62 +10998,6 @@ describe("the whole command table", () => {
     expect(() => w.set_card_zoom({ section: "", zoom: 1 })).toThrow(/cannot be blank/);
     // Refused, and the entry each would have overwritten is still the one that was chosen.
     expect(db.cardZoom.deck).toBe(0.7);
-  });
-
-  /**
-   * The seventh `app_meta` row, and the one that is **half of each** of its two object-shaped
-   * neighbours — which is why the questions asked of it are a subset rather than a copy.
-   *
-   * Like the zoom's and the layout's, there is no single default to fall back on: the collection
-   * opens flattened and the wishlist does not, so an absent key is the only thing that can stand
-   * for a switch nobody has pressed, and the whole answer is the two pages the row actually
-   * names. Unlike them, there is no unusable **value** to ask about — a `bool` off the IPC
-   * boundary is one of two things — so the write's only refusal is the blank section, and the
-   * read's only filter is the same key.
-   *
-   * The round trip is what the pair is for, and it has to run **in both directions**: `false` is
-   * a choice a reader made rather than a switch withdrawn, and on the collection it is the only
-   * thing that can beat a `true` default. A fake that stored `true` and deleted on `false` would
-   * pass every flattening assertion and lose the un-flattening for good.
-   */
-  it("answers only the pages it has a switch for, remembers both directions, and refuses a blank section", () => {
-    expect(readHandlers(makeDb()).flatten_state()).toEqual({});
-    expect(readHandlers(makeDb({ flattenState: { collection: false } })).flatten_state()).toEqual({
-      collection: false,
-    });
-
-    // One unusable key costs one page. A blank section is what a hand-edit leaves behind — the
-    // write below refuses it — and it is no reason to forget the entry beside it.
-    expect(
-      readHandlers(makeDb({ flattenState: { wishlist: true, "": true } })).flatten_state(),
-    ).toEqual({ wishlist: true });
-
-    const db = makeDb();
-    const w = writeHandlers(db);
-    // Two cabinets, two independent memories — the whole reason the value is an object, and the
-    // reason it matters more here than for the two rows above: the defaults differ, so a write
-    // that leaked across would not merely be wrong, it would be wrong in a way that looks right.
-    w.set_flatten_state({ section: "collection", flattened: false });
-    w.set_flatten_state({ section: "wishlist", flattened: true });
-    expect(readHandlers(db).flatten_state()).toEqual({ collection: false, wishlist: true });
-
-    // The way back. `false` wrote an entry above; `true` has to overwrite it rather than the read
-    // falling back on the store's own default.
-    w.set_flatten_state({ section: "collection", flattened: true });
-    expect(readHandlers(db).flatten_state().collection).toBe(true);
-
-    // **The section name is not validated and must not be**: which pages have a cabinet is
-    // TypeScript's vocabulary and `flatten.rs` deliberately does not know them, which is what
-    // `isFlattenSection` exists for on the other side.
-    w.set_flatten_state({ section: "shoebox", flattened: true });
-    expect(readHandlers(db).flatten_state().shoebox).toBe(true);
-
-    // The blank one is the whole of the validation, and there is deliberately no second refusal
-    // beside it — see this test's note.
-    expect(() => w.set_flatten_state({ section: "", flattened: true })).toThrow(/cannot be blank/);
-    // `Object.keys` rather than `toHaveProperty("")` — an empty path is not a key vitest's
-    // matcher can be asked about, it throws inside the matcher itself.
-    expect(Object.keys(db.flattenState)).not.toContain("");
   });
 
   /**

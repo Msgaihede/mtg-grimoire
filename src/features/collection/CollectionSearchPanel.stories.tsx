@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { MIN_PANEL_WIDTH_PX } from "@/features/search/CardSearchPanel";
 import { buildFolderTree, type FolderNode } from "@/lib/folderTree";
 import { CollectionSearchPanel } from "./CollectionSearchPanel";
@@ -35,9 +35,9 @@ const folderName = (id: number | null) =>
  *
  * **`folderId` is an arg rather than something this wrapper derives**, which is the deck panel
  * wrapper's rule read across: where the reader is standing is a fact about the *page* — a
- * `useState` inside `useCollection`, moved by a folder card and reset by Flatten — and a wrapper
- * that re-derived it would be a second, agreeing copy of a rule this component deliberately does
- * not own.
+ * `useState` inside `useCollection`, moved by a shelf heading's title and by the breadcrumb — and
+ * a wrapper that re-derived it would be a second, agreeing copy of a rule this component
+ * deliberately does not own.
  */
 function Panel({ folderId }: { folderId: number | null }) {
   return (
@@ -73,7 +73,7 @@ const meta = {
           "pages are where the disclosure, the splitter and the three drawn states are " +
           "storied. What is left here is the **collection**: the destination is the page's open " +
           "folder rather than a choice made in the popup, the `+` is `AddToCollectionButton` " +
-          "locked to the collection, and a tile can be dragged onto a folder card instead.\n\n" +
+          "locked to the collection, and a tile can be dragged onto a shelf's heading instead.\n\n" +
           "**`folderId` is required and `null` means the root.** Absent and `null` are different " +
           "on the wire — absent is a surface that has never thought about folders (the search " +
           "page, the Tags wall), and this one always has, even when the answer is the root.\n\n" +
@@ -81,7 +81,7 @@ const meta = {
           "target and the shipped window runs with `dragDropEnabled: false`, so a green drag " +
           "here would prove nothing — that is the deck panel's standing decision and it applies " +
           "unchanged. `CollectionSearchPanel.test.tsx` reads the record back out of dnd-kit's " +
-          "own store instead, and `CollectionPage.test.tsx` drives the drop onto a folder card.",
+          "own store instead, and `CollectionPage.test.tsx` drives the drop onto a heading.",
       },
     },
   },
@@ -119,8 +119,14 @@ export const Docked: Story = {
       within(panel).getByRole("searchbox", { name: "Search cards" }),
       "Ancient Tomb",
     );
+    // Past the box's 300ms debounce and the search itself, so {@link InAFolder}'s ceiling: the
+    // default 1000ms is a race under the whole suite's load, and a ceiling costs a pass nothing.
     await expect(
-      await within(panel).findByRole("button", { name: /^Add Ancient Tomb .* to Collection$/ }),
+      await within(panel).findByRole(
+        "button",
+        { name: /^Add Ancient Tomb .* to Collection$/ },
+        { timeout: 4000 },
+      ),
     ).toBeInTheDocument();
   },
 };
@@ -150,15 +156,33 @@ export const InAFolder: Story = {
       await within(panel).findByRole("searchbox", { name: "Search cards" }),
       "Ancient Tomb",
     );
-    const add = await within(panel).findByRole("button", {
-      name: /^Add Ancient Tomb .* to Trade binder$/,
-    });
+    // **Wait for the search to settle before taking the button.** The box is debounced by
+    // `DEBOUNCE_MS` (300 ms) and the unfiltered wall already holds Ancient Tomb, so a bare
+    // `findByRole` can resolve on a tile the narrowed results then replace — and the press below
+    // lands on a detached button, or opens a popup the re-render closes. Settled is every `+` on
+    // the wall naming Ancient Tomb, read and returned inside one `waitFor` so the button is the
+    // one on screen after the query landed.
+    const add = await waitFor(
+      async () => {
+        const every = within(panel).getAllByRole("button", { name: /^Add .* to Trade binder$/ });
+        const tomb = within(panel).getAllByRole("button", {
+          name: /^Add Ancient Tomb .* to Trade binder$/,
+        });
+        await expect(tomb).toHaveLength(every.length);
+        return tomb[0];
+      },
+      { timeout: 4000 },
+    );
 
     // And the popup behind it is pinned to the collection: a chip pair offering the wishlist here
     // would change which page the results the reader is looking at belong to, and it would offer
     // the collection's folder tree for a wishlist add.
     await userEvent.click(add);
-    const popup = await canvas.findByRole("button", { name: "Add to collection" });
+    const popup = await canvas.findByRole(
+      "button",
+      { name: "Add to collection" },
+      { timeout: 4000 },
+    );
     await expect(popup).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: "Wishlist" })).toBeNull();
     await expect(canvas.getByRole("button", { name: /^Change folder for/ })).toBeInTheDocument();

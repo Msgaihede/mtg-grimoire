@@ -259,8 +259,6 @@ pub const COMMANDS: &[&str] = &[
     // last been left with and never record a drag of its own.
     "deck_folder_pane",
     "set_deck_folder_pane",
-    "flatten_state",
-    "set_flatten_state",
     // **The home page's own two pairs, and both halves of each for `deck_sort`'s reason.** A
     // browser that could read the arrangement and not write it would open every session on the
     // layout the desktop was last left with and never record a drag of its own; a browser that
@@ -2298,21 +2296,6 @@ pub fn call(
             )
         }
 
-        "flatten_state" => {
-            let conn = crate::sync::lock_db_read(state);
-            encode(command, crate::flatten::stored(&conn))
-        }
-
-        "set_flatten_state" => {
-            let section: String = field(command, args, "section")?;
-            let flattened: bool = field(command, args, "flattened")?;
-            encode(
-                command,
-                crate::sync::with_write(state, |c| crate::flatten::store(c, &section, flattened))
-                    .map_err(RouteError::Failed)?,
-            )
-        }
-
         // ── The home page's two pairs ───────────────────────────────────────────────
         //
         // `nav_collapsed`'s shape twice over, and both reads are infallible on this side too
@@ -2535,10 +2518,11 @@ pub fn call(
             )
         }
 
-        // `flatten`'s pair over a different key, and infallible on this side for its reason: a
-        // browser that cannot read the row draws each search column the way the frontend's own
-        // default would have. The read also carries the `deck_search_open` bridge, so a session
-        // opened against a database an older build wrote keeps that column's last state.
+        // `list_view`'s pair with a `bool` where the word is, and infallible on this side for its
+        // reason: a browser that cannot read the row draws each search column the way the
+        // frontend's own default would have. The read also carries the `deck_search_open` bridge,
+        // so a session opened against a database an older build wrote keeps that column's last
+        // state.
         "search_open" => {
             let conn = crate::sync::lock_db_read(state);
             encode(command, crate::searchopen::stored(&conn))
@@ -4327,9 +4311,10 @@ mod tests {
         // **and the Collection value graph routed `collection_value_history`**, the two landing
         // in one merge. Counted with that `awk` over the merged array as it stands here, not by
         // adding to either side's number. If a later merge turns this red, take it from `left`.
+        // And down by two on 2026-09-26: folder shelves deleted the `flatten_state` pair.
         assert_eq!(
             COMMANDS.len(),
-            186,
+            184,
             "update this number when a command is added"
         );
     }

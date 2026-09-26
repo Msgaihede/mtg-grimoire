@@ -34,8 +34,14 @@ export const FOLLOW_LIVE_APP_META: readonly QueryKey[] = [
 
 /**
  * View preferences each window keeps for itself (spec §2, decision 4) — never refreshed by another
- * window's write, even one under the same root. Card zoom, list/grid and flatten are not here
- * because they are store state seeded once at launch, never a query.
+ * window's write, even one under the same root. Card zoom and list/grid are not here because they
+ * are store state seeded once at launch, never a query.
+ *
+ * **`["shelfFolds"]` is spelled here rather than imported**, because `lib` imports nothing from
+ * `features`: it is `features/shelves/useShelfFolds.ts`'s `SHELF_FOLDS_KEY`, and
+ * `crossWindow.test.ts` pins the two to one value. Collapse is a view preference (spec §5.7), so a
+ * second window keeps its own folds until it relaunches — and the key sits under no root a table
+ * maps to, which is the fence the writing window's own invalidations need.
  */
 export const PER_WINDOW_KEYS: readonly QueryKey[] = [
   ["navCollapsed"],
@@ -44,6 +50,7 @@ export const PER_WINDOW_KEYS: readonly QueryKey[] = [
   ["deckSort"],
   ["deckSearchTab"],
   ["printingGroupBy"],
+  ["shelfFolds"],
 ];
 
 /**

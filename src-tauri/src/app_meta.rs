@@ -3,10 +3,10 @@
 //! **Carved out of `update.rs` for the reason [`crate::image_uri`] was carved out of
 //! `images.rs`.** `update` is the portable updater — `zip`, `tokio`, and an `.exe` swapped
 //! on disk — so it is `#[cfg(not(target_family = "wasm"))]` in `lib.rs`. But it also held
-//! `app_meta`, which is neither: it is one SQLite table read and written by eleven modules
+//! `app_meta`, which is neither: it is one SQLite table read and written by twenty modules
 //! that have nothing to do with updating anything. `searchopen.rs` remembers which docked
 //! search columns are open in it; `shelffolds.rs` remembers which shelves the reader folded on
-//! the collection and the wishlist; `zoom`, `nav`, `listview` and `flatten` keep their view
+//! the collection and the wishlist; `zoom`, `nav` and `listview` keep their view
 //! state here.
 //!
 //! So the *storage* moved to a module both builds compile, and the *updater* stayed behind.
