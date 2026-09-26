@@ -43,12 +43,15 @@ These words are used exactly, here and in the code.
 - **Token** — one `oracle_id` of layout `token`, `double_faced_token` or `emblem` that the deck
   makes or the reader added. What the band and the pile call *Tokens & Emblems*. Never a deck card:
   never a `deck_cards` row, never counted toward size, validation, stats, the ledger or a pile total.
-- **Entry** — one printing of one token in one **list** (`live` or `theory`), with a quantity. A
-  token has zero or more entries per list.
+- **Entry** — one printing **in one finish** of one token in one **list** (`live` or `theory`),
+  with a quantity. A token has zero or more entries per list; a foil and a nonfoil copy of one
+  printing are two entries.
 - **Implicit entry** — what a token with **no** entries in a list draws: the resolver's default
-  printing, at the legacy quantity (§4.2) or 1. It is what every untouched token is today.
+  printing, in its default finish (nonfoil, or the printing's sole finish when it has one), at the
+  legacy quantity (§4.2) or 1. It is what every untouched token is today.
 - **Mode** — `decks.token_mode`: `managed`, `collection` or `hidden`.
-- **The pool** — the collection's app-owned **Tokens** folder, one per database.
+- **The pool** — the collection's app-owned **Tokens** folder, one per database, and **the only
+  place in the collection a token may be**, apart from a deck's token folder under it (§5.1).
 - **A deck's token folder** — `Tokens ▸ <deck name>`, one per deck in Collection mode, holding the
   copies that deck has pulled. Custody, exactly as a deck's group holds its cards.
 - **Pull / return** — moving copies from the pool into a deck's token folder, and back.
@@ -128,11 +131,16 @@ they are summed only in the token pile's heading.
 - **Why an index and not an anchor category**: an anchor is a category id on a synced row, which
   needs the sync's `sync_uid` translation, and switching the anchor pile on would move the token
   pile to the bottom for a reason the reader cannot see. A count needs neither.
-- **Gesture**: the token pile's heading gets a grip (the `CategoryGrip` look). Dragging it onto any
-  rail pile lands it at that pile's index; ArrowLeft / ArrowRight step it one place, with the same
-  `preventDefault` handshake the category grip uses against the view's own arrows. Its accessible
-  name is `Move Tokens & Emblems, n of N`. A category drag over the token pile is refused — the
-  pile is not in either category run.
+- **Gesture — the pile is dragged, like every railed pile** (the reader, twice): the token pile's
+  heading gets a grip (the `CategoryGrip` look) and the heading is the drag source, exactly as a
+  category's is (`useCategoryDragSource`'s arrangement — the pile's name travels under the pointer,
+  not a ghost of the glyph). Dropping it on any rail pile lands it at that pile's index, with the
+  same `DROP_RING` / `DROP_OVER` marks and `DropIndicator` a category drag draws. ArrowLeft /
+  ArrowRight on the grip step it one place, with the `preventDefault` handshake the category grip
+  uses against the view's own arrows. Its accessible name is `Move Tokens & Emblems, n of N`. A
+  category drag over the token pile is refused — the pile is not in either category run.
+- **Undoable**: a move writes one `Op::Deck { token_rail_index }` step, the shape every other deck
+  field's undo already takes, so Ctrl+Z puts the pile back and Ctrl+Shift+Z moves it again.
 - **The other views** spend the index as **order**, as `splitRail` is already spent: Grid and Table
   insert the pile at `command + flow + index` in their `[...command, ...flow, ...rail]`; Text
   inserts it at `index` in its rail.
@@ -176,9 +184,12 @@ User schema **v51**. Rust-heavy; the UI changes are the band and the mode contro
 - **`deck_token_printings`**, a new synced table (added to `schema.rs`' synced list and the sync
   capture/apply specs beside `deck_tokens`):
   `id`, `deck_id` (→ `decks`, cascade), `variant` (`live`|`theory`), `oracle_id`, `card_id`
-  (NOT NULL — an entry is always a concrete printing), `quantity` (NOT NULL, ≥ 0), `created_at`,
-  `updated_at`, `sync_uid`. Grain `(deck_id, variant, card_id)` — a printing belongs to one
-  oracle, so the oracle is a stored fact for grouping (and for orphans), not a grain term.
+  (NOT NULL — an entry is always a concrete printing), `finish` (NOT NULL, `nonfoil`|`foil`|
+  `etched`, the collection's own words), `quantity` (NOT NULL, ≥ 0), `created_at`, `updated_at`,
+  `sync_uid`. Grain `(deck_id, variant, card_id, finish)` — a printing belongs to one oracle, so
+  the oracle is a stored fact for grouping (and for orphans), not a grain term. **`finish` is NOT
+  NULL on purpose**: SQLite's unique index treats every `NULL` as distinct, so a nullable finish
+  would let one list hold the same regular printing twice.
 - **`deck_tokens` keeps the token-level state** — `auto` / `hidden` / `manual` — shared by both
   lists, grain unchanged `(deck_id, oracle_id)`. A dismissal is "not in this deck" and a hand-added
   token is the deck's, whichever list the reader is looking at. Its `card_id` and `quantity`
@@ -198,22 +209,49 @@ User schema **v51**. Rust-heavy; the UI changes are the band and the mode contro
 3. **Stepping an entry to 0 deletes it — unless it is the token's last entry in that list**, which
    stays at 0. That is today's "kept at zero, art kept", and it stops the implicit default
    reappearing under a reader who zeroed the only printing they had.
-4. **A swap** replaces the entry's `card_id`; swapping onto a printing the list already holds folds
-   the two (quantities summed), on the grain.
-5. **Adding a printing** inserts it at quantity 1, or steps an existing entry of that printing up
-   by 1.
+4. **A swap** replaces the entry's `card_id` and/or `finish`; swapping onto a printing and finish
+   the list already holds folds the two (quantities summed), on the grain.
+5. **Adding a printing** inserts that printing and finish at quantity 1, or steps an existing entry
+   of it up by 1.
 6. **Theory and live never share an entry.** A write names its list.
+7. **A token nothing makes any more is removed** (the reader: "if you cut all cards that create a
+   token, so a token is no longer needed in the deck, simply remove all tokens of that type and
+   return them to the collection tokens folder"). When a list stops deriving a token and the token
+   is not hand-added (`manual`), every entry of it in that list is deleted — and in Collection mode
+   its copies go back to the pool (§5.2). A hand-added token is kept: no card made it, so no cut
+   can unmake it. Cutting the card and adding it back brings the token back as its implicit entry.
+
+   **This is a reconcile after every write that changes a list's cards**, not a rule applied at
+   read time: `reconcile_tokens(conn, deck_id, variant)` in Rust, called from the deck-write choke
+   points — adding, cutting, moving between piles, switching a pile on or off (a switched-off pile
+   makes nothing), clearing, importing over, a printing swap, and undo/redo of any of those. The
+   plan's first task is the census of those call sites, fenced by a test that drives each one.
+   Doing it at read time would leave the entries in the table and the copies in the deck's folder,
+   which is the stranding this rule exists to prevent.
+
+   **The reconcile's deletions ride the card write's own undo step.** `reconcile_tokens` returns the
+   rows it removed and the caller appends an `Op::Tokens { restore }` to the step it files, so
+   Ctrl+Z on the cut puts back the card **and** the reader's Treasure printings — and, in Collection
+   mode, the reconcile after the undo pulls their copies back (§4.7). A write that files no step
+   (the live cut through `deck_to_collection`, [collection-folders.md](../../reference/collection-folders.md)'s
+   *the undo it deliberately does not*) files none for its token half either — the two halves are
+   one press and are reversible together or not at all.
 
 `deckTokens.ts` stays where every conclusion is drawn: effective views become one view **per
-entry** (`printingId`, `quantity`, the token's `oracleId`, `name`, `subtitle`, `state`, `sources`),
-sorted emblems last, then name, subtitle, oracle id — and within one token by set and collector
-number, so a token's printings sit together.
+entry** (`printingId`, `finish`, `quantity`, the token's `oracleId`, `name`, `subtitle`, `state`,
+`sources`), sorted emblems last, then name, subtitle, oracle id — and within one token by set,
+collector number and finish (nonfoil, foil, etched), so a token's printings sit together. The
+entry's `finish` is what the chin names, what `FoilOverlay` sheens and what the price is read at.
 
 ### 4.3 Migration (v51)
 
 - Every `deck_tokens` row with a non-null `card_id` becomes one entry **per list** (`live` and
   `theory`) at `coalesce(quantity, 1)`; its `card_id` and `quantity` are then cleared. Both lists,
   because today's override is shared by both — copying it keeps what each list draws unchanged.
+  Its finish is the printing's **sole** finish when the corpus says it has exactly one, else
+  `nonfoil` — today's picker never chose a finish, so this is what the tile already drew. Where
+  the corpus cannot be read at migration time the entry is `nonfoil`, and a foil-only printing is
+  put right by one swap.
 - A row with only a `quantity` is left as it is: that quantity keeps meaning "the implicit entry's
   quantity" (rule 1). No printing is resolved inside the migration — the resolver's default comes
   from the deck's cards and the corpus, and a rung that guessed it would invent a choice the reader
@@ -226,12 +264,13 @@ number, so a token's printings sit together.
 The four token commands keep their names and gain a `variant` where a write targets a list:
 
 - `deck_tokens(deck_id, variant, marketplace)` — one row per **entry**, carrying `derived`,
-  `sources`, `state`, the chin facts and the price.
-- `deck_token_set_quantity(deck_id, variant, oracle_id, card_id | null, quantity)` — `null` is the
-  implicit entry (materialised by rule 2).
-- `deck_token_swap(deck_id, variant, oracle_id, from_card_id | null, to_card_id)`.
-- `deck_token_add_printing(deck_id, variant, card_id)` — rule 5; a token nothing makes becomes
-  `manual`.
+  `sources`, `state`, the chin facts and the price at the entry's finish.
+- `deck_token_set_quantity(deck_id, variant, oracle_id, entry | null, quantity)` — an entry is
+  `(card_id, finish)`; `null` is the implicit entry (materialised by rule 2).
+- `deck_token_swap(deck_id, variant, oracle_id, from | null, to)` — `from`/`to` are
+  `(card_id, finish)`.
+- `deck_token_add_printing(deck_id, variant, card_id, finish)` — rule 5; a token nothing makes
+  becomes `manual`.
 - `deck_token_state(deck_id, oracle_id, state)` — dismiss / restore, shared by both lists.
 - `deck_token_reset(deck_id, variant, oracle_id)` — deletes that list's entries, back to implicit.
 
@@ -249,22 +288,59 @@ every stepper works in every mode.
 
 ### 4.6 Adding a printing
 
+- **The picker's grain is the printing and the finish.** A printing with two finishes is two
+  tiles, the foil one wearing `FoilOverlay`'s sheen and its finish in the caption — the collection
+  wall's own grain ([collection-folders.md](../../reference/collection-folders.md), *the wall's
+  grain is the printing **and** the finish*). Both pickers below are this one grid.
 - **From the band**: an **Add printing** button opens a picker built on `TokenArtPicker`'s dialog —
   the printings of **every token the deck has** (the tokens on the wall), with a search box over
   name and set. A pick is rule 5 at quantity 1.
 - **From the search column** (either tab): adding or dropping a card whose layout is `token`,
   `double_faced_token` or `emblem` files it as a **token entry** (rule 5) rather than a deck card,
-  whichever pile it was dropped on — tokens never become deck cards. A token the deck does not make
-  becomes a hand-added token. The one predicate lives in `deckTokens.ts` (`isTokenLayout`).
+  whichever pile it was dropped on — tokens never become deck cards. The finish is the tile's own
+  where the tile has one (the collection tab's wall is grained on it), else the printing's default.
+  A token the deck does not make becomes a hand-added token. The one predicate lives in
+  `deckTokens.ts` (`isTokenLayout`), with its Rust twin in §5.1.
 - **A click** on an entry — in the stack or the band — opens the printing picker for **that
-  entry** (rule 4). The picker's own swap never touches the token's other printings.
+  entry** (rule 4). The picker's own swap never touches the token's other entries.
 
-### 4.7 Theory tracking, complete
+### 4.7 Undo, redo and the deck's history
+
+**Every token write is undoable** (the reader's ask) — which reverses #388's "token writes record
+nothing". A token write is a deck write, so it goes where every deck write goes:
+
+- **Undo** — a new `Op::Tokens { restore, patch, delete, states }` in `deck_undo`, the shape
+  `Op::Notes` has: `restore`/`patch`/`delete` over `deck_token_printings` rows (by grain) and
+  `states` over `deck_tokens` rows. A write files one `Step` whose `undo` puts the rows back and
+  whose `redo` re-applies them — rows restored, never a command run backwards, the module's own
+  rule. A **mode** change is `Op::Deck { token_mode }`, a **rail move** `Op::Deck
+  { token_rail_index }` (§3.4).
+- **History** — one `deck_audit` row per write, kind **`token`**, payload
+  `{ action, name, subtitle, card_id, finish, list, from, to }`, with `auditText.ts` arms such as
+  *"Added 1 × Treasure (foil)"*, *"Treasure 1 → 3"*, *"Swapped Treasure's art"*, *"Dismissed
+  Soldier"*. A new kind rather than reusing `add` / `quantity`, because every existing reader of
+  those kinds reads them as **deck cards**, and a Treasure in them is a card that is not in the
+  deck. Widening the kind `CHECK` is part of v51's rung; whether `deck_audit` is rebuilt or needs
+  anything in sync is the plan's to measure.
+- **The undo button's label** is the audit row's text, as for every step, so the button reads
+  *"Undo — Treasure 1 → 3"*.
+- `every_deck_write_leaves_exactly_one_audit_row` gains the token commands, and the fake's
+  `NO_UNDO_STEP` list does not.
+
+**In Collection mode an undo moves cardboard, and it can, where a deck cut's cannot** (§5.2 has
+why): the step restores the entry rows and then runs the deck's **custody reconcile**, which is a
+pure function of the entries and the pool. That is a forward write, not a reversal — so it can land
+short (the pool no longer holds the copy a step-down returned, because the reader moved or sold it)
+and says so the honest way: the entry is back, and the missing copy is a want on the chin.
+
+### 4.8 Theory tracking, complete
 
 Each list now has its own entries, so the token `TheoryPlan` of §3.5 is fed the theory list's
-**entries** and every tier works as it does for cards: ✓ with a signed `planned − live` at the
-printing grain, the art-mismatch tier with the name-grain sum, ✗ for a token the plan does not make.
-No new mark code — only the data changed.
+**entries** — slot `theorySlot({ cardId, finish })`, the finish now real — and every tier works as
+it does for cards: ✓ with a signed `planned − live` at the printing-and-finish grain, the
+art-mismatch tier with the name-grain sum, ✗ for a token the plan does not make. A plan asking for
+a foil Treasure is not satisfied by the nonfoil one, which is the deck card's rule. No new mark
+code — only the data changed.
 
 ## 5. PR 3 — Collection tokens
 
@@ -284,14 +360,34 @@ User schema **v52**. Rust-heavy, and the one PR that moves the reader's cardboar
 - **A deck's token folder** is made on entering Collection mode and deleted on leaving it. It is
   locked and not a drop target, for the deck group's reason: a copy in it must be backed by an
   entry.
+- **A token lives in Tokens and nowhere else** (the reader: "tokens should never go in a binder,
+  only the tokens folder"). A token is a printing whose corpus `layout` is `token`,
+  `double_faced_token` or `emblem` — Rust's `is_token_layout`, the twin of `deckTokens.ts`'
+  `isTokenLayout`. Every door into the collection honours it, as a fence in Rust and never only a
+  greyed control:
+  - **Adding** one (search, the card menu, quick add, the importer) files it into the pool whatever
+    folder the reader was standing in or the add named.
+  - **Moving** one anywhere but the pool — a binder, the root, a deck group, `Recently removed` — is
+    refused with a sentence (`TOKENS_LIVE_IN_TOKENS`), and the collection page draws no drop ring
+    for a token over any other folder. The pool's own copies move freely among the decks' token
+    folders only through the custody writes below.
+  - **Removing** one deletes it; a token never goes to `Recently removed`.
+  - **The upgrade** files every token already in the collection — in a binder, at the root, in a
+    deck group or in `Recently removed` — into the pool, folding on the grain. It runs in Rust
+    against the corpus, as an idempotent sweep at launch after the rung, so a database whose corpus
+    was not readable at migration time is put right on the next launch that has one. An orphan
+    (its printing gone from the corpus) cannot be classified and stays where it is.
+  - A token arriving over sync from a device that has not upgraded is caught by the same sweep.
 
 ### 5.2 Custody
 
-- **Owned** for a live entry is the copies of that exact printing in the deck's token folder. It is
-  drawn as the chin's red `held/quantity`, and only when short — the deck card's rule.
+- **Owned** for a live entry is the copies of that exact printing **in that exact finish** in the
+  deck's token folder. It is drawn as the chin's red `held/quantity`, and only when short — the
+  deck card's rule.
 - **Step up / add a printing / swap onto a printing** pulls up to the shortfall of that exact
-  printing from the pool's **own** entries (never a subfolder, never a binder), oldest first,
-  through `collection_folders::take_copies` and `refile_entry`. What is not there stays a want.
+  printing **and finish** from the pool's **own** entries (never another deck's token folder),
+  oldest first, through `collection_folders::take_copies` and `refile_entry`. A foil entry is never
+  filled by a nonfoil copy, nor the reverse. What is not there stays a want.
 - **Step down / swap away / reset / dismiss** returns the copies above the entry's new quantity to
   the pool, folding on the grain.
 - **Pull available** — a band button, shown in Collection mode while any entry is short — retries
@@ -299,13 +395,28 @@ User schema **v52**. Rust-heavy, and the one PR that moves the reader's cardboar
 - **Entering Collection mode** materialises every live implicit entry (so custody is keyed by a
   stable printing, not by whatever the resolver names tomorrow), creates the deck's token folder
   and pulls for every live entry.
-- **Leaving Collection mode**, or **deleting the deck**, returns every copy in the deck's token
-  folder to the pool and deletes the folder — the reader's answer ("they go back to Tokens"), and
-  unlike a deck's cards, which go to `Recently removed`.
+- **Leaving Collection mode** returns every copy in the deck's token folder to the pool and
+  deletes the folder — the reader's answer ("they go back to Tokens").
+- **Deleting the deck does the same, before anything else is deleted** (the reader, again: "when a
+  deck is removed, make sure the tokens also go back in the collection tokens folder"). The return
+  runs inside `delete_deck`'s transaction **ahead of** the cards' trip to `Recently removed` and
+  ahead of the `ON DELETE CASCADE` that would otherwise take the token folder — and its rows — with
+  the deck. That ordering is the whole of the fix and is pinned by its own test: a deck in
+  Collection mode holding tokens is deleted, and every copy is in the pool afterwards, folded on the
+  grain, with none in `Recently removed` and none lost. The same test is repeated for **clearing**
+  a deck and for **importing over** one, the two other writes that empty a deck's list wholesale.
+  Archiving is not deleting: an archived deck keeps its tokens.
+- **Undo and redo reconcile rather than reverse** (§4.7). The deck card's cut cannot be undone
+  because its copies go through a merge into `Recently removed` and may no longer exist to restore;
+  a token's copies go back to a pool whose contents are exactly what a pull reads, so custody is a
+  pure function of the entries and the pool, and restoring the entries then reconciling is
+  complete. A mode change's undo is the same reconcile against the restored mode — entering or
+  leaving Collection mode again.
 - **Theory holds nothing** (`THEORY_HOLDS_NOTHING`); theory entries are never pulled for.
-- **No stranded copies**: a token nothing makes any more stays listed while its deck's folder holds
-  copies of it, marked *no longer made*, until the reader steps it to 0 — which returns them.
-  Editing the deck's cards therefore never has to reconcile the folder.
+- **No stranded copies**: when the live list stops making a token, rule 7 (§4.2) deletes its
+  entries and the same reconcile returns every copy of it in the deck's token folder to the pool,
+  in the same transaction as the card write that caused it. So a cut Smothering Tithe leaves no
+  Treasure in `Tokens ▸ <deck>`.
 - Refusals are sentences, in `collection_alloc`'s table style (`NO_TOKENS_FOLDER` for a database
   that lost its pool, and so on).
 
@@ -314,12 +425,10 @@ User schema **v52**. Rust-heavy, and the one PR that moves the reader's cardboar
 - **Tokens as deck cards** — considered and refused (the reader: "tokens should not act as real
   cards"): materialising derived tokens as rows would put them in the collection allocation, the
   ledger and the stats.
-- **A card modal, card menu, drag or selection for tokens.**
-- **A token finish.** Entries name a printing; a pull takes any finish of it. The chin reads the
-  printing's own sole finish when it has one.
-- **Undo and history for token writes.** They write neither today; unchanged.
-- **Custody across the collection.** Collection mode pulls from the pool only. Tokens in a binder
-  count for nothing until the reader files them into Tokens.
+- **A card modal, card menu, card drag or selection for a token card.** The *pile* drags (§3.4);
+  the cards in it do not.
+- **Undo for PR 1's theory marks and chin** — they are reads. Every token *write* is undoable from
+  PR 2 on (§4.7), and PR 1's one write, the rail move, is undoable in PR 1.
 
 ## 7. Testing and verification
 
@@ -329,13 +438,19 @@ User schema **v52**. Rust-heavy, and the one PR that moves the reader's cardboar
   ordering; the mode control's three states; search-column routing of token layouts.
 - **cargo test**: each rung on a fresh file and on the ladder
   (`the_user_schema_is_byte_identical_to_what_the_ladder_builds`), and its undo constant; the
-  v51 migration's two arms; every entry rule; each pull and return path against the collection's
-  merge rule; entering, leaving and deleting in Collection mode; sync capture and apply for the new
-  table and columns; `ipc.test.ts` for every changed struct.
+  v51 migration's arms, finish included; every entry rule; rule 7's reconcile from every card-write
+  call site in the census, with its undo restoring the token entries; each pull and return path against the
+  collection's merge rule, at the finish grain; entering, leaving, deleting, clearing and importing
+  over in Collection mode; every door refusing or redirecting a token out of a binder, and the
+  launch sweep; `Op::Tokens` undo and redo for each token write, and the reconcile after an undo
+  in Collection mode landing short honestly; the audit sweep including the token commands; sync
+  capture and apply for the new table and columns; `ipc.test.ts` for every changed struct.
 - **The shipped window, per PR** (`npm run tauri dev`, debug build, a copy of the real database):
   the one-row header at 0.5×, 1× and 2× with nothing overflowing its column; a token card and a
   deck card measured **in the same frame**; the token pile dragged and arrowed through the rail;
-  in PR 2 two Treasure printings side by side and a swap touching one; in PR 3 a pull, a want, a
-  return and a mode switch, with the Tokens folder read on the collection page after each.
+  in PR 2 two Treasure printings side by side, a swap touching one, and Ctrl+Z / Ctrl+Shift+Z
+  over each token write with the undo button's label read; in PR 3 a pull, a want, a return, a mode
+  switch, an undo of each, a deck deletion, and a token dragged at a binder being refused — with the
+  Tokens folder read on the collection page after each.
 - `npm run verify` before every commit; `cargo fmt` and `clippy` before every push (CI runs both,
   verify does not).
