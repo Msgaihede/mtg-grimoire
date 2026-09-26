@@ -1902,6 +1902,26 @@ describe("undo and redo", () => {
     expect(() => h.deck_undo_apply({ deckId: 1, auditId: stale })).toThrow(/edited since/);
   });
 
+  /** `deck_undo::next_redo`'s order: of two undone changes, only the one undone last may come
+   *  back, and the state command offers no redo for the other. */
+  it("redoes only the change undone last", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const made = h.deck_category_create({ deckId: 1, name: "Ramp" });
+    const first = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_category_rename({ id: made.id, name: "Acceleration" });
+    const second = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_undo_apply({ deckId: 1, auditId: second });
+    h.deck_undo_apply({ deckId: 1, auditId: first });
+
+    expect(h.deck_undo_state({ deckId: 1, redoId: second }).redo).toBeNull();
+    expect(() => h.deck_redo_apply({ deckId: 1, auditId: second })).toThrow(/edited since/);
+
+    h.deck_redo_apply({ deckId: 1, auditId: first });
+    h.deck_redo_apply({ deckId: 1, auditId: second });
+    expect(db.deckCategories.find((c) => c.id === made.id)?.name).toBe("Acceleration");
+  });
+
   /** A write that changed nothing wrote no history row, so it files no step — a Ctrl+Z that
    *  appears to do nothing is worse than one that says there is nothing left. */
   it("files no step for a write that recorded no history", () => {
@@ -4677,6 +4697,28 @@ describe("the collection's folders", () => {
     w.collection_folder_delete({ id: 2 });
     expect(db.collectionFolders.map((f) => f.id)).toEqual([1]);
     expect(db.collectionEntries.map((e) => e.folderId)).toEqual([1, null]);
+  });
+
+  /** `collection_folders::FOLDER_HOLDS_LOCKED` — the same refusal read **downward**. Deleting
+   *  `Binder` re-files everything under it, so a locked `Trade binder` inside it is scattered by
+   *  that press as surely as by its own. */
+  it("refuses to delete a folder with a locked folder inside it", () => {
+    const db = filed({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, folderId: 2 })],
+    });
+    const w = writeHandlers(db);
+    w.collection_folder_set_locked({ id: 2, locked: true });
+
+    expect(() => w.collection_folder_delete({ id: 1 })).toThrow(
+      /A folder inside that one is locked\. Unlock it before deleting this one\./,
+    );
+    expect(db.collectionFolders).toHaveLength(2);
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([2]);
+
+    w.collection_folder_set_locked({ id: 2, locked: false });
+    w.collection_folder_delete({ id: 1 });
+    expect(db.collectionFolders).toEqual([]);
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([null]);
   });
 
   /**

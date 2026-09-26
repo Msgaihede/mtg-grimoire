@@ -280,6 +280,29 @@ describe("AddToCollectionButton", () => {
   });
 
   /**
+   * **…but it says so before the press**, which it used to not: the box sat there holding `1.500`
+   * and the add went through with no price and no word about why. The ambiguous dot names both of
+   * its readings; the add itself is unchanged, per the case above.
+   */
+  it("says why a price it cannot read will not be recorded", async () => {
+    await open();
+    expect(price()).not.toHaveAttribute("aria-invalid");
+
+    await userEvent.type(price(), "1.500");
+    expect(price()).toHaveAttribute("aria-invalid", "true");
+    expect(price()).toHaveAccessibleDescription(`Write 1500 or 1.50 — "1.500" could mean either.`);
+
+    await userEvent.clear(price());
+    await userEvent.type(price(), "later");
+    expect(price()).toHaveAccessibleDescription("That is not a price — try 12.50.");
+
+    await userEvent.clear(price());
+    await userEvent.type(price(), "12.50");
+    expect(price()).not.toHaveAttribute("aria-invalid");
+    expect(price()).not.toHaveAccessibleDescription();
+  });
+
+  /**
    * The backend takes any finish for any card — this row of chips is the only thing
    * standing between the collection and an etched copy of a card that was never etched.
    */

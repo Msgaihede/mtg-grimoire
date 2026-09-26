@@ -7647,9 +7647,11 @@ export const ipc = {
    * Sub-folders *do* go with it. An id that resolves to nothing is a success.
    *
    * **A locked folder is refused in words** (`collection_folders::FOLDER_IS_LOCKED`), on the
-   * **effective** lock — so a sub-folder of a locked one is refused too. Re-filing a set-aside
-   * drawer's cards to the root is exactly the undoing the lock exists to prevent; a caller draws
-   * the row greyed with its reason rather than letting the press reach here.
+   * **effective** lock — so a sub-folder of a locked one is refused too — and so is a folder with
+   * a locked one anywhere beneath it (`FOLDER_HOLDS_LOCKED`), which the same press would re-file.
+   * Re-filing a set-aside drawer's cards to the root is exactly the undoing the lock exists to
+   * prevent; a caller draws the row greyed with its reason rather than letting the press reach
+   * here.
    */
   collectionFolderDelete: (id: number) => invoke<void>("collection_folder_delete", { id }),
   /**

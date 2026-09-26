@@ -968,9 +968,11 @@ shared_cell` walks both into two databases and compares them column by column.
     half would put the list back while the copies stayed in `Recently removed` — a deck claiming
     copies its group no longer holds, with the reader believing Ctrl+Z had worked. Half an undo is
     worse than none. The absence is visible because the Undo button's name **is** the change it
-    would reverse, so it goes on naming the press before the cut — **which means a cut does not
-    advance the undo cursor and the previous step stays the one Ctrl+Z will take**, so pressing
-    it after a cut reverses the *older* change rather than the cut or nothing. The complete way
+    would reverse, so it goes on naming the press before the cut — **a cut does not advance the
+    undo cursor**. Pressing Ctrl+Z then reverses that older change only if the deck still holds
+    what it left: when it touched the cut card's cell, the press is refused (`RETIRED`) and that
+    step retired, rather than bringing back a card whose copies are in `Recently removed` — see the
+    `deck_undo` bullet below. The complete way
     back is `collection_to_deck`, which restores both halves at once, and **the deck builder's
     Collection Search tab is what calls it** (2026-08-23,
     `src/features/decks/useCollectionSearch.ts`): the cut copies are sitting in
@@ -1318,7 +1320,25 @@ with the arithmetic behind the 105-character code and the crate pins, is
 - **`sync_identity`, `sync_group` and `sync_devices` never sync.** They are this device's
   secrets. They are `None` in `watch::surface_of` for the sharpest reason on that list: a
   mirrored file quoting any of them would write a key into a folder the reader syncs with
-  Dropbox. PR 7's synced-table list must not name them either.
+  Dropbox. PR 7's synced-table list must not name them either. **The superseded group keys live
+  in `sync_state`** (`group_key@<epoch>`), which is under the same two rules and needed no rung.
+- **⚠️ A superseded group key is kept only across a rotation that, as far as this device can see,
+  dropped nobody** — `identity::supersede`, run by `adopt_epoch` and `commit_rotation` before
+  either touches the roster. Exactly one epoch ahead, a view of the group **exists**, and every
+  device in it (the live roster **and the last manifest's ids**, because `adopt_epoch` never
+  inserts) is still on the new manifest; anything else forgets them all. **An absent
+  `last_manifest` is no view, never an empty one**: only `identity::found_group` seeds it, with
+  `[itself]`, because only a device minting its group knows all of it — a joiner's pairing blob
+  names nobody but the initiator, and an upgraded install has never read a manifest. It is what
+  lets `client::pull` open the backlog behind a join, which every device offline across a pairing
+  used to step over for good. **Never relax it to "keep them all"**: the group key is symmetric
+  and the relay does not refuse a push at a stale epoch, so a device still opening *N* after a
+  removal takes writes from the removed device. **Its one trust in the relay**: the manifest's
+  device list is the relay's report and only the epoch is sealed, so a malicious relay colluding
+  with a removed device could get pre-removal-epoch writes applied (confidentiality still holds).
+  An authenticated join/removal marker would close it and is not built — its trade-offs are in
+  [sync.md](../docs/reference/sync.md). Bounded at `identity::KEY_HISTORY` epochs, current included — the relay's
+  `EPOCH_HISTORY`.
 - **No key crosses the IPC boundary.** `identity::Device.public_key` is `#[serde(skip)]` — a key
   on a list of devices is a key in a screenshot — and every field of `pairing::Pending` is
   private and none is `Serialize`. What crosses is the six digits, as a **string**, and two
@@ -1424,6 +1444,14 @@ with the arithmetic behind the 105-character code and the crate pins, is
   was written, tested and deleted on the argument that with no relay a rotation A performs cannot
   reach B — which is exactly what the rewrap hop now builds. The press is missing rather than
   refused; **re-open it as a decision rather than by citing the old argument.**
+- **⚠️ `check_keys` tries every sealer this device can name — the manifest's devices, its own
+  whole roster, and itself — and must never narrow back to the manifest.** A departure is sealed
+  by the leaver, which is on no manifest it publishes; a rotation this device published and never
+  committed (a lost 2xx, a failed `commit_rotation`) is sealed by this device, which
+  `plan_excluding` seals a blob for. Narrowed, the first stalled every device that stayed after a
+  *Leave group* and the second stalled the publisher for good. **It trusts nothing new**: a
+  candidate is a public key from this device's own roster, taken at pairing, and the AEAD decides.
+  Adopting its own rotation re-arms the baselines the lost commit would have.
 - **⚠️ A device with no blob at a higher epoch has been removed, and the epoch comparison is
   load-bearing.** A group that has claimed and never rotated holds one `group_keys` row with an
   *empty* manifest, so every device in it reads `blob: null, devices: []`. `client::check_keys`
@@ -1493,6 +1521,9 @@ record, with every measurement, is
   at every open.** Not `update_hook` (no values), not `preupdate_hook` (fires before commit, so a
   crash loses an op silently). Never `CREATE TRIGGER IF NOT EXISTS`: a trigger is stored SQL, and
   a build that changed the generator would leave every existing database running the old rules.
+  **`capture::clear_stale_guard` runs just before them**: `suppressed` writes `applying` ahead of
+  its work and no `Drop` runs through a kill, so a row left by one switches capture off until
+  something clears it — and before this, with no deck, nothing at launch did.
 - **`PRAGMA recursive_triggers` being OFF does not mean a trigger's statements fire no triggers**
   — it stops a trigger firing *itself*. The uid mint is an `UPDATE`, so an update trigger without
   both its guards (`AFTER UPDATE OF <captured columns>` **and** a `WHEN` that compares values)
@@ -1535,10 +1566,13 @@ record, with every measurement, is
   why the group door answers `GroupGrant` rather than `Grant` and writes through `store_access`
   rather than `store_grant`.
 - **`pairing.rs` must never carry the refresh secret again.** It sealed one into the blob for a
-  day and the field was taken back out: a device holding that secret can re-register the group's
-  auth through `/rotate`'s second door and therefore evict the devices that removed it, which
-  makes a removal something any paired device can reverse. Restricting the Patreon-side secret to
-  the device that pressed Connect is what makes a removal stick. The sealed plaintext is
+  day and the field was taken back out. The relay retires a refresh secret together with the one
+  device `/claim` recorded as its holder, when a rotation's manifest omits that device — so a copy
+  on any other paired device would survive that device's removal and go on minting tokens for the
+  group that removed it. (The original reason was `/rotate`'s second door, which let the secret
+  re-register the group's auth; that door has since been removed, and the rule stands on this
+  one.) Restricting the Patreon-side secret to the device that pressed Connect is what makes a
+  removal stick. The sealed plaintext is
   `<group_id>\0<epoch>\0<32-byte key>` and **anything ever added goes before the key**, which is
   the only field that can hold a zero byte of its own.
 - **A 401 on the group door is NOT a lapse**, and copying the sync routes' handling would be the
@@ -1950,6 +1984,21 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   their payload key rewritten. It is the cost this rule exists to keep out of the ordinary case,
   not a counter-example to it.) **The reversal's own row records no step**, so the stack stays linear.
   `undone_at` persists (undo survives a restart); the redo queue is the webview's and does not.
+  **A reversal is checked, never trusted — twice.** The id must be the cursor (`next_undo`, or for
+  a redo `next_redo`: the undone step above the cursor with the newest `undone_at` — an ordinal
+  now, `max(now, newest + 1)`, never the wall clock). Then the deck must still hold the side the
+  step moves away from, compared by content — because the cut, the Collection tab's filing, a sync
+  pull and Scryfall's reconcile all change `deck_cards` **without** a step — and a pile or label
+  delete being applied may take only rows the step itself rewrites or recorded. A refused redo is
+  `MOVED_ON` and writes nothing. **A refused undo deletes its own `deck_undo` row** (the history
+  row stays) and says `RETIRED`, never `MOVED_ON` — a reader told "not the most recent change"
+  presses again and undoes the older one — and **so does an undo whose write fails**: it runs in a
+  savepoint, so no constraint can wedge the cursor either. **`Op::Deck` writes only the columns
+  whose two sides differ** — every `deck_update` step records all of `DECK_FIELDS`, and writing
+  them all back reverted folder deletes, tab switches and synced columns, and put deleted folders'
+  ids into a real foreign key. **A schema rung that rewrites `deck_cards`, `decks` or category,
+  label or note contents without clearing `deck_undo` retires every step it touched at the first
+  Ctrl+Z** — clear the journal on such a rung (v21 did) or accept that.
   Every deck write records one — `undoing_any_card_write_restores_the_deck_exactly` and its two
   siblings drive the list and compare the deck row for row. **Four deliberate absences**, each
   argued at its own site: `deck_create`/`duplicate`/`delete`, `deck_folder_delete` (per-deck

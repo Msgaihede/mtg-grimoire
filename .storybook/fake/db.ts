@@ -12227,6 +12227,11 @@ const FOLDER_NOT_YOURS = "That folder is the app's own and is not yours to chang
  */
 const FOLDER_IS_LOCKED = "That folder is locked. Unlock it before deleting it.";
 /**
+ * `collection_folders::FOLDER_HOLDS_LOCKED` — {@link FOLDER_IS_LOCKED} read downward: an unlocked
+ * folder whose sub-tree holds a locked one, which the same delete would scatter.
+ */
+const FOLDER_HOLDS_LOCKED = "A folder inside that one is locked. Unlock it before deleting this one.";
+/**
  * `collection_folders::ENTRY_IN_A_DECK` — what {@link collection_set_folder} says about the row
  * it was **given**, when that row is sitting in a deck's group.
  *
@@ -15063,6 +15068,11 @@ export function writeHandlers(db: FakeDb) {
             grew = true;
           }
         }
+      }
+      // {@link FOLDER_HOLDS_LOCKED}: the same press re-files every folder beneath this one, so a
+      // lock anywhere in the sub-tree refuses it too — before anything below moves.
+      if ([...doomed].some((id) => collectionFolderLocked(db, id))) {
+        throw refuse(FOLDER_HOLDS_LOCKED);
       }
       // Ids rather than rows, taken before anything moves: a merge replaces
       // `db.collectionEntries` with a filtered copy, so a held reference is a row that is no
@@ -21888,15 +21898,13 @@ function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
  */
 function undoHandlers(db: FakeDb) {
   return {
-    /** The newest step of this deck still applied, and — for the id the caller hands in — the
-     *  one it could put back. */
+    /** The newest step of this deck still applied, and — for the id the caller hands in, and
+     *  only when it is {@link nextRedo} — the one it could put back. */
     deck_undo_state: (args: { deckId: number; redoId: number | null }) => {
       const undo = nextUndo(db, args.deckId);
       const redoStep =
-        typeof args.redoId === "number"
-          ? db.deckUndo.find(
-              (s) => s.auditId === args.redoId && s.deckId === args.deckId && s.undoneAt !== null,
-            )
+        typeof args.redoId === "number" && nextRedo(db, args.deckId)?.auditId === args.redoId
+          ? nextRedo(db, args.deckId)
           : undefined;
       return {
         undo: undo ? (auditById(db, undo.auditId) ?? null) : null,
@@ -21915,7 +21923,13 @@ function undoHandlers(db: FakeDb) {
         );
       }
       restoreDeck(db, args.deckId, cursor.before);
-      cursor.undoneAt = stamp(db);
+      // Strictly increasing within the deck, `deck_undo::apply_reversal`'s rule: `nextRedo` reads
+      // it as an ordinal, and two undos inside one tick of `stamp` would otherwise tie.
+      const newest = Math.max(
+        0,
+        ...db.deckUndo.filter((s) => s.deckId === args.deckId).map((s) => s.undoneAt ?? 0),
+      );
+      cursor.undoneAt = Math.max(stamp(db), newest + 1);
       recordReversal(db, args.deckId, "undo", cursor.auditId);
     },
 
@@ -21926,6 +21940,14 @@ function undoHandlers(db: FakeDb) {
       );
       if (!step || step.undoneAt === null) {
         throw refuse("That change has not been undone, so there is nothing to redo.");
+      }
+      // Only the change undone last — `deck_undo::next_redo`. The fake keeps whole-deck
+      // snapshots and makes no content check; the order is the half a story can reach.
+      if (nextRedo(db, args.deckId)?.auditId !== args.auditId) {
+        throw refuse(
+          "That is not the most recent change any more — the deck has been edited since. " +
+            "Open the history to see what happened.",
+        );
       }
       restoreDeck(db, args.deckId, step.after);
       step.undoneAt = null;
@@ -21939,6 +21961,15 @@ function nextUndo(db: FakeDb, deckId: number): FakeDeckUndo | undefined {
   return [...db.deckUndo]
     .filter((s) => s.deckId === deckId && s.undoneAt === null)
     .sort((a, b) => b.auditId - a.auditId)[0];
+}
+
+/** The one step a redo may take — `deck_undo::next_redo`: undone, above the undo cursor, and
+ *  undone last (`undone_at DESC`, then `audit_id ASC`). */
+function nextRedo(db: FakeDb, deckId: number): FakeDeckUndo | undefined {
+  const cursor = nextUndo(db, deckId)?.auditId ?? 0;
+  return [...db.deckUndo]
+    .filter((s) => s.deckId === deckId && s.undoneAt !== null && s.auditId > cursor)
+    .sort((a, b) => (b.undoneAt ?? 0) - (a.undoneAt ?? 0) || a.auditId - b.auditId)[0];
 }
 
 function auditById(db: FakeDb, id: number): DeckAuditEntry | undefined {

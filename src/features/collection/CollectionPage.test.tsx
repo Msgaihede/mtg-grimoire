@@ -5014,6 +5014,49 @@ describe("locking a folder", () => {
   });
 
   /**
+   * **And downward** — `delete_folder`'s `FOLDER_HOLDS_LOCKED`. `Trade binder` carries no lock of
+   * its own, but deleting it re-files everything under it, a locked `Graded` two levels down
+   * included, so the row greys and names the folder *inside* as the reason. Two levels, so a
+   * check of the direct children alone would miss it. Its own Lock row stays live: that flag is
+   * still the reader's to set.
+   *
+   * The second render is the control, and it differs only in `Graded`'s flag: a drawer with an
+   * unlocked sub-tree keeps a live Delete, so the greying is the lock's and not the children's.
+   */
+  it("greys Delete… over a locked folder inside it, naming that as the reason", async () => {
+    const GRADED: CollectionFolder = {
+      ...FOILS,
+      id: 11,
+      parentId: FOILS.id,
+      name: "Graded",
+      syncUid: "uid-graded",
+    };
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, { ...GRADED, locked: true }]);
+    const user = userEvent.setup();
+    const { unmount } = wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+
+    await manage(user, "Trade binder");
+    const remove = screen.getByRole("menuitem", { name: /^Delete/ });
+    expect(remove).toHaveAttribute("aria-disabled", "true");
+    expect(remove).toHaveAccessibleName(/a folder inside it is locked/);
+    expect(screen.getByRole("menuitem", { name: "Lock folder" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+    await user.click(remove);
+    expect(screen.queryByRole("group", { name: "Delete Trade binder" })).toBeNull();
+    unmount();
+
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, GRADED]);
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+    await manage(user, "Trade binder");
+    expect(screen.getByRole("menuitem", { name: /^Delete/ })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  /**
    * **The drag, which is the one gesture worth interrupting** (design §5).
    *
    * A drop target is a rectangle a pointer can land on by mistake, so a drag across the edge of a
