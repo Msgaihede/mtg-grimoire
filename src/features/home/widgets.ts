@@ -32,11 +32,12 @@
 import type { HomeLayout } from "@/lib/ipc";
 
 /**
- * The eleven kinds this build can draw.
+ * The kinds this build can draw.
  *
- * Adding a twelfth means a member here, a row in {@link WIDGET_META} (which will not compile
- * without one) and a component — and it means nothing at all to Rust, which stores whatever
- * string it is handed.
+ * Adding one means a member here, a row in {@link WIDGET_META} (which will not compile without
+ * one) and a component — and it means nothing at all to Rust, which stores whatever string it is
+ * handed. **How many there are is `WIDGET_META`'s to answer and is not written down here**: this
+ * comment said *eleven* while it was true and would have been wrong the day round two landed.
  */
 export type WidgetKind =
   | "summary"
@@ -49,7 +50,11 @@ export type WidgetKind =
   | "setCompletion"
   | "priceMovers"
   | "newPrintings"
-  | "stickyNotes";
+  | "stickyNotes"
+  | "deckCompletion"
+  | "toReview"
+  | "wishlistSavings"
+  | "comingSoon";
 
 /**
  * Which column the two value widgets group their bars over.
@@ -405,6 +410,99 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
       { key: "theory", label: "Theory cards" },
       { key: "basics", label: "Basic lands", dflt: false },
     ],
+    chip: "window",
+  },
+  /**
+   * **Round two (2026-09-26), the catalogue's newest four** — the spec is
+   * `docs/superpowers/specs/2026-09-26-home-widgets-round-two-design.md` §2.1 and the footprints
+   * are the design canvas's. `DEFAULT_LAYOUT` moves for none of them: it fills an eight-by-seven
+   * rectangle exactly, and a new kind in it would break the rectangle.
+   *
+   * **`scope`'s label and its two options are the `decks` row's words, and that is load-bearing.**
+   * A `Pinned` card draws `DecksWidget`'s own checklist through `extraSettings`, and that component
+   * words its hint off the *decks* row (`Choose Pinned under Which decks…`) — so this row says the
+   * same words or the reused sentence names a control this card does not have. `widgets.test.ts`
+   * pins the pair. No `Archived too`: a deck put away is not one a reader is finishing.
+   *
+   * `complete` starts off, `newPrintings`' `dflt: false` precedent: a finished deck is counted in
+   * the footer rather than listed, and a reader who wants the finished ones listed asks for them.
+   */
+  deckCompletion: {
+    label: "Deck completion",
+    description: "How much of each deck you own, and what the rest would cost.",
+    def: [3, 3],
+    min: [2, 2],
+    max: [4, 6],
+    picks: [
+      {
+        key: "scope",
+        label: "Which decks",
+        options: [
+          { id: "recent", label: "Most recent" },
+          { id: "pinned", label: "Pinned" },
+        ],
+      },
+      {
+        key: "order",
+        label: "Order",
+        options: [
+          { id: "done", label: "Nearest done" },
+          { id: "cheapest", label: "Cheapest to finish" },
+          { id: "name", label: "Name" },
+        ],
+      },
+    ],
+    toggles: [{ key: "complete", label: "Complete decks", dflt: false }],
+    chip: "order",
+  },
+  /**
+   * One row per place something is waiting, each drawn only when its count is above zero. `removed`
+   * stays on by default and exists because Recently removed is a holding area rather than a
+   * problem: a reader who uses it as an archive can take the row away.
+   */
+  toReview: {
+    label: "To review",
+    description: "Scanned cards, flagged rows and recently removed copies waiting for you.",
+    def: [2, 3],
+    min: [2, 2],
+    max: [4, 4],
+    picks: [],
+    toggles: [{ key: "removed", label: "Recently removed" }],
+  },
+  /** The price sweep's own plan over the whole wishlist, read and never written. No settings:
+   *  the question is fixed, which is what lets its press open the same sweep. */
+  wishlistSavings: {
+    label: "Wishlist savings",
+    description: "What your pinned wishes would save on the cheapest printing of each card.",
+    def: [3, 3],
+    min: [2, 2],
+    max: [4, 6],
+    picks: [],
+    toggles: [],
+  },
+  /**
+   * Sets not released yet, soonest first. `window`'s options, words and `dflt: 90` are
+   * `newPrintings`' exactly, so a reader who has set one has learnt the other.
+   */
+  comingSoon: {
+    label: "Coming soon",
+    description: "Unreleased sets, how much of each is previewed, and reprints of your deck cards.",
+    def: [4, 2],
+    min: [2, 2],
+    max: [8, 4],
+    picks: [
+      {
+        key: "window",
+        label: "Window",
+        dflt: 90,
+        options: [
+          { id: 30, label: "30 days" },
+          { id: 90, label: "90 days" },
+          { id: 365, label: "A year" },
+        ],
+      },
+    ],
+    toggles: [],
     chip: "window",
   },
 };

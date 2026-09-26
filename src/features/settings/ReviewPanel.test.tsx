@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReviewRow, ReviewTable } from "@/lib/ipc";
+import { RELAY_KEY, REVIEW_KEY } from "@/lib/query";
 
 const syncReviewList = vi.hoisted(() => vi.fn());
 const syncReviewClear = vi.hoisted(() => vi.fn());
@@ -12,7 +13,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { syncReviewList, syncReviewClear },
 }));
 
-import { ReviewPanel, groupByTable } from "./ReviewPanel";
+import { ReviewPanel, groupByTable, reviewRootOf } from "./ReviewPanel";
 
 /**
  * `sync_engine::apply::RESURRECTED`, verbatim — §7.4's first surfaced outcome.
@@ -218,5 +219,103 @@ describe("groupByTable", () => {
     expect(last.label).toBe("Elsewhere");
     expect(last.rows).toEqual([stray]);
     expect(groups.map((g) => g.label)).not.toContain("muted_tags");
+  });
+});
+
+/**
+ * **Clearing a sentence refreshes the list the row belongs to** (spec §2.3). `sync_review_clear`
+ * answers this panel's own list and nothing else, so without this a cleared row stayed counted —
+ * on the collection's banner, the wishlist's chip, the deck editor and the home page's To review —
+ * until something else happened to invalidate its root.
+ */
+describe("clearing a row refreshes the list it came from", () => {
+  /** The panel under a client this test holds, so its invalidations can be read. */
+  function mountWithClient() {
+    const client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    render(
+      <QueryClientProvider client={client}>
+        <ReviewPanel />
+      </QueryClientProvider>,
+    );
+    return invalidate;
+  }
+
+  const WISH: ReviewRow = {
+    table: "wishlist_entries",
+    uid: "wishlist_entries:7",
+    title: "Orcish Bowmasters",
+    sentence: MISSING,
+  };
+
+  it.each([
+    ["collection_entries", "Ragavan, Nimble Pilferer", ["collection"]],
+    ["deck_cards", "Psychic Frog", ["decks"]],
+    ["deck_folders", "Commander", ["decks"]],
+    ["wishlist_entries", "Orcish Bowmasters", ["wishlist"]],
+  ] as const)(
+    "invalidates the %s root when one of its rows is cleared",
+    async (_table, title, root) => {
+      syncReviewList.mockResolvedValue([...ROWS, WISH]);
+      const user = userEvent.setup();
+      const invalidate = mountWithClient();
+
+      await user.click(await screen.findByRole("button", { name: `Looks fine, ${title}` }));
+
+      await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: [...root] }));
+      // The Sync panel's figures still move, and this panel's own list is still not re-read —
+      // the command answered what is left, which is the whole reason it answers a list.
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: RELAY_KEY });
+      expect(invalidate).not.toHaveBeenCalledWith({ queryKey: REVIEW_KEY });
+      expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["sync"] });
+    },
+  );
+
+  /** A row from a table this build cannot name is still clearable, and refreshes nothing it
+   *  cannot name either. */
+  it("refreshes only the relay for a row from a table this build has no name for", async () => {
+    const stray = {
+      table: "muted_tags",
+      uid: "muted_tags:1",
+      title: "Ramp",
+      sentence: "s",
+    } as unknown as ReviewRow;
+    syncReviewList.mockResolvedValue([stray]);
+    const user = userEvent.setup();
+    const invalidate = mountWithClient();
+
+    await user.click(await screen.findByRole("button", { name: "Looks fine, Ramp" }));
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: RELAY_KEY }));
+    expect(invalidate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("reviewRootOf", () => {
+  /** All six tables `REVIEWABLE` names, each at the root its other writes already fire — a
+   *  folder's cabinet is its entries'. */
+  it("names a root for every table the backend can send a row from", () => {
+    const roots: Record<ReviewTable, readonly string[]> = {
+      collection_entries: ["collection"],
+      deck_cards: ["decks"],
+      wishlist_entries: ["wishlist"],
+      collection_folders: ["collection"],
+      deck_folders: ["decks"],
+      wishlist_folders: ["wishlist"],
+    };
+    for (const [table, root] of Object.entries(roots)) {
+      expect(reviewRootOf(table), table).toEqual(root);
+    }
+  });
+
+  it("answers null for a stray table and for a prototype key", () => {
+    for (const table of ["muted_tags", "", "constructor", "toString", "__proto__"]) {
+      expect(reviewRootOf(table), table).toBeNull();
+    }
   });
 });

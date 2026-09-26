@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { Check, CircleCheck } from "lucide-react";
 import type { JSX } from "react";
 import { ipc, ipcError, type ReviewRow, type ReviewTable } from "@/lib/ipc";
@@ -38,6 +38,40 @@ const TABLE_LABEL: Record<ReviewTable, string> = {
 };
 
 const TABLE_ORDER = Object.keys(TABLE_LABEL) as ReviewTable[];
+
+/**
+ * The query root each table's rows are read under — what a cleared sentence has to refresh besides
+ * this panel.
+ *
+ * **Clearing a sentence changes a count somewhere else.** The collection's `needsReview` figure and
+ * its banner, the wishlist's flagged-wish chip, the deck editor's rows and the home page's To
+ * review widget all read these tables, and `sync_review_clear` answers only this panel's list — so
+ * without this a cleared row stayed counted everywhere else until something unrelated invalidated
+ * its root. The roots are the ones every other write to these tables already fires, and a folder's
+ * cabinet is its entries', so nothing downstream learns a new key.
+ *
+ * **Total over `ReviewTable`**, `TABLE_LABEL`'s fence: a seventh table is a red build here too.
+ */
+const TABLE_ROOT: Record<ReviewTable, QueryKey> = {
+  collection_entries: ["collection"],
+  deck_cards: ["decks"],
+  wishlist_entries: ["wishlist"],
+  collection_folders: ["collection"],
+  deck_folders: ["decks"],
+  wishlist_folders: ["wishlist"],
+};
+
+/**
+ * The root a row from `table` is read under, or `null` for a table this build has no name for —
+ * the row filed under `Elsewhere`, which is still clearable and refreshes nothing it cannot name.
+ * An own-property test rather than an index, because an index answers a function for
+ * `"constructor"`.
+ */
+export function reviewRootOf(table: string): QueryKey | null {
+  return Object.prototype.hasOwnProperty.call(TABLE_ROOT, table)
+    ? TABLE_ROOT[table as ReviewTable]
+    : null;
+}
 
 /**
  * What a table this build has no name for is filed under.
@@ -155,7 +189,7 @@ export function ReviewPanel(): JSX.Element {
     // **The command answers what is left, so there is nothing to refetch.** That is the whole
     // reason it answers a list rather than nothing: a second read would race the write on the
     // one write connection and could only ever arrive at the same rows.
-    onSuccess: (left) => {
+    onSuccess: (left, { table }) => {
       client.setQueryData(REVIEW_KEY, left);
       // Two of the Sync panel's figures moved: `reviewCount` is one lower, and `pending` is one
       // *higher*, because clearing a sentence is a write like any other and is captured like
@@ -167,6 +201,10 @@ export function ReviewPanel(): JSX.Element {
       // what is left. Correct in the shipped window, where the re-read agrees; a wasted round
       // trip on the one connection either way, and it hid a real bug in this test.
       void client.invalidateQueries({ queryKey: RELAY_KEY });
+      // **And the list the row belongs to** — see {@link TABLE_ROOT}. Never the `["sync"]` root,
+      // for the reason directly above.
+      const root = reviewRootOf(table);
+      if (root !== null) void client.invalidateQueries({ queryKey: root });
     },
   });
 
