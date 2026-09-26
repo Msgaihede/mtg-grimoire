@@ -814,7 +814,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         detail: null,
       };
     }
-    // `decks.token_rail_index` (user schema v50): the Tokens & Emblems pile moved in the rail.
+    // `decks.token_rail_index` (user schema v51): the Tokens & Emblems pile moved in the rail.
     // `deck.rs` records it as **`tokenRail`** — not the column's `tokenRailIndex` — and `xGroup`'s
     // paragraph applies word for word: the `default` arm below never fails, so only
     // `auditText.test.ts` holds the spelling.

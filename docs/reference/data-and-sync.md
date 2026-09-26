@@ -1002,11 +1002,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (**v48 and v49 have no paragraph on this page** — the managed wishlist, a switch at v48 and a
   mode replacing it under a new column name at v49; [wishlist-folders.md](wishlist-folders.md) is
   their record. Named so nobody reads the gap as a claim.)
-  **v50 adds `decks.token_rail_index`** (2026-09-26,
+  **v51 adds `decks.token_rail_index`** (2026-09-26,
   [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §3.4) — where
   the Tokens & Emblems pile sits among the right-hand rail's piles, stored as the number of rail
-  piles drawn above it. One `ALTER TABLE … ADD COLUMN`, v47's shape, so it owes its
-  `USER_SCHEMA_SQL` line and an `UNDO_V50`, and moves no table or index count: the head is thirty
+  piles drawn above it. **Written as v50 and renumbered before merging**: `main` shipped its own
+  v50 first (`price_snapshots.copies`), and a shipped number is spent. One `ALTER TABLE … ADD
+  COLUMN`, v47's shape, so it owes its
+  `USER_SCHEMA_SQL` line and an `UNDO_V51`, and moves no table or index count: the head is thirty
   tables and **forty-eight** indexes — v48's `idx_wishlist_folders_managed` moved the second
   figure the v46 paragraph above states, and this rung moves neither — read off
   `the_user_schema_is_byte_identical_to_what_the_ladder_builds`' own sentence rather than added.

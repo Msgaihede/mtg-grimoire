@@ -186,10 +186,13 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **50** since the Tokens & Emblems pile learned where
+  numbers from there (`USER_SCHEMA_VERSION` **51** since the Tokens & Emblems pile learned where
   it sits in the rail — `decks.token_rail_index`, `NOT NULL DEFAULT -1` for *last*, an
   arrangement with a history row and a `deck_undo::DECK_FIELDS` entry where `token_stack` has
-  neither; which is one above a theory deck's managed wishlist becoming a choice of Compare view
+  neither, written as v50 and renumbered before merging because `main` shipped its own v50 first;
+  which is one above the price history recording how many copies the reader held on each day it
+  priced (`price_snapshots.copies`, v50), itself one above a theory deck's managed wishlist becoming a
+  choice of Compare view
   (`decks.managed_wishlist_mode`, v49), itself one above that wishlist arriving as a switch (v48),
   one above the deck views learning to draw the tokens as a pile (`decks.token_stack`, v47), and
   one above the home page's sticky notes (`sticky_notes`, v46, the thirtieth user table), which
@@ -2061,7 +2064,7 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   case.** `decks.tokens_open` is the panel's disclosure, on the `decks` capture `Spec` beside
   `separate_x_group`, the last **named** column of `DECK_SELECT` when it landed for `deck_row`'s
   positional reason — which moved its `IMAGE_COL` from 21 to 22 — and on no history row and no
-  `deck_undo::DECK_FIELDS`. **It is not the last named column any more** (user schema v50's
+  `deck_undo::DECK_FIELDS`. **It is not the last named column any more** (user schema v51's
   `token_rail_index` is, at 29, with `deck_row`'s `IMAGE_COL` at 30), and it is not the only
   disclosure either: read both numbers off `deck_row` and never off this page. **`deck_tokens.rs`
   has offsets of its own and they are a different list** — `printing_from`'s `IMAGE_COL` counts

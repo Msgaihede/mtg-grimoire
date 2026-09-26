@@ -4,7 +4,7 @@
 
 **Goal:** Draw the deck's Tokens & Emblems pile with the deck's own pile components (one-row heading with a count pill and price, `DeckCardFace` + `CardChin`, theory marks), let the reader drag and arrow it to any place in the right-hand rail, give every pile heading the one-row pill layout, and offer `Any card` on the deck search's Collection tab.
 
-**Architecture:** Rust gains the chin facts and a marketplace price on each `DeckTokenRow`, and one `decks.token_rail_index` column (user schema v50) written through the existing `deck_update` path so the move is audited and undoable. TypeScript narrows `GroupHeader` and `DeckCardFace` to the fields they read so a token can be fed through them, rebuilds `TokenPile.tsx` on those parts, places the pile by a pure `tokenRail.ts` helper in Stacks, Grid and Text, and builds a token theory plan from the theory list's tokens with the existing `theoryMatch.ts` functions.
+**Architecture:** Rust gains the chin facts and a marketplace price on each `DeckTokenRow`, and one `decks.token_rail_index` column (user schema v51) written through the existing `deck_update` path so the move is audited and undoable. TypeScript narrows `GroupHeader` and `DeckCardFace` to the fields they read so a token can be fed through them, rebuilds `TokenPile.tsx` on those parts, places the pile by a pure `tokenRail.ts` helper in Stacks, Grid and Text, and builds a token theory plan from the theory list's tokens with the existing `theoryMatch.ts` functions.
 
 **Tech Stack:** Tauri 2 / Rust (rusqlite), React 19, TypeScript 6.0, Vitest, dnd-kit (`@dnd-kit/dom` via `src/lib/dndTarget.ts`), Tailwind v4, Storybook fake (`.storybook/fake/db.ts`).
 
@@ -17,7 +17,7 @@
 - The count pill counts **copies** on every pile, the token pile and the band included.
 - Visible digits are `aria-hidden`; one `sr-only` string spells the phrase (`N card`/`N cards`, `N token or emblem`/`N tokens and emblems`). Never two sibling elements assembled into an accessible name.
 - `TOKENS_HEADING` (`"Tokens & Emblems"`) is the one spelling of the pile's name.
-- User schema **v50**. If `main` has shipped a v50 by the time this merges, renumber before merging (memory: `schema-rung-collisions-with-main`).
+- User schema **v51**. Written as v50 and renumbered before merging, because `main` shipped its own v50 (`price_snapshots.copies`) first (memory: `schema-rung-collisions-with-main`).
 - `decks.token_rail_index INTEGER NOT NULL DEFAULT -1`; `-1` (or any value outside `[0, rail.length]`) means **last**. Moving the pile to the last slot writes `-1`.
 - Z-indexes only from `LAYER`; tooltips only through `useTooltip()`; `aria-disabled`, never `disabled`; no `@types/node`; TypeScript stays 6.0.x.
 - **Tests run once, at fan-in**, not inside each subagent (`src/features/decks/CLAUDE.md` / root `CLAUDE.md`). A subagent may run its **own** new test file with `npx vitest run <file>` or `cargo test <name>` to see red/green, but never `npm run verify`, and never two cargo runs at once.
@@ -38,7 +38,7 @@
 | File | Task | Change |
 | --- | --- | --- |
 | `src-tauri/src/deck_tokens.rs` | A1 | `DeckTokenRow` chin facts + price; `deck_tokens` takes `marketplace` |
-| `src-tauri/src/schema.rs` | A1 | v50 rung, `USER_SCHEMA_SQL`, `USER_SCHEMA_VERSION`, `UNDO_V50` + rung test |
+| `src-tauri/src/schema.rs` | A1 | v51 rung, `USER_SCHEMA_SQL`, `USER_SCHEMA_VERSION`, `UNDO_V51` + rung test |
 | `src-tauri/src/deck.rs` | A1 | `DeckPatch`/`DeckRow`/`DeckBefore.token_rail_index`, `?23`, `record_deck_edit` arm, `duplicate_deck` |
 | `src-tauri/src/deck_undo.rs` | A1 | `DECK_FIELDS` gains `token_rail_index` |
 | `src-tauri/src/sync_engine/capture.rs` | A1 | `decks` field list gains `token_rail_index` |
@@ -65,7 +65,7 @@
 
 ---
 
-### Task A1: Rust — token chin facts and price; `decks.token_rail_index` (v50)
+### Task A1: Rust — token chin facts and price; `decks.token_rail_index` (v51)
 
 **Files:**
 - Modify: `src-tauri/src/deck_tokens.rs` (struct `DeckTokenRow` ~L118, `Printing` ~L136, `PRINTING_COLUMNS` ~L195, `deck_token_rows` ~L336, command `deck_tokens` ~L727, tests module)
@@ -123,12 +123,12 @@ fn an_unpriced_token_answers_none_rather_than_zero() {
     let rows = deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer).unwrap();
     assert_eq!(rows.iter().find(|r| r.name == "Treasure").unwrap().unit_price, None);
 }
-``` In `schema.rs`' tests, add a v50 rung test beside the v47 one (~L12265), same shape:
+``` In `schema.rs`' tests, add a v51 rung test beside the v47 one (~L12265), same shape:
 
 ```rust
 #[test]
-fn v50_adds_token_rail_index_at_minus_one() {
-    let conn = at_version(49); // use whatever helper the v47 test uses to build a v49 file
+fn v51_adds_token_rail_index_at_minus_one() {
+    let conn = at_version(50); // use whatever helper the v47 test uses to build a v50 file
     conn.execute("INSERT INTO decks (...) VALUES (...)", []).unwrap(); // copy v47's fixture row
     migrate(&conn).unwrap();
     assert_eq!(has_column(&conn, "decks", "token_rail_index"), 1);
@@ -162,32 +162,32 @@ fn token_rail_index_round_trips_audits_and_undoes() {
 
 Adapt helper names to the ones the neighbouring tests use (`open_test_db`, `create_deck`, `DeckInput`, the undo entry point) — read the `token_stack` tests first and copy their scaffolding verbatim.
 
-- [ ] **Step 2: Run to verify they fail.** `cd src-tauri; cargo test deck_tokens::tests::a_resolved_token token_rail_index v50_adds` — expected: compile errors (missing fields / argument).
+- [ ] **Step 2: Run to verify they fail.** `cd src-tauri; cargo test deck_tokens::tests::a_resolved_token token_rail_index v51_adds` — expected: compile errors (missing fields / argument).
 
-- [ ] **Step 3: Implement the schema rung.** After v49's block in the ladder:
+- [ ] **Step 3: Implement the schema rung.** After the last block in the ladder — `main`'s v50 once merged, v49's until then:
 
 ```rust
-    // v50 (2026-09-26, the token-stacks spec §3.4): `decks.token_rail_index` — where the Tokens &
+    // v51 (2026-09-26, the token-stacks spec §3.4): `decks.token_rail_index` — where the Tokens &
     // Emblems pile sits in the rail, as the number of rail piles drawn above it. `-1` is last,
     // today's place and every existing deck's; a value the rail no longer reaches also draws last
-    // (`tokenRail.ts`). v47's shape, one `ADD COLUMN`, and owes [`tests::UNDO_V50`].
+    // (`tokenRail.tsx`). v47's shape, one `ADD COLUMN`, and owes [`tests::UNDO_V51`].
     //
     // **`NOT NULL DEFAULT -1` and never a nullable column**: `deck::update_deck` writes every
     // field through `coalesce(?n, col)`, which reads a bound NULL as *leave it*, so a NULL "last"
     // could never be written back once the reader had moved the pile.
-    if v < 50 {
+    if v < 51 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch("ALTER TABLE decks ADD COLUMN token_rail_index INTEGER NOT NULL DEFAULT -1;")?;
-        // Literal `50`, for the reason every step before it writes its own.
-        tx.execute_batch("PRAGMA main.user_version = 50;")?;
+        // Literal `51`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA main.user_version = 51;")?;
         tx.commit()?;
     }
 ```
 
-Set `USER_SCHEMA_VERSION` to `50`; append `, token_rail_index INTEGER NOT NULL DEFAULT -1` to the `decks` line of `USER_SCHEMA_SQL` exactly where the ladder would place it (after `managed_wishlist_mode`) so `the_user_schema_is_byte_identical_to_what_the_ladder_builds` stays green; add `const UNDO_V50: &str = "ALTER TABLE decks DROP COLUMN token_rail_index;";` beside `UNDO_V47` and thread it wherever the other `UNDO_V*` constants are listed. Grep `UNDO_V49` for every site.
+Set `USER_SCHEMA_VERSION` to `51`; append `, token_rail_index INTEGER NOT NULL DEFAULT -1` to the `decks` line of `USER_SCHEMA_SQL` exactly where the ladder would place it (after `managed_wishlist_mode`) so `the_user_schema_is_byte_identical_to_what_the_ladder_builds` stays green; add `const UNDO_V51: &str = "ALTER TABLE decks DROP COLUMN token_rail_index;";` beside `UNDO_V47` and thread it wherever the other `UNDO_V*` constants are listed. Grep `UNDO_V49` for every site.
 
 - [ ] **Step 4: Thread the column through `deck.rs`.**
-  - `DeckPatch`: `pub token_rail_index: Option<i64>,` beside `token_stack`, with a doc line pointing at the v50 rung.
+  - `DeckPatch`: `pub token_rail_index: Option<i64>,` beside `token_stack`, with a doc line pointing at the v51 rung.
   - `DeckRow`: `pub token_rail_index: i64,`.
   - `DECK_SELECT`: append `d.token_rail_index` after `d.managed_wishlist_mode`; `deck_row` reads it at the next index (grep the `r.get(27)` neighbours and update the "moved it to N" comment).
   - `DeckBefore`: `token_rail_index: i64,` and wherever `DeckBefore` is read, read it.
@@ -237,7 +237,7 @@ Set `USER_SCHEMA_VERSION` to `50`; append `, token_rail_index INTEGER NOT NULL D
     `row_of` (or wherever `image_uris` is resolved for the effective printing) fills the six new fields from the effective `Printing`; an effective printing that is gone from the corpus answers `None` for all six.
   - The command gains `marketplace` and passes it through.
 
-- [ ] **Step 6: Run the new tests and the module's existing ones.** `cargo test deck_tokens` then `cargo test token_rail_index` then `cargo test schema::tests::v50` then `cargo test the_user_schema_is_byte_identical`. Expected: all PASS. Fix the existing `deck_tokens` tests that now need a `marketplace` argument by passing `Marketplace::Tcgplayer`.
+- [ ] **Step 6: Run the new tests and the module's existing ones.** `cargo test deck_tokens` then `cargo test token_rail_index` then `cargo test schema::tests::v51` then `cargo test the_user_schema_is_byte_identical`. Expected: all PASS. Fix the existing `deck_tokens` tests that now need a `marketplace` argument by passing `Marketplace::Tcgplayer`.
 
 - [ ] **Step 7: Report** the list of files changed and any existing test you had to adapt, with why. Do not commit.
 
@@ -658,7 +658,7 @@ it("offers Any card", () => {
 
 **Files:**
 - Delete: `src/features/decks/TokenCountPill.tsx` once `grep -rn TokenCountPill src .storybook` is empty.
-- Modify: `src/features/decks/CLAUDE.md` (the *Tokens & Emblems* section: the pill counts copies; the pile is drawn with `GroupHeader`/`DeckCardFace`/`CardChin`; "no marketplace in the key" is now false; the rail index and its drag; theory marks), `docs/reference/decks-storage.md` (the six new `DeckTokenRow` fields and the marketplace argument; `decks.token_rail_index`), `docs/reference/data-and-sync.md` (schema ladder row for v50), `src/CLAUDE.md` (the `CardArt` bullet says `DeckTokensPanel` and `TokenArtPicker` are the non-wall callers — `TokenPile` no longer draws `CardArt`; check the sentence still holds).
+- Modify: `src/features/decks/CLAUDE.md` (the *Tokens & Emblems* section: the pill counts copies; the pile is drawn with `GroupHeader`/`DeckCardFace`/`CardChin`; "no marketplace in the key" is now false; the rail index and its drag; theory marks), `docs/reference/decks-storage.md` (the six new `DeckTokenRow` fields and the marketplace argument; `decks.token_rail_index`), `docs/reference/data-and-sync.md` (schema ladder row for v51), `src/CLAUDE.md` (the `CardArt` bullet says `DeckTokensPanel` and `TokenArtPicker` are the non-wall callers — `TokenPile` no longer draws `CardArt`; check the sentence still holds).
 
 - [ ] **Step 1:** `git status` — confirm only planned files changed; read every subagent's report for anything it flagged.
 - [ ] **Step 2:** `npx tsc --noEmit` — fix cross-task type seams (the `TokenPile` interface, `GroupHeading`, `DeckCardFaceFacts`, `DeckTokenView` fields).

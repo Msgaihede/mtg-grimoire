@@ -679,7 +679,7 @@ export interface FakeDeck {
    */
   tokenStack?: boolean;
   /**
-   * `decks.token_rail_index` (user schema v50): where the Tokens & Emblems pile sits in the rail,
+   * `decks.token_rail_index` (user schema v51): where the Tokens & Emblems pile sits in the rail,
    * as the number of rail piles drawn above it. `NOT NULL DEFAULT -1`, and **`-1` is last** — so
    * {@link toDeckRow} resolves the absence to `-1`, never to `0`, which would put every seed's
    * pile at the top of the rail.
@@ -5676,7 +5676,7 @@ function toDeckTokenRow(
     // tile the reader chose the other Treasure for. `picture_for` in `deck_tokens.rs` is the
     // same precedence, and `over` is already in hand here so it costs no second lookup.
     imageUris: frontFaceImageUris(db, over?.cardId ?? defaultCardId),
-    // User schema v50's token pile: the chin of that same printing, so the set code under the
+    // User schema v51's token pile: the chin of that same printing, so the set code under the
     // art is the art's — the Treasure in `starter` is the case, picked `tafr` over the
     // resolver's `thob`.
     setCode: effective?.setCode ?? null,
@@ -7178,7 +7178,7 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // v47's, `?? false` for `token_stack INTEGER NOT NULL DEFAULT 0` — the pile is new, so a
     // deck nobody has asked draws none.
     tokenStack: d.tokenStack ?? false,
-    // v50's, `?? -1` for `token_rail_index INTEGER NOT NULL DEFAULT -1` — **and never `?? 0`**,
+    // v51's, `?? -1` for `token_rail_index INTEGER NOT NULL DEFAULT -1` — **and never `?? 0`**,
     // which is the neighbour's shape read one column over and the bug: `0` is the *top* of the
     // rail, a place the reader has to drag the pile to, while `-1` is last, where it has always
     // been drawn.
@@ -9917,7 +9917,7 @@ export function readHandlers(db: FakeDb) {
      * the panel's: emblems-last and the `localeCompare` are `deckTokenViews`' conclusion, in
      * `features/decks/deckTokens.ts`. Rust supplies facts; TypeScript draws the order.
      *
-     * **`marketplace` prices each row's effective printing** (user schema v50's token pile) and
+     * **`marketplace` prices each row's effective printing** (user schema v51's token pile) and
      * is read through {@link marketplaceOf} exactly as {@link card_printings} reads it — absent
      * or unknown is TCGplayer — so the pile's chin and the art picker's grid quote one number
      * for one printing.
@@ -16390,7 +16390,7 @@ export function writeHandlers(db: FakeDb) {
       if (patch.managedWishlist !== undefined && patch.managedWishlist !== managedWas) {
         field("managedWishlist", managedWas, patch.managedWishlist);
       }
-      // v50's, and **the one column on this patch beside `tokenStack` that does get an arm** —
+      // v51's, and **the one column on this patch beside `tokenStack` that does get an arm** —
       // the paragraph above rules out a reading preference, and this is not one: the reader
       // dragged the Tokens & Emblems pile to a new slot, which is an arrangement like a
       // category's `sortOrder`, and `deck_undo`'s `DECK_FIELDS` names the column so Ctrl+Z puts
@@ -16709,7 +16709,7 @@ export function writeHandlers(db: FakeDb) {
      * `separateXGroup` comes across in the spread below with the rest of the row, and belongs
      * with the theory list rather than with the two exceptions: it is how the reader reads a
      * curve, and a copy opened onto a differently grouped curve than the deck it was made from
-     * would be a copy that lost something nobody chose to change. `tokenRailIndex` (v50) comes
+     * would be a copy that lost something nobody chose to change. `tokenRailIndex` (v51) comes
      * across the same way and for the same reason — `duplicate_deck` names the column, because
      * where the reader put the Tokens & Emblems pile is part of the deck being copied.
      *

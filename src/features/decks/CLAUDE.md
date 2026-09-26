@@ -4168,7 +4168,7 @@ one edit and not four components disagreeing.
     one art picker. The *pile* may move along the rail; the cards in it never do.
 - **The pile's place in the rail is the reader's since 2026-09-26, and it is stored as a count**
   (token stacks spec §3.4; the reader, twice: *"the tokens stack should be draggable to reorder in
-  the right hand rail"*). `decks.token_rail_index`, user schema **v50**, is **the number of rail
+  the right hand rail"*). `decks.token_rail_index`, user schema **v51**, is **the number of rail
   piles drawn above the token pile**, and **`-1` is last** — where every deck's pile was before the
   column existed, and every existing deck's default. `views/tokenRail.tsx` is the whole mechanism.
   - **An index and never an anchor.** "Under the Sideboard" would be a category id on a synced

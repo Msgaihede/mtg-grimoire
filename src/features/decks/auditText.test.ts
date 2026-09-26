@@ -876,7 +876,7 @@ describe("auditSentence", () => {
   });
 
   /**
-   * `decks.token_rail_index` (user schema v50) — the Tokens & Emblems pile moved in the rail.
+   * `decks.token_rail_index` (user schema v51) — the Tokens & Emblems pile moved in the rail.
    * **The word is `deck.rs`'s**, `tokenRail`, and it is the X-split test's trap again: the column
    * suggests `tokenRailIndex`, an unrecognised field is "Changed the deck", and that sentence is
    * true of every deck edit and therefore never fails.

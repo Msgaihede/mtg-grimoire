@@ -867,7 +867,7 @@ describe("ipc argument names match the Rust command signatures", () => {
 
     // **The third disclosure rides the ordinary patch**, `decks.notes_open` at schema v43, and
     // it is pinned here for the reason `DeckInput`'s literal above is — `DeckPatch` stood on
-    // neither mirror table until user schema v50, so this object was the whole of what compared
+    // neither mirror table until user schema v51, so this object was the whole of what compared
     // it with `deck::DeckPatch`; the plain-mirror table below carries it now, and these literals
     // stay as the pin on what reaches the wire rather than on the declaration. The
     // failure is the quiet kind — Tauri drops a payload field a command does not declare, so a
@@ -884,7 +884,7 @@ describe("ipc argument names match the Rust command signatures", () => {
     // failure: a Deck settings switch that never draws the token pile.
     await ipc.deckUpdate(4, { tokenStack: true });
     expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { tokenStack: true } });
-    // User schema v50's rail slot, and the one number on this patch whose sentinel is **not**
+    // User schema v51's rail slot, and the one number on this patch whose sentinel is **not**
     // an absence: `-1` is *last*, a value the reader writes by dragging the pile to the end, so
     // it has to travel as `-1` rather than be dropped the way an absent key reads as "leave it".
     await ipc.deckUpdate(4, { tokenRailIndex: 2 });
@@ -1817,7 +1817,7 @@ describe("ipc argument names match the Rust command signatures", () => {
    * `None`, and a dismissal silently becomes "no change" with no error anywhere.
    *
    * The other three are pinned for the ordinary reason. `deck_tokens` is a read scoped by
-   * `variant`, like every deck read beside it — and, since user schema v50's token pile, priced
+   * `variant`, like every deck read beside it — and, since user schema v51's token pile, priced
    * by `marketplace`, the name `card_printings` and `deck_get` already take it under. That one
    * fails quietly: `card_printings` reads an absent marketplace as TCGplayer, so a wrapper that
    * dropped or misspelt the key would quote dollars under a Card Kingdom heading and nothing
@@ -1847,7 +1847,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       cardId: null,
       quantity: null,
       state: null,
-      // The effective printing's chin and its price (user schema v50's token pile). Typed here
+      // The effective printing's chin and its price (user schema v51's token pile). Typed here
       // for the four fields' reason above: `unitPrice` misspelt is an em dash on every token
       // tile, which reads as "this marketplace does not quote it" rather than as a bug.
       setCode: "tafr",
@@ -4929,7 +4929,7 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["SearchRequest", searchRs, "SearchRequest"],
     ["CardFilters", cardFiltersRs, "CardFilters"],
     ["FacetResponse", facetsRs, "FacetResponse"],
-    // **The deck patch, added with user schema v50's rail slot** (2026-09-26) — the struct the
+    // **The deck patch, added with user schema v51's rail slot** (2026-09-26) — the struct the
     // app sends on every deck write, and one `DeckRow` beside it has been on `mirrors` above
     // since the start while this half of the pair stood on nothing but the literals in "sends
     // every deck write under the name its command declares". A literal pins the fields somebody

@@ -3115,7 +3115,7 @@ copying the line above it is the bug.
 
 User schema **v47** (2026-09-24, [issue #507](https://github.com/Msgaihede/mtg-grimoire/issues/507))
 is `decks.token_stack INTEGER NOT NULL DEFAULT 0` — whether the deck views draw the deck's tokens
-and emblems as a **Tokens & Emblems** pile (a trailing one until v50, below, made its place the
+and emblems as a **Tokens & Emblems** pile (a trailing one until v51, below, made its place the
 reader's), read as `DeckRow.tokenStack` and written as
 `DeckPatch.tokenStack` on the ordinary `deck_update`. It is on the `decks` capture `Spec`, appended
 after `notes_open` as the last named column of `DECK_SELECT` (read off `deck_row`, not off this
@@ -3132,13 +3132,15 @@ Not on `DeckInput` — a deck is born with it off.
 
 ### `decks.token_rail_index`, the pile's place in the rail — and the one of these that is undoable
 
-User schema **v50** (2026-09-26, [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md)
+User schema **v51** (2026-09-26, [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md)
 §3.4) is `decks.token_rail_index INTEGER NOT NULL DEFAULT -1` — where the Tokens & Emblems pile
 sits among the right-hand rail's piles, stored as **the number of rail piles drawn above it**, and
 **`-1` for last**, which is where every deck's pile was before the column existed. v47's shape,
 one `ALTER TABLE … ADD COLUMN`, on the `decks` capture `Spec` after `token_stack`, and owed its
-`USER_SCHEMA_SQL` line and an `UNDO_V50` (prepended to every rewind chain that started at
-`UNDO_V49`). It rides `DeckPatch.tokenRailIndex` / `DeckRow.tokenRailIndex` and reaches `useDeck`'s
+`USER_SCHEMA_SQL` line and an `UNDO_V51` (prepended to every rewind chain; `main`'s `UNDO_V50`
+sits between it and `UNDO_V49` once merged). **Written as v50 and renumbered before merging**,
+because `main` shipped its own v50 first — `price_snapshots.copies`. It rides
+`DeckPatch.tokenRailIndex` / `DeckRow.tokenRailIndex` and reaches `useDeck`'s
 `update` with no per-field arm.
 
 - **An index and never an anchor.** An anchor — "under the Sideboard" — would be a category id on

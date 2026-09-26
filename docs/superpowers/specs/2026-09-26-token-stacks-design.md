@@ -61,8 +61,9 @@ These words are used exactly, here and in the code.
 
 ## 3. PR 1 — stack parity
 
-Frontend, plus one small Rust addition and one `decks` column. User schema **v50** (renumber if
-`main` has moved — see the `schema-rung-collisions-with-main` memory).
+Frontend, plus one small Rust addition and one `decks` column. User schema **v51** — written as
+v50 and renumbered before merging, because `main` shipped its own v50 (`price_snapshots.copies`)
+first; see the `schema-rung-collisions-with-main` memory.
 
 ### 3.1 One-row pile headers, in all four views
 
@@ -122,7 +123,7 @@ they are summed only in the token pile's heading.
 
 ### 3.4 The token pile reorders in the rail
 
-- **Storage**: `decks.token_rail_index INTEGER NOT NULL DEFAULT -1`, user schema v50, `ADD COLUMN`
+- **Storage**: `decks.token_rail_index INTEGER NOT NULL DEFAULT -1`, user schema v51, `ADD COLUMN`
   like `token_stack` at v47. It is **the number of rail piles drawn above the token pile**; `-1` is
   last, today's position and every existing deck's. **Not nullable**, because `deck::update_deck`
   writes every field through `coalesce(?n, col)`, which reads a bound NULL as *leave it* — a NULL

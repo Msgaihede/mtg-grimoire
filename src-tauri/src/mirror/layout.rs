@@ -647,7 +647,7 @@ mod tests {
             // User schema v47's setting, `false` as a fresh deck carries it — here for
             // `bracket`'s reason: the layout reads five fields and not this one.
             token_stack: false,
-            // User schema v50's rail index, `-1` (*last*) as a fresh deck carries it — here for
+            // User schema v51's rail index, `-1` (*last*) as a fresh deck carries it — here for
             // `bracket`'s reason: the layout reads five fields and not this one.
             token_rail_index: -1,
             // The cover printing's picture, and `None` for `cover_card_id`'s reason one line

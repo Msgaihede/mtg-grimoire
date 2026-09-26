@@ -3447,7 +3447,7 @@ export interface DeckPatch {
   tokenStack?: boolean;
   /**
    * Where the **Tokens & Emblems** pile sits in the rail. See {@link DeckRow.tokenRailIndex} —
-   * `decks.token_rail_index`, user schema v50.
+   * `decks.token_rail_index`, user schema v51.
    *
    * **`-1` is a value and not an absence**, which is `defaultCategoryId`'s footing and the reason
    * the column is `NOT NULL DEFAULT -1` rather than nullable: this patch reads an absent key as
@@ -3888,7 +3888,7 @@ export interface DeckRow {
   tokenStack: boolean;
   /**
    * Where the **Tokens & Emblems** pile sits in the rail — `decks.token_rail_index INTEGER NOT
-   * NULL DEFAULT -1`, user schema v50 — as **the number of rail piles drawn above it**.
+   * NULL DEFAULT -1`, user schema v51 — as **the number of rail piles drawn above it**.
    *
    * **`-1` is last**, which is where the pile has always been drawn and where every deck that
    * predates the column keeps it. So is any value the rail no longer reaches: a count stored when
@@ -4557,7 +4557,7 @@ export interface DeckTokenRow {
   /**
    * The **effective printing's** chin — `cardId ?? defaultCardId`, the same printing
    * {@link DeckTokenRow.imageUris} is the picture of — so the token pile can draw the deck
-   * card's own foot: set · `#number` · finish · price (user schema v50's token pile,
+   * card's own foot: set · `#number` · finish · price (user schema v51's token pile,
    * `deck_tokens.rs`).
    *
    * **All six are `null` together for a printing gone from the corpus**, which a stored override

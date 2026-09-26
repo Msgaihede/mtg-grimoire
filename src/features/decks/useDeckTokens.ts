@@ -19,7 +19,7 @@
  * here could only make a missing invalidation *invisible*, and the derived list has to move the
  * moment a deck card does.
  *
- * **The `marketplace` is in the key, and that reverses what this said until user schema v50.**
+ * **The `marketplace` is in the key, and that reverses what this said until user schema v51.**
  * It read *nothing this answers is priced — a token is not a card anybody buys*, which was true
  * of the band and stopped being true of the token pile: each row now carries its effective
  * printing's `unitPrice`, and the pile's chin and heading quote it. So the marketplace is part

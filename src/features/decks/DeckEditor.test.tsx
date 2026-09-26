@@ -356,7 +356,7 @@ const DECK: DeckRow = {
   // Schema v47, and `0` is the column's own default: the token pile in the deck views is opt-in
   // per deck, so a test that says nothing about it draws the views exactly as they were.
   tokenStack: false,
-  // Schema v50, and `-1` is the column's own default: the token pile draws last in the rail, which
+  // Schema v51, and `-1` is the column's own default: the token pile draws last in the rail, which
   // is where it drew before the pile could be moved at all.
   tokenRailIndex: -1,
   statsOpen: true,
@@ -7921,7 +7921,7 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     toughness: null,
     colors: "",
     oracleText: "{T}, Sacrifice this token: Add one mana of any color.",
-    // The effective printing's chin (user schema v50). Unpriced on purpose: a price here would be
+    // The effective printing's chin (user schema v51). Unpriced on purpose: a price here would be
     // a figure on the desk that no test in this block is about.
     setCode: "tmh3",
     collectorNumber: "12",
@@ -8071,7 +8071,7 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     await waitFor(() => expect(pile()).not.toBeNull());
 
     expect(deckTokens).toHaveBeenCalledTimes(1);
-    // The third argument is the marketplace the chin's price is read at (user schema v50) — any
+    // The third argument is the marketplace the chin's price is read at (user schema v51) — any
     // one; this case is about the count and the list.
     expect(deckTokens).toHaveBeenCalledWith(4, "live", expect.any(String));
   });

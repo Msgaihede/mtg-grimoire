@@ -2511,6 +2511,8 @@ over `scripts/cdp.mjs` on the reader's 100-card Commander deck **Bruna** (a plan
 8 tokens), after switching its token pile on through Deck settings the way a reader does. The
 copied `user.db` climbed to **v50** on launch and every deck read `token_rail_index = -1` — the
 migration proved on real data rather than on a fixture, which a worktree cannot otherwise show.
+(**v50 was this rung's number on that build**; it is **v51** since it was renumbered against
+`main`'s own v50, `price_snapshots.copies`. The measurement is left as taken.)
 
 ### A token card is a deck card's size, read off the same frame
 

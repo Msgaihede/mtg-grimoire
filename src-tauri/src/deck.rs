@@ -487,7 +487,7 @@ pub struct DeckPatch {
     /// the three disclosures above it this is a *setting*, chosen in Deck settings, so
     /// [`duplicate_deck`] carries it the way it carries [`Self::separate_x_group`].
     pub token_stack: Option<bool>,
-    /// Where the **Tokens & Emblems** pile sits in the rail — user schema v50, as the number of
+    /// Where the **Tokens & Emblems** pile sits in the rail — user schema v51, as the number of
     /// rail piles drawn above it, and `-1` (or any value the rail no longer reaches) for *last*.
     ///
     /// **`Some(-1)` is how a pile goes back to last**, [`Self::bracket`]'s sentinel arrangement:
@@ -778,7 +778,7 @@ pub struct DeckRow {
     /// carries it, [`Self::separate_x_group`]'s rule. Still no history row and no undo op, the
     /// disclosures' rule — see [`DeckPatch::token_stack`].
     pub token_stack: bool,
-    /// Where the Tokens & Emblems pile sits in the rail — user schema v50, `DEFAULT -1` for
+    /// Where the Tokens & Emblems pile sits in the rail — user schema v51, `DEFAULT -1` for
     /// *last*, so every existing deck draws it where it always has.
     ///
     /// **A fact, not a slot**: the rail's piles come and go with the reader's switches, so an
@@ -1149,7 +1149,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
     ///
     /// User schema v48 moved it to 29, appending the managed-wishlist column.
     ///
-    /// User schema v50 moved it to 30, appending `token_rail_index`.
+    /// User schema v51 moved it to 30, appending `token_rail_index`.
     const IMAGE_COL: usize = 30;
     Ok(DeckRow {
         id: r.get(0)?,
@@ -1274,7 +1274,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // 28, at the end of the named list, same rule — the managed-wishlist mode (schema v49
         // re-added it as TEXT at the same position v48's switch held), read leniently.
         managed_wishlist: crate::managed_wishlist::read_mode(r.get::<_, String>(28)?),
-        // 29, at the end of the named list, same rule — user schema v50's rail index. An
+        // 29, at the end of the named list, same rule — user schema v51's rail index. An
         // `INTEGER` like `bracket` at 19 and `default_category_id` at 17, so a crossed read would
         // hand the pile's slot to a bracket and type out perfectly; only the position tells them
         // apart.
@@ -1944,7 +1944,7 @@ struct DeckBefore {
     virtual_only: bool,
     /// Schema v49's managed-wishlist mode, for the history row.
     managed_wishlist: String,
-    /// User schema v50's rail index, for the history row.
+    /// User schema v51's rail index, for the history row.
     token_rail_index: i64,
 }
 
@@ -2230,7 +2230,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- `?22`, the next number at the **end**, same rule one rung later.
                 managed_wishlist_mode = coalesce(?22, managed_wishlist_mode),
                 -- `?23`, the next number at the **end**, same rule one rung later. User schema
-                -- v50's rail index is an `Option<i64>` like `?11` and `?13`, so a crossed number
+                -- v51's rail index is an `Option<i64>` like `?11` and `?13`, so a crossed number
                 -- is an UPDATE that succeeds and moves a pile, a default category or a bracket.
                 token_rail_index = coalesce(?23, token_rail_index),
                 updated_at = unixepoch()
@@ -3130,7 +3130,7 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // **`token_stack` (user schema v47) is copied too**, where the three disclosures
             // beside it in the table are not: whether the views draw a Tokens & Emblems pile is
             // a setting chosen in Deck settings, `separate_x_group`'s kind of answer, not a band
-            // the reader happened to have open. **`token_rail_index` (user schema v50) comes
+            // the reader happened to have open. **`token_rail_index` (user schema v51) comes
             // with it**: where the pile sits is an arrangement of the deck, like its categories'
             // order, and a copy whose pile jumped back to last would not be a copy.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
@@ -10254,7 +10254,7 @@ mod tests {
                 // User schema v47, and `tokenStack` rather than `token_stack`: the four views
                 // read this key to decide whether to draw the token pile at all.
                 "tokenStack": true,
-                // User schema v50, and `tokenRailIndex` rather than `token_rail_index`: the four
+                // User schema v51, and `tokenRailIndex` rather than `token_rail_index`: the four
                 // views read this key to know where to draw the pile, and a snake-cased one would
                 // be `undefined` — which `tokenRail.tsx` reads as *last*, so the pile would snap
                 // back on every open with no type error anywhere.
@@ -10327,7 +10327,7 @@ mod tests {
         // User schema v47. The Deck settings switch sends this, and a misspelled key would be
         // read by `#[serde(default)]` as an omitted one — a press that changes nothing.
         assert_eq!(patch.token_stack, Some(true));
-        // User schema v50. `-1` because it is the one value a drag back to last sends, and the
+        // User schema v51. `-1` because it is the one value a drag back to last sends, and the
         // one a misspelled key would lose: `#[serde(default)]` would read it as `None`, *leave
         // it*, and the pile would stay wherever the reader had just dragged it from.
         assert_eq!(patch.token_rail_index, Some(-1));
@@ -10994,7 +10994,7 @@ mod tests {
         assert!(!duplicate_deck(&conn, plain.id).unwrap().token_stack);
     }
 
-    /// Where the token pile sits in the rail, end to end (user schema v50): last on a new deck,
+    /// Where the token pile sits in the rail, end to end (user schema v51): last on a new deck,
     /// a patch moves it, **the move is a history row and one Ctrl+Z puts it back**, and a copy
     /// keeps the arrangement.
     ///

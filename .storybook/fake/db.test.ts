@@ -8194,7 +8194,7 @@ describe("the deck row itself", () => {
   });
 
   /**
-   * `decks.token_rail_index` (user schema v50): where the Tokens & Emblems pile sits in the rail,
+   * `decks.token_rail_index` (user schema v51): where the Tokens & Emblems pile sits in the rail,
    * as the number of rail piles drawn above it — and **`-1` is last**, which is the column's
    * `NOT NULL DEFAULT -1` and every existing deck's place.
    *
