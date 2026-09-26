@@ -2013,8 +2013,8 @@ of the two ways it happens:
   mixed-version break. The layout-free candidate is the epoch itself, which is bound into every
   wrap and chosen by the rotator: a removal could advance it by 2 and a join by 1. It costs two
   things — an offline device could catch up across half as many removals inside `/keys`'s
-  eight-epoch window, and the relay would have to accept `+2`, where the relay change in flight
-  makes `/rotate` accept exactly current + 1.
+  eight-epoch window, and the relay would have to accept `+2`, where the relay's `/rotate`
+  accepts exactly current + 1.
 
 ---
 
