@@ -6496,6 +6496,51 @@ describe("a needs-review hand-off over a cabinet the reader has not flattened", 
     expect(useAppStore.getState().collectionFlattened).toBe(true);
   });
 
+  /**
+   * **A hand-off landing on a page that is already mounted** — `useReviewHandoff`'s `settle`, the
+   * render-phase path, which every other case here skips by writing the hand-off before the mount.
+   * It is the path the widget's two store writes take when they land in two commits.
+   */
+  it("answers a hand-off that lands after the page has mounted", async () => {
+    useAppStore.setState({ pendingReviewFilter: null });
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    expect(lastQuery().needsReview).toBeUndefined();
+
+    act(() => useAppStore.setState({ pendingReviewFilter: { scope: "collection" } }));
+
+    await waitFor(() => expect(lastQuery().needsReview).toBe(true));
+    expect(lastQuery().rootOnly).toBeUndefined();
+    expect(await screen.findByText("Mox Pearl")).toBeInTheDocument();
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "true");
+    expect(
+      onPage(screen.getAllByRole("button", { name: "Remove filter — Needs review" })),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+    expect(useAppStore.getState().collectionFlattened).toBe(false);
+  });
+
+  /**
+   * **The guard: no sweep is armed over a switch that is already on.** The cabinet is flat on the
+   * reader's own account, so the chip's press is theirs and writes their switch off — where a sweep
+   * armed anyway would have swallowed it and left the page flat, a press that visibly did nothing.
+   */
+  it("leaves a Flatten press to the stored switch when that switch is already on", async () => {
+    useAppStore.setState({ collectionFlattened: true });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Mox Pearl");
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(flattenChip());
+
+    expect(useAppStore.getState().collectionFlattened).toBe(false);
+    await waitFor(() => expect(lastQuery().rootOnly).toBe(true));
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "false");
+    expect(await screen.findByRole("button", { name: /^Trade binder folder/ })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Mox Pearl")).toBeNull());
+  });
+
   /** The override is the filter's: take the filter away, by its chip or by Reset all, and the
    *  page is standing at the root it was standing at before the hand-off arrived. */
   it.each([

@@ -53,6 +53,7 @@ import { useAppStore } from "@/lib/store";
 import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
+import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { WishFolderCard, WishParentFolderCard } from "./WishFolderCard";
@@ -334,25 +335,15 @@ const WISHLIST_TRAY: readonly TrayCell[] = [
 ];
 
 export function WishlistPage() {
-  /**
-   * **The needs-review hand-off, read before the list hook** — `CollectionPage`'s arrangement one
-   * cabinet over, for its reason: the hook has to be *born* filtered, or TanStack's first-pass
-   * observer fetches the unfiltered list once before the filter lands.
-   */
-  const pendingReviewFilter = useAppStore((s) => s.pendingReviewFilter);
-  const clearPendingReviewFilter = useAppStore((s) => s.clearPendingReviewFilter);
-  const reviewHere = pendingReviewFilter?.scope === "wishlist";
+  // The To review widget's needs-review hand-off, and the flat sweep that comes with it —
+  // `useReviewHandoff` has the whole rule; its two halves sit either side of the list hook.
   const flattenStored = useAppStore((s) => s.wishlistFlattened);
-  /**
-   * **Whether a review hand-off has this page reading the list flat** — `CollectionPage`'s
-   * `reviewSweep`, one cabinet over. Set by the `pendingReviewFilter` consume site, handed to
-   * `useWishlist` as `flattenLocally`, and `useState` so leaving the view drops it.
-   */
-  const [reviewSweep, setReviewSweep] = useState(() => reviewHere && !flattenStored);
+  const review = useReviewHandoff("wishlist", flattenStored);
   const wishlist = useWishlist({
-    flattenLocally: reviewSweep,
-    initialNeedsReview: reviewHere ? true : undefined,
+    flattenLocally: review.reviewSweep,
+    initialNeedsReview: review.initialNeedsReview,
   });
+  review.settle(wishlist.needsReview, wishlist.setNeedsReview);
   const { query, rows, total, marketplace, folderId, flatten } = wishlist;
   const view = useAppStore((s) => s.wishlistView);
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
@@ -390,30 +381,6 @@ export function WishlistPage() {
   useEffect(() => {
     if (pendingHere !== null) clearPendingFolder();
   }, [pendingHere, clearPendingFolder]);
-
-  /**
-   * **The flagged wishes another surface asked this page to open on** — `store.ts`'s
-   * `pendingReviewFilter`, To review's `Wishes` row. `CollectionPage`'s consume site is the
-   * argument, one cabinet over: the initial state on a mount so the first request is already
-   * filtered, a render-phase adjustment on a page already mounted, spent by the effect whether or
-   * not it changed anything, and read only when its `scope` names this page.
-   *
-   * **And `reviewSweep` with it, on that page's three rules** — on with the filter wherever the
-   * reader's Flatten is off, off when the filter goes or the switch comes on, and a Flatten press
-   * spends it without writing `wishlistFlattened`. It matters more here than there:
-   * `wishlistFlattened` *starts* off, so without the sweep a reader sent by the `Wishes` row would
-   * land on a flagged root that holds none of the wishes they were counted.
-   */
-  if (reviewHere && wishlist.needsReview !== true) {
-    wishlist.setNeedsReview(true);
-    if (!flattenStored) setReviewSweep(true);
-  }
-  if (reviewSweep && (wishlist.needsReview !== true || flattenStored)) {
-    setReviewSweep(false);
-  }
-  useEffect(() => {
-    if (reviewHere) clearPendingReviewFilter();
-  }, [reviewHere, clearPendingReviewFilter]);
 
   /**
    * The export dialog, and the sweep that fills it — `CollectionPage`'s twin, for the same
@@ -1732,13 +1699,10 @@ export function WishlistPage() {
         // the list at once, each captioned with the folder it is filed in instead — the only way
         // a reader sees a card's folder without opening it. One press either way, since there is
         // no third state to walk.
-        //
-        // **Pressed is the combined state and a press turns off whichever half is on** — while a
-        // review hand-off's `reviewSweep` is standing that is the sweep, and `wishlistFlattened` is
-        // not written. `CollectionPage`'s consume site has the whole rule.
+        // A review hand-off's sweep takes the press first — `useReviewHandoff`'s `onFlattenToggle`.
         flatten={{
           pressed: wishlist.flatten,
-          onToggle: reviewSweep ? () => setReviewSweep(false) : wishlist.toggleFlatten,
+          onToggle: review.onFlattenToggle(wishlist.toggleFlatten),
         }}
       />
 

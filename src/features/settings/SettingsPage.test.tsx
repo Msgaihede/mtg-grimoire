@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -554,6 +554,28 @@ describe("a group another page asked for", () => {
       await waitFor(() => expect(useAppStore.getState().pendingSettingsGroup).toBeNull());
     },
   );
+
+  /**
+   * **A hand-off landing on a page that is already mounted** — the render-phase adjustment's own
+   * path, which the cases above skip by writing the field before the render. It is the path the
+   * widget's two store writes take when they land in two commits.
+   */
+  it("opens on a group asked for after the page has mounted", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+    expect(screen.getByText("panel:update")).toBeInTheDocument();
+
+    act(() => useAppStore.setState({ pendingSettingsGroup: "sync" }));
+
+    // The rail's own entry, scoped: the Sync panel now mounted beside it draws buttons of its own.
+    const rail = screen.getByRole("navigation", { name: "Settings" });
+    expect(within(rail).getByRole("button", { name: /^Sync/ })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("region", { name: "Needs review" })).toBeInTheDocument();
+    expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingSettingsGroup).toBeNull());
+  });
 
   it("does not survive to a second visit", async () => {
     useAppStore.setState({ pendingSettingsGroup: "storage" });

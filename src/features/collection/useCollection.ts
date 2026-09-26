@@ -174,16 +174,14 @@ export function nextOffset(pages: readonly CountedPage[]): number | undefined {
  * every scrolled page would be worse still.
  *
  * @param options.flattenLocally Draw the cabinet flat **without writing** `collectionFlattened` —
- *   `CollectionPage`'s `reviewSweep`, which a To review hand-off turns on so the flagged copies it
- *   counted across every drawer are on screen wherever they are filed. OR'd with the stored switch
- *   into the one `flatten` this hook sends and returns; see that field.
+ *   `useReviewHandoff`'s `reviewSweep`, which a To review hand-off turns on so the flagged copies
+ *   it counted across every drawer are on screen wherever they are filed. OR'd with the stored
+ *   switch into the one `flatten` this hook sends and returns; see that field.
  * @param options.initialNeedsReview The needs-review filter this list **mounts** with — read once,
- *   by `useState`, and ignored afterwards. `CollectionPage` passes `true` when a To review hand-off
- *   is waiting for it, and that has to be the *initial* state rather than a render-phase
- *   `setNeedsReview`: TanStack builds its observer in a `useState` initializer on the first pass,
- *   keeps it through the pass React restarts, and subscribes it at commit with the first pass's
- *   options — so a filter switched on while rendering still fetched the unfiltered list once, and
- *   threw it away (measured in `CollectionPage.test.tsx`, 2026-09-26).
+ *   by `useState`, and ignored afterwards. `CollectionPage` passes `useReviewHandoff`'s
+ *   `initialNeedsReview`, which has to be the *initial* state rather than a render-phase write:
+ *   TanStack's observer keeps the first render pass's options, so a filter switched on while
+ *   rendering still fetched the unfiltered list once. `useReviewHandoff` has the measurement.
  */
 export function useCollection({
   flattenLocally = false,

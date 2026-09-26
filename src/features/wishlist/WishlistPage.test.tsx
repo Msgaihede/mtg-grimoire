@@ -3924,6 +3924,25 @@ describe("a needs-review hand-off over a list the reader has not flattened", () 
     expect(useAppStore.getState().wishlistFlattened).toBe(true);
   });
 
+  /** `CollectionPage.test.tsx`'s case of the same name: `useReviewHandoff`'s `settle`, the path a
+   *  hand-off takes when it lands on a page that is already mounted. */
+  it("answers a hand-off that lands after the page has mounted", async () => {
+    useAppStore.setState({ pendingReviewFilter: null });
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+    expect(lastQuery().needsReview).toBeUndefined();
+
+    act(() => useAppStore.setState({ pendingReviewFilter: { scope: "wishlist" } }));
+
+    await waitFor(() => expect(lastQuery().needsReview).toBe(true));
+    expect(lastQuery().flatten).toBe(true);
+    expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Remove filter — Needs review" })).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+    expect(useAppStore.getState().wishlistFlattened).toBe(false);
+  });
+
   it.each([
     ["its chip", "Remove filter — Needs review"],
     ["Reset all", /^Reset all/],

@@ -133,11 +133,12 @@ export function activeFilterCount(f: WishlistFilterState): number {
  * up to is arithmetic over the rows on screen rather than a second round trip.
  *
  * @param options.flattenLocally Draw the list flat **without writing** `wishlistFlattened` —
- *   `WishlistPage`'s `reviewSweep`, `useCollection`'s parameter of the same name one cabinet over
- *   and for its reason. OR'd with the stored switch into the one `flatten` this hook sends and
- *   returns.
+ *   `useReviewHandoff`'s `reviewSweep`, `useCollection`'s parameter of the same name one cabinet
+ *   over and for its reason. OR'd with the stored switch into the one `flatten` this hook sends
+ *   and returns.
  * @param options.initialNeedsReview The needs-review filter this list **mounts** with, read once by
- *   `useState` — `useCollection`'s parameter of the same name, where the measurement behind it is.
+ *   `useState` — `useCollection`'s parameter of the same name, and `useReviewHandoff` has the
+ *   measurement behind it.
  */
 export function useWishlist({
   flattenLocally = false,
