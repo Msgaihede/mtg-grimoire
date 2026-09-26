@@ -6607,6 +6607,90 @@ export interface PriceHistory {
 }
 
 /**
+ * How {@link ipc.collectionValueHistory} cuts the collection's value — `value_history.rs`'s
+ * `split` word. `total` is one line and no buckets; the other three put every copy in exactly one
+ * bucket, so a point's bucket values always sum to its total.
+ *
+ * A word the crate does not know is **refused**, in `value_history::NOT_A_SPLIT`'s words — not
+ * read as `total`. Where `price_movers` degrades an unknown window to the default, a graph drawn
+ * under a heading that says *by colour* over a single total line would be the chart lying about
+ * its own subject.
+ */
+export type ValueSplit = "total" | "type" | "color" | "set";
+
+/**
+ * One line of the Collection value graph — `value_history.rs`'s `ValueBucket`.
+ *
+ * `key` is the crate's word and the three splits spell it three ways, none of them this side's to
+ * reword. **`type`** is lowercase — `creature` … `land`, or `other` — and its precedence is
+ * `features/decks/deckBuckets.ts`'s `typeBucket` exactly, on the front face, so a reader meets one
+ * answer to "what type is this card" on the deck editor and on the home page. **`color`** is
+ * `collection_breakdown`'s own vocabulary: `W` `U` `B` `R` `G` as the stored uppercase letter,
+ * beside the two lowercase words `c` and `multi`. **`set`** is the set code, or `other` for a
+ * printing that has left the corpus and for every set past the crate's cap.
+ *
+ * `name` is the set's name for `set` and `null` everywhere else — for the other three splits, for
+ * `other`, and for a set the corpus no longer knows the name of. It is not a label: the words a
+ * reader sees are TypeScript's, and `null` here is a fact about the database.
+ */
+export interface ValueBucket {
+  key: string;
+  name: string | null;
+}
+
+/**
+ * One point of the Collection value graph — `value_history.rs`'s `ValuePoint`.
+ *
+ * **`moved` is the price-only part of the step from the previous point, and the rest is the
+ * reader's own doing.** For every printing held at both points it is `copies_before ×
+ * (price_now − price_before)`, so `total − previous.total − moved` is what was added or taken
+ * away in that step — a figure this side derives rather than the crate sending a second number
+ * that could come to disagree with the first two. `null` on the first point, where there is no
+ * step: **`null` and never `0`**, because *no step* and *a step in which no price moved* are two
+ * different sentences on the readout.
+ */
+export interface ValuePoint {
+  /** Unix seconds of the period's UTC midnight. A weekly period answers its **latest** day. */
+  day: number;
+  /** Σ copies × price over the period's priced rows. Never an em dash: an unpriced copy adds 0. */
+  total: number;
+  /** One value per {@link ValueHistory.buckets}, in the same order; empty for `total`. */
+  values: number[];
+  /** The price-only part of `total − previous.total` — see above. */
+  moved: number | null;
+  /**
+   * True on the last point only: **today**, computed live from `collection_entries` at today's
+   * price the way `collection_summary` computes the collection's value — so the graph's last point
+   * is exactly the figure the Collection value widget prints beside it.
+   */
+  live: boolean;
+}
+
+/**
+ * The collection's value over time at one marketplace — `value_history.rs`'s `ValueHistory`.
+ *
+ * **`points` is every kept snapshot period before today plus a live point for today**, oldest
+ * first: one point a day inside `price_history::DAILY_DAYS` and one per seven-day bucket beyond
+ * it, the table's own thinning applied again at read time so a printing sold mid-week cannot make
+ * a point of its own. **Only rows written from user schema v50 on are read** — `price_snapshots`
+ * learned how many copies it was pricing at that rung, and a row from before it has a price and
+ * no holding — so a database upgraded today answers the live point alone, which is the widget's
+ * *the line starts tomorrow* state rather than a line drawn out of NULLs. **An empty collection
+ * answers no points at all**, not a live point at zero.
+ *
+ * `buckets` is empty for `total`. For `color` it is fixed `W U B R G c multi` order, holding only
+ * the buckets that are non-zero somewhere; for `type` and `set` it is today's value descending with
+ * `other` last and **at most eight named buckets** — which to fold further, and into what words, is
+ * the widget's. `today` is the database's own `unixepoch(date('now'))`, {@link PriceHistory}'s
+ * device, so the page places the range without a clock of its own.
+ */
+export interface ValueHistory {
+  buckets: ValueBucket[];
+  points: ValuePoint[];
+  today: number;
+}
+
+/**
  * One of the reader's own sticky notes — `sticky_notes.rs`'s `StickyNoteRow` (user schema v46).
  *
  * **It hangs off nothing**, which is what separates it from {@link DeckNote}: no deck, no card,
@@ -9360,6 +9444,15 @@ export const ipc = {
    */
   priceHistory: (cardId: string, finish: Finish, marketplace: MarketplaceId) =>
     invoke<PriceHistory>("price_history", { cardId, finish, marketplace }),
+  /**
+   * The collection's value over time at `marketplace`, cut by `split` — the Collection value
+   * graph's read, and `price_snapshots`' second reader after the movers (user schema v50 is what
+   * gave it copies to multiply by). Oldest first, a live point for today last; range and measure
+   * are the widget's and are not asked for here. An unknown `split` is refused in words. See
+   * {@link ValueHistory}.
+   */
+  collectionValueHistory: (split: ValueSplit, marketplace: MarketplaceId) =>
+    invoke<ValueHistory>("collection_value_history", { split, marketplace }),
   /**
    * Every sticky note, `ORDER BY sort_order, id` — see {@link StickyNote}.
    *
