@@ -562,6 +562,14 @@ pub(crate) fn with_write<T>(
                 eprintln!("the managed wishlists could not be armed on this connection: {e}");
             }
             let out = f(&conn);
+            // **The token reconcile's backstop rides the same marks** (spec §4.2 rule 7): a
+            // token no card in a list makes any more loses its entries, for the writes that
+            // file no undo step and so could not do it inside their own transaction — the
+            // Collection tab's filing and cut, a sync pull, Scryfall's reconcile, undo and redo.
+            // **Before the settle and not after it**, because the settle empties the dirty table
+            // this reads; neither writes anything the other reads, so the order costs nothing
+            // else. Logged, never failing the write, for the settle's reason.
+            crate::deck_tokens::reconcile_dirty_logged(&conn);
             crate::managed_wishlist::settle_logged(&conn);
             out
         }
