@@ -1025,12 +1025,16 @@ This page said "one name, two contents — nothing stalls" about the first case 
 That held only for a *re*-pick of a pick both devices had converted, and the rung's own comment
 repeated it.
 
-`deck_tokens::convert_legacy_picks` now runs from `prepare_database` at **every** launch, after
-`capture::install`, **not suppressed**. Every entry it derives is a captured insert, so a peer
-that derived the same row merges on the uid and a peer that did not builds it from the put; a pick
-arriving after the climb is converted at the receiver's next launch and announced; a re-pick
-moves the named entry to the new art in place, captured, so the "two contents" window closes at
-the next launch rather than at the next swap. The clears are captured as well, and recorded
+`deck_tokens::convert_legacy_picks` now runs outside the ladder, **not suppressed**, behind a gate
+of two halves: `convert_legacy_picks_at_launch`, from `prepare_database` at every launch after
+`capture::install`, and `convert_legacy_picks_after_pull`, from `client::pull` behind every pull
+that read everything. A device in no group converts at launch; a device in one converts behind its
+pulls, and at launch only once one has landed (the next paragraph is why). Every entry it derives
+is a captured insert, so a peer that derived the same row merges on the uid and a peer that did not
+builds it from the put; a pick arriving after the climb is converted on the pull that brings it
+and announced; a re-pick moves the named entry to the new art in place, captured, so the "two
+contents" window closes behind the next pull rather than at the next swap. The clears are captured
+as well, and recorded
 **after** the entries, so a v51 peer — holding the stream at the first op for a table it does not
 know — holds the clears with it and keeps drawing its art until it upgrades. Two losses are
 accepted, both confined to a v51 device's last days: a reset made there in that window (the other
@@ -1040,12 +1044,35 @@ longer reads. `a_pick_made_on_a_v51_device_after_the_climb_converges_with_nothin
 `an_art_reset_on_a_v51_device_after_the_conversion_leaves_nothing_deferred` drive both through
 `apply` with nothing deferred; the second went red, `deferred = 1`, against the rung-time
 conversion. (The first cannot go red against a stub that converts at every launch, which is why
-the stall was measured by the throwaway test instead.)
+the stall was measured by the throwaway test instead.) Both now drive their devices through the
+two gated halves rather than the bare conversion.
+
+**A paired device converts behind a pull and never before one** (the fifth review round, the same
+day). While it converted at launch, **a laggard's conversion silently reverted edits**: A converts
+a pick at 3 and steps the live entry to 5; B, still on v51, pulls A's batch and defers it —
+`deck_token_printings` is a table it does not know, and A's clear is held behind the entries, so B
+still holds the pick — but `apply`'s `observe` counts deferred ops, so B's clock is past every
+stamp A wrote. B climbs and converts at launch: `<uid>-live` inserted at the legacy 3 under a later
+stamp than A's step, and last-writer-wins took **both** devices to 3. A finish change or a
+theory-switch move made on A went the same way, and an entry A had deleted came back. Behind a
+pull, B applies A's entries and A's clear first: last-writer-wins takes B's `card_id` to NULL, so
+there is nothing to convert — unless B re-picked after A's clear, and then B's conversion is case
+3's sparse move of A's `<uid>-live` by uid, never an insert over it. The key is the `sync_state`
+row `token_picks_ready` (`deck_tokens::PICKS_READY`), set by the pull half and never cleared; a
+pull held behind a key rotation neither sets it nor converts, because its unreadable envelopes may
+be exactly the entries and clears the gate waits for.
+`a_laggards_conversion_never_reverts_an_edit_made_since` stands in for B's observed clock by
+copying A's into it — a v52 fixture cannot defer a table it knows — and went red, 3 on both devices
+instead of 5, with the gate switched off; `client`'s
+`a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_does_not` drives the pull half
+through a mock relay. **What it costs**: a paired device draws each unconverted token at the
+resolver's printing until its first pull at v52 lands, and a paired device that never completes
+one — a group with no membership, a relay it cannot reach — goes on doing so.
 
 **What a mixed group does across v52**, then: a v52 device's `deck_token_printings` ops **defer**
 on a v51 peer until it upgrades, which is the ordinary cost of a new table, and the clears wait
 behind them; a v51 peer's `deck_tokens.card_id` / `quantity` ops land in the legacy columns on a
-v52 device, where the next launch converts a picked art and otherwise only an untouched token's
+v52 device, where the pull that brings a picked art converts it and otherwise only an untouched token's
 implicit count is read. **"Two names, one entry"** — a pick still in flight between two devices
 under two uids when each converts it — now converges through the grain rule rather than stalling,
 because the announcement is an insert and carries every grain term: `apply` finds the other
@@ -1065,7 +1092,29 @@ population, read off the code and unmeasured**: an entry filed at the `nonfoil` 
 device whose corpus did not hold the printing when it converted, and a printing that loses its
 nonfoil after its entry was filed. Either one, meeting a pick in flight under two uids, can still
 reach the fold above. It needs two v51 devices to have picked the same token's art independently,
-offline, and then one of those two.
+offline, and then one of those two — **or one v51 pick and a reader's own add**, which this page
+understated until the fifth review round: a device whose corpus lacks the printing announces
+`<uid>-live` at the `nonfoil` fallback, and a device where the reader had already added that
+printing at its right finish — so case 1 declined to convert over it — receives the announcement,
+finds no grain match, inserts it beside the reader's entry, and its next repair folds the two and
+deletes the announced name uncaptured, after which the announcer's edits to that name defer there.
+**The gate does not close either route.** It orders a conversion after a pull, and neither route
+is a conversion racing a peer's: each is an announced fallback finish meeting a different row in a
+repair that runs uncaptured, and a pull that lands first changes nothing about that.
+
+**Two generic gaps the conversion can widen, and neither is its own** (named in the same round
+and left for a follow-up). **A deck deleted during the window stalls a stream**:
+`apply::resolve_parent` defers any child whose parent row is gone, with no tombstone check, so a
+peer's entry announcement for a deck this device deleted defers for good — as every child op of a
+deleted parent already does. **`apply::find_row`'s uid rename is unchecked**: it renames the local
+row to the lower uid without asking whether another local row already holds it, and derived names
+make that reachable — a v51 device re-picks art Y2 while the other device holds Y2 as a separate
+entry, which case 1 declined to move — at which point the `UNIQUE(sync_uid)` error escapes the
+group's savepoint and fails the whole `apply` on every pull, about half the time by uid order. The
+conversion adds rows and names to both windows; it creates neither rule. **And one cosmetic loss
+in a group of three or more**: a conversion finding every list already holding the pick (a third
+device's announced entries) records its clear with no entry op ahead of it, so a v51 peer applies
+the clear and draws its default art until it upgrades.
 
 **And the registrations number twelve, not ten**, counted while landing it: the ten above, plus
 `src/lib/userTables.json` — which `changes.rs`' `the_json_both_suites_read_is_the_user_side_of_
@@ -1227,7 +1276,7 @@ day, which took it off the ladder):
 | an *upgraded* file | the v29 rung's `UPDATE … SET sync_uid = lower(hex(randomblob(16)))` |
 | a *converted* file | `schema::mint_missing_uids` inside `split::extract_user_file` |
 | a *fresh* file | `USER_SEED_SQL`, plus the capture trigger for every row written afterwards |
-| a row **a launch pass derives from a synced row** | the pass itself — `deck_tokens::convert_legacy_picks` names each entry `<pick uid>-<list>`, or a random uid per row for a pick that has none, so two devices converting one pick announce one name; see the seventeenth table above |
+| a row **the pick conversion derives from a synced row** | the conversion itself — `deck_tokens::convert_legacy_picks` names each entry `<pick uid>-<list>`, so two devices converting one pick announce one name; a pick with no uid is first given the insert trigger's own mint (no op — `sync_uid` is on no capture spec), and its uncaptured clear is the one write of the pass no peer hears; see the seventeenth table above |
 
 A converted file is the one that was missed first: a legacy `mtg.db` has no such column to
 copy, and `split::convert` stamps *head*, so the ladder never reaches it. A NULL uid is not
@@ -1338,7 +1387,9 @@ rule on purpose:
 
 - **`deck_tokens::convert_legacy_picks` is captured, deliberately, although every device derives
   it too** — the rule's one exception that is not a delete. It turns v51's art picks into entries at
-  every launch (*The seventeenth*, above), and an entry derived on one device has to reach the peers
+  launch on a device in no group, and behind each pull on a device in one (*The seventeenth*,
+  above, has the reversion a launch conversion caused there), and an entry derived on one device
+  has to reach the peers
   that never derived it, or their edits to it stall a stream; the rung that did this uncaptured
   stalled one in each direction. What makes capturing a derived *insert* safe here is the name:
   every device converting one pick announces the same `<pick uid>-<list>`, so the second copy of a

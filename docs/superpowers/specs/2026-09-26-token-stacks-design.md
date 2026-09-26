@@ -295,12 +295,13 @@ entry's `finish` is what the chin names, what `FoilOverlay` sheens and what the 
 - `decks.token_mode` is added at `managed`; `token_stack` is dropped.
 - Proven on a copy of the real dev database (the `prove-a-migration-on-the-real-dev-db` memory).
 
-*(Amended at PR 2's fan-in and task reviews, 2026-09-26, and again at the third and fourth review
-rounds the same day — the conversion as built.)*
-- **The conversion is a captured launch pass, not the rung.** The rung creates the table, adds
+*(Amended at PR 2's fan-in and task reviews, 2026-09-26, and again at the third, fourth and fifth
+review rounds the same day — the conversion as built.)*
+- **The conversion is a captured pass, not the rung.** The rung creates the table, adds
   `token_mode` and drops `token_stack`, and converts no pick.
-  `deck_tokens::convert_legacy_picks` runs from `prepare_database` at every launch, **after
-  `capture::install`, not suppressed**, and before the finish repair. The first version of this
+  `deck_tokens::convert_legacy_picks` runs **after `capture::install`, not suppressed** — from
+  `prepare_database` before the finish repair, and behind a pull, as the gate below decides. The
+  first version of this
   amendment described the rung doing the converting uncaptured, trusting every device to derive
   the same rows from the same synced picks; a group with a device still on v51 breaks that. A pick
   made on the v51 device after another device climbed was converted by the picker alone, so the
@@ -308,11 +309,28 @@ rounds the same day — the conversion as built.)*
   derived — deferred, stalling the picker's stream for good (reproduced by a two-device test). And a
   pick the v51 device reset left the converter the only holder of an entry, stalling the other
   way. **Every derived entry now announces itself with a captured insert**, so a peer that never
-  derived it receives it, and a pick arriving after the climb is converted at the next launch.
-- **Each converted entry is named, not minted**: `<pick uid>-live` / `-theory`, random for a pick
-  with no uid of its own. Every device converting one pick announces the same name, so a second
-  put merges on the uid rather than adding a row; a NULL name would fail the first edit on a paired
-  device (`sync_ops.uid NOT NULL`).
+  derived it receives it, and a pick arriving after the climb is converted on the pull that brings
+  it.
+- **A paired device converts only behind a pull** (the fifth round). A device in no sync group
+  converts at launch; a device in one converts behind every pull that read everything
+  (`convert_legacy_picks_after_pull`, from `sync_engine::client::pull`), and at launch only once
+  such a pull has set the `sync_state` key `token_picks_ready` (`convert_legacy_picks_at_launch`).
+  The launch-time conversion let a laggard revert an earlier climber's edits: A converts a pick at
+  3 and steps the live entry to 5; B, still on v51, defers A's batch (a table it does not know, the
+  clear held behind the entries) while its clock observes the stamps; B climbs and converts at
+  launch, inserting `<uid>-live` at 3 under a later stamp, and last-writer-wins takes both devices
+  back to 3 — a finish change, a theory-switch move or a delete went the same way. Behind a pull,
+  B has applied A's entries and A's clear first, so it has nothing to convert, or — having
+  re-picked since — moves A's entry by uid rather than inserting over it. The cost: a paired device
+  draws an unconverted token at the resolver's printing until its first pull at v52 lands.
+- **Each converted entry is named, not minted**: `<pick uid>-live` / `-theory`. Every device
+  converting one pick announces the same name, so a second put merges on the uid rather than adding
+  a row; a NULL name would fail the first edit on a paired device (`sync_ops.uid NOT NULL`). A pick
+  with no uid of its own is given the insert trigger's mint first, and its clear is written
+  uncaptured, since no peer could find a sparse clear for a name it was never told.
+- **One savepoint per pick** (the fifth round): a pick whose writes fail is rolled back alone,
+  logged and left set for the next pass, rather than one failure blocking every conversion in the
+  file at every launch.
 - **Per pick and list, four cases**: a list already holding the token at that printing in any
   finish keeps it; a grain another token's entry holds is skipped (two tokens can pick one printing
   — a double-faced token — and the first in `oracle_id` order wins on every device, the loser

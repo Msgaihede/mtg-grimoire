@@ -17,9 +17,12 @@
 //! table but two has an `INTEGER PRIMARY KEY`, and those two have none at all — `muted_tags`
 //! is `WITHOUT ROWID` on `(namespace, tag_id)` and `device_names` on `device_id` — so a rowid
 //! would need a second spelling of every statement for both. The uid is `UNIQUE` on every one
-//! and every row has one, which is what `schema::mint_missing_uids`, the capture trigger's mint
-//! and — for the rows user schema v52 moves before any trigger exists for their table — that
-//! rung's own derived names are between them for.
+//! and every row has one, which is what `schema::mint_missing_uids` and the capture trigger's
+//! mint are between them for — plus `deck_tokens::convert_legacy_picks`, which names each entry it
+//! derives from a v51 art pick `<pick uid>-<list>` itself, and first gives the pick the trigger's
+//! own mint where a write behind `capture::suppressed` left it nameless. (This read "that rung's
+//! own derived names" while user schema v52's rung did the converting; the conversion has been a
+//! captured pass outside the ladder since the day it landed.)
 //!
 //! # Add-wins needs this device's own history, and `sync_ops` is where it is
 //!

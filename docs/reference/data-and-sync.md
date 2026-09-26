@@ -1061,8 +1061,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   finish`, and `idx_deck_token_printings_uid`); `decks.token_mode TEXT NOT NULL DEFAULT 'managed'
   CHECK (token_mode IN ('managed','collection','hidden'))` added; and `decks.token_stack` dropped.
   **The rung converts no pick**: every `deck_tokens` row with a picked `card_id` becomes one entry
-  per list in `deck_tokens::convert_legacy_picks`, a **captured** pass `prepare_database` runs at
-  every launch after `capture::install` — the first bullet below. It is the **thirty-first**
+  per list in `deck_tokens::convert_legacy_picks`, a **captured** pass behind a gate — on a device
+  in no sync group `prepare_database` runs it at every launch after `capture::install`, and on a
+  device in one it runs behind each pull at v52 and at launch only once such a pull has landed
+  (the first two bullets below). It is the **thirty-first**
   user table and the **seventeenth** synced one, and leaves the user file at thirty-one tables and
   **fifty** indexes — `the_user_schema_is_byte_identical_to_what_the_ladder_builds` compared 84
   objects at this rung, 31 + 50 + 3 autoindexes, counted off the literal rather than added. It owes
@@ -1080,7 +1082,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     device *reset* left the converter the only holder of an entry, whose own later steps stalled
     the other way. Each entry now announces itself with a captured insert — a peer that derived it
     too merges on the uid, one that did not builds the row from the put — and a pick that arrives
-    after the climb is converted at the next launch. Per pick and per list: a list already holding
+    after the climb is converted on the pull that brings it. Per pick and per list: a list
+    already holding
     the token at that printing, **in any finish**, keeps it; a grain another token's entry holds is
     skipped (two tokens of one deck can have picked **one printing** — a double-faced token carries
     two — and the pick first in **`oracle_id` order, never rowid** wins, which every device sorts
@@ -1091,10 +1094,28 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `card_id` is cleared, and its `quantity` wherever an entry of its token exists (a quantity-only
     row is never touched — that number goes on meaning the implicit entry's count), **all after
     the entries**, so each clear rides behind an entry op a v51 peer holds the stream at.
-    Idempotent: every later launch scans the table and writes nothing, no op included. **Two
-    losses are accepted**, both confined to a v51 device's last days: a reset made there after
-    another device converted, and a count stepped there on a pick another device had already
-    cleared.
+    **One savepoint per pick**: a pick whose writes fail is rolled back alone, written to stderr and
+    left set for the next pass, where one transaction over the file had let one bad pick block every
+    conversion at every launch. Idempotent: every later pass scans the table and writes nothing, no
+    op included. **Two losses are accepted**, both confined to a v51 device's last days: a reset
+    made there after another device converted, and a count stepped there on a pick another device
+    had already cleared.
+  - ⚠️ **A paired device converts only behind a pull, and until the fifth review round it
+    converted at launch.** A launch conversion is a conversion before the device has heard its
+    group, and a laggard's then reverted what an earlier climber had done since: A converts a pick
+    at 3 and steps the live entry to 5; B, still on v51, defers A's batch (a table it does not
+    know, with A's clear held behind the entries) while its clock observes the stamps; B climbs,
+    converts at launch, and inserts `<uid>-live` at 3 under a later stamp than A's step, which
+    last-writer-wins then took back to 3 on **both** devices — a finish change, a theory-switch move
+    or a delete made on A went the same way. So `deck_tokens::convert_legacy_picks_at_launch` runs
+    it only on a device in no sync group or once the `sync_state` key `token_picks_ready` is set,
+    and `sync_engine::client::pull` sets that key and converts, captured, behind every pull that
+    read everything (never one held at an epoch). By then B has applied A's entries and A's clear,
+    so it has no pick left to convert, and a pick it re-made since is a case-3 move of A's entry
+    rather than an insert over it. `a_laggards_conversion_never_reverts_an_edit_made_since` went red
+    — 3 on both devices, not 5 — with the gate switched off. **The cost**: a paired device draws an
+    unconverted token at its resolver's printing until its first pull at v52 lands, and a paired
+    device that never completes one (no membership, no relay) goes on doing so.
   - **The conversion files each art in its printing's own finish, and a repair is the net.** v51
     stored a printing and no finish. The retired rung wrote `'nonfoil'` for every art, because no
     rung reads the corpus; the launch pass runs after `migrate_corpus`, so it files the printing's
@@ -1115,12 +1136,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     printing is sold in. **What it costs now lives only on the fallback**: a peer whose corpus
     lacked the printing announced `nonfoil`, and that put landing after this device's repair, with
     a later stamp, writes the guess back until the next launch repairs it again.
-  - ⚠️ **The entries are named, not minted**: `<pick uid>-<list>`, or random for a pick with no uid
-    of its own — one written behind `capture::suppressed`, where the insert trigger's mint is
-    guarded off — and the random arm gives the two lists' entries two different names. The derived
-    name is what lets two devices that converted one pick merge on it, and what a later conversion
-    finds the entry by when a re-pick moves it. [sync.md](sync.md) has the minting table and the
-    mixed-version windows.
+  - ⚠️ **The entries are named, not minted**: `<pick uid>-<list>`. A pick with no uid of its own —
+    one written behind `capture::suppressed`, where the insert trigger's mint is guarded off — is
+    given that mint first (`sync_uid` is on no capture spec, so the naming is no op), and its clear
+    is written uncaptured: it was never announced under any name, so a captured clear would be a
+    sparse update no peer could find, deferred for good. Until the fifth review round such a pick's
+    entries took a random uid each and its clear failed the pass on `sync_ops.uid NOT NULL` on a
+    paired device. The derived name is what lets two devices that converted one pick merge on it,
+    and what a later conversion finds the entry by when a re-pick moves it. [sync.md](sync.md) has
+    the minting table and the mixed-version windows.
   - ⚠️ **The rung drops the three `decks` capture triggers**, for v43's reason (`sync_upd_decks`
     reads `NEW.token_stack`, and SQLite refuses `DROP COLUMN` on a column a trigger reads —
     measured against 3.53.0 and the bundled 3.53.2; an `OF` list alone is not refused), and
@@ -1148,8 +1172,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   first written, when it did the converting; its two entries and cleared override are what the
   launch pass now produces.) The totality and the naming are held by `schema.rs`' own tests —
   `the_climb_and_the_conversion_are_total_over_a_negative_count_and_a_shared_printing` and
-  `the_launch_conversion_names_a_pick_with_no_uid_at_random` — and the capture, the re-pick and
-  both mixed-version stalls by `deck_tokens.rs`'.
+  `the_launch_conversion_names_a_pick_with_no_uid_before_deriving_from_it` — and the capture, the
+  re-pick, both mixed-version stalls, the reversion the gate closes and the per-pick savepoint by
+  `deck_tokens.rs`'.
   [decks-storage.md](decks-storage.md) has the entries, the commands and the reconcile.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks

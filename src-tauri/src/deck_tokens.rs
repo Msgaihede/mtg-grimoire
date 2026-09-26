@@ -1981,17 +1981,101 @@ pub fn reconcile_dirty_logged(conn: &Connection) {
 /// One v51 art pick still on `deck_tokens`: `(deck, oracle, card, quantity, uid)`.
 type LegacyPick = (i64, String, String, Option<i64>, Option<String>);
 
-/// **The v51 art picks become entries, at launch and captured** (user schema v52, the
-/// token-stacks spec §4.3). `schema::prepare_database` runs this after `capture::install` and
-/// before [`repair_entry_finishes`], logged and left owing like its neighbours.
+/// The `sync_state` key a paired device's legacy picks wait on — set by the first pull this
+/// device applies at user schema v52, and never cleared.
+///
+/// What it records is that this device has **heard its group** since it climbed: every entry a
+/// peer already derived from the same picks, and every clear behind them. That is the one thing
+/// [`convert_legacy_picks_at_launch`] has to know before a paired device may convert, and
+/// [`convert_legacy_picks_after_pull`] is its only writer. A device in no group never reads it.
+pub const PICKS_READY: &str = "token_picks_ready";
+
+/// **The launch half of the conversion's gate** — what `schema::prepare_database` runs, after
+/// `capture::install` and before [`repair_entry_finishes`], logged and left owing like its
+/// neighbours.
+///
+/// **A device in no sync group converts here, at every launch**, as it always did: its writes
+/// record no op, and a pairing later hands its peers the finished entries in a baseline. **A
+/// device in a group converts here only once [`PICKS_READY`] is set**, and until then leaves its
+/// picks to [`convert_legacy_picks_after_pull`], which runs behind its first pull at v52.
+///
+/// **Why a paired device waits** (2026-09-26, the token-stacks PR 2 review's fifth round): a
+/// conversion at launch is a conversion **before the device has heard its group**, and a
+/// laggard's conversion then silently reverts what an earlier climber did since. Device A climbs,
+/// converts a pick at count 3 and steps the live entry to 5. Device B, still on v51, pulls A's
+/// batch and defers it — `deck_token_printings` is a table it does not know, and A's clear of the
+/// pick rides behind the entries, so B still holds the pick — but B's clock observes every stamp
+/// in the batch, deferred ones included (`sync_engine::apply`'s `observe`). Converting at launch,
+/// B inserted `<uid>-live` at the legacy 3 under a stamp later than anything A wrote, and that
+/// insert won every field last-writer-wins decides: A's step, a finish change or a theory-switch
+/// move reverted on **both** devices, and an entry A had deleted came back. Behind a pull, B has
+/// applied A's entries and A's clear first: the clear leaves no pick to convert, and a pick B
+/// re-made after it is converted as case 3's move of the entry A named — a sparse update — never
+/// as an insert over it. `a_laggards_conversion_never_reverts_an_edit_made_since` is that
+/// scenario, and it went red (3 on both devices, not 5) with this gate switched off.
+///
+/// **What it costs**: a paired device draws each unconverted token as its implicit entry — the
+/// resolver's printing, not the art the reader picked on v51 — until its first pull at v52 lands,
+/// which on a device the connection manager can reach is seconds after launch. A paired device
+/// that completes no pull (a group with no membership, a relay it cannot reach, a pull held
+/// behind a key rotation) goes on drawing the default until one does.
+pub fn convert_legacy_picks_at_launch(conn: &Connection) -> Result<(), String> {
+    let waits: bool = conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM sync_group)
+                    AND NOT EXISTS (SELECT 1 FROM sync_state WHERE key = ?1)",
+            [PICKS_READY],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if waits {
+        return Ok(());
+    }
+    convert_legacy_picks(conn)
+}
+
+/// **The pull half of the conversion's gate** — what `sync_engine::client::pull` runs straight
+/// after a pull's `apply` has committed and the cursor has moved. It sets [`PICKS_READY`], so
+/// every launch after it converts too, and then converts **captured**: `apply` has returned, and
+/// `capture::suppressed` with it.
+///
+/// **Behind every such pull, not only the first**, which closes what the launch pass alone left
+/// to the next launch: a v51 peer's pick arriving in a pull is converted and announced on the
+/// pull that brings it. It stays idempotent and cheap — [`convert_legacy_picks`] returns on its
+/// first read when no pick is set, and the key is an `INSERT OR IGNORE` — so a pull with nothing
+/// to convert writes nothing.
+pub fn convert_legacy_picks_after_pull(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO sync_state (key, value) VALUES (?1, '1')",
+        [PICKS_READY],
+    )
+    .map_err(|e| e.to_string())?;
+    convert_legacy_picks(conn)
+}
+
+/// **The v51 art picks become entries, captured** (user schema v52, the token-stacks spec §4.3).
+/// Nothing in production calls this directly: [`convert_legacy_picks_at_launch`] and
+/// [`convert_legacy_picks_after_pull`] are its gate, and their docs say who runs which and why a
+/// paired device waits for a pull.
 ///
 /// A pick is a `deck_tokens` row whose legacy `card_id` is set — v51's one art, shared by both
-/// lists. Each becomes **one entry per list**, named `<pick uid>-<list>` (random for a pick with
-/// no uid, which only a write behind `capture::suppressed` leaves), at
+/// lists. Each becomes **one entry per list**, named `<pick uid>-<list>`, at
 /// `max(coalesce(quantity, 1), 0)`, and the pick is then cleared. The floor is there because
 /// `deck_tokens.quantity` has no `CHECK` — it is a synced field, so a peer or an old build can
 /// have put any integer there — and the entry table refuses a count below zero; zero is the
 /// entry's own "stepped to nothing".
+///
+/// **A pick with no uid is named first**, `UPDATE deck_tokens SET sync_uid = <the mint>` — only a
+/// write behind `capture::suppressed` leaves one, and `sync_uid` is on no capture spec, so the
+/// naming is not an op. Its entries then derive from that name like any other's. Until the fifth
+/// review round such a pick's entries took a random uid each and its clear was captured, and on a
+/// paired device the clear's update trigger put the pick's NULL into `sync_ops.uid NOT NULL` and
+/// failed the whole pass. **Its clear is written behind `capture::suppressed`**, and that part is
+/// deliberate: a nameless pick was never announced under any name, so a captured clear would be a
+/// sparse `{card_id, quantity}` update for a uid no peer holds, carrying no grain term to be
+/// matched by — deferred on every peer, and this device's stream held behind it for good. The
+/// entries themselves are announced whole, as every conversion's are.
+/// `a_nameless_pick_on_a_paired_device_is_named_and_stalls_no_peer` holds both halves.
 ///
 /// **The finish is the printing's own [`default_finish`]**, read from the corpus — the function
 /// an implicit entry is drawn in and an add naming no finish files, so a converted Treasure lands
@@ -2006,19 +2090,19 @@ type LegacyPick = (i64, String, String, Option<i64>, Option<String>);
 /// `default_finish(None)`, which is `nonfoil`, and the repair stays as the net for exactly that
 /// entry once a sync brings the printing.
 ///
-/// **Why here and not in the rung, and why captured.** The v52 rung did this until 2026-09-26,
-/// uncaptured, on the argument that every device climbs over the same synced picks and so derives
-/// the same rows under the same names. A group with a device still on v51 breaks that. A pick
-/// made there after this device climbed was converted by the picker alone, under a name this
-/// device had never heard, and the picker's next count step reached this device as a sparse
-/// `{quantity}` update for a row it could not find — deferred, and the picker's whole stream
-/// held behind it for good; a two-device test reproduced exactly that before this moved. The
-/// reverse held too: a pick the v51 device reset left this device the only holder of an entry,
-/// and its own later steps stalled its stream the other way. **An entry that announces itself
-/// with a captured insert cannot be unknown to a peer**: one that derived it too merges on the
-/// uid, and one that did not builds the row from the put. And because this runs at every
-/// launch, a pick that arrives afterwards — a v51 device picking after this one converted — is
-/// converted at the next.
+/// **Why not in the rung, and why captured.** The v52 rung did this until 2026-09-26, uncaptured,
+/// on the argument that every device climbs over the same synced picks and so derives the same
+/// rows under the same names. A group with a device still on v51 breaks that. A pick made there
+/// after this device climbed was converted by the picker alone, under a name this device had
+/// never heard, and the picker's next count step reached this device as a sparse `{quantity}`
+/// update for a row it could not find — deferred, and the picker's whole stream held behind it
+/// for good; a two-device test reproduced exactly that before this moved. The reverse held too:
+/// a pick the v51 device reset left this device the only holder of an entry, and its own later
+/// steps stalled its stream the other way. **An entry that announces itself with a captured
+/// insert cannot be unknown to a peer**: one that derived it too merges on the uid, and one that
+/// did not builds the row from the put. And because this runs behind every pull and at every
+/// launch the gate allows, a pick that arrives afterwards — a v51 device picking after this one
+/// converted — is converted on the pull that brings it.
 ///
 /// Per pick, per list, in `(deck_id, oracle_id)` order:
 ///
@@ -2031,19 +2115,30 @@ type LegacyPick = (i64, String, String, Option<i64>, Option<String>);
 ///    order already took it. Every device sorts one synced row set alike, so each keeps the same
 ///    winner and names it alike; rowid order would give two devices two names for one entry.
 ///    The loser keeps its count as its token's implicit one and loses only the art.
-/// 3. **The entry this pick named at an earlier conversion is still there** — move it: a v51
-///    device re-picked after this one converted. Its printing is rewritten in place, and its
-///    finish to the new printing's default, keeping the row, the count and the name every peer
-///    holds it by, so the captured update lands on theirs. The count stays, because a re-pick
-///    carries no count and the entry's is the reader's own.
+/// 3. **The entry this pick named at an earlier conversion is still there** — here, or on a peer
+///    that announced it — move it: a v51 device re-picked after the conversion. Its printing is
+///    rewritten in place, and its finish to the new printing's default, keeping the row, the
+///    count and the name every peer holds it by, so the captured update lands on theirs. The
+///    count stays, because a re-pick carries no count and the entry's is the reader's own.
 /// 4. **Otherwise insert it.**
 ///
 /// Then every pick's `card_id` is cleared, and its `quantity` wherever an entry of its token now
 /// exists — **all the entries first and the clears after**, so every clear rides behind an entry
 /// op in this device's stream. A v51 peer holds the stream at the first op for a table it does
-/// not know, so it holds the clears too and goes on drawing its art until it upgrades.
+/// not know, so it holds the clears too and goes on drawing its art until it upgrades. (In a group
+/// of three or more that can fail cosmetically: a conversion that finds every list already
+/// holding the pick — a third device's announced entries — writes no entry op, and if no other
+/// pick's entry precedes it the clear reaches the v51 peer first, which then draws its default
+/// art until it upgrades.)
 ///
-/// **Idempotent and cheap**: a cleared pick is never read again, so every launch after the first
+/// **One savepoint per pick, never one transaction for the file.** A pick whose entries or clear
+/// fail is rolled back to its own savepoint, written to stderr beside the deck and token it
+/// belongs to, and left set, so it is tried again behind the next pull or at the next launch the
+/// gate allows; every other pick still converts. Before the fifth review round one failure — a
+/// case-3 move colliding on the grain in the other list, say — rolled back every conversion in
+/// the file, at every launch, for good.
+///
+/// **Idempotent and cheap**: a cleared pick is never read again, so every run after the first
 /// scans a table of one row per deviated token and writes nothing, no op included. **Two losses
 /// are accepted, both confined to a v51 device's last days**: a reset made there after this
 /// device converted is lost, because this device's entry reaches it after the upgrade and the
@@ -2071,6 +2166,8 @@ pub fn convert_legacy_picks(conn: &Connection) -> Result<(), String> {
         return Ok(());
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The picks whose entries are in, and whose captured clear is still owed.
+    let mut owed: Vec<&LegacyPick> = Vec::with_capacity(picks.len());
     {
         // `None` when there is no `cards` table to ask — a corpus an ingest has not filled —
         // which answers the same `nonfoil` an absent printing does; see the doc.
@@ -2084,36 +2181,106 @@ pub fn convert_legacy_picks(conn: &Connection) -> Result<(), String> {
                     .flatten()
             });
             let finish = default_finish(listed.as_deref());
-            for variant in crate::schema::DECK_VARIANTS {
-                convert_pick_in(&tx, pick, variant, finish)?;
+            let converted = one_pick(&tx, || {
+                let (uid, named_here) = name_of(&tx, pick)?;
+                for variant in crate::schema::DECK_VARIANTS {
+                    convert_pick_in(&tx, pick, &uid, variant, finish)?;
+                }
+                // A pick named just now was never announced, so its clear goes uncaptured and
+                // now — see the doc — and nothing about it is owed to the second loop.
+                if named_here {
+                    crate::sync_engine::capture::suppressed(&tx, || clear_pick(&tx, pick))?;
+                }
+                Ok(named_here)
+            });
+            match converted {
+                Ok(false) => owed.push(pick),
+                Ok(true) => {}
+                Err(e) => skipped(pick, &e),
             }
         }
     }
-    for (deck_id, oracle_id, ..) in &picks {
-        tx.execute(
-            "UPDATE deck_tokens
-                SET card_id = NULL,
-                    quantity = CASE WHEN EXISTS (SELECT 1 FROM deck_token_printings e
-                                                  WHERE e.deck_id = deck_tokens.deck_id
-                                                    AND e.oracle_id = deck_tokens.oracle_id)
-                                    THEN NULL ELSE quantity END,
-                    updated_at = unixepoch()
-              WHERE deck_id = ?1 AND oracle_id = ?2",
-            params![deck_id, oracle_id],
-        )
-        .map_err(|e| e.to_string())?;
+    for pick in owed {
+        if let Err(e) = one_pick(&tx, || clear_pick(&tx, pick)) {
+            skipped(pick, &e);
+        }
     }
     tx.commit().map_err(|e| e.to_string())
 }
 
-/// One pick into one list, in `finish` — [`convert_legacy_picks`]' four cases, in its order.
+/// Run one pick's writes inside a savepoint of their own: released when `f` succeeds, rolled back
+/// to when it fails, so one pick's failure costs that pick alone — [`convert_legacy_picks`]' doc.
+fn one_pick<T>(tx: &Connection, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    tx.execute_batch("SAVEPOINT convert_pick")
+        .map_err(|e| e.to_string())?;
+    match f() {
+        Ok(value) => tx
+            .execute_batch("RELEASE convert_pick")
+            .map(|()| value)
+            .map_err(|e| e.to_string()),
+        Err(e) => {
+            let _ = tx.execute_batch("ROLLBACK TO convert_pick; RELEASE convert_pick");
+            Err(e)
+        }
+    }
+}
+
+/// What a pick that could not be converted writes, and where: stderr, as every neighbour of the
+/// launch pass does, because nothing a reader could act on is gained by a sentence in the log.
+fn skipped(pick: &LegacyPick, e: &str) {
+    eprintln!(
+        "a pre-v52 token art pick (deck {}, token {}) could not be converted: {e}\nIt is tried \
+         again at the next pull or launch; the deck's other picks converted, and until then this \
+         token draws its default printing.",
+        pick.0, pick.1
+    );
+}
+
+/// The pick's name, and whether it was minted here: a pick with no `sync_uid` is given the
+/// capture trigger's own mint before anything derives from it — [`convert_legacy_picks`]' doc.
+fn name_of(tx: &Connection, pick: &LegacyPick) -> Result<(String, bool), String> {
+    if let Some(uid) = &pick.4 {
+        return Ok((uid.clone(), false));
+    }
+    let uid: String = tx
+        .query_row("SELECT lower(hex(randomblob(16)))", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE deck_tokens SET sync_uid = ?1
+          WHERE deck_id = ?2 AND oracle_id = ?3 AND sync_uid IS NULL",
+        params![uid, pick.0, pick.1],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((uid, true))
+}
+
+/// Clear one pick: its `card_id` always, its `quantity` wherever an entry of its token now exists.
+fn clear_pick(tx: &Connection, pick: &LegacyPick) -> Result<(), String> {
+    tx.execute(
+        "UPDATE deck_tokens
+            SET card_id = NULL,
+                quantity = CASE WHEN EXISTS (SELECT 1 FROM deck_token_printings e
+                                              WHERE e.deck_id = deck_tokens.deck_id
+                                                AND e.oracle_id = deck_tokens.oracle_id)
+                                THEN NULL ELSE quantity END,
+                updated_at = unixepoch()
+          WHERE deck_id = ?1 AND oracle_id = ?2",
+        params![pick.0, pick.1],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// One pick into one list, in `finish`, named after `uid` — [`convert_legacy_picks`]' four
+/// cases, in its order.
 fn convert_pick_in(
     tx: &Connection,
     pick: &LegacyPick,
+    uid: &str,
     variant: &str,
     finish: &str,
 ) -> Result<(), String> {
-    let (deck_id, oracle_id, card_id, quantity, uid) = pick;
+    let (deck_id, oracle_id, card_id, quantity, _) = pick;
     let exists = |sql: &str, values: &[&dyn rusqlite::ToSql]| -> Result<bool, String> {
         tx.query_row(sql, values, |r| r.get(0))
             .map_err(|e| e.to_string())
@@ -2134,28 +2301,25 @@ fn convert_pick_in(
     )? {
         return Ok(());
     }
-    let name = uid.as_ref().map(|uid| format!("{uid}-{variant}"));
+    let name = format!("{uid}-{variant}");
     // 3. The entry an earlier conversion made from this pick, moved to the new art.
-    if let Some(name) = &name {
-        let moved = tx
-            .execute(
-                "UPDATE deck_token_printings
-                    SET card_id = ?2, finish = ?3, updated_at = unixepoch()
-                  WHERE sync_uid = ?1",
-                params![name, card_id, finish],
-            )
-            .map_err(|e| e.to_string())?;
-        if moved > 0 {
-            return Ok(());
-        }
+    let moved = tx
+        .execute(
+            "UPDATE deck_token_printings
+                SET card_id = ?2, finish = ?3, updated_at = unixepoch()
+              WHERE sync_uid = ?1",
+            params![name, card_id, finish],
+        )
+        .map_err(|e| e.to_string())?;
+    if moved > 0 {
+        return Ok(());
     }
     // 4. A new entry.
     tx.execute(
         "INSERT INTO deck_token_printings
              (deck_id, variant, oracle_id, card_id, finish, quantity, created_at, updated_at,
               sync_uid)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch(), unixepoch(),
-                 coalesce(?7, lower(hex(randomblob(16)))))",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch(), unixepoch(), ?7)",
         params![
             deck_id,
             variant,
@@ -5091,11 +5255,12 @@ mod tests {
         assert_eq!(recorded(&conn), [], "nothing recorded on the second launch");
     }
 
-    /// **A pick that arrives after the conversion is converted at the next launch, moving the
-    /// entry it already named.** A v51 peer that picks a second art sends `deck_tokens.card_id`,
-    /// which `apply` writes behind `suppressed`; the entry `<uid>-live` already exists here, at the
-    /// old art. The next conversion rewrites that entry's printing in place — same row, same name,
-    /// `nonfoil` for the finish repair to settle — and the rewrite is captured, so every peer
+    /// **A pick that arrives after the conversion is converted by the next pass — behind the pull
+    /// that brought it — moving the entry it already named.** A v51 peer that picks a second art
+    /// sends `deck_tokens.card_id`, which `apply` writes behind `suppressed`; the entry
+    /// `<uid>-live` already exists here, at the old art. The next conversion rewrites that entry's
+    /// printing in place — same row, same name, the new printing's default finish — and the
+    /// rewrite is captured, so every peer
     /// that holds the entry under that name moves it too.
     #[test]
     fn a_pick_that_arrives_after_the_conversion_moves_the_entry_it_named() {
@@ -5261,13 +5426,36 @@ mod tests {
         );
     }
 
+    /// A pull at v52, as `sync_engine::client::pull` runs one: `apply` the ops, then the pull half
+    /// of the conversion's gate behind them.
+    fn pulled(
+        conn: &Connection,
+        ops: &[crate::sync_engine::merge::Op],
+    ) -> crate::sync_engine::apply::ApplyReport {
+        let report = crate::sync_engine::apply::apply(conn, ops).unwrap();
+        convert_legacy_picks_after_pull(conn).unwrap();
+        report
+    }
+
+    /// Every entry's name and count on one device, `(uid, quantity)`, in name order.
+    fn counts(conn: &Connection) -> Vec<(String, i64)> {
+        conn.prepare("SELECT sync_uid, quantity FROM deck_token_printings ORDER BY sync_uid")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
     /// **Two devices, a pick made on the v51 one after the other climbed, and no op left
     /// deferred** — the stall the rung-time conversion had. The rung converted only what a device
     /// held when it climbed, behind `suppressed`: a pick arriving afterwards was converted by the
     /// *picker* when it climbed, under a name the first device had never heard, and the picker's
     /// next count step reached it as a sparse update for a row it could not find — deferred, and
-    /// the picker's whole stream held behind it for good. Here each device converts at its own
-    /// launch and announces what it derived, so each receives the other's rows whole.
+    /// the picker's whole stream held behind it for good. Here each device converts behind a pull
+    /// (both are paired, so neither converts at launch) and announces what it derived, so each
+    /// receives the other's rows whole — and B, pulling before A's announcement reaches it,
+    /// converts its own pick independently, under the same names.
     #[test]
     fn a_pick_made_on_a_v51_device_after_the_climb_converges_with_nothing_deferred() {
         use crate::sync_engine::apply::apply;
@@ -5280,14 +5468,22 @@ mod tests {
             .query_row("SELECT id FROM decks", [], |r| r.get(0))
             .unwrap();
 
-        // A climbs, with nothing to convert yet.
-        convert_legacy_picks(&a).unwrap();
-        // B, still on v51, picks an art, and A receives the pick.
+        // A climbs: its launch waits, and its first pull at v52 has nothing to convert.
+        convert_legacy_picks_at_launch(&a).unwrap();
+        pulled(&a, &[]);
+        // B, still on v51, picks an art; A converts it on the pull that brings it.
         seed_pick(&b, deck_b, &treasure(), None, "u-pick");
-        apply(&a, &since(&b, &mut mb)).unwrap();
-        // A's next launch converts what arrived; B upgrades and converts its own pick.
-        convert_legacy_picks(&a).unwrap();
-        convert_legacy_picks(&b).unwrap();
+        pulled(&a, &since(&b, &mut mb));
+        assert_eq!(
+            named_entries(&a).len(),
+            2,
+            "converted on the pull, not a launch later"
+        );
+        // B upgrades, and its first pull lands before A's announcement has reached the relay:
+        // it converts its own pick.
+        convert_legacy_picks_at_launch(&b).unwrap();
+        assert_eq!(named_entries(&b), [], "a paired launch waits for a pull");
+        pulled(&b, &[]);
         // B steps its live entry: the sparse op that used to stall.
         b.execute(
             "UPDATE deck_token_printings SET quantity = 4 WHERE variant = 'live'",
@@ -5296,13 +5492,9 @@ mod tests {
         .unwrap();
 
         let (to_a, to_b) = (since(&b, &mut mb), since(&a, &mut ma));
+        assert_eq!(pulled(&a, &to_a).deferred, 0, "B's step finds A's row");
         assert_eq!(
-            apply(&a, &to_a).unwrap().deferred,
-            0,
-            "B's step finds A's row"
-        );
-        assert_eq!(
-            apply(&b, &to_b).unwrap().deferred,
+            pulled(&b, &to_b).deferred,
             0,
             "and A's announcements find B's"
         );
@@ -5323,7 +5515,8 @@ mod tests {
     /// device will never derive once its pick is gone; under the rung-time conversion the
     /// converter's later count steps reached it as sparse updates for a row it did not have, and
     /// the converter's stream stalled there for good. The announced insert is what the other
-    /// device builds the row from. The reset itself is lost in that window, which is accepted.
+    /// device builds the row from, on its first pull at v52. The reset itself is lost in that
+    /// window, which is accepted.
     #[test]
     fn an_art_reset_on_a_v51_device_after_the_conversion_leaves_nothing_deferred() {
         use crate::sync_engine::apply::apply;
@@ -5334,31 +5527,242 @@ mod tests {
         apply(&b, &since(&a, &mut ma)).unwrap();
         let _ = since(&b, &mut mb);
 
-        // A climbs and converts. B, still on v51, holds A's stream at the first entry op.
-        convert_legacy_picks(&a).unwrap();
-        // B resets the art, upgrades, and has nothing left to convert.
+        // A climbs and converts behind its first pull. B, still on v51, holds A's stream at the
+        // first entry op.
+        convert_legacy_picks_at_launch(&a).unwrap();
+        pulled(&a, &[]);
+        // B resets the art. A steps its live entry.
         b.execute(
             "UPDATE deck_tokens SET card_id = NULL WHERE sync_uid = 'u-pick'",
             [],
         )
         .unwrap();
-        convert_legacy_picks(&b).unwrap();
-        // A steps its live entry.
         a.execute(
             "UPDATE deck_token_printings SET quantity = 5 WHERE variant = 'live'",
             [],
         )
         .unwrap();
-
+        // B upgrades: its launch waits, and its first pull brings A's entries, step and clear.
+        convert_legacy_picks_at_launch(&b).unwrap();
         let (to_a, to_b) = (since(&b, &mut mb), since(&a, &mut ma));
         assert_eq!(
-            apply(&b, &to_b).unwrap().deferred,
+            pulled(&b, &to_b).deferred,
             0,
             "A's step finds the row A announced"
         );
-        assert_eq!(apply(&a, &to_a).unwrap().deferred, 0);
+        assert_eq!(pulled(&a, &to_a).deferred, 0);
         assert_eq!(named_entries(&a), named_entries(&b));
         assert_eq!(named_entries(&b).len(), 2, "B holds both of A's entries");
+    }
+
+    /// **A laggard's conversion never reverts an edit made since** — the fifth review round's
+    /// finding, and the reason the conversion has a gate. A climbs and converts a pick at 3, then
+    /// steps the live entry to 5. B, still on v51, pulls A's batch and defers it (a table it does
+    /// not know, with A's clear held behind the entries), but its clock observes every stamp in
+    /// it, deferred ones included — which is what the clock copy below stands for, because a v52
+    /// fixture cannot defer a table it knows. When B climbs, a conversion at launch inserted
+    /// `u-pick-live` at 3 under a later stamp than A's step, and last-writer-wins took both
+    /// devices back to 3: **3 on both, measured with the gate switched off**. Behind B's first
+    /// pull, A's entries and A's clear arrive first, B has no pick left to convert, and A's 5
+    /// stands everywhere.
+    #[test]
+    fn a_laggards_conversion_never_reverts_an_edit_made_since() {
+        use crate::sync_engine::apply::apply;
+        let (a, b) = (paired_as("dev-a"), paired_as("dev-b"));
+        let (mut ma, mut mb) = (0, 0);
+        let deck_a = crate::schema::tests::deck(&a, "Tokens");
+        seed_pick(&a, deck_a, &treasure(), Some(3), "u-pick");
+        apply(&b, &since(&a, &mut ma)).unwrap();
+        let _ = since(&b, &mut mb);
+
+        // A climbs, converts behind its first pull, and the reader steps the live entry to 5.
+        convert_legacy_picks_at_launch(&a).unwrap();
+        pulled(&a, &[]);
+        a.execute(
+            "UPDATE deck_token_printings SET quantity = 5 WHERE variant = 'live'",
+            [],
+        )
+        .unwrap();
+        let to_b = since(&a, &mut ma);
+        // B, on v51, defers A's batch — and its clock observes the batch's stamps all the same.
+        let (ms, ctr): (i64, i64) = a
+            .query_row("SELECT ms, ctr FROM sync_clock WHERE id = 1", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        b.execute(
+            "UPDATE sync_clock SET ms = max(ms, ?1), ctr = ?2 + 1 WHERE id = 1",
+            params![ms, ctr],
+        )
+        .unwrap();
+
+        // B climbs: its launch, then its first pull at v52, which brings A's batch.
+        convert_legacy_picks_at_launch(&b).unwrap();
+        assert_eq!(pulled(&b, &to_b).deferred, 0);
+        // Both ways, until each has heard everything the other said.
+        assert_eq!(pulled(&a, &since(&b, &mut mb)).deferred, 0);
+        assert_eq!(pulled(&b, &since(&a, &mut ma)).deferred, 0);
+
+        let want = vec![
+            ("u-pick-live".to_owned(), 5),
+            ("u-pick-theory".to_owned(), 3),
+        ];
+        assert_eq!(counts(&a), want, "A's step stands on A");
+        assert_eq!(counts(&b), want, "and on B");
+    }
+
+    /// **A paired device converts nothing at launch until a pull at v52 has landed, and from
+    /// then on converts at launch too.** The launch pass is where a paired device would convert
+    /// before hearing its group; the pull half sets [`PICKS_READY`] and converts, and a pick that
+    /// reaches the table afterwards by some other route is converted by the next launch.
+    #[test]
+    fn a_paired_device_converts_nothing_at_launch_before_its_first_pull() {
+        let conn = paired();
+        let (deck, _, _) = deck_with_piles(&conn);
+        seed_pick(&conn, deck, &treasure(), Some(2), "u-pick");
+
+        convert_legacy_picks_at_launch(&conn).unwrap();
+        assert_eq!(entries(&conn, deck), [], "the launch waits for a pull");
+        assert_eq!(
+            stored(&conn, deck)[0].1.as_deref(),
+            Some(treasure().id),
+            "and the pick is still set"
+        );
+
+        pulled(&conn, &[]);
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e("live", treasure().oracle_id, treasure().id, "nonfoil", 2),
+                e("theory", treasure().oracle_id, treasure().id, "nonfoil", 2),
+            ],
+            "the first pull converts"
+        );
+        assert_eq!(
+            crate::sync_engine::client::get_state(&conn, PICKS_READY).as_deref(),
+            Some("1")
+        );
+
+        seed_pick(&conn, deck, &goblin(), Some(1), "u-goblin");
+        convert_legacy_picks_at_launch(&conn).unwrap();
+        assert_eq!(
+            entries(&conn, deck).len(),
+            4,
+            "a launch after that pull converts again"
+        );
+    }
+
+    /// **A device in no sync group converts at launch**, as it always did — there is no group to
+    /// hear, and its writes record no op for anyone to race.
+    #[test]
+    fn an_unpaired_device_converts_at_launch() {
+        let conn = open();
+        crate::sync_engine::capture::install(&conn).unwrap();
+        let (deck, _, _) = deck_with_piles(&conn);
+        seed_pick(&conn, deck, &treasure(), Some(2), "u-pick");
+
+        convert_legacy_picks_at_launch(&conn).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e("live", treasure().oracle_id, treasure().id, "nonfoil", 2),
+                e("theory", treasure().oracle_id, treasure().id, "nonfoil", 2),
+            ]
+        );
+        assert_eq!(stored(&conn, deck)[0].1, None, "and the pick is cleared");
+    }
+
+    /// **A nameless pick on a paired device is named, converted, and stalls no peer.** Only a
+    /// write behind `capture::suppressed` leaves a `deck_tokens` row with no `sync_uid`. The
+    /// conversion used to leave it nameless and capture its clear, whose update trigger put the
+    /// NULL into `sync_ops.uid NOT NULL` and failed the whole pass. It is named with the insert
+    /// trigger's own mint first — no op, `sync_uid` is on no capture spec — and its clear goes
+    /// uncaptured, because a pick never announced under any name has no peer that could find a
+    /// sparse clear for it: captured, the clear defers on the peer and holds this device's
+    /// stream there for good. The entries are announced whole, and the peer builds both.
+    #[test]
+    fn a_nameless_pick_on_a_paired_device_is_named_and_stalls_no_peer() {
+        use crate::sync_engine::apply::apply;
+        let (a, b) = (paired_as("dev-a"), paired_as("dev-b"));
+        let (mut ma, mut mb) = (0, 0);
+        let deck_a = crate::schema::tests::deck(&a, "Tokens");
+        apply(&b, &since(&a, &mut ma)).unwrap();
+        let _ = since(&b, &mut mb);
+        crate::sync_engine::capture::suppressed(&a, || {
+            a.execute(
+                "INSERT INTO deck_tokens
+                     (deck_id, oracle_id, card_id, quantity, state, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 3, 'auto', 0, 0)",
+                params![deck_a, treasure().oracle_id, treasure().id],
+            )
+        })
+        .unwrap();
+
+        convert_legacy_picks(&a).unwrap();
+
+        let pick: String = a
+            .query_row("SELECT sync_uid FROM deck_tokens", [], |r| r.get(0))
+            .expect("the pick is named");
+        let names: Vec<String> = named_entries(&a).into_iter().map(|r| r.4).collect();
+        assert_eq!(names, [format!("{pick}-live"), format!("{pick}-theory")]);
+        assert_eq!(stored(&a, deck_a)[0].1, None, "and cleared");
+        let ops = since(&a, &mut ma);
+        let tables: Vec<&str> = ops.iter().map(|op| op.table.as_str()).collect();
+        assert_eq!(
+            tables,
+            ["deck_token_printings", "deck_token_printings"],
+            "the two entries announced, and no clear for a name no peer holds"
+        );
+        assert_eq!(apply(&b, &ops).unwrap().deferred, 0, "the peer builds both");
+        assert_eq!(named_entries(&b), named_entries(&a));
+    }
+
+    /// **A pick that fails is skipped, and every other pick converts.** One savepoint per pick:
+    /// a refused write rolls back that pick's entries alone, leaves its pick set to be tried again,
+    /// and returns `Ok` — where one transaction over the file rolled back every conversion in it,
+    /// at every launch, for as long as the one pick kept failing. The Treasure sorts first, so the
+    /// Goblin converting proves a failure does not stop the walk.
+    #[test]
+    fn a_pick_that_fails_is_skipped_and_every_other_pick_converts() {
+        let conn = paired();
+        let (deck, _, _) = deck_with_piles(&conn);
+        seed_pick(&conn, deck, &treasure(), Some(2), "u-treasure");
+        seed_pick(&conn, deck, &goblin(), Some(1), "u-goblin");
+        conn.execute_batch(&format!(
+            "CREATE TEMP TRIGGER refuse_treasure BEFORE INSERT ON deck_token_printings
+               WHEN NEW.card_id = '{}'
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+            treasure().id
+        ))
+        .unwrap();
+
+        convert_legacy_picks(&conn).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e("live", goblin().oracle_id, goblin().id, "nonfoil", 1),
+                e("theory", goblin().oracle_id, goblin().id, "nonfoil", 1),
+            ],
+            "the Goblin converted; the Treasure left nothing half-written"
+        );
+        let picks: Vec<Option<String>> = stored(&conn, deck).into_iter().map(|r| r.1).collect();
+        assert_eq!(
+            picks,
+            [Some(treasure().id.to_owned()), None],
+            "the refused pick is still set, to be tried again"
+        );
+
+        conn.execute_batch("DROP TRIGGER temp.refuse_treasure")
+            .unwrap();
+        convert_legacy_picks(&conn).unwrap();
+        assert_eq!(
+            entries(&conn, deck).len(),
+            4,
+            "and the next run converts it"
+        );
+        assert!(stored(&conn, deck).iter().all(|r| r.1.is_none()));
     }
 
     /// **Two wrong finishes of one printing in one list fold into the lower uid** — apply's `min`

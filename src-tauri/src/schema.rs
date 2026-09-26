@@ -5107,13 +5107,17 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
         );
     }
     // Logged and left owing, the same reason again: a v51 art pick not yet converted draws as
-    // the token's implicit entry — the resolver's printing — until the next launch converts it,
+    // the token's implicit entry — the resolver's printing — until a later pass converts it,
     // and nothing a reader could act on is gained by refusing to start over one. **After
     // `capture::install` and never inside a rung**, because this is the one launch step whose
     // writes must be captured: every entry it derives has to reach the peers that never derived
     // it, or their edits to it stall a sync stream (the v52 rung's comment and the function's own
-    // say how). Idempotent, so every later launch costs one read that finds nothing.
-    if let Err(e) = crate::deck_tokens::convert_legacy_picks(conn) {
+    // say how). **Gated**: a device in no sync group converts here, and a device in one only once
+    // a pull at v52 has landed — until then `sync_engine::client::pull` converts behind its first
+    // pull instead, because a conversion before the device has heard its group can revert what a
+    // peer did since (`convert_legacy_picks_at_launch`'s doc). Idempotent, so every later launch
+    // costs one read that finds nothing.
+    if let Err(e) = crate::deck_tokens::convert_legacy_picks_at_launch(conn) {
         eprintln!(
             "the decks' pre-v52 token art picks could not be converted at launch: {e}\nThey \
              are tried again at the next launch; until then each draws its default printing."
@@ -6908,9 +6912,11 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     //
     // ⚠️ **The rung creates the table and converts nothing.** Every v51 art pick — a
     // `deck_tokens` row whose `card_id` is set — becomes one entry per list in
-    // [`crate::deck_tokens::convert_legacy_picks`], which [`prepare_database`] runs at every
-    // launch after `capture::install`, **captured**; its comment has the four cases it takes and
-    // the two losses it accepts. **Until 2026-09-26 this rung did the converting**, uncaptured,
+    // [`crate::deck_tokens::convert_legacy_picks`], **captured**, after `capture::install` —
+    // at launch from [`prepare_database`] on a device in no sync group, and on a device in one
+    // behind its pulls (`convert_legacy_picks_at_launch` has the gate and the reversion it
+    // closes); its comment has the four cases it takes and the two losses it accepts. **Until
+    // 2026-09-26 this rung did the converting**, uncaptured,
     // naming each entry `<pick uid>-<list>` on the argument that every device climbs over the
     // same synced picks and so derives the same rows under the same names. A group with a device
     // still on v51 broke that argument in both directions, and each break stalled a sync stream
@@ -6920,8 +6926,8 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // v51 device reset left this device the only holder of an entry, whose own later steps
     // stalled the other way. An entry announced by a captured insert cannot be unknown to a
     // peer, and a rung can announce nothing: it runs before `capture::install`. So the rung
-    // leaves every pick where it is, and a pick that arrives after the climb is converted at the
-    // next launch like any other.
+    // leaves every pick where it is, and a pick that arrives after the climb is converted by the
+    // next pass like any other.
     //
     // ⚠️ **Only the three `decks` capture triggers come off first**, v43's move verbatim:
     // `sync_upd_decks` reads `NEW.token_stack` in its `WHEN` and its body, SQLite refuses
@@ -13407,15 +13413,19 @@ pub(crate) mod tests {
         );
     }
 
-    /// **An override with no `sync_uid` still gives its two entries a name each, and two
-    /// different ones.** The derived `<uid>-live` / `-theory` needs a uid to derive from, and a
-    /// row written behind `capture::suppressed` has none — the insert trigger that mints one is
-    /// guarded off there — while `NULL || '-live'` is NULL: the nameless row the derivation exists
-    /// to prevent, since the first edit to it on a paired device emits an op with no uid. The
-    /// random arm is the insert trigger's own mint (32 lowercase hex), evaluated once per row, so
-    /// the entry in each list is a row of its own on the wire.
+    /// **An override with no `sync_uid` is named before its entries derive from it.** The
+    /// derived `<uid>-live` / `-theory` needs a uid to derive from, and a row written behind
+    /// `capture::suppressed` has none — the insert trigger that mints one is guarded off there —
+    /// while `NULL || '-live'` is NULL: the nameless row the derivation exists to prevent, since
+    /// the first edit to it on a paired device emits an op with no uid. So the pick takes the
+    /// insert trigger's own mint (32 lowercase hex) first, and its two entries are named after it
+    /// like any other pick's — two rows on the wire, one name to derive them from. (Until the fifth
+    /// review round each entry took a random uid of its own and the pick stayed nameless, which on
+    /// a paired device failed the whole pass at the pick's clear;
+    /// `deck_tokens::tests::a_nameless_pick_on_a_paired_device_is_named_and_stalls_no_peer` is that
+    /// half, on the paired fixture this unpaired file cannot be.)
     #[test]
-    fn the_launch_conversion_names_a_pick_with_no_uid_at_random() {
+    fn the_launch_conversion_names_a_pick_with_no_uid_before_deriving_from_it() {
         let conn = user_file_at_51();
         conn.execute_batch(
             "INSERT INTO decks (id, name, format_key, created_at, updated_at)
@@ -13429,6 +13439,16 @@ pub(crate) mod tests {
         migrate_user(&conn).unwrap();
         crate::deck_tokens::convert_legacy_picks(&conn).unwrap();
 
+        let pick: String = conn
+            .query_row("SELECT sync_uid FROM deck_tokens", [], |r| r.get(0))
+            .expect("the pick is named before anything derives from it");
+        assert!(
+            pick.len() == 32
+                && pick
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "{pick:?} is not the mint's 32 lowercase hex"
+        );
         let uids: Vec<Option<String>> = conn
             .prepare("SELECT sync_uid FROM deck_token_printings ORDER BY variant")
             .unwrap()
@@ -13436,23 +13456,10 @@ pub(crate) mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(uids.len(), 2, "one entry per list");
-        let uids: Vec<String> = uids
-            .into_iter()
-            .map(|uid| uid.expect("an entry with no uid fails its first edit on a paired device"))
-            .collect();
-        for uid in &uids {
-            assert!(
-                uid.len() == 32
-                    && uid
-                        .chars()
-                        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
-                "{uid:?} is not the mint's 32 lowercase hex"
-            );
-        }
-        assert_ne!(
-            uids[0], uids[1],
-            "the two lists' entries are two rows on the wire"
+        assert_eq!(
+            uids,
+            [Some(format!("{pick}-live")), Some(format!("{pick}-theory"))],
+            "one entry per list, each derived from the minted name — two rows on the wire"
         );
     }
 

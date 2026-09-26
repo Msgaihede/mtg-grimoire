@@ -2288,3 +2288,73 @@ async fn a_later_trip_acks_again_once_the_cursor_moves_past_the_stored_watermark
     acked.assert_calls(2);
     assert_eq!(get_state(&a, LAST_ACKED).as_deref(), Some("9"));
 }
+
+/// **A pull that lands converts user schema v52's legacy art picks behind it, captured — and a
+/// pull held at an epoch converts nothing.** A paired device's launch leaves its picks alone until
+/// it has heard its group (`deck_tokens::convert_legacy_picks_at_launch` has the reversion that
+/// taught it), so this is where they convert: after `apply`, outside `capture::suppressed`, so the
+/// entries are ops the next push announces. A page with an envelope from a newer epoch holds the
+/// cursor, and may be holding exactly the peer's entries and clears the gate waits for, so it
+/// neither sets the key nor converts.
+#[tokio::test]
+async fn a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_does_not() {
+    let b = paired("dev-b", 0);
+    let deck = crate::schema::tests::deck(&b, "Tokens");
+    b.execute(
+        "INSERT INTO deck_tokens
+             (deck_id, oracle_id, card_id, quantity, state, created_at, updated_at, sync_uid)
+         VALUES (?1, 'o-treasure', 'p-treasure', 2, 'auto', 0, 0, 'u-pick')",
+        [deck],
+    )
+    .unwrap();
+    let entries = |c: &Connection| -> i64 {
+        c.query_row("SELECT count(*) FROM deck_token_printings", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+
+    // A page carrying an envelope sealed at an epoch this device has not reached.
+    let a = paired("dev-a", 1);
+    add_copy(&a, "c1", 1);
+    let newer = identity::group(&a).unwrap().unwrap();
+    let envelope = wire::seal_batch(&newer, "dev-a", &outbox(&a)).unwrap();
+    let held = MockServer::start_async().await;
+    held.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200).json_body(serde_json::json!({
+            "envelopes": [serde_json::to_value(&envelope).unwrap()],
+            "cursor": 9,
+        }));
+    });
+    pull(&b, &held.base_url(), "access-1").await.unwrap();
+    assert_eq!(entries(&b), 0, "a pull held at an epoch converts nothing");
+    assert_eq!(get_state(&b, crate::deck_tokens::PICKS_READY), None);
+
+    // A page that lands.
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 3 }));
+    });
+    pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(entries(&b), 2, "one entry per list");
+    assert_eq!(
+        get_state(&b, crate::deck_tokens::PICKS_READY).as_deref(),
+        Some("1"),
+        "and every launch after this one converts too"
+    );
+    let announced: i64 = b
+        .query_row(
+            "SELECT count(*) FROM sync_ops
+              WHERE tbl = 'deck_token_printings' AND pushed_at IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        announced, 2,
+        "captured: the next push announces both entries"
+    );
+}

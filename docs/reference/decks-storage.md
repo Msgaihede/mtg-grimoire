@@ -3376,9 +3376,13 @@ structural.
 
 **The v52 rung creates the table and converts nothing.** Every v51 art pick — a `deck_tokens` row
 whose legacy `card_id` is set, one art shared by both lists — becomes entries in
-`deck_tokens::convert_legacy_picks`, which `schema::prepare_database` runs at **every** launch,
-after `capture::install` and before the finish repair below, **logged and left owing** on failure.
-Its writes are **captured**, and that is the whole reason it is not in the rung.
+`deck_tokens::convert_legacy_picks`, reached through a gate of two halves:
+`convert_legacy_picks_at_launch`, which `schema::prepare_database` runs at **every** launch after
+`capture::install` and before the finish repair below, **logged and left owing** on failure; and
+`convert_legacy_picks_after_pull`, which `sync_engine::client::pull` runs behind every pull that
+read everything. A device in no sync group converts at launch; a device in one converts behind its
+pulls, and at launch only once one has landed (*A paired device waits for a pull*, below). Its
+writes are **captured**, and that is the whole reason it is not in the rung.
 
 ⚠️ **Until 2026-09-26 the rung did the converting, uncaptured**, naming each entry
 `<override uid>-<list>` on the argument that every device climbs over the same synced picks and so
@@ -3395,6 +3399,30 @@ whose own later steps stalled its stream the other way —
 **An entry that announces itself with a captured insert cannot be unknown to a peer**: a peer that
 derived it too merges on the uid, and one that did not builds the row from the put.
 
+**A paired device waits for a pull**, and until the fifth review round of the day it converted at
+launch like any other. A launch conversion is a conversion **before the device has heard its
+group**, and a laggard's then silently reverted what an earlier climber had done since. A climbs,
+converts a pick at 3 and steps the live entry to 5. B, still on v51, pulls A's batch and defers it —
+a table it does not know, with A's clear of the pick held behind the entries — but its clock
+observes every stamp in the batch, deferred ones included (`apply`'s `observe`). B climbs, converts
+at launch, and inserts `<uid>-live` at the legacy 3 under a stamp later than anything A wrote; that
+insert won every field last-writer-wins decides, so A's step — or a finish change, a theory-switch
+move, a delete — was reverted on **both** devices.
+`a_laggards_conversion_never_reverts_an_edit_made_since` is that scenario, and it went red (3 on
+both devices, not 5) with the gate switched off. Behind a pull, B has applied A's entries and A's
+clear first: the clear leaves no pick to convert, and a pick B re-made after it reaches case 3 below
+as a **move** of the entry A named — a sparse update — never as an insert over it. The key is the
+`sync_state` row `token_picks_ready` (`deck_tokens::PICKS_READY`), set by the pull half and never
+cleared; a pull held behind a key rotation neither sets it nor converts, because its unreadable
+envelopes may be exactly the entries and clears the gate waits for. The pull half runs behind
+**every** such pull, so a v51 peer's pick is converted on the pull that brings it rather than at the
+next launch. `a_paired_device_converts_nothing_at_launch_before_its_first_pull`,
+`an_unpaired_device_converts_at_launch`, and in `client`'s suite
+`a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_does_not`. **The cost**: a
+paired device draws each unconverted token at its resolver's printing, not the art picked on v51,
+until its first pull at v52 lands — seconds after launch where the relay answers, and indefinitely on
+a paired device that completes no pull (a group with no membership, a relay it cannot reach).
+
 Per pick, per list, in `(deck_id, oracle_id)` order:
 
 1. **The list already holds the token at the picked printing, in any finish** — it keeps what it
@@ -3407,15 +3435,25 @@ Per pick, per list, in `(deck_id, oracle_id)` order:
    synced row set alike, so each keeps the same winner under the same name. The loser keeps its
    count as its token's implicit one and loses only the art.
 3. **The entry this pick named at an earlier conversion is still there** — it is **moved**: a v51
-   device re-picked after this one converted, `apply` wrote the new `card_id` onto the legacy
-   column, and the next launch rewrites the entry's printing — and its finish, to the new
+   device re-picked after the conversion — this device's, or a peer's it has applied — `apply`
+   wrote the new `card_id` onto the legacy column, and the pass behind that pull rewrites the
+   entry's printing — and its finish, to the new
    printing's default — in place: same row, same count, same name, so the captured update lands on
    every peer holding it.
    `a_pick_that_arrives_after_the_conversion_moves_the_entry_it_named`.
-4. **Otherwise it is inserted**, named `<pick uid>-<list>` (random for a pick with no uid of its
-   own, which only a write behind `capture::suppressed` leaves, and different per list), at
-   `max(coalesce(quantity, 1), 0)` — floored because `deck_tokens.quantity` is a synced field with no
-   `CHECK`.
+4. **Otherwise it is inserted**, named `<pick uid>-<list>`, at `max(coalesce(quantity, 1), 0)` —
+   floored because `deck_tokens.quantity` is a synced field with no `CHECK`.
+
+**A pick with no uid of its own is named before any of that** — only a write behind
+`capture::suppressed` leaves one, and the insert trigger's own mint is written onto it
+(`sync_uid` is on no capture spec, so that is no op). Its clear is then written **uncaptured**, and
+that is deliberate: a pick never announced under any name has no peer that could find a sparse
+`{card_id, quantity}` update for it — the op carries no grain term — so a captured clear would defer
+on every peer and hold this device's stream there for good. Its entries are announced whole like any
+other's. Until the fifth review round such a pick's entries took a random uid each and its captured
+clear put the NULL uid into `sync_ops.uid NOT NULL`, failing the whole pass on a paired device;
+`a_nameless_pick_on_a_paired_device_is_named_and_stalls_no_peer` holds it on the capture-live
+fixture, peer included.
 
 **Every case files the printing's own `default_finish`**, read from the corpus — the resolver's
 function, so a converted Treasure lands in the finish an implicit entry was already drawn in: a
@@ -3436,8 +3474,16 @@ Then every pick's `card_id` is cleared, and its `quantity` wherever an entry of 
 exists — **all the entries first and the clears after**, so each clear rides behind an entry op in
 the device's stream. A v51 peer holds that stream at the first op for a table it does not know, so it
 holds the clears too and goes on drawing its art until it upgrades — the accepted new-table stall.
-**Idempotent and cheap**: a cleared pick is never read again, so every later launch scans a table of
-one row per deviated token and writes nothing, no op included
+(In a group of three or more it can lose that art early, cosmetically: a conversion finding every
+list already holding the pick — a third device's announced entries — writes no entry op, and with
+no other pick's entry ahead of it the clear reaches the v51 peer first.)
+**One savepoint per pick, never one transaction for the file**: a pick whose entries or clear fail
+is rolled back alone, written to stderr with its deck and token, and left set for the next pass,
+while every other pick converts — before the fifth review round one failure (a case-3 move colliding
+on the grain in the other list, say) rolled back the whole file at every launch.
+`a_pick_that_fails_is_skipped_and_every_other_pick_converts` refuses one pick with a temporary
+trigger. **Idempotent and cheap**: a cleared pick is never read again, so every later pass scans a
+table of one row per deviated token and writes nothing, no op included
 (`a_second_conversion_writes_nothing_and_announces_nothing`). The capture itself is
 `the_conversion_announces_every_entry_it_derives_and_the_cleared_pick_behind_them`: two puts named
 `u-pick-live` / `u-pick-theory` carrying the whole row, then the `deck_tokens` op clearing both

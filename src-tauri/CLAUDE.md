@@ -149,9 +149,12 @@ both plus the frontend.
   argument and `vacuum_into_incremental` runs `VACUUM corpus`.
 - Only `schema::migrate_user` / `migrate_corpus` may stop a launch. `prepare_database`'s other
   steps (an FTS rebuild an interrupted compaction owed; the staging table an interrupted ingest
-  left; `managed_wishlist::settle_all`; and v52's pair, `deck_tokens::convert_legacy_picks` then
-  `deck_tokens::repair_entry_finishes` — the conversion **after `capture::install` and captured**,
-  the repair after it and suppressed) are logged and left owing — their likeliest cause is a full
+  left; `managed_wishlist::settle_all`; and v52's pair, `deck_tokens::convert_legacy_picks_at_launch`
+  then `deck_tokens::repair_entry_finishes` — the conversion **after `capture::install` and
+  captured**, and **gated**: it converts on a device in no sync group, and on one in a group only
+  once a pull at v52 has landed, `sync_engine::client::pull` converting behind every such pull
+  meanwhile, because a conversion before the device has heard its group reverted a peer's later
+  edits; the repair after it and suppressed) are logged and left owing — their likeliest cause is a full
   or read-only disk,
   and `init_state` turns any error into "move it aside", which that disk cannot do. **A corpus
   that will not open is not one of those failures**: it is deleted and rebuilt, and the
@@ -207,10 +210,19 @@ both plus the frontend.
   there after this device climbed was converted by the picker alone, so its next count step
   arrived here as a sparse update for a row never heard of; and a pick reset there left this device
   the only holder of an entry, whose steps stalled the other way. **The conversion is
-  `deck_tokens::convert_legacy_picks` now, a launch pass after `capture::install`, captured**:
+  `deck_tokens::convert_legacy_picks` now, a pass after `capture::install`, captured**:
   every entry it derives announces itself with a put under the derived name, so a peer that
   derived it too merges on the uid and one that did not builds it; a pick arriving after the
-  climb is converted at the next launch, and a re-pick moves the named entry in place. It is total
+  climb is converted on the pull that brings it, and a re-pick moves the named entry in place.
+  ⚠️ **It is gated on a pull for a paired device, and until the fifth review round it was not**:
+  `convert_legacy_picks_at_launch` converts at launch only on a device in no group or once the
+  `sync_state` key `token_picks_ready` is set, and `convert_legacy_picks_after_pull`, run by
+  `sync_engine::client::pull` behind every pull that read everything, sets it and converts. A
+  laggard converting at launch — before it had applied the entries and the clear an earlier
+  climber announced, but with its clock already past their stamps from deferring them on v51 —
+  inserted `<uid>-live` at the legacy count under a later stamp and reverted the climber's steps,
+  finish changes and moves on both devices. One savepoint per pick, and a pick with no uid is
+  given the insert trigger's mint first and its clear left uncaptured. It is total
   (a negative synced count floored at 0; two tokens that picked one printing keep one entry, the
   first in **`oracle_id` order, never rowid**, the loser keeping its count), idempotent, and clears
   each pick after all the entries so a v51 peer holding the stream at the new table holds the clears
@@ -1598,8 +1610,10 @@ record, with every measurement, is
   an entry derived on one device must reach peers that never derived it — the v52 rung did the same
   conversion uncaptured and stalled a stream in each direction in a mixed-version group — and it
   is safe because every device announces one pick's entry under the same derived name, so a second
-  put merges on the uid, and the table carries no counter to double. [sync.md](../docs/reference/sync.md)
-  has both arguments in full.
+  put merges on the uid, and the table carries no counter to double — **provided the device has
+  heard its group first**, which is why a paired device converts only behind a pull: a laggard's
+  captured insert, converted at launch, outranked a peer's later edits and reverted them.
+  [sync.md](../docs/reference/sync.md) has all three arguments in full.
 - **`apply` runs inside `capture::suppressed`**, or two devices ping-pong an op forever. It folds
   each row **twice**: incoming ops for the counter deltas, incoming plus this device's own
   `sync_ops` history for existence and for which side won each field. Without the second fold,

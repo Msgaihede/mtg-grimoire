@@ -1020,6 +1020,23 @@ pub async fn pull(
     let report = apply::apply(conn, &ops)?;
     if !behind {
         set_state(conn, PULL_CURSOR, &page.cursor.to_string()).map_err(|e| e.to_string())?;
+        // **User schema v52's art picks convert here on a paired device, and only behind a pull
+        // that read everything.** A conversion before this device has heard its group can insert
+        // an entry a peer already derived and has edited since, under a later stamp, and revert
+        // the edit on every device — `deck_tokens::convert_legacy_picks_at_launch` has the
+        // scenario. So the launch pass leaves a paired device's picks alone until this has run
+        // once, and this runs behind every pull after, which converts a v51 peer's pick on the
+        // pull that brings it. **Not behind a pull held at an epoch**: its unreadable envelopes
+        // may be exactly the peer's entries and clears the gate waits for. **Captured**, because
+        // `apply` has returned and `capture::suppressed` with it; and logged rather than
+        // returned, because the pull itself has landed and a pick left owing is retried behind
+        // the next one.
+        if let Err(e) = crate::deck_tokens::convert_legacy_picks_after_pull(conn) {
+            eprintln!(
+                "the decks' pre-v52 token art picks could not be converted after a pull: \
+                 {e}\nThey are tried again behind the next pull."
+            );
+        }
     }
     Ok((unreadable, report))
 }
