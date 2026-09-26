@@ -559,7 +559,8 @@ const ORDER_NAME_COLLAPSED: &str = "min(c.name) ASC";
 /// `idx_cards_collapse`. Ranking still needs a list, because it applies to a corpus the reader
 /// has asked to include the unplayable printings in — and an art card that outranks the card it
 /// depicts is wrong whether or not it was asked for.
-const NON_CARD_LAYOUTS: &str = "('art_series','front_card','token','double_faced_token','emblem')";
+pub(crate) const NON_CARD_LAYOUTS: &str =
+    "('art_series','front_card','token','double_faced_token','emblem')";
 
 /// 1 for a non-card, 0 for a card — the first term of the relevance fallback.
 ///

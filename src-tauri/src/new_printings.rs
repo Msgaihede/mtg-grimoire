@@ -90,7 +90,7 @@ const MAX_LANGS: usize = 24;
 /// A literal, never a needle: no byte of the request reaches this pattern, so `LIKE`'s three
 /// metacharacters have nothing to escape — which is the opposite of `combos`' search, where the
 /// needle is typed and the answer is `instr` for exactly that reason.
-const BASIC_LAND_LIKE: &str = "Basic %Land%";
+pub(crate) const BASIC_LAND_LIKE: &str = "Basic %Land%";
 
 /// Is this a language code at all? The corpus's are two to four lowercase letters (`en`, `zhs`,
 /// `grc`). A shape check rather than a membership test against the known 19: a language Scryfall

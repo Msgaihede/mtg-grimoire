@@ -25,7 +25,7 @@ use crate::{
     import, index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, new_printings,
     paths, price_history, recent_cards, reset, scanner, schema, scryfall, search, searchopen,
     set_completion, share, startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags,
-    update, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    upcoming_sets, update, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -630,6 +630,9 @@ pub fn run() {
             deck_completion::deck_completion,
             // To review's deck-card count — its own read, not `sync_relay_status`'s six-table sum.
             deck_completion::deck_review_count,
+            // The Coming soon widget: one `SELECT` over `cards` on the read-only connection, its
+            // only clock SQLite's `date('now')`.
+            upcoming_sets::upcoming_sets,
             startview::start_view,
             startview::set_start_view,
             marketplace_feed::marketplace_feed_refresh,

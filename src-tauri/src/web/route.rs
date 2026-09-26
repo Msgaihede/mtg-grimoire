@@ -306,6 +306,9 @@ pub const COMMANDS: &[&str] = &[
     // **To review's deck-card count**, one `count(*)`. `sync_review_list` is not routed here, so
     // the widget draws this row without a press on this target; the number itself still answers.
     "deck_review_count",
+    // **The Coming soon widget's read.** Over `cards` rather than `sets`, which this target never
+    // fills, and clocked by SQLite's `date('now')` — so it answers here as on the desktop.
+    "upcoming_sets",
     "start_view",
     "set_start_view",
     // **The three docked search columns' shared row**, and both halves for `deck_sort`'s reason.
@@ -2502,6 +2505,16 @@ pub fn call(
             )
         }
 
+        // `days` is `field`: the widget always sends its window, and the module clamps it.
+        "upcoming_sets" => {
+            let days: i64 = field(command, args, "days")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::upcoming_sets::upcoming_sets_for(&conn, days).map_err(RouteError::Failed)?,
+            )
+        }
+
         "start_view" => {
             let conn = crate::sync::lock_db_read(state);
             encode(command, crate::startview::stored(&conn))
@@ -3801,6 +3814,42 @@ mod tests {
         assert_eq!(call(&s, "deck_review_count", &json!({})).unwrap(), json!(1));
     }
 
+    /// **Coming soon's read, routed.** The fixture's printings carry no release date, so the
+    /// first answer is empty; one printing ten days out is one set under `ipc.ts`' names. `days`
+    /// is `field`, not `optional`: the widget always sends its window, and an absent one is a
+    /// caller bug to be told about rather than a silent default.
+    #[test]
+    fn the_upcoming_sets_read_is_routed() {
+        assert!(COMMANDS.contains(&"upcoming_sets"));
+        let s = state("web-route-upcoming-sets");
+        let out = call(&s, "upcoming_sets", &json!({ "days": 90 })).unwrap();
+        assert_eq!(out["sets"], json!([]));
+        assert_eq!(out["today"].as_str().map(str::len), Some(10), "YYYY-MM-DD");
+
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.execute(
+                "INSERT INTO cards (id, oracle_id, name, set_code, set_name, collector_number,
+                                    lang, layout, released_at, is_paper, raw)
+                 VALUES ('soon', 'o-soon', 'Soon', 'tdm', 'Tarkir: Dragonstorm', '1', 'en',
+                         'normal', date('now', '+10 days'), 1, '{}')",
+                [],
+            )
+            .unwrap();
+        }
+        let out = call(&s, "upcoming_sets", &json!({ "days": 30 })).unwrap();
+        assert_eq!(out["sets"][0]["code"], json!("tdm"));
+        assert_eq!(out["sets"][0]["name"], json!("Tarkir: Dragonstorm"));
+        assert_eq!(out["sets"][0]["previewed"], json!(1));
+        assert_eq!(out["sets"][0]["inDecks"], json!(0));
+        assert!(out["sets"][0]["releasedAt"].as_str().is_some());
+
+        assert!(matches!(
+            call(&s, "upcoming_sets", &json!({})),
+            Err(RouteError::Args { .. })
+        ));
+    }
+
     /// **The folder tree's width and collapse, round-tripped through the route** — the pair beside
     /// the one above, and written separately because the thing to pin here is the *shape* rather
     /// than only the survival: the read answers an object with both fields, `width` is `null`
@@ -4210,12 +4259,12 @@ mod tests {
         // array as it stands here — which answered 180 before it, not the 179 above, so the
         // literal had already moved once without this paragraph.
         //
-        // **183 since the home widgets' second round routed `deck_completion` and
-        // `deck_review_count`**, counted with the same `awk`. If a later merge turns this red,
-        // take the number from `left`.
+        // **184 since the home widgets' second round routed `deck_completion`,
+        // `deck_review_count` and `upcoming_sets`**, counted with the same `awk`. If a later merge
+        // turns this red, take the number from `left`.
         assert_eq!(
             COMMANDS.len(),
-            183,
+            184,
             "update this number when a command is added"
         );
     }
