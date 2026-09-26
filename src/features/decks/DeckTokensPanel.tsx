@@ -212,9 +212,9 @@ export interface DeckTokensPanelProps {
    */
   onPick: (view: DeckTokenView) => void;
   /**
-   * The header's **Add printing**: open the picker on every token the deck has, to add one
+   * The header's **Add printing**: open the picker on every token the deck keeps, to add one
    * printing at one copy (spec §4.6, rule 5). The host owns that picker too, and decides which
-   * tokens it lists.
+   * tokens it lists; the band draws the button only while at least one token is not dismissed.
    */
   onAddPrinting: () => void;
   /** `decks.token_mode` — what the header's {@link TokenModeControl} shows as pressed. */
@@ -321,6 +321,14 @@ export function DeckTokensPanel({
    */
   const answered = tokens.query.isSuccess;
   const canOpen = rows.length > 0;
+  /**
+   * There is a token to add a printing of — **one the deck keeps**, which is exactly what the
+   * picker's `add` mode offers (`DeckEditor`'s `keptTokens`). Narrower than {@link canOpen} on
+   * purpose: a deck whose every token is dismissed still opens, because the band is where `Show
+   * dismissed` lives and a dismissal is put back, but its Add printing would open a picker saying
+   * the deck makes no token, which is false about a deck whose tokens are only put away.
+   */
+  const canAdd = rows.some((row) => row.state !== "hidden");
 
   return (
     // The Deck stats band's own grammar, character for character: a rule and the content under
@@ -403,11 +411,11 @@ export function DeckTokensPanel({
               answered by nothing but the count moving by one. The press and not the pick is the
               moment, so a picker the reader dismisses still leaves them looking at the wall.
 
-              **Absent on a deck that makes nothing**, where the disclosure is absent for the same
-              reason: the picker lists the printings of the tokens the deck has, and with none it
-              would be a dialog that can only refuse. A greyed control that spends the whole deck
-              refusing is this band's own argument against drawing one. */}
-          {canOpen && (
+              **Absent on a deck that makes nothing, and on one whose every token is dismissed**
+              (`canAdd`): the picker lists the printings of the tokens the deck keeps, and with
+              none it would be a dialog that can only refuse. A greyed control that spends the
+              whole deck refusing is this band's own argument against drawing one. */}
+          {canAdd && (
             <button
               type="button"
               onClick={() => {

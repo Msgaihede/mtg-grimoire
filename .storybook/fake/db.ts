@@ -13487,7 +13487,10 @@ function withTokenStep(db: FakeDb, deckId: number, write: () => void): void {
  *
  * 1. **An implicit entry is materialised first** (rule 2), so adding art B to a token drawn at art
  *    A keeps A — the whole point of the rule.
- * 2. The entry is inserted at `quantity`, or an existing one of that printing and finish steps up.
+ * 2. The entry is inserted at `quantity`, or an existing one of that printing and finish steps up
+ *    — and **the token's zero-quantity entries in this list are deleted**, never the one just
+ *    added to: rule 3 held one at zero because it was the last, and beside the new entry it is
+ *    not. The deletes are the write's own, so one Undo restores them.
  * 3. **A token the list derives nothing for becomes `manual`**; a derived one the reader had
  *    dismissed comes back to `auto` — an add is *put this on the wall*.
  *
@@ -13530,6 +13533,14 @@ function addTokenPrinting(
       finish: filed,
       quantity: landed,
     });
+    // Rule 3's zero is the last entry held at none; beside the entry just filed it is not the
+    // last, and a `0` tile no stepper can zero again would be stuck on the band. Inside the
+    // journalled write, so one Undo restores it.
+    for (const zero of tokenEntries(db, deckId, variant, oracleId)) {
+      if (zero.quantity === 0 && !(zero.cardId === printing.id && zero.finish === filed)) {
+        dropTokenEntry(db, deckId, entryRowOf(zero));
+      }
+    }
     if (best === undefined) writeTokenState(db, deckId, oracleId, "manual");
     else if (storedToken(db, deckId, oracleId)?.state === "hidden") {
       writeTokenState(db, deckId, oracleId, "auto");

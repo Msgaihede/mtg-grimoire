@@ -13239,9 +13239,10 @@ pub(crate) mod tests {
     /// **v52 adds no word to `deck_audit.kind`, and the `CHECK` at head is what says so.** A
     /// token write is a `deck` row with `field: "token"` in its payload — the deck notes'
     /// precedent — because `deck_audit` syncs: a tenth word would be refused by the `CHECK` on
-    /// every paired device still on v51, which defers the op and stalls that sender's stream
-    /// until the peer upgrades. [`AUDIT_KINDS`] is spelled out here rather than counted, so a
-    /// rung that widened it would have to edit this line to pass.
+    /// every paired device still on v51, which defers the op — and, while the client advances its
+    /// cursor past a deferral, drops it and the sender's later ops in that page for good
+    /// (`sync_engine::apply`'s module doc). [`AUDIT_KINDS`] is spelled out here rather than
+    /// counted, so a rung that widened it would have to edit this line to pass.
     #[test]
     fn v52_files_token_history_under_deck_and_adds_no_audit_kind() {
         assert_eq!(

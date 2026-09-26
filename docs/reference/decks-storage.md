@@ -2999,7 +2999,12 @@ CREATE UNIQUE INDEX idx_deck_token_printings_uid ON deck_token_printings (sync_u
   5. **Adding a printing** materialises the implicit entry first, then inserts the printing at
      `quantity` or steps the held entry up by it; a token the list derives nothing for becomes
      `manual`, and a `hidden` one it does derive comes back to `auto` (an add is *put this on the
-     wall*, and filing a printing that stays hidden would be a press nobody can see).
+     wall*, and filing a printing that stays hidden would be a press nobody can see). **It also
+     deletes the token's zero-quantity entries in that list**, never the one it adds to: rule 3
+     held one at zero because it was the last, and beside the new entry it is a `0` tile no
+     stepper can send to zero again. The deletes are the write's own, inside `journal_in`, so one
+     Undo restores them —
+     `adding_a_printing_clears_the_tokens_zero_entries_in_that_list_and_undo_restores_them`.
   6. **Theory and live never share an entry**; every entry write names its list.
   7. **A token nothing makes any more is removed** — *Rule 7*, below.
 
@@ -3012,8 +3017,12 @@ CREATE UNIQUE INDEX idx_deck_token_printings_uid ON deck_token_printings (sync_u
 - **Synced**, the seventeenth table, with `quantity` a **field** for the reason the next section
   gives — NOT NULL this time, so a counter would be *possible*, and still wrong: two devices each
   setting a count of 4 mean 4. Its `apply::Meta` grain is `(deck_uid, variant, card_id, finish)`,
-  its rank 16. The rung's derived uids and uncaptured writes are in
-  [sync.md](sync.md) and [data-and-sync.md](data-and-sync.md).
+  its rank 16. **The rung converts nothing**: the v51 picks become entries in
+  `deck_tokens::convert_legacy_picks`, a **captured** pass after `capture::install` — at launch on
+  a device in no group, behind a pull on one in a group — whose entries take derived uids
+  (`<pick uid>-<list>`) and announce themselves as puts. Why the rung-time conversion, derived
+  uids and uncaptured writes both, was retired is in [sync.md](sync.md) and
+  [data-and-sync.md](data-and-sync.md).
 
 ### `quantity` is a synced **field** and not a counter, on two grounds
 
@@ -3208,7 +3217,10 @@ commands; `add_printing_in` calls it inside whatever transaction it was handed, 
   `every_token_write_is_one_deck_row_and_one_step`. The deck notes' `{ field: "note" }` precedent,
   for a sharper reason than the rebuild a tenth word costs: `deck_audit` is synced and
   append-only, so a word a paired device's `CHECK` does not know would be refused there, and its
-  applier defers the op — **stalling that device's whole stream until it upgrades**. `deck` is
+  applier defers the op — **which loses it, and the sender's later ops in that page, for good**:
+  the client advances its pull cursor past a deferral, so upgrading brings nothing back
+  ([sync.md](sync.md) *Deferred ops are dropped, not held*; this read "stalling that device's whole
+  stream until it upgrades"). `deck` is
   already the deck-level kind, so no reader takes a token for a deck card. `delta` is 0 — the day
   header's `+7 / −6` adds up cards — and the row names no card (`card_name` is `NULL`: a token is
   never a `deck_cards` row).
@@ -3410,7 +3422,10 @@ insert won every field last-writer-wins decides, so A's step — or a finish cha
 move, a delete — was reverted on **both** devices.
 `a_laggards_conversion_never_reverts_an_edit_made_since` is that scenario, and it went red (3 on
 both devices, not 5) with the gate switched off. Behind a pull, B has applied A's entries and A's
-clear first: the clear leaves no pick to convert, and a pick B re-made after it reaches case 3 below
+clear first — ⚠️ **provided B did not pull at v51 during the window**: the client drops a deferred
+op rather than holding it, so a B that did still holds the pick after it climbs and reverts A the
+same way, until the sync-delivery fix ([sync.md](sync.md) *Deferred ops are dropped, not held*).
+Otherwise the clear leaves no pick to convert, and a pick B re-made after it reaches case 3 below
 as a **move** of the entry A named — a sparse update — never as an insert over it. The key is the
 `sync_state` row `token_picks_ready` (`deck_tokens::PICKS_READY`), set by the pull half and never
 cleared; a pull held behind a key rotation neither sets it nor converts, because its unreadable
@@ -3472,8 +3487,12 @@ entries `nonfoil`, before the pass read the corpus.
 
 Then every pick's `card_id` is cleared, and its `quantity` wherever an entry of its token now
 exists — **all the entries first and the clears after**, so each clear rides behind an entry op in
-the device's stream. A v51 peer holds that stream at the first op for a table it does not know, so it
-holds the clears too and goes on drawing its art until it upgrades — the accepted new-table stall.
+the device's stream. A v51 peer defers the first op for a table it does not know and leaves the
+sender's later ops in that page unapplied, so it never applies a clear ahead of its entry and goes
+on drawing its art. This read "until it upgrades — the accepted new-table stall"; ⚠️ it is a loss,
+not a stall: the client advances its cursor past the deferral, so the entries and clears are
+dropped and the art stays after the upgrade too ([sync.md](sync.md) *Deferred ops are dropped, not
+held*).
 (In a group of three or more it can lose that art early, cosmetically: a conversion finding every
 list already holding the pick — a third device's announced entries — writes no entry op, and with
 no other pick's entry ahead of it the clear reaches the v51 peer first.)
@@ -3491,8 +3510,9 @@ legacy columns. The two stalls are pinned end to end through `sync_engine::apply
 `a_pick_made_on_a_v51_device_after_the_climb_converges_with_nothing_deferred` and
 `an_art_reset_on_a_v51_device_after_the_conversion_leaves_nothing_deferred`.
 **Two losses are accepted**, both confined to a v51 device's last days: a reset made there after
-another device converted (the other device's entry reaches it after the upgrade, and the reset has
-nothing left to clear), and a count stepped there on a pick another device had already cleared,
+another device converted (argued as "the other device's entry reaches it after the upgrade, and
+the reset has nothing left to clear" — while a deferral is dropped, the entry never reaches it),
+and a count stepped there on a pick another device had already cleared,
 which lands on the legacy column a converted token no longer reads.
 
 ### `repair_entry_finishes`, the net under the conversion

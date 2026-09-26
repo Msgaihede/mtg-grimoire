@@ -14779,9 +14779,10 @@ describe("deck tokens", () => {
       [TOKEN_PRINTING.treasureTafr, "nonfoil", 4],
       [TOKEN_PRINTING.treasureThob, "foil", 1],
     ]);
-    // The plan's entries are exactly what v52 copied there. (Read off the table rather than the
-    // theory read: deck 1 keeps no plan, so that list derives nothing and draws none of them —
-    // the resolver's rule for an entry of a token neither derived nor kept by hand.)
+    // The plan's entries are exactly what v52's conversion filed there. (Read off the table
+    // rather than the theory read: deck 1 keeps no plan, so that list derives nothing and draws
+    // none of them — the resolver's rule for an entry of a token neither derived nor kept by
+    // hand.)
     expect(
       db.deckTokenPrintings
         .filter((e) => e.deckId === 1 && e.variant === "theory")
@@ -14851,6 +14852,57 @@ describe("deck tokens", () => {
         implicit: false,
       }),
     ]);
+  });
+
+  /**
+   * **An add clears the token's zero entries in that list**, and one Undo brings them back — the
+   * crate's `add_printing_in`. Rule 3 held the entry at zero because it was the last; beside a
+   * second printing it is not, and left alone it is a `0` tile no stepper can send to zero again.
+   * The plan's zero entry is the other list's, and stays.
+   */
+  it("clears the token's zero entries in that list on an add, and undoes it in one step", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    db.deckTokenPrintings = db.deckTokenPrintings.map((e) =>
+      e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure && e.variant === "theory"
+        ? { ...e, quantity: 0 }
+        : e,
+    );
+    const entries = () =>
+      db.deckTokenPrintings
+        .filter((e) => e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure)
+        .map((e) => [e.variant, e.cardId, e.finish, e.quantity])
+        .sort((a, b) => String(a).localeCompare(String(b)));
+    h.deck_token_set_quantity({
+      deckId: 1,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.treasure,
+      entry: { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil" },
+      quantity: 0,
+    });
+    const zeroed = [
+      ["live", TOKEN_PRINTING.treasureTafr, "nonfoil", 0],
+      ["theory", TOKEN_PRINTING.treasureTafr, "nonfoil", 0],
+    ];
+    expect(entries()).toEqual(zeroed);
+
+    h.deck_token_add_printing({
+      deckId: 1,
+      variant: "live",
+      cardId: TOKEN_PRINTING.treasureThob,
+      finish: "foil",
+    });
+    const added = [
+      ["live", TOKEN_PRINTING.treasureThob, "foil", 1],
+      ["theory", TOKEN_PRINTING.treasureTafr, "nonfoil", 0],
+    ];
+    expect(entries()).toEqual(added);
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(entries()).toEqual(zeroed);
+    h.deck_redo_apply({ deckId: 1, auditId: undo.id });
+    expect(entries()).toEqual(added);
   });
 
   /**

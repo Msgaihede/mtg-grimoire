@@ -1093,7 +1093,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     because `deck_tokens.quantity` is a synced field with no `CHECK`. Then every pick's
     `card_id` is cleared, and its `quantity` wherever an entry of its token exists (a quantity-only
     row is never touched — that number goes on meaning the implicit entry's count), **all after
-    the entries**, so each clear rides behind an entry op a v51 peer holds the stream at.
+    the entries**, so each clear rides behind an entry op a v51 peer defers — and, while the client
+    drops a deferral ([sync.md](sync.md) *Deferred ops are dropped, not held*), loses with it.
     **One savepoint per pick**: a pick whose writes fail is rolled back alone, written to stderr and
     left set for the next pass, where one transaction over the file had let one bad pick block every
     conversion at every launch. Idempotent: every later pass scans the table and writes nothing, no
@@ -1110,8 +1111,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     or a delete made on A went the same way. So `deck_tokens::convert_legacy_picks_at_launch` runs
     it only on a device in no sync group or once the `sync_state` key `token_picks_ready` is set,
     and `sync_engine::client::pull` sets that key and converts, captured, behind every pull that
-    read everything (never one held at an epoch). By then B has applied A's entries and A's clear,
-    so it has no pick left to convert, and a pick it re-made since is a case-3 move of A's entry
+    read everything (never one held at an epoch). By then B has applied A's entries and A's clear —
+    ⚠️ unless B *pulled* at v51 during the window, which today dropped them rather than holding
+    them, so that B reverts A the same way until the sync-delivery fix — so it has no pick left to
+    convert, and a pick it re-made since is a case-3 move of A's entry
     rather than an insert over it. `a_laggards_conversion_never_reverts_an_edit_made_since` went red
     — 3 on both devices, not 5 — with the gate switched off. **The cost**: a paired device draws an
     unconverted token at its resolver's printing until its first pull at v52 lands, and a paired

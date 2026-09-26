@@ -4170,7 +4170,9 @@ already effective, and `viewOf` copies them.
   5. **Adding a printing** inserts it at one copy (an add through `add_card` at its own count) or
      steps the entry the list already holds up by that, materialising the implicit entry first; a
      token the list derives nothing for becomes `manual`, and a dismissed one it does derive comes
-     back to `auto`.
+     back to `auto`. **The add also deletes the token's zero entries in that list** (never the one
+     it adds to), because rule 3's zero was *the last entry* and beside the new one it is not — a
+     `0` tile no stepper can zero again. One Undo brings the zero back.
   6. **Theory and live never share an entry**; every entry write names its list. Dismiss and
      restore name none, because the state is the token's.
   7. **A token nothing makes any more is removed** — its entries in that list are deleted, unless
@@ -4218,8 +4220,10 @@ already effective, and `viewOf` copies them.
   whose type line, or any ` // ` face of it, begins `Token` or `Emblem`: a layout-only test let
   six real tokens (five `flip` Role tokens and the reversible Mechtitan) become deck cards through
   `add_card`. `deckTokens.ts`' **`isTokenPrinting`** is its TypeScript twin, and the Storybook fake
-  is what routes on it — **the app itself routes nothing**. `isTokenLayout` survives as the narrow
-  first half only, and is not the routing question.
+  is what routes on it. **The app routes nothing on it, and names with it**: routing stays Rust's,
+  but `DeckSearchPanel` reads `isTokenPrinting` to name a token tile's Add button *Add … to Tokens
+  & Emblems* — where the add lands — rather than the category a card of that type line would take.
+  `isTokenLayout` survives as the narrow first half only, and is not the routing question.
   **A rerouted `add_card` answers `EntryChange { id: 0 }`**, and that is a contract: no deck card
   was made, so `DeckEditor`'s `markAdded` skips `NO_DECK_CARD` rather than arm a landed glow
   against a row id no card has, and the token appears in the pile because `useDeck`'s `["decks"]`
@@ -4234,8 +4238,10 @@ already effective, and `viewOf` copies them.
   - **History is a `deck_audit` row of kind `deck` with `field: "token"`, never a tenth kind** —
     the deck notes' `{ field: "note" }` precedent, and a sync reason rather than a rebuild one:
     `deck_audit` is synced and append-only, so a word its `CHECK` does not know would be refused
-    by a paired device on an older build and its applier would defer the op, stalling that
-    device's whole stream until it upgraded. `auditText.ts`' `tokenLine` words the five actions —
+    by a paired device on an older build and its applier would defer the op — which, while the
+    sync client advances its cursor past a deferral, loses it and the sender's later ops in that
+    page for good (sync.md *Deferred ops are dropped, not held*; this read "stalling that device's
+    whole stream until it upgraded"). `auditText.ts`' `tokenLine` words the five actions —
     *Added 1 × Treasure (foil)*, *Treasure 1 → 3*, *Swapped Treasure's art* (with `TCMM #48 →
     TVOW #17 (foil)` in the detail, and *folded into one row* on a fold), *Dismissed Treasure* /
     *Restored Treasure*, *Reset Treasure's printings* — reading `journal_in`'s snake_case payload
@@ -4611,8 +4617,10 @@ already effective, and `viewOf` copies them.
     and subtitle, behind a search box that filters by token name or set code. A refused read names
     its token and the others still draw; no tile is pressed. A pick is rule 5 at one copy.
     **Add printing** sits in the band's header, is **absent on a deck that makes nothing** (a
-    dialog that could only refuse, the band's own no-greyed-control rule), is drawn while the band
-    is shut and **opens it on press** — the Notes band's `New note` precedent. ⚠️ It lists
+    dialog that could only refuse, the band's own no-greyed-control rule) **and on one whose every
+    token is dismissed** — gated on at least one kept row (`canAdd`), which is what the picker
+    offers, while the disclosure stays so a dismissal can still be put back — is drawn while the
+    band is shut and **opens it on press** — the Notes band's `New note` precedent. ⚠️ It lists
     `keptTokens` and never the wall with `Show dismissed` on, so a dismissed token revealed on the
     band is not offered — a known seam (TC, deferred), not a decision to defend.
 - **The query key is `["decks", "tokens", deckId, variant, marketplace]`, under the `["decks"]`

@@ -906,9 +906,10 @@ describe("auditSentence", () => {
 
   /**
    * **Token writes are `deck` rows with `field: "token"`** (user schema v52) — and never a new
-   * audit kind, because `deck_audit` is synced and a word its `CHECK` does not know would stall a
-   * paired device still on an older build. The deck notes' precedent: the `action` is what tells
-   * the five writes apart, so the arm switches on it the way the `note` arm does.
+   * audit kind, because `deck_audit` is synced and a word its `CHECK` does not know is deferred —
+   * and so dropped — by a paired device still on an older build. The deck notes' precedent: the
+   * `action` is what tells the five writes apart, so the arm switches on it the way the `note` arm
+   * does.
    *
    * **The name is the payload's**, not the row's `cardName` — Rust records no card on a token
    * row (a token is never a deck card), so the entry's own name is `null` and the token's name

@@ -1019,6 +1019,13 @@ pub async fn pull(
 
     let report = apply::apply(conn, &ops)?;
     if !behind {
+        // ⚠️ **To the page head, whatever `apply` deferred — and that makes a deferral a loss.**
+        // The relay answers only rows above this cursor, and `apply` keeps no copy of what it
+        // held back, so a deferred op and every later op from its device in this page are never
+        // offered again; `sync_peers` holding below them only makes a re-delivery *safe*, and
+        // nothing re-delivers. Open until the sync-delivery fix — hold the cursor on a deferral
+        // a newer schema caused — which must land before any release that carries v52. Only
+        // `behind`, above, holds the cursor today. `apply`'s module doc has the whole record.
         set_state(conn, PULL_CURSOR, &page.cursor.to_string()).map_err(|e| e.to_string())?;
         // **User schema v52's art picks convert here on a paired device, and only behind a pull
         // that read everything.** A conversion before this device has heard its group can insert

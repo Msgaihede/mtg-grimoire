@@ -31,7 +31,8 @@
 //! default finish, at `deck_tokens.quantity ?? 1`. `deck_tokens` keeps what is shared by both
 //! lists — the token's **state**, `auto`, `hidden` or `manual` — and its `card_id` and `quantity`
 //! are legacy: read for an implicit entry, and written again only by [`convert_legacy_picks`],
-//! which turns a v51 pick into entries at launch and clears it. Spec §4.2's seven rules are this
+//! which turns a v51 pick into entries and clears it — at launch on a device in no sync group,
+//! and on one in a group behind a pull ([`convert_legacy_picks_at_launch`] says why). Spec §4.2's seven rules are this
 //! module's writes, and the one that reaches every card write is rule 7, [`reconcile_in`].
 //!
 //! **Nothing is gated on `layout` before the blob is touched**, which is the one place this parts
@@ -1721,7 +1722,10 @@ pub fn add_printing(
 /// 1. **An implicit entry is materialised first** (rule 2), so adding art B to a token drawn at
 ///    art A keeps A — the whole point of the rule.
 /// 2. The entry is inserted at `quantity`, or an existing entry of that printing and finish is
-///    stepped up by it.
+///    stepped up by it — and **the token's zero-quantity entries in this list are deleted**,
+///    never the one just added to. Rule 3 held one at zero because it was the last; beside the
+///    new entry it is not, and a `0` tile no stepper can zero again is stuck on the band. The
+///    deletes are the write's own, so one Undo restores them.
 /// 3. **A token the list derives nothing for becomes `manual`** — the reader's own, which no cut
 ///    can reconcile away. A derived token the reader had **dismissed** comes back to `auto`: an
 ///    add is *put this on the wall*, and filing a printing of a token that stays hidden would be a
@@ -1775,6 +1779,16 @@ pub fn add_printing_in(
                 quantity: landed,
             },
         )?;
+        // Rule 3's zero is *the last entry, held at none*; the entry just filed means it is not
+        // the last any more, and a `0` tile left beside it is one no stepper can send to zero
+        // again. So the token's other zero entries in this list go — inside this write, so the
+        // step's before-and-after carries them and one Undo restores them.
+        for zero in entries_of(tx, deck_id, variant, &oracle_id)?
+            .into_iter()
+            .filter(|e| e.quantity == 0 && !(e.card_id == printing.id && e.finish == finish))
+        {
+            drop_entry(tx, deck_id, &zero)?;
+        }
         let state = state_of(tx, deck_id, &oracle_id)?.state;
         if !derived {
             write_state(tx, deck_id, &oracle_id, MANUAL_STATE)?;
@@ -2014,6 +2028,14 @@ pub const PICKS_READY: &str = "token_picks_ready";
 /// as an insert over it. `a_laggards_conversion_never_reverts_an_edit_made_since` is that
 /// scenario, and it went red (3 on both devices, not 5) with this gate switched off.
 ///
+/// ⚠️ **"Behind a pull, B has applied A's entries" rests on a re-delivery the client does not do
+/// yet.** B deferred A's batch at v51, and `sync_engine::client::pull` advanced B's cursor past
+/// it all the same, so B's first pull at v52 does not bring it back: a B that *pulled* at v51
+/// during the window still holds the pick after it climbs, and converting behind that pull is the
+/// same late insert. The gate closes the reversion for a laggard that did not pull during the
+/// window, and for every laggard once the sync-delivery fix holds the cursor on a newer-schema
+/// deferral — `sync_engine::apply`'s module doc has the mechanism.
+///
 /// **What it costs**: a paired device draws each unconverted token as its implicit entry — the
 /// resolver's printing, not the art the reader picked on v51 — until its first pull at v52 lands,
 /// which on a device the connection manager can reach is seconds after launch. A paired device
@@ -2124,12 +2146,15 @@ pub fn convert_legacy_picks_after_pull(conn: &Connection) -> Result<(), String> 
 ///
 /// Then every pick's `card_id` is cleared, and its `quantity` wherever an entry of its token now
 /// exists — **all the entries first and the clears after**, so every clear rides behind an entry
-/// op in this device's stream. A v51 peer holds the stream at the first op for a table it does
-/// not know, so it holds the clears too and goes on drawing its art until it upgrades. (In a group
-/// of three or more that can fail cosmetically: a conversion that finds every list already
-/// holding the pick — a third device's announced entries — writes no entry op, and if no other
-/// pick's entry precedes it the clear reaches the v51 peer first, which then draws its default
-/// art until it upgrades.)
+/// op in this device's stream. A v51 peer defers the first op for a table it does not know and
+/// leaves this device's later ops in that page unapplied, so it never applies a clear ahead of
+/// its entry and goes on drawing its art. ⚠️ **Not "until it upgrades"**, which this read: the
+/// client advances its pull cursor past a deferral (`sync_engine::apply`'s module doc), so the
+/// peer drops the entries and the clears alike and draws its art after it upgrades too, until the
+/// sync-delivery fix lands. (In a group of three or more that can fail cosmetically: a
+/// conversion that finds every list already holding the pick — a third device's announced
+/// entries — writes no entry op, and if no other pick's entry precedes it the clear reaches the
+/// v51 peer first, which then draws its default art.)
 ///
 /// **One savepoint per pick, never one transaction for the file.** A pick whose entries or clear
 /// fail is rolled back to its own savepoint, written to stderr beside the deck and token it
@@ -2141,9 +2166,10 @@ pub fn convert_legacy_picks_after_pull(conn: &Connection) -> Result<(), String> 
 /// **Idempotent and cheap**: a cleared pick is never read again, so every run after the first
 /// scans a table of one row per deviated token and writes nothing, no op included. **Two losses
 /// are accepted, both confined to a v51 device's last days**: a reset made there after this
-/// device converted is lost, because this device's entry reaches it after the upgrade and the
-/// reset has nothing left to clear; and a count stepped there on a pick this device has already
-/// cleared lands on the legacy column, which a converted token no longer reads.
+/// device converted is lost — argued as "this device's entry reaches it after the upgrade and the
+/// reset has nothing left to clear", and, while a deferral is dropped, the entry never reaches it
+/// at all; and a count stepped there on a pick this device has already cleared lands on the
+/// legacy column, which a converted token no longer reads.
 pub fn convert_legacy_picks(conn: &Connection) -> Result<(), String> {
     let picks: Vec<LegacyPick> = {
         let mut stmt = conn
@@ -4323,6 +4349,44 @@ mod tests {
         );
     }
 
+    /// **An add clears the token's zero entries in that list**, and one Undo brings them back.
+    /// Rule 3 keeps a token's *last* entry at zero to mean *none*; once a second printing is
+    /// added that entry is not the last any more, and left alone it is a `0` tile no stepper can
+    /// send to zero again. The other list's zero entry is not this write's to clear.
+    #[test]
+    fn adding_a_printing_clears_the_tokens_zero_entries_in_that_list_and_undo_restores_them() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        seed_entry(&conn, deck, "theory", &treasure(), "nonfoil", 0);
+        set_quantity(&conn, deck, "live", treasure().oracle_id, None, 0).unwrap();
+        let zeroed = vec![
+            e("live", treasure().oracle_id, treasure().id, "nonfoil", 0),
+            e("theory", treasure().oracle_id, treasure().id, "nonfoil", 0),
+        ];
+        assert_eq!(entries(&conn, deck), zeroed, "the only entry, held at zero");
+
+        add_printing(&conn, deck, "live", treasure_older().id, Some("foil")).unwrap();
+        let added = vec![
+            e("live", treasure().oracle_id, treasure_older().id, "foil", 1),
+            e("theory", treasure().oracle_id, treasure().id, "nonfoil", 0),
+        ];
+        assert_eq!(
+            entries(&conn, deck),
+            added,
+            "exactly one live entry remains, at one"
+        );
+
+        let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
+        assert_eq!(
+            entries(&conn, deck),
+            zeroed,
+            "one Undo restores the zero entry"
+        );
+        crate::deck_undo::apply_reversal(&conn, deck, audit, false).unwrap();
+        assert_eq!(entries(&conn, deck), added, "and Redo clears it again");
+    }
+
     /// **A card that is not a token or an emblem is refused, and nothing is written** — Lightning
     /// Bolt handed to the band's *Add printing* would otherwise be filed as a hand-added token.
     /// The Tithe here is the deck's own maker, which is the nearest thing to a token a press
@@ -5168,9 +5232,10 @@ mod tests {
     /// Each entry is a captured insert named `<pick uid>-<list>`, so a peer that never derived it
     /// — a device that had not yet seen the pick when it converted — receives the whole row
     /// rather than a later sparse edit it has no row for. The pick's clear is captured too, and
-    /// it is recorded **after** the entries: a v51 peer holds this device's stream at the first
-    /// op for a table it does not know, so it holds the clear with it and goes on drawing its
-    /// art until it upgrades.
+    /// it is recorded **after** the entries: a v51 peer defers this device's first op for a table
+    /// it does not know and leaves the later ones in that page unapplied, so it never applies the
+    /// clear ahead of the entry. (It then drops both, upgrade or not, until the sync-delivery fix —
+    /// `sync_engine::apply`'s module doc.)
     #[test]
     fn the_conversion_announces_every_entry_it_derives_and_the_cleared_pick_behind_them() {
         let conn = paired();

@@ -106,9 +106,9 @@ const SUBTITLE = {
  * printing and finish**, which since user schema v52 is what tells two tiles of one token apart.
  *
  * The Treasure is the entry the seed's art-and-count override became (the `tafr` printing at
- * four, plain — the rung writes `nonfoil`); the other four are implicit entries, drawn at the
- * resolver's default printing in its default finish, which for a printing sold in both is the
- * plain one.
+ * four, plain — the conversion files the printing's default finish, and `tafr` is sold plain as
+ * well as foil); the other four are implicit entries, drawn at the resolver's default printing in
+ * its default finish, which for a printing sold in both is the plain one.
  */
 const ENTRY = {
   treasure: `Treasure, ${SUBTITLE.treasure}, TAFR · 15, Nonfoil`,

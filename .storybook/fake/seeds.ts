@@ -1416,13 +1416,15 @@ function starterDeckTokens(): FakeDeckToken[] {
 }
 
 /**
- * The `deck_token_printings` entries — **what v52's rung writes from the two pre-v52 rows that
- * named a printing**, one entry per list at `coalesce(quantity, 1)` and `nonfoil`:
+ * The `deck_token_printings` entries — **what v52's conversion
+ * (`deck_tokens::convert_legacy_picks`, a launch pass, not the rung) files from the two pre-v52
+ * rows that named a printing**, one entry per list at `coalesce(quantity, 1)` in the printing's
+ * default finish — `nonfoil` for both, each sold plain as well as foil:
  *
  * * **Deck 1's Treasure**, the older `tafr` printing at four — the reader kept it over the one
  *   the resolver names (`thob`), so the tile draws an art and a count that are both the
  *   reader's, and `overridden` gives the reset affordance something to undo.
- * * **Deck 2's hand-added emblem** at one — a count nobody set, taken at the rung's `?? 1`.
+ * * **Deck 2's hand-added emblem** at one — a count nobody set, taken at the conversion's `?? 1`.
  *
  * Both lists get both, because the pre-v52 override was shared by both lists and copying it is
  * what keeps each list drawing what it drew. Every other token here draws its implicit entry.

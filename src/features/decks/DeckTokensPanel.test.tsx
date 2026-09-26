@@ -268,6 +268,31 @@ describe("DeckTokensPanel", () => {
   });
 
   /**
+   * **Every token dismissed: no Add printing, and the band still opens.** The picker offers the
+   * printings of the tokens the deck *keeps*, so here it would open on "This deck makes no token
+   * or emblem to add a printing of" — a sentence that is false about a deck whose tokens are only
+   * put away. The disclosure stays, because opening the band is how a reader finds `Show
+   * dismissed` and restores one.
+   */
+  it("draws no Add printing when every token is dismissed, and still lets the band open", async () => {
+    const hidden = { ...PLAIN, state: "hidden" as const };
+    const { onToggle } = band({
+      open: false,
+      tokens: tokensOf(
+        [hidden],
+        [
+          { oracleId: "o-treasure", state: "hidden" },
+          { oracleId: "o-wurm", state: "hidden" },
+        ],
+      ),
+    });
+
+    expect(screen.queryByRole("button", { name: "Add printing" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: TOKENS_HEADING }));
+    expect(onToggle).toHaveBeenCalledWith(true);
+  });
+
+  /**
    * **A dismissal is counted once per token, not once per entry.** The rows are one per entry
    * now, so a Treasure dismissed with two printings is two hidden rows — and one token the switch
    * offers to show.

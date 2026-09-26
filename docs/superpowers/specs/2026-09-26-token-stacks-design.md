@@ -223,7 +223,10 @@ User schema **v52**. Rust-heavy; the UI changes are the band and the mode contro
 4. **A swap** replaces the entry's `card_id` and/or `finish`; swapping onto a printing and finish
    the list already holds folds the two (quantities summed), on the grain.
 5. **Adding a printing** inserts that printing and finish at quantity 1, or steps an existing entry
-   of it up by 1.
+   of it up by 1. *(Amended at PR 2's final review, 2026-09-26: the add also deletes the token's
+   zero-quantity entries in that list, never the one it adds to. Rule 3 keeps an entry at 0 only
+   while it is the last; beside a new one it is a `0` tile no stepper can send to 0 again. The
+   deletes are the add's own, so one Undo restores them.)*
 6. **Theory and live never share an entry.** A write names its list.
 7. **A token nothing makes any more is removed** (the reader: "if you cut all cards that create a
    token, so a token is no longer needed in the deck, simply remove all tokens of that type and
@@ -336,8 +339,8 @@ review rounds the same day — the conversion as built.)*
   — a double-faced token — and the first in `oracle_id` order wins on every device, the loser
   keeping its count); the entry this pick named at an earlier conversion is moved to the new art in
   place (a v51 re-pick); otherwise it is inserted at `max(coalesce(quantity, 1), 0)` — v51's column
-  had no `CHECK`. The picks are cleared after all the entries, captured, so a v51 peer holding the
-  stream at the new table holds the clears too. Idempotent. Accepted: a v51 reset in the window
+  had no `CHECK`. The picks are cleared after all the entries, captured, so a v51 peer never
+  applies a clear ahead of its entry (it drops both — the last amendment below). Idempotent. Accepted: a v51 reset in the window
   before that device upgrades, and a v51 count stepped on a pick another device has cleared.
 - **The finish is the printing's own `default_finish`, read from the corpus** — in the insert and
   in the moved entry alike — because the pass runs after `migrate_corpus`. `nonfoil` plus a repair
@@ -355,6 +358,28 @@ review rounds the same day — the conversion as built.)*
   held row only when it is not; walked in `sync_uid` order, a fold of two wrong finishes keeps the
   lower uid on every device. It runs under capture suppression — every device derives it — where a
   delete and re-insert would have come back with no uid at all.
+
+*(Amended at PR 2's final review, 2026-09-26 — **"the accepted stall" is a loss, not a stall**.)*
+- **Everything this spec and its plan say about a v51 peer "stalling until it upgrades", "holding
+  its stream" or "holding the clears" described a hold the client does not perform.** `apply`
+  holds the sender's `sync_peers` watermark at the first op it cannot apply, but
+  `sync_engine::client::pull` then advances `PULL_CURSOR` to the page head whatever was deferred,
+  the relay answers only rows above the cursor, and `apply` keeps no copy. So a v51 peer **drops**
+  a v52 device's page from its first `deck_token_printings` op on — token entries, the conversion's
+  clears, and that device's unrelated later ops in the page alike — and upgrading does not bring
+  them back. The same was true of `deck_notes` at v43; it predates this PR.
+- **What that costs the conversion.** The pull gate (the fifth round, above) argues that behind a
+  pull "B has applied A's entries and A's clear first". That holds for a laggard that did not pull
+  during the window. A laggard that *pulled* at v51 dropped them, still holds the pick after it
+  climbs, and its conversion behind its first pull at v52 is the late insert that reverts A's
+  edits. The accepted "v51 reset in the window" loss is wider for the same reason: A's entry never
+  reaches the reset device, and A's later edits to it drop there.
+- **Ruling**: the fix is a dedicated sync-delivery PR — hold the cursor on a deferral a newer
+  schema caused, and resolve the child of a deleted parent — which must land **before any release
+  that carries v52**; PR 3 (a v53 kind change) depends on it. PR 2 corrects the docs and changes
+  no sync behaviour. **Until then, every device in a group is updated before it syncs across the
+  schema change.** [sync.md](../../reference/sync.md) *Deferred ops are dropped, not held* has the
+  mechanism.
 
 ### 4.4 Commands
 
@@ -448,7 +473,10 @@ nothing". A token write is a deck write, so it goes where every deck write goes:
   the deck-level kind, so no reader takes a token for a deck card. *(Amended at the task reviews,
   2026-09-26: this keeps the **history** from stalling a v51 peer, and no more. The entries
   themselves live in a table that peer does not sync, so every entry write defers there too until
-  it upgrades — the cost every new synced table has paid.)*
+  it upgrades — the cost every new synced table has paid.)* *(Amended again at the final review,
+  2026-09-26: not "until it upgrades". A deferred op is dropped, with its sender's later ops in the
+  page, and upgrading does not bring it back — §4.3's last amendment. A new kind would have cost
+  the same loss for good, which is why the rule stands.)*
 - **The undo button's label** is the audit row's text, as for every step, so the button reads
   *"Undo — Treasure 1 → 3"*.
 - `every_deck_write_leaves_exactly_one_audit_row` gains the token commands, and the fake's
