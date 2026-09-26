@@ -76,7 +76,7 @@ const BURN: DeckRow = {
   statsOpen: true,
   defaultCategoryId: 0,
   bracket: 0,
-  tokenStack: false,
+  tokenMode: "managed",
   tokenRailIndex: -1,
 };
 
@@ -712,33 +712,39 @@ describe("DeckSettingsDialog", () => {
   });
 
   /**
-   * The Tokens & Emblems pile (issue #507): drawn here, where a `deck_update` can carry it, and
-   * written in the one act that settles it — the create dialog draws no such row.
+   * The token mode (token stacks spec §4.5, user schema v52): drawn here, where a `deck_update`
+   * can carry it, and written in the one act that settles it — one field, one write. It replaced
+   * the `Show Tokens & Emblems in the deck` switch, which is asserted gone rather than assumed.
    */
-  it("draws the Tokens & Emblems switch and writes it on the press", async () => {
+  it("draws the Tokens mode control and writes tokenMode on the press", async () => {
     deckGet.mockResolvedValue(detail());
     open();
     await loaded();
 
-    const toggle = screen.getByRole("switch", {
-      name: "Show Tokens & Emblems in the deck Disabled",
-    });
-    await userEvent.click(toggle);
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { tokenStack: true }));
+    expect(screen.queryByRole("switch", { name: /tokens & emblems/i })).toBeNull();
+    const group = screen.getByRole("group", { name: "Tokens" });
+    expect(within(group).getByRole("button", { name: "Managed" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(within(group).getByRole("button", { name: "Hide" }));
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { tokenMode: "hidden" }));
+    expect(deckUpdate).toHaveBeenCalledTimes(1);
   });
 
-  /** A deck that already draws the pile reads `Enabled`, and the press turns it off. */
-  it("reads the stored Tokens & Emblems answer off the deck row", async () => {
-    deckGet.mockResolvedValue(detail({ tokenStack: true }));
+  /** A deck whose pile is hidden reads `Hide`, and the press puts it back to `managed`. */
+  it("reads the stored token mode off the deck row", async () => {
+    deckGet.mockResolvedValue(detail({ tokenMode: "hidden" }));
     open();
     await loaded();
 
-    const toggle = screen.getByRole("switch", {
-      name: "Show Tokens & Emblems in the deck Enabled",
-    });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-    await userEvent.click(toggle);
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { tokenStack: false }));
+    const group = screen.getByRole("group", { name: "Tokens" });
+    expect(within(group).getByRole("button", { name: "Hide" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(within(group).getByRole("button", { name: "Managed" }));
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { tokenMode: "managed" }));
   });
 
   /** And a deck with no plan is offered none of them, for the reason it is offered no theory

@@ -135,8 +135,8 @@ function Body({
     // `AUTO_CATEGORY` for a deck that does not exist — the column's own `DEFAULT 0`, and the
     // only answer a deck with no categories could honestly give.
     defaultCategoryId: row?.defaultCategoryId ?? AUTO_CATEGORY,
-    // Off for a deck that does not exist — `decks.token_stack`'s `DEFAULT 0`.
-    tokenStack: row?.tokenStack ?? false,
+    // `managed` for a deck that does not exist — `decks.token_mode`'s `DEFAULT 'managed'`.
+    tokenMode: row?.tokenMode ?? "managed",
   }));
   /**
    * The cover, and **the artist goes with the card rather than surviving it**.
@@ -202,7 +202,7 @@ function Body({
         canSetTheoryMarks={canSetTheoryMarks}
         // One flag serves both in this workbench, because both answer "is there a deck row to
         // write to" and a story's deck either exists or does not. The form keeps them two props.
-        canSetTokenStack={canSetTheoryMarks}
+        canSetTokenMode={canSetTheoryMarks}
         cover={coverProps}
         idPrefix={id}
       />
@@ -304,8 +304,8 @@ export const NewDeck: Story = {
     await expect(args.onSubmit).toHaveBeenCalledTimes(1);
     // One press, one event: the field is not blurred, so nothing commits alongside it.
     await expect(args.onCommit).not.toHaveBeenCalled();
-    // A deck that does not exist has no row for the Tokens & Emblems answer to be written to.
-    await expect(canvas.queryByRole("switch", { name: /tokens & emblems/i })).toBeNull();
+    // A deck that does not exist has no row for the token mode to be written to.
+    await expect(canvas.queryByRole("group", { name: "Tokens" })).toBeNull();
     await expect(name).toHaveFocus();
   },
 };
@@ -474,29 +474,44 @@ export const KindTheoryAndActual: Story = {
 };
 
 /**
- * **The Tokens & Emblems pile** (issue #507) — one switch, drawn on the edit shape only.
+ * **The token mode** (token stacks spec §4.5, user schema v52) — `Managed` or `Hide`, drawn on
+ * the edit shape only.
  *
- * Off by default. On, the deck's four views draw one more pile at the end — the tokens the band
- * under the desk lists — and that pile counts toward nothing: not the deck's size, not a total,
- * not validation. **New deck** draws no such row, because `DeckInput` has no field to carry it.
+ * It replaced the `Show Tokens & Emblems in the deck` switch, and every deck starts `Managed`:
+ * the deck's four views draw one more pile — the tokens the band under the desk lists — and that
+ * pile counts toward nothing, not the deck's size, not a total, not validation. `Hide` takes the
+ * pile out of all four views and leaves the band, and every stepper on it, where it was. The
+ * third word, `Collection`, arrives with the custody it means in PR 3; a button for it now would
+ * behave exactly like `Managed`. **New deck** draws no control, because `DeckInput` has no field
+ * to carry the answer.
  */
 export const TokensAndEmblems: Story = {
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
 
     await canvas.findByLabelText("Name");
-    const toggle = canvas.getByRole("switch", {
-      name: "Show Tokens & Emblems in the deck Disabled",
-    });
-    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(canvas.queryByRole("switch", { name: /tokens & emblems/i })).toBeNull();
+    const group = canvas.getByRole("group", { name: "Tokens" });
+    await expect(within(group).getByRole("button", { name: "Managed" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(within(group).queryByRole("button", { name: /collection/i })).toBeNull();
 
-    await userEvent.click(toggle);
+    await userEvent.click(within(group).getByRole("button", { name: "Hide" }));
 
-    await expect(args.onChange).toHaveBeenLastCalledWith({ tokenStack: true });
+    await expect(args.onChange).toHaveBeenLastCalledWith({ tokenMode: "hidden" });
+    await expect(within(group).getByRole("button", { name: "Hide" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // The selected mode's sentence follows the press, under the control.
     await expect(
-      canvas.getByRole("switch", { name: "Show Tokens & Emblems in the deck Enabled" }),
-    ).toHaveAttribute("aria-checked", "true");
-    // A switch settles in one act, so nothing commits beside it.
+      canvas.getByText(
+        "No token pile in the deck's views. The Tokens & Emblems band under the deck still keeps every token.",
+      ),
+    ).toBeVisible();
+    // A press settles in one act, so nothing commits beside it.
     await expect(args.onCommit).not.toHaveBeenCalled();
   },
 };

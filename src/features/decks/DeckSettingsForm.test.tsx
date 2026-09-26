@@ -55,8 +55,8 @@ const VALUE: DeckSettingsValue = {
   managedWishlist: "off",
   folderId: null,
   defaultCategoryId: AUTO_CATEGORY,
-  // Off, which is `decks.token_stack`'s `DEFAULT 0` — every deck until a reader asks.
-  tokenStack: false,
+  // `decks.token_mode`'s `DEFAULT 'managed'` — every deck, from v52 on, until a reader asks.
+  tokenMode: "managed",
 };
 
 /**
@@ -142,7 +142,7 @@ function Harness({
       // wants that case passes `false` and says so.
       canSetTheoryMarks={rest.canSetTheoryMarks ?? true}
       // The edit host's answer again, for the same reason.
-      canSetTokenStack={rest.canSetTokenStack ?? true}
+      canSetTokenMode={rest.canSetTokenMode ?? true}
       cover={rest.cover ?? COVER}
       idPrefix={rest.idPrefix ?? "s"}
     />
@@ -546,51 +546,68 @@ describe("DeckSettingsForm", () => {
   });
 
   /**
-   * The Tokens & Emblems pile (issue #507): a switch named by its visible heading plus its own
-   * state word, reporting one field and nothing a text field's commit would carry.
+   * **The switch is gone and the mode is here** (token stacks spec §4.5, user schema v52).
+   * `Show Tokens & Emblems in the deck` was a yes-or-no; `decks.token_mode` is a choice out of a
+   * closed set, so it is drawn as one — a group of `aria-pressed` buttons named by the word beside
+   * them — and it reports one field, never anything a text field's commit would carry.
    */
-  it("reports the Tokens & Emblems switch as one field, named by its heading", async () => {
+  it("draws the Tokens mode control in place of the old switch, and reports tokenMode", async () => {
     const { onChange, onCommit } = form();
 
-    const toggle = screen.getByRole("switch", {
-      name: "Show Tokens & Emblems in the deck Disabled",
-    });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByRole("switch", { name: /tokens & emblems/i })).toBeNull();
+    const group = screen.getByRole("group", { name: "Tokens" });
+    expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => [b.textContent, b.getAttribute("aria-pressed")]),
+    ).toEqual([
+      ["Managed", "true"],
+      ["Hide", "false"],
+    ]);
+    // The selected mode's sentence under the control, as the kind group draws its kind's.
     expect(
       screen.getByText(
-        "Adds a Tokens & Emblems pile to Stacks, Grid, Text and Table. Tokens never count toward the deck's card total.",
+        "A Tokens & Emblems pile in Stacks, Grid, Text and Table. Tokens never count toward the deck's card total.",
       ),
     ).toBeInTheDocument();
 
-    await userEvent.click(toggle);
+    await userEvent.click(within(group).getByRole("button", { name: "Hide" }));
 
-    expect(onChange).toHaveBeenCalledWith({ tokenStack: true });
+    expect(onChange).toHaveBeenLastCalledWith({ tokenMode: "hidden" });
     expect(onCommit).not.toHaveBeenCalled();
+    expect(within(group).getByRole("button", { name: "Hide" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // …and the sentence follows the press.
     expect(
-      screen.getByRole("switch", { name: "Show Tokens & Emblems in the deck Enabled" }),
-    ).toHaveAttribute("aria-checked", "true");
+      screen.getByText(
+        "No token pile in the deck's views. The Tokens & Emblems band under the deck still keeps every token.",
+      ),
+    ).toBeInTheDocument();
   });
 
   /**
    * Not tied to the deck's kind: a Regular, a Theory + Actual and a Virtual deck all make tokens,
-   * so the switch is there on each.
+   * so the control is there on each.
    */
-  it("draws the Tokens & Emblems switch whatever the deck's kind", async () => {
+  it("draws the Tokens mode control whatever the deck's kind", async () => {
     form();
     for (const kind of Object.values(DECK_KIND_LABEL)) {
       await userEvent.click(screen.getByRole("button", { name: kind }));
-      expect(screen.getByRole("switch", { name: /tokens & emblems/i })).toBeInTheDocument();
+      expect(screen.getByRole("group", { name: "Tokens" })).toBeInTheDocument();
     }
   });
 
   /**
-   * The create host's half: `DeckInput` carries no `tokenStack`, so a press there would reach
-   * nothing — `canSetTheoryMarks`' argument, and `defaultCategoryId`'s before it.
+   * The create host's half: `DeckInput` carries no `tokenMode`, so a press there would reach
+   * nothing and the deck would be born `managed` whatever it said — `canSetTheoryMarks`'
+   * argument, and `defaultCategoryId`'s before it.
    */
-  it("draws no Tokens & Emblems switch for a host that cannot write it", () => {
-    form({ canSetTokenStack: false });
+  it("draws no Tokens mode control for a host that cannot write it", () => {
+    form({ canSetTokenMode: false });
 
-    expect(screen.queryByRole("switch", { name: /tokens & emblems/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Tokens" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Tokens & Emblems/)).not.toBeInTheDocument();
   });
 

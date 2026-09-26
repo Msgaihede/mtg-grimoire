@@ -37,14 +37,28 @@
  * ## One read, one picker, two drawings
  *
  * **This band takes the {@link DeckTokens} answer as a prop and calls `useDeckTokens` nowhere**
- * (2026-09-24, issue #507). A deck with `tokenStack` on draws the same tokens a second time, as a
- * pile inside whichever view is on the desk, and the two drawings have to be one answer: a
- * quantity stepped on the band is the number the pile draws, and a printing picked from a pile is
- * the picture the band draws. `DeckEditor` therefore calls the hook **once** and hands the result
- * to both, and it mounts the **one** `TokenArtPicker` both of them open — so this band holds no
- * picker and no `picking` state, and a tile's press is `onPick(oracleId)` up to the host. Two hook
- * calls would have been two `showDismissed` switches and two write observers, and two pickers
- * would have been two dialogs free to disagree about which token they were for.
+ * (2026-09-24, issue #507). A deck whose token mode draws a pile (`managed`, and `collection` once
+ * PR 3 gives it custody) draws the same tokens a second time, inside whichever view is on the
+ * desk, and the two drawings have to be one answer: a quantity stepped on the band is the number
+ * the pile draws, and a printing picked from a pile is the picture the band draws. `DeckEditor`
+ * therefore calls the hook **once** and hands the result to both, and it mounts the **one**
+ * `TokenArtPicker` both of them open — so this band holds no picker and no `picking` state. A
+ * tile's press is `onPick(view)` and the header's **Add printing** is `onAddPrinting()`, both up to
+ * the host. Two hook calls would have been two `showDismissed` switches and two write observers,
+ * and two pickers would have been two dialogs free to disagree about which token they were for.
+ *
+ * ## One tile per entry, and a header on every deck
+ *
+ * **A tile is an _entry_ — one printing in one finish — since user schema v52** (token stacks
+ * spec §4), so a Treasure the reader keeps as a plain and a foil copy is two tiles, keyed on
+ * {@link DeckTokenView.entryKey} and never on the oracle id. Each tile's stepper writes its own
+ * entry; its picture opens the picker on that entry alone. Dismiss, restore and reset are the
+ * **token's** — a dismissal is "not in this deck", whichever printing the reader pressed it on —
+ * so they act on every entry of it at once, which is what the reader sees happen.
+ *
+ * **The header draws on every deck, the mode control in it** (`TokenModeControl`): how a deck
+ * keeps its tokens is a question about the deck, so it is answerable before the deck makes its
+ * first one. It is the same control Deck settings draws, writing the same `decks.token_mode`.
  *
  * ## A tile is a stacked card, at the reader's own zoom
  *
@@ -94,26 +108,39 @@
  * name with the words run together (`"Missing2"`), which is why the visible name and the visible
  * subtitle are two paragraphs and every accessible name is spelled rather than assembled.
  *
+ * **Since v52 the subtitle is not enough either**, because one token is several tiles: the two
+ * Treasures above share a name *and* a subtitle, and differ only in their printing and finish.
+ * So `tileName` spells those too — `Quantity of Treasure, <subtitle>, TMOM · 12, Foil` — and the
+ * foot under each picture draws them for the eye (`CardChin`, the same foot every wall of cards
+ * draws).
+ *
  * **The subtitle is clamped in CSS and never in the string.** A token's oracle text is the term
  * that separates the two Wurms, so a truncation short enough to fit a 150px tile would fold them
  * back together in exactly the case this exists for.
  */
 import { useId, type JSX } from "react";
-import { ChevronRight, Eye, EyeOff, Undo2 } from "lucide-react";
+import { ChevronRight, Eye, EyeOff, Plus, Undo2 } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
+import { CardChin } from "@/components/CardChin";
 import { ToggleChip } from "@/components/FilterChips";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { atLeast, cardScaleVars } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
+import { FINISH_LABEL } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
+import type { Currency } from "@/lib/marketplace";
 import { PRESS } from "@/lib/motion";
+import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { stackCardWidth } from "./CardStack";
 import { CountPill, tokenCountWords } from "./CountPill";
-import type { DeckTokenView } from "./deckTokens";
+import { entryRef, type DeckTokenView } from "./deckTokens";
+import { META_SUBMIT } from "./metaRows";
+import { TokenModeControl, type TokenMode } from "./TokenModeControl";
 import type { DeckTokens } from "./useDeckTokens";
 
 /**
@@ -174,14 +201,29 @@ export interface DeckTokensPanelProps {
   open: boolean;
   onToggle: (next: boolean) => void;
   /**
-   * A tile's picture was pressed: open the art picker on this token.
+   * A tile's picture was pressed: open the picker on **this entry** — one printing in one finish
+   * of one token — to swap it (spec §4.2 rule 4; the token's other entries are untouched).
    *
    * **The host owns the picker**, because the views' token pile opens the same one — see this
-   * file's header. An `oracle_id` and never the view, which is the `Layer` union's rule one
-   * surface over: the wall is re-derived after every write, so a frozen view would answer about
-   * the token as it was when the tile was pressed.
+   * file's header. The view is handed over whole, and the host is what must not keep it: the wall
+   * is re-derived after every write, so the host holds the view's
+   * {@link DeckTokenView.entryKey} and looks the entry up again on every render — the `Layer`
+   * union's rule one surface over — rather than answering about the entry as it was when pressed.
    */
-  onPick: (oracleId: string) => void;
+  onPick: (view: DeckTokenView) => void;
+  /**
+   * The header's **Add printing**: open the picker on every token the deck has, to add one
+   * printing at one copy (spec §4.6, rule 5). The host owns that picker too, and decides which
+   * tokens it lists.
+   */
+  onAddPrinting: () => void;
+  /** `decks.token_mode` — what the header's {@link TokenModeControl} shows as pressed. */
+  mode: TokenMode;
+  /**
+   * A press on the mode control. The host writes `{ tokenMode }` through `deck.update`, the same
+   * write Deck settings makes, so the two controls cannot come to disagree.
+   */
+  onMode: (mode: TokenMode) => void;
 }
 
 /**
@@ -198,8 +240,20 @@ export function DeckTokensPanel({
   open,
   onToggle,
   onPick,
+  onAddPrinting,
+  mode,
+  onMode,
 }: DeckTokensPanelProps): JSX.Element {
   const bodyId = useId();
+  /** The mode control's id stem — its own, so the settings dialog's control opened over this
+   *  band never shares an `id` with it. */
+  const modeId = useId();
+
+  /**
+   * The currency every tile's foot writes its entry's price in — read once for the band, as the
+   * zoom below is, so a deck that makes twenty tokens is one subscription rather than twenty.
+   */
+  const { marketplace } = useMarketplace();
 
   /**
    * How large the reader has asked the desk's cards to be drawn — `cardZoom.deck`, the same
@@ -220,13 +274,21 @@ export function DeckTokensPanel({
   // Counted on every render and deliberately not memoised. `query.data ?? []` is a fresh array
   // whenever the read has not landed, so a `useMemo` over it would be rebuilt every render *and*
   // cost a dependency comparison — the hook keeps a stable `NO_ROWS` for the memo that matters,
-  // which is the one that sorts the wall. A `filter().length` over a deck's tokens is a handful
-  // of rows and buys nothing back.
-  const dismissed = rows.filter((row) => row.state === "hidden").length;
+  // which is the one that sorts the wall. A pass over a deck's tokens is a handful of rows and
+  // buys nothing back.
+  //
+  // **Tokens, not rows, since v52**: the resolver answers one row per *entry*, so a Treasure
+  // dismissed with two printings is two hidden rows and one token the switch offers to show.
+  // The state is the token's (`deck_tokens` is grained on the oracle id), so the ids are what is
+  // counted.
+  const dismissed = new Set(
+    rows.filter((row) => row.state === "hidden").map((row) => row.oracleId),
+  ).size;
 
   /**
-   * How many copies the deck brings: the stepper's number summed over every token that is not
-   * dismissed — the figure beside the heading (token stacks spec §3.1).
+   * How many copies the deck brings: the stepper's number summed over every entry of every token
+   * that is not dismissed — the figure beside the heading (token stacks spec §3.1). A Treasure
+   * kept as three plain copies and one foil is four.
    *
    * **Summed over `tokens.tokens`, the resolved views, and never over `rows`**: a view's
    * `quantity` is `deckTokens.ts`' conclusion (`??` the untouched floor, a zeroed token staying
@@ -322,21 +384,64 @@ export function DeckTokensPanel({
           </p>
         )}
 
-        {open && dismissed > 0 && (
-          <ToggleChip
-            className="ml-auto"
-            label="Show dismissed"
-            hint={plural(dismissed, "token or emblem", "tokens and emblems")}
-            pressed={tokens.showDismissed}
-            onClick={() => tokens.setShowDismissed(!tokens.showDismissed)}
-          />
-        )}
+        {/* The header's controls, at the far end of the row — `ml-auto` on the run rather than on
+            its first member, because which of them is first depends on whether the wall is open
+            and whether the deck has anything dismissed. They wrap as one run under the heading on
+            a narrow editor rather than one at a time. */}
+        <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          {open && dismissed > 0 && (
+            <ToggleChip
+              label="Show dismissed"
+              hint={plural(dismissed, "token or emblem", "tokens and emblems")}
+              pressed={tokens.showDismissed}
+              onClick={() => tokens.setShowDismissed(!tokens.showDismissed)}
+            />
+          )}
+
+          {/* **Drawn while the band is shut, and the press opens it** — the Notes band's
+              `New note`, for its reason: a printing added into a region the reader cannot see is
+              answered by nothing but the count moving by one. The press and not the pick is the
+              moment, so a picker the reader dismisses still leaves them looking at the wall.
+
+              **Absent on a deck that makes nothing**, where the disclosure is absent for the same
+              reason: the picker lists the printings of the tokens the deck has, and with none it
+              would be a dialog that can only refuse. A greyed control that spends the whole deck
+              refusing is this band's own argument against drawing one. */}
+          {canOpen && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!open) onToggle(true);
+                onAddPrinting();
+              }}
+              // `inline-flex items-center gap-1.5` for the glyph beside the word: `META_SUBMIT`
+              // is geometry and colour only and names no `display` — the Notes band's own note.
+              className={cn("inline-flex items-center gap-1.5", META_SUBMIT)}
+            >
+              <Plus aria-hidden="true" className="size-3.5 shrink-0" />
+              Add printing
+            </button>
+          )}
+
+          {/* On **every** deck, including one that makes nothing and one whose read was refused:
+              the mode is a question about the deck, not about the tokens on the wall, so a reader
+              can set it before the deck makes its first token. Last in the row, so it holds the
+              same place at the far end whichever of the two controls before it are drawn. */}
+          <TokenModeControl value={mode} onChange={onMode} idPrefix={modeId} />
+        </div>
       </div>
 
       {/* Always in the tree so `aria-controls` above always names something, and empty while the
           area is shut so a closed band costs no picture, no tile and no state. */}
       <div id={bodyId}>
-        {open && canOpen && <TokenWall tokens={tokens} zoom={zoom} onPick={onPick} />}
+        {open && canOpen && (
+          <TokenWall
+            tokens={tokens}
+            zoom={zoom}
+            currency={marketplace.currency}
+            onPick={onPick}
+          />
+        )}
       </div>
     </section>
   );
@@ -346,12 +451,15 @@ export function DeckTokensPanel({
 function TokenWall({
   tokens,
   zoom,
+  currency,
   onPick,
 }: {
   tokens: DeckTokens;
   /** `cardZoom.deck`, read once by the band above. See this file's header. */
   zoom: number;
-  onPick: (oracleId: string) => void;
+  /** How every tile's foot writes its entry's one unit price — read once by the band above. */
+  currency: Currency;
+  onPick: (view: DeckTokenView) => void;
 }) {
   return (
     <div className="mt-3">
@@ -380,13 +488,17 @@ function TokenWall({
           className="flex flex-wrap"
           style={{ columnGap: atLeast(TILE_GAP_X, zoom), rowGap: atLeast(TILE_GAP_Y, zoom) }}
         >
+          {/* Keyed on the **entry**, never the oracle id: since v52 one token is as many tiles as
+              it has printings-in-a-finish, and two children sharing an oracle id as their key
+              would be one React child drawn twice. */}
           {tokens.tokens.map((view) => (
-            <li key={view.oracleId} style={{ width: stackCardWidth(zoom) }}>
+            <li key={view.entryKey} style={{ width: stackCardWidth(zoom) }}>
               <TokenTile
                 view={view}
                 tokens={tokens}
                 zoom={zoom}
-                onPick={() => onPick(view.oracleId)}
+                currency={currency}
+                onPick={() => onPick(view)}
               />
             </li>
           ))}
@@ -397,15 +509,31 @@ function TokenWall({
 }
 
 /**
- * One token's name folded into a verb, for a control's accessible name.
+ * One entry's name folded into a verb, for a control's accessible name —
+ * `Quantity of Treasure, <subtitle>, TMOM · 12, Foil`.
  *
  * **The subtitle is in every one of them**, which is the whole of what keeps two `Wurm` tiles
- * apart for a reader who cannot see them. A name assembled from the tile's visible elements
- * would not do: a `gap` between two flex children runs their words together in the computed
- * name, so each control spells its own.
+ * apart for a reader who cannot see them. **So are the printing and the finish, since v52**,
+ * which is what keeps two tiles of *one* token apart: a Treasure kept as a plain and a foil copy
+ * of one printing shares its name and its subtitle, and only `Nonfoil` against `Foil` separates
+ * the two steppers. The printing is written as the foot under the picture writes it
+ * (`SET · number`), so what the ear hears is what the eye reads; the finish is spelled on every
+ * entry, plain copies included, because on this wall it is a grain term rather than a mark.
+ *
+ * A name assembled from the tile's visible elements would not do: a `gap` between two flex
+ * children runs their words together in the computed name, so each control spells its own — and
+ * through this one helper, so a control added later cannot be the one that forgets a term.
  */
 function tileName(verb: string, view: DeckTokenView): string {
-  return view.subtitle === null ? `${verb} ${view.name}` : `${verb} ${view.name}, ${view.subtitle}`;
+  const printing = [view.setCode?.toUpperCase(), view.collectorNumber]
+    .filter((part): part is string => part !== undefined && part !== null && part !== "")
+    .join(" · ");
+  return [
+    `${verb} ${view.name}`,
+    ...(view.subtitle === null ? [] : [view.subtitle]),
+    ...(printing === "" ? [] : [printing]),
+    FINISH_LABEL[view.finish],
+  ].join(", ");
 }
 
 /** One token or emblem: its picture, what it is, and the three things a reader can do to it. */
@@ -413,12 +541,15 @@ function TokenTile({
   view,
   tokens,
   zoom,
+  currency,
   onPick,
 }: {
   view: DeckTokenView;
   tokens: DeckTokens;
   /** `cardZoom.deck`. The tile's root publishes it as the two card variables; see the header. */
   zoom: number;
+  /** How the foot writes this entry's one unit price. */
+  currency: Currency;
   onPick: () => void;
 }) {
   const tip = useTooltip();
@@ -448,31 +579,60 @@ function TokenTile({
         hidden && "opacity-60",
       )}
     >
-      <button
-        type="button"
-        onClick={onPick}
-        // Named for what pressing it does. The picture is the control, so a name repeating the
-        // token would say "Treasure" over a picture of a Treasure — and the subtitle is what
-        // separates this press from the identically-named tile beside it.
-        aria-label={tileName("Change the art for", view)}
-        className={cn("block w-full rounded-lg", FOCUS_INSET)}
-      >
-        <CardArt
-          cardId={view.printingId}
-          // **The web target's and the phone's only picture**, and `null` there is the no-art
-          // frame rather than a broken `<img>`: neither has the `mtgimg://` protocol to ask, so
-          // a tile with no URL on its row draws nothing at all. `deckTokens.ts` has already
-          // picked the variant off the row, so this is a pass-through and never a lookup.
-          imageUrl={view.imageUrl}
-          // The `alt` and the no-picture fallback's own line. The button's `aria-label` above
-          // wins the accessible name, so this is what is left for the frame that never loads —
-          // and a named frame is what keeps a rate-limited screen a list of tokens.
-          name={view.name}
-          // Not virtualised: every token the deck makes is mounted at once, so the browser's own
-          // intersection gate is the only thing bounding what the wall asks for.
-          loading="lazy"
+      {/* The picture and its foot are one child of the column, so the column's `gap` does not
+          open between them: `CardChin` rides up onto the frame by `CHIN_RISE` to read as the
+          card's own edge, which a gap would turn back into a bar floating under a picture. */}
+      <div>
+        <button
+          type="button"
+          onClick={onPick}
+          // Named for what pressing it does. The picture is the control, so a name repeating the
+          // token would say "Treasure" over a picture of a Treasure — and the subtitle, the
+          // printing and the finish are what separate this press from the tiles beside it.
+          aria-label={tileName("Change the art for", view)}
+          className={cn("block w-full rounded-lg", FOCUS_INSET)}
+        >
+          <CardArt
+            cardId={view.printingId}
+            // **The web target's and the phone's only picture**, and `null` there is the no-art
+            // frame rather than a broken `<img>`: neither has the `mtgimg://` protocol to ask, so
+            // a tile with no URL on its row draws nothing at all. `deckTokens.ts` has already
+            // picked the variant off the row, so this is a pass-through and never a lookup.
+            imageUrl={view.imageUrl}
+            // The `alt` and the no-picture fallback's own line. The button's `aria-label` above
+            // wins the accessible name, so this is what is left for the frame that never loads —
+            // and a named frame is what keeps a rate-limited screen a list of tokens.
+            name={view.name}
+            // **The entry's own finish** — the sheen and the chip for a foil or etched copy, and
+            // nothing for a plain one: `nonfoil` is the finish a price is assumed to be, and
+            // handed through as a word it would paint the chip's felt with nothing in it (the
+            // collection page's `finishMarkOf`).
+            finish={view.finish === "nonfoil" ? null : view.finish}
+            // Not virtualised: every token the deck makes is mounted at once, so the browser's
+            // own intersection gate is the only thing bounding what the wall asks for.
+            loading="lazy"
+          />
+        </button>
+        {/* **The foot every wall of cards draws** (`CardChin`, at `seam="art"` under a `CardArt`
+            frame), and since v52 the line that tells one token's entries apart for the eye: the
+            rarity, `SET · number`, the finish's mark and one copy's price at that finish. A
+            sibling of the button, so its facts are announced rather than swallowed by the
+            button's name. The price is this entry's and nothing else's — no token's price ever
+            reaches the deck's totals. */}
+        <CardChin
+          zoom={zoom}
+          rarity={view.rarity}
+          setCode={view.setCode ?? ""}
+          collectorNumber={view.collectorNumber ?? ""}
+          // The code is what fits; the set's name is one hover away, as on a deck card's foot.
+          printingTitle={
+            view.setName === null ? null : `${view.setName} · #${view.collectorNumber ?? ""}`
+          }
+          finish={view.finish}
+          money={formatPrice(view.unitPrice, currency)}
+          seam="art"
         />
-      </button>
+      </div>
 
       {/* Two elements, and that is the rule rather than a layout preference — see this file's
           header. The name is clamped to one line and the subtitle to two; both keep their whole
@@ -501,13 +661,19 @@ function TokenTile({
         <QuantityStepper
           size="xs"
           value={view.quantity}
-          onChange={(next) => tokens.setQuantity(view.oracleId, next)}
-          // **Zero is a value and not an absence**, so the floor is 0 and the write stores it: a
-          // token zeroed while its art is kept is a decision, and `deckTokens.ts` reads it back
-          // with `??` for the same reason.
+          // **This entry and no other** — `entryRef`'s four facts, so a step on the foil Treasure
+          // cannot land on the plain one, and an implicit entry says so and is materialised by
+          // Rust on the way in (spec §4.2 rule 2).
+          onChange={(next) => tokens.setQuantity(entryRef(view), next)}
+          // **Zero is a value and not an absence**, so the floor is 0 and the write stores it:
+          // the token's last entry stepped to 0 stays at 0 with its printing kept (rule 3), and
+          // any other entry stepped to 0 leaves the list — Rust's rule, not this stepper's.
           min={0}
           label={tileName("Quantity of", view)}
         />
+        {/* The token's, not the entry's: `deck_tokens.state` is grained on the oracle id, so a
+            dismissal takes every entry of the token off the wall at once — "not in this deck",
+            whichever of its printings the reader pressed it on. */}
         <button
           type="button"
           onClick={() =>
@@ -523,15 +689,19 @@ function TokenTile({
             <EyeOff aria-hidden="true" className={TILE_ICON} />
           )}
         </button>
-        {/* Drawn only where there is something to undo, which is what `overridden` answers — and
-            it is `reset`, not a `setPrinting` of three nulls. The two are the same write and only
-            one of them says what the reader pressed. */}
+        {/* Drawn only where there is something to undo, which is what `overridden` answers: this
+            list holds entries of the token. `reset` deletes them all — the token's, like the
+            dismissal beside it — and the token falls back to its implicit entry, the printing the
+            deck's cards name. The tooltip says that scope, because the name only says which tile
+            the press was made on. */}
         {view.overridden && (
           <button
             type="button"
             onClick={() => tokens.reset(view.oracleId)}
             aria-label={tileName("Reset", view)}
-            {...tip(tileName("Reset", view), { describes: false })}
+            {...tip(
+              `Back to the printing the deck's cards make, dropping every ${view.name} printing picked for this list.`,
+            )}
             className={TILE_BUTTON}
           >
             <Undo2 aria-hidden="true" className={TILE_ICON} />
