@@ -97,7 +97,7 @@ export interface TokenPick {
  * **`swap` carries the entry as a view rather than an id**, because every string the dialog sets
  * in type is already on it: the name it is titled by, the {@link DeckTokenView.subtitle} that
  * says *which* Wurm, and the `(printingId, finish)` pair a tile is marked current by. The host
- * looks it up afresh on every render by `entryKey` (`DeckEditor`'s `picking`), so a wall
+ * looks it up afresh on every render by `entryKey` (`DeckEditor`'s `pickingToken`), so a wall
  * re-derived after a write is never answered about with a frozen copy.
  *
  * **`add` carries the tokens on the wall** — one view per *entry*, so a Treasure kept in two

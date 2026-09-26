@@ -15078,6 +15078,13 @@ describe("deck tokens", () => {
       expect.objectContaining({ state: "hidden" }),
     ]);
     expect(storedTokenRows(db, 1, TOKEN_ORACLE.treasure)[0]).not.toHaveProperty("variant");
+    // Kept by hand: the same one row, and both lists read it.
+    state("manual");
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)[0].state).toBe("manual");
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure, "theory")[0].state).toBe("manual");
+    expect(storedTokenRows(db, 1, TOKEN_ORACLE.treasure)).toEqual([
+      expect.objectContaining({ state: "manual" }),
+    ]);
     state("auto");
     expect(storedTokenRows(db, 1, TOKEN_ORACLE.treasure)).toEqual([]);
     // The zeroed Construct keeps its row: a legacy count is something to carry.
@@ -15483,6 +15490,114 @@ describe("deck tokens", () => {
       expect.objectContaining({ state: "manual", implicit: false, quantity: 1 }),
     ]);
     expect(rowsOf(db, 1, TOKEN_ORACLE.wurmDeathtouch)).toEqual([]);
+  });
+
+  /**
+   * **The theory switch carries the live list's token entries into the plan with the cards**
+   * (`deck::update_deck` and `move_live_tokens_into_theory`, spec §4.2): the Treasure art and count
+   * the reader chose are part of the deck that becomes the plan, and one Ctrl+Z puts them back on
+   * the live list. On a new deck, because the starter's two lists hold the same cards and could not
+   * tell a move from a coincidence.
+   *
+   * The stale plan entry is the v52 rung's copy of an old pick: the plan makes no Treasure, so rule
+   * 7 owes its deletion whatever the switch does, and the crate reconciles both lists **before** it
+   * reads the step's before-image — an undo that restored it would hand the backstop a row to
+   * delete and the crate's redo a reason to refuse.
+   */
+  it("moves the live token entries into the plan when the theory switch turns on", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    const deckId = h.deck_create({ deck: { name: "Pirates", formatKey: "modern" } }).id;
+    const ragavan = db.deckCards.find(
+      (c) => c.deckId === 1 && c.name === "Ragavan, Nimble Pilferer",
+    )!;
+    h.deck_add_card({
+      deckId,
+      cardId: ragavan.cardId,
+      categoryId: null,
+      categoryName: "Main deck",
+      variant: "live",
+      quantity: 1,
+    });
+    h.deck_token_set_quantity({
+      deckId,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.treasure,
+      entry: null,
+      quantity: 3,
+    });
+    // Onto the printing Ragavan does not name, so the plan's own default cannot pass for the move.
+    h.deck_token_swap({
+      deckId,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.treasure,
+      from: { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil" },
+      to: { cardId: TOKEN_PRINTING.treasureThob, finish: "foil" },
+    });
+    db.deckTokenPrintings.push({
+      id: Math.max(0, ...db.deckTokenPrintings.map((e) => e.id)) + 1,
+      deckId,
+      variant: "theory",
+      oracleId: TOKEN_ORACLE.treasure,
+      cardId: TOKEN_PRINTING.treasureTafr,
+      finish: "nonfoil",
+      quantity: 7,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    const stepped = expect.objectContaining({
+      cardId: TOKEN_PRINTING.treasureThob,
+      finish: "foil",
+      quantity: 3,
+      implicit: false,
+    });
+
+    h.deck_update({ id: deckId, patch: { theoryEnabled: true } });
+
+    expect(rowsOf(db, deckId, TOKEN_ORACLE.treasure, "theory")).toEqual([stepped]);
+    expect(rowsOf(db, deckId, TOKEN_ORACLE.treasure, "live")).toEqual([]);
+    expect(db.deckTokenPrintings.filter((e) => e.deckId === deckId)).toEqual([
+      expect.objectContaining({ variant: "theory", cardId: TOKEN_PRINTING.treasureThob }),
+    ]);
+    const undo = h.deck_undo_state({ deckId, redoId: null }).undo!;
+    const step = db.deckUndo.find((s) => s.auditId === undo.id)!;
+    expect(step.before.tokenPrintings.filter((e) => e.variant === "theory")).toEqual([]);
+
+    h.deck_undo_apply({ deckId, auditId: undo.id });
+    expect(rowsOf(db, deckId, TOKEN_ORACLE.treasure, "live")).toEqual([stepped]);
+    expect(db.deckTokenPrintings.filter((e) => e.deckId === deckId)).toEqual([
+      expect.objectContaining({ variant: "live", cardId: TOKEN_PRINTING.treasureThob }),
+    ]);
+
+    h.deck_redo_apply({ deckId, auditId: undo.id });
+    expect(rowsOf(db, deckId, TOKEN_ORACLE.treasure, "theory")).toEqual([stepped]);
+  });
+
+  /**
+   * **A state write that lands on the state the token already has records nothing** — no history
+   * row, no undo step, and the deck not touched. `journal_in` compares `state_of`'s
+   * `(card_id, quantity, state)` and never `updated_at`, which the crate's upsert moves on every
+   * press; a comparison that read the whole row would file a second *Dismissed Treasure* for a
+   * press that dismissed nothing.
+   */
+  it("records nothing for a state write that changes no state", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    const dismiss = () =>
+      h.deck_token_state({ deckId: 1, oracleId: TOKEN_ORACLE.treasure, state: "hidden" });
+    dismiss();
+    const rows = db.deckAudit.length;
+    const steps = db.deckUndo.length;
+    const touched = db.decks.find((d) => d.id === 1)!.updatedAt;
+
+    dismiss();
+
+    expect(db.deckAudit).toHaveLength(rows);
+    expect(db.deckUndo).toHaveLength(steps);
+    expect(db.decks.find((d) => d.id === 1)!.updatedAt).toBe(touched);
+    expect(storedTokenRows(db, 1, TOKEN_ORACLE.treasure)).toEqual([
+      expect.objectContaining({ state: "hidden" }),
+    ]);
   });
 
   /** `deck_tokens.deck_id` and `deck_token_printings.deck_id` are `ON DELETE CASCADE` — and the

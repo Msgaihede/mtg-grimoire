@@ -103,16 +103,17 @@
  * both names were **correct** and merely not unique.
  *
  * So every control on a tile folds {@link DeckTokenView.subtitle} into its own name, through
- * {@link tileName}, and the subtitle is drawn under the token's name as an element of its own —
- * never as a second half of one line. Two flex children with a `gap` between them compute to a
- * name with the words run together (`"Missing2"`), which is why the visible name and the visible
- * subtitle are two paragraphs and every accessible name is spelled rather than assembled.
+ * {@link tokenEntryName}, and the subtitle is drawn under the token's name as an element of its
+ * own — never as a second half of one line. Two flex children with a `gap` between them compute
+ * to a name with the words run together (`"Missing2"`), which is why the visible name and the
+ * visible subtitle are two paragraphs and every accessible name is spelled rather than assembled.
  *
  * **Since v52 the subtitle is not enough either**, because one token is several tiles: the two
  * Treasures above share a name *and* a subtitle, and differ only in their printing and finish.
- * So `tileName` spells those too — `Quantity of Treasure, <subtitle>, TMOM · 12, Foil` — and the
- * foot under each picture draws them for the eye (`CardChin`, the same foot every wall of cards
- * draws).
+ * So `tokenEntryName` spells those too — `Quantity of Treasure, <subtitle>, TMOM · 12, Foil` — and
+ * the foot under each picture draws them for the eye (`CardChin`, the same foot every wall of
+ * cards draws). It is `deckTokens.ts`' and not this file's, because the pile in the four views
+ * names the same entry and one entry must answer to one name on one screen.
  *
  * **The subtitle is clamped in CSS and never in the string.** A token's oracle text is the term
  * that separates the two Wurms, so a truncation short enough to fit a 150px tile would fold them
@@ -127,7 +128,6 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { atLeast, cardScaleVars } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
-import { FINISH_LABEL } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
@@ -138,7 +138,7 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { stackCardWidth } from "./CardStack";
 import { CountPill, tokenCountWords } from "./CountPill";
-import { entryRef, type DeckTokenView } from "./deckTokens";
+import { entryRef, tokenEntryName, type DeckTokenView } from "./deckTokens";
 import { META_SUBMIT } from "./metaRows";
 import { TokenModeControl, type TokenMode } from "./TokenModeControl";
 import type { DeckTokens } from "./useDeckTokens";
@@ -290,13 +290,13 @@ export function DeckTokensPanel({
    * that is not dismissed — the figure beside the heading (token stacks spec §3.1). A Treasure
    * kept as three plain copies and one foil is four.
    *
-   * **Summed over `tokens.tokens`, the resolved views, and never over `rows`**: a view's
-   * `quantity` is `deckTokens.ts`' conclusion (`??` the untouched floor, a zeroed token staying
-   * 0), and re-deriving that fallback here would be a second copy of a rule that file owns. The
-   * views are narrowed by `showDismissed`, so the dismissed ones are filtered back out, which
-   * keeps the number still when the reader reveals a dismissal — looking at a token you put away
-   * does not bring it. That is the same set the views' token pile heads (never a dismissed one,
-   * whatever the switch says), so the band and the pile say one number.
+   * **Summed over `tokens.tokens`, the resolved views**: a view's `quantity` is the entry's own,
+   * effective as it arrives — Rust applies the implicit entry's `deck_tokens.quantity ?? 1` since
+   * user schema v52, and a zeroed last entry arrives as 0 — so there is no fallback left for this
+   * sum to re-derive. The views are narrowed by `showDismissed`, so the dismissed ones are
+   * filtered back out, which keeps the number still when the reader reveals a dismissal — looking
+   * at a token you put away does not bring it. That is the same set the views' token pile heads
+   * (never a dismissed one, whatever the switch says), so the band and the pile say one number.
    */
   const copies = tokens.tokens
     .filter((view) => view.state !== "hidden")
@@ -508,34 +508,6 @@ function TokenWall({
   );
 }
 
-/**
- * One entry's name folded into a verb, for a control's accessible name —
- * `Quantity of Treasure, <subtitle>, TMOM · 12, Foil`.
- *
- * **The subtitle is in every one of them**, which is the whole of what keeps two `Wurm` tiles
- * apart for a reader who cannot see them. **So are the printing and the finish, since v52**,
- * which is what keeps two tiles of *one* token apart: a Treasure kept as a plain and a foil copy
- * of one printing shares its name and its subtitle, and only `Nonfoil` against `Foil` separates
- * the two steppers. The printing is written as the foot under the picture writes it
- * (`SET · number`), so what the ear hears is what the eye reads; the finish is spelled on every
- * entry, plain copies included, because on this wall it is a grain term rather than a mark.
- *
- * A name assembled from the tile's visible elements would not do: a `gap` between two flex
- * children runs their words together in the computed name, so each control spells its own — and
- * through this one helper, so a control added later cannot be the one that forgets a term.
- */
-function tileName(verb: string, view: DeckTokenView): string {
-  const printing = [view.setCode?.toUpperCase(), view.collectorNumber]
-    .filter((part): part is string => part !== undefined && part !== null && part !== "")
-    .join(" · ");
-  return [
-    `${verb} ${view.name}`,
-    ...(view.subtitle === null ? [] : [view.subtitle]),
-    ...(printing === "" ? [] : [printing]),
-    FINISH_LABEL[view.finish],
-  ].join(", ");
-}
-
 /** One token or emblem: its picture, what it is, and the three things a reader can do to it. */
 function TokenTile({
   view,
@@ -589,7 +561,7 @@ function TokenTile({
           // Named for what pressing it does. The picture is the control, so a name repeating the
           // token would say "Treasure" over a picture of a Treasure — and the subtitle, the
           // printing and the finish are what separate this press from the tiles beside it.
-          aria-label={tileName("Change the art for", view)}
+          aria-label={tokenEntryName("Change the art for", view)}
           className={cn("block w-full rounded-lg", FOCUS_INSET)}
         >
           <CardArt
@@ -669,7 +641,7 @@ function TokenTile({
           // the token's last entry stepped to 0 stays at 0 with its printing kept (rule 3), and
           // any other entry stepped to 0 leaves the list — Rust's rule, not this stepper's.
           min={0}
-          label={tileName("Quantity of", view)}
+          label={tokenEntryName("Quantity of", view)}
         />
         {/* The token's, not the entry's: `deck_tokens.state` is grained on the oracle id, so a
             dismissal takes every entry of the token off the wall at once — "not in this deck",
@@ -679,8 +651,8 @@ function TokenTile({
           onClick={() =>
             hidden ? tokens.restore(view.oracleId) : tokens.dismiss(view.oracleId)
           }
-          aria-label={tileName(hidden ? "Restore" : "Dismiss", view)}
-          {...tip(tileName(hidden ? "Restore" : "Dismiss", view), { describes: false })}
+          aria-label={tokenEntryName(hidden ? "Restore" : "Dismiss", view)}
+          {...tip(tokenEntryName(hidden ? "Restore" : "Dismiss", view), { describes: false })}
           className={TILE_BUTTON}
         >
           {hidden ? (
@@ -698,7 +670,7 @@ function TokenTile({
           <button
             type="button"
             onClick={() => tokens.reset(view.oracleId)}
-            aria-label={tileName("Reset", view)}
+            aria-label={tokenEntryName("Reset", view)}
             {...tip(
               `Back to the printing the deck's cards make, dropping every ${view.name} printing picked for this list.`,
             )}

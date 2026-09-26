@@ -8,6 +8,7 @@ import {
   isEmblem,
   isTokenLayout,
   isTokenPrinting,
+  tokenEntryName,
   tokenSubtitle,
   type DeckTokenRow,
 } from "./deckTokens";
@@ -347,6 +348,36 @@ describe("deckTokenViews", () => {
     expect(
       deckTokenViews([row({ state: "hidden" })], { showDismissed: true })[0].overridden,
     ).toBe(false);
+  });
+});
+
+/**
+ * **One entry, one name, on every surface that draws it** — the band's tile and the pile's card
+ * both call this, so the whole string is pinned here once rather than twice by two surfaces'
+ * literals. Two entries of one printing differ only in the finish, and the finish is spelled on
+ * the plain copy too: without it the two steppers would announce one name, which is the collection
+ * wall's shipped duplicate-name bug reached through a token.
+ */
+describe("tokenEntryName", () => {
+  const SUBTITLE = "Colorless · {T}, Sacrifice this token: Add one mana of any color.";
+  const entry = (over: Partial<DeckTokenRow>) =>
+    deckTokenViews([
+      row({ cardId: "c-tafr", setCode: "tafr", collectorNumber: "15", implicit: false, ...over }),
+    ])[0];
+
+  it("spells the verb, the token, its subtitle, the printing and the finish", () => {
+    expect(tokenEntryName("Quantity of", entry({ finish: "nonfoil" }))).toBe(
+      `Quantity of Treasure, ${SUBTITLE}, TAFR · 15, Nonfoil`,
+    );
+    expect(tokenEntryName("Quantity of", entry({ finish: "foil" }))).toBe(
+      `Quantity of Treasure, ${SUBTITLE}, TAFR · 15, Foil`,
+    );
+  });
+
+  it("says no printing for one gone from the corpus, and still says its finish", () => {
+    expect(tokenEntryName("Reset", entry({ setCode: null, collectorNumber: null }))).toBe(
+      `Reset Treasure, ${SUBTITLE}, Nonfoil`,
+    );
   });
 });
 

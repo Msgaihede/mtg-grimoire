@@ -13401,10 +13401,14 @@ function tokenChange(
  * its CHECK does not know would stall a paired device on an older build. The undo step is
  * {@link journalled}'s, keyed on that row, so it is filed exactly when the row is.
  *
- * **A write that changed nothing records nothing** — a stepper landing on the count it was at, a
- * reset of a token with no entries — while the deck's stamp still moves, which is the crate's
- * `touch_deck` committing with a transaction that wrote nothing else. `list` is `null` for a state
- * write, which is shared by both lists.
+ * **A write that changed nothing records nothing and touches nothing** — a stepper landing on the
+ * count it was at, a reset of a token with no entries, a dismissal of a token already dismissed:
+ * no history row, no undo step, and the deck's stamp left where it was, because the crate returns
+ * before `touch_deck`. "Nothing" is read as the crate reads it — the entries by
+ * {@link entryRowOf}, the state as `state_of`'s `(quantity, state)` — and **never `updatedAt`**,
+ * which {@link writeTokenState} moves on every non-`auto` press exactly as the crate's upsert
+ * does; a whole-row comparison would file a second *Dismissed Treasure* for a press that
+ * dismissed nothing. `list` is `null` for a state write, which is shared by both lists.
  *
  * A refusal thrown by `write` leaves the stamp unmoved, which is the crate's rollback: every
  * refusal a write can raise is raised before it changes a row.
@@ -13417,15 +13421,17 @@ function journalTokens(
   write: () => TokenChange,
 ): void {
   const deck = requireDeck(db, deckId);
-  const read = () =>
-    JSON.stringify([
+  const read = () => {
+    const held = storedToken(db, deckId, oracleId);
+    return JSON.stringify([
       list === null ? [] : tokenEntries(db, deckId, list, oracleId).map(entryRowOf),
-      storedToken(db, deckId, oracleId) ?? null,
+      held === undefined ? null : { quantity: held.quantity, state: held.state },
     ]);
+  };
   const before = read();
   const change = write();
-  deck.updatedAt = stamp(db);
   if (read() === before) return;
+  deck.updatedAt = stamp(db);
   const token = tokenPrintings(db, oracleId)[0];
   record(
     db,
@@ -14729,6 +14735,29 @@ function moveLiveToTheory(db: FakeDb, deckId: number): number {
   return live.length;
 }
 
+/**
+ * `deck::move_live_tokens_into_theory` — the live list's token entries become the plan's, as its
+ * cards just did (user schema v52, token stacks spec §4.2): the Treasure art the reader chose is
+ * part of the deck that becomes the plan.
+ *
+ * **The plan's own entries go first**, because {@link theoryCopies} asks about `deck_cards` alone
+ * and a plan with no cards can still hold entries — a live entry moved onto a theory one at the
+ * same printing and finish would break the grain. Replacing rather than folding is the switch's
+ * own meaning: the deck the reader built *is* the plan, so a stale plan art kept beside its arts
+ * would draw a mix nobody chose. Row ids travel with the row, as the cards' do.
+ */
+function moveLiveTokensToTheory(db: FakeDb, deckId: number): void {
+  db.deckTokenPrintings = db.deckTokenPrintings.filter(
+    (e) => !(e.deckId === deckId && e.variant === "theory"),
+  );
+  const at = stamp(db);
+  for (const entry of db.deckTokenPrintings) {
+    if (entry.deckId !== deckId || entry.variant !== LIVE) continue;
+    entry.variant = "theory";
+    entry.updatedAt = at;
+  }
+}
+
 /** `deck_theory::theory_copies` — copies, not rows. Two printings at 2 and 3 is 5 cards. */
 function theoryCopies(db: FakeDb, deckId: number): number {
   return db.deckCards
@@ -15932,11 +15961,6 @@ export function writeHandlers(db: FakeDb) {
       // entry is what the reader pointed at, the category is only where it was going.
       const source = db.collectionEntries.find((e) => e.id === args.entryId);
       if (!source) throw refuse(ENTRY_GONE);
-      // **Issue #358's fence** (`deck::plays_card`), and it sits ahead of the pile for the reason
-      // the rollback below exists: the name arm *writes* — a pile nobody has made yet is made
-      // here — and a refusal that lands after that create leaves an empty column standing after
-      // a press that failed. The crate gets that from the transaction the create sits in; this
-      // one gets it by being asked first, which is where `collection_alloc` puts it too.
       // **The token reroute** (user schema v52) — `collection_alloc::collection_to_deck`'s, ahead
       // of the fence below because a deck never "plays" a token (a token is never a `deck_cards`
       // row), so `NOT_IN_DECK` would refuse every one. The row's printing in the row's finish is
@@ -15953,6 +15977,11 @@ export function writeHandlers(db: FakeDb) {
         );
         return { entryId: null, fromDeck: null, deckCardId: null, quantity: 0 };
       }
+      // **Issue #358's fence** (`deck::plays_card`), and it sits ahead of the pile for the reason
+      // the rollback below exists: the name arm *writes* — a pile nobody has made yet is made
+      // here — and a refusal that lands after that create leaves an empty column standing after
+      // a press that failed. The crate gets that from the transaction the create sits in; this
+      // one gets it by being asked first, which is where `collection_alloc` puts it too.
       if (!deckPlays(db, args.deckId, source.cardId)) throw refuse(NOT_IN_DECK);
       // Its **name** as well as its id, because the history row below quotes the word rather
       // than a number no reader can resolve — `deck::add_card`'s two arms record the same way.
@@ -17537,7 +17566,19 @@ export function writeHandlers(db: FakeDb) {
         const turnedOn = theoryEnabled && !before.theoryEnabled;
         deck.theoryEnabled = theoryEnabled;
         if (turnedOn && theoryCopies(db, deck.id) === 0) {
+          // `deck::update_deck`'s order, and the first line is the half that is easy to lose:
+          // **both lists are reconciled before anything moves**, and what that deletes is kept out
+          // of the step's before-image ({@link omitFromStep}). The plan can hold entries its
+          // empty card list makes no token for — the v52 rung copied every pick into both lists
+          // — and rule 7 owes their deletion whatever this press does, so an undo that put one
+          // back would restore a row the backstop deletes again at once. Then the cards, then
+          // the reader's token entries ({@link moveLiveTokensToTheory}), then rule 7 again on the
+          // lists the move just changed. The step is the **net** change, which a snapshot-based
+          // step gets by construction.
+          omitFromStep(db, reconcileTokens(db, deck.id, VARIANTS));
           moveLiveToTheory(db, deck.id);
+          moveLiveTokensToTheory(db, deck.id);
+          reconcileTokens(db, deck.id, VARIANTS);
           // The tab the reader is put on, because it is now the tab their deck is in. Written
           // here rather than left to `deck_set_view_state` for the reason the move itself is
           // not two commands: a reader who pressed one switch made one decision.
@@ -22577,11 +22618,15 @@ function journalled<T extends Record<string, (args: never) => unknown>>(db: Fake
   const wrapped: Record<string, (args: never) => unknown> = {};
   for (const [name, handler] of Object.entries(writes)) {
     // Every write reconciles the tokens of the decks whose cards it moved — spec §4.2's rule 7,
-    // in the crate's two layers ({@link reconcileInStep} and {@link reconcileBackstop}).
-    const step = (args: Record<string, unknown>) =>
-      reconcileInStep(db, () => handler(args as never));
+    // in the crate's two layers ({@link reconcileInStep} and {@link reconcileBackstop}). A write
+    // that refused last time may have left rows for {@link omitFromStep}; they are not this one's.
+    const step = (args: Record<string, unknown>) => {
+      takeStepOmissions(db);
+      return reconcileInStep(db, () => handler(args as never));
+    };
     const stepless = (args: Record<string, unknown>) => {
       const { result, dirty } = step(args);
+      takeStepOmissions(db);
       reconcileBackstop(db, dirty);
       return result;
     };
@@ -22598,12 +22643,16 @@ function journalled<T extends Record<string, (args: never) => unknown>>(db: Fake
       // cut's own Ctrl+Z (spec §4.2): undo puts the card **and** its Treasure printings back. The
       // backstop runs after it, so what it deletes sits in no step — the crate's arrangement.
       const { result, dirty } = step(args);
+      const omitted = takeStepOmissions(db);
       const rows = db.deckAudit.slice(written);
       if (before !== null && rows.length > 0) {
         db.deckUndo.push({
           auditId: rows[rows.length - 1].id,
           deckId,
-          before,
+          before: {
+            ...before,
+            tokenPrintings: before.tokenPrintings.filter((e) => !omitted.has(e.id)),
+          },
           after: deckState(db, deckId) as FakeDeckState,
           undoneAt: null,
         });
@@ -22613,6 +22662,32 @@ function journalled<T extends Record<string, (args: never) => unknown>>(db: Fake
     }) as (args: never) => unknown;
   }
   return wrapped as T;
+}
+
+/**
+ * The token entries a write deleted **ahead of** its own step, keyed by the database — what
+ * {@link journalled} leaves out of that step's before-image.
+ *
+ * The crate reads a step's before-image inside the transaction, so a write can delete first and
+ * read second; the fake's snapshot is taken by the wrapper before the handler runs, so a handler
+ * that owes the crate's order says which rows to leave out instead. One caller: the theory
+ * switch's first reconcile (`deck::update_deck`), whose deletions ride no step for the reason
+ * given there. Deletions only, by row id — a snapshot row is a copy carrying its row's id.
+ */
+const stepOmissions = new WeakMap<FakeDb, Set<number>>();
+
+/** Mark `removed` as deleted ahead of the running write's step. */
+function omitFromStep(db: FakeDb, removed: readonly FakeDeckTokenPrinting[]): void {
+  const ids = stepOmissions.get(db) ?? new Set<number>();
+  for (const entry of removed) ids.add(entry.id);
+  stepOmissions.set(db, ids);
+}
+
+/** The running write's omissions, cleared as they are read. */
+function takeStepOmissions(db: FakeDb): Set<number> {
+  const ids = stepOmissions.get(db) ?? new Set<number>();
+  stepOmissions.delete(db);
+  return ids;
 }
 
 /**

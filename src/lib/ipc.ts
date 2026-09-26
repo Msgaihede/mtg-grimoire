@@ -4586,9 +4586,10 @@ export interface DeckTokenRow {
    * **This entry's finish** — `deck_token_printings.finish`, the collection's own three words and
    * never `null`: the column is `NOT NULL` on purpose, because SQLite's unique index treats every
    * `NULL` as distinct and a nullable finish would let one list hold one regular printing twice.
-   * An implicit entry's is its printing's default — `nonfoil`, or the printing's sole finish when
-   * it is sold in one. It is what the chin names, what the sheen is drawn for and what
-   * {@link unitPrice} is read at.
+   * An implicit entry's is its printing's default, `deck_tokens::default_finish`: the **first**
+   * finish the printing is sold in, in `FINISHES` order — `nonfoil` wherever it is sold that way,
+   * `foil` for one sold only in foil and etched — and `nonfoil` where the corpus lists none. It is
+   * what the chin names, what the sheen is drawn for and what {@link unitPrice} is read at.
    */
   finish: Finish;
   /**
@@ -8186,8 +8187,10 @@ export const ipc = {
   /**
    * **Swap one entry to another printing and/or finish** — the art picker's press (rule 4).
    *
-   * `from` is the entry being changed, or `null` for the implicit entry (materialised first, at
-   * its effective quantity); `to` is where it lands. **Swapping onto a printing and finish this
+   * `from` is the entry being changed, or `null` for the implicit entry — which is never stored,
+   * so the swap *is* its materialisation, **at the destination** and at its effective quantity,
+   * rather than a stored default then moved; `to` is where it lands. Swapping an entry onto its
+   * own printing and finish writes nothing. **Swapping onto a printing and finish this
    * list already holds folds the two**, quantities summed, on the grain — one tile, never two
    * rows that draw identically. The token's other entries are untouched: adding art B keeps
    * art A, and swapping A never reaches B.

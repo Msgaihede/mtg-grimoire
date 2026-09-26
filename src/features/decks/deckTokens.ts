@@ -4,10 +4,10 @@
  * **Rust supplies the facts and this file draws every conclusion**, which is the same boundary
  * the rest of the deck builder keeps. Rust resolves each deck card's `all_parts` against the
  * corpus and joins on whatever the reader stored against that token; what it hands over is
- * true whether or not anything is ever rendered. Which printing to draw, how many copies the
- * stepper starts at, whether a dismissed token is on screen at all and the order the wall
- * reads in are all decisions, and they live here — in one function, with one test file, so
- * that changing a rule is one edit and not four components disagreeing.
+ * true whether or not anything is ever rendered. Whether a dismissed token is on screen at all,
+ * the order the wall reads in, the key each tile is drawn under and the name each control
+ * answers to are all decisions, and they live here — in one function each, with one test file,
+ * so that changing a rule is one edit and not four components disagreeing.
  *
  * **A wire row is one _entry_ since user schema v52** — one printing, in one finish, of one
  * token, in the list the read named (token stacks spec §4.2) — and Rust resolves it: an
@@ -22,7 +22,7 @@
  * never-fetched floor to fall back to: a deck that derives nothing derives nothing.
  */
 
-import { FINISHES, type Finish } from "@/lib/finish";
+import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
 import { WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import type { DeckTokenRow, DeckTokenState, TokenSource } from "@/lib/ipc";
 import { tileKeyOf } from "@/lib/tileKey";
@@ -400,8 +400,10 @@ function byEntry(a: DeckTokenView, b: DeckTokenView): number {
  *
  * **`implicit` is what turns into `null` on the wire**: an implicit entry is not stored, so a
  * write aimed at it names no `(cardId, finish)` and Rust materialises the default in this list
- * only (spec §4.2 rule 2). The `cardId` and `finish` still travel with it for the one write
- * that reads them regardless — a swap's `to` is always a real grain.
+ * only (spec §4.2 rule 2). Its `cardId` and `finish` are the printing the resolver drew, and
+ * **no write reads them**: `useDeckTokens`' `stored` answers `null` off `implicit` alone, and a
+ * swap's destination is an argument of its own rather than anything on this reference. They are
+ * carried because a reference is made from a view, and a stored entry's pair is its address.
  */
 export interface TokenEntryRef {
   oracleId: string;
@@ -422,6 +424,38 @@ export function entryRef(view: DeckTokenView): TokenEntryRef {
     finish: view.finish,
     implicit: view.implicit,
   };
+}
+
+/**
+ * One entry's name folded into a verb, for a control's accessible name —
+ * `Quantity of Treasure, <subtitle>, TMOM · 12, Foil` — and **the one spelling of it**: the band
+ * (`DeckTokensPanel`) and the pile the four views draw (`views/TokenPile`) both call this, because
+ * one entry is drawn on both surfaces at once and must not answer to two names on one screen.
+ *
+ * **The subtitle is in every one of them**, which is the whole of what keeps two `Wurm`s apart for
+ * a reader who cannot see them. **So are the printing and the finish, since v52**, which is what
+ * keeps one token's entries apart: a Treasure kept as a plain and a foil copy of one printing
+ * shares its name and its subtitle, and only `Nonfoil` against `Foil` separates the two. The
+ * printing is written as the chin under the picture writes it (`SET · number`), so what the ear
+ * hears is what the eye reads; the finish is spelled on every entry, plain copies included,
+ * because on this wall it is a grain term rather than a mark. A printing gone from the corpus
+ * (its chin facts all `null`) says no printing and still says its finish. The name's head is
+ * `<verb> <name>`, so `/^Change the art for Treasure/` finds every entry of the token.
+ *
+ * A name assembled from a tile's visible elements would not do: a `gap` between two flex children
+ * runs their words together in the computed name, so each control spells its own — through this
+ * one helper, so a control added later cannot be the one that forgets a term.
+ */
+export function tokenEntryName(verb: string, view: DeckTokenView): string {
+  const printing = [view.setCode?.toUpperCase(), view.collectorNumber]
+    .filter((part): part is string => part !== undefined && part !== null && part !== "")
+    .join(" · ");
+  return [
+    `${verb} ${view.name}`,
+    ...(view.subtitle === null ? [] : [view.subtitle]),
+    ...(printing === "" ? [] : [printing]),
+    FINISH_LABEL[view.finish],
+  ].join(", ");
 }
 
 /**

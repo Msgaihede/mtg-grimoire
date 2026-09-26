@@ -65,8 +65,8 @@ import {
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
-import type { DeckTokenView } from "../deckTokens";
-import { TOKEN_PILE_ATTR, tokenControlName, type TokenPile } from "./TokenPile";
+import { tokenEntryName, type DeckTokenView } from "../deckTokens";
+import { TOKEN_PILE_ATTR, type TokenPile } from "./TokenPile";
 
 /**
  * A card carried from wherever it sits into a pile, as a real pointer gesture.
@@ -4789,7 +4789,7 @@ describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
     const { pile } = setup(TOKENS);
     const wurm = TOKENS[2];
     fireEvent.click(
-      screen.getByRole("button", { name: `Increase ${tokenControlName("Quantity of", wurm)}` }),
+      screen.getByRole("button", { name: `Increase ${tokenEntryName("Quantity of", wurm)}` }),
     );
     // The entry's address — its token, its printing and its finish — and never the oracle id
     // alone, which a token with two printings would share between them.
@@ -4797,7 +4797,7 @@ describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
       { oracleId: "o-wurm-l", cardId: "p-wurm-l", finish: "nonfoil", implicit: false },
       4,
     );
-    fireEvent.click(screen.getByRole("button", { name: tokenControlName("Change the art for", wurm) }));
+    fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Change the art for", wurm) }));
     expect(pile!.pickArt).toHaveBeenCalledWith(wurm);
   });
 

@@ -20,11 +20,10 @@ import { STACK_OPEN_ATTR, stackHeight } from "../CardStack";
 import { CARD_BODY_ATTR, DECK_GROUP_ATTR } from "../cardControl";
 import { tokenCountWords } from "../CountPill";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
-import type { DeckTokenView } from "../deckTokens";
+import { tokenEntryName, type DeckTokenView } from "../deckTokens";
 import { DECK_CARD_ATTR } from "../dnd";
 import {
   TOKEN_PILE_ATTR,
-  tokenControlName,
   tokenFaceFacts,
   tokenMadeBy,
   TokenGridPile,
@@ -155,14 +154,14 @@ const DRAWINGS = [
   { name: "table", draw: (pile: TokenPile) => <TokenTablePile pile={pile} /> },
 ] as const;
 
-describe("tokenControlName", () => {
+describe("tokenEntryName", () => {
   it("folds the subtitle in, so two same-named tokens are two names", () => {
     const [a, b] = WURMS;
-    expect(tokenControlName("Change the art for", a)).toBe(
+    expect(tokenEntryName("Change the art for", a)).toBe(
       "Change the art for Wurm, Colorless 3/3 · Deathtouch, TCLB · 5, Nonfoil",
     );
-    expect(tokenControlName("Change the art for", a)).not.toBe(
-      tokenControlName("Change the art for", b),
+    expect(tokenEntryName("Change the art for", a)).not.toBe(
+      tokenEntryName("Change the art for", b),
     );
   });
 
@@ -172,11 +171,11 @@ describe("tokenControlName", () => {
    * steppers would announce one name: the collection wall's shipped duplicate-name bug, reached
    * through a token.
    *
-   * **Spelled in the band's own shape, term for term** — `<verb> <name>, <subtitle>, <SET ·
-   * number>, <Finish>`, `DeckTokensPanel.tsx`'s `tileName` (module-private, so this is a literal
-   * rather than a comparison) — because one entry is drawn on the band and in the pile at once and
-   * must not answer to two names on one screen. `DeckTokensPanel.test.tsx` pins the band's half
-   * with the same shape.
+   * **One spelling for the band and the pile** — `<verb> <name>, <subtitle>, <SET · number>,
+   * <Finish>`, `deckTokens.ts`' `tokenEntryName`, which both surfaces call — because one entry is
+   * drawn on the band and in the pile at once and must not answer to two names on one screen. The
+   * whole string is written out here rather than compared against the helper, so a change to the
+   * shape is a change a test has to be told about.
    */
   it("names each entry by its printing and finish, exactly as the band's tile does", () => {
     const subtitle = "Colorless · {T}, Sacrifice this token: Add one mana of any color.";
@@ -189,7 +188,7 @@ describe("tokenControlName", () => {
     });
     const commanderLegends = token({ printingId: "p-tclb", finish: "nonfoil" });
     const names = [secretLair, commanderLegends].map((view) =>
-      tokenControlName("Quantity of", view),
+      tokenEntryName("Quantity of", view),
     );
     expect(names).toEqual([
       `Quantity of Treasure, ${subtitle}, SLD · 2820, Foil`,
@@ -197,22 +196,22 @@ describe("tokenControlName", () => {
     ]);
     // And one printing in its two finishes — the pair `TWO_ENTRIES` draws — is two names too.
     const [regular, foil] = TWO_ENTRIES;
-    expect(tokenControlName("Quantity of", regular)).toBe(
+    expect(tokenEntryName("Quantity of", regular)).toBe(
       `Quantity of Treasure, ${subtitle}, TCLB · 5, Nonfoil`,
     );
-    expect(tokenControlName("Quantity of", foil)).toBe(
+    expect(tokenEntryName("Quantity of", foil)).toBe(
       `Quantity of Treasure, ${subtitle}, TCLB · 5, Foil`,
     );
   });
 
   it("leaves out the subtitle an emblem does not have, and a printing gone from the corpus", () => {
-    expect(tokenControlName("Quantity of", token({ name: "Emblem", subtitle: null }))).toBe(
+    expect(tokenEntryName("Quantity of", token({ name: "Emblem", subtitle: null }))).toBe(
       "Quantity of Emblem, TCLB · 5, Nonfoil",
     );
     // All six chin facts are `null` together for a printing the corpus no longer holds; the
     // finish is the entry's own and is still said.
     expect(
-      tokenControlName(
+      tokenEntryName(
         "Quantity of",
         token({ name: "Emblem", subtitle: null, setCode: null, collectorNumber: null }),
       ),
@@ -304,7 +303,7 @@ describe.each(DRAWINGS)("the $name drawing", ({ draw }) => {
   it("opens the printing picker on the entry that was pressed", () => {
     const { pile } = setup();
     fireEvent.click(
-      screen.getByRole("button", { name: tokenControlName("Change the art for", WURMS[1]) }),
+      screen.getByRole("button", { name: tokenEntryName("Change the art for", WURMS[1]) }),
     );
     // The whole view, so the editor can hold its `entryKey` — never a frozen copy of it.
     expect(pile.pickArt).toHaveBeenCalledWith(WURMS[1]);
@@ -312,7 +311,7 @@ describe.each(DRAWINGS)("the $name drawing", ({ draw }) => {
 
   it("steps an entry's copies, down to zero, addressed by the entry", () => {
     const { pile } = setup([token({ quantity: 1 })]);
-    const name = tokenControlName("Quantity of", token());
+    const name = tokenEntryName("Quantity of", token());
     // Spelled out rather than built with `entryRef`, so the address is checked against the
     // entry's facts rather than against the helper the pile calls.
     const entry = { oracleId: "o-treasure", cardId: "p-treasure", finish: "nonfoil", implicit: false };
@@ -336,18 +335,18 @@ describe.each(DRAWINGS)("the $name drawing", ({ draw }) => {
       const names = screen
         .getAllByRole("button", { name: /^Change the art for Treasure/ })
         .map((button) => button.getAttribute("aria-label"));
-      expect(names).toEqual(TWO_ENTRIES.map((view) => tokenControlName("Change the art for", view)));
+      expect(names).toEqual(TWO_ENTRIES.map((view) => tokenEntryName("Change the art for", view)));
       expect(new Set(names).size).toBe(2);
 
       const foil = TWO_ENTRIES[1];
       fireEvent.click(
-        screen.getByRole("button", { name: `Increase ${tokenControlName("Quantity of", foil)}` }),
+        screen.getByRole("button", { name: `Increase ${tokenEntryName("Quantity of", foil)}` }),
       );
       expect(pile.setQuantity).toHaveBeenLastCalledWith(
         { oracleId: "o-treasure", cardId: "p-treasure", finish: "foil", implicit: false },
         2,
       );
-      fireEvent.click(screen.getByRole("button", { name: tokenControlName("Change the art for", foil) }));
+      fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Change the art for", foil) }));
       expect(pile.pickArt).toHaveBeenLastCalledWith(foil);
     } finally {
       error.mockRestore();
@@ -423,7 +422,7 @@ describe("TokenStackPile", () => {
     const [regular, foil] = TWO_ENTRIES.map(
       (view) =>
         screen
-          .getByRole("button", { name: tokenControlName("Change the art for", view) })
+          .getByRole("button", { name: tokenEntryName("Change the art for", view) })
           .closest("li")!,
     );
     expect(within(foil).getByRole("img", { name: "Foil" })).toBeInTheDocument();
@@ -439,7 +438,7 @@ describe("TokenStackPile", () => {
     renderStack({ ...pileOf([token()]), theoryMark: () => ({ tier: "exact", delta: 0 }) });
     const press = screen.getByRole("button", { name: /^Change the art for Treasure/ });
     expect(press).toHaveAccessibleName(
-      `${tokenControlName("Change the art for", token())}, ${theoryMatchLabel("exact", 0).toLowerCase()}`,
+      `${tokenEntryName("Change the art for", token())}, ${theoryMatchLabel("exact", 0).toLowerCase()}`,
     );
   });
 
@@ -458,7 +457,7 @@ describe("TokenStackPile", () => {
     const { container } = renderStack(pileOf([token(), ...WURMS]));
     expect(container.querySelectorAll(`[${STACK_OPEN_ATTR}]`)).toHaveLength(0);
     fireEvent.focus(
-      screen.getByRole("button", { name: tokenControlName("Change the art for", WURMS[0]) }),
+      screen.getByRole("button", { name: tokenEntryName("Change the art for", WURMS[0]) }),
     );
     const open = container.querySelectorAll(`[${STACK_OPEN_ATTR}]`);
     expect(open).toHaveLength(1);

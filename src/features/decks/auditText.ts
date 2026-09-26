@@ -612,7 +612,8 @@ function categoryLine(p: Record<string, unknown>): AuditLine {
  *   the entry that left and the one it landed as, read off the corpus at the write so the drawer
  *   can say which art without it. The extra **`folded`** is the swap landing on an entry the list
  *   already held, whose copies were summed into it.
- * * **`state`** — the state words, `auto`/`manual` before and the one written after.
+ * * **`state`** — the state words, the token's before (`auto` where it had no row) and the one
+ *   written after. Any of the three can be the `from`: every restore's is `hidden`.
  * * **`reset`** — both `null`, and the extra **`entries`** is how many entries went.
  */
 function tokenLine(p: Record<string, unknown>): AuditLine {

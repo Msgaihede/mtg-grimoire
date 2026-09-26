@@ -51,10 +51,10 @@
  *
  * A token's name does not identify it (`DeckTokensPanel.tsx`'s header has the corpus figures —
  * `Wurmcoil Engine` alone puts two `Wurm`s on one wall), so every control here spells its own
- * accessible name through {@link tokenControlName}, the band's `tileName` rule: the subtitle folded
- * in, never assembled from two flex children that would compute to `"Wurm3/3"`. **And nor does a
- * token identify an entry**, so the name carries the entry's printing and finish too — in the
- * band's own spelling, so one entry answers to one name on both surfaces.
+ * accessible name through `deckTokens.ts`' {@link tokenEntryName} — the helper the band calls too:
+ * the subtitle folded in, never assembled from two flex children that would compute to
+ * `"Wurm3/3"`. **And nor does a token identify an entry**, so the name carries the entry's
+ * printing and finish too — one spelling, so one entry answers to one name on both surfaces.
  */
 import { useCallback, useId, type ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
@@ -63,7 +63,7 @@ import { CardChin } from "@/components/CardChin";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { atLeast, cardScaleVars } from "@/lib/cardZoom";
-import { FINISH_LABEL, playedFinish } from "@/lib/finish";
+import { playedFinish } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import type { Currency } from "@/lib/marketplace";
@@ -86,7 +86,7 @@ import { REVEALED_ON_CARD, revealedWhenOpen } from "../cardControl";
 import { tokenCountWords } from "../CountPill";
 import { DeckCardFace, type DeckCardFaceFacts } from "../DeckCardFace";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
-import { entryRef, type DeckTokenView, type TokenEntryRef } from "../deckTokens";
+import { entryRef, tokenEntryName, type DeckTokenView, type TokenEntryRef } from "../deckTokens";
 import type { TheoryMark } from "../theoryMatch";
 import { tokenDeckFinish } from "../tokenTheory";
 import { GroupHeader, type GroupHeading } from "./GroupHeader";
@@ -120,37 +120,6 @@ export const TOKEN_PILE_ATTR = "data-token-pile";
  *  exactly as it was before the pile existed. */
 export function hasTokenPile(pile: TokenPile | undefined): pile is TokenPile {
   return pile !== undefined && pile.tokens.length > 0;
-}
-
-/**
- * One entry's name folded into a verb, for a control's accessible name —
- * `Quantity of Treasure, <subtitle>, TCLB · 5, Nonfoil`, spelled once for the four views.
- *
- * **Exactly the band's `tileName`, term for term** (`DeckTokensPanel.tsx`), because one entry is
- * drawn on both surfaces at once and must not answer to two names on one screen. That helper is
- * module-private, so the spelling is restated here rather than imported, and
- * `TokenPile.test.tsx` pins both halves with the band's own literal shape — keep the two in step.
- *
- * **The subtitle is in every one of them**, which is the whole of what keeps two `Wurm`s apart
- * for a reader who cannot see them — **and so are the printing and the finish** (token stacks
- * PR 2), which is what keeps one token's entries apart: a Treasure held as a plain and a foil copy
- * shares its name and its subtitle, and only `Nonfoil` against `Foil` separates the two. The
- * printing is written as the chin writes it (`SET · number`), so what the ear hears is what the
- * eye reads, and the finish is spelled on every entry, plain copies included, because here it is a
- * grain term rather than a mark. A printing gone from the corpus (its chin facts all `null`) says
- * no printing and still says its finish. The name's head is unchanged, so
- * `/^Change the art for Treasure/` still finds every entry of the token.
- */
-export function tokenControlName(verb: string, view: DeckTokenView): string {
-  const printing = [view.setCode?.toUpperCase(), view.collectorNumber]
-    .filter((part): part is string => part !== undefined && part !== null && part !== "")
-    .join(" · ");
-  return [
-    `${verb} ${view.name}`,
-    ...(view.subtitle === null ? [] : [view.subtitle]),
-    ...(printing === "" ? [] : [printing]),
-    FINISH_LABEL[view.finish],
-  ].join(", ");
 }
 
 /** Why this token is in the pile — the deck cards that make it, or the reader's own press. */
@@ -355,7 +324,7 @@ export function TokenStackPile({
                 focus="inset"
                 value={view.quantity}
                 min={0}
-                label={tokenControlName("Quantity of", view)}
+                label={tokenEntryName("Quantity of", view)}
                 onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
             </span>
@@ -402,7 +371,7 @@ function TokenFace({
   const tip = useTooltip();
   const press = useCallback(() => pile.pickArt(view), [pile, view]);
   const mark = pile.theoryMark?.(view) ?? null;
-  const name = tokenControlName("Change the art for", view);
+  const name = tokenEntryName("Change the art for", view);
   return (
     <>
       <button
@@ -511,7 +480,7 @@ export function TokenGridPile({
                 focus="inset"
                 value={view.quantity}
                 min={0}
-                label={tokenControlName("Quantity of", view)}
+                label={tokenEntryName("Quantity of", view)}
                 onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
             </span>
@@ -551,7 +520,7 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
             <button
               type="button"
               onClick={() => pile.pickArt(view)}
-              aria-label={tokenControlName("Change the art for", view)}
+              aria-label={tokenEntryName("Change the art for", view)}
               className={cn(
                 "flex h-[22px] w-full cursor-pointer items-center gap-1.5 rounded px-1 text-xs",
                 "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
@@ -587,7 +556,7 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
                 size="xs"
                 value={view.quantity}
                 min={0}
-                label={tokenControlName("Quantity of", view)}
+                label={tokenEntryName("Quantity of", view)}
                 onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
             </span>
@@ -634,7 +603,7 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
                 size="xs"
                 value={view.quantity}
                 min={0}
-                label={tokenControlName("Quantity of", view)}
+                label={tokenEntryName("Quantity of", view)}
                 onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
             </span>
@@ -659,7 +628,7 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
             <button
               type="button"
               onClick={() => pile.pickArt(view)}
-              aria-label={tokenControlName("Change the art for", view)}
+              aria-label={tokenEntryName("Change the art for", view)}
               {...tip("Change the art", { describes: false })}
               className={cn(
                 "grid size-7 place-items-center rounded-md border border-border text-dim hover:text-text",

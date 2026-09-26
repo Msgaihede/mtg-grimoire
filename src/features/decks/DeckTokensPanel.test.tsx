@@ -124,7 +124,7 @@ describe("DeckTokensPanel", () => {
   /**
    * **One tile per entry, and no two tiles share a name.** A Treasure kept as a plain and a foil
    * copy of one printing is two tiles over one picture, so the subtitle no longer tells them
-   * apart — the printing and the finish do, and `tileName` spells both into every control.
+   * apart — the printing and the finish do, and `tokenEntryName` spells both into every control.
    *
    * The keys are the entries' too: keyed on the oracle id, the two Treasures would be one React
    * child twice, which React reports and then draws wrong.
