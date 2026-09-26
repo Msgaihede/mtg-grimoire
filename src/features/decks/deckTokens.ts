@@ -4,24 +4,28 @@
  * **Rust supplies the facts and this file draws every conclusion**, which is the same boundary
  * the rest of the deck builder keeps. Rust resolves each deck card's `all_parts` against the
  * corpus and joins on whatever the reader stored against that token; what it hands over is
- * true whether or not anything is ever rendered. Which printing to draw, how many copies the
- * stepper starts at, whether a dismissed token is on screen at all and the order the wall
- * reads in are all decisions, and they live here — in one function, with one test file, so
- * that changing a rule is one edit and not four components disagreeing.
+ * true whether or not anything is ever rendered. Whether a dismissed token is on screen at all,
+ * the order the wall reads in, the key each tile is drawn under and the name each control
+ * answers to are all decisions, and they live here — in one function each, with one test file,
+ * so that changing a rule is one edit and not four components disagreeing.
  *
- * **The table stores deviations only** (spec §4). A token nobody touched has no row at all, so
- * `cardId`, `quantity` and `state` all arrive `null` in the ordinary case and every one of
- * them needs a fallback. Those fallbacks are written with `??` and must stay that way: `||`
- * agrees with `??` on every value the reader can produce except one, and that one — a
- * quantity of 0 — is a decision they made on purpose.
+ * **A wire row is one _entry_ since user schema v52** — one printing, in one finish, of one
+ * token, in the list the read named (token stacks spec §4.2) — and Rust resolves it: an
+ * untouched token arrives as one **implicit** row at the resolver's default printing and
+ * `deck_tokens.quantity ?? 1`, and a token with entries arrives as exactly those. So the
+ * fallbacks this file used to draw (`cardId ?? defaultCardId`, `quantity ?? 1`) are Rust's now,
+ * and what is left here is the grain the wall keys on ({@link DeckTokenView.entryKey}), the order
+ * it reads in, and whether a dismissed token is on screen at all.
  *
  * **Nothing here fetches, and nothing here can be unavailable.** The feature reads the corpus
  * the app already has, so unlike the Tagger datasets or the price feeds there is no
  * never-fetched floor to fall back to: a deck that derives nothing derives nothing.
  */
 
+import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
 import { WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import type { DeckTokenRow, DeckTokenState, TokenSource } from "@/lib/ipc";
+import { tileKeyOf } from "@/lib/tileKey";
 
 /**
  * The wire shape, re-exported from its one home.
@@ -35,33 +39,124 @@ import type { DeckTokenRow, DeckTokenState, TokenSource } from "@/lib/ipc";
 export type { DeckTokenRow, DeckTokenState, TokenSource };
 
 /**
- * How many copies a token the reader has never touched shows.
+ * How many copies a token the reader has never touched shows — the `1` in Rust's
+ * `deck_tokens.quantity ?? 1` for an implicit entry.
  *
  * **A floor, deliberately, and never a guess.** Reading *"create two 1/1 white Soldier
  * tokens"* out of oracle text is defeated by `create X`, by *for each*, by copy-tokens and by
  * repeatable makers like Krenko, and a number the reader has to correct is worse than one they
- * raise. It is stored as an *absent* quantity rather than as a 1, so moving this constant
- * later moves every untouched token with it.
+ * raise. **Rust applies it since v52** — a wire row's quantity is already effective — so this is
+ * the TypeScript spelling of that fact, kept for the one reader that has to answer it itself:
+ * the Storybook fake, which mirrors the resolver.
  *
  * Typed `number` rather than left as the literal `1`: a consumer that seeds a `useState` from
  * it would otherwise get a state of type `1` and be unable to set anything else.
  */
 export const DEFAULT_TOKEN_QUANTITY: number = 1;
 
-/** One token or emblem, resolved — every field is what to draw, with no fallback left to do. */
+/**
+ * The three `cards.layout` words that make a printing a token **by themselves** —
+ * `deck_tokens::TOKEN_LAYOUTS`. A `Set` for {@link isTokenLayout}'s one lookup.
+ */
+const TOKEN_LAYOUTS: ReadonlySet<string> = new Set(["token", "double_faced_token", "emblem"]);
+
+/**
+ * The two layouts a token *can* wear without being one — `deck_tokens::TWO_SIDED_LAYOUTS`, the
+ * half of {@link isTokenPrinting} the type line answers. Six printings in the debug corpus are
+ * tokens under them (five `flip` Role tokens and the `reversible_card` Mechtitan) against 119 real
+ * cards (Jace, Kytheon, the double-sided basics), measured by the crate on 2026-09-26.
+ */
+const TWO_SIDED_LAYOUTS: ReadonlySet<string> = new Set(["flip", "reversible_card"]);
+
+/**
+ * Whether a `cards.layout` word is a token's **on its own** — `token`, `double_faced_token` or
+ * `emblem` — and **the TypeScript twin of `deck_tokens::is_token_layout`**, for drawing.
+ *
+ * **Not the routing question, and it answers `false` for six real tokens.** A `flip` Role token
+ * or the `reversible_card` Mechtitan is a token by its type line and not by its layout, so a
+ * caller deciding whether a printing *is* a token asks {@link isTokenPrinting}. This answers the
+ * narrower question a surface asks about a row the crate has already filed as a token.
+ *
+ * **It routes nothing in the app.** A token dropped on a pile or added from the search column is
+ * filed as a token entry by Rust, at `deck::add_card` and `collection_alloc::collection_to_deck`,
+ * because no drag payload and no add call carries the card's layout (measured 2026-09-26) — a
+ * router here would have to thread it through six call sites and would miss the seventh.
+ *
+ * Absent (`null`, `undefined`) is not a token.
+ */
+export function isTokenLayout(layout: string | null | undefined): boolean {
+  return layout !== null && layout !== undefined && TOKEN_LAYOUTS.has(layout);
+}
+
+/**
+ * **Whether a printing is a token or an emblem** — the TypeScript twin of
+ * `deck_tokens::is_token_printing`, the question both of the crate's add paths route on and the
+ * one `add_printing_in` refuses everything else by (`NOT_A_TOKEN`). The Storybook fake routes and
+ * refuses on this; the app itself routes nothing ({@link isTokenLayout}'s second paragraph).
+ *
+ * Two halves, in the crate's order:
+ *
+ * 1. **The layout alone**, for {@link TOKEN_LAYOUTS} — {@link isTokenLayout}.
+ * 2. **The type line, for {@link TWO_SIDED_LAYOUTS}** — a `flip` or `reversible_card` printing is
+ *    a token when its type line, **or any face of it**, begins `Token` or `Emblem`. The corpus
+ *    stores a two-faced printing's line as its faces joined by ` // `, so the faces are the
+ *    ` // ` segments and nothing is parsed. Scryfall writes the `Token` supertype first, which is
+ *    why a case-sensitive prefix is the whole test.
+ *
+ * Any other layout is never a token, whatever its line says — a `normal` card whose line starts
+ * `Token` is not read as one. An absent layout or an absent line answers `false`.
+ */
+export function isTokenPrinting(
+  layout: string | null | undefined,
+  typeLine: string | null | undefined,
+): boolean {
+  if (isTokenLayout(layout)) return true;
+  if (layout === null || layout === undefined || !TWO_SIDED_LAYOUTS.has(layout)) return false;
+  if (typeLine === null || typeLine === undefined) return false;
+  return typeLine
+    .split(" // ")
+    .some((face) => face.startsWith("Token") || face.startsWith("Emblem"));
+}
+
+/**
+ * One entry of a token list, resolved — every field is what to draw, with no fallback left to do.
+ *
+ * **One view per entry** (user schema v52): a token with a foil and a nonfoil Treasure in the list
+ * is two views sharing an {@link oracleId} and differing in {@link printingId}, {@link finish},
+ * {@link quantity} and everything below the picture. Every surface keys a tile on
+ * {@link entryKey}, never on the oracle id.
+ */
 export interface DeckTokenView {
   oracleId: string;
   name: string;
   typeLine: string | null;
   layout: string;
-  /** What to draw: the reader's pick, else the resolver's. */
+  /** This entry's printing — Rust's resolved `cardId`, the resolver's default for an implicit
+   *  entry. What the tile draws and what the chin describes. */
   printingId: string;
-  /** What to show in the stepper. */
+  /** This entry's finish — never `null`, the collection's own three words. What the chin names,
+   *  what the sheen is drawn for and what {@link unitPrice} was read at. */
+  finish: Finish;
+  /** `true` when this list holds no entry of the token and this is the one Rust drew for it. A
+   *  write aimed at it sends `null` for the entry, and Rust materialises it (spec §4.2 rule 2). */
+  implicit: boolean;
+  /**
+   * The tile's identity — `tileKeyOf(printingId, finish)`, the collection wall's own spelling,
+   * because the grain is the same one: two copies of one printing in two finishes are two
+   * objects. Unique within one list's answer by construction (`deck_token_printings` is unique on
+   * `(deck, list, card, finish)`, and an implicit entry exists only where no stored one does).
+   */
+  entryKey: string;
+  /** What to show in the stepper — Rust's effective quantity. `0` is a value. */
   quantity: number;
   sources: TokenSource[];
   derived: boolean;
   state: DeckTokenState;
-  /** True when the reader has deviated — drives the "reset" affordance. */
+  /**
+   * True when this list holds the token's entries — which is exactly what `deck_token_reset`
+   * deletes, so it is what drives the "reset" affordance. A dismissal is not one: reset does not
+   * touch the state.
+   */
   overridden: boolean;
   /** {@link tokenSubtitle}'s line, or `null` where there is nothing to say. */
   subtitle: string | null;
@@ -94,16 +189,16 @@ export interface DeckTokenView {
    */
   imageUris: Partial<Record<ImageVariant, string>> | null;
   /**
-   * The effective printing's chin facts and price — {@link DeckTokenRow.setCode} and its five
-   * neighbours, resolved by Rust off the printing {@link DeckTokenView.printingId} names and
-   * **passed through untouched**. What the chin prints from them (the finish word, the em dash,
-   * the currency) is the drawing's conclusion and not this module's: a view keyed on a stored
-   * fact can be tested against the fact, and a second decision here would be a second place a
-   * Treasure's price could come to disagree with the picker's.
+   * The entry's chin facts and price — {@link DeckTokenRow.setCode} and its five neighbours,
+   * resolved by Rust off the printing {@link DeckTokenView.printingId} names and **passed through
+   * untouched**. What the chin prints from them (the finish word, the em dash, the currency) is
+   * the drawing's conclusion and not this module's: a view keyed on a stored fact can be tested
+   * against the fact, and a second decision here would be a second place a Treasure's price could
+   * come to disagree with the picker's.
    *
-   * `unitPrice` is one copy at the marketplace the read was asked for, `null` where it quotes
-   * none; the pile's heading multiplies it by {@link DeckTokenView.quantity}, and nothing sums it
-   * into the deck's own totals.
+   * `unitPrice` is one copy **at the entry's {@link finish}** at the marketplace the read was
+   * asked for, `null` where it quotes none; the pile's heading multiplies it by
+   * {@link DeckTokenView.quantity}, and nothing sums it into the deck's own totals.
    */
   setCode: string | null;
   collectorNumber: string | null;
@@ -208,23 +303,22 @@ function viewOf(row: DeckTokenRow): DeckTokenView {
     name: row.name,
     typeLine: row.typeLine,
     layout: row.layout,
-    // `??` on both, and never `||`. A stored `""` is not reachable — `card_id` is either a
-    // printing or NULL — but a stored 0 is, and it is a token the reader zeroed while keeping
-    // the art they chose for it.
-    printingId: row.cardId ?? row.defaultCardId,
-    quantity: row.quantity ?? DEFAULT_TOKEN_QUANTITY,
+    // The entry's own printing, finish and quantity, as Rust resolved them — an implicit entry's
+    // are the resolver's default and `deck_tokens.quantity ?? 1` already. No fallback here: a
+    // second one would be a second, stale copy of spec §4.2's rule 1.
+    printingId: row.cardId,
+    finish: row.finish,
+    implicit: row.implicit,
+    entryKey: tileKeyOf(row.cardId, row.finish),
+    quantity: row.quantity,
     // Passed through rather than copied: the rows come straight off a React Query cache and
     // nothing downstream mutates them.
     sources: row.sources,
     derived: row.derived,
-    state: row.state ?? "auto",
-    // "There is something to reset", which is exactly the three stored columns. `quantity`
-    // is compared against `null` rather than tested for truth for the reason above: 0 is a
-    // deviation and the most easily lost one.
-    overridden:
-      row.cardId !== null ||
-      row.quantity !== null ||
-      (row.state !== null && row.state !== "auto"),
+    state: row.state,
+    // "There is something to reset": `deck_token_reset` deletes this list's entries, so an
+    // implicit entry is the one state it has nothing to do to.
+    overridden: !row.implicit,
     subtitle: tokenSubtitle(row),
     // `??` for the absent key as well as for the null: `imageUris` is `Partial`, so a printing
     // that publishes only some variants has no entry at all for the rest.
@@ -259,7 +353,8 @@ function viewOf(row: DeckTokenRow): DeckTokenView {
  * how this was found, and 104 token/emblem names are shared by more than one `oracle_id`
  * (debug corpus, 2026-09-07). The subtitle comes first of the two because it is the thing the
  * reader can actually read — Deathtouch before Lifelink is an order that means something —
- * and the oracle id is the final term only so that the comparator is total.
+ * and the oracle id is what keeps one token's entries from interleaving with another's. Within
+ * one token, {@link byEntry} orders the entries.
  */
 function byEmblemThenName(a: DeckTokenView, b: DeckTokenView): number {
   const emblems = Number(isEmblem(a)) - Number(isEmblem(b));
@@ -268,16 +363,109 @@ function byEmblemThenName(a: DeckTokenView, b: DeckTokenView): number {
   if (names !== 0) return names;
   const subtitles = (a.subtitle ?? "").localeCompare(b.subtitle ?? "", "en");
   if (subtitles !== 0) return subtitles;
-  return a.oracleId.localeCompare(b.oracleId, "en");
+  const tokens = a.oracleId.localeCompare(b.oracleId, "en");
+  if (tokens !== 0) return tokens;
+  return byEntry(a, b);
 }
 
 /**
- * The resolver's rows as the panel's tiles.
+ * Collector numbers compared **as numbers where they are numbers** — `2` before `15` — and as
+ * text where they are not (`15a`, `★`). Pinned to `"en"` for the reason the name comparison is.
+ */
+const COLLECTOR_ORDER = new Intl.Collator("en", { numeric: true });
+
+/**
+ * **One token's entries, in the order a reader looks for a printing**: set, then collector
+ * number, then finish in `FINISHES` order (nonfoil, foil, etched) — spec §4.2 — so a token's
+ * printings sit together and a foil copy sits right after its nonfoil twin.
+ *
+ * A printing gone from the corpus has no set and no number; its `null`s sort as empty text, in
+ * front, which is a stable place rather than a meaningful one. The printing id is the final term
+ * only so the comparator is total: two entries of one token cannot share a printing *and* a
+ * finish, because that is the grain.
+ */
+function byEntry(a: DeckTokenView, b: DeckTokenView): number {
+  const sets = (a.setCode ?? "").localeCompare(b.setCode ?? "", "en");
+  if (sets !== 0) return sets;
+  const numbers = COLLECTOR_ORDER.compare(a.collectorNumber ?? "", b.collectorNumber ?? "");
+  if (numbers !== 0) return numbers;
+  const finishes = FINISHES.indexOf(a.finish) - FINISHES.indexOf(b.finish);
+  if (finishes !== 0) return finishes;
+  return a.printingId.localeCompare(b.printingId, "en");
+}
+
+/**
+ * What a token write needs to address one entry — the token, the entry's grain and whether it
+ * is the implicit one. {@link entryRef} makes one out of a view; `useDeckTokens`' writes take it.
+ *
+ * **`implicit` is what turns into `null` on the wire**: an implicit entry is not stored, so a
+ * write aimed at it names no `(cardId, finish)` and Rust materialises the default in this list
+ * only (spec §4.2 rule 2). Its `cardId` and `finish` are the printing the resolver drew, and
+ * **no write reads them**: `useDeckTokens`' `stored` answers `null` off `implicit` alone, and a
+ * swap's destination is an argument of its own rather than anything on this reference. They are
+ * carried because a reference is made from a view, and a stored entry's pair is its address.
+ */
+export interface TokenEntryRef {
+  oracleId: string;
+  cardId: string;
+  finish: Finish;
+  implicit: boolean;
+}
+
+/**
+ * The four facts that address a view's entry, **and nothing else** — so a write is handed a
+ * reference rather than a whole view, and a stale view cannot carry a quantity or a state into
+ * a write by accident.
+ */
+export function entryRef(view: DeckTokenView): TokenEntryRef {
+  return {
+    oracleId: view.oracleId,
+    cardId: view.printingId,
+    finish: view.finish,
+    implicit: view.implicit,
+  };
+}
+
+/**
+ * One entry's name folded into a verb, for a control's accessible name —
+ * `Quantity of Treasure, <subtitle>, TMOM · 12, Foil` — and **the one spelling of it**: the band
+ * (`DeckTokensPanel`) and the pile the four views draw (`views/TokenPile`) both call this, because
+ * one entry is drawn on both surfaces at once and must not answer to two names on one screen.
+ *
+ * **The subtitle is in every one of them**, which is the whole of what keeps two `Wurm`s apart for
+ * a reader who cannot see them. **So are the printing and the finish, since v52**, which is what
+ * keeps one token's entries apart: a Treasure kept as a plain and a foil copy of one printing
+ * shares its name and its subtitle, and only `Nonfoil` against `Foil` separates the two. The
+ * printing is written as the chin under the picture writes it (`SET · number`), so what the ear
+ * hears is what the eye reads; the finish is spelled on every entry, plain copies included,
+ * because on this wall it is a grain term rather than a mark. A printing gone from the corpus
+ * (its chin facts all `null`) says no printing and still says its finish. The name's head is
+ * `<verb> <name>`, so `/^Change the art for Treasure/` finds every entry of the token.
+ *
+ * A name assembled from a tile's visible elements would not do: a `gap` between two flex children
+ * runs their words together in the computed name, so each control spells its own — through this
+ * one helper, so a control added later cannot be the one that forgets a term.
+ */
+export function tokenEntryName(verb: string, view: DeckTokenView): string {
+  const printing = [view.setCode?.toUpperCase(), view.collectorNumber]
+    .filter((part): part is string => part !== undefined && part !== null && part !== "")
+    .join(" · ");
+  return [
+    `${verb} ${view.name}`,
+    ...(view.subtitle === null ? [] : [view.subtitle]),
+    ...(printing === "" ? [] : [printing]),
+    FINISH_LABEL[view.finish],
+  ].join(", ");
+}
+
+/**
+ * The resolver's rows as the panel's tiles — **one per entry**, a token's entries together.
  *
  * `hidden` rows are dropped unless `showDismissed` — a dismissal is the reader saying "not in
  * this deck", so it has to actually leave the wall, and the affordance that brings it back is
- * the only way to undo it. `manual` rows stay whether the deck derives them or not; that is
- * the whole of what the word means.
+ * the only way to undo it. The state is the token's, so a dismissal takes every entry of it at
+ * once. `manual` rows stay whether the deck derives them or not; that is the whole of what the
+ * word means.
  *
  * Returns a **new** array. The input is `readonly` and untouched, because it is a query
  * cache's own array and sorting it in place would reorder the cache under React.

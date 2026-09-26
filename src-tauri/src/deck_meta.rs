@@ -789,23 +789,27 @@ pub fn set_category_active(
     // the sentence from a field whose name is about state rather than about what happened.
     let action = if is_active { "activate" } else { "deactivate" };
     let audit_id = record_category(&tx, deck_id, &json!({ "action": action, "name": name }))?;
-    record_category_step(
-        &tx,
-        audit_id,
-        deck_id,
-        vec![crate::deck_undo::Op::Categories {
-            restore: vec![],
-            patch: before,
-            delete: vec![],
-            default_category_id: None,
-        }],
-        vec![crate::deck_undo::Op::Categories {
-            restore: vec![],
-            patch: category_step_row(&tx, id)?,
-            delete: vec![],
-            default_category_id: None,
-        }],
-    )?;
+    // **The token reconcile, by hand** — this step is built without `deck_undo::record_cells`,
+    // which is where every other card write gets it. A pile switched off counts toward nothing,
+    // so its cards make no tokens, and a Treasure only they made loses its entries in both lists
+    // (a category is not variant-scoped). They ride this step, so switching the pile back on
+    // with Ctrl+Z brings the reader's Treasure printings back with it; switching it on by hand
+    // brings the Treasure back as its implicit entry, which is rule 7's own promise.
+    let removed = crate::deck_tokens::reconcile_in(&tx, deck_id, &crate::schema::DECK_VARIANTS)?;
+    let mut undo = vec![crate::deck_undo::Op::Categories {
+        restore: vec![],
+        patch: before,
+        delete: vec![],
+        default_category_id: None,
+    }];
+    let mut redo = vec![crate::deck_undo::Op::Categories {
+        restore: vec![],
+        patch: category_step_row(&tx, id)?,
+        delete: vec![],
+        default_category_id: None,
+    }];
+    crate::deck_undo::push_removed_tokens(removed, &mut undo, &mut redo);
+    record_category_step(&tx, audit_id, deck_id, undo, redo)?;
     tx.commit().map_err(|e| e.to_string())?;
     read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
 }
@@ -1050,35 +1054,37 @@ pub fn delete_category(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    record_category_step(
-        &tx,
-        audit_id,
-        deck_id,
-        vec![
-            crate::deck_undo::Op::Categories {
-                restore: category_before,
-                patch: vec![],
-                delete: vec![],
-                default_category_id: Some(default_before),
-            },
-            crate::deck_undo::Op::Cards {
-                scope: cells.clone(),
-                rows: cards_before,
-            },
-        ],
-        vec![
-            crate::deck_undo::Op::Cards {
-                scope: cells,
-                rows: cards_after,
-            },
-            crate::deck_undo::Op::Categories {
-                restore: vec![],
-                patch: vec![],
-                delete: vec![id],
-                default_category_id: Some(default_after),
-            },
-        ],
-    )?;
+    // **The token reconcile, by hand, over both lists** — [`set_category_active`]'s reason, and
+    // the CASCADE's reach: the cards under the pile went in both variants, so a token only they
+    // made goes in both. Last on both sides of the step, after the pile and its cards, because
+    // nothing it restores points at either.
+    let removed = crate::deck_tokens::reconcile_in(&tx, deck_id, &crate::schema::DECK_VARIANTS)?;
+    let mut undo = vec![
+        crate::deck_undo::Op::Categories {
+            restore: category_before,
+            patch: vec![],
+            delete: vec![],
+            default_category_id: Some(default_before),
+        },
+        crate::deck_undo::Op::Cards {
+            scope: cells.clone(),
+            rows: cards_before,
+        },
+    ];
+    let mut redo = vec![
+        crate::deck_undo::Op::Cards {
+            scope: cells,
+            rows: cards_after,
+        },
+        crate::deck_undo::Op::Categories {
+            restore: vec![],
+            patch: vec![],
+            delete: vec![id],
+            default_category_id: Some(default_after),
+        },
+    ];
+    crate::deck_undo::push_removed_tokens(removed, &mut undo, &mut redo);
+    record_category_step(&tx, audit_id, deck_id, undo, redo)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }

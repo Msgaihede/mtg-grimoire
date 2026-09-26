@@ -2570,3 +2570,81 @@ token's chin read its set and number, and `—` where the printing has no price
 The search column's Collection tab listed `Any card`, `Any format`, `Commander`, … in its Format
 picker; picking `Any card` held (`Showing: Any card`) where the tab had opened on the deck's own
 format.
+
+## Token entries, per list, and the mode control — 2026-09-26, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+Token stacks PR 2 ([the spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §4, user
+schema **v52**), driven over `scripts/cdp.mjs` on **Bruna** again, from a copy of the main
+checkout's `data` folder taken at **v46** — so the launch climbed six rungs, not one.
+
+### The climb and the legacy pick
+
+The copy held one v51-shaped art pick (`deck_tokens.card_id` set, `quantity` NULL, deck 1). After
+the launch: `user_version` **52**; the pick cleared on its `deck_tokens` row; and two entries,
+`live` and `theory`, at quantity 1, under the derived names `<override uid>-live` / `-theory`. The
+copy is **unpaired**, so the launch-time conversion ran — a paired device converts after its first
+pull instead. Every one of the five decks read `token_mode = 'managed'`.
+
+### The band and the pile, per entry
+
+The band's header is one **34px** row — disclosure, count pill, `Add printing`, the `Tokens` word
+and the `Managed | Hide` group — at 1920 and at **1024** (right edge 989 of the column, no document
+overflow at either). The pile's heading is one **26px** row. Every tile is named
+`<verb> <name>, <subtitle>, <SET · number>, <Finish>`; the two Angels (`Flying` against
+`Flying, vigilance`) are two names; a foil-only printing's implicit entry reads `Foil`.
+
+### Add printing, swap, and the plan's marks
+
+- **Add printing** opened a **1440 × 972** picker titled `Add a printing`: a search box, one
+  group per kept token named with its subtitle, **454** printing × finish tiles, none pressed.
+  Picking `TFDC · 2, Foil` under the Flying Angel added a second entry beside the old one — the
+  pill 8 → 9 — and the Undo button read `Undo — Added 1 × Angel (foil)`.
+- **On Actual the plan's marks moved with it**: the new foil entry read `art mismatch · 1 to
+  remove` (the plan holds one Flying Angel, the list now two) and the original `exact match`.
+- **A press on the pile's foil entry** opened the swap picker, `Art for Angel`, **45** tiles, with
+  exactly `TFDC · 2 · 2026, Foil` pressed. Picking `TFRC · 1, Nonfoil` changed that entry and no
+  other — the original `TRVR · 2` was untouched — and Undo read `Undo — Swapped Angel's art`.
+
+### Cutting a token's maker, and one Ctrl+Z bringing both printings back
+
+On the **Theory** list (a live cut files no undo step — it moves cardboard), with the Flying
+Angel at two printings: stepping **Court of Grace** to zero took both Angel entries and its Spirit
+off the list with it (pile 9 → 6) — rule 7's in-transaction reconcile — and Undo read
+`Undo — Removed Court of Grace`. **One Undo put back the card, both Angel printings and the Spirit**
+(pile 6 → 9), and Redo (`Redo — Removed Court of Grace`) cut all four again with no banner.
+
+### Hide
+
+`Hide` took the pile out of the view and left the band's nine tiles and its steppers; `Managed`
+brought it back. Each was one undoable step — `Undo — Hid Tokens & Emblems`,
+`Undo — Set Tokens & Emblems to Managed`.
+
+### A token from the search column
+
+On the `All cards` tab under `Any card`, `t:token treasure`, pressing `Add` on **Dinosaur //
+Treasure** — a `double_faced_token`, the widened predicate's case — filed it as a token entry at its
+printing's own finish (`F17 · 11, Foil`): the pill 9 → 10, the deck's `Cards` still `100+1`, no
+deck row, no landed glow, Undo `Added 1 × Dinosaur // Treasure (foil)`. **The button promised
+`Add Dinosaur // Treasure to Creature`**, which is where a deck card would have gone and not where
+this one went — **fixed the same day**: a token tile's button is named
+`Add … to Tokens & Emblems` (`isTokenPrinting` on the search row's own `layout` and `typeLine`),
+and the press still sends the ordinary add Rust reroutes.
+
+### The Collection tab: a token is greyed, and plain copies wore a foil sheen
+
+- **A token in the collection cannot be filed from the tab at all.** With one Treasure copy seeded
+  at the root (and removed afterwards), its tile's Add was `aria-disabled` and read `Treasure is
+  not in this deck — add it from the Card search tab first` — #358's fence, because a token is
+  never a deck row the deck "plays". Right for Managed mode, where tokens never touch the
+  collection; **the sentence is wrong for a token** (adding it from Card search makes a token entry,
+  which still is not a played card) — open, below. The Rust reroute in `collection_to_deck` is
+  therefore unreachable from this window in PR 2.
+- **Fixed on the pass:** every plain copy on the tab drew `data-foil-sheen` — three of four tiles,
+  all `nonfoil` rows. The tab handed `CardArt` the raw word, which it reads as a finish to sheen;
+  `CollectionSearchTab` now maps `nonfoil` to `null`, `CollectionPage`'s `finishMarkOf` rule. After
+  the fix only the foil row (`FIN · 566`, ×10) wore one. That bug predates the token work.
+
+### Open
+
+- **The Collection tab's greyed sentence for a token** advises a route that cannot help. PR 3's
+  Collection mode is where a token is filed from the collection at all; the sentence belongs to it.

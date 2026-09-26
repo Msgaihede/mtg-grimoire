@@ -54,6 +54,13 @@ function numberField(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
+/** A payload field read as a count, whichever of a JSON number or its digits the backend wrote —
+ *  `0` for anything else, {@link numberField}'s floor. */
+function countField(value: unknown): number {
+  const parsed = typeof value === "string" ? Number(value) : value;
+  return numberField(parsed);
+}
+
 /**
  * A payload field read as a flag.
  *
@@ -569,6 +576,144 @@ function categoryLine(p: Record<string, unknown>): AuditLine {
   }
 }
 
+/**
+ * A token write — `deck_tokens.rs`' five commands, one `deck` row each with `field: "token"`
+ * (user schema v52, token stacks spec §4.7).
+ *
+ * **A `deck` row and never a tenth audit kind**, and the reason is sync rather than the rebuild
+ * the notes paid attention to: `deck_audit` is a synced, append-only table, so a word its `CHECK`
+ * does not know would be refused by a paired device still on an older build — and its applier
+ * defers the op, which today loses it and the sender's later ops in that page for good: the sync
+ * client advances its cursor past a deferral, so upgrading brings nothing back (sync.md, "Deferred
+ * ops are dropped, not held"). `deck` is already the deck-level kind, so no reader takes a token
+ * for a deck card.
+ *
+ * **The name is the payload's** (`name`), because Rust records no card on these rows — a token is
+ * never a `deck_cards` row — so {@link DeckAuditEntry.cardName} is `null` here. The **subtitle**
+ * rides in the detail: `Wurmcoil Engine` makes two `Wurm`s, and two "Dismissed Wurm" lines about
+ * two tokens would read as one. So does the **list**, where it is the plan: the row's own
+ * variant is the deck level, and the payload's `list` is the only place the list is recorded. The
+ * live list is not named, because on a deck without a plan there is only one list and "actual"
+ * would be a word for a distinction that is not on the reader's screen.
+ *
+ * **The finish is said only where it is not the regular copy** — "Added 1 × Treasure (foil)",
+ * "Added 1 × Treasure" — which is the deck card's rule: `nonfoil` is the one finish with no word.
+ *
+ * **The payload is `deck_tokens::journal_in`'s, key for key** — snake_case throughout:
+ * `{ field: "token", action, name, subtitle, card_id, finish, list, from, to }` plus one extra
+ * per action. `card_id`/`finish` are the entry the row is about (the one a swap *landed* on) and
+ * are `null` for `state` and `reset`; `list` is `null` for `state`, which is shared by both lists.
+ * `from` and `to` are read per action:
+ *
+ * * **`add`** — the entry's count before and after, and the extra **`quantity` is the copies
+ *   added**. The sentence's number is `quantity` and never `to`: a second press on a printing the
+ *   list holds steps it by one, and "Added 3 × Treasure" for that press would be a sentence about
+ *   two copies nobody added. A row without the extra falls back to `to − from`.
+ * * **`quantity`** — the two counts; a `0` is a count and is printed.
+ * * **`swap`** — two **objects**, `entry_facts`' `{ card_id, finish, set_code, collector_number }`:
+ *   the entry that left and the one it landed as, read off the corpus at the write so the drawer
+ *   can say which art without it. The extra **`folded`** is the swap landing on an entry the list
+ *   already held, whose copies were summed into it.
+ * * **`state`** — the state words, the token's before (`auto` where it had no row) and the one
+ *   written after. Any of the three can be the `from`: every restore's is `hidden`.
+ * * **`reset`** — both `null`, and the extra **`entries`** is how many entries went.
+ */
+function tokenLine(p: Record<string, unknown>): AuditLine {
+  const name = text(p.name) ?? "a token";
+  const held = finishSuffix(text(p.finish));
+  const detail = line(
+    text(p.subtitle),
+    text(p.list) === "theory" ? `in the ${listName("theory")}` : null,
+  );
+  switch (text(p.action)) {
+    case "add": {
+      // The count added is the row's own `quantity` — `deck_tokens.rs` records it beside the
+      // entry's two counts, since a drop onto a pile can add more than one — and `to − from` for
+      // a row that does not carry it.
+      const added =
+        "quantity" in p ? countField(p.quantity) : countField(p.to) - countField(p.from);
+      return {
+        text: added > 0 ? `Added ${added} × ${name}${held}` : `Added ${name}${held}`,
+        detail,
+      };
+    }
+    case "quantity": {
+      // Through `text()`, which answers a number as its digits — so a `0` is printed rather than
+      // read as absent — and a string as itself. The arrow is only honest when *both* ends are
+      // there; a row carrying one of them says the shorter sentence.
+      const from = text(p.from);
+      const to = text(p.to);
+      return {
+        text:
+          from !== null && to !== null
+            ? `${name}${held} ${from} → ${to}`
+            : `Changed ${name}${held}`,
+        detail,
+      };
+    }
+    case "swap": {
+      // Which art to which, off the two `entry_facts` objects — the deck card swap's `FROM → TO`
+      // one kind over, with the number beside the set because two printings of one token in one
+      // set is the ordinary case. The arrow is drawn only when both ends name a printing; the
+      // fold is said in the deck card's own words, because a list that silently loses a line
+      // reads like a bug.
+      const from = tokenArt(nested(p.from));
+      const to = tokenArt(nested(p.to));
+      return {
+        text: `Swapped ${name}'s art`,
+        detail: line(
+          detail,
+          from !== null && to !== null ? `${from} → ${to}` : to,
+          flag(p.folded) ? "folded into one row" : null,
+        ),
+      };
+    }
+    case "state":
+      // `hidden` is the dismissal; either other word is the token back on the wall, and which
+      // one (`auto` or `manual`) is the resolver's bookkeeping rather than something the reader
+      // chose between.
+      return {
+        text: text(p.to) === "hidden" ? `Dismissed ${name}` : `Restored ${name}`,
+        detail,
+      };
+    case "reset": {
+      // `entries` is how many went. A reset of a token with none records nothing at all, so a
+      // `0` here is a row this build did not write, and it says nothing rather than "0".
+      const entries = countField(p.entries);
+      return {
+        text: `Reset ${name}'s printings`,
+        detail: line(detail, entries > 0 ? `${plural(entries, "printing")} cleared` : null),
+      };
+    }
+    // An action this build has never heard of, written by a newer one: still a sentence about
+    // the token, which is what the `note` arm's `default` does for a note.
+    default:
+      return { text: `Changed ${name}`, detail };
+  }
+}
+
+/** A finish as the words after a token's name — nothing for the regular copy, which is the deck
+ *  card's rule: `nonfoil` is the one finish with no word. */
+function finishSuffix(finish: string | null): string {
+  return finish === null || finish === "nonfoil" ? "" : ` (${finishLabel(finish).toLowerCase()})`;
+}
+
+/**
+ * One side of a token swap, from `deck_tokens::entry_facts` — `TAFR #15`, `THOB #13 (foil)`.
+ *
+ * The set code is upper-cased here for the deck card swap's reason (a set code is printed in
+ * capitals, and `cards.set_code` stores it lower). `null` when the object is absent or names no
+ * set: an entry whose printing had left the corpus when the row was written has nothing to say,
+ * and a bare finish would be a claim about which art without one.
+ */
+function tokenArt(facts: Record<string, unknown> | null): string | null {
+  if (facts === null) return null;
+  const set = text(facts.set_code);
+  if (set === null) return null;
+  const number = text(facts.collector_number);
+  return `${set.toUpperCase()}${number === null ? "" : ` #${number}`}${finishSuffix(text(facts.finish))}`;
+}
+
 /** The deck's own fields. `cover`, `notes` and `note` say only that they changed: a cover is an
  *  id nobody can read and a note is a paragraph nobody wants in a one-line history. */
 function deckLine(p: Record<string, unknown>): AuditLine {
@@ -829,6 +974,26 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     // cards that make them — the opposite meaning of the same word.
     case "tokenRail":
       return { text: `Moved ${TOKENS_HEADING}`, detail: null };
+    // `decks.token_mode` (user schema v52), which replaced v47's `token_stack` — a switch that
+    // wrote no row at all, so there is no old word to keep reading. `deck.rs` records the mode as
+    // **`tokenMode`** with the two words, and the sentence is the mode's rather than the
+    // column's: a reader pressed *Managed* or *Hide*, never `hidden`. No `detail`, the marks'
+    // reason — three words, and the one not named is not worth a line.
+    case "tokenMode":
+      switch (text(p.to)) {
+        case "hidden":
+          return { text: `Hid ${TOKENS_HEADING}`, detail: null };
+        case "managed":
+          return { text: `Set ${TOKENS_HEADING} to Managed`, detail: null };
+        case "collection":
+          return { text: `Set ${TOKENS_HEADING} to Collection`, detail: null };
+        default:
+          return { text: `Changed how the deck keeps its ${TOKENS_HEADING}`, detail: null };
+      }
+    // Every token write since user schema v52 — the five commands, one row each. See
+    // {@link tokenLine}: they are `deck` rows rather than a tenth kind for the notes' reason.
+    case "token":
+      return tokenLine(p);
     // A field this build has never heard of, written by a newer one — or by an older one,
     // since a database outlives the app that wrote it. A plain line with a date and a delta
     // beats a blank one, and beats a throw by a good deal more.

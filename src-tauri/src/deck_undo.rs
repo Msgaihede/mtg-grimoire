@@ -1,4 +1,4 @@
-//! Undo and redo for the deck editor: the journal, and the four primitives it replays.
+//! Undo and redo for the deck editor: the journal, and the primitives it replays.
 //!
 //! Three decisions shape this module, and each one is a thing that goes wrong if it is
 //! reversed:
@@ -131,8 +131,9 @@ const DECK_FIELDS: &[&str] = &[
     // is gone — one paragraph became [`Op::Notes`]' many rows — and `notes_open` is not its
     // successor on this list any more than `tokens_open` or `stats_open` are on it: a
     // disclosure is not an audited edit, so there is nothing for a Ctrl+Z to put back.
-    // `token_stack` (user schema v47) is absent on the same terms: a view setting with no
-    // history row, so no step either.
+    // `token_stack` (user schema v47) was absent on the same terms — a view setting with no
+    // history row — and user schema v52 dropped the column for `token_mode`, below, which is
+    // not a view setting and is on this list.
     "cover_card_id",
     "cover_kind",
     // **Retired, and it must stay on this list until the column itself goes.** Nothing has
@@ -187,9 +188,14 @@ const DECK_FIELDS: &[&str] = &[
     // Schema v49's managed-wishlist mode — an ordinary `deck_update` answer with a history row.
     "managed_wishlist_mode",
     // User schema v51's rail index — an arrangement, like a category's `sort_order`: the reader
-    // moved the pile and Ctrl+Z moves it back. **Unlike `token_stack`**, which is a view setting
-    // with no history row and so no step (see the note under `description` above).
+    // moved the pile and Ctrl+Z moves it back.
     "token_rail_index",
+    // User schema v52's token mode — `managed`, `collection` or `hidden` — and on the list for
+    // the rail index's reason: a mode is an arrangement the reader chose for this deck, an
+    // ordinary `deck_update` writes it with a history row, and a Ctrl+Z that left it alone
+    // would put a settings press back and leave the pile shown or hidden where the press put
+    // it. It replaced `token_stack`, which was a view setting and never on this list.
+    "token_mode",
     "last_variant",
     "last_group_by",
     "last_sort_by",
@@ -399,6 +405,46 @@ pub struct NoteCard {
     pub oracle_id: String,
 }
 
+/// One `deck_token_printings` row — one printing, in one finish, of one token, in one list —
+/// as a step carries it. User schema v52.
+///
+/// **Addressed by its grain and never by its id**, [`CardRow`]'s rule for [`CardRow`]'s reason:
+/// nothing points at `deck_token_printings.id`, so a restored entry is a new row and carrying
+/// the old id would buy nothing but a collision the first time a rowid had been handed on.
+/// [`crate::schema::DECK_TOKEN_PRINTING_GRAIN`] is `deck_id, variant, card_id, finish`, and the
+/// deck is the step's.
+///
+/// `oracle_id` is carried although it is not a grain term: a printing belongs to one oracle
+/// card, so it is a stored fact for grouping (and for an orphan whose printing has left the
+/// corpus), and a restore has to write it back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenEntryRow {
+    pub variant: String,
+    pub oracle_id: String,
+    pub card_id: String,
+    /// `nonfoil`, `foil` or `etched` — **never NULL**, unlike [`CardRow::finish`]: the column is
+    /// `NOT NULL` so that SQLite's unique index cannot hold one regular printing twice.
+    pub finish: String,
+    pub quantity: i64,
+}
+
+/// One `deck_tokens` row — a token's state, shared by both lists — as a step carries it.
+///
+/// **`state: None` is the row's absence**, and that is a state of its own rather than a
+/// missing value: `deck_tokens` stores only deviations, so a token nobody has touched has no
+/// row, and putting that back means deleting whatever a write inserted. `card_id` and
+/// `quantity` are the legacy columns user schema v52 stopped writing — carried anyway, because
+/// a restore that dropped them would move a token's implicit quantity (`quantity ?? 1`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenStateRow {
+    pub oracle_id: String,
+    pub card_id: Option<String>,
+    pub quantity: Option<i64>,
+    pub state: Option<String>,
+}
+
 /// One reversal instruction. A step is a list of these, applied in order.
 ///
 /// **Order inside a step is load-bearing**: `deck_cards.category_id` and `.label_id` are real
@@ -500,6 +546,38 @@ pub enum Op {
     Deck {
         fields: serde_json::Map<String, Value>,
     },
+    /// A deck's token entries and token states — user schema v52, and the sixth of these.
+    ///
+    /// **Every token write is a deck write and files a step**, which reverses what
+    /// `crate::deck_tokens` said until v52 ("token writes record nothing"): a reader who steps a
+    /// Treasure to 3 by mistake presses Ctrl+Z like anywhere else in the deck.
+    ///
+    /// `delete` removes `deck_token_printings` rows **by grain**, then `restore` upserts rows to
+    /// the recorded quantity, then `states` puts `deck_tokens` rows back (a `None` state deletes
+    /// the row). Deletes first, [`Op::Cards`]' "delete exactly the scope, insert exactly the
+    /// rows": a token write records every entry of the token in its list on both sides, so an
+    /// undo deletes what the write left and restores what it found, and a swap's fold — two
+    /// entries became one — comes back as two.
+    ///
+    /// **It also rides the card writes**, which is the half of it that is not a token command:
+    /// [`record_cells`], [`record_variant`] and `deck_meta`'s two hand-built steps (a pile
+    /// switched off, a pile deleted) run [`crate::deck_tokens::reconcile_in`] after their write
+    /// and append the entries it removed through [`push_removed_tokens`] — a Treasure nothing
+    /// makes any more — so Ctrl+Z on the cut puts back the card **and** the reader's Treasure
+    /// printings. **The theory switch builds its own pair instead** (`deck::token_step`): it
+    /// *moves* the live list's entries into the plan as well as reconciling, so its step carries
+    /// the net difference between the deck's entries before and after, in both directions.
+    ///
+    /// No FK to order it against: `deck_token_printings` points at `decks` and at nothing a step
+    /// restores, so every caller appends it after the card ops.
+    Tokens {
+        #[serde(default)]
+        restore: Vec<TokenEntryRow>,
+        #[serde(default)]
+        delete: Vec<TokenEntryRow>,
+        #[serde(default)]
+        states: Vec<TokenStateRow>,
+    },
 }
 
 /// One change, reversible both ways.
@@ -594,6 +672,11 @@ pub fn record_cells(
     made: Option<Vec<i64>>,
 ) -> Result<(), String> {
     let after = read_cells(tx, deck_id, &cells)?;
+    // **The token reconcile, inside this write's own transaction** (spec §4.2 rule 7): a list
+    // that stopped deriving a token loses that token's entries, and they ride this step so one
+    // Ctrl+Z puts back the card *and* the reader's printings of what it made. Read after the
+    // write and before the step is built, because what it removed is part of the step.
+    let removed = crate::deck_tokens::reconcile_in(tx, deck_id, &variants_of(&cells))?;
     let mut undo = vec![Op::Cards {
         scope: cells.clone(),
         rows: before,
@@ -603,7 +686,52 @@ pub fn record_cells(
         rows: after,
     }];
     push_made_categories(tx, deck_id, made, &mut undo, &mut redo)?;
+    push_removed_tokens(removed, &mut undo, &mut redo);
     record_step(tx, audit_id, deck_id, &Step::new(undo, redo))
+}
+
+/// Every list a scope names, once each and in the schema's order — what
+/// [`crate::deck_tokens::reconcile_in`] is asked about after a card write.
+///
+/// A move names one list; a category delete names both. Reconciling a list the write did not
+/// touch would cost a derivation and could remove nothing the write caused.
+fn variants_of(cells: &[Cell]) -> Vec<&'static str> {
+    crate::schema::DECK_VARIANTS
+        .into_iter()
+        .filter(|v| cells.iter().any(|c| c.variant == *v))
+        .collect()
+}
+
+/// Append the token entries a card write's reconcile removed to both sides of its step:
+/// restored on the undo side, deleted again on the redo side, **after** the card ops on both.
+///
+/// Nothing to order against — `deck_token_printings` hangs off `decks` alone — so after is
+/// simply where a reader of the step expects the consequence. An empty list appends nothing, so
+/// every step recorded for a deck that makes no tokens is the shape it always was.
+///
+/// `pub(crate)` for `deck_meta`'s two steps built without [`record_cells`] or
+/// [`record_variant`] — the pile switch and the pile delete — which append the same op by hand.
+/// `deck::update_deck`'s theory switch is the third step built by hand and does **not** come
+/// through here: it moves entries as well as removing them, so it records a net difference of
+/// its own (`deck::token_step`).
+pub(crate) fn push_removed_tokens(
+    removed: Vec<TokenEntryRow>,
+    undo: &mut Vec<Op>,
+    redo: &mut Vec<Op>,
+) {
+    if removed.is_empty() {
+        return;
+    }
+    undo.push(Op::Tokens {
+        restore: removed.clone(),
+        delete: vec![],
+        states: vec![],
+    });
+    redo.push(Op::Tokens {
+        restore: vec![],
+        delete: removed,
+        states: vec![],
+    });
 }
 
 /// Add the piles a write invented to both sides of a step.
@@ -756,6 +884,9 @@ pub fn record_variant(
     made_labels: Option<Vec<i64>>,
 ) -> Result<(), String> {
     let after = read_variant(tx, deck_id, variant)?;
+    // [`record_cells`]' token reconcile, over the one list this write reshaped — an import
+    // that replaced the list, or a copy of live into theory, can stop it making a token.
+    let removed = crate::deck_tokens::reconcile_in(tx, deck_id, &[variant])?;
     let mut undo = vec![Op::Variant {
         variant: variant.to_owned(),
         rows: before,
@@ -766,6 +897,7 @@ pub fn record_variant(
     }];
     push_made_categories(tx, deck_id, made, &mut undo, &mut redo)?;
     push_made_labels(tx, made_labels, &mut undo, &mut redo)?;
+    push_removed_tokens(removed, &mut undo, &mut redo);
     record_step(tx, audit_id, deck_id, &Step::new(undo, redo))
 }
 
@@ -1221,7 +1353,107 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                     .map_err(|e| e.to_string())?;
                 }
             }
+            Op::Tokens {
+                restore,
+                delete,
+                states,
+            } => apply_tokens(tx, deck_id, restore, delete, states)?,
         }
+    }
+    Ok(())
+}
+
+/// [`Op::Tokens`]' three lists, in the order that makes the op idempotent.
+///
+/// **Deletes by grain first**, then restores, then states — [`Op::Cards`]' "delete exactly the
+/// scope, insert exactly the rows". A step records every entry of the token in its list on both
+/// sides, so deleting the side being left and upserting the side being reached lands exactly on
+/// the recorded state whether or not a row survived in between.
+///
+/// ⚠️ **Except a grain the same op also restores, which is left for the upsert to rewrite in
+/// place.** Deleting it first would land on the same quantity through a *new row* — and a new
+/// row is a new `sync_uid`: a tombstone and a put on the wire for an entry the step only
+/// re-counted, and a row a peer still names by the old uid, which add-wins can resurrect beside
+/// the new one on the same grain, where the unique index refuses it and that peer's stream
+/// stalls. `deck::token_step` records the theory switch's net difference for the same reason;
+/// this makes every token step net at the one place they are all applied, so a step recorded
+/// whole — as `deck_tokens`' journal records them — keeps its entries' names too.
+/// `an_undo_rewrites_the_entries_it_keeps_in_place_and_keeps_their_uids` is the paired fixture.
+///
+/// **The restore is an upsert on [`crate::schema::DECK_TOKEN_PRINTING_GRAIN`] that writes the
+/// recorded quantity**, never a sum: a step carries a state, not a delta, and replaying one twice
+/// must not double a reader's Treasures. The grain is interpolated and never retyped, because an
+/// `ON CONFLICT` target that does not match the unique index verbatim is a runtime error at the
+/// first undo rather than a compile error.
+///
+/// **No capture suppression**: these are ordinary writes, so the undo reaches the reader's other
+/// devices as the ops it is — and a restore is a captured insert, which is what keeps a
+/// reconcile's deletion meaningful to undo on the device across the room.
+fn apply_tokens(
+    tx: &Connection,
+    deck_id: i64,
+    restore: &[TokenEntryRow],
+    delete: &[TokenEntryRow],
+    states: &[TokenStateRow],
+) -> Result<(), String> {
+    let kept = |row: &TokenEntryRow| {
+        restore
+            .iter()
+            .any(|r| r.variant == row.variant && r.card_id == row.card_id && r.finish == row.finish)
+    };
+    for row in delete.iter().filter(|row| !kept(row)) {
+        tx.execute(
+            "DELETE FROM deck_token_printings
+              WHERE deck_id = ?1 AND variant = ?2 AND card_id = ?3 AND finish = ?4",
+            params![deck_id, row.variant, row.card_id, row.finish],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    for row in restore {
+        tx.execute(
+            &format!(
+                "INSERT INTO deck_token_printings
+                     (deck_id, variant, oracle_id, card_id, finish, quantity, created_at,
+                      updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch(), unixepoch())
+                 ON CONFLICT ({grain}) DO UPDATE SET
+                     quantity = excluded.quantity,
+                     updated_at = unixepoch()",
+                grain = crate::schema::DECK_TOKEN_PRINTING_GRAIN
+            ),
+            params![
+                deck_id,
+                row.variant,
+                row.oracle_id,
+                row.card_id,
+                row.finish,
+                row.quantity
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    for row in states {
+        match &row.state {
+            None => tx.execute(
+                "DELETE FROM deck_tokens WHERE deck_id = ?1 AND oracle_id = ?2",
+                params![deck_id, row.oracle_id],
+            ),
+            Some(state) => tx.execute(
+                &format!(
+                    "INSERT INTO deck_tokens
+                         (deck_id, oracle_id, card_id, quantity, state, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, unixepoch(), unixepoch())
+                     ON CONFLICT ({grain}) DO UPDATE SET
+                         card_id = excluded.card_id,
+                         quantity = excluded.quantity,
+                         state = excluded.state,
+                         updated_at = unixepoch()",
+                    grain = crate::schema::DECK_TOKEN_GRAIN
+                ),
+                params![deck_id, row.oracle_id, row.card_id, row.quantity, state],
+            ),
+        }
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1379,8 +1611,11 @@ fn same_value(a: &Value, b: &Value) -> bool {
 ///   is compared only when the step moved it.
 /// * **[`Op::Deck`]**: the columns in `changed` — the ones the step moved — hold the recorded
 ///   values, [`VIEW_FIELDS`] excepted.
+/// * **[`Op::Tokens`]**: every `restore` entry is at its grain with the recorded quantity, and
+///   every `states` row is what `deck_tokens` holds for that token — absence included
+///   ([`tokens_hold`]).
 ///
-/// ⚠️ **`delete` lists are deliberately not checked**, in any of the three kinds. They state an
+/// ⚠️ **`delete` lists are deliberately not checked**, in any of the four kinds that carry one. They state an
 /// absence ("no row has this id"), and every row id here is a rowid alias that another deck's, or
 /// another label's, next insert is handed — so the check would refuse an undo because somebody
 /// elsewhere made a pile. It protects nothing either: every restore finds a taken id and moves
@@ -1448,8 +1683,63 @@ fn holds(
                 let now = read_deck_fields(tx, deck_id, &wanted)?;
                 wanted.iter().all(|f| same_value(&now[*f], &fields[*f]))
             }
+            Op::Tokens {
+                restore, states, ..
+            } => tokens_hold(tx, deck_id, restore, states)?,
         };
         if !held {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Each recorded entry is at its grain with its recorded oracle and quantity, and each recorded
+/// token state is what `deck_tokens` holds for that token now — the row itself, or its absence.
+///
+/// **The side being left, checked; its `delete` list, not** — [`holds`]' rule for every kind:
+/// a delete states an absence, and here a sync pull adding the same printing back would refuse
+/// an undo for a reason the reader cannot see, while protecting nothing, because the reversal's
+/// restore is an upsert that lands on whatever is there.
+///
+/// This is what refuses an undo after a write that files no step moved the entries — the
+/// backstop reconcile behind [`crate::sync::with_write`], a cut through
+/// `collection_alloc::deck_to_collection`, a sync pull.
+fn tokens_hold(
+    tx: &Connection,
+    deck_id: i64,
+    restore: &[TokenEntryRow],
+    states: &[TokenStateRow],
+) -> Result<bool, String> {
+    for row in restore {
+        let now: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT oracle_id, quantity FROM deck_token_printings
+                  WHERE deck_id = ?1 AND variant = ?2 AND card_id = ?3 AND finish = ?4",
+                params![deck_id, row.variant, row.card_id, row.finish],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if now != Some((row.oracle_id.clone(), row.quantity)) {
+            return Ok(false);
+        }
+    }
+    for row in states {
+        let now: Option<(Option<String>, Option<i64>, String)> = tx
+            .query_row(
+                "SELECT card_id, quantity, state FROM deck_tokens
+                  WHERE deck_id = ?1 AND oracle_id = ?2",
+                params![deck_id, row.oracle_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let recorded = row
+            .state
+            .clone()
+            .map(|state| (row.card_id.clone(), row.quantity, state));
+        if now != recorded {
             return Ok(false);
         }
     }
@@ -2471,6 +2761,52 @@ mod tests {
             let value = read_deck_fields(conn, deck_id, &[field]).unwrap();
             out.push(format!("deck {field}={}", value[*field]));
         }
+        // **The token entries and the token states** (user schema v52) — every column a reader
+        // can see, for `finish`'s reason above: a token write that restored the right count at
+        // the wrong printing, or put a dismissal back without its legacy quantity, would pass a
+        // snapshot that did not read them. And the *card* cases need them as much as the token
+        // ones do: a cut that reconciles a Treasure away has to put its entries back on undo.
+        let mut entries = conn
+            .prepare(
+                "SELECT variant, oracle_id, card_id, finish, quantity
+                   FROM deck_token_printings WHERE deck_id = ?1",
+            )
+            .unwrap();
+        out.extend(
+            entries
+                .query_map(params![deck_id], |r| {
+                    Ok(format!(
+                        "token entry {}|{}|{}|{}|{}",
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, i64>(4)?,
+                    ))
+                })
+                .unwrap()
+                .map(Result::unwrap),
+        );
+        let mut states = conn
+            .prepare(
+                "SELECT oracle_id, coalesce(card_id, ''), coalesce(quantity, -1), state
+                   FROM deck_tokens WHERE deck_id = ?1",
+            )
+            .unwrap();
+        out.extend(
+            states
+                .query_map(params![deck_id], |r| {
+                    Ok(format!(
+                        "token state {}|{}|{}|{}",
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                })
+                .unwrap()
+                .map(Result::unwrap),
+        );
         out.sort();
         out
     }
@@ -3116,6 +3452,281 @@ mod tests {
         ]
     }
 
+    /// [`seeded`] plus a token maker: `Smothering Tithe`, whose `raw` names a Treasure in
+    /// `all_parts` the way Scryfall's does (a `combo_piece` naming its own printing, a `token`
+    /// naming the Treasure), and **two** printings of that Treasure — the second sold in foil — so
+    /// a swap, a fold and an added printing all have somewhere to go.
+    ///
+    /// Plain-text `raw`, which [`crate::card_row::raw_json`] reads as readily as gzip; the
+    /// resolver's own fixtures in `deck_tokens` exercise the gzip path.
+    fn seeded_with_tokens() -> Connection {
+        let conn = seeded();
+        let tithe_raw = json!({
+            "id": "tithe",
+            "name": "Smothering Tithe",
+            "all_parts": [
+                { "object": "related_card", "id": "tithe", "component": "combo_piece",
+                  "name": "Smothering Tithe" },
+                { "object": "related_card", "id": "treasure-a", "component": "token",
+                  "name": "Treasure" },
+            ],
+        })
+        .to_string();
+        conn.execute(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,mana_cost,cmc,type_line,prices,finishes,raw)
+               VALUES ('tithe','o-tithe','Smothering Tithe','cmm','693','en','normal','rare',
+                       '{3}{W}',4.0,'Enchantment','{"usd":"20.00"}','["nonfoil"]',?1)"#,
+            params![tithe_raw],
+        )
+        .unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,type_line,oracle_text,colors,released_at,prices,finishes,raw)
+               VALUES
+                 ('treasure-a','o-treasure','Treasure','tcmm','48','en','token','common',
+                  'Token Artifact — Treasure','{T}, Sacrifice this token: Add one mana.','',
+                  '2023-08-04','{"usd":"0.25"}','["nonfoil"]','{}'),
+                 ('treasure-b','o-treasure','Treasure','tvow','17','en','token','common',
+                  'Token Artifact — Treasure','{T}, Sacrifice this token: Add one mana.','',
+                  '2021-11-19','{"usd":"1.50","usd_foil":"4.00"}','["nonfoil","foil"]','{}');"#,
+        )
+        .unwrap();
+        conn
+    }
+
+    /// [`fresh`]'s deck over [`seeded_with_tokens`], with the Tithe in its live Ramp pile — so
+    /// the live list makes a Treasure, and every card and category write in this fixture can
+    /// stop it making one.
+    fn fresh_with_tokens() -> (Connection, i64) {
+        let conn = seeded_with_tokens();
+        let id = deck(&conn, "Tithe");
+        let ramp = category(&conn, id, "Ramp");
+        let draw = category(&conn, id, "Draw");
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", None, 2).unwrap();
+        crate::deck::add_card(&conn, id, "serra-lea", Some(draw), None, "live", None, 1).unwrap();
+        crate::deck::add_card(&conn, id, "tithe", Some(ramp), None, "live", None, 1).unwrap();
+        (conn, id)
+    }
+
+    /// Two live Treasure entries — the reader kept both printings, one of them foil.
+    fn two_treasures(conn: &Connection, deck_id: i64) {
+        crate::deck_tokens::add_printing(conn, deck_id, "live", "treasure-b", Some("foil"))
+            .unwrap();
+    }
+
+    fn treasure_entry(card_id: &str, finish: &str) -> crate::deck_tokens::TokenEntryKey {
+        crate::deck_tokens::TokenEntryKey {
+            card_id: card_id.to_owned(),
+            finish: finish.to_owned(),
+        }
+    }
+
+    /// The five token writes, and the card and category writes whose reconcile takes a token's
+    /// entries — each driven once over [`fresh_with_tokens`].
+    fn token_write_cases() -> Vec<Case> {
+        vec![
+            (
+                "deck_token_set_quantity (materialising)",
+                nothing,
+                |c, id| {
+                    crate::deck_tokens::set_quantity(c, id, "live", "o-treasure", None, 3).unwrap();
+                },
+            ),
+            (
+                // Rule 3's first half: one of two entries stepped to nothing is deleted, and the
+                // undo has to bring back exactly that one.
+                "deck_token_set_quantity (one of two to zero)",
+                two_treasures,
+                |c, id| {
+                    crate::deck_tokens::set_quantity(
+                        c,
+                        id,
+                        "live",
+                        "o-treasure",
+                        Some(&treasure_entry("treasure-b", "foil")),
+                        0,
+                    )
+                    .unwrap();
+                },
+            ),
+            ("deck_token_swap (the implicit entry)", nothing, |c, id| {
+                crate::deck_tokens::swap(
+                    c,
+                    id,
+                    "live",
+                    "o-treasure",
+                    None,
+                    &treasure_entry("treasure-b", "nonfoil"),
+                )
+                .unwrap();
+            }),
+            (
+                // Rule 4's fold: two entries became one, and only the step's recorded rows say
+                // what the two were.
+                "deck_token_swap (folding onto an entry)",
+                two_treasures,
+                |c, id| {
+                    crate::deck_tokens::swap(
+                        c,
+                        id,
+                        "live",
+                        "o-treasure",
+                        Some(&treasure_entry("treasure-a", "nonfoil")),
+                        &treasure_entry("treasure-b", "foil"),
+                    )
+                    .unwrap();
+                },
+            ),
+            ("deck_token_add_printing", nothing, |c, id| {
+                crate::deck_tokens::add_printing(c, id, "live", "treasure-b", Some("foil"))
+                    .unwrap();
+            }),
+            ("deck_token_state (hidden)", nothing, |c, id| {
+                crate::deck_tokens::set_state(c, id, "o-treasure", "hidden").unwrap();
+            }),
+            ("deck_token_reset", two_treasures, |c, id| {
+                crate::deck_tokens::reset(c, id, "live", "o-treasure").unwrap();
+            }),
+            (
+                // **Review Focus 2**: cut the card that makes the Treasure while the reader keeps
+                // two printings of it. The cut's own step carries the two entries its reconcile
+                // removed (`record_cells`' hook), so one Ctrl+Z brings the card **and** both
+                // entries back.
+                "deck_set_card_quantity (zero, cutting the maker of two Treasure entries)",
+                two_treasures,
+                |c, id| {
+                    crate::deck::set_card_quantity(c, id, "tithe", ramp(c, id), "live", None, 0)
+                        .unwrap();
+                },
+            ),
+            (
+                // The same through the whole-pile clear, which is `record_cells` over a pile cell.
+                "deck_category_clear (the maker's pile)",
+                two_treasures,
+                |c, id| {
+                    crate::deck::clear_category(c, id, ramp(c, id), "live").unwrap();
+                },
+            ),
+            (
+                // `record_variant`'s hook: an import replacing the list drops the maker.
+                "deck_import_commit (replace, dropping the maker)",
+                two_treasures,
+                |c, id| {
+                    crate::import::commit_import(
+                        c,
+                        id,
+                        "live",
+                        "replace",
+                        &[imported("serra-lea", 1, "Draw")],
+                    )
+                    .unwrap();
+                },
+            ),
+            (
+                // The first hand-built hook: a pile switched off counts toward nothing.
+                "deck_category_set_active (off, the maker's pile)",
+                two_treasures,
+                |c, id| {
+                    crate::deck_meta::set_category_active(c, ramp(c, id), false).unwrap();
+                },
+            ),
+            (
+                // The second: a pile deleted takes its cards with it, in both lists.
+                "deck_category_delete (the maker's pile)",
+                two_treasures,
+                |c, id| {
+                    crate::deck_meta::delete_category(c, ramp(c, id), None).unwrap();
+                },
+            ),
+        ]
+    }
+
+    /// **Every token write undoes and redoes exactly, and so does every card write whose
+    /// reconcile takes a token's entries** — the card sweep's own claim, over a deck that makes a
+    /// token, with [`snapshot`] reading both token tables.
+    #[test]
+    fn undoing_any_token_write_restores_the_deck_exactly() {
+        drive_cases_on(fresh_with_tokens, token_write_cases());
+    }
+
+    /// **The reconcile's deletions ride the cut's own step, and nowhere else.** The case in the
+    /// sweep above proves the round trip; this pins its shape — one step, whose undo side ends in
+    /// an [`Op::Tokens`] restoring exactly the two entries — so a hook that filed its own step,
+    /// or left the entries off the cut's, is caught by name rather than by a snapshot diff.
+    #[test]
+    fn a_cut_that_reconciles_tokens_carries_them_on_its_own_step() {
+        let (conn, id) = fresh_with_tokens();
+        two_treasures(&conn, id);
+        let before: i64 = conn
+            .query_row("SELECT count(*) FROM deck_undo", [], |r| r.get(0))
+            .unwrap();
+        crate::deck::set_card_quantity(&conn, id, "tithe", ramp(&conn, id), "live", None, 0)
+            .unwrap();
+        let after: i64 = conn
+            .query_row("SELECT count(*) FROM deck_undo", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, before + 1, "one press, one step");
+
+        let (step, _) = read_step(&conn, next_undo(&conn, id).unwrap().unwrap())
+            .unwrap()
+            .unwrap();
+        let Some(Op::Tokens { restore, .. }) = step.undo.last() else {
+            panic!(
+                "the undo side must end in the tokens it restores: {:?}",
+                step.undo
+            );
+        };
+        let mut restored: Vec<(&str, &str, i64)> = restore
+            .iter()
+            .map(|r| (r.card_id.as_str(), r.finish.as_str(), r.quantity))
+            .collect();
+        restored.sort_unstable();
+        assert_eq!(
+            restored,
+            vec![("treasure-a", "nonfoil", 1), ("treasure-b", "foil", 1)]
+        );
+        assert!(
+            matches!(step.redo.last(), Some(Op::Tokens { delete, .. }) if delete.len() == 2),
+            "and the redo side deletes them again"
+        );
+    }
+
+    /// A step recorded before v52 has no `tokens` op and deserialises; one naming the three
+    /// lists by their wire keys does too — the op's JSON shape is `op: "tokens"` with camelCase
+    /// keys, and an empty list may be omitted.
+    #[test]
+    fn a_tokens_op_round_trips_through_its_json_column() {
+        let op = Op::Tokens {
+            restore: vec![TokenEntryRow {
+                variant: "live".to_owned(),
+                oracle_id: "o-treasure".to_owned(),
+                card_id: "treasure-b".to_owned(),
+                finish: "foil".to_owned(),
+                quantity: 2,
+            }],
+            delete: vec![],
+            states: vec![TokenStateRow {
+                oracle_id: "o-treasure".to_owned(),
+                card_id: None,
+                quantity: Some(3),
+                state: None,
+            }],
+        };
+        let json = serde_json::to_value(&op).unwrap();
+        assert_eq!(json["op"], json!("tokens"));
+        assert_eq!(json["restore"][0]["oracleId"], json!("o-treasure"));
+        assert_eq!(serde_json::from_value::<Op>(json).unwrap(), op);
+        assert_eq!(
+            serde_json::from_value::<Op>(json!({ "op": "tokens" })).unwrap(),
+            Op::Tokens {
+                restore: vec![],
+                delete: vec![],
+                states: vec![],
+            }
+        );
+    }
+
     /// The label [`fresh`] seeds. **No deck in the lookup**, since v21 there is none on the row
     /// — and no ambiguity either: these fixtures seed one deck and one label.
     fn label_id(conn: &Connection, _deck_id: i64) -> i64 {
@@ -3189,8 +3800,14 @@ mod tests {
     /// Drive each case once over a fresh deck: set up, snapshot, write, undo, compare, redo,
     /// compare.
     fn drive_cases(cases: Vec<Case>) {
+        drive_cases_on(fresh, cases);
+    }
+
+    /// [`drive_cases`] over a fixture of the caller's — [`fresh_with_tokens`] for the token
+    /// writes, which need a deck that makes a token.
+    fn drive_cases_on(fixture: fn() -> (Connection, i64), cases: Vec<Case>) {
         for (name, setup, drive) in cases {
-            let (conn, id) = fresh();
+            let (conn, id) = fixture();
             setup(&conn, id);
             let before = snapshot(&conn, id);
 

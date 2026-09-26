@@ -1453,6 +1453,10 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
             // the mana base must stay two notes and no column pair could tell an accidental
             // duplicate from a deliberate one.
             "deck_note_cards.idx_deck_note_cards_grain",
+            // `DECK_TOKEN_PRINTING_GRAIN` — one entry per printing, finish and list since v52,
+            // and per variant where the row below deliberately is not: theory and live never
+            // share an entry.
+            "deck_token_printings.idx_deck_token_printings_grain",
             // `DECK_TOKEN_GRAIN` — one row per token per deck since v37, and deliberately not
             // per variant.
             "deck_tokens.idx_deck_tokens_grain",
@@ -1486,6 +1490,76 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
         .map(str::to_owned),
         "a UNIQUE index on a synced table with no grain is two devices keeping separate rows, \
          silently and forever"
+    );
+}
+
+/// **Two devices adding one printing of one token to one list end with one entry** (user schema
+/// v52) — the grain `META` restates, driven the way it fails: each device inserts its own row
+/// under its own uid, and without the grain the far op is an insert that hits
+/// `idx_deck_token_printings_grain`, rolls the savepoint back and defers the op — which the client
+/// today drops, with the rest of that device's page (`sync.md`, *Deferred ops are dropped, not
+/// held*).
+///
+/// The deck crosses first, so both entries hang off one deck uid. **The count is a field**, so
+/// the two devices' `2` and `3` do not sum: last writer wins, and both devices agree on which.
+/// A second list is the control — the other variant is a row of its own on both devices.
+#[test]
+fn two_devices_adding_one_token_printing_end_with_one_entry() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    a.execute(
+        "INSERT INTO decks (name, format_key, created_at, updated_at)
+         VALUES ('Tithe', 'commander', unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    let entry = |conn: &Connection, variant: &str, quantity: i64| {
+        conn.execute(
+            "INSERT INTO deck_token_printings
+                 (deck_id, variant, oracle_id, card_id, finish, quantity, created_at, updated_at)
+             SELECT id, ?1, 'o-treasure', 'p-treasure', 'nonfoil', ?2, 0, 0 FROM decks",
+            rusqlite::params![variant, quantity],
+        )
+        .unwrap();
+    };
+    entry(&a, "live", 2);
+    entry(&b, "live", 3);
+    entry(&b, "theory", 1);
+
+    let to_b = since(&a, &mut ma);
+    let to_a = since(&b, &mut mb);
+    let report = apply(&b, &to_b).unwrap();
+    assert_eq!(report.deferred, 0, "the grain must find b's own row");
+    let report = apply(&a, &to_a).unwrap();
+    assert_eq!(report.deferred, 0, "and a's, the other way");
+
+    let read = |conn: &Connection| -> Vec<(String, i64, String)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT variant, quantity, sync_uid FROM deck_token_printings ORDER BY variant",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    let (on_a, on_b) = (read(&a), read(&b));
+    assert_eq!(
+        on_a.len(),
+        2,
+        "one live entry and one theory entry: {on_a:?}"
+    );
+    assert_eq!(
+        on_a, on_b,
+        "both devices hold the same rows under the same uids"
+    );
+    assert!(
+        on_a[0].1 == 2 || on_a[0].1 == 3,
+        "a count is a field, so it is one device's value and never their sum: {on_a:?}"
     );
 }
 

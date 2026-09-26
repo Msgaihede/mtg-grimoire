@@ -793,6 +793,34 @@ describe("DeckSearchPanel", () => {
   });
 
   /**
+   * **A token's button names where a token goes.** The press still sends the ordinary add —
+   * `deck::add_card` is what reroutes a token into the deck's Tokens & Emblems (user schema v52)
+   * — but a button that promised `to Creature` for a token filed somewhere else entirely. Found on
+   * PR 2's live pass with `Dinosaur // Treasure`, a two-sided token, which is why the fixture is
+   * one: `isTokenPrinting`'s widened half, not the bare `token` layout.
+   */
+  it("names Tokens & Emblems on a token's button, and still sends the ordinary add", async () => {
+    searchCards.mockResolvedValue(
+      page([
+        {
+          ...BOLT,
+          id: "t1",
+          name: "Dinosaur // Treasure",
+          typeLine: "Token Creature — Dinosaur // Token Artifact — Treasure",
+          layout: "double_faced_token",
+        },
+      ]),
+    );
+    await openPanel();
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Dinosaur // Treasure to Tokens & Emblems" }),
+    );
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "t1", MAIN.id, null, "live", null, 1);
+  });
+
+  /**
    * A picked id the handed-down list does not hold, which is a single commit's worth of state:
    * a deleted category reaches the deck row and the category list together, and nothing orders
    * those two.

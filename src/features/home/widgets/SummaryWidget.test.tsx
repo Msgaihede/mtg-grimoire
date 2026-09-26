@@ -60,7 +60,7 @@ function deck(name: string, over: Partial<DeckRow> = {}): DeckRow {
     defaultCategoryId: 0,
     bracket: 0,
     tokensOpen: false,
-    tokenStack: false,
+    tokenMode: "managed",
     tokenRailIndex: -1,
     statsOpen: true,
     ...over,

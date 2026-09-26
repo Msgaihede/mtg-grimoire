@@ -50,7 +50,7 @@ const ATRAXA: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   tokensOpen: false,
-  tokenStack: false,
+  tokenMode: "managed",
   tokenRailIndex: -1,
   statsOpen: true,
   defaultCategoryId: 0,

@@ -110,8 +110,19 @@ pub fn surface_of(table: &str) -> Option<Dirty> {
         // channel for deck-level prose out of scope — so a write here costs one pass that
         // renders identical bytes, and `None` would be the arm a reader has to remember to move
         // the day a format grows a notes section.
-        "deck_cards" | "deck_categories" | "deck_labels" | "deck_folders" | "deck_tokens"
-        | "deck_notes" | "deck_note_cards" => Some(DECKS_ONLY),
+        // **`deck_token_printings` joins beside `deck_tokens`, on that table's argument exactly**
+        // (user schema v52): a token's entries are the printings the reader brings, and no
+        // mirrored file names a token yet — the token-stacks spec §4.4 says so and keeps a token
+        // section out of scope — so a write here costs one pass that renders identical bytes,
+        // and `None` would be the arm a reader has to remember to move.
+        "deck_cards"
+        | "deck_categories"
+        | "deck_labels"
+        | "deck_folders"
+        | "deck_tokens"
+        | "deck_token_printings"
+        | "deck_notes"
+        | "deck_note_cards" => Some(DECKS_ONLY),
         // Both, and the over-approximation is deliberate: a deck's name titles its group
         // folder in the cabinet, so a rename that only marked decks would leave the folder
         // named after the old one until something else touched the collection. Being wrong
@@ -313,7 +324,7 @@ pub fn install_hook_with_changes(
         // commit hook per connection, so a second installer would take this one off.
         //
         // A commit, not a row: `update_hook` does not fire for `WITHOUT ROWID` tables, and two
-        // of the sixteen synced tables are exactly that (`muted_tags`, and `device_names`
+        // of the synced tables are exactly that (`muted_tags`, and `device_names`
         // since user schema v31). A row-level wake would silently never sync a mute or a
         // rename.
         //
@@ -1062,7 +1073,7 @@ mod tests {
             .map(String::as_str)
             .partition(|t| surface_of(t).is_some());
 
-        // The twelve that reach the mirror.
+        // The tables that reach the mirror.
         assert_eq!(
             mapped,
             [
@@ -1074,6 +1085,8 @@ mod tests {
                 "deck_labels",
                 "deck_note_cards",
                 "deck_notes",
+                // User schema v52, beside the table it split out of — see `surface_of`.
+                "deck_token_printings",
                 "deck_tokens",
                 "decks",
                 "wishlist_entries",
@@ -1192,6 +1205,8 @@ mod tests {
         assert!(surface_of("deck_labels").unwrap().decks);
         assert!(surface_of("deck_tokens").unwrap().decks);
         assert!(!surface_of("deck_tokens").unwrap().collection);
+        assert!(surface_of("deck_token_printings").unwrap().decks);
+        assert!(!surface_of("deck_token_printings").unwrap().collection);
         assert!(surface_of("deck_notes").unwrap().decks);
         assert!(!surface_of("deck_notes").unwrap().collection);
         assert!(surface_of("deck_note_cards").unwrap().decks);

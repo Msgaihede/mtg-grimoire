@@ -556,15 +556,19 @@ pub fn run() {
             deck_theory::deck_theory_slots,
             deck_theory::deck_theory_copy_from_live,
             deck_theory::deck_theory_missing_to_wishlist,
-            // The tokens and emblems a deck needs, and the three writes that record a deviation
-            // from them. `generate_handler!` names a command after the **last path segment**, so
-            // `deck_tokens::deck_tokens` registers as `deck_tokens` — the module and the read
-            // wear the same name on purpose, because the wire name is the one `src/lib/ipc.ts`
-            // invokes and `deck_tokens_list` would be a second thing to remember.
+            // The tokens and emblems a deck needs, one row per entry, and the five writes over
+            // their entries and states (user schema v52, which retired `deck_token_set`,
+            // `deck_token_clear` and `deck_token_add`). `generate_handler!` names a command after
+            // the **last path segment**, so `deck_tokens::deck_tokens` registers as
+            // `deck_tokens` — the module and the read wear the same name on purpose, because the
+            // wire name is the one `src/lib/ipc.ts` invokes and `deck_tokens_list` would be a
+            // second thing to remember.
             deck_tokens::deck_tokens,
-            deck_tokens::deck_token_set,
-            deck_tokens::deck_token_clear,
-            deck_tokens::deck_token_add,
+            deck_tokens::deck_token_set_quantity,
+            deck_tokens::deck_token_swap,
+            deck_tokens::deck_token_add_printing,
+            deck_tokens::deck_token_state,
+            deck_tokens::deck_token_reset,
             // The Notes band's read, its six writes, and the one read that is not deck-scoped at
             // all. `generate_handler!` names a command after the **last path segment** again, so
             // `deck_notes::deck_notes` registers as `deck_notes` — the module and the read wear

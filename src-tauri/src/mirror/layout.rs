@@ -644,9 +644,10 @@ mod tests {
             // for `bracket`'s reason three comments up: the layout reads five fields and not
             // this one, and `DeckRow` has no `Default`.
             stats_open: true,
-            // User schema v47's setting, `false` as a fresh deck carries it — here for
-            // `bracket`'s reason: the layout reads five fields and not this one.
-            token_stack: false,
+            // User schema v52's mode (v47's `token_stack` before it), `managed` as a fresh deck
+            // carries it — here for `bracket`'s reason: the layout reads five fields and not this
+            // one.
+            token_mode: "managed".to_owned(),
             // User schema v51's rail index, `-1` (*last*) as a fresh deck carries it — here for
             // `bracket`'s reason: the layout reads five fields and not this one.
             token_rail_index: -1,

@@ -119,12 +119,15 @@ pub const COMMANDS: &[&str] = &[
     "deck_theory_missing_to_wishlist",
     "deck_undo_apply",
     "deck_redo_apply",
-    // The three token writes. Plain `sync::with_write` on the other side — nothing here moves a
+    // The five token writes (user schema v52, which retired `deck_token_set`, `deck_token_clear`
+    // and `deck_token_add`). Plain `sync::with_write` on the other side — nothing here moves a
     // copy across the collection boundary, so none of them is one of the four that owe
     // `with_write_owned`.
-    "deck_token_set",
-    "deck_token_clear",
-    "deck_token_add",
+    "deck_token_set_quantity",
+    "deck_token_swap",
+    "deck_token_add_printing",
+    "deck_token_state",
+    "deck_token_reset",
     // The six note writes. Plain `sync::with_write` on the other side, for the token writes'
     // reason: a note names a card by oracle id and moves no copy anywhere, so none of these is
     // one of the writes that owe `collection_source::with_write_owned`.
@@ -1184,53 +1187,96 @@ pub fn call(
             )
         }
 
-        // **`tokenState` on the wire, `token_state` in Rust, `state` in the column.** The
-        // rename is the Tauri command's — `state` is already the managed `AppState` every
-        // command takes — and this arm has to spell the *wire* name, because that is what
-        // `src/lib/ipc.ts` sends on both targets. `optional` and not `field` for all three:
-        // the page sends `null` for a field it is not setting, and a null is an answer here
-        // rather than a missing argument.
-        "deck_token_set" => {
+        // The five writes. **Every argument is the wire's camelCase**, read off the
+        // `#[tauri::command]` wrappers rather than chosen here. `entry` and `from` are
+        // `{ cardId, finish }` or `null` — the implicit entry — so both are `optional`; `to` is
+        // always a printing and a finish, so it is `field`. `finish` on an add is `optional`: the
+        // wrapper takes an `Option`, and a `null` is the printing's default rather than a
+        // missing argument.
+        //
+        // **`state` is the token's state on the wire and in the column**, since v52 retired
+        // `deck_token_set` and the `tokenState` rename it needed: the desktop wrapper calls the
+        // managed `AppState` `app` instead, which Tauri injects by type rather than by name.
+        "deck_token_set_quantity" => {
             let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
             let oracle_id: String = field(command, args, "oracleId")?;
-            let card_id: Option<String> = optional(command, args, "cardId")?;
-            let quantity: Option<i64> = optional(command, args, "quantity")?;
-            let token_state: Option<String> = optional(command, args, "tokenState")?;
+            let entry: Option<crate::deck_tokens::TokenEntryKey> =
+                optional(command, args, "entry")?;
+            let quantity: i64 = field(command, args, "quantity")?;
             encode(
                 command,
                 crate::sync::with_write(state, |c| {
-                    crate::deck_tokens::set_token_override(
+                    crate::deck_tokens::set_quantity(
                         c,
                         deck_id,
+                        &variant,
                         &oracle_id,
-                        card_id.as_deref(),
+                        entry.as_ref(),
                         quantity,
-                        token_state.as_deref(),
                     )
                 })
                 .map_err(RouteError::Failed)?,
             )
         }
 
-        "deck_token_clear" => {
+        "deck_token_swap" => {
             let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
             let oracle_id: String = field(command, args, "oracleId")?;
+            let from: Option<crate::deck_tokens::TokenEntryKey> = optional(command, args, "from")?;
+            let to: crate::deck_tokens::TokenEntryKey = field(command, args, "to")?;
             encode(
                 command,
                 crate::sync::with_write(state, |c| {
-                    crate::deck_tokens::clear_token_override(c, deck_id, &oracle_id)
+                    crate::deck_tokens::swap(c, deck_id, &variant, &oracle_id, from.as_ref(), &to)
                 })
                 .map_err(RouteError::Failed)?,
             )
         }
 
-        "deck_token_add" => {
+        "deck_token_add_printing" => {
             let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
             let card_id: String = field(command, args, "cardId")?;
+            let finish: Option<String> = optional(command, args, "finish")?;
             encode(
                 command,
                 crate::sync::with_write(state, |c| {
-                    crate::deck_tokens::add_token(c, deck_id, &card_id)
+                    crate::deck_tokens::add_printing(
+                        c,
+                        deck_id,
+                        &variant,
+                        &card_id,
+                        finish.as_deref(),
+                    )
+                    .map(|_| ())
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_token_state" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let oracle_id: String = field(command, args, "oracleId")?;
+            let token_state: String = field(command, args, "state")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_tokens::set_state(c, deck_id, &oracle_id, &token_state)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_token_reset" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
+            let oracle_id: String = field(command, args, "oracleId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_tokens::reset(c, deck_id, &variant, &oracle_id)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -4342,6 +4388,139 @@ mod tests {
         }
     }
 
+    /// **The five token writes, routed and advertised, and the three they retired gone from
+    /// both** (user schema v52) — the notebook's pin below, for the token cluster: membership
+    /// in `COMMANDS` beside the wire names each arm reads, driven through a write and a read back
+    /// so an arm that parsed its arguments and wrote nothing would still go red.
+    ///
+    /// **`state` is the wire key of `deck_token_state`**, where the retired `deck_token_set`
+    /// needed `tokenState` because the desktop wrapper's `state` was the managed `AppState`.
+    #[test]
+    fn the_token_commands_are_both_routed_and_advertised() {
+        let s = state("web-route-deck-token-writes");
+        for name in [
+            "deck_tokens",
+            "deck_token_set_quantity",
+            "deck_token_swap",
+            "deck_token_add_printing",
+            "deck_token_state",
+            "deck_token_reset",
+        ] {
+            assert!(
+                COMMANDS.contains(&name),
+                "`{name}` is an arm the page is never told about"
+            );
+        }
+        for retired in ["deck_token_set", "deck_token_clear", "deck_token_add"] {
+            assert!(!COMMANDS.contains(&retired), "`{retired}` was retired");
+            assert_eq!(
+                call(&s, retired, &json!({})).unwrap_err(),
+                RouteError::Unknown(retired.into()),
+                "`{retired}` must not be routed"
+            );
+        }
+
+        let id = make_deck(&s, "Tokens");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.execute(
+                r#"INSERT INTO cards (id, oracle_id, name, type_line, layout, set_code,
+                                      collector_number, lang, finishes, prices, raw)
+                   VALUES ('tok', 'o-tok', 'Treasure', 'Token Artifact — Treasure', 'token',
+                           'ttst', '2', 'en', '["nonfoil","foil"]', '{"usd":"0.25"}', '{}')"#,
+                [],
+            )
+            .unwrap();
+        }
+        let wall = |s: &std::sync::Arc<crate::sync::AppState>| {
+            call(
+                s,
+                "deck_tokens",
+                &json!({ "deckId": id, "variant": "live" }),
+            )
+            .unwrap()
+        };
+
+        call(
+            &s,
+            "deck_token_add_printing",
+            &json!({ "deckId": id, "variant": "live", "cardId": "tok", "finish": "foil" }),
+        )
+        .unwrap();
+        let out = wall(&s);
+        assert_eq!(out.as_array().unwrap().len(), 1, "{out}");
+        assert_eq!(out[0]["cardId"], json!("tok"));
+        assert_eq!(out[0]["finish"], json!("foil"));
+        assert_eq!(out[0]["implicit"], json!(false));
+        assert_eq!(
+            out[0]["state"],
+            json!("manual"),
+            "nothing makes it, so it is the reader's"
+        );
+
+        call(
+            &s,
+            "deck_token_set_quantity",
+            &json!({ "deckId": id, "variant": "live", "oracleId": "o-tok",
+                     "entry": { "cardId": "tok", "finish": "foil" }, "quantity": 3 }),
+        )
+        .unwrap();
+        assert_eq!(wall(&s)[0]["quantity"], json!(3));
+
+        call(
+            &s,
+            "deck_token_swap",
+            &json!({ "deckId": id, "variant": "live", "oracleId": "o-tok",
+                     "from": { "cardId": "tok", "finish": "foil" },
+                     "to": { "cardId": "tok", "finish": "nonfoil" } }),
+        )
+        .unwrap();
+        assert_eq!(wall(&s)[0]["finish"], json!("nonfoil"));
+
+        call(
+            &s,
+            "deck_token_state",
+            &json!({ "deckId": id, "oracleId": "o-tok", "state": "hidden" }),
+        )
+        .unwrap();
+        assert_eq!(
+            wall(&s).as_array().unwrap().len(),
+            0,
+            "a hidden token nothing derives is off the wall — only `manual` keeps one there"
+        );
+        call(
+            &s,
+            "deck_token_state",
+            &json!({ "deckId": id, "oracleId": "o-tok", "state": "manual" }),
+        )
+        .unwrap();
+
+        call(
+            &s,
+            "deck_token_reset",
+            &json!({ "deckId": id, "variant": "live", "oracleId": "o-tok" }),
+        )
+        .unwrap();
+        let out = wall(&s);
+        assert_eq!(
+            out[0]["implicit"],
+            json!(true),
+            "back to the implicit entry"
+        );
+        assert_eq!(out[0]["quantity"], json!(1));
+
+        let err = call(
+            &s,
+            "deck_token_state",
+            &json!({ "deckId": id, "oracleId": "o-tok", "tokenState": "hidden" }),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, RouteError::Args { .. }),
+            "the retired spelling is not read: {err:?}"
+        );
+    }
+
     /// **The deck's notebook, routed and advertised — and the other half of the drift
     /// `COMMANDS` cannot see on its own.**
     ///
@@ -4541,9 +4720,16 @@ mod tests {
         //
         // **187 when that `main` met the shelves branch**, which had written 184 against the same
         // 181 — `awk`'s answer over the merged array, and neither 184 nor 185 plus anything.
+        //
+        // **187 since token stacks' user schema v52 routed five token writes and retired three**
+        // (`deck_token_set`, `deck_token_clear`, `deck_token_add`) — counted with the same `awk`
+        // over the array as it stands here.
+        //
+        // **189 when token stacks met the shelves branch** — `awk` over the merged array, not
+        // 187 plus or minus either side's change.
         assert_eq!(
             COMMANDS.len(),
-            187,
+            189,
             "update this number when a command is added"
         );
     }

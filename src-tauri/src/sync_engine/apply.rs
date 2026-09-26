@@ -13,12 +13,16 @@
 //!
 //! # The row handle here is the `sync_uid`, not the rowid
 //!
-//! Every statement this module builds addresses a row by `WHERE sync_uid = ?`. Fourteen of the
-//! sixteen synced tables have an `INTEGER PRIMARY KEY` and two have none at all — `muted_tags`
+//! Every statement this module builds addresses a row by `WHERE sync_uid = ?`. Every synced
+//! table but two has an `INTEGER PRIMARY KEY`, and those two have none at all — `muted_tags`
 //! is `WITHOUT ROWID` on `(namespace, tag_id)` and `device_names` on `device_id` — so a rowid
-//! would need a second spelling of every statement for both. The uid is `UNIQUE` on all
-//! sixteen and every row has one, which is what `schema::mint_missing_uids` and the capture
-//! trigger's mint are between them for.
+//! would need a second spelling of every statement for both. The uid is `UNIQUE` on every one
+//! and every row has one, which is what `schema::mint_missing_uids` and the capture trigger's
+//! mint are between them for — plus `deck_tokens::convert_legacy_picks`, which names each entry it
+//! derives from a v51 art pick `<pick uid>-<list>` itself, and first gives the pick the trigger's
+//! own mint where a write behind `capture::suppressed` left it nameless. (This read "that rung's
+//! own derived names" while user schema v52's rung did the converting; the conversion has been a
+//! captured pass outside the ladder since the day it landed.)
 //!
 //! # Add-wins needs this device's own history, and `sync_ops` is where it is
 //!
@@ -41,17 +45,32 @@
 //! What it does **not** cover is a third device: B has no local ops for a row C edited, so
 //! A's tombstone and C's edit only meet if they arrive in one batch. The relay hands them over
 //! in hybrid-logical-clock order, so the common case orders itself; the residual is a sparse
-//! edit arriving after a tombstone, which is **deferred** rather than lost.
+//! edit arriving after a tombstone, which is **deferred** — and a deferral is currently a loss,
+//! which the next section is about.
 //!
-//! # Why a device's stream stalls rather than skipping ahead
+//! # A deferred op holds the watermark, and the client does not re-fetch it (open)
 //!
 //! `sync_peers` is a *watermark*: everything at or below it has been applied. So an op that
 //! could not be applied cannot simply be counted and stepped over — advancing past it would
 //! lose it for good, and not advancing would replay the ops above it and **add their counter
 //! deltas a second time**. Both are silent. So the watermark is advanced only to the last op
-//! before the first unappliable one from that device, that device's later ops are left for the
-//! next pull, and [`ApplyReport::deferred`] is what says it happened. A stall is visible and
-//! self-heals when the missing parent arrives; the two alternatives are not and do not.
+//! before the first unappliable one from that device, that device's later ops in the batch are
+//! left unapplied, and [`ApplyReport::deferred`] is what says it happened. **What the watermark
+//! buys is that a re-delivery is safe**: the ops at or below it are skipped, so a page handed
+//! over twice applies each counter delta once.
+//!
+//! ⚠️ **Nothing re-delivers, today, and so a deferral is a loss rather than a stall.**
+//! `client::pull` advances `PULL_CURSOR` to the page head after this returns, whatever was
+//! deferred; the relay answers only rows with `seq` above that cursor (`relay/src/log.ts`'s
+//! `since`); and this module keeps no copy of a deferred op. So a deferred op, **and every
+//! later op from the same device in that page**, is dropped — never applied here, never offered
+//! again. Only a deferral the same batch resolves (the second attempt in `run_groups`, a parent
+//! further down the page) is applied. This predates user schema v52: a v51 peer drops a v52
+//! device's page from its first `deck_token_printings` op on, exactly as a v42 peer dropped
+//! `deck_notes` at v43, and upgrading does not bring those ops back. The fix is a dedicated
+//! sync-delivery change — hold the cursor on a deferral a newer schema caused, and resolve the
+//! child of a deleted parent — which must land before any release that carries v52.
+//! [sync.md](../../../docs/reference/sync.md) *Deferred ops are dropped, not held* is the record.
 
 use crate::sync_engine::capture::{self, Absent, Parent, Spec};
 use crate::sync_engine::hlc::Hlc;
@@ -86,8 +105,9 @@ pub struct ApplyReport {
     /// by definition.
     pub skipped: usize,
     /// Ops whose parent has not arrived, or which do not describe a row this database can
-    /// build. **The device that wrote them is stalled at the first of them** — see the module
-    /// doc.
+    /// build. **The device that wrote them is held at the first of them**: its watermark stays
+    /// below it and its later ops in this batch are left unapplied — and, because the client
+    /// advances its cursor past them, not offered again. See the module doc.
     pub deferred: usize,
 }
 
@@ -160,15 +180,16 @@ struct Meta {
     /// `created_at` / `updated_at`. `deck_audit` and `muted_tags` carry their own stamp
     /// (`at`, `muted_at`) as an ordinary field and have neither column.
     timestamps: bool,
-    /// Whether the table can hold a sentence for the reader at all. Ten of the sixteen
-    /// cannot: `decks`, `deck_categories`, `deck_labels`, `deck_tokens`, `deck_notes`,
-    /// `deck_note_cards`, `deck_audit`, `muted_tags`, `device_names` and `sticky_notes`.
+    /// Whether the table can hold a sentence for the reader at all. Eleven of the seventeen
+    /// cannot: `decks`, `deck_categories`, `deck_labels`, `deck_tokens`, `deck_token_printings`,
+    /// `deck_notes`, `deck_note_cards`, `deck_audit`, `muted_tags`, `device_names` and
+    /// `sticky_notes`.
     needs_review: bool,
     /// The self-referencing column a cycle can form on, for the three folder tables.
     tree: Option<&'static str>,
 }
 
-const META: [Meta; 16] = [
+const META: [Meta; 17] = [
     Meta {
         table: "deck_folders",
         order: 0,
@@ -444,6 +465,43 @@ const META: [Meta; 16] = [
         needs_review: false,
         tree: None,
     },
+    Meta {
+        table: "deck_token_printings",
+        // Appended rather than slotted in behind `decks`, `deck_tokens`' reason: the rank is only
+        // ever *sorted* by, so what it has to say is "after the deck this row hangs off", which
+        // any number above 1 says. Renumbering the tail for a tidier one moves ranks to change
+        // nothing an emission can observe.
+        order: 16,
+        // `idx_deck_token_printings_grain`, restating `schema::DECK_TOKEN_PRINTING_GRAIN` as a
+        // predicate, and owed for `deck_tokens`' reason: two devices that each add the same
+        // printing, in the same finish, to the same list hold one row under two uids, so without
+        // this the far op is not a row to update but a row to insert — which hits the unique
+        // index, rolls the group's savepoint back and defers that op for ever.
+        //
+        // **`deck_id` from the parent and the other three from the fields**, because a local
+        // deck id means nothing on the far device, while a list name, a Scryfall printing id and
+        // a finish word mean the same thing everywhere. **No `coalesce`**, unlike `deck_cards`'
+        // grain above: `finish` is NOT NULL here, so `=` is the index's own test.
+        grains: &[Grain {
+            predicate: "deck_id = ? AND variant = ? AND card_id = ? AND finish = ?",
+            sources: &[
+                Source::Parent("deck"),
+                Source::Field("variant"),
+                Source::Field("card_id"),
+                Source::Field("finish"),
+            ],
+        }],
+        // **No counter, so no `Floor`**, although the column is NOT NULL and could carry a delta:
+        // the count is a setting, which `super::capture`'s spec argues, and a stored zero is a
+        // token's last entry the reader stepped down — kept on purpose, never arithmetic's
+        // accident.
+        counters: &[],
+        timestamps: true,
+        // No `needs_review` column on the table. An entry whose printing leaves the corpus is an
+        // orphan drawn from the row's own `oracle_id`, not a conflict to report.
+        needs_review: false,
+        tree: None,
+    },
 ];
 
 fn meta_of(table: &str) -> Option<&'static Meta> {
@@ -572,11 +630,16 @@ fn apply_in(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
     //    stalls known.
     //
     // **The second pass is not an optimisation, it is the whole correctness of the watermark.**
-    // `sync_peers` only advances to the last op before a device's first unappliable one, so the
-    // next pull re-delivers everything above that. If this pass had *applied* the ops after the
-    // block, they would be applied a second time then — and a counter applied twice is the
-    // collection growing by itself. Measured before the fix: one `+1` after a blocked op became
-    // a quantity of 2 on the second delivery of the same page.
+    // `sync_peers` only advances to the last op before a device's first unappliable one, and
+    // that is what makes a re-delivery of everything above it safe. If this pass had *applied*
+    // the ops after the block, a re-delivery would apply them a second time — and a counter
+    // applied twice is the collection growing by itself. Measured before the fix: one `+1` after
+    // a blocked op became a quantity of 2 on the second delivery of the same page.
+    //
+    // ⚠️ **But nothing re-delivers today.** `client::pull` advances `PULL_CURSOR` to the page
+    // head after this returns, whatever was deferred, and the relay answers only rows above the
+    // cursor — so the ops held here are dropped until the sync-delivery fix lands (the module
+    // doc's last section).
     //
     // The loop runs until no new device is found to be blocked, which is at most once per
     // device and in practice once. Each round rolls its own work back, so only the last one
@@ -1449,9 +1512,11 @@ fn break_cycles(conn: &Connection, meta: &Meta, groups: &[Group]) -> Result<usiz
 
 /// Move each peer's watermark to the last op before the first one that could not be applied.
 ///
-/// **Below the block and never past it.** Everything at or above a device's block is left for
-/// the next pull, which is why the pass above must not have applied any of it: the two halves
-/// are one rule, and getting either wrong doubles a counter or loses an op.
+/// **Below the block and never past it.** Everything at or above a device's block is left
+/// unapplied, which is why the pass above must not have applied any of it: the two halves are
+/// one rule, and getting either wrong would double a counter on a re-delivery or lose an op.
+/// (⚠️ The client does not re-deliver yet — it advances its cursor past a deferral, so the ops
+/// left here are dropped; see the module doc.)
 fn advance_watermarks(
     conn: &Connection,
     groups: &[Group],
