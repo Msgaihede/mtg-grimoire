@@ -332,9 +332,13 @@ holds the scanner for good: the in-flight count has no age, by design. Every wri
 (`with_write` answers `BUSY` after five seconds), but a `spawn_blocking` that hung would keep every
 other window on the sentence until the process exits. Nothing today is known to hang.
 
-**Deck undo needed nothing.** The cursor is per deck in the database, the redo stack is per window, a
-stale redo is refused (`MOVED_ON`), and the undo button refreshes through §4. Ctrl+Z in either window
-undoes that deck's most recent change, which is what one deck with two views should mean.
+**Deck undo: the cursor is per deck in the database, the redo stack is per window.** A window's redo
+stack is cleared only by that window's own writes, so the backend is what refuses a redo another
+window has overtaken: `deck_redo_apply` takes only `next_redo` — the step undone last, above the
+undo cursor — and only when the deck still holds that step's undo side, else `MOVED_ON`; and
+`deck_undo_state` answers no redo for any other id, so the button greys after §4's refresh rather
+than failing when pressed. Ctrl+Z in either window undoes that deck's most recent change, which is
+what one deck with two views should mean. [decks-storage.md](decks-storage.md) has the rule.
 
 ## 6. The two other one-window assumptions
 

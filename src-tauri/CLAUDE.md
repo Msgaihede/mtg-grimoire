@@ -946,9 +946,11 @@ shared_cell` walks both into two databases and compares them column by column.
     half would put the list back while the copies stayed in `Recently removed` — a deck claiming
     copies its group no longer holds, with the reader believing Ctrl+Z had worked. Half an undo is
     worse than none. The absence is visible because the Undo button's name **is** the change it
-    would reverse, so it goes on naming the press before the cut — **which means a cut does not
-    advance the undo cursor and the previous step stays the one Ctrl+Z will take**, so pressing
-    it after a cut reverses the *older* change rather than the cut or nothing. The complete way
+    would reverse, so it goes on naming the press before the cut — **a cut does not advance the
+    undo cursor**. Pressing Ctrl+Z then reverses that older change only if the deck still holds
+    what it left: when it touched the cut card's cell, the press is refused (`RETIRED`) and that
+    step retired, rather than bringing back a card whose copies are in `Recently removed` — see the
+    `deck_undo` bullet below. The complete way
     back is `collection_to_deck`, which restores both halves at once, and **the deck builder's
     Collection Search tab is what calls it** (2026-08-23,
     `src/features/decks/useCollectionSearch.ts`): the cut copies are sitting in
@@ -1928,6 +1930,21 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   their payload key rewritten. It is the cost this rule exists to keep out of the ordinary case,
   not a counter-example to it.) **The reversal's own row records no step**, so the stack stays linear.
   `undone_at` persists (undo survives a restart); the redo queue is the webview's and does not.
+  **A reversal is checked, never trusted — twice.** The id must be the cursor (`next_undo`, or for
+  a redo `next_redo`: the undone step above the cursor with the newest `undone_at` — an ordinal
+  now, `max(now, newest + 1)`, never the wall clock). Then the deck must still hold the side the
+  step moves away from, compared by content — because the cut, the Collection tab's filing, a sync
+  pull and Scryfall's reconcile all change `deck_cards` **without** a step — and a pile or label
+  delete being applied may take only rows the step itself rewrites or recorded. A refused redo is
+  `MOVED_ON` and writes nothing. **A refused undo deletes its own `deck_undo` row** (the history
+  row stays) and says `RETIRED`, never `MOVED_ON` — a reader told "not the most recent change"
+  presses again and undoes the older one — and **so does an undo whose write fails**: it runs in a
+  savepoint, so no constraint can wedge the cursor either. **`Op::Deck` writes only the columns
+  whose two sides differ** — every `deck_update` step records all of `DECK_FIELDS`, and writing
+  them all back reverted folder deletes, tab switches and synced columns, and put deleted folders'
+  ids into a real foreign key. **A schema rung that rewrites `deck_cards`, `decks` or category,
+  label or note contents without clearing `deck_undo` retires every step it touched at the first
+  Ctrl+Z** — clear the journal on such a rung (v21 did) or accept that.
   Every deck write records one — `undoing_any_card_write_restores_the_deck_exactly` and its two
   siblings drive the list and compare the deck row for row. **Four deliberate absences**, each
   argued at its own site: `deck_create`/`duplicate`/`delete`, `deck_folder_delete` (per-deck

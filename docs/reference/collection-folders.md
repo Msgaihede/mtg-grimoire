@@ -1069,10 +1069,13 @@ table at all. Three things follow:
 
   **Say the consequence plainly, because the button's name is only visible to somebody reading
   it: a cut does not advance the undo cursor, so the previous step remains the one Ctrl+Z will
-  take.** Cut a card and press Ctrl+Z and the *older* change is reversed — the rename, the add,
-  the pile move before it — not the cut, and not nothing. The label is honest about that the whole
-  time; a keyboard user who never looks at it is the one this sentence is for. It is not a
-  keystroke that fails, it is a keystroke that succeeds at something else.
+  take.** Cut a card and press Ctrl+Z and the *older* change is reversed — the rename, the pile
+  move before it — not the cut, **provided the deck still holds what that change left**. When the
+  older change touched the card that was cut (the stepper's +1, the add), the press is refused
+  (`RETIRED`) and that step is retired: its rows would bring back a card whose copies are in
+  `Recently removed`. The label is honest the whole time; a keyboard user who never looks at it is
+  the one this sentence is for. The rule is `deck_undo`'s, in
+  [decks-storage.md](decks-storage.md).
 
   **The cost, stated plainly, and it got smaller on 2026-08-23.** A cut still cannot be reversed
   from the keyboard. What changed is that `collection_to_deck` — the write that restores **both**
