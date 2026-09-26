@@ -233,12 +233,26 @@ User schema **v52**. Rust-heavy; the UI changes are the band and the mode contro
    can unmake it. Cutting the card and adding it back brings the token back as its implicit entry.
 
    **This is a reconcile after every write that changes a list's cards**, not a rule applied at
-   read time: `reconcile_tokens(conn, deck_id, variant)` in Rust, called from the deck-write choke
-   points — adding, cutting, moving between piles, switching a pile on or off (a switched-off pile
-   makes nothing), clearing, importing over, a printing swap, and undo/redo of any of those. The
-   plan's first task is the census of those call sites, fenced by a test that drives each one.
-   Doing it at read time would leave the entries in the table and the copies in the deck's folder,
-   which is the stranding this rule exists to prevent.
+   read time — doing it at read time would leave the entries in the table and the copies in the
+   deck's folder, which is the stranding this rule exists to prevent. The census (2026-09-26, 18
+   writers) settled where it runs, **in two layers**:
+
+   - **Inside the write's own transaction**, for every writer that files an undo step, so its
+     deletions can ride that step: at the two shared choke points `deck_undo::record_cells` and
+     `record_variant` (adding, a quantity, clearing a pile or a list, a move, a printing swap,
+     copying live into theory, importing), and by hand at the three steps built without them —
+     the theory switch (`update_deck` → `move_live_into_theory`), switching a pile on or off
+     (`set_category_active`) and deleting a pile (`delete_category`).
+   - **After every write, as a backstop**, on the hook `sync::with_write` already runs for the
+     managed wishlist (its TEMP dirty-deck triggers on `deck_cards` and `deck_categories`), for
+     the writers that file no step: `collection_to_deck`, `deck_to_collection`, sync apply, the
+     reconcile of vanished printings, and **undo/redo itself**. Its deletions sit in no step — so
+     a redo does not bring back entries a post-undo reconcile removed, the one cost of this
+     arrangement.
+
+   Reconcile deletions are **ordinary captured writes**: every device derives the same result, a
+   delete that finds nothing is a no-op, and capturing them keeps an undo's restore (a captured
+   insert) meaningful on the other device.
 
    **The reconcile's deletions ride the card write's own undo step.** `reconcile_tokens` returns the
    rows it removed and the caller appends an `Op::Tokens { restore }` to the step it files, so
@@ -259,10 +273,12 @@ entry's `finish` is what the chin names, what `FoilOverlay` sheens and what the 
 - Every `deck_tokens` row with a non-null `card_id` becomes one entry **per list** (`live` and
   `theory`) at `coalesce(quantity, 1)`; its `card_id` and `quantity` are then cleared. Both lists,
   because today's override is shared by both — copying it keeps what each list draws unchanged.
-  Its finish is the printing's **sole** finish when the corpus says it has exactly one, else
-  `nonfoil` — today's picker never chose a finish, so this is what the tile already drew. Where
-  the corpus cannot be read at migration time the entry is `nonfoil`, and a foil-only printing is
-  put right by one swap.
+  **The rung writes `nonfoil`**: no migration rung reads the corpus (`migrate_user` runs before
+  `migrate_corpus`, and no rung selects from `cards`). A **launch-time idempotent repair**,
+  `deck_tokens::repair_entry_finishes`, run beside `managed_wishlist::settle_all`, then sets each
+  entry whose finish its printing is not sold in to the printing's sole finish — the reader can
+  never have chosen such a finish, since the picker only offers what is sold, so the repair
+  touches only what the rung could not know.
 - A row with only a `quantity` is left as it is: that quantity keeps meaning "the implicit entry's
   quantity" (rule 1). No printing is resolved inside the migration — the resolver's default comes
   from the deck's cards and the corpus, and a rung that guessed it would invent a choice the reader
@@ -285,17 +301,26 @@ The four token commands keep their names and gain a `variant` where a write targ
 - `deck_token_state(deck_id, oracle_id, state)` — dismiss / restore, shared by both lists.
 - `deck_token_reset(deck_id, variant, oracle_id)` — deletes that list's entries, back to implicit.
 
-The exact split is the plan's to settle; what is fixed is that **every write names its list** and
-**no write touches the collection in Managed or Hide**. Sync capture and apply gain the new table;
-the text mirror writes entries rather than one line per token.
+`deck_token_set`, `deck_token_clear` and `deck_token_add` are retired — `add` had no caller at all
+(2026-09-26). **Every write names its list** and **no write touches the collection in Managed or
+Hide**. Sync capture and apply gain the new table. **The text mirror renders no tokens** (none of
+its files names one — `mirror/watch.rs`), so it only maps the new table to `DECKS_ONLY`, as it maps
+`deck_tokens`; a token section in the mirror is not part of this PR.
 
 ### 4.5 The mode control
 
 A three-way segmented control — **Managed tokens / Collection tokens / Hide tokens** — in two
 places writing one column: the **Tokens & Emblems band's header** (visible in every mode, Hide
-included) and **Deck settings**, replacing today's `Draw tokens as a stack` switch. `hidden` takes
-the pile out of all four views; `managed` and `collection` draw it. The band is always there and
-every stepper works in every mode.
+included) and **Deck settings**, replacing today's `Show Tokens & Emblems in the deck` switch.
+`hidden` takes the pile out of all four views; `managed` and `collection` draw it. The band is
+always there and every stepper works in every mode. It is `DeckKindGroup`'s shape — a
+`role="group"` of `aria-pressed` buttons, never a radiogroup — since this app has no shared
+segmented component.
+
+**PR 2 draws two of the three segments, Managed and Hide; Collection arrives in PR 3 with the
+custody it means.** A Collection button that behaved exactly like Managed would be a control that
+lies about what it does. The column's `CHECK` carries all three words from v52, so PR 3 adds a
+button and a behaviour and no rung.
 
 ### 4.6 Adding a printing
 
@@ -308,10 +333,19 @@ every stepper works in every mode.
   name and set. A pick is rule 5 at quantity 1.
 - **From the search column** (either tab): adding or dropping a card whose layout is `token`,
   `double_faced_token` or `emblem` files it as a **token entry** (rule 5) rather than a deck card,
-  whichever pile it was dropped on — tokens never become deck cards. The finish is the tile's own
-  where the tile has one (the collection tab's wall is grained on it), else the printing's default.
-  A token the deck does not make becomes a hand-added token. The one predicate lives in
-  `deckTokens.ts` (`isTokenLayout`), with its Rust twin in §5.1.
+  whichever pile it was dropped on — tokens never become deck cards. A token the deck does not
+  make becomes a hand-added token.
+
+  **The routing is in Rust, at the two writes every add path ends in**: `deck::add_card` (the Add
+  button, a drop on any pile, quick add, the card menu's `Add to`, a drop on the sidebar's deck
+  entry) and `collection_alloc::collection_to_deck` (the Collection tab). Measured 2026-09-26: no
+  drag payload and no add call carries the card's `layout`, so a TypeScript router would have to
+  thread it through six call sites and would miss the next one; in Rust the card's own row is at
+  hand and the rule is structural. `deck_tokens::is_token_layout` is the predicate, and
+  `deckTokens.ts`' `isTokenLayout` its TypeScript twin for drawing. A rerouted `add_card` answers
+  an `EntryChange` with **`id: 0`** — no deck card was made, so nothing is marked as landed — and a
+  rerouted `collection_to_deck` moves **no copy** in PR 2 (PR 3's custody pulls from the pool).
+  The finish is the add's own where it names one, else the printing's default.
 - **A click** on an entry — in the stack or the band — opens the printing picker for **that
   entry** (rule 4). The picker's own swap never touches the token's other entries.
 
@@ -320,19 +354,20 @@ every stepper works in every mode.
 **Every token write is undoable** (the reader's ask) — which reverses #388's "token writes record
 nothing". A token write is a deck write, so it goes where every deck write goes:
 
-- **Undo** — a new `Op::Tokens { restore, patch, delete, states }` in `deck_undo`, the shape
-  `Op::Notes` has: `restore`/`patch`/`delete` over `deck_token_printings` rows (by grain) and
-  `states` over `deck_tokens` rows. A write files one `Step` whose `undo` puts the rows back and
-  whose `redo` re-applies them — rows restored, never a command run backwards, the module's own
-  rule. A **mode** change is `Op::Deck { token_mode }`, a **rail move** `Op::Deck
-  { token_rail_index }` (§3.4).
-- **History** — one `deck_audit` row per write, kind **`token`**, payload
-  `{ action, name, subtitle, card_id, finish, list, from, to }`, with `auditText.ts` arms such as
-  *"Added 1 × Treasure (foil)"*, *"Treasure 1 → 3"*, *"Swapped Treasure's art"*, *"Dismissed
-  Soldier"*. A new kind rather than reusing `add` / `quantity`, because every existing reader of
-  those kinds reads them as **deck cards**, and a Treasure in them is a card that is not in the
-  deck. Widening the kind `CHECK` is part of v52's rung; whether `deck_audit` is rebuilt or needs
-  anything in sync is the plan's to measure.
+- **Undo** — a new `Op::Tokens { restore, delete, states }` in `deck_undo`: `restore` upserts
+  `deck_token_printings` rows to the quantity recorded, `delete` removes rows by grain, and
+  `states` sets `deck_tokens` rows to what was recorded (an absent state deletes the row). A write
+  files one `Step` whose `undo` puts the rows back and whose `redo` re-applies them — rows
+  restored, never a command run backwards, the module's own rule. A **mode** change is
+  `Op::Deck { token_mode }`, a **rail move** `Op::Deck { token_rail_index }` (§3.4).
+- **History** — one `deck_audit` row per write, kind **`deck`** with payload
+  `{ field: "token", action, name, subtitle, card_id, finish, list, from, to }`, with
+  `auditText.ts` arms such as *"Added 1 × Treasure (foil)"*, *"Treasure 1 → 3"*, *"Swapped
+  Treasure's art"*, *"Dismissed Soldier"*. **Not a new kind** — the deck notes' precedent
+  (`{ field: "note", action }`), measured 2026-09-26: `deck_audit` **is synced** (append-only),
+  so a new word in its `CHECK` would be refused by any paired device still on an older build, and
+  its applier defers the op — stalling that device's stream until it upgrades. `deck` is already
+  the deck-level kind, so no reader takes a token for a deck card.
 - **The undo button's label** is the audit row's text, as for every step, so the button reads
   *"Undo — Treasure 1 → 3"*.
 - `every_deck_write_leaves_exactly_one_audit_row` gains the token commands, and the fake's
