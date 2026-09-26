@@ -23,8 +23,11 @@
  * answers `0` — so money never decides whether a deck is done, an em dash is drawn exactly for
  * `null`, and {@link rowHint} says which copies a figure leaves out.
  *
- * **A figure measured on the plan says `Plan` where it is drawn** — {@link countCaption}, the tile's
- * shortfall and the press's name all lead with it. A theory deck's `81 of 100` is its plan against
+ * **A figure measured on the plan says `Plan` wherever the row is drawn** — {@link countCaption},
+ * the tile's shortfall and the press's name all lead with it, and a compact panel, which draws no
+ * count at all, keeps the word alone as the row's caption: its price and its track are still the
+ * plan's. The rows of one list share a height, so once any listed row is a plan's, a compact
+ * panel counts every row at the captioned height. A theory deck's `81 of 100` is its plan against
  * every copy it could use, not its sleeved list, and a reader who opens a deck holding sixty cards
  * beside a card saying "of 100" would read the two as disagreeing. The hint says it in full; the
  * word is what survives without a pointer. The press is unchanged: it opens the deck exactly as
@@ -38,7 +41,7 @@
  * It is neither complete nor in progress; there is nothing to measure. {@link completionRows}
  * leaves it out, **once, before anything orders, counts or decides the card is empty**, so none of
  * those three can come to disagree about it. A scope holding only such decks draws
- * {@link NO_DECKS}.
+ * {@link NO_DECKS} under `Most recent` and {@link PINS_UNMEASURABLE} under `Pinned`.
  *
  * ## Which decks is a filter; order is a display decision
  *
@@ -127,14 +130,26 @@ function completeWord(): string {
 }
 
 const PENDING = "Measuring your decks…";
-/** Names every kind of deck the card leaves out, so a reader holding one of each is told why none
- *  of them is here — an empty deck included, which is the one they are least likely to guess. */
+/** `Most recent` with nothing to measure. Names every kind of deck that scope leaves out, so a
+ *  reader holding one of each is told why none of them is here — an empty deck included, which is
+ *  the one they are least likely to guess. **Never drawn under `Pinned`**, where an archived pin is
+ *  kept and the reader has decks by definition: that is {@link PINS_UNMEASURABLE}. */
 export const NO_DECKS =
   "No decks to measure — build one on the Decks page. Archived, virtual and empty decks are left out here.";
 /** `DecksWidget`'s sentence, for its reason: the chip reads `Pinned`, so drawing the recent decks
  *  under it would be the card claiming something it is not doing. */
 export const NOTHING_PINNED =
   "No decks pinned yet — choose them in this card's settings under Customize.";
+/**
+ * `Pinned` with pins, none of which can be measured — `DecksWidget`'s `PINS_GONE` for this card.
+ *
+ * That sentence has one reason (the decks are not in the collection any more) and this card has
+ * three: a pin can also name a virtual deck, which `deck_completion` answers nothing for, or a deck
+ * whose list asks for nothing. Its own sentence for `PINS_GONE`'s reason: the reader chose a set,
+ * so the useful answer points at the choosing — not at building a deck they already have.
+ */
+export const PINS_UNMEASURABLE =
+  "None of the decks pinned here can be measured — each is gone from this collection, virtual or empty. Choose others in this card's settings under Customize.";
 /** Names the switch by the registry's own label. */
 export const ALL_COMPLETE = `Every deck here is complete — turn on ${completeWord()} in this card's settings to list them.`;
 
@@ -301,6 +316,15 @@ export function rowHint(row: DeckCompletion, marketplace: Marketplace): string |
  * `notifyOnChangeProps: []` so its refetch re-renders nothing. The subscription listens for the
  * **invalidate action** rather than any event, because a query under `["collection"]` emits
  * `fetch` and `success` on every ordinary read. No loop: what it invalidates sits under `["decks"]`.
+ *
+ * **A burst in one tick is one invalidation.** One binder write invalidates `["collection"]`,
+ * and that dispatches an `invalidate` event per cached query under the root — synchronously, in
+ * one `invalidateQueries` call. Answered one by one, each event re-issued this read and the next
+ * cancelled it, and **a cancelled TanStack fetch does not abort a Tauri invoke**: K events were K
+ * backend measurements of every deck, K − 1 thrown away. So an event only *queues* the
+ * invalidation, and a microtask sends it once the burst is over. (`ActivityWidget`'s bridge, which
+ * this one was copied from, still answers event by event — a known follow-up, not a difference of
+ * design.)
  */
 function useCollectionBridge(enabled: boolean): void {
   const client = useQueryClient();
@@ -318,10 +342,16 @@ function useCollectionBridge(enabled: boolean): void {
     // Every marketplace's entry: the key less its last segment, derived from the one definition in
     // `keys.ts` so this line cannot come to spell it differently.
     const root = deckCompletionKey(DEFAULT_MARKETPLACE).slice(0, -1);
+    let queued = false;
     return client.getQueryCache().subscribe((event) => {
       if (event.type !== "updated" || event.action.type !== "invalidate") return;
       if (event.query.queryKey[0] !== "collection") return;
-      void client.invalidateQueries({ queryKey: root });
+      if (queued) return;
+      queued = true;
+      queueMicrotask(() => {
+        queued = false;
+        void client.invalidateQueries({ queryKey: root });
+      });
     });
   }, [client, enabled]);
 }
@@ -366,18 +396,30 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
   // Every deck that can be measured, and nothing else: a deck asking for nothing is already out,
   // so the empty state below, the footer's count and the order all see the same rows.
   const inScope = completionRows(decksQuery.data, completionQuery.data, scope, deckIds);
-  if (inScope.length === 0) return <WidgetMessage>{NO_DECKS}</WidgetMessage>;
+  if (inScope.length === 0) {
+    return <WidgetMessage>{scope === "pinned" ? PINS_UNMEASURABLE : NO_DECKS}</WidgetMessage>;
+  }
   const listed = showComplete ? inScope : inScope.filter((row) => row.missing > 0);
   if (listed.length === 0) return <WidgetMessage>{ALL_COMPLETE}</WidgetMessage>;
 
   /**
    * What the box carries. **On a two-cell tile the shortfall moves under the name** — `WidgetRow`'s
    * rule — and it is the missing count that is kept, with its price beside it, because *how far* is
-   * what this card is about. A compact panel drops the `96 of 100` caption and keeps the price. The
-   * footer is a panel's furniture and is drawn from three cells wide.
+   * what this card is about. A compact panel drops the `96 of 100` caption and keeps the price —
+   * **except that a plan's row keeps the word `Plan`**, since its price and track are the plan's
+   * and nothing else on the row would say so. The footer is a panel's furniture and is drawn from
+   * three cells wide.
+   *
+   * **`rowsFit` takes one height for the whole list, so it is the tallest row that may be drawn.**
+   * Asked over `listed` rather than over the rows that end up shown, because which rows are shown
+   * is what the answer decides: once any listed row is a plan's, a compact panel counts every row
+   * as captioned. Counting at the bare height beside a captioned row would cut the list to more
+   * rows than the box holds — the half-row `SetCompletionWidget`'s `rowPx` note records.
    */
   const tile = fit.tier === 0;
-  const captioned = tile || !fit.compact;
+  const fullCaption = !fit.compact;
+  const planLine = fit.compact && listed.some((row) => row.list === "theory");
+  const captioned = tile || fullCaption || planLine;
   const footer = completionFooter(inScope, currency);
   const footerShown = fit.tier >= 1 && footer.text !== "";
   const shown = sortCompletions(listed, order).slice(
@@ -427,7 +469,7 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
             <WidgetRow
               key={row.deckId}
               name={row.name}
-              caption={captioned ? caption : undefined}
+              caption={fullCaption ? caption : row.list === "theory" ? PLAN : undefined}
               value={price}
               track={track}
               hint={hint}

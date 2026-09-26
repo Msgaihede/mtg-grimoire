@@ -41,6 +41,7 @@ import {
   DeckCompletionWidget,
   NO_DECKS,
   NOTHING_PINNED,
+  PINS_UNMEASURABLE,
   rowHint,
   sortCompletions,
   type CompletionRow,
@@ -570,6 +571,27 @@ describe("DeckCompletionWidget", () => {
 
       expect(screen.queryByText("56 of 60 · 4 missing")).toBeNull();
       expect(screen.getByText("$12.50")).toBeInTheDocument();
+      // Nothing under the name at all: the row is the name and the figure.
+      expect(screen.getByRole("button", { name: /^Burn/ })).toHaveTextContent(/^Burn\$12\.50$/);
+    });
+
+    /**
+     * **A compact panel draws no count, and a plan's figures still need saying** (fix round 1): the
+     * price and the track beside `Esper Control` are the plan's, so the word alone is its caption.
+     * A live row beside it stays bare.
+     */
+    it("keeps the word Plan as the caption of a theory row on a compact card", () => {
+      seed([PLAN, BURN], [PLAN_AT, BURN_AT]);
+
+      draw(null, { fit: fitFor(3, 3, "compact") });
+
+      const plan = screen.getByRole("button", { name: /^Esper Control/ });
+      expect(plan).toHaveTextContent(/^Esper ControlPlan\$50\.00$/);
+      expect(within(plan).getByText("Plan")).toBeInTheDocument();
+      expect(within(plan).queryByText(/81 of 100/)).toBeNull();
+      expect(screen.getByRole("button", { name: /^Burn/ })).toHaveTextContent(/^Burn\$12\.50$/);
+      // The name a reader drives by still carries the whole caption.
+      expect(plan).toHaveAccessibleName("Esper Control · Plan · 81 of 100 · 19 missing · $50.00");
     });
 
     it("cuts the list to the rows the box holds", () => {
@@ -583,6 +605,33 @@ describe("DeckCompletionWidget", () => {
       draw(null, { fit });
 
       // A captioned row with a track is 57px, and the footer takes 22 before rows are counted.
+      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(57, 22));
+    });
+
+    /**
+     * **One row height for the whole list, and it has to be the tallest row drawn.** A compact
+     * panel of live decks is bare rows (42px with the track); one theory row among them carries the
+     * `Plan` line, so every row is counted at the captioned 57px — counting at 42 would cut the list
+     * to more rows than the box holds. The fixture is chosen so the two counts differ (5 against 4).
+     */
+    it("counts rows at the captioned height on a compact card once a theory row is listed", () => {
+      const fit = fitFor(3, 3, "compact");
+      expect(fit.rowsFit(42, 22)).not.toBe(fit.rowsFit(57, 22));
+      const many = Array.from({ length: 12 }, (_, i) => deck({ id: 100 + i, name: `Deck ${i}` }));
+      const answers = many.map((d) =>
+        completion({ deckId: d.id, owned: 50, missing: 10, missingCost: 4 }),
+      );
+      seed(many, answers);
+
+      const { unmount } = draw(null, { fit });
+
+      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(42, 22));
+      unmount();
+
+      // The same decks with one of them measured on its plan.
+      seed(many, [...answers.slice(0, 11), { ...answers[11], list: "theory" }]);
+      draw(null, { fit });
+
       expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(57, 22));
     });
   });
@@ -650,6 +699,22 @@ describe("DeckCompletionWidget", () => {
       draw({ scope: "pinned" });
 
       expect(screen.getByText(NOTHING_PINNED)).toBeInTheDocument();
+      expect(rowNames()).toEqual([]);
+    });
+
+    /**
+     * **Pins that answer to nothing measurable are the pins' problem, not the collection's**
+     * (fix round 1). `NO_DECKS` would tell a reader who has decks to build one, and say archived
+     * decks are left out — false under `Pinned`, where an archived pin is drawn. Here the pins are
+     * a virtual deck, an empty one and an id no deck has any more, while four real decks exist.
+     */
+    it("says the pins cannot be measured when every pin is gone, virtual or empty", () => {
+      seed([SHELL, ...DECKS], [SHELL_AT, ...ANSWERS]);
+
+      draw({ scope: "pinned", deckIds: [5, 9, 404] });
+
+      expect(screen.getByText(PINS_UNMEASURABLE)).toBeInTheDocument();
+      expect(screen.queryByText(NO_DECKS)).toBeNull();
       expect(rowNames()).toEqual([]);
     });
 
@@ -744,6 +809,35 @@ describe("DeckCompletionWidget", () => {
       expect(
         await screen.findByRole("button", { name: "Burn · 58 of 60 · 2 missing · $6.00" }),
       ).toBeInTheDocument();
+    });
+
+    /**
+     * **One write, one measurement** (fix round 1). A binder write invalidates `["collection"]`,
+     * which dispatches one `invalidate` event per cached query under that root — the marker plus
+     * whatever the collection page, the search and the other widgets hold. Answered one by one,
+     * each event re-issues the read and the next cancels it, and a cancelled TanStack fetch does
+     * not abort a Tauri invoke: K events cost K backend runs over every deck, K − 1 discarded. The
+     * bridge coalesces a burst in one tick into one invalidation.
+     */
+    it("measures once for a burst of collection invalidations in one tick", async () => {
+      seed([BURN], [BURN_AT]);
+      // Three more readers under the root, so one write dispatches four `invalidate` events.
+      qc.setQueryData(["collection", "list", "a"], []);
+      qc.setQueryData(["collection", "list", "b"], []);
+      qc.setQueryData(["collection", "count"], 0);
+      deckCompletion.mockResolvedValue([
+        completion({ deckId: 1, owned: 58, missing: 2, missingCost: 6 }),
+      ]);
+      draw();
+
+      await act(async () => {
+        await qc.invalidateQueries({ queryKey: ["collection"] });
+      });
+
+      expect(
+        await screen.findByRole("button", { name: "Burn · 58 of 60 · 2 missing · $6.00" }),
+      ).toBeInTheDocument();
+      expect(deckCompletion).toHaveBeenCalledTimes(1);
     });
 
     it("leaves the read alone when an unrelated root is invalidated", async () => {
