@@ -866,8 +866,10 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
 
     // **The third disclosure rides the ordinary patch**, `decks.notes_open` at schema v43, and
-    // it is pinned here for the reason `DeckInput`'s literal above is: `DeckPatch` is on neither
-    // mirror table, so this object is the whole of what compares it with `deck::DeckPatch`. The
+    // it is pinned here for the reason `DeckInput`'s literal above is — `DeckPatch` stood on
+    // neither mirror table until user schema v50, so this object was the whole of what compared
+    // it with `deck::DeckPatch`; the plain-mirror table below carries it now, and these literals
+    // stay as the pin on what reaches the wire rather than on the declaration. The
     // failure is the quiet kind — Tauri drops a payload field a command does not declare, so a
     // misspelt key is a band that closes itself on every reload with nothing red anywhere, which
     // is indistinguishable from a reader who never opened it.
@@ -882,6 +884,13 @@ describe("ipc argument names match the Rust command signatures", () => {
     // failure: a Deck settings switch that never draws the token pile.
     await ipc.deckUpdate(4, { tokenStack: true });
     expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { tokenStack: true } });
+    // User schema v50's rail slot, and the one number on this patch whose sentinel is **not**
+    // an absence: `-1` is *last*, a value the reader writes by dragging the pile to the end, so
+    // it has to travel as `-1` rather than be dropped the way an absent key reads as "leave it".
+    await ipc.deckUpdate(4, { tokenRailIndex: 2 });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { tokenRailIndex: 2 } });
+    await ipc.deckUpdate(4, { tokenRailIndex: -1 });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { tokenRailIndex: -1 } });
 
     invoke.mockResolvedValue(undefined);
     await ipc.deckDelete(4);
@@ -1808,7 +1817,11 @@ describe("ipc argument names match the Rust command signatures", () => {
    * `None`, and a dismissal silently becomes "no change" with no error anywhere.
    *
    * The other three are pinned for the ordinary reason. `deck_tokens` is a read scoped by
-   * `variant`, like every deck read beside it. `deck_token_clear` addresses the override by
+   * `variant`, like every deck read beside it — and, since user schema v50's token pile, priced
+   * by `marketplace`, the name `card_printings` and `deck_get` already take it under. That one
+   * fails quietly: `card_printings` reads an absent marketplace as TCGplayer, so a wrapper that
+   * dropped or misspelt the key would quote dollars under a Card Kingdom heading and nothing
+   * would go red. `deck_token_clear` addresses the override by
    * the grain (`deckId`, `oracleId`); `deck_token_add` addresses a **printing** (`deckId`,
    * `cardId`) because a hand-added token is picked out of a printings grid and Rust resolves
    * the oracle id from it. Those two ids are one word apart and interchangeable to a
@@ -1834,6 +1847,15 @@ describe("ipc argument names match the Rust command signatures", () => {
       cardId: null,
       quantity: null,
       state: null,
+      // The effective printing's chin and its price (user schema v50's token pile). Typed here
+      // for the four fields' reason above: `unitPrice` misspelt is an em dash on every token
+      // tile, which reads as "this marketplace does not quote it" rather than as a bug.
+      setCode: "tafr",
+      collectorNumber: "15",
+      setName: "Adventures in the Forgotten Realms Tokens",
+      rarity: "common",
+      finishes: '["nonfoil","foil"]',
+      unitPrice: 0.23,
     };
     invoke.mockResolvedValue([row]);
 
@@ -1842,8 +1864,12 @@ describe("ipc argument names match the Rust command signatures", () => {
     // be the only thing standing between the crate and every caller. The annotation above is
     // half the assertion — a field this side spells differently is a compile error here and
     // `undefined` everywhere else.
-    expect(await ipc.deckTokens(7, "live")).toEqual([row]);
-    expect(invoke).toHaveBeenCalledWith("deck_tokens", { deckId: 7, variant: "live" });
+    expect(await ipc.deckTokens(7, "live", "cardkingdom")).toEqual([row]);
+    expect(invoke).toHaveBeenCalledWith("deck_tokens", {
+      deckId: 7,
+      variant: "live",
+      marketplace: "cardkingdom",
+    });
 
     invoke.mockResolvedValue(undefined);
     await ipc.deckTokenSet(7, "o-1", { cardId: "c-9", quantity: 4, state: "auto" });
@@ -4903,6 +4929,19 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["SearchRequest", searchRs, "SearchRequest"],
     ["CardFilters", cardFiltersRs, "CardFilters"],
     ["FacetResponse", facetsRs, "FacetResponse"],
+    // **The deck patch, added with user schema v50's rail slot** (2026-09-26) — the struct the
+    // app sends on every deck write, and one `DeckRow` beside it has been on `mirrors` above
+    // since the start while this half of the pair stood on nothing but the literals in "sends
+    // every deck write under the name its command declares". A literal pins the fields somebody
+    // thought to write out; this pins all of them, so a column added to `deck::DeckPatch` and
+    // forgotten here is red rather than a switch whose press Tauri drops on the way in.
+    //
+    // It is the loudest kind of drift and the quietest at once: every field is `Option` and
+    // `coalesce(?n, column)` reads an absent one as *leave it*, so a misspelt key is not an error
+    // anywhere — the patch lands, `updated_at` moves, and the one column the reader changed does
+    // not. `tokenRailIndex` is the case that added the row: a pile dragged to a new slot that
+    // snapped back on the next read would look like a drop target that refused.
+    ["DeckPatch", deckRs, "DeckPatch"],
   ];
 
   it.each(plainMirrors)(

@@ -169,6 +169,7 @@ function deckRow(over: Partial<DeckRow> & { id: number; name: string }): DeckRow
     bracket: 0,
     tokensOpen: false,
     tokenStack: false,
+    tokenRailIndex: -1,
     statsOpen: true,
     ...over,
   };

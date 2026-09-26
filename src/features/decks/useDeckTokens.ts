@@ -7,24 +7,31 @@
  * what the wall draws. So this hook owns exactly two things — the query key, and the arithmetic
  * that turns "the reader changed one field" into a write the backend can take.
  *
- * **The key is `["decks", "tokens", deckId, variant]`, under the `["decks"]` root on purpose.**
- * `useDeck`'s own `invalidate` fires that root for every write to what is *in* a deck, so adding
- * a card, moving one between piles or switching a category off already refreshes this list — and
- * it should, because all three change what the deck makes. A key of this feature's own would have
- * to be invalidated by every one of those writes, from a file that has no reason to know this
- * area exists.
+ * **The key is `["decks", "tokens", deckId, variant, marketplace]`, under the `["decks"]` root on
+ * purpose.** `useDeck`'s own `invalidate` fires that root for every write to what is *in* a deck,
+ * so adding a card, moving one between piles or switching a category off already refreshes this
+ * list — and it should, because all three change what the deck makes. A key of this feature's
+ * own would have to be invalidated by every one of those writes, from a file that has no reason
+ * to know this area exists. The same root is what a price feed landing sweeps, which is the
+ * other reason it is the right one now that the rows carry a price.
  *
  * **No `staleTime`.** `query.ts` caches 30 s app-wide, which is the whole budget; a second one
  * here could only make a missing invalidation *invisible*, and the derived list has to move the
  * moment a deck card does.
  *
- * **No `marketplace` in the key either.** Nothing this answers is priced — a token is not a card
- * anybody buys — so carrying it would be two cached answers to one question, refetched on a
- * switch that cannot change it.
+ * **The `marketplace` is in the key, and that reverses what this said until user schema v50.**
+ * It read *nothing this answers is priced — a token is not a card anybody buys*, which was true
+ * of the band and stopped being true of the token pile: each row now carries its effective
+ * printing's `unitPrice`, and the pile's chin and heading quote it. So the marketplace is part
+ * of the question, exactly as it is for `useDeck`'s `deck_get` — two marketplaces are two
+ * answers, and a switch refetches rather than relabelling one feed's numbers as another's. It is
+ * read here with `useMarketplace()` rather than taken as an argument — `useDeck`'s arrangement —
+ * so every caller and every story keeps the signature it had.
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type DeckVariant } from "@/lib/ipc";
+import { useMarketplace } from "@/lib/useMarketplace";
 import { writeFailure } from "@/lib/writes";
 import { DEFAULT_VARIANT, opened } from "./useDeck";
 import {
@@ -108,9 +115,12 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
    */
   const [showDismissed, setShowDismissed] = useState(false);
 
+  // The marketplace prices every row — see the file header for why it is in the key.
+  const { marketplace } = useMarketplace();
+
   const query = useQuery({
-    queryKey: ["decks", "tokens", deckId, variant],
-    queryFn: () => ipc.deckTokens(opened(deckId), variant),
+    queryKey: ["decks", "tokens", deckId, variant, marketplace.id],
+    queryFn: () => ipc.deckTokens(opened(deckId), variant, marketplace.id),
     enabled: deckId !== null,
   });
 
@@ -123,12 +133,15 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
   );
 
   /**
-   * This deck's tokens in **both** lists — `["decks", "tokens", deckId]`, one segment short of
-   * the query key.
+   * This deck's tokens in **both** lists and at **every** marketplace — `["decks", "tokens",
+   * deckId]`, two segments short of the query key.
    *
    * The override is not grained on variant, so a token dismissed while reading the Actual list is
    * dismissed in the plan too; an invalidation naming one variant would leave the other tab
-   * drawing a deviation the reader has just removed, for as long as `query.ts`'s 30 s allows.
+   * drawing a deviation the reader has just removed, for as long as `query.ts`'s 30 s allows. The
+   * marketplace is dropped for the same reason one segment further: an art picked under Card
+   * Kingdom is the art under TCGplayer too, and a cached answer for the other one would still
+   * draw the old printing the moment the reader switched back.
    *
    * **On success only.** Each of the three commands is a single statement against one row, so a
    * refusal leaves the table exactly as this cache already describes it — there is nothing to

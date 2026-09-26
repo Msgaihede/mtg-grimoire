@@ -51,6 +51,7 @@ const ATRAXA: DeckRow = {
   separateXGroup: false,
   tokensOpen: false,
   tokenStack: false,
+  tokenRailIndex: -1,
   statsOpen: true,
   defaultCategoryId: 0,
   bracket: 0,

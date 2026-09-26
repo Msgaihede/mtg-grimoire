@@ -42,6 +42,14 @@ const row = (over: Partial<DeckTokenRow> = {}): DeckTokenRow => ({
   toughness: null,
   colors: "",
   oracleText: "{T}, Sacrifice this token: Add one mana of any color.",
+  // The effective printing's chin facts and price, all unknown: a printing gone from the corpus
+  // answers `null` for every one of them, and that is the state a synthetic id is in.
+  setCode: null,
+  collectorNumber: null,
+  setName: null,
+  rarity: null,
+  finishes: null,
+  unitPrice: null,
   ...over,
 });
 
@@ -99,6 +107,59 @@ describe("deckTokenViews", () => {
     expect(deckTokenViews([row({ imageUris: null })])[0].imageUrl).toBeNull();
     expect(deckTokenViews([row()])[0].imageUrl).toBeNull();
     expect(deckTokenViews([row({ imageUris: { thumb: "t" } })])[0].imageUrl).toBeNull();
+  });
+
+  /**
+   * **The chin's facts and the price are passed through, and nothing here concludes anything
+   * from them.** Rust resolves them off the *effective* printing — the one `imageUris` already
+   * describes — and prices it at the marketplace the read was asked for, so the only way this
+   * file could be wrong about them is by dropping or renaming one on the way to the view. Every
+   * value is distinct from the fixture's `null` default, so a field left uncopied fails rather
+   * than passing on a coincidence.
+   *
+   * `finishes` stays the JSON **text** `cards.finishes` stores: what a token is drawn at is
+   * `playedFinish(null, finishes)`'s decision at the surface that draws it, and a parsed array
+   * here would be a second reading of one column.
+   */
+  it("carries the effective printing's chin facts and price through untouched", () => {
+    const [view] = deckTokenViews([
+      row({
+        setCode: "tclb",
+        collectorNumber: "5",
+        setName: "Commander Legends: Battle for Baldur's Gate Tokens",
+        rarity: "common",
+        finishes: '["nonfoil"]',
+        unitPrice: 0.25,
+      }),
+    ]);
+    expect(view).toMatchObject({
+      setCode: "tclb",
+      collectorNumber: "5",
+      setName: "Commander Legends: Battle for Baldur's Gate Tokens",
+      rarity: "common",
+      finishes: '["nonfoil"]',
+      unitPrice: 0.25,
+    });
+    // An unpriced printing stays unpriced: `null` is the em dash, and a `0` would be a Treasure
+    // quoted as free.
+    expect(deckTokenViews([row({ unitPrice: null })])[0].unitPrice).toBeNull();
+  });
+
+  /**
+   * **The whole map travels beside the resolved `imageUrl`**, because the token pile draws the
+   * deck's own card face and `DeckCardFace` picks its own variant (`DECK_CARD_VARIANT`) off the
+   * map — a variant this file does not choose and must not narrow to. The absent key folds to
+   * `null` for `imageUrl`'s reason: a DTO from a build that predates the field has no picture,
+   * and `undefined` is a third state nothing downstream should have to spell.
+   */
+  it("passes the row's picture map through beside the resolved URL", () => {
+    const uris: Partial<Record<ImageVariant, string>> = {
+      display: "https://cards.scryfall.io/normal/front/a.jpg?1",
+      art: "https://cards.scryfall.io/art_crop/front/a.jpg?1",
+    };
+    expect(deckTokenViews([row({ imageUris: uris })])[0].imageUris).toEqual(uris);
+    expect(deckTokenViews([row({ imageUris: null })])[0].imageUris).toBeNull();
+    expect(deckTokenViews([row()])[0].imageUris).toBeNull();
   });
 
   /**
