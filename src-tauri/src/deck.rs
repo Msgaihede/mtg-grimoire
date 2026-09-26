@@ -487,6 +487,19 @@ pub struct DeckPatch {
     /// the three disclosures above it this is a *setting*, chosen in Deck settings, so
     /// [`duplicate_deck`] carries it the way it carries [`Self::separate_x_group`].
     pub token_stack: Option<bool>,
+    /// Where the **Tokens & Emblems** pile sits in the rail — user schema v50, as the number of
+    /// rail piles drawn above it, and `-1` (or any value the rail no longer reaches) for *last*.
+    ///
+    /// **`Some(-1)` is how a pile goes back to last**, [`Self::bracket`]'s sentinel arrangement:
+    /// the `coalesce(?n, column)` every field here is written with reads a bound NULL as
+    /// unchanged, so a nullable column could never be written back to "last" once moved.
+    ///
+    /// **Where it parts company with [`Self::token_stack`]**: that is a view setting, and this is
+    /// an arrangement the reader dragged — a category's `sort_order`'s kind of answer. So it has
+    /// an arm in [`record_deck_edit`] (`tokenRail`) and a place on `deck_undo::DECK_FIELDS`, and
+    /// [`duplicate_deck`] carries it. **Storage only, on this side**: what the index *means*
+    /// against a rail whose piles come and go is `tokenRail.tsx`'.
+    pub token_rail_index: Option<i64>,
     /// Which Compare view this deck's **managed wishlist** follows — one of
     /// [`crate::managed_wishlist::MODES`], `off` for none. See [`DeckRow::managed_wishlist`].
     ///
@@ -765,6 +778,14 @@ pub struct DeckRow {
     /// carries it, [`Self::separate_x_group`]'s rule. Still no history row and no undo op, the
     /// disclosures' rule — see [`DeckPatch::token_stack`].
     pub token_stack: bool,
+    /// Where the Tokens & Emblems pile sits in the rail — user schema v50, `DEFAULT -1` for
+    /// *last*, so every existing deck draws it where it always has.
+    ///
+    /// **A fact, not a slot**: the rail's piles come and go with the reader's switches, so an
+    /// index the rail no longer reaches also draws last, and that conclusion is `tokenRail.tsx`'.
+    /// See [`DeckPatch::token_rail_index`] for why it has a history row where `token_stack` has
+    /// none.
+    pub token_rail_index: i64,
     /// Which of the Compare dialog's three views this deck's **managed wishlist** follows —
     /// `all`, `missing` or `other` (Different printing) — or `off` for no folder at all
     /// (`decks.managed_wishlist_mode`, schema v49, `DEFAULT 'off'`; issue #512). The folder is
@@ -1093,6 +1114,7 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             d.virtual_only, d.stats_open, d.notes_open, d.token_stack, d.managed_wishlist_mode,
+            d.token_rail_index,
             {images}
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
@@ -1126,7 +1148,9 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
     /// User schema v47 moved it to 28, appending `token_stack` after `notes_open`.
     ///
     /// User schema v48 moved it to 29, appending the managed-wishlist column.
-    const IMAGE_COL: usize = 29;
+    ///
+    /// User schema v50 moved it to 30, appending `token_rail_index`.
+    const IMAGE_COL: usize = 30;
     Ok(DeckRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -1250,7 +1274,12 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // 28, at the end of the named list, same rule — the managed-wishlist mode (schema v49
         // re-added it as TEXT at the same position v48's switch held), read leniently.
         managed_wishlist: crate::managed_wishlist::read_mode(r.get::<_, String>(28)?),
-        // **From 29**, last of all, for the reason written twelve comments up — the
+        // 29, at the end of the named list, same rule — user schema v50's rail index. An
+        // `INTEGER` like `bracket` at 19 and `default_category_id` at 17, so a crossed read would
+        // hand the pile's slot to a bracket and type out perfectly; only the position tells them
+        // apart.
+        token_rail_index: r.get(29)?,
+        // **From 30**, last of all, for the reason written twelve comments up — the
         // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
         // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
         //
@@ -1915,6 +1944,8 @@ struct DeckBefore {
     virtual_only: bool,
     /// Schema v49's managed-wishlist mode, for the history row.
     managed_wishlist: String,
+    /// User schema v50's rail index, for the history row.
+    token_rail_index: i64,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id, and the word
@@ -2032,7 +2063,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     archived, folder_id, theory_enabled, separate_x_group,
                     default_category_id, game_key, bracket,
                     theory_mark_exact, theory_mark_name, theory_mark_unplanned,
-                    virtual_only, managed_wishlist_mode
+                    virtual_only, managed_wishlist_mode, token_rail_index
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -2087,6 +2118,10 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     virtual_only: r.get(15)?,
                     // 16, at the end, same rule.
                     managed_wishlist: crate::managed_wishlist::read_mode(r.get::<_, String>(16)?),
+                    // 17, at the end, same rule — an INTEGER like `bracket` at 11 and
+                    // `default_category_id` at 9, so a crossed index records a move that never
+                    // happened.
+                    token_rail_index: r.get(17)?,
                 })
             },
         )
@@ -2194,6 +2229,10 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 token_stack = coalesce(?21, token_stack),
                 -- `?22`, the next number at the **end**, same rule one rung later.
                 managed_wishlist_mode = coalesce(?22, managed_wishlist_mode),
+                -- `?23`, the next number at the **end**, same rule one rung later. User schema
+                -- v50's rail index is an `Option<i64>` like `?11` and `?13`, so a crossed number
+                -- is an UPDATE that succeeds and moves a pile, a default category or a bracket.
+                token_rail_index = coalesce(?23, token_rail_index),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -2221,6 +2260,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.notes_open,
                 patch.token_stack,
                 managed_wishlist,
+                patch.token_rail_index,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -2635,6 +2675,16 @@ fn record_deck_edit(
         .filter(|m| *m != before.managed_wishlist)
     {
         field("managedWishlist", json!(before.managed_wishlist), json!(to))?;
+    }
+    // `tokenRail`, camelCase — `xGroup`'s rule — and the **numbers** on both sides, `-1` for
+    // last: which pile that slot fell beside is a fact about the rail at the moment of the drag,
+    // and `auditText.ts` words the move without it. An arrangement the reader dragged earns its
+    // row where `token_stack`, a view setting, has none.
+    if let Some(to) = patch
+        .token_rail_index
+        .filter(|i| *i != before.token_rail_index)
+    {
+        field("tokenRail", json!(before.token_rail_index), json!(to))?;
     }
     if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
         last = Some(record_filed(tx, id, Some(to))?);
@@ -3080,16 +3130,18 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // **`token_stack` (user schema v47) is copied too**, where the three disclosures
             // beside it in the table are not: whether the views draw a Tokens & Emblems pile is
             // a setting chosen in Deck settings, `separate_x_group`'s kind of answer, not a band
-            // the reader happened to have open.
+            // the reader happened to have open. **`token_rail_index` (user schema v50) comes
+            // with it**: where the pile sits is an arrangement of the deck, like its categories'
+            // order, and a copy whose pile jumped back to last would not be a copy.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
-                                theory_mark_unplanned, virtual_only, token_stack, managed_wishlist_mode,
-                                archived, created_at, updated_at)
+                                theory_mark_unplanned, virtual_only, token_stack, token_rail_index,
+                                managed_wishlist_mode, archived, created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
                     folder_id, theory_enabled, separate_x_group,
                     bracket, theory_mark_exact, theory_mark_name, theory_mark_unplanned,
-                    virtual_only, token_stack, managed_wishlist_mode,
+                    virtual_only, token_stack, token_rail_index, managed_wishlist_mode,
                     0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
              RETURNING id, name, virtual_only",
@@ -10117,6 +10169,10 @@ mod tests {
             // `true` rather than the column's `DEFAULT 0`, the same rule again: `false` is what
             // every deck carries and would read correct on a field that never left Rust.
             token_stack: true,
+            // A real slot rather than the column's `DEFAULT -1`, the same rule: `-1` is what
+            // every deck carries and would read correct on a field that never left Rust. `2`
+            // and not `3`, so it cannot be mistaken for `bracket` beside it.
+            token_rail_index: 2,
             // Two keys, both real URLs, because this is the one field on the row whose *shape*
             // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
             // TypeScript as an object of variant keys and not as a list or a bare string, and
@@ -10198,6 +10254,11 @@ mod tests {
                 // User schema v47, and `tokenStack` rather than `token_stack`: the four views
                 // read this key to decide whether to draw the token pile at all.
                 "tokenStack": true,
+                // User schema v50, and `tokenRailIndex` rather than `token_rail_index`: the four
+                // views read this key to know where to draw the pile, and a snake-cased one would
+                // be `undefined` — which `tokenRail.tsx` reads as *last*, so the pile would snap
+                // back on every open with no type error anywhere.
+                "tokenRailIndex": 2,
                 // The cover printing's picture, spelled out key by key: this is the deck
                 // gallery's only way to draw a cover on web and on the phone, and it is a map
                 // rather than a URL because `LIST_VARIANTS` decides what a row carries.
@@ -10255,7 +10316,7 @@ mod tests {
 
         let patch: DeckPatch = serde_json::from_str(
             r#"{"coverCardId":"bolt-lea","archived":true,"separateXGroup":true,"gameKey":"mtgo",
-                "virtualOnly":true,"tokenStack":true}"#,
+                "virtualOnly":true,"tokenStack":true,"tokenRailIndex":-1}"#,
         )
         .expect("the patch payload");
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
@@ -10266,6 +10327,10 @@ mod tests {
         // User schema v47. The Deck settings switch sends this, and a misspelled key would be
         // read by `#[serde(default)]` as an omitted one — a press that changes nothing.
         assert_eq!(patch.token_stack, Some(true));
+        // User schema v50. `-1` because it is the one value a drag back to last sends, and the
+        // one a misspelled key would lose: `#[serde(default)]` would read it as `None`, *leave
+        // it*, and the pile would stay wherever the reader had just dragged it from.
+        assert_eq!(patch.token_rail_index, Some(-1));
         assert!(patch.name.is_none(), "an omitted field means leave it");
 
         // And the third: `deck_set_view_state`'s `viewState`, which the editor sends one
@@ -10927,6 +10992,94 @@ mod tests {
         // accident.
         let plain = create_deck(&conn, &input("Storm", "modern")).unwrap();
         assert!(!duplicate_deck(&conn, plain.id).unwrap().token_stack);
+    }
+
+    /// Where the token pile sits in the rail, end to end (user schema v50): last on a new deck,
+    /// a patch moves it, **the move is a history row and one Ctrl+Z puts it back**, and a copy
+    /// keeps the arrangement.
+    ///
+    /// The part `token_stack`'s test above asserts the opposite of: that one is a view setting
+    /// and records nothing, and this is an arrangement the reader dragged — a category's
+    /// `sort_order`'s kind of answer, so the drawer names it and the journal can reverse it.
+    #[test]
+    fn token_rail_index_round_trips_audits_and_undoes() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert_eq!(
+            deck.token_rail_index, -1,
+            "a new deck draws its pile last — the column's own DEFAULT -1"
+        );
+
+        let moved = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                token_rail_index: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(moved.token_rail_index, 1, "the readback is the write");
+        let read = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert_eq!(
+            (read.token_rail_index, read.managed_wishlist.as_str()),
+            (1, "off"),
+            "…including through `DECK_SELECT`'s positional reads, the neighbour untouched"
+        );
+        assert!(
+            read.image_uris.is_none(),
+            "and `IMAGE_COL` moved with it — a deck with no cover reads no picture"
+        );
+
+        let payloads: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 20)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| serde_json::from_str(&r.payload).unwrap())
+            .collect();
+        assert_eq!(
+            payloads.first(),
+            Some(&json!({ "field": "tokenRail", "from": -1, "to": 1 })),
+            "the move is named in the drawer, from and to: {payloads:?}"
+        );
+
+        // The same index again is no change, and a no-change is no row.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                token_rail_index: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            crate::deck_audit::list(&conn, deck.id, 20)
+                .unwrap()
+                .iter()
+                .filter(|r| r.payload.contains("tokenRail"))
+                .count(),
+            1,
+            "re-sending the index the deck already holds records nothing"
+        );
+
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
+        assert_eq!(
+            copy.token_rail_index, 1,
+            "an arrangement comes across with the deck"
+        );
+
+        // `apply_reversal` itself, `undo_puts_every_theory_mark_back`'s route: the path Ctrl+Z
+        // takes.
+        let cursor = crate::deck_undo::next_undo(&conn, deck.id)
+            .unwrap()
+            .unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck.id, cursor, true).unwrap();
+        assert_eq!(
+            read_deck(&conn, deck.id).unwrap().unwrap().token_rail_index,
+            -1,
+            "one Ctrl+Z puts the pile back where it was"
+        );
     }
 
     /// The deck's bracket, end to end: a new deck is on Auto, a patch moves it, an absent field

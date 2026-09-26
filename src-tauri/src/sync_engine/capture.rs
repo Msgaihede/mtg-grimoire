@@ -402,6 +402,11 @@ pub const TABLES: [Spec; 16] = [
             // — how *this* list is read — and `DEFAULT 0` makes the old-peer direction safe the
             // way it is for `virtual_only` above.
             "token_stack",
+            // And where that pile sits in the rail (user schema v50) — an arrangement of the
+            // deck the reader dragged, so it travels with the deck the way the order of its
+            // categories does. `DEFAULT -1` (*last*) makes the old-peer direction safe: a device
+            // on v49 names no such field and the pile stays where every deck drew it before.
+            "token_rail_index",
             "bracket",
             // **Schema v38's two theory marks and v39's third, and they travel for `bracket`'s
             // reason** — which

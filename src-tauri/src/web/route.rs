@@ -1146,15 +1146,19 @@ pub fn call(
         // ── Tokens and emblems ──────────────────────────────────────────────────────
         //
         // The read follows `card_meld_parts` above: it inflates `cards.raw` and walks
-        // `all_parts`, which needs no filesystem, no network and no marketplace. Nothing in
-        // the answer is priced.
+        // `all_parts`, which needs no filesystem and no network. **`marketplace` prices each
+        // row** (`DeckTokenRow::unit_price`), and it is `deck_get`'s shape: `Option<String>`
+        // through `Marketplace::from_opt`, because that is what the Tauri command takes and an
+        // absent key is the ordinary call.
         "deck_tokens" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let variant: String = field(command, args, "variant")?;
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
             let conn = crate::sync::lock_db_read(state);
             encode(
                 command,
-                crate::deck_tokens::deck_token_rows(&conn, deck_id, &variant)
+                crate::deck_tokens::deck_token_rows(&conn, deck_id, &variant, marketplace)
                     .map_err(RouteError::Failed)?,
             )
         }
@@ -3158,6 +3162,95 @@ mod tests {
             &s,
             "deck_get",
             &json!({ "id": id, "variant": "live", "marketplace": { "not": "a string" } }),
+        )
+        .unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
+    }
+
+    /// **`deck_tokens` prices at the marketplace it is sent, and reads the key the page sends.**
+    ///
+    /// The arm's other three shapes are `deck_get`'s — absent and `null` are TCGplayer, an
+    /// unreadable value is an argument error — and the Cardmarket figure is what proves the
+    /// argument reaches the price rather than being read and dropped: an arm that ignored it
+    /// would answer `0.25` on every line and pass the first two assertions.
+    #[test]
+    fn deck_tokens_prices_at_the_marketplace_it_is_sent() {
+        let s = state("web-route-deck-tokens-price");
+        let id = make_deck(&s, "Tokens");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            let raw = crate::card_row::gzip_raw(
+                &json!({
+                    "id": "maker",
+                    "name": "Maker",
+                    "all_parts": [{
+                        "object": "related_card",
+                        "id": "tok",
+                        "component": "token",
+                        "name": "Treasure",
+                    }],
+                })
+                .to_string(),
+            );
+            conn.execute(
+                "INSERT INTO cards (id, oracle_id, name, layout, set_code, collector_number,
+                                    lang, raw)
+                 VALUES ('maker', 'o-maker', 'Maker', 'normal', 'tst', '9', 'en', ?1)",
+                rusqlite::params![raw],
+            )
+            .unwrap();
+            conn.execute(
+                r#"INSERT INTO cards (id, oracle_id, name, type_line, layout, set_code,
+                                      collector_number, lang, finishes, prices, raw)
+                   VALUES ('tok', 'o-tok', 'Treasure', 'Token Artifact — Treasure', 'token',
+                           'ttst', '2', 'en', '["nonfoil"]',
+                           '{"usd":"0.25","eur":"0.40"}', '{}')"#,
+                [],
+            )
+            .unwrap();
+            // The Sideboard: `create_deck` seeds the four predefined piles and no `main` one,
+            // and the Sideboard is active, so it makes tokens (`deck_token_rows`' first rule).
+            let side: i64 = conn
+                .query_row(
+                    "SELECT id FROM deck_categories WHERE deck_id = ?1 AND kind = 'side'",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            conn.execute(
+                "INSERT INTO deck_cards
+                     (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                      name, quantity, created_at, updated_at)
+                 VALUES (?1, ?2, 'live', 'maker', 'tst', '9', 'en', 'Maker', 1, 0, 0)",
+                rusqlite::params![id, side],
+            )
+            .unwrap();
+        }
+        let price = |args: serde_json::Value| {
+            let out = call(&s, "deck_tokens", &args).unwrap();
+            assert_eq!(out.as_array().unwrap().len(), 1, "the one Treasure: {out}");
+            out[0]["unitPrice"].clone()
+        };
+
+        assert_eq!(
+            price(json!({ "deckId": id, "variant": "live" })),
+            json!(0.25),
+            "no marketplace key at all is TCGplayer"
+        );
+        assert_eq!(
+            price(json!({ "deckId": id, "variant": "live", "marketplace": null })),
+            json!(0.25),
+            "and an explicit null means the same thing"
+        );
+        assert_eq!(
+            price(json!({ "deckId": id, "variant": "live", "marketplace": "cardmarket" })),
+            json!(0.4),
+            "a named marketplace reaches the price"
+        );
+        let err = call(
+            &s,
+            "deck_tokens",
+            &json!({ "deckId": id, "variant": "live", "marketplace": { "not": "a string" } }),
         )
         .unwrap_err();
         assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");

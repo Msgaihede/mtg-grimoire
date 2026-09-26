@@ -46,8 +46,20 @@
 //! toughness, colors and oracle text together told 8 of 8 apart in both sampled names (debug
 //! corpus, 2026-09-07), and two tiles announcing one accessible name is a bug that has already
 //! shipped once on the collection wall.
+//!
+//! # The chin and the price
+//!
+//! A token drawn in a deck view's pile wears the chin every deck card wears — set, number,
+//! rarity, finish — and a price its pile heading sums. **All of it is the printing the tile
+//! draws**: `card_id` where the reader picked art, `default_card_id` otherwise, the precedence
+//! [`DeckTokenRow::image_uris`] already follows. The price is that printing in the marketplace
+//! the command was asked for, **priced exactly as a deck row that names no finish is**
+//! ([`crate::sorting::printing_price_by_finish_expr`], `nonfoil → foil → etched`), so a token and
+//! a deck card of the same printing never quote two figures on one screen — and `None` where the
+//! marketplace has no figure: never a zero, and never another marketplace's.
 
 use crate::schema::DECK_TOKEN_GRAIN;
+use crate::sorting::Marketplace;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -113,7 +125,9 @@ pub struct TokenSource {
 ///
 /// `card_id`, `quantity` and `state` are all `None` when there is no stored row — the table holds
 /// only deviations, so three nulls is the ordinary case and never a default in disguise.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+///
+/// `PartialEq` and not `Eq` since [`Self::unit_price`] made it carry an `f64`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckTokenRow {
     pub oracle_id: String,
@@ -162,6 +176,24 @@ pub struct DeckTokenRow {
     /// rows in the corpus keep their URLs on `card_faces[0]` alone — and face-first precedence
     /// is that module's rule rather than one respelled here.
     pub image_uris: Option<BTreeMap<String, String>>,
+    /// The effective printing's set code — the printing [`Self::image_uris`] describes, so
+    /// `card_id` first and `default_card_id` after. **All six chin fields below are `None`
+    /// together when a pick has left the corpus**, the picture's own answer for that case.
+    pub set_code: Option<String>,
+    /// The effective printing's collector number.
+    pub collector_number: Option<String>,
+    /// The effective printing's set name.
+    pub set_name: Option<String>,
+    /// The effective printing's rarity, Scryfall's word (`common`, `rare`, …).
+    pub rarity: Option<String>,
+    /// The effective printing's finishes, as the JSON text `cards.finishes` holds
+    /// (`["nonfoil","foil"]`) — `src/lib/finish.ts`' `parseFinishes` input, not a second shape.
+    pub finishes: Option<String>,
+    /// What one copy of the effective printing costs in the asked marketplace, priced as a deck
+    /// row naming no finish is ([`printing_price`]: `nonfoil → foil → etched`), or `None` where
+    /// that marketplace has no figure — never `0`, which a pile heading's sum would count as a
+    /// free card.
+    pub unit_price: Option<f64>,
 }
 
 /// One `cards` row as this module needs it: the display fields, plus the three the tie-break
@@ -180,6 +212,11 @@ struct Printing {
     released_at: Option<String>,
     set_code: String,
     collector_number: String,
+    /// The three chin fields `set_code` and `collector_number` do not already carry — read with
+    /// the row, so a tile nobody picked art for costs no second query for them.
+    set_name: Option<String>,
+    rarity: Option<String>,
+    finishes: Option<String>,
     /// The front face's picture per variant, folded up by
     /// [`crate::image_uri::front_face_map`]. Read here rather than at [`row_of`] so that the
     /// derived row and the hand-added one cannot resolve it two ways.
@@ -205,7 +242,7 @@ struct Printing {
 static PRINTING_COLUMNS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
         "id, oracle_id, name, type_line, layout, power, toughness, colors,
-     oracle_text, released_at, set_code, collector_number, {images}",
+     oracle_text, released_at, set_code, collector_number, set_name, rarity, finishes, {images}",
         images = crate::image_uri::front_face_selects("cards").join(", ")
     )
 });
@@ -216,11 +253,12 @@ static PRINTING_COLUMNS: std::sync::LazyLock<String> = std::sync::LazyLock::new(
 /// one** (debug corpus, 2026-09-07) — so this is a fence around a case that does not currently
 /// occur, written the way [`crate::card::list_printings`] fences the blank.
 fn printing_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Printing>> {
-    /// Where [`PRINTING_COLUMNS`]' image expressions start - one past `collector_number`, the
-    /// last named column. Named rather than inlined for `deck::deck_row`'s reason: the pairing
-    /// arithmetic below is [`crate::image_uri::front_face_map`]'s and only the *offset* is this
-    /// function's. It moves with every column added to the named list.
-    const IMAGE_COL: usize = 12;
+    /// Where [`PRINTING_COLUMNS`]' image expressions start - one past `finishes`, the last named
+    /// column. Named rather than inlined for `deck::deck_row`'s reason: the pairing arithmetic
+    /// below is [`crate::image_uri::front_face_map`]'s and only the *offset* is this function's.
+    /// It moves with every column added to the named list: 12 until the chin's three columns
+    /// (2026-09-26) put `set_name`, `rarity` and `finishes` in front of the pictures.
+    const IMAGE_COL: usize = 15;
 
     let oracle_id: Option<String> = r.get(1)?;
     let Some(oracle_id) = oracle_id.filter(|o| !o.trim().is_empty()) else {
@@ -239,15 +277,19 @@ fn printing_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Printing>> {
         released_at: r.get(9)?,
         set_code: r.get(10)?,
         collector_number: r.get(11)?,
-        // **From 12**, one past `collector_number`, the last named column — the
+        // 12, 13 and 14 — three `TEXT` columns in a row, so a crossed pair types out perfectly
+        // and draws a rarity where the set name belongs. Only the position tells them apart.
+        set_name: r.get(12)?,
+        rarity: r.get(13)?,
+        finishes: r.get(14)?,
+        // **From 15**, one past `finishes`, the last named column — the
         // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
         // the (top-level, face) pairs `front_face_map` folds back up.
         //
-        // This read carries the failure `deck::deck_row` records and the eleven above it do
-        // not: each of those is caught by a value of the wrong *kind* turning up in a field,
-        // while here the pair is (top-level, face) and `for_face` prefers the face, so a read
-        // one column out still answers a perfectly real URL - the right picture from the wrong
-        // slot, or the crop where the card belongs.
+        // This read carries the failure `deck::deck_row` records: the pair is (top-level,
+        // face) and `for_face` prefers the face, so a read one column out still answers a
+        // perfectly real URL - the right picture from the wrong slot, or the crop where the
+        // card belongs.
         image_uris: crate::image_uri::front_face_map(|i| {
             r.get::<_, Option<String>>(IMAGE_COL + i)
         })?,
@@ -333,10 +375,13 @@ type Override = (Option<String>, Option<i64>, String);
 /// Order is `(name, oracle_id)`, derived rows first and hand-added ones after. Which order the
 /// wall is actually in is TypeScript's — emblems last, then by name — and **its sort is stable**,
 /// so an unordered answer here would make two `Wurm` tiles swap places between opens.
+///
+/// `market` prices each row's effective printing — see this module's *The chin and the price*.
 pub fn deck_token_rows(
     conn: &Connection,
     deck_id: i64,
     variant: &str,
+    market: Marketplace,
 ) -> Result<Vec<DeckTokenRow>, String> {
     let makers = deck_printings(conn, deck_id, variant)?;
     let overrides = stored_overrides(conn, deck_id)?;
@@ -433,8 +478,8 @@ pub fn deck_token_rows(
         let mut sources = group.sources;
         sources.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.card_id.cmp(&b.card_id)));
         let stored = overrides.get(&oracle_id);
-        let picture = picture_for(conn, best, stored)?;
-        out.push(row_of(best, picture, sources, true, stored));
+        let drawn = drawn_for(conn, best, stored, market)?;
+        out.push(row_of(best, drawn, sources, true, stored));
     }
     out.sort_by(|a, b| {
         a.name
@@ -453,8 +498,8 @@ pub fn deck_token_rows(
             continue;
         }
         if let Some(printing) = newest_printing(conn, oracle_id)? {
-            let picture = picture_for(conn, &printing, Some(stored))?;
-            added.push(row_of(&printing, picture, Vec::new(), false, Some(stored)));
+            let drawn = drawn_for(conn, &printing, Some(stored), market)?;
+            added.push(row_of(&printing, drawn, Vec::new(), false, Some(stored)));
         }
     }
     added.sort_by(|a, b| {
@@ -473,12 +518,12 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
 
 /// One wire row, built from the printing the resolver named and whatever the reader stored.
 ///
-/// `picture` is [`picture_for`]'s answer and is passed in rather than taken off `printing`,
-/// because the two disagree for exactly the rows the reader has picked art for — see
+/// `drawn` is [`drawn_for`]'s answer and is passed in rather than taken off `printing`, because
+/// the two disagree for exactly the rows the reader has picked art for — see
 /// [`DeckTokenRow::image_uris`].
 fn row_of(
     printing: &Printing,
-    picture: Option<BTreeMap<String, String>>,
+    drawn: Drawn,
     sources: Vec<TokenSource>,
     derived: bool,
     stored: Option<&Override>,
@@ -498,49 +543,129 @@ fn row_of(
         card_id: stored.and_then(|s| s.0.clone()),
         quantity: stored.and_then(|s| s.1),
         state: stored.map(|s| s.2.clone()),
-        image_uris: picture,
+        image_uris: drawn.image_uris,
+        set_code: drawn.set_code,
+        collector_number: drawn.collector_number,
+        set_name: drawn.set_name,
+        rarity: drawn.rarity,
+        finishes: drawn.finishes,
+        unit_price: drawn.unit_price,
     }
 }
 
-/// The picture the tile will actually draw: the reader's pick where there is one, the printing
-/// the resolver named otherwise.
+/// What a tile draws of the printing it **addresses** — the picture, and the chin and price
+/// beneath it. All `None` ([`Default`]) for a pick that has left the corpus.
+#[derive(Debug, Default)]
+struct Drawn {
+    image_uris: Option<BTreeMap<String, String>>,
+    set_code: Option<String>,
+    collector_number: Option<String>,
+    set_name: Option<String>,
+    rarity: Option<String>,
+    finishes: Option<String>,
+    unit_price: Option<f64>,
+}
+
+/// What the tile will actually draw: the reader's pick where there is one, the printing the
+/// resolver named otherwise — its picture, its chin and its price, all off that one printing.
 ///
 /// **The order is `card_id` then `default_card_id`, which is `deckTokens.ts`' `printingId`**, and
 /// getting it the other way round is a *wrong* picture rather than a missing one — the deck's
 /// default Treasure drawn on the tile the reader chose the other Treasure for, on the web and on
-/// the phone alone, where no `mtgimg://` corrects it.
+/// the phone alone, where no `mtgimg://` corrects it. The chin under it would then name a set the
+/// art is not from, and the pile heading would sum the wrong printing's price.
 ///
-/// The extra read is skipped whenever the two name the same row, which is every token nobody has
-/// deviated on. **A pick that has left the corpus answers `None` rather than falling back to the
-/// resolver's picture**: the tile is addressing that printing, so art from a different one would
-/// be this function inventing a card.
-fn picture_for(
+/// The extra row read is skipped whenever the two name the same row, which is every token nobody
+/// has deviated on; the price is one read either way. **A pick that has left the corpus answers
+/// all `None` rather than falling back to the resolver's printing**: the tile is addressing that
+/// printing, so art, a chin or a price from a different one would be this function inventing a
+/// card.
+fn drawn_for(
     conn: &Connection,
     printing: &Printing,
     stored: Option<&Override>,
-) -> Result<Option<BTreeMap<String, String>>, String> {
+    market: Marketplace,
+) -> Result<Drawn, String> {
     match stored
         .and_then(|s| s.0.as_deref())
         .filter(|picked| *picked != printing.id)
     {
-        Some(picked) => printing_picture(conn, picked),
-        None => Ok(printing.image_uris.clone()),
+        Some(picked) => picked_printing(conn, picked, market),
+        None => Ok(Drawn {
+            image_uris: printing.image_uris.clone(),
+            set_code: Some(printing.set_code.clone()),
+            collector_number: Some(printing.collector_number.clone()),
+            set_name: printing.set_name.clone(),
+            rarity: printing.rarity.clone(),
+            finishes: printing.finishes.clone(),
+            unit_price: printing_price(conn, &printing.id, market)?,
+        }),
     }
 }
 
-/// One printing's front-face picture and nothing else — the four image expressions on their own,
-/// so a pick costs the columns it needs rather than a second whole [`Printing`].
-fn printing_picture(
+/// One picked printing's picture and chin, and then its price — the columns a tile needs rather
+/// than a second whole [`Printing`], and no `oracle_id` fence, because the pick is addressed by
+/// id and was never grained.
+fn picked_printing(conn: &Connection, card_id: &str, market: Marketplace) -> Result<Drawn, String> {
+    /// Where the image expressions start — one past `finishes`, [`printing_from`]'s `IMAGE_COL`
+    /// rule for a list of its own.
+    const IMAGE_COL: usize = 5;
+    let found = conn
+        .query_row(
+            &format!(
+                "SELECT set_code, collector_number, set_name, rarity, finishes, {images}
+                   FROM cards WHERE id = ?1",
+                images = crate::image_uri::front_face_selects("cards").join(", ")
+            ),
+            params![card_id],
+            |r| {
+                Ok(Drawn {
+                    set_code: r.get(0)?,
+                    collector_number: r.get(1)?,
+                    set_name: r.get(2)?,
+                    rarity: r.get(3)?,
+                    finishes: r.get(4)?,
+                    image_uris: crate::image_uri::front_face_map(|i| {
+                        r.get::<_, Option<String>>(IMAGE_COL + i)
+                    })?,
+                    unit_price: None,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(mut drawn) = found else {
+        return Ok(Drawn::default());
+    };
+    drawn.unit_price = printing_price(conn, card_id, market)?;
+    Ok(drawn)
+}
+
+/// One printing's price in `market`, **exactly as a deck row that names no finish is priced** —
+/// [`crate::sorting::printing_price_by_finish_expr`], `nonfoil → foil → etched`, first priced
+/// link wins. `None` for unpriced, and for a printing that is not there.
+///
+/// **That chain and not a single "default finish"**, and the reason is the pile beside it: a
+/// token stack is drawn to function like a deck card's stack, and a printing listed in several
+/// finishes whose nonfoil is unpriced would otherwise read `—` here while the same printing in
+/// the deck read its foil rate — one card priced two ways on one screen. Which finish the chin
+/// *marks* is a separate question, `src/lib/finish.ts`' `soleFinish` over
+/// [`DeckTokenRow::finishes`], and nothing here answers it.
+///
+/// Through the crate's one price builder, so the Cardmarket etched hole and the feed lookups
+/// are the ones every other surface draws.
+fn printing_price(
     conn: &Connection,
     card_id: &str,
-) -> Result<Option<BTreeMap<String, String>>, String> {
+    market: Marketplace,
+) -> Result<Option<f64>, String> {
     conn.query_row(
         &format!(
-            "SELECT {images} FROM cards WHERE id = ?1",
-            images = crate::image_uri::front_face_selects("cards").join(", ")
+            "SELECT {} FROM cards c WHERE c.id = ?1",
+            crate::sorting::printing_price_by_finish_expr(market)
         ),
         params![card_id],
-        |r| crate::image_uri::front_face_map(|i| r.get::<_, Option<String>>(i)),
+        |r| r.get::<_, Option<f64>>(0),
     )
     .optional()
     .map(Option::flatten)
@@ -718,7 +843,10 @@ pub fn add_token(conn: &Connection, deck_id: i64, card_id: &str) -> Result<(), S
 /// [`deck_token_rows`]' command. Read-only connection on the blocking pool, as
 /// [`crate::card::card_meld_parts`] is and for the same reason.
 ///
-/// Takes no `marketplace`: nothing in the answer is priced. The art picker the reader opens next
+/// **`marketplace` is `card_printings`' argument exactly** — an `Option<String>` resolved by
+/// [`Marketplace::from_opt`], so absent, null, a typo and a future id all price at TCGplayer
+/// rather than refusing to draw a deck's tokens over a setting. It prices each row's
+/// [`DeckTokenRow::unit_price`], which a pile heading sums. The art picker the reader opens next
 /// is `card_printings`, which already answers on a token — its predicate is
 /// `oracle_id = ?1 AND is_paper = 1` and every token row satisfies both — so this feature adds no
 /// second read command.
@@ -728,10 +856,12 @@ pub async fn deck_tokens(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
     deck_id: i64,
     variant: String,
+    marketplace: Option<String>,
 ) -> Result<Vec<DeckTokenRow>, String> {
     let app = state.inner().clone();
+    let market = Marketplace::from_opt(marketplace.as_deref());
     tauri::async_runtime::spawn_blocking(move || {
-        deck_token_rows(&crate::sync::lock_db_read(&app), deck_id, &variant)
+        deck_token_rows(&crate::sync::lock_db_read(&app), deck_id, &variant, market)
     })
     .await
     .map_err(|e| format!("this deck's tokens could not be read: {e}"))?
@@ -834,6 +964,13 @@ mod tests {
         set_code: &'a str,
         collector_number: &'a str,
         released_at: &'a str,
+        set_name: &'a str,
+        rarity: &'a str,
+        /// The JSON text `card_row` stores in `cards.finishes`: `["nonfoil"]`, `["foil"]`.
+        finishes: &'a str,
+        /// Scryfall's `prices` object as `cards.prices` holds it — decimal **strings** and
+        /// nulls, which is what [`crate::sorting::price_expr`]'s `CAST` is there for.
+        prices: &'a str,
         /// `all_parts` entries as `(id, component, name)`.
         parts: &'a [(&'a str, &'a str, &'a str)],
     }
@@ -853,6 +990,12 @@ mod tests {
                 set_code: "tst",
                 collector_number: "1",
                 released_at: "2020-01-01",
+                set_name: "Test Set",
+                rarity: "common",
+                finishes: r#"["nonfoil"]"#,
+                // Unpriced everywhere: every existing fixture predates the price and said
+                // nothing about one.
+                prices: "{}",
                 parts: &[],
             }
         }
@@ -892,8 +1035,9 @@ mod tests {
             conn.execute(
                 "INSERT INTO cards
                      (id, oracle_id, name, type_line, layout, power, toughness, colors,
-                      oracle_text, set_code, collector_number, lang, released_at, raw)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'en',?12,?13)",
+                      oracle_text, set_code, collector_number, lang, released_at, raw,
+                      set_name, rarity, finishes, prices)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'en',?12,?13,?14,?15,?16,?17)",
                 params![
                     self.id,
                     self.oracle_id,
@@ -908,6 +1052,10 @@ mod tests {
                     self.collector_number,
                     self.released_at,
                     raw,
+                    self.set_name,
+                    self.rarity,
+                    self.finishes,
+                    self.prices,
                 ],
             )
             .unwrap();
@@ -944,7 +1092,8 @@ mod tests {
         }
     }
 
-    /// The Treasure `Smothering Tithe` names.
+    /// The Treasure `Smothering Tithe` names — and the one fixture carrying a price, so the
+    /// chin's tests have a figure to find.
     fn treasure() -> Card<'static> {
         Card {
             id: "cb7b5024-3a0b-4f14-977e-ba6c4c2567c9",
@@ -957,6 +1106,10 @@ mod tests {
             set_code: "tcmm",
             collector_number: "48",
             released_at: "2023-08-04",
+            set_name: "Commander Masters Tokens",
+            rarity: "common",
+            finishes: r#"["nonfoil"]"#,
+            prices: r#"{"usd":"0.25"}"#,
             ..Card::default()
         }
     }
@@ -1252,9 +1405,11 @@ mod tests {
         format!("{IMAGE_HOST}art_crop/front/{tag}/{tag}.jpg?1757200000")
     }
 
-    /// The live list, which is what every test below but one is about.
+    /// The live list, which is what every test below but one is about — priced at TCGplayer,
+    /// `Marketplace::from_opt`'s default, since most of them are not about the price.
     fn rows(conn: &Connection, deck: i64) -> Vec<DeckTokenRow> {
-        deck_token_rows(conn, deck, "live").expect("the resolver must never answer Err")
+        deck_token_rows(conn, deck, "live", Marketplace::Tcgplayer)
+            .expect("the resolver must never answer Err")
     }
 
     fn names(rows: &[DeckTokenRow]) -> Vec<&str> {
@@ -1296,6 +1451,217 @@ mod tests {
             (row.card_id.as_deref(), row.quantity, row.state.as_deref()),
             (None, None, None),
             "no override stored means three nulls, never a default"
+        );
+    }
+
+    // ── The chin and the price ────────────────────────────────────────────────────────
+
+    /// The chin a pile draws under each token — set, number, rarity — and the figure its
+    /// heading sums, all off the printing the tile draws.
+    #[test]
+    fn a_resolved_token_carries_its_printings_chin_and_price() {
+        let conn = open();
+        let (deck, main, _) = deck_with_piles(&conn);
+        tithe().insert(&conn);
+        treasure().insert(&conn);
+        play(&conn, deck, main, &tithe(), "live");
+
+        let rows = deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer).unwrap();
+        let t = rows.iter().find(|r| r.name == "Treasure").unwrap();
+        assert_eq!(t.set_code.as_deref(), Some(treasure().set_code));
+        assert_eq!(
+            t.collector_number.as_deref(),
+            Some(treasure().collector_number)
+        );
+        assert_eq!(t.set_name.as_deref(), Some("Commander Masters Tokens"));
+        assert_eq!(t.rarity.as_deref(), Some("common"));
+        assert_eq!(t.finishes.as_deref(), Some(r#"["nonfoil"]"#));
+        assert_eq!(t.unit_price, Some(0.25));
+    }
+
+    /// **A foil-only printing is priced at its foil rate, never read as unpriced** — reading
+    /// `$.usd` alone is the bug `sorting::printing_price_by_finish_expr` documents for 13 515
+    /// foil-only printings, and that chain is what prices a token.
+    #[test]
+    fn a_foil_only_token_is_priced_at_its_foil_price() {
+        let conn = open();
+        let (deck, main, _) = deck_with_piles(&conn);
+        tithe().insert(&conn);
+        Card {
+            finishes: r#"["foil"]"#,
+            prices: r#"{"usd":null,"usd_foil":"3.10"}"#,
+            ..treasure()
+        }
+        .insert(&conn);
+        play(&conn, deck, main, &tithe(), "live");
+
+        let rows = deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer).unwrap();
+        let t = rows.iter().find(|r| r.name == "Treasure").unwrap();
+        assert_eq!(t.unit_price, Some(3.10));
+        assert_eq!(t.finishes.as_deref(), Some(r#"["foil"]"#));
+    }
+
+    /// **A token is priced exactly as a deck card that names no finish** — the case where a
+    /// single "default finish" and the deck's `nonfoil → foil → etched` chain part company: a
+    /// printing listed in both finishes whose nonfoil is unpriced. The chain answers the foil
+    /// rate, a default finish would answer `None`, and the pile beside this one — the deck's own
+    /// cards — quotes the chain, so anything else is one card priced two ways on one screen.
+    ///
+    /// Held to the deck's own expression rather than to a literal alone, so the two cannot drift.
+    #[test]
+    fn a_token_listed_in_two_finishes_is_priced_as_a_deck_card_would_be() {
+        let conn = open();
+        let (deck, main, _) = deck_with_piles(&conn);
+        tithe().insert(&conn);
+        Card {
+            finishes: r#"["nonfoil","foil"]"#,
+            prices: r#"{"usd":null,"usd_foil":"2.40"}"#,
+            ..treasure()
+        }
+        .insert(&conn);
+        play(&conn, deck, main, &tithe(), "live");
+
+        let rows = deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer).unwrap();
+        let t = rows.iter().find(|r| r.name == "Treasure").unwrap();
+        assert_eq!(t.unit_price, Some(2.40), "the foil rate, not an em dash");
+        assert_eq!(
+            t.finishes.as_deref(),
+            Some(r#"["nonfoil","foil"]"#),
+            "and the finishes reach the chin unchanged — which one it marks is TypeScript's"
+        );
+        let deck_figure: Option<f64> = conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM cards c WHERE c.id = ?1",
+                    crate::sorting::printing_price_by_finish_expr(Marketplace::Tcgplayer)
+                ),
+                params![treasure().id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            t.unit_price, deck_figure,
+            "the figure a finishless deck row of this printing quotes"
+        );
+    }
+
+    /// Unpriced is `None` and never `0` — the heading's sum skips it, and a zero would be a
+    /// free card in the total. Common on Card Kingdom and Mana Pool.
+    #[test]
+    fn an_unpriced_token_answers_none_rather_than_zero() {
+        let conn = open();
+        let (deck, main, _) = deck_with_piles(&conn);
+        tithe().insert(&conn);
+        Card {
+            prices: "{}",
+            ..treasure()
+        }
+        .insert(&conn);
+        play(&conn, deck, main, &tithe(), "live");
+
+        let rows = deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer).unwrap();
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.name == "Treasure")
+                .unwrap()
+                .unit_price,
+            None
+        );
+    }
+
+    /// **The chin follows the art the reader picked, as the picture does** — the same
+    /// `card_id ?? default_card_id` precedence, and the same answer for a pick that has left
+    /// the corpus: nothing, rather than the resolver's printing wearing the pick's place.
+    #[test]
+    fn a_picked_printing_brings_its_own_chin_and_price() {
+        let conn = open();
+        tithe().insert(&conn);
+        treasure().insert(&conn);
+        let older = Card {
+            id: "c-treasure-older",
+            set_code: "tvow",
+            collector_number: "17",
+            released_at: "2021-11-19",
+            set_name: "Crimson Vow Tokens",
+            prices: r#"{"usd":"1.50"}"#,
+            ..treasure()
+        };
+        older.insert(&conn);
+        let (deck, main, _) = deck_with_piles(&conn);
+        play(&conn, deck, main, &tithe(), "live");
+        set_token_override(
+            &conn,
+            deck,
+            treasure().oracle_id,
+            Some(older.id),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let rows = deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer).unwrap();
+        assert_eq!(rows[0].default_card_id, treasure().id);
+        assert_eq!(
+            (
+                rows[0].set_code.as_deref(),
+                rows[0].collector_number.as_deref(),
+                rows[0].set_name.as_deref(),
+                rows[0].unit_price,
+            ),
+            (
+                Some("tvow"),
+                Some("17"),
+                Some("Crimson Vow Tokens"),
+                Some(1.50)
+            ),
+            "the printing the tile draws, not the one the resolver named"
+        );
+
+        set_token_override(
+            &conn,
+            deck,
+            treasure().oracle_id,
+            Some("c-vanished"),
+            None,
+            None,
+        )
+        .unwrap();
+        let gone = &deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer).unwrap()[0];
+        assert_eq!(
+            (
+                gone.set_code.as_deref(),
+                gone.collector_number.as_deref(),
+                gone.set_name.as_deref(),
+                gone.rarity.as_deref(),
+                gone.finishes.as_deref(),
+                gone.unit_price,
+            ),
+            (None, None, None, None, None, None),
+            "a pick that has left the corpus has no chin, the way it has no picture"
+        );
+    }
+
+    /// The marketplace argument reaches the price — Cardmarket reads the euro keys of the same
+    /// blob, so a figure that ignored it would quote dollars under a euro sign.
+    #[test]
+    fn the_price_is_the_asked_marketplaces() {
+        let conn = open();
+        let (deck, main, _) = deck_with_piles(&conn);
+        tithe().insert(&conn);
+        Card {
+            prices: r#"{"usd":"0.25","eur":"0.40"}"#,
+            ..treasure()
+        }
+        .insert(&conn);
+        play(&conn, deck, main, &tithe(), "live");
+
+        let price = |market| deck_token_rows(&conn, deck, "live", market).unwrap()[0].unit_price;
+        assert_eq!(price(Marketplace::Tcgplayer), Some(0.25));
+        assert_eq!(price(Marketplace::Cardmarket), Some(0.40));
+        assert_eq!(
+            price(Marketplace::Cardkingdom),
+            None,
+            "a feed with no row for the printing is unpriced there, never another shop's figure"
         );
     }
 
@@ -1634,7 +2000,7 @@ mod tests {
             card.insert_raw(&conn, raw);
             play(&conn, deck, main, &card, "live");
             assert_eq!(
-                deck_token_rows(&conn, deck, "live"),
+                deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer),
                 Ok(Vec::new()),
                 "{why} must answer an empty list rather than an Err"
             );
@@ -1643,7 +2009,7 @@ mod tests {
         }
 
         assert_eq!(
-            deck_token_rows(&conn, 9999, "live"),
+            deck_token_rows(&conn, 9999, "live", Marketplace::Tcgplayer),
             Ok(Vec::new()),
             "a deck that is not there has no tokens, which is an answer"
         );
@@ -1937,19 +2303,21 @@ mod tests {
         play(&conn, deck, main, &tithe(), "theory");
         set_token_override(&conn, deck, treasure().oracle_id, Some("c-a"), None, None).unwrap();
 
-        let theory = deck_token_rows(&conn, deck, "theory").unwrap();
+        let theory = deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer).unwrap();
         assert_eq!(theory.len(), 1, "the plan is what names the Treasure");
         assert!(theory[0].derived);
         assert_eq!(theory[0].card_id.as_deref(), Some("c-a"));
         assert!(
-            deck_token_rows(&conn, deck, "live").unwrap().is_empty(),
+            deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer)
+                .unwrap()
+                .is_empty(),
             "and the live list derives nothing — an `auto` override is a deviation from a token \
              this list needs, so on its own it conjures no row"
         );
 
         // The same stored row, read from the other list once that list makes the token too.
         play(&conn, deck, main, &tithe(), "live");
-        let live = deck_token_rows(&conn, deck, "live").unwrap();
+        let live = deck_token_rows(&conn, deck, "live", Marketplace::Tcgplayer).unwrap();
         assert_eq!(
             live[0].card_id.as_deref(),
             Some("c-a"),
@@ -1988,9 +2356,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "cardId",
+                "collectorNumber",
                 "colors",
                 "defaultCardId",
                 "derived",
+                "finishes",
                 "imageUris",
                 "layout",
                 "name",
@@ -1998,13 +2368,21 @@ mod tests {
                 "oracleText",
                 "power",
                 "quantity",
+                "rarity",
+                "setCode",
+                "setName",
                 "sources",
                 "state",
                 "toughness",
                 "typeLine",
+                "unitPrice",
             ]
         );
         assert_eq!(soldier_row["power"], json!("1"), "a string, never a number");
+        // The chin: `finishes` is the column's JSON **text**, `parseFinishes`' input, and an
+        // unpriced printing is `null` on the wire rather than `0` or an absent key.
+        assert_eq!(soldier_row["finishes"], json!(r#"["nonfoil"]"#));
+        assert_eq!(soldier_row["unitPrice"], serde_json::Value::Null);
         assert_eq!(soldier_row["colors"], json!("W"), "letters, never an array");
         assert_eq!(
             json[0]["colors"],
