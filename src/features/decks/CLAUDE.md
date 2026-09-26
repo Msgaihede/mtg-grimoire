@@ -3659,8 +3659,12 @@ layer.
   up for a long name and for both switched-off rails, the Sideboard's whole name at 1×; two rows
   below that, with `Card Draw and Selection` keeping 77px of name at 0.5×. `GroupHeader`'s
   `layout` doc carries the rest, including the floor under the *name span* that was measured and
-  refused because it wraps that Sideboard at 1×. **Owed: the same sweep in the shipped window**,
-  where the real face moves every threshold.
+  refused because it wraps that Sideboard at 1×. **The shipped window agrees** (2026-09-26,
+  `npm run tauri dev`, debug build, 1920×1080, a copy of the real db, the 14 piles of a 100-card
+  Commander deck with a railed Sideboard, Maybeboard and token pile, **Geist**): every heading one
+  row at 0.8×, 0.9×, 1×, 1.1× and 2×, every heading two rows at 0.5×, and at all six stops no chip
+  over the pill, nothing past the heading's box and `document.scrollWidth === clientWidth`.
+  [decks-live-findings.md](../../../docs/reference/decks-live-findings.md) has the rest.
 - **A pile at rest has no edge, and the box that edge was drawn in is still there** (changed
   2026-08-14). `StackGroup`'s `<section>` is `border border-transparent` in **both** states, with
   a `bg-surface/60` wash under the inactive one; it used to be `border-border` active and
