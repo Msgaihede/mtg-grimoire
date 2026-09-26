@@ -77,6 +77,10 @@ import { PRINTING_GROUP_BY_OPTIONS } from "@/features/card/printings";
 // The app's own reader, borrowed for one fence: a seeded payload whose keys were misspelled
 // degrades to a sentence rather than an error, so nothing but this would notice.
 import { activityLine } from "@/features/home/activityText";
+// The deck editor's own arithmetic, borrowed for the one fence `deck_completion` exists to keep:
+// the widget has to say what the editor says, and a hand-copy of the sum here would only prove the
+// fake agrees with itself.
+import { deckStats } from "@/features/decks/DeckStats";
 // The app's half of the default layout, which the fake spells out rather than imports — so the
 // only thing holding the two together is a test that compares them.
 import { DEFAULT_LAYOUT } from "@/features/home/widgets";
@@ -15993,6 +15997,403 @@ describe("set completion", () => {
     expect(got.find((s) => s.setCode === "mh2")).toMatchObject({ owned: 3, size: 303 });
     expect(got.find((s) => s.setCode === "lea")).toMatchObject({ owned: 2, size: null });
     expect(readHandlers(seed("empty")).set_completion()).toEqual([]);
+  });
+});
+
+/**
+ * `deck_completion` — owned against wanted, **counted the way the deck editor counts it**: a live
+ * list against its own group, a plan-keeping deck's theory list against every copy it could use,
+ * every active pile, exact `(card_id, finish)`, one shared pool per key.
+ */
+describe("deck completion", () => {
+  /** What the deck editor quotes one copy of deck 1's first row at. */
+  const unitOf = (db: FakeDb, marketplace?: string) =>
+    readHandlers(db).deck_get({ id: 1, variant: "live", marketplace })!.cards[0].unitPrice!;
+
+  it("measures a live list against its own group, over every active pile, from one shared pool", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, categoryKind: "main", quantity: 4 }),
+        // The same printing in the sideboard: one `(card_id, finish)` key, so the two rows share
+        // the group's five rather than each being handed all of them.
+        deckCard({ id: 2, categoryKind: "side", quantity: 2 }),
+        // The Maybeboard ships switched off, and a switched-off pile counts toward nothing.
+        deckCard({ id: 3, categoryKind: "maybe", quantity: 3 }),
+      ],
+      collectionEntries: [
+        entry({ id: 1, folderId: groupId(1), quantity: 5 }),
+        // At the root: a live list is custody, and a copy nobody filed into the deck is not its.
+        entry({ id: 2, quantity: 9 }),
+      ],
+    });
+    const unit = unitOf(db);
+
+    const [row] = readHandlers(db).deck_completion({});
+
+    expect(row).toMatchObject({
+      deckId: 1,
+      list: "live",
+      wanted: 6,
+      owned: 5,
+      missing: 1,
+      unpricedMissing: 0,
+    });
+    expect(row.missingCost).toBeCloseTo(unit, 9);
+  });
+
+  /** A deck that keeps a plan is measured by its plan, against the root, its own group and
+   *  Recently removed — never another deck's group. */
+  it("measures a theory deck's plan against every copy the deck could use", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true }), deck({ id: 2, name: "Other" })],
+      deckCards: [
+        deckCard({ id: 1, variant: "theory", quantity: 4 }),
+        // The live list is not what a plan-keeping deck is measured by.
+        deckCard({ id: 2, quantity: 1 }),
+      ],
+      collectionEntries: [
+        entry({ id: 1, quantity: 1 }),
+        entry({ id: 2, folderId: REMOVED_FOLDER, quantity: 1 }),
+        entry({ id: 3, folderId: groupId(1), quantity: 1 }),
+        entry({ id: 4, folderId: groupId(2), quantity: 5 }),
+      ],
+    });
+
+    expect(readHandlers(db).deck_completion({}).find((r) => r.deckId === 1)).toMatchObject({
+      list: "theory",
+      wanted: 4,
+      owned: 3,
+      missing: 1,
+    });
+  });
+
+  /** A virtual deck holds nothing by definition, so 0 % of it is not a finding. An archived or an
+   *  empty deck still answers — which decks to draw is the widget's decision. */
+  it("answers no row for a virtual deck, and a row for an archived or an empty one", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, archived: true }), deck({ id: 2, virtualOnly: true }), deck({ id: 3 })],
+      deckCards: [deckCard({ id: 1, deckId: 2, quantity: 4 })],
+    });
+    const nothing = {
+      list: "live",
+      wanted: 0,
+      owned: 0,
+      missing: 0,
+      missingCost: null,
+      unpricedMissing: 0,
+    };
+
+    expect(readHandlers(db).deck_completion({})).toEqual([
+      { deckId: 1, ...nothing },
+      { deckId: 3, ...nothing },
+    ]);
+  });
+
+  /** An unpriced copy is counted in its own figure and never summed as zero. */
+  it("counts missing copies the marketplace cannot price, and answers null when nothing is priced", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: NO_PRICE.id, quantity: 3 })],
+    });
+
+    expect(readHandlers(db).deck_completion({})).toEqual([
+      {
+        deckId: 1,
+        list: "live",
+        wanted: 3,
+        owned: 0,
+        missing: 3,
+        missingCost: null,
+        unpricedMissing: 3,
+      },
+    ]);
+  });
+
+  /**
+   * **`0` rather than `null` once anything counted is priced** — `deckStats`' `missingPrice` rule,
+   * which is the editor's: `null` is "this marketplace quotes none of this deck", and a deck whose
+   * priced copies are all in hand costs nothing to finish at the prices there are.
+   */
+  it("answers zero rather than null once anything counted is priced", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, quantity: 1 }),
+        deckCard({ id: 2, cardId: NO_PRICE.id, categoryKind: "side", quantity: 2 }),
+      ],
+      collectionEntries: [entry({ id: 1, folderId: groupId(1), quantity: 1 })],
+    });
+
+    expect(readHandlers(db).deck_completion({})[0]).toMatchObject({
+      missing: 2,
+      missingCost: 0,
+      unpricedMissing: 2,
+    });
+  });
+
+  it("prices the missing copies at the marketplace it is asked for", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, quantity: 2 })],
+    });
+    const eur = unitOf(db, "cardmarket");
+
+    expect(
+      readHandlers(db).deck_completion({ marketplace: "cardmarket" })[0].missingCost,
+    ).toBeCloseTo(2 * eur, 9);
+  });
+
+  /**
+   * **The fence**: for every deck in the starter world — a live deck with copies in its group, a
+   * Commander deck, a deck with a plan — the numbers are the ones the editor's own `deckStats`
+   * draws over `deck_get` of the list that was measured.
+   */
+  it("says what the deck editor says, for every deck in the starter world", () => {
+    const db = seed("starter");
+    const reads = readHandlers(db);
+    const rows = reads.deck_completion({ marketplace: "tcgplayer" });
+
+    expect(rows.map((r) => r.deckId)).toEqual(
+      db.decks
+        .filter((d) => !d.virtualOnly)
+        .map((d) => d.id)
+        .sort((a, b) => a - b),
+    );
+    // Non-vacuity: a plan is measured, and something is missing somewhere.
+    expect(rows.some((r) => r.list === "theory")).toBe(true);
+    expect(rows.some((r) => r.missing > 0)).toBe(true);
+    for (const row of rows) {
+      const cards = reads.deck_get({ id: row.deckId, variant: row.list, marketplace: "tcgplayer" })!
+        .cards;
+      const stats = deckStats(cards);
+      expect(row.owned, `deck ${row.deckId} owned`).toBe(stats.owned);
+      expect(row.missing, `deck ${row.deckId} missing`).toBe(stats.missing);
+      expect(row.wanted, `deck ${row.deckId} wanted`).toBe(stats.owned + stats.missing);
+      if (stats.missingPrice === null) expect(row.missingCost).toBeNull();
+      else expect(row.missingCost).toBeCloseTo(stats.missingPrice, 9);
+    }
+  });
+});
+
+/** `deck_review_count` — `count(*)` of `deck_cards` carrying a sentence: rows, never copies. */
+describe("deck review count", () => {
+  it("counts the deck rows carrying a sentence, and only those", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, quantity: 4, needsReview: "This printing is not in the card database." }),
+        deckCard({ id: 2, categoryKind: "side" }),
+        // A switched-off pile still asks: the sentence is about the row, not about what it counts.
+        deckCard({
+          id: 3,
+          categoryKind: "maybe",
+          needsReview:
+            "Another device deleted this while this one was still changing it, so it was kept.",
+        }),
+      ],
+    });
+
+    expect(readHandlers(db).deck_review_count()).toBe(2);
+  });
+
+  it("answers zero for starter and one for needsReview", () => {
+    expect(readHandlers(seed("starter")).deck_review_count()).toBe(0);
+    expect(readHandlers(seed("needsReview")).deck_review_count()).toBe(1);
+  });
+});
+
+/**
+ * `upcoming_sets` — sets with paper printings released after today and inside the window, read
+ * over `cards` because the browser build never fills `sets`. The fake has no `set_type` at all,
+ * which is the browser build's shape: the layout fence and the released-set rule are the whole of
+ * it here.
+ */
+describe("upcoming sets", () => {
+  const TODAY = new Date(CLOCK_BASE * 1_000).toISOString().slice(0, 10);
+  const inDays = (days: number) =>
+    new Date((CLOCK_BASE + days * 86_400) * 1_000).toISOString().slice(0, 10);
+  /** A printing of `template` in a set `days` out — every column but the set, the number, the
+   *  date and the id is the real row's. A negative `days` is the past; zero is today. */
+  const future = (
+    template: FakeCard,
+    set: string,
+    number: string,
+    days: number,
+    over: Partial<FakeCard> = {},
+  ): FakeCard => ({
+    ...template,
+    id: `future-${set}-${number}`,
+    setCode: set,
+    setName: `Set ${set.toUpperCase()}`,
+    collectorNumber: number,
+    releasedAt: inDays(days),
+    ...over,
+  });
+
+  it("answers the sets after today and inside the window, soonest first, at their earliest date", () => {
+    const db = makeDb({
+      cards: [
+        ...CARDS,
+        future(BOLT, "bbb", "1", 20),
+        future(BOLT, "aaa", "1", 5),
+        // A later card of the same set: the set answers its earliest date and counts both.
+        future(BOLT, "aaa", "2", 9),
+        // Releasing today is released, not upcoming.
+        future(BOLT, "zzz", "1", 0),
+        // Exactly at the window's edge is inside it; one day past is not.
+        future(BOLT, "xxx", "1", 30),
+        future(BOLT, "yyy", "1", 31),
+      ],
+    });
+
+    const got = readHandlers(db).upcoming_sets({ days: 30 });
+
+    expect(got.today).toBe(TODAY);
+    expect(got.sets.map((s) => [s.code, s.releasedAt, s.previewed])).toEqual([
+      ["aaa", inDays(5), 2],
+      ["bbb", inDays(20), 1],
+      ["xxx", inDays(30), 1],
+    ]);
+  });
+
+  /** `search.rs`' `NON_CARD_LAYOUTS`, all five — `front_card` included, which the widget's spec
+   *  did not name and the crate's shared list carries. */
+  it("leaves out tokens, emblems, art cards, front cards and digital printings", () => {
+    const db = makeDb({
+      cards: [
+        ...CARDS,
+        future(BOLT, "aaa", "1", 5),
+        future(BOLT, "aaa", "T1", 5, { layout: "token" }),
+        future(BOLT, "aaa", "T2", 5, { layout: "double_faced_token" }),
+        future(BOLT, "aaa", "E1", 5, { layout: "emblem" }),
+        future(BOLT, "aaa", "A1", 5, { layout: "art_series" }),
+        future(BOLT, "aaa", "F1", 5, { layout: "front_card" }),
+        future(BOLT, "ddd", "1", 5, { isPaper: false, digital: true }),
+        // A set of nothing but tokens is no set at all.
+        future(BOLT, "ttt", "1", 5, { layout: "token" }),
+      ],
+    });
+
+    expect(readHandlers(db).upcoming_sets({ days: 90 }).sets).toEqual([
+      { code: "aaa", name: "Set AAA", releasedAt: inDays(5), previewed: 1, inDecks: 0 },
+    ]);
+  });
+
+  /**
+   * **A set is coming soon only while none of its paper cards has released** — the crate's
+   * `HAVING NOT EXISTS`, asked of every card the set has rather than of the window's. The List,
+   * Foundations Commander and Special Guests each gained future-dated printings on the dev corpus,
+   * and a card date alone would announce a set from 2020. A card dated today counts as released,
+   * and a digital printing released long ago does not.
+   */
+  it("leaves out a set any of whose paper cards has already released", () => {
+    const db = makeDb({
+      cards: [
+        ...CARDS,
+        // Released a month ago — outside the window, so only a rule over every card sees it.
+        future(BOLT, "old", "1", -30),
+        future(BOLT, "old", "2", 10),
+        future(BOLT, "old", "3", 12),
+        future(BOLT, "tdy", "1", 0),
+        future(BOLT, "tdy", "2", 10),
+        future(BOLT, "new", "1", 10),
+        future(BOLT, "new", "2", 12),
+        future(BOLT, "new", "A-1", -30, { isPaper: false, digital: true }),
+      ],
+    });
+
+    const got = readHandlers(db).upcoming_sets({ days: 90 }).sets;
+
+    expect(got.map((s) => s.code)).toEqual(["new"]);
+    expect(got[0].previewed).toBe(2);
+  });
+
+  /** `new_printings`' defaults: live and theory rows, virtual decks left out, basics left out. */
+  it("counts the oracle cards the reader's decks hold, live or theory, without virtual decks or basics", () => {
+    const COUNTERSPELL = CARDS.find((c) => c.name === "Counterspell")!;
+    const FOREST = CARDS.find((c) => c.typeLine === "Basic Land — Forest")!;
+    const SOL_RING = CARDS.find((c) => c.name === "Sol Ring")!;
+    const TOMB = CARDS.find((c) => c.name === "Ancient Tomb")!;
+    const db = makeDeckDb({
+      cards: [
+        ...CARDS,
+        future(BOLT, "aaa", "1", 5),
+        future(COUNTERSPELL, "aaa", "2", 5),
+        future(FOREST, "aaa", "3", 5),
+        future(SOL_RING, "aaa", "4", 5),
+        future(TOMB, "aaa", "5", 5),
+      ],
+      decks: [deck({ id: 1, theoryEnabled: true }), deck({ id: 2, virtualOnly: true })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id }),
+        deckCard({ id: 2, cardId: COUNTERSPELL.id, variant: "theory" }),
+        deckCard({ id: 3, cardId: FOREST.id, quantity: 20 }),
+        deckCard({ id: 4, deckId: 2, cardId: SOL_RING.id }),
+      ],
+    });
+
+    expect(readHandlers(db).upcoming_sets({ days: 90 }).sets).toEqual([
+      { code: "aaa", name: "Set AAA", releasedAt: inDays(5), previewed: 5, inDecks: 2 },
+    ]);
+  });
+
+  it("clamps the window into 1..=365", () => {
+    const db = makeDb({
+      cards: [
+        ...CARDS,
+        future(BOLT, "aaa", "1", 1),
+        future(BOLT, "bbb", "1", 365),
+        future(BOLT, "ccc", "1", 366),
+      ],
+    });
+    const codes = (days: number) =>
+      readHandlers(db)
+        .upcoming_sets({ days })
+        .sets.map((s) => s.code);
+
+    expect(codes(0)).toEqual(["aaa"]);
+    expect(codes(-5)).toEqual(["aaa"]);
+    expect(codes(99_999)).toEqual(["aaa", "bbb"]);
+  });
+
+  /** The generated corpus has nothing unreleased but a token; the `waiting` world has three sets,
+   *  one per window. */
+  it("answers nothing for starter, and one, two and three sets for waiting's three windows", () => {
+    expect(readHandlers(seed("starter")).upcoming_sets({ days: 365 }).sets).toEqual([]);
+    const waiting = readHandlers(seed("waiting"));
+
+    expect(waiting.upcoming_sets({ days: 30 }).sets.map((s) => s.code)).toEqual(["ftf"]);
+    expect(waiting.upcoming_sets({ days: 90 }).sets.map((s) => s.code)).toEqual(["ftf", "vgd"]);
+    expect(waiting.upcoming_sets({ days: 365 }).sets).toEqual([
+      { code: "ftf", name: "Foretold Frontiers", releasedAt: inDays(12), previewed: 4, inDecks: 2 },
+      { code: "vgd", name: "Vigil of the Drowned", releasedAt: inDays(40), previewed: 2, inDecks: 0 },
+      { code: "lmr", name: "Lumen Reach", releasedAt: inDays(200), previewed: 1, inDecks: 1 },
+    ]);
+  });
+});
+
+/** The world To review is storied in: something behind every row it can draw but the scanner's. */
+describe("the waiting world", () => {
+  it("has something for each of To review's rows the store can seed", () => {
+    const db = seed("waiting");
+    const reads = readHandlers(db);
+
+    expect(reads.collection_summary({ query: WHOLE_COLLECTION }).needsReview).toBe(1);
+    expect(
+      reads.wishlist_list({ query: { needsReview: true, flatten: true, limit: 1, offset: 0 } })
+        .total,
+    ).toBe(1);
+    expect(reads.deck_review_count()).toBe(1);
+    const removed = reads.collection_folder_list().find((f) => f.kind === "removed")!;
+    expect(reads.collection_folder_summary({}).find((s) => s.folderId === removed.id)?.cards).toBe(
+      2,
+    );
+  });
+
+  /** `FakeDb.scannerTray`'s rule: a tray row is a card somebody scanned, so a story writes one. */
+  it("carries no scanner tray", () => {
+    expect(seed("waiting").scannerTray).toEqual([]);
   });
 });
 

@@ -161,6 +161,7 @@ import type {
   DeckCard,
   DeckCategory,
   DeckCombo,
+  DeckCompletion,
   DeckCoverKind,
   DeckPipCosts,
   DeckFinish,
@@ -260,6 +261,8 @@ import type {
   TransferImportMode,
   UpdateAsset,
   UpdateStatus,
+  UpcomingSet,
+  UpcomingSets,
   WishInput,
   WishOptimizeApplyItem,
   WishOptimizeMove,
@@ -2800,6 +2803,28 @@ const MAX_NEW_PRINTING_LANGS = 24;
  * case-insensitive over ASCII, which is the `i`.
  */
 const BASIC_LAND_TYPE = /^Basic .*Land/i;
+
+/** `upcoming_sets`' ceiling — the longest window Coming soon may ask about, in days. A
+ *  hand-edited `config` cannot ask for the whole corpus. */
+const MAX_UPCOMING_DAYS = 365;
+
+/**
+ * `search.rs`' `NON_CARD_LAYOUTS`, which `upcoming_sets` shares rather than copies — the printings
+ * that are not a card a set is *previewing*: an art-series card, a front card, a token, a
+ * double-faced token and an emblem. **All five**, `front_card` included, which the widget's spec
+ * did not name and the crate's shared list carries.
+ *
+ * Where `sets` has rows the crate also drops four `set_type`s. **This fake has no `set_type`**
+ * ({@link readHandlers.list_sets} answers `null` for it), which is the browser build's shape
+ * exactly — there `sets` is never filled and this fence is the whole of the layout rule.
+ */
+const UPCOMING_SKIPPED_LAYOUTS: ReadonlySet<string> = new Set([
+  "art_series",
+  "front_card",
+  "token",
+  "double_faced_token",
+  "emblem",
+]);
 
 /**
  * Is this a language code at all? `new_printings::is_lang_code` — two to four lowercase ASCII
@@ -10985,6 +11010,153 @@ export function readHandlers(db: FakeDb) {
           size: SET_PRINTED_SIZES[setCode] ?? null,
         }))
         .sort((a, b) => cmp(a.name, b.name));
+    },
+
+    /**
+     * `deck_completion::deck_completion` — owned against wanted for every deck, **counted the way
+     * {@link readHandlers.deck_get} counts it** and then summed the way the editor's `deckStats`
+     * sums it.
+     *
+     * **The measured list is the deck's kind's**: `theory` for a deck that keeps a plan, attributed
+     * from {@link theoryPool}, and `live` otherwise, attributed from {@link ownedByPrinting} — the
+     * same two pools `deck_get` picks between, handed to the same {@link attributeOwned} in the
+     * same {@link deckReadOrder}, so one `(card_id, finish)` in two piles shares one pool. **Every
+     * active pile counts**, sideboard and companion included — `deckStats`' `counted`, and
+     * deliberately wider than {@link readHandlers.deck_values}' size pile.
+     *
+     * **A virtual deck answers no row**: it holds nothing by definition, and 0 % of every deck is
+     * not a finding. Archived and empty decks answer one, ordered by id; which to draw is the
+     * widget's decision.
+     *
+     * `missingCost` is `deckStats`' `missingPrice` exactly — `null` while nothing counted is priced
+     * at this marketplace, else the priced rows' `unit × short` summed (so a complete, priced deck
+     * answers `0`, and so does one whose only missing copies are unpriced). `unpricedMissing` is
+     * missing **copies** with no price. The unit is {@link deckPriceAt}, which is what this fake's
+     * deck rows quote — so a story's widget and the editor it opens can never disagree.
+     */
+    deck_completion: (args: { marketplace?: MarketplaceId | null }): DeckCompletion[] => {
+      const mp = marketplaceOf(args.marketplace);
+      return [...db.decks]
+        .filter((d) => !d.virtualOnly)
+        .sort((a, b) => a.id - b.id)
+        .map((d): DeckCompletion => {
+          const list: DeckCompletion["list"] = d.theoryEnabled ? "theory" : "live";
+          const rows = db.deckCards
+            .filter((dc) => dc.deckId === d.id && dc.variant === list)
+            .sort(deckReadOrder(db));
+          const owned = attributeOwned(
+            db,
+            rows,
+            list === "live" ? ownedByPrinting(db, d.id) : theoryPool(db, d.id),
+          );
+          const row: DeckCompletion = {
+            deckId: d.id,
+            list,
+            wanted: 0,
+            owned: 0,
+            missing: 0,
+            missingCost: null,
+            unpricedMissing: 0,
+          };
+          for (const dc of rows) {
+            // A switched-off pile counts toward nothing — `attributeOwned` already handed it no
+            // copies, and it is not part of what the deck wants either.
+            if (categoryById(db, dc.categoryId)?.isActive !== true) continue;
+            const have = Math.min(owned.get(dc.id) ?? 0, dc.quantity);
+            const short = dc.quantity - have;
+            row.wanted += dc.quantity;
+            row.owned += have;
+            row.missing += short;
+            const unit = deckPriceAt(db, cardById(db, dc.cardId), mp);
+            if (unit === null) row.unpricedMissing += short;
+            else row.missingCost = (row.missingCost ?? 0) + unit * short;
+          }
+          return row;
+        });
+    },
+
+    /**
+     * `deck_completion::review_count` — how many `deck_cards` rows carry a sentence, any deck,
+     * either list. Rows and never copies: a flagged row of four is one thing to look at.
+     */
+    deck_review_count: (): number => db.deckCards.filter((dc) => dc.needsReview !== null).length,
+
+    /**
+     * `upcoming_sets::upcoming_sets` — every set with paper printings released after today and at
+     * most `days` out, soonest first then by code.
+     *
+     * **Today is {@link CLOCK_BASE}'s UTC day**, the fake's own, exactly as
+     * {@link readHandlers.new_printings} measures from it — and it is answered, so the page counts
+     * *in N days* from the same day the read used. `days` is clamped into `1..=`
+     * {@link MAX_UPCOMING_DAYS}. A set answers its **earliest** card's date in the window, the
+     * greatest of its names there (`max(set_name)`), and the count of its **distinct** collector
+     * numbers; {@link UPCOMING_SKIPPED_LAYOUTS} and printings that are not paper are never counted.
+     *
+     * **A set any of whose paper cards has already released is not coming soon**, asked of every
+     * card the set has rather than of the window's — the crate's `HAVING NOT EXISTS`, and like it
+     * over every layout: The List and its kind gain future-dated printings, and a card date alone
+     * would announce a set from 2020. A card dated today counts as released.
+     *
+     * `inDecks` is `new_printings`' defaults: distinct oracle ids held by decks that are not
+     * virtual, in live and theory rows alike, basic lands left out — so a set reprinting the
+     * Forests every deck holds is not "in your decks" on their account.
+     */
+    upcoming_sets: (args: { days: number }): UpcomingSets => {
+      // `|| 1` catches `NaN` — a hand-edited config can hand over anything — and `0`, which the
+      // crate's clamp also lifts to one day.
+      const days = Math.min(MAX_UPCOMING_DAYS, Math.max(1, Math.trunc(args.days) || 1));
+      const today = dayOf(CLOCK_BASE);
+      const until = dayOf(CLOCK_BASE + days * 86_400);
+      const held = new Set<string>();
+      for (const row of db.deckCards) {
+        const deck = db.decks.find((d) => d.id === row.deckId);
+        if (deck === undefined || deck.virtualOnly) continue;
+        const card = cardById(db, row.cardId);
+        if (card === null || card.oracleId === "") continue;
+        if (BASIC_LAND_TYPE.test(card.typeLine ?? "")) continue;
+        held.add(card.oracleId);
+      }
+      // The released-set rule's subject: every set that already has a paper card out, whatever
+      // its layout and however far outside the window.
+      const released = new Set<string>();
+      for (const card of db.cards) {
+        if (card.isPaper && card.releasedAt <= today) released.add(card.setCode);
+      }
+      type Upcoming = {
+        name: string;
+        releasedAt: string;
+        numbers: Set<string>;
+        oracles: Set<string>;
+      };
+      const sets = new Map<string, Upcoming>();
+      for (const card of db.cards) {
+        if (!card.isPaper || UPCOMING_SKIPPED_LAYOUTS.has(card.layout)) continue;
+        if (card.releasedAt <= today || card.releasedAt > until) continue;
+        if (released.has(card.setCode)) continue;
+        const set = sets.get(card.setCode) ?? {
+          name: card.setName,
+          releasedAt: card.releasedAt,
+          numbers: new Set<string>(),
+          oracles: new Set<string>(),
+        };
+        if (card.releasedAt < set.releasedAt) set.releasedAt = card.releasedAt;
+        if (card.setName > set.name) set.name = card.setName;
+        set.numbers.add(card.collectorNumber);
+        if (held.has(card.oracleId)) set.oracles.add(card.oracleId);
+        sets.set(card.setCode, set);
+      }
+      const answered: UpcomingSet[] = [...sets]
+        .map(([code, set]) => ({
+          code,
+          // `coalesce(max(set_name), set_code)` — and a fake card's `setName` is never NULL, so
+          // the fallback arm has nothing to catch here.
+          name: set.name,
+          releasedAt: set.releasedAt,
+          previewed: set.numbers.size,
+          inDecks: set.oracles.size,
+        }))
+        .sort((a, b) => cmp(a.releasedAt, b.releasedAt) || cmp(a.code, b.code));
+      return { today, sets: answered };
     },
 
     /**

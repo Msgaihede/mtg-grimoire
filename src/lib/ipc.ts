@@ -6729,6 +6729,73 @@ export interface NewPrintings {
 }
 
 /**
+ * How much of one deck the reader owns — `deck_completion.rs`'s `DeckCompletion`, one row per deck
+ * that is not virtual (archived ones included; which decks to draw is the widget's decision).
+ *
+ * **Counted exactly as the deck editor counts**, which is the whole point of the read: a widget
+ * saying "4 missing" about a deck that opens saying "6 missing" is a bug report. So a deck with no
+ * plan measures its live list against its own group, a deck with `theoryEnabled` measures its plan
+ * against every copy it could use, every active pile counts — sideboard and companion included,
+ * unlike {@link DeckValue}'s narrower pile — and ownership is exact printing and finish.
+ */
+export interface DeckCompletion {
+  deckId: number;
+  /** Which list was measured — `live` against the deck's own group, or `theory` for a deck that
+   *  keeps a plan. The editor's `Actual`/`Theory` tab the numbers agree with. */
+  list: "live" | "theory";
+  /** Copies the measured list asks for, over every active pile. */
+  wanted: number;
+  /** Of those, copies the pool covers. Never more than `wanted`. */
+  owned: number;
+  /** `wanted − owned`. Never negative. */
+  missing: number;
+  /**
+   * What the missing copies cost at the marketplace asked for. **`null` when nothing counted in
+   * the list is priced there** — `DeckStats`' `missingPrice` rule — so a complete deck whose cards
+   * are priced answers `0`, and `null` always draws an em dash rather than `$0.00`. A deck whose
+   * only missing copies are unpriced also answers `0`, beside a non-zero
+   * {@link DeckCompletion.unpricedMissing}.
+   */
+  missingCost: number | null;
+  /** Missing **copies** this marketplace has no price for — counted beside the cost, never summed
+   *  into it as zero. */
+  unpricedMissing: number;
+}
+
+/** One set with printings still to come — `upcoming_sets.rs`'s `UpcomingSet`. */
+export interface UpcomingSet {
+  code: string;
+  /** `cards.set_name`, or the code where no card in the window carries one. */
+  name: string;
+  /** The set's **earliest** card date in the window, `YYYY-MM-DD` — cards of one set can carry
+   *  different dates. */
+  releasedAt: string;
+  /** Distinct collector numbers previewed so far — a second language of one card is not a second
+   *  card. */
+  previewed: number;
+  /** Distinct oracle cards in it that the reader's non-virtual decks hold, live or theory, basic
+   *  lands left out — `new_printings`' defaults. */
+  inDecks: number;
+}
+
+/**
+ * The upcoming sets, and the day they were counted from — `upcoming_sets.rs`'s `UpcomingSets`.
+ *
+ * **Read over `cards`, not `sets`**, because the browser build never fills `sets`; where it has
+ * rows the crate also drops token, promo, memorabilia and minigame sets. Tokens, emblems, art
+ * cards and front cards are never counted, and **a set any of whose paper cards has already
+ * released is not coming soon at all** — The List and its kind gain future-dated printings, and a
+ * card date alone would announce a set from 2020.
+ */
+export interface UpcomingSets {
+  /** SQLite's `date('now')`, UTC — the day *in N days* is counted from, so the page carries no
+   *  clock of its own. */
+  today: string;
+  /** Soonest first, then by code. */
+  sets: UpcomingSet[];
+}
+
+/**
  * Which edge detector runs — `Method` in `crates/card-scanner/src/session.rs`, whose
  * `#[serde(rename_all = "lowercase")]` is the whole of the mapping.
  */
@@ -9439,6 +9506,24 @@ export const ipc = {
   /** Move the *seen* cursor to `at`, in Unix seconds. **The clock is the caller's** — never
    *  `SystemTime::now()`, which panics on the wasm target. */
   markNewPrintingsSeen: (at: number) => invoke<void>("mark_new_printings_seen", { at }),
+  /**
+   * How much of every deck the reader owns, priced at `marketplace` — see {@link DeckCompletion}.
+   * `deck_values`' shape: one argument, and the marketplace belongs in the caller's query key.
+   */
+  deckCompletion: (marketplace: MarketplaceId) =>
+    invoke<DeckCompletion[]>("deck_completion", { marketplace }),
+  /**
+   * How many `deck_cards` rows carry a `needs_review` sentence — rows, not copies, and only that
+   * one table. Its own read rather than `sync_relay_status`' `reviewCount`, which sums six tables,
+   * is desktop-only and takes the write lock. **Takes no arguments**: an argument object sent to a
+   * command that declares only the managed state is a deserialisation error, not a type error.
+   */
+  deckReviewCount: () => invoke<number>("deck_review_count"),
+  /**
+   * The sets with paper printings released after today and within `days` (clamped `1..=365` in
+   * Rust) — see {@link UpcomingSets}. Routed on both targets.
+   */
+  upcomingSets: (days: number) => invoke<UpcomingSets>("upcoming_sets", { days }),
   /**
    * Which view the app opens on, as a stored word — `"home"` for a database nobody has changed.
    *
