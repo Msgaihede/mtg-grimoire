@@ -5121,11 +5121,11 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     }
     // Logged and left owing, the same reason once more: a token entry in a finish its printing
     // is not sold in draws the wrong chin until the next launch, and nothing a reader could act
-    // on is gained by refusing to start over one. **After the conversion**, because the
-    // conversion writes `nonfoil` for every pick it moves — v51 stored no finish, and the rows it
-    // announces must be the same on every device, corpus or none — and this is the half of that
-    // move which reads the corpus. Idempotent, so every later launch costs one read that finds
-    // nothing.
+    // on is gained by refusing to start over one. **After the conversion**, as its net: the
+    // conversion files each pick in the printing's own default finish, read from the corpus it
+    // runs after, and falls back to `nonfoil` only where this device's corpus cannot say — those
+    // entries, and a printing whose sold finishes changed after its entry was filed, are what
+    // this moves. Idempotent, so every later launch costs one read that finds nothing.
     if let Err(e) = crate::deck_tokens::repair_entry_finishes(conn) {
         eprintln!(
             "the finishes of the decks' token printings could not be checked at launch: \

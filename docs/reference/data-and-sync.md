@@ -1095,20 +1095,26 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     losses are accepted**, both confined to a v51 device's last days: a reset made there after
     another device converted, and a count stepped there on a pick another device had already
     cleared.
-  - ⚠️ **The conversion writes `'nonfoil'` for every art, knowing it is a guess.** v51 stored a
-    printing and no finish, and the rows it announces must be the same on every device, corpus or
-    none — so `deck_tokens::repair_entry_finishes`, run straight after it at the end of
-    `prepare_database` and logged-and-left-owing like it, moves each entry whose finish its
-    printing is not sold in to the printing's sole finish, folding on the grain where it has to,
-    **in `sync_uid` order** so a fold keeps the lower uid on every device (`apply`'s `min` rule —
-    walked in local row order, two devices holding two wrong finishes of one printing could keep
-    the entry under two names). Idempotent, and behind `capture::suppressed`, because whether a
-    printing is foil-only is a fact of this device's corpus — and **in place**, keeping each
-    entry's row and uid, because a row re-inserted under `suppressed` comes back with no name and
-    its next captured stepper press fails on `sync_ops.uid NOT NULL`. It can touch nothing a reader
-    chose: the picker offers only a finish a printing is sold in. **Its one cost**: a peer's
-    announced `nonfoil` that lands after this device's repair, with a later stamp than this
-    device's own announcement, writes the guess back until the next launch repairs it again.
+  - **The conversion files each art in its printing's own finish, and a repair is the net.** v51
+    stored a printing and no finish. The retired rung wrote `'nonfoil'` for every art, because no
+    rung reads the corpus; the launch pass runs after `migrate_corpus`, so it files the printing's
+    `default_finish` — the resolver's own, the finish an implicit entry is drawn in — and every
+    device whose corpus holds the printing announces **identical content** under one name. Only
+    where this device's corpus cannot say (the printing absent, its `finishes` unreadable, no
+    `cards` table) does it fall back to `nonfoil`. `deck_tokens::repair_entry_finishes`, run
+    straight after it at the end of `prepare_database` and logged-and-left-owing like it, is the
+    net for those entries and for a printing whose sold finishes change later: it moves each entry
+    whose finish its printing is not sold in to the printing's sole finish, folding on the grain
+    where it has to, **in `sync_uid` order** so a fold keeps the lower uid on every device
+    (`apply`'s `min` rule — walked in local row order, two devices holding two wrong finishes of
+    one printing could keep the entry under two names). Idempotent, and behind
+    `capture::suppressed`, because whether a printing is foil-only is a fact of this device's
+    corpus — and **in place**, keeping each entry's row and uid, because a row re-inserted under
+    `suppressed` comes back with no name and its next captured stepper press fails on
+    `sync_ops.uid NOT NULL`. It can touch nothing a reader chose: the picker offers only a finish a
+    printing is sold in. **What it costs now lives only on the fallback**: a peer whose corpus
+    lacked the printing announced `nonfoil`, and that put landing after this device's repair, with
+    a later stamp, writes the guess back until the next launch repairs it again.
   - ⚠️ **The entries are named, not minted**: `<pick uid>-<list>`, or random for a pick with no uid
     of its own — one written behind `capture::suppressed`, where the insert trigger's mint is
     guarded off — and the random arm gives the two lists' entries two different names. The derived

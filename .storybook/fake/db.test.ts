@@ -15499,10 +15499,10 @@ describe("deck tokens", () => {
    * the live list. On a new deck, because the starter's two lists hold the same cards and could not
    * tell a move from a coincidence.
    *
-   * The stale plan entry is the v52 rung's copy of an old pick: the plan makes no Treasure, so rule
-   * 7 owes its deletion whatever the switch does, and the crate reconciles both lists **before** it
-   * reads the step's before-image — an undo that restored it would hand the backstop a row to
-   * delete and the crate's redo a reason to refuse.
+   * The stale plan entry is the v52 conversion pass's copy of an old pick: the plan makes no
+   * Treasure, so rule 7 owes its deletion whatever the switch does, and the crate reconciles both
+   * lists **before** it reads the step's before-image — an undo that restored it would hand the
+   * backstop a row to delete and the crate's redo a reason to refuse.
    */
   it("moves the live token entries into the plan when the theory switch turns on", () => {
     const db = seed("starter");

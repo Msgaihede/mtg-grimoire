@@ -3408,13 +3408,29 @@ Per pick, per list, in `(deck_id, oracle_id)` order:
    count as its token's implicit one and loses only the art.
 3. **The entry this pick named at an earlier conversion is still there** — it is **moved**: a v51
    device re-picked after this one converted, `apply` wrote the new `card_id` onto the legacy
-   column, and the next launch rewrites the entry's printing and finish in place — same row, same
-   count, same name, so the captured update lands on every peer holding it.
+   column, and the next launch rewrites the entry's printing — and its finish, to the new
+   printing's default — in place: same row, same count, same name, so the captured update lands on
+   every peer holding it.
    `a_pick_that_arrives_after_the_conversion_moves_the_entry_it_named`.
 4. **Otherwise it is inserted**, named `<pick uid>-<list>` (random for a pick with no uid of its
    own, which only a write behind `capture::suppressed` leaves, and different per list), at
    `max(coalesce(quantity, 1), 0)` — floored because `deck_tokens.quantity` is a synced field with no
-   `CHECK` — and in `nonfoil`, for the repair below to settle.
+   `CHECK`.
+
+**Every case files the printing's own `default_finish`**, read from the corpus — the resolver's
+function, so a converted Treasure lands in the finish an implicit entry was already drawn in: a
+foil-only printing converts straight to `foil`. The retired rung wrote `nonfoil` for every art and
+left the repair to correct it, only because no rung reads the corpus; the launch pass runs after
+`migrate_corpus` and can. What that buys is sync, not just a first draw: every device whose corpus
+holds the printing announces **identical content** under one name, so no conversion hands a peer a
+`nonfoil` put that lands after that peer's repair and writes the guess back, or that misses a
+repaired entry on the grain and lands beside it as a second row. **Only where this device's corpus
+cannot say** — the printing absent, its `finishes` unreadable, or no `cards` table to ask — does it
+fall back to `nonfoil`, `default_finish`'s own answer for "no opinion", and the repair below is the
+net for exactly those entries. `a_foil_only_pick_converts_straight_to_foil_and_the_repair_then_changes_nothing`
+(on the capture-live fixture: the announced puts carry `finish: "foil"`, and the repair then moves
+nothing) and `a_pick_whose_printing_the_corpus_lacks_converts_at_nonfoil`; the first went red, both
+entries `nonfoil`, before the pass read the corpus.
 
 Then every pick's `card_id` is cleared, and its `quantity` wherever an entry of its token now
 exists — **all the entries first and the clears after**, so each clear rides behind an entry op in
@@ -3433,15 +3449,16 @@ another device converted (the other device's entry reaches it after the upgrade,
 nothing left to clear), and a count stepped there on a pick another device had already cleared,
 which lands on the legacy column a converted token no longer reads.
 
-### `repair_entry_finishes`, the conversion's other half
+### `repair_entry_finishes`, the net under the conversion
 
-The conversion writes every art at **`nonfoil`**, knowing it is a guess: v51 stored a printing and
-no finish, and the rows the conversion announces must be the same on every device — a device whose
-corpus has not downloaded yet cannot read a printing's finishes. (While the rung converted, the
-reason was stronger still: no migration rung reads the corpus, because `migrate_user` runs before
-`migrate_corpus`.) `deck_tokens::repair_entry_finishes` is the other half, run from
-`schema::prepare_database` straight after the conversion and, like it, **logged and left owing** on
-failure. It moves every entry whose finish its printing is not sold in to the printing's
+The conversion files each art in its printing's own finish and falls back to **`nonfoil`** only
+where this device's corpus cannot say; a printing whose sold finishes change after its entry was
+filed is the other case nothing could decide at write time. (While the rung converted, the repair
+was the other half of *every* conversion: no migration rung reads the corpus, because
+`migrate_user` runs before `migrate_corpus`, so the rung wrote `nonfoil` for every art.)
+`deck_tokens::repair_entry_finishes` is that net, run from `schema::prepare_database` straight
+after the conversion and, like it, **logged and left owing** on failure. It moves every entry whose
+finish its printing is not sold in to the printing's
 `default_finish` — its sole finish, for a foil-only or etched-only printing — and **folds** into an
 entry the list already holds at that grain rather than failing the launch on the unique index. A
 printing gone from the corpus, or whose `finishes` says nothing, is left alone. It can touch
@@ -3463,9 +3480,11 @@ the first moved keeps its row and the second folds into it. Walked in each devic
 two devices could keep the entry under two names, each then holding a row the other's edits cannot
 find. `the_finish_repair_folds_two_wrong_finishes_into_the_lower_uid` inserts the higher uid first
 and went red (`u-b` kept) before the `ORDER BY`.
-**Its one cost**: a peer's announced `nonfoil` that lands after this device's repair, with a later
-stamp than this device's own announcement, writes the guess back; the entry draws in the wrong
-finish until the next launch repairs it again.
+**Its one cost lives only on the fallback now**: a peer whose corpus lacked the printing announced
+`nonfoil`, and that put landing after this device's repair, with a later stamp than this device's
+own announcement, writes the guess back; the entry draws in the wrong finish until the next launch
+repairs it again. A conversion on a device whose corpus holds the printing announces the right
+finish, and the repair then has nothing to move.
 `the_finish_repair_moves_an_unsold_finish_to_the_sole_one_and_is_idempotent` and
 `the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured`.
 

@@ -17569,9 +17569,10 @@ export function writeHandlers(db: FakeDb) {
           // `deck::update_deck`'s order, and the first line is the half that is easy to lose:
           // **both lists are reconciled before anything moves**, and what that deletes is kept out
           // of the step's before-image ({@link omitFromStep}). The plan can hold entries its
-          // empty card list makes no token for — the v52 rung copied every pick into both lists
-          // — and rule 7 owes their deletion whatever this press does, so an undo that put one
-          // back would restore a row the backstop deletes again at once. Then the cards, then
+          // empty card list makes no token for — the crate's v52 conversion pass copied every pick
+          // into both lists — and rule 7 owes their deletion whatever this press does, so an undo
+          // that put one back would restore a row the backstop deletes again at once. Then the
+          // cards, then
           // the reader's token entries ({@link moveLiveTokensToTheory}), then rule 7 again on the
           // lists the move just changed. The step is the **net** change, which a snapshot-based
           // step gets by construction.

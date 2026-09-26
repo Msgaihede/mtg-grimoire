@@ -1049,15 +1049,23 @@ v52 device, where the next launch converts a picked art and otherwise only an un
 implicit count is read. **"Two names, one entry"** — a pick still in flight between two devices
 under two uids when each converts it — now converges through the grain rule rather than stalling,
 because the announcement is an insert and carries every grain term: `apply` finds the other
-device's entry on `(deck, variant, card, finish)` and both adopt the lower uid. ⚠️ **One corner is
-still open, read off the code and unmeasured**: the grain includes the finish, and each device's
-finish repair (below) is uncaptured. If that in-flight pick names a **foil-only** printing and one
-device has already repaired its entry to `foil` when the other's `nonfoil` announcement arrives, the
-announcement finds no grain match and inserts a second row; that device's next repair folds the two
-(doubling the count) and deletes the other device's name uncaptured, after which an edit to that
-name from the other device defers. It needs two v51 devices to have picked the same token's art
-independently, offline, and a foil-only printing; writing the corpus's own finish in the
-conversion wherever the corpus can say it would close it, and was not done.
+device's entry on `(deck, variant, card, finish)` and both adopt the lower uid.
+**The corner that grain match used to leave is closed for conversions.** The grain includes the
+finish, and each device's finish repair (below) is uncaptured. While the conversion announced every
+art as `nonfoil` and left the repair to correct it, an in-flight pick of a **foil-only** printing
+broke the match: a device that had already repaired its entry to `foil` received the other's
+`nonfoil` announcement, found no grain match, inserted a second row, and its next repair folded the
+two (doubling the count) and deleted the other device's name uncaptured, after which an edit to that
+name from the other device deferred. Since the same day the conversion files the printing's own
+`default_finish`, read from the corpus it runs after, so two devices converting one pick announce
+the same finish and the grain matches
+(`a_foil_only_pick_converts_straight_to_foil_and_the_repair_then_changes_nothing` pins the
+announced `finish: "foil"`). ⚠️ **What remains is the repair's own
+population, read off the code and unmeasured**: an entry filed at the `nonfoil` fallback on a
+device whose corpus did not hold the printing when it converted, and a printing that loses its
+nonfoil after its entry was filed. Either one, meeting a pick in flight under two uids, can still
+reach the fold above. It needs two v51 devices to have picked the same token's art independently,
+offline, and then one of those two.
 
 **And the registrations number twelve, not ten**, counted while landing it: the ten above, plus
 `src/lib/userTables.json` — which `changes.rs`' `the_json_both_suites_read_is_the_user_side_of_
@@ -1335,9 +1343,13 @@ rule on purpose:
   stalled one in each direction. What makes capturing a derived *insert* safe here is the name:
   every device converting one pick announces the same `<pick uid>-<list>`, so the second copy of a
   put merges on the uid instead of adding a row — and there is no counter on the table to double.
+  **And the same content**: the finish is the printing's own `default_finish`, read from the
+  corpus, so two devices whose corpora hold the printing announce identical rows.
 - **`deck_tokens::repair_entry_finishes` runs behind `capture::suppressed`**, at every launch, after
-  the conversion: it moves an entry the conversion filed at `nonfoil` onto its printing's sole
-  finish, and whether a printing is foil-only is a fact of *this* device's corpus. A captured fold
+  the conversion, as its net: it moves an entry the conversion could only file at the `nonfoil`
+  fallback (this device's corpus lacked the printing), or one whose printing has since stopped
+  being sold that way, onto its printing's sole finish — and whether a printing is foil-only is a
+  fact of *this* device's corpus. A captured fold
   would arrive on the other device as a second sum — the `card_migrations` failure one table over.
   ⚠️ **And it rewrites in place, never deleting and re-inserting**: `suppressed` also switches off
   the insert trigger's uid mint, so a re-inserted entry would come back nameless and its next

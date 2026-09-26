@@ -215,14 +215,17 @@ both plus the frontend.
   first in **`oracle_id` order, never rowid**, the loser keeping its count), idempotent, and clears
   each pick after all the entries so a v51 peer holding the stream at the new table holds the clears
   too. The rung drops only `decks`' three capture triggers now (v43's move); `deck_tokens`' stay.
-  ⚠️ **The conversion writes `nonfoil` as a known guess** — v51 stored no finish, and the rows it
-  announces must be the same on every device, corpus or none — so
-  `deck_tokens::repair_entry_finishes` corrects a foil-only printing's entry straight after it in
-  the same launch, logged and left owing like it, behind `capture::suppressed` because whether a
-  printing is foil-only is a fact of *this* device's corpus — **in place**, keeping each entry's row
-  and `sync_uid`, because a row re-inserted under `suppressed` comes back nameless and its next
-  captured stepper press fails on `sync_ops.uid NOT NULL`, and **in `sync_uid` order**, so a fold of
-  two wrong finishes keeps the lower uid on every device. It leaves the user
+  **The conversion files each pick in the printing's own `default_finish`**, read from the corpus
+  it runs after — v51 stored no finish, and the retired rung wrote `nonfoil` for every art only
+  because no rung reads the corpus — so every device whose corpus holds the printing announces
+  identical content. It falls back to `nonfoil` only where this device's corpus cannot say, and
+  `deck_tokens::repair_entry_finishes` is the net for those entries (and for a printing whose sold
+  finishes change later), straight after it in the same launch, logged and left owing like it,
+  behind `capture::suppressed` because whether a printing is foil-only is a fact of *this*
+  device's corpus — **in place**, keeping each entry's row and `sync_uid`, because a row
+  re-inserted under `suppressed` comes back nameless and its next captured stepper press fails on
+  `sync_ops.uid NOT NULL`, and **in `sync_uid` order**, so a fold of two wrong finishes keeps the
+  lower uid on every device. It leaves the user
   file at thirty-one tables and fifty indexes, counted off `USER_SCHEMA_SQL` when it landed. That
   is one above **v51**, which
   added `decks.token_rail_index`, where the Tokens & Emblems pile sits in the rail — `NOT NULL

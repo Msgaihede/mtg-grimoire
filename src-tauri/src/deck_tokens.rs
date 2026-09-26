@@ -1978,10 +1978,6 @@ pub fn reconcile_dirty_logged(conn: &Connection) {
     }
 }
 
-/// The finish a converted pick lands in: a guess, because v51 recorded a printing and no finish.
-/// [`repair_entry_finishes`] moves it to the printing's own finish later in the same launch.
-const CONVERTED_FINISH: &str = "nonfoil";
-
 /// One v51 art pick still on `deck_tokens`: `(deck, oracle, card, quantity, uid)`.
 type LegacyPick = (i64, String, String, Option<i64>, Option<String>);
 
@@ -1992,10 +1988,23 @@ type LegacyPick = (i64, String, String, Option<i64>, Option<String>);
 /// A pick is a `deck_tokens` row whose legacy `card_id` is set — v51's one art, shared by both
 /// lists. Each becomes **one entry per list**, named `<pick uid>-<list>` (random for a pick with
 /// no uid, which only a write behind `capture::suppressed` leaves), at
-/// `max(coalesce(quantity, 1), 0)` and in [`CONVERTED_FINISH`], and the pick is then cleared.
-/// The floor is there because `deck_tokens.quantity` has no `CHECK` — it is a synced field, so a
-/// peer or an old build can have put any integer there — and the entry table refuses a count
-/// below zero; zero is the entry's own "stepped to nothing".
+/// `max(coalesce(quantity, 1), 0)`, and the pick is then cleared. The floor is there because
+/// `deck_tokens.quantity` has no `CHECK` — it is a synced field, so a peer or an old build can
+/// have put any integer there — and the entry table refuses a count below zero; zero is the
+/// entry's own "stepped to nothing".
+///
+/// **The finish is the printing's own [`default_finish`]**, read from the corpus — the function
+/// an implicit entry is drawn in and an add naming no finish files, so a converted Treasure lands
+/// in the finish the reader was already looking at. v51 stored a printing and no finish, and the
+/// retired rung wrote `nonfoil` for every art and left [`repair_entry_finishes`] to correct it,
+/// only because no rung reads the corpus. This runs after `migrate_corpus` and can. It matters
+/// for more than the first draw: every device whose corpus holds the printing announces
+/// **identical content** under one name, so no conversion can hand a peer a `nonfoil` put that
+/// lands after that peer's repair and writes the guess back, or that misses a repaired entry on
+/// the grain and lands beside it as a second row. **A corpus that cannot say** — the printing is
+/// absent, its `finishes` will not parse, or there is no `cards` table to ask — answers
+/// `default_finish(None)`, which is `nonfoil`, and the repair stays as the net for exactly that
+/// entry once a sync brings the printing.
 ///
 /// **Why here and not in the rung, and why captured.** The v52 rung did this until 2026-09-26,
 /// uncaptured, on the argument that every device climbs over the same synced picks and so derives
@@ -2023,10 +2032,10 @@ type LegacyPick = (i64, String, String, Option<i64>, Option<String>);
 ///    winner and names it alike; rowid order would give two devices two names for one entry.
 ///    The loser keeps its count as its token's implicit one and loses only the art.
 /// 3. **The entry this pick named at an earlier conversion is still there** — move it: a v51
-///    device re-picked after this one converted. Its printing and finish are rewritten in place,
-///    keeping the row, the count and the name every peer holds it by, so the captured update
-///    lands on theirs. The count stays, because a re-pick carries no count and the entry's is the
-///    reader's own.
+///    device re-picked after this one converted. Its printing is rewritten in place, and its
+///    finish to the new printing's default, keeping the row, the count and the name every peer
+///    holds it by, so the captured update lands on theirs. The count stays, because a re-pick
+///    carries no count and the entry's is the reader's own.
 /// 4. **Otherwise insert it.**
 ///
 /// Then every pick's `card_id` is cleared, and its `quantity` wherever an entry of its token now
@@ -2062,9 +2071,22 @@ pub fn convert_legacy_picks(conn: &Connection) -> Result<(), String> {
         return Ok(());
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    for pick in &picks {
-        for variant in crate::schema::DECK_VARIANTS {
-            convert_pick_in(&tx, pick, variant)?;
+    {
+        // `None` when there is no `cards` table to ask — a corpus an ingest has not filled —
+        // which answers the same `nonfoil` an absent printing does; see the doc.
+        let mut finishes = tx.prepare("SELECT finishes FROM cards WHERE id = ?1").ok();
+        for pick in &picks {
+            let listed: Option<String> = finishes.as_mut().and_then(|stmt| {
+                stmt.query_row([&pick.2], |r| r.get::<_, Option<String>>(0))
+                    .optional()
+                    .ok()
+                    .flatten()
+                    .flatten()
+            });
+            let finish = default_finish(listed.as_deref());
+            for variant in crate::schema::DECK_VARIANTS {
+                convert_pick_in(&tx, pick, variant, finish)?;
+            }
         }
     }
     for (deck_id, oracle_id, ..) in &picks {
@@ -2084,8 +2106,13 @@ pub fn convert_legacy_picks(conn: &Connection) -> Result<(), String> {
     tx.commit().map_err(|e| e.to_string())
 }
 
-/// One pick into one list — [`convert_legacy_picks`]' four cases, in its order.
-fn convert_pick_in(tx: &Connection, pick: &LegacyPick, variant: &str) -> Result<(), String> {
+/// One pick into one list, in `finish` — [`convert_legacy_picks`]' four cases, in its order.
+fn convert_pick_in(
+    tx: &Connection,
+    pick: &LegacyPick,
+    variant: &str,
+    finish: &str,
+) -> Result<(), String> {
     let (deck_id, oracle_id, card_id, quantity, uid) = pick;
     let exists = |sql: &str, values: &[&dyn rusqlite::ToSql]| -> Result<bool, String> {
         tx.query_row(sql, values, |r| r.get(0))
@@ -2103,7 +2130,7 @@ fn convert_pick_in(tx: &Connection, pick: &LegacyPick, variant: &str) -> Result<
     if exists(
         "SELECT EXISTS(SELECT 1 FROM deck_token_printings
                         WHERE deck_id = ?1 AND variant = ?2 AND card_id = ?3 AND finish = ?4)",
-        &[deck_id, &variant, card_id, &CONVERTED_FINISH],
+        &[deck_id, &variant, card_id, &finish],
     )? {
         return Ok(());
     }
@@ -2115,7 +2142,7 @@ fn convert_pick_in(tx: &Connection, pick: &LegacyPick, variant: &str) -> Result<
                 "UPDATE deck_token_printings
                     SET card_id = ?2, finish = ?3, updated_at = unixepoch()
                   WHERE sync_uid = ?1",
-                params![name, card_id, CONVERTED_FINISH],
+                params![name, card_id, finish],
             )
             .map_err(|e| e.to_string())?;
         if moved > 0 {
@@ -2134,7 +2161,7 @@ fn convert_pick_in(tx: &Connection, pick: &LegacyPick, variant: &str) -> Result<
             variant,
             oracle_id,
             card_id,
-            CONVERTED_FINISH,
+            finish,
             quantity.unwrap_or(1).max(0),
             name
         ],
@@ -2147,14 +2174,17 @@ fn convert_pick_in(tx: &Connection, pick: &LegacyPick, variant: &str) -> Result<
 /// printing is not sold in moves to the printing's [`default_finish`] — its sole finish, for a
 /// foil-only or etched-only printing.
 ///
-/// The conversion could not know: [`convert_legacy_picks`] turns each v51 pick into an entry at
-/// [`CONVERTED_FINISH`], because v51 stored a printing and no finish, and because the rows it
-/// announces must be the same on every device — a device whose corpus has not downloaded yet
-/// cannot read a printing's finishes, so the finish is settled here, per device, instead. (Until
-/// 2026-09-26 the v52 rung did the converting, and **no migration rung reads the corpus** at all:
-/// `migrate_user` runs before `migrate_corpus`.) The reader can never have chosen such a finish —
-/// the picker only offers what is sold — so this touches only what the conversion could not
-/// decide. A printing that has left the corpus, or whose `finishes` says nothing, is left alone.
+/// **It is the net under [`convert_legacy_picks`], no longer the half of it.** The conversion files
+/// each v51 pick in its printing's own [`default_finish`], read from the corpus; it falls back to
+/// `nonfoil` only where this device's corpus cannot say — the printing absent, or its `finishes`
+/// unreadable — and those are the entries this moves, at the first launch after a sync brings the
+/// printing. The other population is a printing whose sold finishes change after its entry was
+/// filed, which no write can foresee. (Until 2026-09-26 the v52 rung did the converting, wrote
+/// `nonfoil` for every art because **no migration rung reads the corpus** — `migrate_user` runs
+/// before `migrate_corpus` — and this was the other half of every conversion.) The reader can
+/// never have chosen such a finish — the picker only offers what is sold — so this touches only
+/// what nothing could decide at write time. A printing that has left the corpus, or whose
+/// `finishes` says nothing, is left alone.
 ///
 /// **The entry keeps its row, and so its `sync_uid`.** Where the target finish is free in that
 /// list the finish is rewritten **in place** (`UPDATE … WHERE id`), never deleted and inserted
@@ -2177,10 +2207,11 @@ fn convert_pick_in(tx: &Connection, pick: &LegacyPick, variant: &str) -> Result<
 /// derives for itself: whether a printing is foil-only is a fact of *this* device's corpus, each
 /// device repairs its own rows, and a captured fold would arrive on the other device as a second
 /// sum. `the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured` is the paired
-/// fixture that holds the name. **The one cost of settling the finish per device**: a peer's
-/// announced conversion carries `nonfoil`, and one that lands here after this repair, with a
-/// later stamp than this device's own announcement, writes the guess back — the entry draws in
-/// the wrong finish until the next launch repairs it again, uncaptured as before.
+/// fixture that holds the name. **The one cost of settling a finish per device** survives only on
+/// the fallback: a peer whose corpus lacked the printing announced `nonfoil`, and its put landing
+/// here after this repair, with a later stamp than this device's own announcement, writes the
+/// guess back until the next launch repairs it again, uncaptured as before. A conversion on a
+/// device whose corpus holds the printing announces the right finish and costs nothing here.
 pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
     // `(id, deck, variant, card, quantity, the finish it should be)`.
     type Wrong = (i64, i64, String, String, i64, &'static str);
@@ -5147,6 +5178,87 @@ mod tests {
             ]
         );
         assert_eq!(stored(&conn, deck)[0].1, None);
+    }
+
+    /// **A foil-only pick converts straight to a foil entry, announced as foil, and the finish
+    /// repair then has nothing to do.** The conversion runs at launch after `migrate_corpus`, so
+    /// it reads the printing's own finishes and files the resolver's `default_finish` — the same
+    /// function an implicit entry is drawn in. Every device whose corpus holds the printing
+    /// therefore announces identical content, and a repair that would have to move the entry
+    /// after an announcement carrying `nonfoil` — the one write that let a later peer put write
+    /// the guess back, or a second name land beside the first — never happens for a conversion.
+    #[test]
+    fn a_foil_only_pick_converts_straight_to_foil_and_the_repair_then_changes_nothing() {
+        let conn = paired();
+        let foil_only = Card {
+            id: "c-treasure-foil-only",
+            finishes: r#"["foil"]"#,
+            ..treasure()
+        };
+        foil_only.insert(&conn);
+        let (deck, _, _) = deck_with_piles(&conn);
+        seed_pick(&conn, deck, &foil_only, Some(2), "u-pick");
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        convert_legacy_picks(&conn).unwrap();
+
+        let converted = entries(&conn, deck);
+        assert_eq!(
+            converted,
+            vec![
+                e("live", treasure().oracle_id, foil_only.id, "foil", 2),
+                e("theory", treasure().oracle_id, foil_only.id, "foil", 2),
+            ],
+            "the printing's own finish, not a guess"
+        );
+        let announced: Vec<(String, Value)> = recorded(&conn)
+            .into_iter()
+            .filter(|(t, ..)| t == "deck_token_printings")
+            .map(|(_, uid, _, fields)| (uid, fields["finish"].clone()))
+            .collect();
+        assert_eq!(
+            announced,
+            [
+                ("u-pick-live".to_owned(), json!("foil")),
+                ("u-pick-theory".to_owned(), json!("foil")),
+            ],
+            "the announced insert carries the finish every peer will hold"
+        );
+
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        repair_entry_finishes(&conn).unwrap();
+        assert_eq!(
+            entries(&conn, deck),
+            converted,
+            "the repair has nothing to move"
+        );
+        assert_eq!(recorded(&conn), [], "and writes nothing");
+    }
+
+    /// **A pick whose printing this device's corpus does not hold still converts, at `nonfoil`**
+    /// — `default_finish`'s own answer when the finishes cannot be read — and the finish repair,
+    /// which reads the same corpus, leaves it alone until a sync brings the printing. That is the
+    /// case the repair stays for.
+    #[test]
+    fn a_pick_whose_printing_the_corpus_lacks_converts_at_nonfoil() {
+        let conn = paired();
+        let (deck, _, _) = deck_with_piles(&conn);
+        let absent = Card {
+            id: "c-not-in-this-corpus",
+            ..treasure()
+        };
+        seed_pick(&conn, deck, &absent, Some(1), "u-pick");
+
+        convert_legacy_picks(&conn).unwrap();
+        repair_entry_finishes(&conn).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e("live", treasure().oracle_id, absent.id, "nonfoil", 1),
+                e("theory", treasure().oracle_id, absent.id, "nonfoil", 1),
+            ]
+        );
     }
 
     /// **Two devices, a pick made on the v51 one after the other climbed, and no op left

@@ -280,13 +280,14 @@ entry's `finish` is what the chin names, what `FoilOverlay` sheens and what the 
 - Every `deck_tokens` row with a non-null `card_id` becomes one entry **per list** (`live` and
   `theory`) at `coalesce(quantity, 1)`; its `card_id` and `quantity` are then cleared. Both lists,
   because today's override is shared by both — copying it keeps what each list draws unchanged.
-  **The conversion writes `nonfoil`**: v51 stored no finish, and a migration rung — where this was
-  first placed — reads no corpus at all (`migrate_user` runs before `migrate_corpus`, and no rung
-  selects from `cards`). A **launch-time idempotent repair**, `deck_tokens::repair_entry_finishes`,
-  then sets each entry whose finish its printing is not sold in to the printing's sole finish — the
-  reader can never have chosen such a finish, since the picker only offers what is sold, so the
-  repair touches only what the conversion could not know. *(Where the conversion runs, and why it
-  is captured, is the second amendment below.)*
+  **The finish is the printing's default** — v51 stored no finish. *(As first written this said
+  "the rung writes `nonfoil`", because a migration rung, where this was first placed, reads no
+  corpus at all; the conversion now runs at launch after `migrate_corpus` and files the printing's
+  own `default_finish` — see the amendments below.)* A **launch-time idempotent repair**,
+  `deck_tokens::repair_entry_finishes`, then sets each entry whose finish its printing is not sold
+  in to the printing's sole finish — the reader can never have chosen such a finish, since the
+  picker only offers what is sold, so the repair touches only what nothing could decide at write
+  time. *(Where the conversion runs, and why it is captured, is the second amendment below.)*
 - A row with only a `quantity` is left as it is: that quantity keeps meaning "the implicit entry's
   quantity" (rule 1). No printing is resolved inside the migration — the resolver's default comes
   from the deck's cards and the corpus, and a rung that guessed it would invent a choice the reader
@@ -294,8 +295,8 @@ entry's `finish` is what the chin names, what `FoilOverlay` sheens and what the 
 - `decks.token_mode` is added at `managed`; `token_stack` is dropped.
 - Proven on a copy of the real dev database (the `prove-a-migration-on-the-real-dev-db` memory).
 
-*(Amended at PR 2's fan-in and task reviews, 2026-09-26, and again at the third review round the
-same day — the conversion as built.)*
+*(Amended at PR 2's fan-in and task reviews, 2026-09-26, and again at the third and fourth review
+rounds the same day — the conversion as built.)*
 - **The conversion is a captured launch pass, not the rung.** The rung creates the table, adds
   `token_mode` and drops `token_stack`, and converts no pick.
   `deck_tokens::convert_legacy_picks` runs from `prepare_database` at every launch, **after
@@ -320,9 +321,18 @@ same day — the conversion as built.)*
   had no `CHECK`. The picks are cleared after all the entries, captured, so a v51 peer holding the
   stream at the new table holds the clears too. Idempotent. Accepted: a v51 reset in the window
   before that device upgrades, and a v51 count stepped on a pick another device has cleared.
+- **The finish is the printing's own `default_finish`, read from the corpus** — in the insert and
+  in the moved entry alike — because the pass runs after `migrate_corpus`. `nonfoil` plus a repair
+  was the rung's ruling, and only because no rung reads the corpus. Every device whose corpus holds
+  the printing therefore announces identical content, so no conversion can hand a peer a `nonfoil`
+  put that undoes its repair or misses its repaired entry on the grain and lands as a second row.
+  The pass falls back to `nonfoil` only where the corpus cannot say (the printing absent, its
+  finishes unreadable).
 - **The rung drops only `decks`' capture triggers** (for the `DROP COLUMN`); it writes no
   `deck_tokens` row, so that table's triggers stay.
-- **The finish repair updates in place, in `sync_uid` order.** Moving an entry to its printing's
+- **The finish repair is the net, and updates in place, in `sync_uid` order.** It moves the
+  fallback's entries once a sync brings the printing, and an entry whose printing's sold finishes
+  changed after it was filed. Moving an entry to its printing's
   sold finish is an `UPDATE` when that grain is free, so the entry keeps its uid, and a fold into the
   held row only when it is not; walked in `sync_uid` order, a fold of two wrong finishes keeps the
   lower uid on every device. It runs under capture suppression — every device derives it — where a

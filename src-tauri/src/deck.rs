@@ -2402,9 +2402,9 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     //
     // **And the before-image is read only after both lists have been reconciled once**, which is
     // the same trap one step earlier. The plan can hold entries its (empty) card list makes no
-    // token for — the v52 rung copied every old pick into both lists — and rule 7 owes their
-    // removal whatever this press does. Read into the before-image, the undo would put such an
-    // entry back, `sync::with_write`'s backstop would delete it again the moment the undo
+    // token for — v52's launch conversion copied every old pick into both lists — and rule 7
+    // owes their removal whatever this press does. Read into the before-image, the undo would put
+    // such an entry back, `sync::with_write`'s backstop would delete it again the moment the undo
     // committed, and the redo's `holds` would find it missing and refuse: an undo that could never
     // be redone. Reconciled first, the undo restores exactly what the backstop keeps. The
     // deletions ride no step, like every backstop deletion (`deck_tokens::reconcile_dirty`).
@@ -2541,9 +2541,10 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
 ///
 /// **The plan's own entries go first, because `deck_theory::theory_is_empty` asks about
 /// `deck_cards` alone** and a plan with no cards can still hold entries. Every deck that has never
-/// had a plan carries some: the v52 rung made one entry *per list* out of every picked art, so the
-/// theory list holds a copy of each live pick. Moving a live entry onto a theory one at the same
-/// printing and finish would be refused by `idx_deck_token_printings_grain`. **Replacing them
+/// had a plan carries some: v52's launch conversion (`deck_tokens::convert_legacy_picks`) made one
+/// entry *per list* out of every picked art, so the theory list holds a copy of each live pick.
+/// Moving a live entry onto a theory one at the same printing and finish would be refused by
+/// `idx_deck_token_printings_grain`. **Replacing them
 /// rather than folding into them is the switch's own meaning**: the deck the reader built *is* the
 /// plan, so its Treasure arts are the plan's, and a stale theory art kept beside them would draw a
 /// mix nobody chose.
@@ -11558,11 +11559,11 @@ mod tests {
     }
 
     /// **A plan with no cards can still hold token entries, and the switch replaces them** —
-    /// `deck_theory::theory_is_empty` asks about `deck_cards` alone. The v52 rung made one entry
-    /// per list out of every picked art, so every deck that has never had a plan carries theory
-    /// copies like this one; moving a live entry onto one at the same printing and finish would
-    /// hit `idx_deck_token_printings_grain` and fail the whole press. The stale plan here holds a
-    /// third art, `TREASURE` at 5, which collides with a live entry on the grain.
+    /// `deck_theory::theory_is_empty` asks about `deck_cards` alone. v52's launch conversion made
+    /// one entry per list out of every picked art, so every deck that has never had a plan carries
+    /// theory copies like this one; moving a live entry onto one at the same printing and finish
+    /// would hit `idx_deck_token_printings_grain` and fail the whole press. The stale plan here
+    /// holds a third art, `TREASURE` at 5, which collides with a live entry on the grain.
     ///
     /// The switch leaves exactly the live arts in the plan, the stale art gone. **The stale art
     /// does not come back on an undo**: a plan with no cards makes no Treasure, so rule 7 owes its

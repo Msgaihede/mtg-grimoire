@@ -4201,8 +4201,9 @@ already effective, and `viewOf` copies them.
   **The theory switch moves the live list's entries into the plan with the cards** rather than
   letting the reconcile take them — the Treasure arts the reader chose are part of the deck that
   becomes the plan — and replaces what the plan held, on the switch's one undoable step. **One
-  Ctrl+Z puts the live arts back, not the plan's stale ones**: the v52 rung copied every old pick
-  into *both* lists, a plan with no cards makes no token, so the switch reconciles both lists
+  Ctrl+Z puts the live arts back, not the plan's stale ones**: v52's launch conversion pass copied
+  every old pick into *both* lists, a plan with no cards makes no token, so the switch reconciles
+  both lists
   before it reads what its step records, and restoring an entry rule 7 owes the deletion of would
   only hand the backstop a row to delete and the redo a reason to refuse.
 - **A token is never a deck card, and the router is Rust's** (spec §4.6). Adding or dropping a
