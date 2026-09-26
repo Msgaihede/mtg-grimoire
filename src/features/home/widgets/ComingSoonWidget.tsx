@@ -70,6 +70,35 @@ const ROW_PX = 51;
 const FIGURES_PX = 74;
 const FIGURES_COMPACT_PX = 62;
 
+/** `WidgetFigures`' box for one figure — `basis-[120px]` — and its `gap-x-3.5` between two. */
+const FIGURE_BASIS_PX = 120;
+const FIGURE_GAP_X_PX = 14;
+/** `WidgetFigures`' `gap-y-1.5`: the space above a line the figures wrapped onto. */
+const FIGURE_GAP_Y_PX = 6;
+/**
+ * One figure's height: a 16px `text-xs` label over a 1.125rem number at `leading-[1.2]` (21.6px),
+ * rounded up. A wrapped line is always the small number — the 1.375rem one is drawn only from four
+ * cells wide, which even at `CELL_MIN` is wider than two figures need to share a line.
+ */
+const FIGURE_PX = 38;
+
+/**
+ * The figure line's reservation, as this body draws it.
+ *
+ * **Two figures share a line only when the body is at least two bases and a gap wide** (254px). A
+ * two-cell tile's body is narrower at every cell the grid draws — about 231px at the widest, eight
+ * columns just short of a ninth — so its figures wrap and the line is two lines tall. Counted
+ * against one line, the rows promise more than the tile has, and at compact density the last one
+ * is cut by the card's edge (derived, not measured) — `SetCompletionWidget`'s `rowPx` failure, one
+ * block up. **Asked of the body's width rather than of the tier**: `fit.ts`' rule that what fits
+ * is pixels, and a three-cell card on cells under about 84px wraps as well.
+ */
+function figuresPx(fit: WidgetFit): number {
+  const line = fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX;
+  const shared = fit.bodyWidthPx >= 2 * FIGURE_BASIS_PX + FIGURE_GAP_X_PX;
+  return shared ? line : line + FIGURE_GAP_Y_PX + FIGURE_PX;
+}
+
 const PENDING = "Looking for announced sets…";
 
 /** A release day in words, in UTC — see the module doc. */
@@ -98,15 +127,22 @@ export function whenLabel(days: number): string {
   return `in ${days} days`;
 }
 
-/** `TRK · in 12 days · 79 seen · 3 in your decks` — the last clause only when there is one. */
-export function setCaption(set: UpcomingSet, today: string): string {
-  const parts = [
-    set.code.toUpperCase(),
-    whenLabel(daysUntil(today, set.releasedAt)),
-    `${count(set.previewed)} seen`,
-  ];
+/** `TRK · in 12 days` — the two clauses that tell one set from another, and all a two-cell tile
+ *  has room for. {@link setCaption} is this with the counts after it. */
+export function shortCaption(set: UpcomingSet, today: string): string {
+  return `${set.code.toUpperCase()} · ${whenLabel(daysUntil(today, set.releasedAt))}`;
+}
+
+/** A short caption with the counts after it — the last clause only when there is one. */
+function withCounts(short: string, set: UpcomingSet): string {
+  const parts = [short, `${count(set.previewed)} seen`];
   if (set.inDecks > 0) parts.push(`${count(set.inDecks)} in your decks`);
   return parts.join(" · ");
+}
+
+/** `TRK · in 12 days · 79 seen · 3 in your decks` — the last clause only when there is one. */
+export function setCaption(set: UpcomingSet, today: string): string {
+  return withCounts(shortCaption(set, today), set);
 }
 
 /** The window as the empty sentence says it: `90 days`, or `year` for the widest. */
@@ -129,8 +165,9 @@ function releaseHint(set: UpcomingSet): string | undefined {
  * One answer, drawn: the empty sentence, or the two figures over the rows.
  *
  * **Rows flow into `fit.listColumns` columns** (`WidgetRowList`), and are cut to whole rows after
- * the figure line is reserved. On a two-cell tile the caption keeps the two clauses that tell sets
- * apart — the code and the day — and drops the counts the figures already sum.
+ * the figure line is reserved — two lines of it where the figures wrap ({@link figuresPx}). On a
+ * two-cell tile the caption keeps the two clauses that tell sets apart — the code and the day
+ * ({@link shortCaption}) — and drops the counts the figures already sum.
  */
 export function ComingSoonFace({
   answer,
@@ -150,10 +187,7 @@ export function ComingSoonFace({
   const previewed = answer.sets.reduce((sum, set) => sum + set.previewed, 0);
   const inDecks = answer.sets.reduce((sum, set) => sum + set.inDecks, 0);
   const tile = fit.tier === 0;
-  const shown = answer.sets.slice(
-    0,
-    fit.rowsFit(ROW_PX, fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX),
-  );
+  const shown = answer.sets.slice(0, fit.rowsFit(ROW_PX, figuresPx(fit)));
 
   return (
     <>
@@ -173,16 +207,15 @@ export function ComingSoonFace({
       />
       <WidgetRowList fit={fit} label="Announced sets">
         {shown.map((set) => {
-          const caption = setCaption(set, answer.today);
+          // The day counted once per set: the tile draws the short caption, and the press label
+          // carries the whole one whatever the box is drawing.
+          const short = shortCaption(set, answer.today);
+          const caption = withCounts(short, set);
           return (
             <WidgetRow
               key={set.code}
               name={set.name}
-              caption={
-                tile
-                  ? `${set.code.toUpperCase()} · ${whenLabel(daysUntil(answer.today, set.releasedAt))}`
-                  : caption
-              }
+              caption={tile ? short : caption}
               hint={releaseHint(set)}
               onPress={still ? undefined : () => showSetInSearch(set.code)}
               // The whole row in one string — a `gap` between the name and the caption computes to

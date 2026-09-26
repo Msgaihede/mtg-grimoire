@@ -21,6 +21,7 @@ import {
   daysUntil,
   emptySentence,
   setCaption,
+  shortCaption,
   whenLabel,
   windowWords,
 } from "./ComingSoonWidget";
@@ -51,12 +52,30 @@ const ASH = upcoming({
 
 const ANSWER: UpcomingSets = { today: TODAY, sets: [GLASS, TREK, ASH] };
 
+/** More sets than any box below holds, so a cut shows whichever reservation it was cut under. */
+const MANY: UpcomingSets = {
+  today: TODAY,
+  sets: [
+    GLASS,
+    TREK,
+    ASH,
+    ...[1, 2, 3, 4, 5, 6].map((day) =>
+      upcoming({ code: `n0${day}`, name: `Next ${day}`, releasedAt: `2027-01-0${day}` }),
+    ),
+  ],
+};
+
 function widget(config: unknown = null): HomeWidget {
   return { id: "comingSoon", kind: "comingSoon", x: 0, y: 0, w: 4, h: 4, config };
 }
 
-function fitFor(w: number, h: number): WidgetFit {
-  return makeFit({ w, h, widthPx: spanPx(w, 104), heightPx: spanPx(h, 104), density: "comfortable" });
+function fitFor(
+  w: number,
+  h: number,
+  density: "comfortable" | "compact" = "comfortable",
+  cell = 104,
+): WidgetFit {
+  return makeFit({ w, h, widthPx: spanPx(w, cell), heightPx: spanPx(h, cell), density });
 }
 
 /** Four cells wide is two list columns, and room for every row. */
@@ -130,6 +149,13 @@ describe("the words", () => {
     ).toBe("BIG · in 5 days · 1,234 seen");
   });
 
+  /** The tile's caption is the full one's head, so the two can never name a set differently. */
+  it("shortens a caption to the code and the day", () => {
+    expect(shortCaption(TREK, TODAY)).toBe("TRK · in 12 days");
+    expect(shortCaption(GLASS, TODAY)).toBe("GLS · tomorrow");
+    expect(setCaption(TREK, TODAY).startsWith(`${shortCaption(TREK, TODAY)} · `)).toBe(true);
+  });
+
   it("says the window in its own words", () => {
     expect(windowWords(30)).toBe("30 days");
     expect(windowWords(90)).toBe("90 days");
@@ -174,6 +200,48 @@ describe("ComingSoonWidget", () => {
       // A captioned row is 51px, and the figure line takes 74 before rows are counted.
       expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(51, 74));
       expect(fit.rowsFit(51, 74)).toBeLessThan(3);
+    });
+
+    /**
+     * Two figures are `basis-[120px]` with a 14px gap, so a body under 254px wraps them onto two
+     * lines and the rows are cut under both: compact's one-line 62, plus the 6px gap above the
+     * second line and a 38px figure on it. Compact is where a one-line cut overflows — comfortable's
+     * rounding slack hid it — and a 3×3 on 76px cells is a panel, not a tile, that wraps as well.
+     */
+    const WRAPPED_COMPACT = 62 + 6 + 38;
+
+    it.each([
+      [2, 2, 104],
+      [2, 3, 104],
+      [3, 3, 76],
+    ])(
+      "cuts a compact %i×%i card on %ipx cells under two lines of figures",
+      (w, h, cell) => {
+        qc.setQueryData(upcomingSetsKey(90), MANY);
+        const fit = fitFor(w, h, "compact", cell);
+
+        draw(null, { fit });
+
+        expect(fit.bodyWidthPx).toBeLessThan(2 * 120 + 14);
+        expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(51, WRAPPED_COMPACT));
+        // The guard: a one-line reservation promises more rows than this box holds, and there are
+        // sets enough to draw them — so a cut under one line cannot pass this case.
+        expect(fit.rowsFit(51, WRAPPED_COMPACT)).toBeLessThan(fit.rowsFit(51, 62));
+        expect(MANY.sets.length).toBeGreaterThanOrEqual(fit.rowsFit(51, 62));
+      },
+    );
+
+    it("keeps one line of figures where the two fit side by side", () => {
+      qc.setQueryData(upcomingSetsKey(90), MANY);
+      const fit = fitFor(4, 3, "compact");
+
+      draw(null, { fit });
+
+      expect(fit.bodyWidthPx).toBeGreaterThanOrEqual(2 * 120 + 14);
+      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(51, 62));
+      // The guard, the other way: a two-line reservation here would draw fewer.
+      expect(fit.rowsFit(51, 62)).toBeGreaterThan(fit.rowsFit(51, WRAPPED_COMPACT));
+      expect(MANY.sets.length).toBeGreaterThanOrEqual(fit.rowsFit(51, 62));
     });
 
     it("shortens the caption to the code and the day on a two-cell tile", () => {
