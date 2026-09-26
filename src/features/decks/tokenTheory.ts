@@ -84,18 +84,30 @@ export function tokenDeckFinish(view: Pick<DeckTokenView, "finish">): DeckFinish
   return view.finish === "nonfoil" ? null : view.finish;
 }
 
-/** The plan's entries as `TheorySlot`s — each printing **and finish**, keyed exactly as a deck
- *  card's slot is (`theorySlot({ cardId, finish })`), with the token's `oracleId` as the name
- *  tier's key — the module note says why never its name. `undefined` in, `undefined` out: a plan
- *  that has not loaded marks nothing. */
+/**
+ * The plan's entries as `TheorySlot`s — each printing **and finish**, keyed exactly as a deck
+ * card's slot is (`theorySlot({ cardId, finish })`), with the token's `oracleId` as the name
+ * tier's key — the module note says why never its name. `undefined` in, `undefined` out: a plan
+ * that has not loaded marks nothing.
+ *
+ * **An entry held at 0 is no slot at all.** Rule 3 (spec §4.2) keeps a token's last entry at 0
+ * rather than deleting it, so the implicit default does not come back under a reader who zeroed
+ * the only printing they had — a row that means *the plan wants none of this token*. Kept as a
+ * slot it would be a plan asking for zero of the printing, and one live copy against it would
+ * read the exact tick (`DIFFERENCE_FLOOR` keeps 1-against-0 at no number) instead of the X the
+ * plan's real answer is. A deck card's plan cannot hold a zero row — stepping one to 0 deletes
+ * it — so this filter is the one place the token side has to say so for itself.
+ */
 export function tokenTheorySlots(
   plan: readonly DeckTokenView[] | undefined,
 ): TheorySlot[] | undefined {
-  return plan?.map((view) => ({
-    key: theorySlot({ cardId: view.printingId, finish: tokenDeckFinish(view) }),
-    nameKey: view.oracleId,
-    quantity: view.quantity,
-  }));
+  return plan
+    ?.filter((view) => view.quantity > 0)
+    .map((view) => ({
+      key: theorySlot({ cardId: view.printingId, finish: tokenDeckFinish(view) }),
+      nameKey: view.oracleId,
+      quantity: view.quantity,
+    }));
 }
 
 /**

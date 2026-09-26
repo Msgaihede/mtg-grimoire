@@ -989,8 +989,9 @@ const REFILE_NOTE_MS = 6000;
  * printing was a token, a double-faced token or an emblem, and Rust filed it as a token entry
  * instead (token stacks, spec §4.6: *tokens never become deck cards*, whichever pile they were
  * dropped on). No SQLite row is numbered 0, so this is a sentinel and never an address, and the
- * landed mark skips it ({@link DeckEditor}'s `markAdded`): there is no card to point at, and the
- * token shows up in the Tokens & Emblems pile, which the add's own invalidation re-reads.
+ * landed mark skips it ({@link DeckEditor}'s `markAdded`): there is no card to point at. The
+ * token shows up on the Tokens & Emblems band — and in the views' pile too, on a deck whose token
+ * mode draws one (not `hidden`) — both re-read by the add's own `["decks"]` invalidation.
  */
 const NO_DECK_CARD = 0;
 
@@ -1484,6 +1485,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const undo = useDeckUndo(deckId);
 
+  /**
+   * The tokens and emblems this deck makes — **read once, here, for every surface that draws
+   * them** (issue #507). The Tokens & Emblems band and, on a deck whose token mode draws it
+   * ({@link tokenPileDrawn}), the pile each view draws are two drawings of one answer: a quantity
+   * stepped on one is the number the other draws, and a dismissal made on the band takes the token
+   * out of the pile. A hook call per surface would be two `showDismissed` switches and two write
+   * observers, each free to own a refusal the other never hears about. ({@link planTokens} is a
+   * second call and not a second drawing: it reads the *other* list, for the plan's marks, and
+   * draws nothing.)
+   *
+   * **One view per entry** since token stacks PR 2 (user schema v52, spec §4.2) — a token with a
+   * foil and a regular copy in this list is two views — and every write addresses an entry.
+   *
+   * **Declared here, above {@link bannerWrites} and {@link lastOfAny}, and not beside the rest of
+   * the token wiring**, because its `writes` join both: every token write is journalled since PR 2
+   * (spec §4.7), so a token write is a deck write the redo stack has to be thrown away after, and
+   * a refused one has to be said somewhere while the band that would say it is shut. A `const`
+   * read above its own declaration is a `ReferenceError` on the first render.
+   */
+  const deckTokens = useDeckTokens(deckId, variant);
+
   const writes = [
     deck.setQuantity,
     deck.clearCategory,
@@ -1526,7 +1548,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // the two menu rows that fetch before they write have no surface to report into, and their
   // failure is the failure of a press rather than of a background query. It is last in the
   // chain because a refused *write* is the more specific answer whenever both are standing.
-  const bannerFailure = writeFailure(writes) ?? undo.error ?? pressReadFailure;
+  //
+  // **The token writes join this family exactly while the Tokens & Emblems band is shut** (token
+  // stacks PR 2). The band says their refusal itself — once, above its wall, the newest token
+  // write's sentence (`useDeckTokens`' `failure`) — but the wall is unmounted while the band is
+  // collapsed, which is every deck's default, and since PR 2 the views draw the pile on every
+  // managed deck. So a refused pile stepper or pile swap (a busy database, a deck deleted under the
+  // reader) would otherwise be a press that changed nothing and said nothing anywhere. Open, the
+  // band speaks and this banner leaves them out: two sentences for one refusal is the reason this
+  // family leaves the docked panel's add out too.
+  const bannerWrites =
+    row?.tokensOpen === true ? writes : ([...writes, ...deckTokens.writes] as const);
+  const bannerFailure = writeFailure(bannerWrites) ?? undo.error ?? pressReadFailure;
 
   /**
    * What to say when a re-file moved nothing — and **nothing at all when it moved something**,
@@ -2044,33 +2077,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   useDockHeight(dockRef, deskRef);
 
-  /**
-   * The tokens and emblems this deck makes — **read once, here, for every surface that draws
-   * them** (issue #507). The Tokens & Emblems band and, on a deck whose token mode draws it
-   * ({@link tokenPileDrawn}), the pile each view draws are two drawings of one answer: a quantity
-   * stepped on one is the number the other draws, and a dismissal made on the band takes the token
-   * out of the pile. A hook call per surface would be two `showDismissed` switches and two write
-   * observers, each free to own a refusal the other never hears about. ({@link planTokens} is a
-   * second call and not a second drawing: it reads the *other* list, for the plan's marks, and
-   * draws nothing.)
-   *
-   * **One view per entry** since token stacks PR 2 (user schema v52, spec §4.2) — a token with a
-   * foil and a regular copy in this list is two views — and every write addresses an entry.
-   *
-   * **Declared here, above {@link lastOfAny}, and not beside the rest of the token wiring**,
-   * because its `writes` join that list: every token write is journalled since PR 2 (spec §4.7),
-   * so a token write is a deck write the redo stack has to be thrown away after, and a `const`
-   * read above its own declaration is a `ReferenceError` on the first render.
-   */
-  const deckTokens = useDeckTokens(deckId, variant);
-
   // A refused write re-reads the deck, and the read is what decides what happened: every write
   // goes through `touch_deck`, which answers "That deck is not there any more" when the deck
   // has been deleted under the reader — so the same refusal is either a busy database (the
   // banner says so, the deck stays) or a deck that is gone (the read answers null and the
   // editor says so). Keyed on `submittedAt` so each new failure re-reads exactly once.
   //
-  // **Every write above plus three, banner or no banner.** `add_card` calls `touch_deck` like the rest and
+  // **Every write above, and the ones the banner leaves out, banner or no banner.** `add_card`
+  // calls `touch_deck` like the rest and
   // `missing_to_wishlist` answers the same `GONE` from its own read, so a press in the docked
   // panel or on the stats block reaches the same sentence — and without them here that surface
   // would report a deck that is gone while the view beside it went on painting it, with every
@@ -2095,14 +2109,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // **`setLabel` rides in through `writes`** and is live coverage for the same reason: nothing
   // in the app could reach it until that menu, and every one of the four views can now.
   //
-  // **The token writes ride here and not in `writes`** (token stacks PR 2, spec §4.7). Here,
-  // because each one is a journalled deck write now — a stepper press, a swap, an added printing,
-  // a dismissal, a reset — so a success has to clear the redo stack below like any other, and a
-  // refusal (a deck deleted under the reader answers `GONE` from `touch_deck`) has to re-read the
-  // deck like any other. Not in `writes`, because the band draws their refusal itself, beside the
-  // tile that was pressed (`useDeckTokens`' `failure`), and two banners for one refusal would be
-  // worse than one in the wrong place — the reason `writes` gives for leaving out the docked
-  // panel's add. `planTokens`' writes are never pressed, so they are not here either.
+  // **The token writes ride here always, and in the banner only while the band is shut** (token
+  // stacks PR 2, spec §4.7). Here always, because each one is a journalled deck write now — a
+  // stepper press, a swap, an added printing, a dismissal, a reset — so a success has to clear the
+  // redo stack below like any other, and a refusal (a deck deleted under the reader answers `GONE`
+  // from `touch_deck`) has to re-read the deck like any other. Not in `writes` itself, because
+  // the band says their refusal once, above its own wall (`useDeckTokens`' `failure`, the newest
+  // token write's sentence), and while it is open a banner too would be two sentences for one
+  // refusal; {@link bannerWrites} is what adds them while the band is shut. `planTokens`' writes
+  // are never pressed, so they are in neither list.
   const refetch = deck.query.refetch;
   const lastOfAny = newestWrite([
     ...writes,
@@ -4034,16 +4049,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * pressed — a quantity stepped since, a printing another write has moved — and a swap made
    * through it would name a `from` the list may no longer hold. Looked up in `deckTokens.tokens`,
    * which is every entry either surface can draw: the pile draws a subset of it (never a dismissed
-   * token) and the band draws all of it. **An entry that has gone is no entry to swap**, so the
-   * picker shuts rather than answer about a row the list no longer holds.
+   * token) and the band draws all of it.
+   *
+   * **An entry that has gone is no entry to swap, and the key goes with it** — reset here, during
+   * render, which is this file's own pattern for state that has to follow a read (never an effect,
+   * which is a `setState` the lint refuses). Shutting the dialog through `mode` alone is not
+   * enough: `Dialog`'s `onClose` runs only for the reader's own presses, so the key would outlive
+   * the entry, and a later read that brought the same entry back — an undo taking a Treasure away
+   * and the redo returning it — would reopen a picker nobody pressed for. The reset only ever
+   * writes `null`, and only while a swap's lookup misses, so it cannot cycle.
    */
   const [pickingToken, setPickingToken] = useState<TokenPicking>(null);
+  const pickedEntry =
+    pickingToken?.kind === "swap"
+      ? tokenList.find((view) => view.entryKey === pickingToken.entryKey)
+      : undefined;
+  if (pickingToken?.kind === "swap" && pickedEntry === undefined) setPickingToken(null);
   const tokenPicker = useMemo(() => {
     if (pickingToken === null) return null;
     if (pickingToken.kind === "add") return { kind: "add" as const, tokens: keptTokens };
-    const entry = tokenList.find((view) => view.entryKey === pickingToken.entryKey);
-    return entry === undefined ? null : { kind: "swap" as const, entry };
-  }, [pickingToken, keptTokens, tokenList]);
+    return pickedEntry === undefined ? null : { kind: "swap" as const, entry: pickedEntry };
+  }, [pickingToken, keptTokens, pickedEntry]);
   /** A press on an entry, from the pile or the band — stable, because the pile's memo holds it. */
   const pickTokenEntry = useCallback(
     (view: DeckTokenView) => setPickingToken({ kind: "swap", entryKey: view.entryKey }),

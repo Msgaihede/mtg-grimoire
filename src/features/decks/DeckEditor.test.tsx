@@ -8193,6 +8193,83 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     expect(screen.queryByRole("button", { name: /^Redo —/ })).toBeNull();
   });
 
+  /**
+   * **A token write the pile makes is said somewhere while the band is shut** (fix round 2). The
+   * band draws its hook's refusal above its wall, and the wall is unmounted while the band is
+   * collapsed — which is every deck's default — while PR 2 draws the pile on every managed deck.
+   * So a refused pile stepper would be a press that changed nothing on screen and said nothing
+   * anywhere. The token writes join the editor's own banner exactly while the band is shut.
+   */
+  it("says a refused pile stepper in the editor's banner while the band is shut", async () => {
+    deckTokenSetQuantity.mockRejectedValue("The database is busy with a sync.");
+    deckWith({ tokenMode: "managed", tokensOpen: false });
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+
+    await userEvent.click(
+      within(pile()!).getByRole("button", { name: /^Increase Quantity of Treasure/ }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The database is busy with a sync.");
+    // The editor's banner, not the band's line — the band's wall is not mounted.
+    expect(band()).not.toContainElement(alert);
+  });
+
+  /** **And never twice**: with the band open it draws the refusal above its own wall, so the
+   *  banner leaves the token writes out and the reader reads one sentence for one refusal. */
+  it("leaves a refused pile stepper to the band's own line while the band is open", async () => {
+    deckTokenSetQuantity.mockRejectedValue("The database is busy with a sync.");
+    deckWith({ tokenMode: "managed", tokensOpen: true });
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+
+    await userEvent.click(
+      within(pile()!).getByRole("button", { name: /^Increase Quantity of Treasure/ }),
+    );
+
+    const alert = await within(band()).findByRole("alert");
+    expect(alert).toHaveTextContent("The database is busy with a sync.");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
+  /**
+   * **A picker whose entry has gone stays shut when the entry comes back** (fix round 2). The
+   * picker is held by the entry's key and looked up on every render, so an entry an undo takes
+   * away shuts it — and the key has to go with it, or the redo that brings the entry back reopens
+   * a dialog nobody pressed for. The two re-reads are the undo's and the redo's own invalidation,
+   * which is the reported path: Ctrl+Z, then Ctrl+Shift+Z.
+   */
+  it("keeps the picker shut when its entry vanishes and a later read brings it back", async () => {
+    deckUndoState.mockImplementation((_deckId: number, redoId: number | null) =>
+      Promise.resolve(
+        redoId === null ? { undo: UNDOABLE, redo: null } : { undo: null, redo: UNDOABLE },
+      ),
+    );
+    deckWith({ tokenMode: "managed" });
+    const user = userEvent.setup();
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+    await screen.findByRole("button", { name: /^Undo —/ });
+
+    await user.click(within(pile()!).getByRole("button", { name: ART }));
+    await screen.findByRole("dialog");
+
+    // The undo's re-read answers a deck that makes no Treasure: the entry has gone.
+    deckTokens.mockResolvedValue([]);
+    await user.keyboard("{Control>}z{/Control}");
+    await waitFor(() => expect(deckUndoApply).toHaveBeenCalledWith(4, 77));
+    await waitFor(() => expect(pile()).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The redo's re-read brings the very same entry back.
+    deckTokens.mockResolvedValue([treasure()]);
+    await user.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+    await waitFor(() => expect(deckRedoApply).toHaveBeenCalledWith(4, 77));
+    await waitFor(() => expect(pile()).not.toBeNull());
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("never counts a token toward the deck's cards", async () => {
     deckWith({ tokenMode: "managed" });
     await open();

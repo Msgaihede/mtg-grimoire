@@ -157,4 +157,20 @@ describe("tokenTheoryPlan over entries with real finishes", () => {
     expect(tokenTheoryMark(plan, regular)).toEqual({ tier: "name", delta: 2 });
     expect(tokenTheoryMark(plan, other)).toEqual({ tier: "name", delta: 2 });
   });
+
+  /**
+   * **A plan entry held at 0 is a plan that asks for none** (spec §4.2 rule 3: stepping a token's
+   * last entry to 0 keeps the row at 0 rather than deleting it, so the implicit default does not
+   * come back). As a slot it would be a plan asking for zero of this printing, and one live copy
+   * against it reads the exact tick — `DIFFERENCE_FLOOR` keeps 1-against-0 at no number — where
+   * the plan in fact makes none of the token and the honest mark is the X.
+   */
+  it("reads a live copy as unplanned against a plan that holds the token at zero", () => {
+    const planned = view({ printingId: "p1", quantity: 0 });
+    const live = view({ printingId: "p1", quantity: 1 });
+    expect(tokenTheoryMark(tokenTheoryPlan([planned], [live], ON), live)).toEqual({
+      tier: "unplanned",
+      delta: 0,
+    });
+  });
 });
