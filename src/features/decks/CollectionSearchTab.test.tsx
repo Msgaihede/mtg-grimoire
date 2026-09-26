@@ -3,9 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import type { CollectionFolder, CollectionRow, DeckCategory } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
@@ -38,6 +40,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { useAppStore } from "@/lib/store";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { CollectionSearchTab } from "./CollectionSearchTab";
+import { readDragData } from "./dnd";
 
 const DECK_ID = 4;
 
@@ -800,6 +803,82 @@ describe("CollectionSearchTab", () => {
         name: "Lightning Bolt — could not read what this deck plays",
       }),
     ).toHaveAttribute("aria-disabled", "true");
+  });
+
+  /**
+   * **The tile is a drag source, and what it carries is the card it draws** — the card-search
+   * tab's own payload, so a drop onto a deck column means on this tab exactly what it means one
+   * press away.
+   *
+   * It was never registered: the wall drew a `CardGrid` with no drag seam at all, while the Add
+   * button's comment and #358's closing note both described a drag that existed only on the other
+   * tab. So this picks the tile up and reads what the library was handed, rather than trusting an
+   * attribute — `DeckSearchPanel.test.tsx`'s method for the same question about the tab beside it.
+   */
+  it("hands each tile to the drag adapter, carrying the card it draws", async () => {
+    const { container } = tab();
+    const art = await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    const tiles = [...container.querySelectorAll(`[${DND_SOURCE_ATTR}]`)];
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0]).toContainElement(art);
+
+    const drags = recordDrags();
+    // A box, because dnd-kit hit-tests by coordinate and jsdom measures every rect as zero.
+    const held = await startPointerDrag(boxed(tiles[0] as HTMLElement, 0));
+    expect(held.started).toBe(true);
+    await held.cancel();
+    drags.stop();
+
+    expect(drags.records.map(readDragData)).toEqual([
+      { kind: "search-card", cardId: LOOSE.cardId, name: LOOSE.name, typeLine: LOOSE.typeLine },
+    ]);
+  });
+
+  /**
+   * **A tile the Add button refuses is still a card to drag**, and that is #358's own route rather
+   * than a hole in its fence. The drop writes the deck's *list* (`deck_add_card`) and moves no
+   * copy, so it cannot put cardboard in a deck folder — which is the only thing the fence is about.
+   * It is the first half of the two-press route the refusal names: add the card, then file the
+   * copies.
+   */
+  it("lets a card this deck does not play be dragged into it", async () => {
+    collectionList.mockResolvedValue({ items: [UNPLAYED], total: 1 });
+    const { container } = tab();
+    await screen.findByRole("button", { name: /^Sol Ring is not in this deck/ });
+
+    const drags = recordDrags();
+    const tile = container.querySelector(`[${DND_SOURCE_ATTR}]`);
+    expect(tile).not.toBeNull();
+    const held = await startPointerDrag(boxed(tile as HTMLElement, 0));
+    expect(held.started).toBe(true);
+    await held.cancel();
+    drags.stop();
+
+    expect(drags.records.map(readDragData)).toEqual([
+      { kind: "search-card", cardId: "sol", name: "Sol Ring", typeLine: "Artifact" },
+    ]);
+  });
+
+  /**
+   * The tile's one control keeps its press — the same `data-no-drag` guard the card-search tab's
+   * Add button carries, and for the same reason: a press that slips a few pixels is a press. The
+   * art is a button too and is deliberately still a drag handle.
+   */
+  it("does not drag a tile when the press landed on its Add button", async () => {
+    const { container } = tab();
+    const add = await screen.findByRole("button", { name: /^Add Lightning Bolt/ });
+    const tile = container.querySelector(`[${DND_SOURCE_ATTR}]`)!;
+
+    const held = await startPointerDrag(boxed(tile as HTMLElement, 0), { pressOn: add });
+    expect(held.started).toBe(false);
+    await held.cancel();
+
+    const art = screen.getByRole("button", { name: "Lightning Bolt" });
+    const again = await startPointerDrag(boxed(tile as HTMLElement, 0), { pressOn: art });
+    // Asked while the drag is still up: `started` is a live reading of the manager's operation.
+    expect(again.started).toBe(true);
+    await again.cancel();
   });
 
   /**

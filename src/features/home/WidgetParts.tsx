@@ -1,6 +1,6 @@
 /**
  * The pieces every widget body is drawn from — a figure line, horizontal bars, a list of bordered
- * rows, a footer, a sentence — so nine bodies are one visual language rather than nine.
+ * rows, a footer, a sentence — so every body speaks one visual language rather than its own.
  *
  * **Drawn to the grid redesign (`Widget.dc.html`) and shared rather than restated**: a body that
  * wants a row draws a `WidgetRow`, and the day the design moves a row's padding it moves in one
