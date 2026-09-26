@@ -2089,7 +2089,12 @@ finds a NULL and every index plan measured for that list lost to the scan. The p
 `shelf_position`, an `instr` over one bound comma-wrapped string (`,3,0,12,`, from `shelf_order`)
 whose first occurrence keeps a shelf named twice at its first place. Each binds one string whatever
 the list's length, so a statement's text does not vary with it and nothing a caller sent is
-interpolated. `wishlist::wishlist_scope` calls the same builders over `w.folder_id`.
+interpolated. The wishlist shares all three over `w.folder_id`: `wishlist::wishlist_scope` calls
+`shelf_term`, and `wishlist::list_statements` binds `shelf_order` for `shelf_position`. Both
+halves are fenced where the page runs them: `a_list_without_the_unfiled_shelf_is_searched_through_the_folder_index`
+asserts `EXPLAIN QUERY PLAN` on `list_entries`' own count and page statements, and
+`a_list_naming_one_shelf_twice_answers_its_first_place` pins the first-occurrence rule — each with a
+wishlist twin.
 
 ### `collection_shelf_counts`
 
@@ -2195,19 +2200,28 @@ reached the same rule first.
 
 ### What the `shelves` query costs — measured 2026-09-26, in a test harness on Windows
 
-**Not in the shipped window.** Taken on Windows 11 Pro (AMD Ryzen 9 5900X), SQLite 3.53.2 bundled
-through rusqlite 0.40.1, at `3efd50b0`, by a temporary `#[ignore]` harness (`shelves_bench.rs`,
-since deleted) that called the crate's own functions on `db::open_read` after `prepare_database`.
+**Not in the shipped window.** Two measurements, both on the same Windows 11 Pro machine (AMD
+Ryzen 9 5900X) with SQLite 3.53.2 bundled through rusqlite 0.40.1, and both by a temporary
+`#[ignore]` harness (`shelves_bench.rs`, deleted after each) that called the crate's own functions
+on `db::open_read` after `prepare_database`:
+
+- **The first measurement, at `3efd50b0`** — the code before the fix.
+- **The re-measure, of the fix as committed in `0604eff0`** — taken from the working tree just
+  before that commit, with `collection.rs` at blob `a0f92a99` and `wishlist.rs` at `3dc09c83`,
+  which are the blobs the commit holds. The harness called `list_entries`, `shelf_counts` and
+  `summarise` as they stand and re-implemented nothing of the fix.
+
 **debug** is `cargo test`, the `tauri dev` profile; **release** is `cargo test --release`. Three
 warm-up calls, then twenty timed; every figure is a median. Two data sets, both byte copies of
 `src-tauri/target/debug/data/`: the real one — 277 entries in 7 folders, migrated from user v46 to
 v51 on the copy — and the same copy with 100,000 entries seeded into user tables only, 100,277 in
-all, 30,001 of them unfiled, 57 folders to depth 6, so the root sends 58 ids.
+all, 30,001 of them unfiled, 57 folders to depth 6, so the root sends 58 ids. The re-measure took
+fresh copies and re-seeded them from the same deterministic seed, and they came out identical.
 
 **The plan's gate was `shelves` at no more than 3× `rootOnly`'s median. The first measurement
 tripped it, and found a second regression the gate had not asked about:**
 
-| 100k copy, before the fix | debug | release |
+| 100k copy, before the fix (`3efd50b0`) | debug | release |
 | --- | --- | --- |
 | The root wall (58 ids) against `rootOnly` | 4.51× | 3.72× |
 | One folder four levels down, 120 rows, `shelves=[id]` against `folderId=id` | 25× | 33× |
@@ -2218,35 +2232,43 @@ paid a correlated `json_each` position lookup per row on top. **A folder below t
 PLAN` read `SCAN e` for every `shelves` statement against `SEARCH e USING INDEX idx_collection_folder`
 for `rootOnly` and `folderId`.
 
-**The fix is the two builder changes above, and no schema rung.** Each variant was timed as its
-count and page statements over the same rows, and asserted to answer the same total and the same
-first-page ids in the same order:
+**The fix is the two builder changes above, and no schema rung.** The harness first timed candidate
+variants of `list_entries`' own statements, string-edited and asserted to answer the same total and
+the same first-page ids in the same order. That **prediction** for the chosen pair was 2.79× (debug)
+and 2.70× (release) for the root wall and 1.06× and 0.98× for the deep folder, with `instr` alone
+taking the root wall's statements from 1643 to 1021 ms (debug) and from 1263 to 902 ms (release).
+An expression index on `coalesce(folder_id, 0)` was measured the same way and refused: it gained
+nothing the builder change does not, it cost 20–26% on the whole-root list, and it would have been
+a user-schema rung. **The re-measure of the committed code confirmed the prediction:**
 
-| 100k copy, after the fix | debug | release |
+| 100k copy, after the fix (`0604eff0`) | debug | release |
 | --- | --- | --- |
-| The root wall, against `rootOnly` | 1021 ms / 366 ms = **2.79×** | 902 ms / 334 ms = **2.70×** |
-| The 120-row folder, against `folderId` | 1.36 ms / 1.28 ms = **1.06×** | 0.835 ms / 0.856 ms = **0.98×** |
+| The root wall, against `rootOnly` | 1041.6 ms / 375.6 ms = **2.77×** | 916.0 ms / 339.4 ms = **2.70×** |
+| The 120-row folder, against `folderId` | 2.229 ms / 2.050 ms = **1.09×** | 1.048 ms / 1.006 ms = **1.04×** |
 
-**What is left of the root's ratio is row count.** The position lookup was most of the
-like-for-like cost, and `instr` alone took the root wall's statements from 1643 to 1021 ms (debug)
-and from 1263 to 902 ms (release) over the same rows. An expression index
-on `coalesce(folder_id, 0)` was measured and refused: it gained nothing the builder change does
-not, it cost 20–26% on the whole-root list, and it would have been a user-schema rung.
+**What is left of the root's ratio is row count.** Over the same 100,277 rows the root wall is now
+*faster* than a list with no folder term at all — the old Flatten query — at 0.93× (debug) and 0.90×
+(release) of it. The deep folder and its subtree plan `SEARCH e USING INDEX idx_collection_folder`
+again; the root list names `0` and scans by design; no plan shows a `MULTI-INDEX OR`.
 
-**On the real dev database the whole question is milliseconds.** The root's `shelves` list took
-4.0 ms debug and 2.1 ms release, and the list, the counts and the summary together 7.3 ms debug and
-4.0 ms release — medians taken **before** the fix, since the variants were timed on the 100k copy
-only.
+**On the real dev database the whole question is milliseconds, and its ratio is not the gate's.**
+After the fix the root's `shelves` list took 3.8 ms debug and 1.8 ms release, and the list, the
+counts and the summary together about 7.4 ms debug and 3.7 ms release. **It still reads about 12×
+`rootOnly` there** (12.6× debug, 12.2× release), and that is a row-count artefact rather than a
+regression: 277 rows against the 1 this database has unfiled. Over the same rows it is 1.23× and
+1.17×. So the gate passes at 100k and is simply not the right question at 277 rows — nobody should
+read it as passing everywhere.
 
 ⚠️ **Open: `collection_shelf_counts` is the largest read on a very large collection, and the fix
-does not touch it.** At the 100k root (58 shelves) it took **3.06 s debug and 2.44 s release**, and
-**`fill_peek` was 45% and 47% of that** (1.38 s and 1.15 s): the peek groups every scoped row by
-`(shelf, card_id)` and fetches `cards.name` for each before the window cuts to four. Inside a
-7-shelf, 8,813-row subtree it took 271 ms debug and 221 ms release; on the real database 2.2 ms and
-1.3 ms. The list, the counts and the summary all take the one `db_read` mutex, so they run in
-series. The likeliest next step — ask for a peek only for the shelves whose heading is shut, since
-only a shut heading draws one — changes `ShelfCount`'s contract across both pages, is not built,
-and has no figure behind it.
+does not touch it.** At the 100k root (58 shelves) it took **2.9 s debug and 2.5 s release** in the
+re-measure (3.06 s and 2.44 s in the first). **`fill_peek` was 45% and 47% of it in the first
+measurement** (1.38 s and 1.15 s) and was not timed apart in the re-measure: the peek groups every
+scoped row by `(shelf, card_id)` and fetches `cards.name` for each before the window cuts to four.
+Inside a 7-shelf, 8,813-row subtree it took 271 ms debug and 221 ms release (first measurement
+only); on the real database 2.6 ms and 1.3 ms after the fix. The list, the counts and the summary
+all take the one `db_read` mutex, so they run in series. The likeliest next step — ask for a peek
+only for the shelves whose heading is shut, since only a shut heading draws one — changes
+`ShelfCount`'s contract across both pages, is not built, and has no figure behind it.
 
 **Not driven in the shipped window when this section was written.** What only a live pass can
 see — the sticky bar tracking its shelf, a heading that scrolls in mid-drag arming, the fold anchor,
@@ -2281,24 +2303,36 @@ ring's — an inset ring cannot be clipped, a half-drawn focus indicator is a WC
 
 ## The wall's grain is the printing **and** the finish
 
+**History (2026-09-26):** on the collection page the folder joined the tile too. Its tiles key on
+`tileKeyOf(cardId, finish, folderId)` (`CollectionPage.tsx:1101`), so the same printing in two
+folders is a tile on each shelf, and only `foldCopies` — the deck editor's docked collection
+column — still keys on the printing and the finish alone (`collectionTiles.ts:185`). The ring is
+still the two-part key on both walls; on the collection wall it is a tile's own `ringKey`. See
+[A tile is one folder's](#a-tile-is-one-folders-the-eleventh-term-reaches-the-wall). Sentences below
+that this changed are corrected where they stand.
+
 2026-08-26, out of
 [2026-08-26-card-chin-and-exact-prices-design.md](../superpowers/specs/2026-08-26-card-chin-and-exact-prices-design.md).
 The storage grain has had eleven terms since v24 and did not move; what moved is what a **tile**
 is. A foil and a played nonfoil of one printing are two objects at two prices sharing only a set
-and a number, so they are two tiles — and every other grain term still merges. Condition, language
-and **folder** are all one object seen from more than one place, and the table beside the wall is
-where a reader gets those apart.
+and a number, so they are two tiles — and every other grain term merged. Condition, language and,
+until shelves, **folder** were all one object seen from more than one place, and the table beside
+the wall is where a reader gets those apart. Since shelves the collection page merges condition
+and language only; the deck editor's docked column still merges the folder too.
 
 **There are two folds of the collection into tiles, not one, and both split.** The collection page
 folds rows in `CollectionPage`'s `tiles` memo; the deck editor's docked Collection tab folds the
 same rows in `collectionTiles.ts`'s `foldCopies`. They were written apart and keyed the same way, so
 splitting one alone would have made two drawings of one collection disagree about what a tile *is*.
-Both key on `` `${cardId}:${finish}` `` now, through **one** `tileKeyOf`, in `src/lib/tileKey.ts`.
-Each fold stamps a tile with it and each wall builds the ring composite back out of the pane's card
-and finish with it, so the two ends of that ring cannot be two spellings of one string — both are
-plain `string` and nothing in the type system relates them, which is why a missed spelling would be
-a wall where pressing a tile rings nothing at all, silently and with nothing red. The `?? "nonfoil"`
-that makes the two ends meet is spelled there once, for both walls.
+Both keyed on `` `${cardId}:${finish}` `` from 2026-08-26, through **one** `tileKeyOf`, in
+`src/lib/tileKey.ts`; since shelves the collection page passes the folder as that function's third
+argument and `foldCopies` does not. Each wall builds the ring composite back out of the pane's card
+and finish with the two-part call, and each tile carries the same two-part string to be compared
+against it — the tile's key on the docked column, the tile's `ringKey` on the collection wall — so
+the two ends of that ring cannot be two spellings of one string. Both are plain `string` and nothing
+in the type system relates them, which is why a missed spelling would be a wall where pressing a
+tile rings nothing at all, silently and with nothing red. The `?? "nonfoil"` that makes the two ends
+meet is spelled there once, for both walls.
 
 **It was written out twice before that module existed, byte for byte, each copy carrying a doc
 block arguing that the duplication is what must not happen.** `src/lib/` is where the survivor went
@@ -2342,17 +2376,20 @@ a control acting on cardboard the reader is not pointing at, with the tile itsel
 rather than `tile.id`.
 
 **What is still a list rather than a single id is the point of that map.** One finish of one
-printing is still several rows — they differ in grade, in language and in folder — so a drag still
-hands a folder every one of them and the reader still answers which. The split narrowed *which* rows
-sit behind a picture; it did not turn the several into one. The two `cardId`s in the drag payload
-stay `tile.id` deliberately: a drop onto a **deck** is `deck_add_card(deckId, cardId, …)`, which
-names a printing and takes no finish, and the tile half's `cardId` is what a folder card and a
-breadcrumb caption say the reader is filing. Only the *rows* are the finish's.
+printing is still several rows — they differ in grade and in language, and until shelves in folder
+too — so a drag still hands a folder every one of them and the reader still answers which. The
+split narrowed *which* rows sit behind a picture; it did not turn the several into one. The two
+`cardId`s in the drag payload stay `tile.id` deliberately: a drop onto a **deck** is
+`deck_add_card(deckId, cardId, …)`, which names a printing and takes no finish, and the tile half's
+`cardId` is what a drop target and a breadcrumb segment say the reader is filing — a folder card
+until shelves, a heading since. Only the *rows* are the finish's.
 
 **`CardGrid` gained `GridCard.key` for this and nothing else changed on the other walls.** It
-defaults to `id`, so six of the seven walls pass none and are untouched. `id` stays what fetches the
-art, what a press opens and what `onSelect` is about; `key` is what the ring compares, what
-`data-grid-index` walks and what the picked set remembers.
+defaults to `id`, so a wall that passes none is untouched. `id` stays what fetches the
+art, what a press opens and what `onSelect` is about; `key` is what `data-grid-index` walks and what
+the picked set remembers, and what the ring compares — **unless a tile carries a `ringKey`**, which
+the collection wall's has since shelves (`CardGrid.tsx:1749`), so one printing on two shelves is two
+keys and one ring.
 
 **The open card's side of that composite is the store's `paneFinish`.** Two openers set it —
 `openCardAsFinish`, the collection wall's, and `openCardFromDeckSearch`, *widened* to carry the

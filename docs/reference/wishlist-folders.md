@@ -600,23 +600,26 @@ The collection's field one table over, and every rule of it holds: **present, it
 list position, then the sort, then `w.id`; an id no folder answers to matches nothing and refuses
 nothing; and **absent is the old answer** — the root, or everything when flattened — for every
 caller that does not send it. The term is the collection's builder over `w.folder_id`, so a list
-that leaves out `0` searches `idx_wishlist_folder` rather than scanning.
-`wishlist_shelves_win_over_folder_id_and_flatten`,
+that leaves out `0` plans `SEARCH w USING INDEX idx_wishlist_folder` and a list naming it scans —
+asserted on the list's own count and page statements by
+`a_wishlist_list_without_the_root_is_searched_through_the_folder_index`, the collection's test one
+table over. `wishlist_shelves_win_over_folder_id_and_flatten`,
 `wishlist_an_unknown_shelf_id_returns_no_rows_and_no_error` and
-`a_wishlist_query_without_shelves_answers_exactly_what_it_did_before` are the fences.
+`a_wishlist_query_without_shelves_answers_exactly_what_it_did_before` are the other fences.
 
 **The page sends two lists, as the collection does** (`useWishlist.ts:247-255`): the list asks for
 the open shelves (`fetchIds`, `:339`), and the counts, the export sweep and the optimise sweep ask
 for every shelf at and below the level (`countIds`, riding `filters` at `:298`). Nothing is asked
 until the folder list has answered (`ready`, `:256`).
 
-**Measured only on the real dev database, and only before the fix**, in the collection's harness
-(Windows, 2026-09-26; medians of twenty): 89 wishes, 87 of them at the root and 2 in one folder.
-`wishlist_list` with `shelves=[0, 1]` took 1.78 ms debug and 0.91 ms release, against 1.57 ms and
-0.81 ms for the pre-shelves root read of 87 rows and 1.65 ms and 0.84 ms for a flattened read of the same
-89; `wishlist_shelf_counts` for that list took 0.92 ms and 0.54 ms. The 100,000-entry copy seeded
-no wishes, so the wishlist has no figure at scale — the builders are the collection's, and so is
-the fix.
+**Timed only on the real dev database, and only in the first measurement** (`3efd50b0`, before the
+fix; the collection's harness, Windows, 2026-09-26, medians of twenty): 89 wishes, 87 of them at
+the root and 2 in one folder. `wishlist_list` with `shelves=[0, 1]` took 1.78 ms debug and 0.91 ms
+release, against 1.57 ms and 0.81 ms for the pre-shelves root read of 87 rows and 1.65 ms and
+0.84 ms for a flattened read of the same 89; `wishlist_shelf_counts` for that list took 0.92 ms and
+0.54 ms. The re-measure of the fix timed no wishlist case, and the 100,000-entry copy seeded no
+wishes, so the wishlist has no figure at scale and none after the fix — the builders are the
+collection's, and so is the fix.
 
 ### `wishlist_shelf_counts`
 
@@ -654,8 +657,10 @@ un-counted to own up to. `Total cost` reads `—` while the wall holds no wishes
 which `buildShelves` draws **at the root only**, under a `Managed by decks` label, by name, and shut
 by default. A managed heading draws its chevron, its title, a **Managed** pill
 (`ShelfHeading.tsx:308-315`) and its figures, and **nothing a hand write could be refused for** —
-no Add folder, no Rename, no `⋯`, no drag, and no card target that arms, because `canFile` refuses a
-managed destination (`WishlistPage.tsx:1474-1566`). **An empty managed folder keeps its heading**,
+no Add folder, no Rename, no `⋯`, no drag, and no card target that arms. `renderHeading` wires the
+first four only for a reader's own folder (`WishlistPage.tsx:1474-1566`), and every heading's card
+target comes from `cardDrops` (`:1460-1467`), which asks `canFile` — and `canFile` refuses a managed
+destination (`:1101-1109`). **An empty managed folder keeps its heading**,
 because a deck whose plan asks for nothing more is good news rather than a hidden shelf. The table
 draws `MANAGED_EMPTY` (*Nothing missing — this deck has every card its plan asks for.*) under it
 (`:1570-1578`); the grid draws the heading alone, since `layoutShelves` gives an empty row only to a
