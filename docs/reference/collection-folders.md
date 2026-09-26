@@ -556,9 +556,14 @@ sentence in this module's existing grammar rather than a `CHECK` or a constraint
 is what that press does: it
 [re-files every card in the sub-tree to the root](#delete_folder-re-files-one-row-at-a-time), which
 silently undoes exactly the filing the lock was protecting. A subfolder of a locked parent is
-refused for the same reason, because it scatters the same cards. The check is the **first** thing
-the function does, before its own transaction, and `effectively_locked` answers `false` for an id
-nothing answers to — so "a folder that is not there is a success" survives being asked second.
+refused for the same reason, because it scatters the same cards. **So is an unlocked folder with a
+locked one anywhere beneath it** — `FOLDER_HOLDS_LOCKED`, *"A folder inside that one is locked.
+Unlock it before deleting this one."* — because deleting `Binder` re-files a locked `Binder/Graded`
+exactly as deleting `Graded` would; that check asks the same `doomed` sub-tree the re-filing walks
+(`DOOMED_FOLDERS`). Both checks come **first**, before the function's own transaction, and each
+answers `false` for an id nothing answers to — so "a folder that is not there is a success"
+survives being asked second. The menu greys `Delete…` for all three, naming *unlock it first*, *a
+folder above it is locked* or *a folder inside it is locked*.
 
 **Rename and move do not refuse, and that is a decision rather than an omission.** Neither disturbs
 a card. A drawer the reader could not re-title or re-file would be a lock on the *folder*, where
@@ -681,7 +686,7 @@ management purposes" means:
 | `deck_theory::OWNED_SPARE_SQL` | The bracket estimate's spare count — *what can this plan count on.* |
 | `collection_source::Availability::ForDeck` | The deck's card search, its `×N` and its Owned chip (#349). |
 | `share::snapshot`'s `LOCKED_FOLDER_IDS` | What a published snapshot carries. A share refuses a locked folder outright and drops every locked drawer inside what it does publish. |
-| `delete_folder`'s `FOLDER_IS_LOCKED` | The one folder write that is refused, because it re-files the sub-tree to the root. |
+| `delete_folder`'s `FOLDER_IS_LOCKED` and `FOLDER_HOLDS_LOCKED` | The one folder write that is refused — on a lock at, above or anywhere beneath the folder pressed — because it re-files the sub-tree to the root. |
 
 **Absence stopped saying "set aside", so a mark had to start**, and the swap is the whole of the
 UI side. A copy in a locked drawer is drawn wearing a `Lock`:
@@ -1425,9 +1430,10 @@ depends on `PRAGMA foreign_keys` being ON**, which is per-connection; `db::open`
 connection the app hands out, and a test that opens its own has to say so itself.
 
 An id that resolves to nothing is a **success**, `deck_meta::delete_folder`'s rule: the caller
-wanted that folder gone, and it is gone. **Two ids are not**: a folder the app owns
+wanted that folder gone, and it is gone. **Two kinds of id are not**: a folder the app owns
 (`FOLDER_NOT_YOURS`), and — since v33 — one the reader has set aside (`FOLDER_IS_LOCKED`, on the
-*effective* lock, asked before this function's own transaction opens). The second is this whole
+*effective* lock, or `FOLDER_HOLDS_LOCKED`, on a lock anywhere in its sub-tree — both asked before
+this function's own transaction opens). The second is this whole
 section read as a refusal: what a delete does to a locked folder is scatter its sub-tree to the
 root, which is exactly the filing the lock was protecting. See
 [the lock](#the-lock-stops-the-app-offering-and-never-stops-the-reader-reaching); the "not there is
@@ -1778,22 +1784,30 @@ only while that pragma happens to be on.
 | The folder is the app's | `That folder is the app's own and is not yours to change.` (`FOLDER_NOT_YOURS`) | Every write, both ends |
 | The card is in a deck | `Those copies are in a deck. Cut the card from the deck to get them back.` (`ENTRY_IN_A_DECK`) | `set_entry_folder`, on the row it was given |
 | The folder is set aside | `That folder is locked. Unlock it before deleting it.` (`FOLDER_IS_LOCKED`) | `delete_folder` only, on the **effective** lock |
+| A folder inside it is set aside | `A folder inside that one is locked. Unlock it before deleting this one.` (`FOLDER_HOLDS_LOCKED`) | `delete_folder` only, on any folder in the sub-tree it re-files |
 
 The first two are borrowed from `deck_meta` rather than re-spelled — a reader who has met "That
 folder is not there any more." in the deck gallery and on the wishlist must meet the same sentence
 here, and `deck_meta::CATEGORY_WRONG_DECK`'s doc is the standing rule that a second copy of a
 refusal is a second thing to drift.
 
-**The last three are local, because each is a fact this cabinet has and the other two do not.**
+**`FOLDER_HOLDS_LOCKED` is the lock refusal read downward**: the delete re-files every folder
+beneath the one pressed, so a locked `Binder/Graded` is scattered by deleting `Binder` exactly as
+by deleting `Graded`. It asks the same `doomed` sub-tree the re-filing walks
+(`DOOMED_FOLDERS`), and the menu greys `Delete…` with *a folder inside it is locked* before the
+press can reach it.
+
+**The last four are local, because each is a fact this cabinet has and the other two do not.**
 `deck_folders` and `wishlist_folders` carry no `kind` column at all and no `locked` one either, so
 there is no sentence in either module to reach for. And the schema could not say any of it anyway:
 the DDL CHECKs that a `deck` folder names a deck and that the kind is one of three, but nothing in
 it says who may *edit* a row, or whose copies a row is holding, or which drawer the reader has set
 aside — and a CHECK that could would fire as `CHECK constraint failed: collection_folders`.
 
-**`FOLDER_IS_LOCKED` is on exactly one write, and the narrowness is the decision**
-([the lock](#the-lock-stops-the-app-offering-and-never-stops-the-reader-reaching)): a delete
-scatters the sub-tree to the root and undoes the filing the lock was protecting, where rename and
+**`FOLDER_IS_LOCKED` and `FOLDER_HOLDS_LOCKED` are on exactly one write, and the narrowness is
+the decision** ([the lock](#the-lock-stops-the-app-offering-and-never-stops-the-reader-reaching)):
+a delete scatters the whole sub-tree to the root and undoes the filing the lock was protecting —
+whether the lock is on the folder pressed, above it or below it — where rename and
 move disturb no card at all and `set_entry_folder` must go on filing copies in and out — the issue
 asked for that in as many words.
 
@@ -2423,7 +2437,7 @@ build, not a description of this one.
 | Path | What is in it |
 | --- | --- |
 | `src-tauri/src/schema.rs` | The v24 and v25 steps, the v34 rung that adds `locked`, the v36 rung that sweeps every `kind = 'deck'` folder to the exact-grain rule, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `UNDO_V34`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
-| `src-tauri/src/collection_folders.rs` | The folder commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `set_folder_locked`, `LOCKED_FOLDER_IDS` and `effectively_locked` (the lock's inheritance, spelled once), `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK`, `FOLDER_IS_LOCKED` |
+| `src-tauri/src/collection_folders.rs` | The folder commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `set_folder_locked`, `LOCKED_FOLDER_IDS` and `effectively_locked` (the lock's inheritance, spelled once), `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK`, `FOLDER_IS_LOCKED`, `FOLDER_HOLDS_LOCKED` and the `DOOMED_FOLDERS` sub-tree it and the delete share |
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the pair that moves a row across the deck boundary and back — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/deck_pull.rs` | The third crossing (2026-09-03, issue #351): `deck_pull_plan` and `deck_pull_from_collection` — filling a hole the list already declares, writing no `deck_cards` row. Candidate eligibility, the pre-pick order, the all-or-nothing batch, and the `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has) |
 | `src-tauri/src/deck_quick_add.rs` | The fourth crossing (2026-09-03, issue #350): `deck_quick_add_wishes` and `deck_quick_add_to_collection` — the only one that *creates* a row rather than moving one. The seven-step order, `WISH_GONE` and `WISH_WRONG_CARD`, the wishlist predicate and why it drops the any-printing arm, and the fourth `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-quick-add-recording-cardboard-nobody-had-written-down) |

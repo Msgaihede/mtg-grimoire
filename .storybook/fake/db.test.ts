@@ -4679,6 +4679,28 @@ describe("the collection's folders", () => {
     expect(db.collectionEntries.map((e) => e.folderId)).toEqual([1, null]);
   });
 
+  /** `collection_folders::FOLDER_HOLDS_LOCKED` — the same refusal read **downward**. Deleting
+   *  `Binder` re-files everything under it, so a locked `Trade binder` inside it is scattered by
+   *  that press as surely as by its own. */
+  it("refuses to delete a folder with a locked folder inside it", () => {
+    const db = filed({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, folderId: 2 })],
+    });
+    const w = writeHandlers(db);
+    w.collection_folder_set_locked({ id: 2, locked: true });
+
+    expect(() => w.collection_folder_delete({ id: 1 })).toThrow(
+      /A folder inside that one is locked\. Unlock it before deleting this one\./,
+    );
+    expect(db.collectionFolders).toHaveLength(2);
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([2]);
+
+    w.collection_folder_set_locked({ id: 2, locked: false });
+    w.collection_folder_delete({ id: 1 });
+    expect(db.collectionFolders).toEqual([]);
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([null]);
+  });
+
   /**
    * Everything a lock does **not** refuse, asserted together because each of them being allowed
    * is a decision rather than an oversight.

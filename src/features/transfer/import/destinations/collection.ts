@@ -18,6 +18,7 @@
  */
 import { normalizeCondition, type Condition } from "@/lib/conditions";
 import type { CollectionImportItem, DeckFinish, ImportResolveRow } from "@/lib/ipc";
+import { parsePurchasePrice } from "@/lib/prices";
 import type { ParsedList } from "../parse";
 import type { HintMiss, UnmatchedLine } from "./deck";
 
@@ -43,11 +44,20 @@ export interface UnknownCondition {
   said: string;
 }
 
+/**
+ * A line whose `Purchase price` cell said something {@link parsePurchasePrice} refused — the
+ * {@link UnknownCondition} row's reasoning one column over. The copy still lands, with no price;
+ * silence here would be indistinguishable from a file with no price column at all. `said` is the
+ * cell verbatim and never empty: a blank cell never reaches `extra`.
+ */
+export type UnreadablePrice = UnknownCondition;
+
 export interface CollectionPlan {
   items: CollectionImportItem[];
   unmatched: UnmatchedLine[];
   hintMisses: HintMiss[];
   unknownConditions: UnknownCondition[];
+  unreadablePrices: UnreadablePrice[];
   parseIssues: ParsedList["issues"];
   /** Copies that will actually land — not `ParsedList.totalCards`, which counts lines
    *  nothing resolved. */
@@ -63,6 +73,7 @@ export function planCollectionImport(
   const unmatched: UnmatchedLine[] = [];
   const hintMisses: HintMiss[] = [];
   const unknownConditions: UnknownCondition[] = [];
+  const unreadablePrices: UnreadablePrice[] = [];
   // Keyed on the part of the collection's grain an import can produce — {@link grainKey}, which
   // is where the two terms it cannot produce are argued. A file naming the same grain twice is
   // one intention said twice: under `add` it would double-count, and under `set` the second line
@@ -132,6 +143,12 @@ export function planCollectionImport(
       serialNumber,
       grading,
     });
+    // Read before the fold, so a refused cell is said whichever line of a folded pair it sat on.
+    const saidPrice = textOrUndefined(line.extra.purchasePrice);
+    const purchasePrice = saidPrice === undefined ? undefined : parsePurchasePrice(saidPrice);
+    if (saidPrice !== undefined && purchasePrice === undefined) {
+      unreadablePrices.push({ lineNumber: line.lineNumber, name: line.name, said: saidPrice });
+    }
     const seen = folded.get(key);
     if (seen !== undefined) {
       seen.quantity += line.quantity;
@@ -150,7 +167,7 @@ export function planCollectionImport(
       misprint,
       serialNumber,
       grading,
-      purchasePrice: numberOrUndefined(line.extra.purchasePrice),
+      purchasePrice,
       purchaseCurrency: line.extra.purchaseCurrency,
       acquiredAt: line.extra.acquiredAt,
       acquisitionSource: line.extra.acquisitionSource,
@@ -164,6 +181,7 @@ export function planCollectionImport(
     unmatched,
     hintMisses,
     unknownConditions,
+    unreadablePrices,
     parseIssues: list.issues,
     totalCards: items.reduce((n, i) => n + i.quantity, 0),
   };
@@ -266,24 +284,6 @@ function flagOf(raw: string | undefined): boolean {
 function textOrUndefined(raw: string | undefined): string | undefined {
   const cleaned = (raw ?? "").trim();
   return cleaned === "" ? undefined : cleaned;
-}
-
-/**
- * A price cell, read the way a spreadsheet actually writes one — a currency symbol in front, a
- * thousands separator inside — rather than the bare number `Number.parseFloat` alone can read.
- *
- * `Number.parseFloat("$4.50")` is `NaN`: it stops at the first character that cannot start a
- * number, and `$` cannot. Both TCGplayer's and Deckbox's own CSV exports write a symbol prefix,
- * so a purchase price coming back from either was dropped on every row rather than a rare one.
- * Only `$`, `€`, `£` and a comma are stripped — the currencies this app's own `formatPrice`
- * knows — so a cell this cannot make sense of still falls through to `NaN` rather than being
- * guessed at.
- */
-function numberOrUndefined(raw: string | undefined): number | undefined {
-  if (raw === undefined) return undefined;
-  const cleaned = raw.trim().replace(/[$€£,]/g, "");
-  const n = Number.parseFloat(cleaned);
-  return Number.isFinite(n) ? n : undefined;
 }
 
 /** The printing a line was answered with, as a card prints it — `deck.ts`'s own `printingOf`,
