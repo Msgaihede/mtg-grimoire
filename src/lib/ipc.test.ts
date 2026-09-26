@@ -25,6 +25,7 @@ import combosRs from "../../src-tauri/src/combos.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
 import deckpaneRs from "../../src-tauri/src/deckpane.rs?raw";
 import decksortRs from "../../src-tauri/src/decksort.rs?raw";
+import deckCompletionRs from "../../src-tauri/src/deck_completion.rs?raw";
 import deckMetaRs from "../../src-tauri/src/deck_meta.rs?raw";
 import deckMissingRs from "../../src-tauri/src/deck_missing.rs?raw";
 import deckNotesRs from "../../src-tauri/src/deck_notes.rs?raw";
@@ -51,6 +52,7 @@ import startviewRs from "../../src-tauri/src/startview.rs?raw";
 import stickyNotesRs from "../../src-tauri/src/sticky_notes.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
+import upcomingSetsRs from "../../src-tauri/src/upcoming_sets.rs?raw";
 import valueHistoryRs from "../../src-tauri/src/value_history.rs?raw";
 import wishlistFoldersRs from "../../src-tauri/src/wishlist_folders.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
@@ -3037,6 +3039,58 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **Round two's three reads** (2026-09-26) — Deck completion, To review's deck-card count and
+   * Coming soon — pinned on the day they were written, one case because they are one page's worth.
+   *
+   * Three traps, one per command. `deck_completion` takes `marketplace` alone, `deck_values`' shape
+   * one read over, and a wrapper copied from `price_movers` would send three more keys Tauri has
+   * nowhere to put. `deck_review_count` takes **no arguments**, `set_completion`'s trap: an argument
+   * object sent to a command that declares only the managed state is a deserialisation error, not a
+   * type error. And `upcoming_sets` takes `days` — `new_printings`' own word for its window — where
+   * a wrapper copied from `recent_cards` would send `limit` and read an empty feed as "nothing
+   * announced".
+   *
+   * **The registrations are asserted too**, because a command the handler list forgot answers
+   * `unknown command` at run time with both suites green.
+   */
+  it("sends round two's three reads under the names their commands declare", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    for (const [name, src] of [
+      ["deck_completion.rs", deckCompletionRs],
+      ["upcoming_sets.rs", upcomingSetsRs],
+    ] as const) {
+      expect(src.length, `${name} was not read`).toBeGreaterThan(1_000);
+    }
+    const declares = (src: string, command: string, param: string) =>
+      expect(src, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+
+    invoke.mockResolvedValue([]);
+    await ipc.deckCompletion("cardkingdom");
+    expect(invoke).toHaveBeenCalledWith("deck_completion", { marketplace: "cardkingdom" });
+    declares(deckCompletionRs, "deck_completion", "marketplace");
+
+    invoke.mockResolvedValue(2);
+    await ipc.deckReviewCount();
+    expect(invoke).toHaveBeenCalledWith("deck_review_count");
+    expect(deckCompletionRs).toContain("fn deck_review_count(");
+
+    invoke.mockResolvedValue({ today: "2026-09-26", sets: [] });
+    await ipc.upcomingSets(90);
+    expect(invoke).toHaveBeenCalledWith("upcoming_sets", { days: 90 });
+    declares(upcomingSetsRs, "upcoming_sets", "days");
+
+    for (const registered of [
+      "deck_completion::deck_completion,",
+      "deck_completion::deck_review_count,",
+      "upcoming_sets::upcoming_sets,",
+    ]) {
+      expect(desktopRs).toContain(registered);
+    }
+  });
+
+  /**
    * **The sticky notes' five** (user schema v46), pinned on the day they were written — one case,
    * because they are one widget's worth of commands and the traps are one family's.
    *
@@ -4881,6 +4935,20 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["NewPrintingDeck", newPrintingsRs, "NewPrintingDeck"],
     ["NewPrinting", newPrintingsRs, "NewPrinting"],
     ["NewPrintings", newPrintingsRs, "NewPrintings"],
+    // **Round two's three** (2026-09-26): `DeckCompletion` from `deck_completion.rs`, and
+    // `UpcomingSet` nested inside `UpcomingSets` from `upcoming_sets.rs` — two rows for that one
+    // command for `PriceMovers`' reason, since a field renamed inside a set leaves the outer struct
+    // agreeing while every row reads `undefined`. Here and not on `mirrors`: no picture, and none
+    // reaches ten fields.
+    //
+    // Every drift is the quiet kind. A renamed `missingCost` is `undefined`, which is not `null`,
+    // so a deck's cost draws `NaN` where an em dash belongs; a renamed `wanted` makes every ratio
+    // `NaN` and the order meaningless; a renamed `today` leaves the page no day to count *in N
+    // days* from; and a renamed `inDecks` is `undefined`, so a caption's last clause never draws —
+    // which is exactly what a set with no deck cards in it looks like.
+    ["DeckCompletion", deckCompletionRs, "DeckCompletion"],
+    ["UpcomingSet", upcomingSetsRs, "UpcomingSet"],
+    ["UpcomingSets", upcomingSetsRs, "UpcomingSets"],
     ["WishlistSummary", wishlistRs, "WishlistSummary"],
     // Defined in `collection.rs` and imported by `wishlist.rs` — one struct for two commands, so
     // one row here rather than two, and a second definition in the wishlist would be the drift

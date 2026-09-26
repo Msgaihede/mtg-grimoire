@@ -518,6 +518,7 @@ describe("the seeded rows agree with the cards they name", () => {
     virtualDeck: true,
     paired: true,
     shared: true,
+    waiting: true,
   } satisfies Record<SeedName, true>) as SeedName[];
 
   it.each(names)("%s denormalises set, collector and language faithfully", (name) => {
@@ -675,6 +676,36 @@ describe("the seeded rows agree with the cards they name", () => {
     // arrives connected, and `paired` deliberately does not.
     expect(db.supporter.status).toBe("active");
     expect(db.pairing.group).not.toBeNull();
+  });
+
+  /**
+   * **`waiting` is `needsReview` plus two things and nothing else** — a Recently removed row and
+   * the unreleased printings — so every story on it sees exactly the decks, wishes and flagged rows
+   * a `needsReview` story sees, and the corpus is the generated one with seven rows appended rather
+   * than a different one.
+   */
+  it("waiting is needsReview plus a Recently removed row and seven unreleased printings", () => {
+    const base = seed("needsReview");
+    const db = seed("waiting");
+    const today = new Date(CLOCK_BASE * 1_000).toISOString().slice(0, 10);
+
+    expect(db.cards.slice(0, base.cards.length)).toEqual(base.cards);
+    const extra = db.cards.slice(base.cards.length);
+    expect(extra).toHaveLength(7);
+    for (const card of extra) {
+      expect(card.releasedAt > today, card.id).toBe(true);
+      expect(
+        base.cards.some((c) => c.id === card.id),
+        card.id,
+      ).toBe(false);
+    }
+    expect(db.collectionEntries.slice(0, base.collectionEntries.length)).toEqual(
+      base.collectionEntries,
+    );
+    expect(db.collectionEntries).toHaveLength(base.collectionEntries.length + 1);
+    expect(db.decks).toEqual(base.decks);
+    expect(db.deckCards).toEqual(base.deckCards);
+    expect(db.wishlistEntries).toEqual(base.wishlistEntries);
   });
 
   /**

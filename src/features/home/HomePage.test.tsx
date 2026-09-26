@@ -45,9 +45,15 @@ vi.mock("./widgets/SummaryWidget", () => ({
   SummaryWidget: stubs.body,
   SummaryWidgetSettings: stubs.settings,
 }));
+/**
+ * **A settings stub that says something**, `NewPrintingsWidget`'s below and for its reason: the
+ * page hands `DecksWidgetSettings` to two kinds — `decks`, and `deckCompletion`, which reuses the
+ * pin checklist rather than copying it — so a missing `renderExtraSettings` arm must be a sentence
+ * that is absent rather than a `null` that looks the same either way.
+ */
 vi.mock("./widgets/DecksWidget", () => ({
   DecksWidget: stubs.body,
-  DecksWidgetSettings: stubs.settings,
+  DecksWidgetSettings: () => "the deck pin picker",
 }));
 vi.mock("./widgets/FoldersWidget", () => ({
   FoldersWidget: stubs.body,
@@ -61,9 +67,13 @@ vi.mock("./widgets/RecentCardsWidget", () => ({ RecentCardsWidget: stubs.body })
 vi.mock("./widgets/SetCompletionWidget", () => ({ SetCompletionWidget: stubs.body }));
 vi.mock("./widgets/PriceMoversWidget", () => ({ PriceMoversWidget: stubs.body }));
 vi.mock("./widgets/StickyNotesWidget", () => ({ StickyNotesWidget: stubs.body }));
+vi.mock("./widgets/DeckCompletionWidget", () => ({ DeckCompletionWidget: stubs.body }));
+vi.mock("./widgets/ToReviewWidget", () => ({ ToReviewWidget: stubs.body }));
+vi.mock("./widgets/WishlistSavingsWidget", () => ({ WishlistSavingsWidget: stubs.body }));
+vi.mock("./widgets/ComingSoonWidget", () => ({ ComingSoonWidget: stubs.body }));
 
 /**
- * **The one mock whose settings stub says something.**
+ * **A settings stub that says something**, as `DecksWidget`'s above does for the pin checklist.
  *
  * Both of the page's switches are over `widget.kind`, which is a free `string` with a `default`
  * arm — so a missing `case` compiles, type-checks and draws `UnknownWidgetBody` in silence. The
@@ -236,6 +246,55 @@ describe("HomePage", () => {
     await customize(user);
     await user.click(screen.getByRole("button", { name: "Settings for New printings" }));
     expect(await screen.findByText("the new printings pickers")).toBeInTheDocument();
+  });
+
+  /**
+   * **The four kinds of round two, through the same two switches** — four `renderBody` arms and
+   * one `renderExtraSettings` arm. The previous case's argument holds for each: a forgotten `case`
+   * is not a type error, so the placeholder's sentence is asserted absent as well as the body
+   * present, and `deckCompletion`'s popover must carry the Decks widget's own checklist.
+   */
+  it("draws the four round-two bodies, and Deck completion's pin checklist, through the two switches", async () => {
+    const user = userEvent.setup();
+    mount(
+      layoutOf(
+        widget({ id: "dc", kind: "deckCompletion", x: 0, y: 0, w: 3, h: 3 }),
+        widget({ id: "tr", kind: "toReview", x: 3, y: 0, w: 2, h: 3 }),
+        widget({ id: "ws", kind: "wishlistSavings", x: 5, y: 0, w: 3, h: 3 }),
+        widget({ id: "cs", kind: "comingSoon", x: 0, y: 3, w: 4, h: 2 }),
+      ),
+    );
+
+    for (const id of ["dc", "tr", "ws", "cs"]) {
+      expect(screen.getByText(`Body of ${id}`)).toBeInTheDocument();
+    }
+    expect(screen.queryByText(/came from a newer version/)).toBeNull();
+
+    await customize(user);
+    await user.click(screen.getByRole("button", { name: "Settings for Deck completion" }));
+    expect(await screen.findByText("the deck pin picker")).toBeInTheDocument();
+  });
+
+  /** Each new kind is in the catalogue, previewed as its own body told it is still. */
+  it("offers the four round-two kinds in the catalogue, each previewed still", async () => {
+    const user = userEvent.setup();
+    mount(layoutOf());
+
+    await user.click(screen.getByRole("button", { name: "Add widget" }));
+    const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+
+    for (const [kind, label] of [
+      ["deckCompletion", "Deck completion"],
+      ["toReview", "To review"],
+      ["wishlistSavings", "Wishlist savings"],
+      ["comingSoon", "Coming soon"],
+    ] as const) {
+      expect(within(dialog).getByRole("button", { name: `Add ${label}` })).toBeInTheDocument();
+      expect(within(dialog).getByText(`Body of preview-${kind}`)).toBeInTheDocument();
+      expect(handed.get(`preview-${kind}`)).toEqual(
+        expect.objectContaining({ still: true, editing: false }),
+      );
+    }
   });
 
   it("places each box on its own cells and hands its body the footprint in pixels", () => {

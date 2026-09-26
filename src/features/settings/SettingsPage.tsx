@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BackupPanel } from "@/features/settings/BackupPanel";
 import { CachePanel } from "@/features/settings/CachePanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
@@ -14,13 +14,21 @@ import { SyncPanel } from "@/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { WebStoragePanel, useWebStorage } from "@/features/settings/WebStoragePanel";
-import { visiblePanels, type BadgeId, type GroupId, type PanelId } from "@/features/settings/nav";
+import {
+  PANELS,
+  visiblePanels,
+  type BadgeId,
+  type GroupId,
+  type PanelId,
+} from "@/features/settings/nav";
 import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
 import { useHiddenTags } from "@/features/settings/useHiddenTags";
 import { SettingsSection } from "@/features/settings/panelChrome";
 import { count } from "@/lib/counts";
+import { holdInView } from "@/lib/holdInView";
 import { ipc } from "@/lib/ipc";
 import { REVIEW_KEY } from "@/lib/query";
+import { useAppStore } from "@/lib/store";
 import type { Update } from "@/lib/useUpdate";
 import { useErrorLog } from "@/lib/useErrorLog";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -49,6 +57,18 @@ export function imageFailureLine(failures: number | undefined): string {
     `${count(failures)} card image${failures === 1 ? "" : "s"} could not be saved there ` +
     "this session — the folder may be read-only or full."
   );
+}
+
+/**
+ * A stored word as one of this page's panels, or `null` for a word it has none for.
+ *
+ * `store.ts` keeps `pendingSettingsPanel` a plain `string` so it needs nothing from this feature,
+ * and this is the other half of that bargain: the narrowing lives here, beside the panels. **An
+ * `includes` over the panels' own keys and never `word in PANELS`**, `isWidgetKind`'s reason —
+ * `in` walks the prototype and would take `"constructor"` for a panel.
+ */
+function asPanelId(word: string): PanelId | null {
+  return (Object.keys(PANELS) as string[]).includes(word) ? (word as PanelId) : null;
 }
 
 /**
@@ -128,6 +148,62 @@ export function SettingsPage({ update }: { update: Update }) {
    * ancestor happens to carry the `overflow`.
    */
   const root = useRef<HTMLDivElement>(null);
+  /**
+   * **The panel another page asked this one to bring into view** — `store.ts`'s
+   * `pendingSettingsPanel`, whose only writer is the home page's To review widget sending a reader
+   * to Needs review.
+   *
+   * `CollectionPage`'s `pendingFolder` arrangement: a render-phase adjustment rather than a mount
+   * effect, so the pane draws the group that holds the panel on its first commit with no frame of
+   * `Updates` and no `setState` in an effect body; and spent by the effect below whether or not it
+   * named a panel, so a word this page has none for is **dropped** rather than left to fire on a
+   * later visit. The query goes with it, `pickGroup`'s rule, **even where the rail already stands
+   * on that group**: a query outranks the group, so a panel arriving under one would be a press that
+   * visibly did nothing.
+   *
+   * **The effect then brings the panel to the top of the pane and holds it there while the page
+   * settles** — `holdInView`, `pickGroup`'s scroll aimed at the panel and repeated. The group alone
+   * was not enough: Needs review is the second panel under `Sync`, below a Sync panel tall enough to
+   * hold it off the screen, and the first pass (2026-09-26, 1920×1080) found its heading at y=976
+   * and its rows below the fold. **One scroll was not enough either**, which the re-check found the
+   * same day: on a first visit the Sync panel's reads have not answered when the group is drawn,
+   * the page is too short to scroll at all, and the panel grew 437 → 824px afterwards and pushed
+   * Needs review back down to y=976. So the hold re-aligns on every size change of the page root or
+   * the panel, and lets go at the reader's first key, press, wheel or touch, or after its window.
+   * The panel is found by its heading's id, which `nav.ts` guarantees is the panel's own
+   * `SettingsSection` stem.
+   *
+   * **The release is kept in a ref and never returned as the effect's cleanup**: spending the
+   * hand-off re-runs this effect with `pendingPanel` null, and a returned cleanup would end the hold
+   * on the very next commit. It ends on the reader, the window, a second hand-off, a group picked on
+   * the rail, or the page unmounting (the effect below).
+   */
+  const pendingPanel = useAppStore((s) => s.pendingSettingsPanel);
+  const clearPendingPanel = useAppStore((s) => s.clearPendingSettingsPanel);
+  const askedPanel = pendingPanel === null ? null : asPanelId(pendingPanel);
+  const askedGroup = askedPanel === null ? null : PANELS[askedPanel].group;
+  if (askedGroup !== null && (group !== askedGroup || query !== "")) {
+    setGroup(askedGroup);
+    if (query !== "") setQuery("");
+  }
+  const releaseHold = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (pendingPanel === null) return;
+    clearPendingPanel();
+    const panel = asPanelId(pendingPanel);
+    if (panel === null) return;
+    const section = root.current?.querySelector(`#${panel}-heading`)?.closest("section");
+    if (section === null || section === undefined || root.current === null) return;
+    releaseHold.current?.();
+    releaseHold.current = holdInView(section, [root.current]);
+  }, [pendingPanel, clearPendingPanel]);
+  useEffect(
+    () => () => {
+      releaseHold.current?.();
+      releaseHold.current = null;
+    },
+    [],
+  );
 
   const log = useErrorLog();
   const marketplace = useMarketplace();
@@ -196,6 +272,10 @@ export function SettingsPage({ update }: { update: Update }) {
    * a lie about the environment into shipped code to keep a test quiet.
    */
   const pickGroup = (id: GroupId) => {
+    // A reader's own press lands them somewhere else, so a panel still held from a hand-off is
+    // let go — the press already did that through the window listener; this says so here too.
+    releaseHold.current?.();
+    releaseHold.current = null;
     setGroup(id);
     setQuery("");
     root.current?.scrollIntoView?.({ block: "start" });

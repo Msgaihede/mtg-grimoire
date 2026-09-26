@@ -15,6 +15,7 @@ import {
   WIDGETS,
   type BreakdownDimension,
   type WidgetKind,
+  type WidgetPick,
 } from "./widgets";
 
 /**
@@ -38,6 +39,10 @@ const EVERY_KIND: Record<WidgetKind, true> = {
   priceMovers: true,
   newPrintings: true,
   stickyNotes: true,
+  deckCompletion: true,
+  toReview: true,
+  wishlistSavings: true,
+  comingSoon: true,
 };
 
 const EVERY_DIMENSION: Record<BreakdownDimension, true> = {
@@ -246,6 +251,29 @@ describe("WIDGETS", () => {
         toggles: { virtual: false, theory: true, basics: false },
         chip: "window",
       },
+      // Round two (2026-09-26). `scope` is the `decks` row's two of three words — no `Archived
+      // too`, because a deck put away is not one a reader is finishing — and `complete` is the
+      // second switch in the registry that starts off: finished decks are counted in the footer
+      // and listed only when asked for.
+      deckCompletion: {
+        picks: {
+          scope: { ids: ["recent", "pinned"], dflt: undefined },
+          order: { ids: ["done", "cheapest", "name"], dflt: undefined },
+        },
+        toggles: { complete: false },
+        chip: "order",
+      },
+      // On by default: Recently removed is a holding area rather than a problem, and the switch
+      // exists for the reader who uses it as an archive.
+      toReview: { picks: {}, toggles: { removed: true }, chip: undefined },
+      wishlistSavings: { picks: {}, toggles: {}, chip: undefined },
+      // `newPrintings`' window, word for word and default for default, so a reader who set one
+      // has learnt the other.
+      comingSoon: {
+        picks: { window: { ids: [30, 90, 365], dflt: 90 } },
+        toggles: {},
+        chip: "window",
+      },
     });
   });
 
@@ -287,7 +315,56 @@ describe("WIDGETS", () => {
   });
 
   /**
-   * The value graph, off the catalogue and not the seed — the case above, for a later kind.
+   * **Round two's four, off the catalogue and not the seed** — spec §2.1's footprints, which are
+   * the design canvas's, and the default layout untouched: it fills an eight-by-seven rectangle
+   * exactly, and a new kind in it would rearrange the page of every reader who never asked.
+   */
+  it("carries round two's four kinds at the canvas's footprints, off the default layout", () => {
+    const kinds = ["deckCompletion", "toReview", "wishlistSavings", "comingSoon"] as const;
+    const footprints = Object.fromEntries(
+      kinds.map((kind) => {
+        const { def, min, max } = widgetMeta(kind);
+        return [kind, { def, min, max }];
+      }),
+    );
+
+    expect(footprints).toEqual({
+      deckCompletion: { def: [3, 3], min: [2, 2], max: [4, 6] },
+      toReview: { def: [2, 3], min: [2, 2], max: [4, 4] },
+      wishlistSavings: { def: [3, 3], min: [2, 2], max: [4, 6] },
+      comingSoon: { def: [4, 2], min: [2, 2], max: [8, 4] },
+    });
+    for (const kind of kinds) {
+      expect(
+        DEFAULT_LAYOUT.widgets.some((widget) => widget.kind === kind),
+        kind,
+      ).toBe(false);
+    }
+    expect(DEFAULT_LAYOUT.widgets).toHaveLength(8);
+    // The record's insertion order is the catalogue's, and these four close it.
+    expect(WIDGETS.slice(-4).map((widget) => widget.kind)).toEqual([...kinds]);
+  });
+
+  /**
+   * **`deckCompletion`'s `Pinned` checklist is `DecksWidgetSettings`, reused rather than copied**,
+   * and that component words its hint off the *decks* row — `Choose Pinned under Which decks…`.
+   * So this card's `scope` row has to say the same words, or the reused sentence names a control
+   * this card does not have.
+   */
+  it("gives deck completion's scope row the decks widget's own words", () => {
+    const labelOf = (pick: WidgetPick, id: string) =>
+      pick.options.find((option) => option.id === id)?.label;
+    const decks = widgetMeta("decks").picks.find((pick) => pick.key === "scope")!;
+    const completion = widgetMeta("deckCompletion").picks.find((pick) => pick.key === "scope")!;
+
+    expect(completion.label).toBe(decks.label);
+    expect(labelOf(completion, "pinned")).toBe(labelOf(decks, "pinned"));
+    expect(labelOf(completion, "recent")).toBe(labelOf(decks, "recent"));
+  });
+
+  /**
+   * The value graph, off the catalogue and not the seed — the new-printings case, for a later
+   * kind.
    *
    * Two things the vocabulary pin cannot say. **Each pick offers exactly the words its reader
    * handles**: `split` is sent to Rust, so an option the command does not know is a card that

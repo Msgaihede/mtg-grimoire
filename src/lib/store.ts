@@ -826,6 +826,59 @@ interface AppState {
   /** Spend it — `SearchPage`, on the commit it applied it. */
   clearPendingSearchSet: () => void;
   /**
+   * **The needs-review filter a press somewhere else asked a list to open with** — the home page's
+   * To review widget, and {@link pendingFolder}'s one-shot shape aimed at a filter rather than a
+   * drawer. `CollectionPage` or `WishlistPage`, whichever `scope` names, turns its own
+   * `needsReview` state on as it renders and spends this; the other page leaves it alone.
+   *
+   * **A scope and nothing more**, because the filter has one state worth being sent to: the
+   * flagged rows. Cleared by {@link setActiveView} for `pendingFolder`'s reason, which makes the
+   * same demand of the press: **the view first, this second**.
+   */
+  pendingReviewFilter: PendingReviewFilter | null;
+  /** Ask a list to open on its flagged rows. **Call {@link setActiveView} before this, never
+   *  after** — see {@link pendingFolder} for what the other order costs. */
+  setPendingReviewFilter: (filter: PendingReviewFilter) => void;
+  /** Spend it — the page its `scope` names, on the commit it read it. */
+  clearPendingReviewFilter: () => void;
+  /**
+   * **The Settings panel a press somewhere else asked that page to bring into view** — To review's
+   * `Deck cards` row, which sends the reader to `review`, the Needs review panel. The page opens
+   * the rail group that panel is drawn under and scrolls the panel to the top of the pane.
+   *
+   * **A panel and not a group, since the final fix wave of 2026-09-26**: it named the `sync` group
+   * until then, and the live pass found Settings opening on Sync scrolled to its top, with Needs
+   * review — the group's second panel, under a tall Sync panel — below the fold at 1920×1080. A
+   * panel says where the reader is going; its group is a fact `nav.ts` already holds.
+   *
+   * **A plain string and not `PanelId`**, so this module imports nothing from `features/settings`:
+   * `SettingsPage` narrows it against its own panels and **drops** a word it has no panel for,
+   * which a newer build's word or a renamed panel would otherwise turn into a refusal nobody can
+   * see. Cleared by {@link setActiveView}; written after it.
+   */
+  pendingSettingsPanel: string | null;
+  /** Ask Settings to show a panel. **Call {@link setActiveView} before this, never after.** */
+  setPendingSettingsPanel: (panel: string) => void;
+  /** Spend it — `SettingsPage`, on the commit it read it. */
+  clearPendingSettingsPanel: () => void;
+  /**
+   * **Whether a press somewhere else asked the Wishlist to open its price sweep over the whole
+   * list** — the home page's Wishlist savings widget, which counted what every pinned wish would
+   * save and has to open a dialog planning the same wishes.
+   *
+   * `WishlistPage` answers it with a **scope override** on the dialog — every wish, flattened, no
+   * filters — and never by writing `wishlistFlattened` or a filter: those are the reader's, and
+   * closing the dialog leaves the page exactly as they left it. A boolean because there is nothing
+   * else to say; the widget only ever asks about the whole list. Cleared by {@link setActiveView};
+   * written after it.
+   */
+  pendingOptimize: boolean;
+  /** Ask the Wishlist to open the sweep over everything. **Call {@link setActiveView} before
+   *  this, never after.** */
+  setPendingOptimize: () => void;
+  /** Spend it — `WishlistPage`, on the commit it opened the dialog. */
+  clearPendingOptimize: () => void;
+  /**
    * The card a reader asked to see every printing of, and the deck slot they asked from.
    *
    * **One field, written by one action that touches nothing else.** What this replaced —
@@ -1106,6 +1159,16 @@ export interface PendingFolder {
 }
 
 /**
+ * Which list a needs-review hand-off is for — see {@link AppState.pendingReviewFilter}, the only
+ * field of this shape. The two scopes are spelled out here for {@link PendingFolder}'s reason: they
+ * agree with it today because the app has two lists that flag rows, and that is a coincidence
+ * rather than one fact.
+ */
+export interface PendingReviewFilter {
+  scope: "collection" | "wishlist";
+}
+
+/**
  * The question the printings modal is open on — see {@link AppState.printingsRequest}, which is
  * the only field of this shape and where every part of it is argued.
  *
@@ -1322,6 +1385,11 @@ export const useAppStore = create<AppState>((set) => ({
         // The search hand-off, for the folder's reason on the line above. `showSetInSearch` writes
         // it *after* calling this, which is the order that survives.
         pendingSearchSet: null,
+        // The home page's three other hand-offs, for the folder's reason three lines up: each is
+        // written after the view change that carries it, so this clears only one nobody read.
+        pendingReviewFilter: null,
+        pendingSettingsPanel: null,
+        pendingOptimize: false,
       };
     }),
   // Nothing until a reader pastes a link, which is what keeps the rail row off the screen of
@@ -1635,6 +1703,19 @@ export const useAppStore = create<AppState>((set) => ({
     set({ pendingSearchSet: setCode });
   },
   clearPendingSearchSet: () => set({ pendingSearchSet: null }),
+  // Nothing pending until a home-page press names one, and never again after the page that
+  // answered it has read it — `pendingFolder`'s arrangement three times over. Each setter writes
+  // one field and has no opinion about the view, so the order its caller depends on stays
+  // statable: `setActiveView` first, the hand-off second.
+  pendingReviewFilter: null,
+  setPendingReviewFilter: (pendingReviewFilter) => set({ pendingReviewFilter }),
+  clearPendingReviewFilter: () => set({ pendingReviewFilter: null }),
+  pendingSettingsPanel: null,
+  setPendingSettingsPanel: (pendingSettingsPanel) => set({ pendingSettingsPanel }),
+  clearPendingSettingsPanel: () => set({ pendingSettingsPanel: null }),
+  pendingOptimize: false,
+  setPendingOptimize: () => set({ pendingOptimize: true }),
+  clearPendingOptimize: () => set({ pendingOptimize: false }),
   printingsRequest: null,
   // One field, and that is the whole point — see the interface. Its predecessor wrote six in
   // this `set` because it was a navigation; a modal drawn over the app is not one, so nothing

@@ -131,8 +131,19 @@ export function activeFilterCount(f: WishlistFilterState): number {
  * every input, `keepPreviousData` so a refined filter does not blank the list, and the same
  * short-page pager. There is no summary query — a wishlist fits in one page, so what it adds
  * up to is arithmetic over the rows on screen rather than a second round trip.
+ *
+ * @param options.flattenLocally Draw the list flat **without writing** `wishlistFlattened` —
+ *   `useReviewHandoff`'s `reviewSweep`, `useCollection`'s parameter of the same name one cabinet
+ *   over and for its reason. OR'd with the stored switch into the one `flatten` this hook sends
+ *   and returns.
+ * @param options.initialNeedsReview The needs-review filter this list **mounts** with, read once by
+ *   `useState` — `useCollection`'s parameter of the same name, and `useReviewHandoff` has the
+ *   measurement behind it.
  */
-export function useWishlist() {
+export function useWishlist({
+  flattenLocally = false,
+  initialNeedsReview,
+}: { flattenLocally?: boolean; initialNeedsReview?: boolean } = {}) {
   // Which marketplace this list quotes — an input to the query and part of its key, because
   // it decides what a Cost cell contains and not merely how it is written.
   const { marketplace } = useMarketplace();
@@ -158,7 +169,7 @@ export function useWishlist() {
   // a `{X}{B}{B}{B}` on the list answers the `3` chip and this one both.
   const [manaX, setManaX] = useState(false);
   const [rarities, setRarities] = useState<readonly string[]>([]);
-  const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
+  const [needsReview, setNeedsReview] = useState<boolean | undefined>(initialNeedsReview);
   // Empty is name order — the view's own default, which is what a cleared sort falls back
   // to. Not a filter, so `resetAll` leaves it alone.
   const [sort, setSort] = useState<SortSpec<WishlistSortKey>>([]);
@@ -188,8 +199,13 @@ export function useWishlist() {
    * **Two selectors, never one object literal**: a selector returning a fresh object is a new
    * reference on every store write, so this hook would re-render on a card zoom or a view
    * switch. `FilterBar`'s `ViewToggle` reads its eight fields the same way.
+   *
+   * **What the list draws is the stored switch _or_ the caller's `flattenLocally`**, and the
+   * second is never written back — `useCollection`'s arrangement, where it is argued. The wire,
+   * the key and the returned `flatten` all read the combined value.
    */
-  const flatten = useAppStore((s) => s.wishlistFlattened);
+  const flattenStored = useAppStore((s) => s.wishlistFlattened);
+  const flatten = flattenStored || flattenLocally;
   const toggleFlatten = useAppStore((s) => s.toggleWishlistFlattened);
   const [debouncedText, setDebouncedText] = useState("");
 
@@ -503,8 +519,8 @@ export function useWishlist() {
      * navigation, for the reason `folderId` is: it says how much of the tree is on screen,
      * not which wishes qualify.
      *
-     * The store's `wishlistFlattened`, read straight through: the page and the filter bar are
-     * unchanged, so this pair is still the whole of what a caller sees.
+     * The store's `wishlistFlattened`, read straight through — **or'd with the caller's
+     * `flattenLocally`**, which is the one way this can be `true` while the stored switch is off.
      */
     flatten,
     /** Off shows the current folder; on shows the whole wishlist. The store's own action —

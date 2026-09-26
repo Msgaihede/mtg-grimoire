@@ -66,6 +66,11 @@ pub mod combos;
 pub mod db;
 pub mod deck;
 pub mod deck_audit;
+/// **The home page's Deck completion read and To review's deck-card count** — how much of each
+/// deck the reader holds and what the rest costs, by the deck editor's own rules and through its
+/// own two pool functions, and how many deck rows are flagged. No table of its own, no clock and
+/// no network, so it sits on the every-target half with the deck modules.
+pub mod deck_completion;
 pub mod deck_meta;
 pub mod deck_missing;
 /// **A deck's notebook** — user schema v43, issue #447. Two tables, eight commands and no
@@ -231,6 +236,10 @@ pub mod sync_pair;
 /// stands. `src/features/transfer/__golden__/` is one corpus and one golden set that both
 /// suites assert byte equality against, and it goes on doing that unchanged.
 pub mod transfer;
+/// **The home page's Coming soon read** — sets with printings announced for the next N days,
+/// read off `cards` rather than `sets` because the browser build never fills `sets`. One
+/// `SELECT` whose only clock is SQLite's `date('now')`, so it answers on every target.
+pub mod upcoming_sets;
 /// **The version, the release history and the clock they were read at — but never the swap.**
 /// This module was §6.3's second permanent exclusion and only half of it ever was one: the
 /// `.exe` replacement, the staging and the relaunch are Windows to the bone, while

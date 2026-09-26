@@ -578,6 +578,10 @@ beforeEach(() => {
     // exactly as `wishlistFlattened` above does, and the block near the end writes one in every
     // case.
     pendingFolder: null,
+    // **The two other hand-offs this page consumes**, for the folder's reason: a case that left
+    // either written would open the next case on the flagged wishes or inside the price sweep.
+    pendingReviewFilter: null,
+    pendingOptimize: false,
   });
 });
 
@@ -3828,5 +3832,179 @@ describe("a deck's managed wishlist", () => {
 
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(useAppStore.getState().openDeckId).toBe(4);
+  });
+});
+
+/**
+ * **The flagged wishes another page asked this one to open on** — `store.ts`'s
+ * `pendingReviewFilter`, the To review widget's `Wishes` row. `CollectionPage.test.tsx`'s block
+ * of the same name is the argument; this is the other cabinet.
+ */
+describe("a needs-review filter another page asked for", () => {
+  it("asks for the flagged wishes from its first request, and spends the hand-off", async () => {
+    useAppStore.setState({ pendingReviewFilter: { scope: "wishlist" } });
+    wrap(<WishlistPage />);
+
+    await waitFor(() => expect(wishlistList).toHaveBeenCalled());
+    expect(
+      wishlistList.mock.calls.every(([q]) => (q as WishlistQuery).needsReview === true),
+    ).toBe(true);
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+  });
+
+  it("leaves the collection's hand-off untouched", async () => {
+    useAppStore.setState({ pendingReviewFilter: { scope: "collection" } });
+    wrap(<WishlistPage />);
+
+    await waitFor(() => expect(wishlistList).toHaveBeenCalled());
+    expect(lastQuery().needsReview).toBeUndefined();
+    expect(useAppStore.getState().pendingReviewFilter).toEqual({ scope: "collection" });
+  });
+});
+
+/**
+ * **A needs-review hand-off over a list the reader has not flattened** — the controller's ruling
+ * of 2026-09-26, and `CollectionPage.test.tsx`'s block of the same shape on the other cabinet.
+ * This one is the likelier of the two to bite: `wishlistFlattened` *starts* off, so a reader sent
+ * here by To review's `Wishes` row lands on the root unless the page draws flat for them — and it
+ * does so through a local flag, never through the reader's persisted switch.
+ */
+describe("a needs-review hand-off over a list the reader has not flattened", () => {
+  /** A flagged wish filed in `Ordered` — the drawer the root does not show. */
+  const FLAGGED: WishRow = { ...FILED, needsReview: REVIEW_NOTE };
+
+  /**
+   * `the folders`' `listByLevel`, honouring the filter: every wish when flattened, `Ordered`'s by
+   * id, and the root's two healthy ones otherwise — so a flagged root is honestly empty.
+   */
+  const listByLevel = async (q: WishlistQuery) => {
+    const level =
+      q.flatten === true ? [BOLT, ANY, FLAGGED] : q.folderId === 1 ? [FLAGGED] : [BOLT, ANY];
+    return page(level.filter((row) => q.needsReview !== true || row.needsReview !== null));
+  };
+
+  const flattenChip = () => screen.getByRole("button", { name: "Flatten" });
+
+  beforeEach(() => {
+    useAppStore.setState({ pendingReviewFilter: { scope: "wishlist" } });
+    wishlistFolderList.mockResolvedValue(FOLDERS);
+    wishlistFolderSummary.mockResolvedValue(SUMMARY);
+    wishlistList.mockImplementation(listByLevel);
+  });
+
+  it("draws the flagged wish wherever it is filed, and leaves the stored switch off", async () => {
+    wrap(<WishlistPage />);
+
+    expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
+    expect(
+      wishlistList.mock.calls.every(([q]) => {
+        const asked = q as WishlistQuery;
+        return asked.needsReview === true && asked.flatten === true;
+      }),
+    ).toBe(true);
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+    expect(useAppStore.getState().wishlistFlattened).toBe(false);
+  });
+
+  it("goes back to the root when Flatten is pressed, without writing the stored switch", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Rhystic Study");
+
+    await user.click(flattenChip());
+
+    await waitFor(() => expect(lastQuery().flatten).toBeUndefined());
+    await waitFor(() => expect(screen.queryByText("Rhystic Study")).toBeNull());
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "false");
+    expect(await screen.findByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
+    expect(useAppStore.getState().wishlistFlattened).toBe(false);
+    // The override is spent, so the next press is the ordinary one and does write.
+    await user.click(flattenChip());
+    expect(useAppStore.getState().wishlistFlattened).toBe(true);
+  });
+
+  /** `CollectionPage.test.tsx`'s case of the same name: `useReviewHandoff`'s `settle`, the path a
+   *  hand-off takes when it lands on a page that is already mounted. */
+  it("answers a hand-off that lands after the page has mounted", async () => {
+    useAppStore.setState({ pendingReviewFilter: null });
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+    expect(lastQuery().needsReview).toBeUndefined();
+
+    act(() => useAppStore.setState({ pendingReviewFilter: { scope: "wishlist" } }));
+
+    await waitFor(() => expect(lastQuery().needsReview).toBe(true));
+    expect(lastQuery().flatten).toBe(true);
+    expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Remove filter — Needs review" })).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+    expect(useAppStore.getState().wishlistFlattened).toBe(false);
+  });
+
+  it.each([
+    ["its chip", "Remove filter — Needs review"],
+    ["Reset all", /^Reset all/],
+  ] as const)("goes back to the root when the filter is cleared by %s", async (_how, name) => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Rhystic Study");
+
+    await user.click(screen.getByRole("button", { name }));
+
+    await waitFor(() => expect(lastQuery().flatten).toBeUndefined());
+    expect(lastQuery().needsReview).toBeUndefined();
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(screen.queryByText("Rhystic Study")).toBeNull();
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "false");
+    expect(useAppStore.getState().wishlistFlattened).toBe(false);
+  });
+});
+
+/**
+ * **The price sweep another page asked for** — `store.ts`'s `pendingOptimize`, the home page's
+ * Wishlist savings widget. The widget counted what *every* pinned wish would save, so the dialog it
+ * opens has to plan the same list — and must not get there by writing the reader's own switches.
+ */
+describe("a price sweep another page asked for", () => {
+  it("opens the dialog over every wish, flattened and unfiltered, and spends the hand-off", async () => {
+    useAppStore.setState({ pendingOptimize: true });
+    wrap(<WishlistPage />);
+
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(wishlistOptimizePlan).toHaveBeenCalled());
+    const asked = wishlistOptimizePlan.mock.calls[
+      wishlistOptimizePlan.mock.calls.length - 1
+    ][0] as WishlistQuery;
+    // `wholeWishlistQuery` plus the paging `useWishlistOptimize` adds and the command ignores —
+    // no folder, no filter, and flattened whatever the page's own switch says.
+    expect(asked).toEqual({ flatten: true, marketplace: "tcgplayer", limit: 0, offset: 0 });
+    // The scope sentence says so, rather than naming the root the page is standing at.
+    expect(within(dialog).getByText("Every folder")).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBe(false));
+    // **A scope override and never a write**: the reader's persisted switch is as it was, and the
+    // list behind the dialog is still the unflattened root.
+    expect(useAppStore.getState().wishlistFlattened).toBe(false);
+    expect(lastQuery().flatten).toBeUndefined();
+  });
+
+  /** The override is the hand-off's alone: the page's own button plans the page's own list. */
+  it("plans the page's own list again when the Optimise button is pressed afterwards", async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({ pendingOptimize: true });
+    wrap(<WishlistPage />);
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBe(false));
+
+    await user.click(screen.getByRole("button", { name: "Close the price check" }));
+    wishlistOptimizePlan.mockClear();
+    // Straight to the button: a closing panel is still in the tree for the length of its fade.
+    await user.click(screen.getByRole("button", { name: "Optimise wishlist prices" }));
+
+    await waitFor(() => expect(wishlistOptimizePlan).toHaveBeenCalled());
+    const asked = wishlistOptimizePlan.mock.calls[0][0] as WishlistQuery;
+    expect(asked.flatten).toBeUndefined();
+    expect(asked).toMatchObject({ marketplace: "tcgplayer", limit: 0, offset: 0 });
   });
 });

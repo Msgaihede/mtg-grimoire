@@ -60,6 +60,7 @@ import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
+import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
@@ -681,7 +682,15 @@ const COLLECTION_TRAY: readonly TrayCell[] = [
 ];
 
 export function CollectionPage() {
-  const collection = useCollection();
+  // The To review widget's needs-review hand-off, and the flat sweep that comes with it —
+  // `useReviewHandoff` has the whole rule; its two halves sit either side of the list hook.
+  const flattenStored = useAppStore((s) => s.collectionFlattened);
+  const review = useReviewHandoff("collection", flattenStored);
+  const collection = useCollection({
+    flattenLocally: review.reviewSweep,
+    initialNeedsReview: review.initialNeedsReview,
+  });
+  review.settle(collection.needsReview, collection.setNeedsReview);
   const { query, summary, rows, total, marketplace, folderId, flatten } = collection;
   const view = useAppStore((s) => s.collectionView);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
@@ -2927,7 +2936,11 @@ export function CollectionPage() {
         // no drill-down, and every copy in the list at once — each tile captioned with the drawer
         // it is filed in instead, which is the only way a reader sees where a copy is without
         // opening it. One press either way, since there is no third state to walk.
-        flatten={{ pressed: collection.flatten, onToggle: collection.toggleFlatten }}
+        // A review hand-off's sweep takes the press first — `useReviewHandoff`'s `onFlattenToggle`.
+        flatten={{
+          pressed: collection.flatten,
+          onToggle: review.onFlattenToggle(collection.toggleFlatten),
+        }}
       />
 
       {/* **The row the list and the search column share** (design §4), and the one thing on this

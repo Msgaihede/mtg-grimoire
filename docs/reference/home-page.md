@@ -130,9 +130,10 @@ under it — `newPrintings` and `stickyNotes` landed within a day of each other,
 edit routes to neither CI job. `WIDGET_META` is what the Add-widget catalogue offers and is its
 own census; `DEFAULT_LAYOUT` is what a first launch is handed. A kind may be in the catalogue and not in the layout, and several are:
 `wishlistValue`, which has never been on a first launch; `newPrintings` and `stickyNotes`, which
-joined the catalogue alone because either one would break the rectangle; and `valueHistory`
+joined the catalogue alone because either one would break the rectangle; `valueHistory`
 (§14), which stayed out for `newPrintings`' reason — a widget in the seed rearranges the page of
-every reader who never asked for it. So the sentence below still names **eight** widgets in an
+every reader who never asked for it; and §15's `deckCompletion`, `toReview`, `wishlistSavings`
+and `comingSoon`, for that reason again (their spec's §1). So the sentence below still names **eight** widgets in an
 eight-by-seven rectangle and is correct as written, and `DEFAULT_LAYOUT`'s three copies —
 `widgets.ts`, `home.rs` and the Storybook fake — did not move. Counting the table below and
 editing that literal to match is the mistake this note exists to stop.
@@ -167,6 +168,10 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `priceMovers` | owned printings whose price moved most over a window | `{ window: 7d·30d·all, direction: both·up·down }` |
 | `stickyNotes` | the reader's own notes, as a board of tinted tiles or a pad of stacked sheets | `{ layout: board·pad, dates, strip, pinned }` |
 | `newPrintings` | reprints of cards the watched decks hold, in release-day groups | `{ scope: all·chosen, deckIds, window: 30·90·365, langs: en·all·chosen, langIds, virtual, theory, basics }` |
+| `deckCompletion` | each deck's owned-against-wanted, with the cost of the rest | `{ scope: recent·pinned, deckIds, order: done·cheapest·name, complete }` |
+| `toReview` | scanned cards waiting, flagged binder entries, wishes and deck cards, and Recently removed — each row opening its list | `{ removed }` |
+| `wishlistSavings` | pinned wishes with a cheaper printing, biggest saving first | — |
+| `comingSoon` | unreleased sets, how many of their cards are previewed, and how many are already in your decks | `{ window: 30·90·365 }` |
 
 **A config written before the grid keeps its meaning.** `dimension` and `limit` kept their keys
 rather than taking the design's `scope`, and a `decks` config holding pins but no `scope` reads as
@@ -219,6 +224,16 @@ invalidates the key beside it. `stickyNotesKey` is `["stickyNotes"]`, the exact 
 `crossWindow.ts` maps `sticky_notes` to, so a note written in the other window lands here as
 well — and filing it under `["collection"]` to obey the rule would have re-read every note after
 each add to the binder while leaving it stale after the four presses that actually change one.
+
+**Round two brought a second bridge and a key no write in its own window reaches**, and §15 argues
+each at its kind. `deckCompletionKey` keeps the rule — it sits under `["decks"]` — and still needs
+`ActivityWidget`'s machinery one root wide, because owned copies are collection rows; its bridge
+sends **one** invalidation per burst where `ActivityWidget`'s sends one per event.
+`scannerTrayCountKey` sits under `["scanner"]` beside the tray's own entry, which it must never
+share. With one window open no write in that window invalidates it, so its reader's `staleTime: 0`
+is what keeps it fresh; with a second window, `crossWindow.ts` invalidates it in each window on
+every `app_meta` commit from the other — so it is refreshed by an invalidation there, and never by
+a write of the window it is drawn in.
 
 ## 4. The grid is measured in JavaScript, and still not a container query
 
@@ -533,6 +548,9 @@ connection-only query, which is exactly what `web::route` answers.
 | `price_history` | `price_history.rs` | `{ points, now, today }` — one copy's kept snapshots, for the mover popup (§11) |
 | `collection_value_history` | `value_history.rs` | `{ buckets, points, today }` — the collection's value per kept period plus a live point for today, split one way, each point carrying its price-only part (§14) |
 | `sticky_notes` and its four writes | `sticky_notes.rs` | every note by `sort_order`, then create, update, delete and reorder (§12) |
+| `deck_completion` | `deck_completion.rs` | `[{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }]` — every deck that is not virtual, measured as its editor measures it (§15) |
+| `deck_review_count` | `deck_completion.rs` | how many `deck_cards` rows carry a `needs_review` sentence (§15) |
+| `upcoming_sets` | `upcoming_sets.rs` | `{ today, sets: [{ code, name, releasedAt, previewed, inDecks }] }` — sets not yet out, soonest first (§15) |
 
 Registration is three places, and a command missing from one of them answers `unknown command` at
 runtime with nothing red: `lib.rs`'s module map, `desktop.rs`'s `generate_handler!` list, and
@@ -666,7 +684,10 @@ From the design's §9, plus two the build itself turned up:
   storyable at a line apiece. **What `busy` does reach is the one refusal this page can show** —
   a refused `set_home_layout`, which `WhileTheDatabaseIsBusy` presses Remove under, asserting the
   widget still leaves the page and nothing is said: the optimistic, deliberately-unrolled-back
-  write `useHomeLayout` documents.
+  write `useHomeLayout` documents. **Round two's kinds (§15) widen the gap rather than close it**:
+  the fake answers `deck_completion`, `deck_review_count` and `upcoming_sets` without consulting
+  any fault, so none of their bodies has a refusal story, and each one's *could not be read*
+  branch is proven in its own unit test only.
 * ~~**`sticky_note_reorder` is built and reaches no press.**~~ **Wired the same day**, and the
   entry is kept because the reason it was ever true is the useful part. The command shipped end to
   end — the function and its tests in `sticky_notes.rs`, the registration in `lib.rs`,
@@ -681,6 +702,25 @@ From the design's §9, plus two the build itself turned up:
   design that is then cut is not dead code and is not a mistake, but it is unreachable until
   something presses it, and a grep for its callers is the only thing that says which of the two it
   currently is.
+* **`ActivityWidget`'s bridge still answers a burst event by event.** One binder write invalidates
+  `["collection"]`, which dispatches an `invalidate` per cached query under that root in one
+  synchronous call, and the bridge re-issues `activity_recent` for each — each fetch cancelling the
+  last, and **a cancelled TanStack fetch does not abort a Tauri invoke**, so every one of them still
+  runs. Deck completion's bridge (§15) was copied from it and fixed on the way: it queues the
+  invalidation and a microtask sends it once. The same fix belongs here; **a follow-up, not a
+  difference of design.**
+* **The browser build answers two round-two questions with less, and says so.** To review draws
+  no `Scanned cards` row there (there is no scanner, and `scanner_tray` is not routed), and draws
+  its `Deck cards` row **without a press**, because `sync_review_list` is not routed either and the
+  Needs review panel would have nothing to show — the row's hint sends the reader to the desktop
+  app. And Coming soon cannot drop a `token`, `promo`, `memorabilia` or `minigame` set there,
+  because that word is `sets.set_type` and the browser build never fills `sets`: the layout filter
+  is the whole rule, so a set of one of those types whose cards carry an ordinary layout would be
+  listed. Neither is a refusal; both are §15's.
+* **Wishlist savings can offer a printing in another language**, because
+  `wishlist_optimize_plan` has no language filter and the card draws exactly what the sweep dialog
+  will offer. A language rule belongs to the plan and would change both surfaces at once; it is
+  recorded here so its absence is a decision (§15).
 
 ## 9. The live pass
 
@@ -864,7 +904,7 @@ find out. A `still` body (the catalogue's previews) draws no press at all.
 
 ## 12. Sticky notes — user schema v46, `sticky_notes`
 
-The eleventh kind and the first one that is nothing but the reader's own typing
+The first kind that is nothing but the reader's own typing
 ([issue #479](https://github.com/Msgaihede/mtg-grimoire/issues/479), 2026-09-20). Its design is
 [the spec](../superpowers/specs/2026-09-20-sticky-notes-widget-design.md); what follows is only
 what a reader of *this* page needs.
@@ -1093,9 +1133,9 @@ with reprints.
 `new_printings` and `mark_new_printings_seen` are registered in `desktop.rs`'s `invoke_handler`
 **and** named in `web/route.rs`'s `COMMANDS` with a match arm each — a command missing there is
 dead on the web and Android builds, as `price_movers` and `set_completion` already are not.
-`COMMANDS.len()` was **174** at that merge, counted off the merged array with that comment's own
-`awk` rather than by adding two to 172 — a figure for that day, which every later route has moved;
-the build answers today's.
+The route count's literal was re-derived at that merge off the merged array with that comment's
+own `awk` rather than by adding two to the old figure; the build answers the count, so no figure
+is written here.
 
 `src/lib/ipc.test.ts` carries three mirror rows (`NewPrintingDeck`, `NewPrinting`, `NewPrintings` —
 nested two deep, `PriceMovers`' reason: a field renamed inside the deck entry leaves both structs
@@ -1541,3 +1581,481 @@ count is written here; the build answers both.
 
 **Out of scope, deliberately:** dragging the card is the page's, Customize gains nothing beyond the
 registry row, and there is no backfill.
+
+---
+
+## 15. Home widgets, round two (2026-09-26)
+
+The kinds chosen on 2026-09-26 from the proposals on the Claude Design canvas
+[Dashboard widget proposals](https://claude.ai/artifact/KD8KLMt59PTYHdkPbCZWKU): **Deck
+completion**, **To review**, **Wishlist savings** and **Coming soon**. The design is
+[the spec](../superpowers/specs/2026-09-26-home-widgets-round-two-design.md) and
+[the plan](../superpowers/plans/2026-09-26-home-widgets-round-two.md) is what the lanes built
+against; **where this section and the spec disagree, this section is the build**, and each
+disagreement is stated at its site. Each kind is a `WIDGET_META` row, a body in
+`src/features/home/widgets/` and at most one new read, and the new reads — `deck_completion`,
+`deck_review_count` and `upcoming_sets` — are routed on both targets (§6's table).
+
+**Catalogue only, and Rust's vocabulary untouched.** `DEFAULT_LAYOUT` did not move in any of its
+three copies — §3's note has the reason — and `home.rs` gained nothing, which is §1's promise and
+§13's test: an older build keeps each of these kinds as an unknown-widget placeholder and loses
+nothing on a round trip.
+
+**The live pass ran on 2026-09-26**, a **debug build under `tauri dev`**, at **1920×1080** (the
+narrow-window checks at 1280, 1200, 1150, 1100 and 1024 by emulation), against **a copy of the
+reader's real data folder** — `user.db` migrated v46 → v50 on launch, 118,404 cards. Every figure
+below that came off that window says so; the query-plan figures under Coming soon were taken
+through `node:sqlite` and carry their own qualifiers. Each read was timed around
+`window.__TAURI_INTERNALS__.invoke`, one uncounted warm-up and then five runs:
+
+| Command | Runs (ms) | Median |
+| --- | --- | --- |
+| `deck_completion { marketplace: "tcgplayer" }` | 7.7, 8.0, 10.1, 8.3, 7.6 | **8.0 ms** |
+| `upcoming_sets { days: 90 }` | 49.2, 47.7, 47.7, 47.5, 46.8 | **47.7 ms** (6 sets) |
+| `upcoming_sets { days: 365 }` | 47.6, 48.2, 46.6, 47.0, 47.0 | **47.0 ms** (6 sets) |
+
+`deck_completion` answered five rows, one of them an empty deck the card leaves out; the timings
+were taken before the Card Kingdom feed had landed, so `marketplace_prices` was empty. **Both reads
+are the ones before the final fix wave** — `upcoming_sets` has counted `previewed` differently since
+(Coming soon, below), measured at +0.4 and +1.0 ms over the old statement on the same copy through
+`node:sqlite`, which is not the app.
+
+**The pass found two layout defects and four things to rule on, and the final fix wave answered
+all six** — the footers (next subsection), Coming soon's smallest box, To review's accessible names,
+its landing on Needs review and its scanned count, and Coming soon's `seen`. One observation is
+kept as the known cost of a ruling rather than fixed: **a row measured on the plan can open the deck
+on its Actual list.** Bruna's row read `Plan · 64 of 101 · 37 missing · $1,251.27`, and the editor
+opened on Actual — its `last_variant` — reading `100 missing`; one press of `Theory` made the two
+agree (`$1,251.27 missing · 1 unpriced`). That is the price of the ruling that a press opens the deck
+as every other row does and **carries no variant hand-off** (Deck completion, below), and the `Plan`
+caption is what tells the reader which list the figure was.
+
+### Footers are one line, and reserved at what one draws
+
+**Measured in the live pass: a footer line is 16px** (`text-xs`, line-height 1rem) **and the body's
+gap above it is 8px comfortable, 5 compact** — 24 and 21 in all, where every footer on the page
+reserved a guessed 22. And long footers wrapped: Wishlist savings' `1 more has no price at
+Cardmarket to compare against` (288–318px of 12px Geist) drew two lines at every two-cell width and
+three at a 1024px window, where a 2×3 compact body scrolled 19px; Deck completion's
+`1 deck complete · $2,687.74 to finish the rest · 1 copy unpriced` (~345–380px) drew two at every
+three-cell width, the default 3×3 included.
+
+**So the four round-two kinds follow one rule**: a footer is **exactly one line** —
+`WidgetParts.tsx`'s `WidgetFooterLine`, `truncate`, drawing a short `line` and speaking the whole
+sentence (`said`) both as its `useTooltip()` hint and to a screen reader, through an `sr-only` span
+beside the `aria-hidden` line — and its reservation is **computed rather than guessed**:
+`fit.ts`' `footerLinePx(fit)` is `XS_LINE_PX` (16) plus `bodyGapPx`, the one function `WidgetCard`
+also reads its gap from, so a body cannot reserve a gap the card does not draw. The short wording is
+what keeps the ellipsis rare: `1 more: no Cardmarket price`, `58 more save €101.60`,
+`2 complete · $221.70 to finish · 14 unpriced`. Deck completion and Wishlist savings are the two
+that draw footers; To review and Coming soon draw none. **The older kinds' footers still reserve a
+22px `WidgetFooter` that can wrap** — a follow-up outside this round, not measured here.
+
+### Deck completion — `deck_completion.rs`, `DeckCompletionWidget.tsx`
+
+`deck_completion(marketplace)` answers one row per deck that is not virtual —
+`{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }` — and the body decides
+only which decks, in what order, and how many fit. **Nothing in the body re-derives a count.**
+
+**It measures what the deck editor measures, rule for rule**, because a card reading *4 missing*
+over a deck that opens reading *6 missing* is a bug report, and the reader chose that over any
+simpler count (spec §1):
+
+* **The list picks the pool, as `get_deck` does.** A deck without a theory plan measures its live
+  list against its own group (`deck::owned_by_printing`); a deck with `theory_enabled` measures its
+  theory list against every copy it could be built from (`deck::available_by_printing` — the
+  collection root, its own group and `Recently removed`, never another deck's group or a locked
+  drawer). `list` says which was measured.
+* **Every active pile counts, sideboard and companion included** — `DeckStats`' `missing`, and
+  **deliberately not** `deck_values`' main + commander + maybe (§6). The two counts disagreeing
+  inside the editor is an existing fact this kind did not change; matching the number the editor
+  prints is the whole point.
+* **The key is exact printing and exact finish**, a NULL deck-row finish meaning the regular copy.
+  `attribute_owned` hands a scarce pool down the read order, so summed over one key it owns
+  `min(Σ wanted, pool)` — which is what lets the wanted copies and their price aggregate in SQL
+  rather than calling `get_deck` once per deck.
+* **The pools are read through `deck.rs`'s own two functions, one statement per deck**, and never
+  restated as one statement over every deck: `collection_source`'s `ForDeck` arm interpolates a
+  literal deck id, so a single statement would need a second spelling of *what this deck can use*
+  — the drift that module exists to prevent.
+* **Virtual decks answer no row** — they hold nothing by definition, and 0% of every one of them
+  is not a finding — and tokens never count, being `deck_tokens`, which nothing here reads.
+
+**The fence asks both questions of one fixture.**
+`deck_completion::tests::every_deck_answers_what_its_editor_draws` runs `get_deck` and the
+editor's own copies-and-money loop over a live deck, a theory deck, a foil and a NULL-finish row of
+one printing, an inactive pile, a sideboard sharing the main pile's pool, a copy in `Recently
+removed`, copies in another deck's group, a locked folder, an unpriced printing, an empty deck and a
+virtual one — and **pins the numbers as well as comparing them**, because a comparison alone passes
+over a fixture that built something other than what it says. A drift between the widget and the
+editor is a red build rather than a card that disagrees with a deck.
+
+**Complete is `missing === 0`, never a cost of zero.** `missingCost` is `None` exactly when
+nothing on the measured list is priced — the editor's `priced === 0 ? null : …` — so a deck short
+only unpriced copies answers `0`, beside a non-zero `unpricedMissing`. Money therefore never decides
+whether a deck is done; an em dash is drawn exactly for `null`, and the row's hint names the
+copies a figure leaves out.
+
+**A deck that asks for nothing is not on the card.** A deck just made, or a plan not yet written,
+answers `wanted: 0`, and `missing === 0` is true of it — so every rule above would have called it
+complete, listed it under `Complete decks`, counted it in the footer, and let a scope of nothing
+but fresh shells say *every deck here is complete*. It is neither complete nor in progress.
+`completionRows` drops it **once, before anything orders, counts or decides the card is empty**, so
+those three cannot come to disagree about it; a scope holding only such decks draws `NO_DECKS`
+under `Most recent` and `PINS_UNMEASURABLE` under `Pinned` — a sentence of its own, because a pin
+can also name a deck that is gone or virtual, and the useful answer then points at the choosing.
+
+**A figure measured on the plan says `Plan` at every density.** `countCaption`, the tile's
+shortfall and the press's accessible name all lead with the word, and a compact panel — which
+draws no count at all — keeps it alone as the row's caption, because its price and its track are
+still the plan's. The reason is the list the reader meets: a theory deck's count is its plan
+against every copy it could use, not its sleeved list, and a reader who opens that deck on a
+shorter live list reads the card and the editor as disagreeing. The hint says it in full; the word
+is what survives without a pointer. **The press does not change** — it opens the deck like every
+other row, `setActiveView("decks")` then `setOpenDeckId(id)`, and which list the editor shows is
+the editor's decision. **The live pass met that cost on its first press** (Bruna, above): the row
+measured the plan and the editor opened on Actual, one `Theory` press from agreeing.
+
+**One bridge, from `["collection"]`, and a burst is one invalidation.** `deckCompletionKey` sits
+under `["decks"]`, which every deck write invalidates — but owned copies are collection rows, and a
+quantity stepped in the binder invalidates `["collection"]` and nothing else. `useCollectionBridge`
+is `ActivityWidget`'s bridge one root wide: a marker query under `["collection"]` so the signal
+exists, and a cache subscription that turns an `invalidate` there into one of this key. **What it
+adds is the coalescing.** One binder write dispatches an `invalidate` per cached query under the
+root, synchronously, in one call; answered one by one, each event re-issued this read and the next
+cancelled it, and **a cancelled TanStack fetch does not abort a Tauri invoke** — so every event was
+a backend measurement of every deck, all but the last thrown away. An event now only queues the
+invalidation, and a `queueMicrotask` sends it once the burst is over. `ActivityWidget` still
+answers event by event (§8).
+
+**Which decks is a filter; order is a display decision.** `Most recent` is `deck_list`'s order
+with archived and virtual decks taken out, never a sort — `DecksWidget`'s rule, read through its
+own `deckScope`, `pinnedDeckIds` and `decksToShow`, because `Pinned` draws `DecksWidgetSettings`'
+checklist **reused rather than copied** and the checklist writes exactly what those read.
+`sortCompletions` orders what is left (*Nearest done*, *Cheapest to finish* with a `null` cost
+last, *Name*), because the three orders are three readings of one answer and a command per order
+would be three places one count is written.
+
+**The footer is a statement about every deck in scope, never about the rows that fit** —
+*n decks complete · $x to finish the rest · n copies unpriced* — so a card resized smaller does not
+change what its total is a total of, and unpriced copies are counted beside the money and never
+summed into it as zero. The marketplace is in the key because `missingCost` is priced at it. **It is
+one line** (the footer rule above): `completionFooter` answers the sentence and a `line` of the same
+clauses in their short words and the same order — *n complete · $x to finish · n unpriced* — so
+where even the line is cut, the ellipsis takes the unpriced copies first, which the sentence and each
+row's own hint still say. Its reservation is `footerLinePx`, and a test at 99px cells fails if it
+goes back to 22.
+
+### To review — `ToReviewWidget.tsx`, and `deck_review_count`
+
+One row per place something is waiting, drawn only when its count is above zero and always in
+this order: **Scanned cards** (the scanner's tray), **Binder entries**, **Wishes** and **Deck
+cards** (each flagged for review by a card-data update), and **Recently removed**. **Each row opens
+the place it counts**, chosen by the reader over a single row into Settings (spec §1): the scanner
+by a view change alone, the binder and the wishlist through `pendingReviewFilter`, the deck cards
+through `pendingSettingsPanel` (`"review"`, the Needs review panel, which Settings brings into
+view), and Recently removed through the `pendingFolder` hand-off `FoldersWidget` already makes. The
+new hand-offs are this section's last subsection.
+
+**Rows or copies, and the caption says which.** The flagged places count **rows** —
+`collection_summary.needsReview` counts entries, a flagged wish is a wish, a flagged deck card a
+`deck_cards` row — and each row's name says the unit. `Recently removed` counts **copies**, because
+that is how a reader thinks of a holding area, so its caption *is* its count and it carries no
+second figure saying the same thing. `reviewRows` decides every one of those words and is pure.
+
+**Scanned cards counts copies, in the Scanner's own words — a disagreement with spec §4.1**, which
+said `scanner_tray` length. The live pass read `Scanned cards · 1 ready` beside a Scanner heading its
+tray `Scanned cards 2` over one row of two, because the row counted rows and the Scanner counts
+copies. So `trayCounts` asks the tray's own two functions: the figure is `totalCopies` — what
+`TrayPanel` heads the tray with — and the caption is `unresolvedCount` said as `TrayPanel` says it,
+*n cards to pick* (rows still waiting on a printing, however many copies are stacked on one), or
+*Ready to add*. The tile, with no heading to lean on, names the copies: *6 copies · 1 to pick*,
+*2 copies ready*.
+
+**A press is named by exactly what its row draws** (WCAG 2.5.3, label in name): the name, then the
+caption and the figure this box drew, joined — so the tile, which is the kind's default face, says
+`Wishes · 3 flagged` where it used to say `Wishes · Flagged for review · 3` over a row showing
+`3 flagged`, and a compact panel is named by its figure. The final review found the tile the one
+widget of the four out of step.
+
+**Five reads, one of them new.** `deck_review_count` (`deck_completion::review_count`) is
+`count(*)` of `deck_cards` rows whose `needs_review` is not NULL — the count
+`sync_engine/commands.rs` takes for this one table, so the row and the Needs review panel it opens
+say one number. **Not `sync_relay_status.reviewCount`**, which sums every flagged table into one
+figure, is desktop-only and takes the write lock. The binder count is `SummaryWidget`'s own read
+through `collectionTotalKey`, one fetch between the two cards. The wishes are the `total` of a
+one-row page, `flatten: true` so a wish filed in a drawer counts — `limit: 1` rather than `0`,
+which the backend reads as its default page. And Recently removed is **found in
+`collection_folder_list`, then looked up in the summary**, because an empty folder answers no
+summary row and a missing row is zero.
+
+**The tray is read under its own key, `["scanner","trayCount"]`, and never `["scanner","tray"]`.**
+That entry *is* the tray in the window that owns the scanner — `useTray` writes it with
+`setQueryData`, and the stored copy can lag it by the tray's 400ms debounce — so a second reader
+able to refetch it would race the scanner's own write, and multi-window.md records what refreshing
+it loses. **No write in the same window invalidates the count's key**, so it is read with
+`staleTime: 0`: in one window the Scanner and the home page are never on screen together, and a
+re-read on every mount is what a trip to the Scanner and back needs rather than the app's
+thirty-second default. **With a second window they are on screen together**, and there every tray
+write is an `app_meta` commit that `lib/crossWindow.ts` answers — an invalidation of this key in
+each other window: `FOLLOW_LIVE_APP_META` carries `["scanner","trayCount"]`, which is
+safe to follow because `scanner_tray` is a plain `SELECT` — a refresh answers no write and starts no
+loop — and whose key sits *beside* the tray's rather than under it, so the single-writer predicate
+never spares it.
+
+**Clearing a flagged row refreshes the count.** `ReviewPanel`'s clear used to refresh only the Sync
+panel's own figures; it now also invalidates the root the cleared row's table is read under
+(`TABLE_ROOT`, through `reviewRootOf` — never `["sync"]`), so To review, the binder's banner and
+the wishlist's chip drop the row without waiting for an unrelated write. `TABLE_ROOT` is total over
+`ReviewTable`, so a table added there without a root is a red build.
+
+**On the browser build** the tray is neither read nor drawn, and the deck-cards row is drawn without
+a press — §8 has both. `web` is a prop defaulting to `isWebTarget()`, because that answer is a
+build-time define the workbench folds to the desktop one; a story names it and the page never does.
+
+**`Recently removed` is a switch, on by default**, because that folder is a holding area rather than
+a problem, and a reader who keeps it as an archive should be able to take the row away.
+
+### Wishlist savings — `WishlistSavingsWidget.tsx`, and no new command
+
+`wishlist_optimize_plan` already answers, per pinned wish, both printings with their prices and the
+saving. The card asks it about **the whole wishlist** — `wholeWishlistQuery`
+(`src/features/wishlist/wholeWishlistQuery.ts`): `flatten: true`, no filters, the reader's
+marketplace — which is the question `WishlistPage` puts to the sweep dialog when a press here lands
+there. **It is one cache entry, not two copies of one:** `wishlistSavingsKey` is
+`useWishlistOptimize`'s own `optimizePlanKey` over that query, so the dialog opens on this card's
+answer, and the dialog's apply — which invalidates `["wishlist"]` — refreshes the card with it. One
+builder rather than two literals, because a reader who pressed a row has to meet a dialog planning
+the same wishes.
+
+**A price that is not there is said, never summed.** `saved` is `null` exactly when `from.price`
+is — a pinned printing the marketplace does not list. `splitSavings` leaves those moves out of
+`Could save` and counts them on a line of their own (*n more have no current price*); a card whose
+moves are all like that says so in a sentence rather than drawing `Could save $0.00`. The figure is
+gold and everything else body ink, `WidgetParts.tsx`'s rule that the accent is money.
+
+**`skipped` is never *already cheapest*.** `considered` is every wish the plan scanned, any-printing
+wishes included, so `considered === 0` is an empty wishlist rather than one with nothing pinned; and
+no move at all is *every pinned wish is already on its cheapest printing* **only while `skipped` is
+zero**. A skipped wish is one the plan could not compare — and the one a reader meets is a card with
+no printing priced at this marketplace and finish: Card Kingdom or Mana Pool picked before its feed
+has landed, or a foil wish nobody quotes foil for. With no move and some skipped, *already
+cheapest* would be false, so `skippedOnly` says no price was there to compare against and **names
+the marketplace**, since switching one is what changes the answer; beside moves, `skippedFooter` is
+one more line, counted and never summed.
+
+**All three footer lines are one line** (the footer rule at this section's head): `cutFooter`,
+`unpricedFooter` and `skippedFooter` each answer a short `line` and the sentence the card has always
+said — `1 more: no Cardmarket price` over `1 more has no price at Cardmarket to compare against`,
+`58 more save €101.60` over `58 more wishes save €101.60` — and each is reserved at `footerLinePx`.
+The skipped sentence is the one the live pass found on two and three lines; a test at 92px cells
+fails if the three reservations go back to 22.
+
+**And it never draws a row or a line the body cannot hold, down to `CELL_MIN`.** The re-check the
+same afternoon (debug build) found the one-line footers right everywhere but one box: a 2×2 at the
+smallest window the app allows, **1024px**, where the card is **181px** and its body 129. It drew the
+figure, **one wish row** and its lines, and scrolled — **3px** under the cut line alone, **27px**
+comfortable and **16px** compact under two lines — because the rows were cut with `rowsFit`, whose
+floor of one draws a row the arithmetic had just said did not fit. `savingsLayout(fit, …)` counts
+with `fitCount` instead (Coming soon's `layoutFor` is the same rule) and answers three faces:
+**every row with the lines under it**; **the rows that fit, the cut line and the lines**; and, where
+no row fits under its lines, **the figure and as many of the unpriced and skipped lines as fit**, in
+their order, then the figure alone. **No cut line on that last face** — with no row drawn it would
+restate the figure, which already counts every wish (`on N wishes`), so what is not drawn is still
+said truthfully. With no row there is no list and no rule under the figure. At the 1024px cell a 2×2
+therefore draws the figure alone, or the figure and both lines; at `CELL_MIN` (a 96px body
+comfortable, 98 compact) the figure and one line. The cost is the figure's reservation: 74px
+comfortable and 62 compact against the 52px the live pass measured it drawing, so a 2×2 at 1024
+compact with no other lines — which the re-check measured drawing a row and a cut line with no
+scroll — now draws the figure alone. `WishlistSavingsWidget.test.tsx` pins each face at the 1024px cell (derived
+from `fit.ts`: eight columns, `spanPx(2, 84.5) = 181`) and at `CELL_MIN`, in both densities, with a
+guard that `rowsFit` would have drawn a row in every one.
+
+**What it inherits from the plan and does not paper over**: wishes in a deck's managed wishlist and
+digital printings are skipped, and the cheaper printing may be in another language, because the
+plan has no language filter (§8). The card says what the dialog will offer.
+
+**A press — a row or the figure** — is `setActiveView("wishlist")` then `setPendingOptimize()`, and
+the page opens `OptimizeWishlistDialog` over the whole list. The kind has no settings, because the
+question is fixed, and that is what lets its press open the same sweep.
+
+### Coming soon — `upcoming_sets.rs`, `ComingSoonWidget.tsx`
+
+`upcoming_sets(days)` answers `{ today, sets }`: each set with paper printings released after today
+and on or before today plus `days` (clamped into `1..=365`, because the number arrives from a
+`config` a reader can hand-edit), soonest first and then by code, with its name, its earliest date,
+`previewed` and `inDecks`.
+
+**`previewed` is the number the search draws for the set — a disagreement with spec §6.1**, which
+said `count(DISTINCT collector_number)`. A press on the row opens Search on the set's chip with the
+format on `Any card`, collapsed to one row per card, and the live pass read `Reality Fracture · FRA ·
+461 seen` over that search saying `285 cards`. Measured on the pass's copy of the corpus through
+`node:sqlite` (read-only, 2026-09-26), every language of FRA is English, so a language rule changes
+nothing; the gap is the set's showcase and borderless printings:
+
+| Set | Distinct collector numbers (the old `previewed`) | Search's collapsed count | Distinct cards in the window |
+| --- | --- | --- | --- |
+| FRA | 461 | **285** | 285 |
+| FRC | 103 | **87** | 87 |
+| MBC | 77 | 77 | 77 |
+| SDS | 1 | 1 | 1 |
+| TRC | 41 | **40** | 40 |
+| TRK | 135 | **91** | 91 |
+
+So `previewed` is now **that search's own count, asked of the same rows**: a correlated
+`count(DISTINCT coalesce(oracle_id, id))` over every paper printing in the set's code — `search.rs`'
+`COLLAPSE_KEY`, made `pub(crate)` and shared — whatever its layout and date, because the search on
+`Any card` draws a token filed under the set's own code and a card dated past the window, and the
+window decides only which sets are coming, never what a set counts.
+`upcoming_sets::tests::previewed_is_the_number_the_search_draws_for_the_set` asks `run_search` itself
+over a fixture holding each of those cases, and the fake's `db.test.ts` asks its own `search_cards`
+the same way. `Previewed so far` sums the sets' figures, so it read 818 on the live pass's 90 days and
+reads 581 on the same copy now. The statement costs what it did: medians of five on that copy,
+**40.2 → 40.6 ms at 90 days and 40.5 → 41.5 ms at 365** through `node:sqlite` (release SQLite, not the
+app; the app's own time is the table at this section's head).
+
+**It reads `cards`, not `sets`, because the browser build never fills `sets`** —
+`sync::insert_sets` is gated off the wasm target — while every card row carries its own `set_code`,
+`set_name` and `released_at`. `sets` is `LEFT JOIN`ed for the one word only it knows, and **where it
+has a row**, `set_type` `token`, `promo`, `memorabilia` and `minigame` drop out; where it has none
+the layout filter is the whole rule (§8). A row with no type is kept.
+
+**A set drops out once any of its paper cards has released**, asked of every card the set has
+rather than only the window's. The List, Foundations Commander and Special Guests each gained
+future-dated printings on the dev corpus, and a card date alone would have announced a set from 2020
+as coming soon. It is asked of `cards` too, so it holds in a browser — and it is a `HAVING`, run
+once per set, **never a term in the row filter**, where it walked the set once per printing in the
+window instead (`upcoming_sets_for`'s comment has that cost).
+
+**The layouts left out are `search.rs`' `NON_CARD_LAYOUTS`, shared rather than copied** — tokens,
+double-faced tokens, emblems, art series and front cards; `front_card` is one the spec did not name.
+Shared, a layout Scryfall adds leaves the search's ranking and this count by one edit.
+
+**`inDecks` is `new_printings`' defaults**: distinct oracle cards in the window held by a deck that
+is not virtual, live and theory rows alike, basic lands left out through `BASIC_LAND_LIKE` — and,
+like §13, archived decks are not filtered.
+
+**The window is found through a `rowid IN (SELECT …)` subquery**, and the reason is the connection
+rather than the widget: with the window's terms in the outer `WHERE`, the planner walked
+`idx_cards_set_cn` to satisfy the `GROUP BY` and looked every printing up in `cards` — rows that carry
+the `raw` blob — **while holding the one read-only connection every other read queues on**. The
+subquery reads only `is_paper`, `released_at` and the rowid, all in `idx_cards_collapse`, so it scans
+that index and fetches only the printings inside the window. **~1.4 s against ~60–72 ms on the real
+corpus**, answers identical — measured on 2026-09-26 through `node:sqlite`, which is **a release
+build of SQLite and not the app**; the lower figure is the subquery before the released-set
+`HAVING` was added and the upper one with it. The app's own time for this read is the live pass's to
+take. There is no `INDEXED BY`: a corpus without the index scans `cards` once, which the plain
+`WHERE` cost anyway.
+
+**Days are counted from the read's own `today`, never from this machine's clock.** "Today" is
+SQLite's `date('now')`, which is UTC, read once, bound into the window and **returned beside the
+list**; `daysUntil` parses both dates as UTC midnights and the release day in a row's hint is
+formatted with `timeZone: "UTC"`, `NewPrintingsWidget`'s rule — a reader west of Greenwich in the
+evening would otherwise read a set as a day nearer than the read that found it. **A fold, never a
+sort**: SQL answered the order, and re-ordering here would be a second opinion about it.
+
+**A press shows the set in Search**: `showSetInSearch(code)`, the view change and the hand-off in one
+store action, which puts the format picker on `Any card` so legality does not hide a card that is
+not legal anywhere yet. The two figures, `Previewed so far` and `Reprints of your deck cards`, are
+counts and so body ink; a two-cell tile's figures wrap onto a second line, and `figuresPx` reserves
+it by the body's width rather than its tier.
+
+**It never draws a row the body cannot hold, down to `CELL_MIN`.** The live pass found a 2×2 on
+cells of ~100px or less scrolling — 4px compact and 9 comfortable at a 1100px window, 23 and 28 at
+1024 — because the rows were cut with `rowsFit`, which floors at one: the arithmetic had answered
+*no row fits* and the body drew one anyway. `layoutFor(fit)` counts with `fitCount`, whose zero is a
+real answer, and tries three faces in order: **both figures and the rows under them**; **the first
+figure alone and the rows under its one line** — a figure gives way to a row, because the rows are
+what the card presses into; and **no row**, with both figures only where the two fit on their own.
+At `CELL_MIN` a 2×2 body is 96px comfortable and 98 compact, shorter than the two wrapped figures
+(101px measured in the live pass), so the smallest box draws the first figure alone; a 2×2 on the
+grid's own 104px cells draws it over one row comfortable and both figures over one row compact; a
+stacked 2×2, as wide as the canvas, keeps both figures on one line and no row. With no row there is
+no list at all and no rule under the figures, because an empty list would still take the body's
+gap. Each face is fenced in `ComingSoonWidget.test.tsx`, the smallest at `CELL_MIN` itself.
+
+**`upcomingSetsKey` sits under `["decks"]` with no bridge.** The answer is half corpus and half
+`deck_cards`: a deck write changes the second half, and a finished sync — the only thing that changes
+the first — invalidates `["decks"]` with every other root (`SYNC_INVALIDATED` in
+`src/lib/useSyncInvalidation.ts`). `NEW_PRINTINGS_ROOT` made the other call for a feed that also has
+a cursor write of its own; this one has none.
+
+### The three hand-offs
+
+Three presses land on a page in a state it does not open in by itself, and each is a field on
+`AppState` in `src/lib/store.ts` **built exactly as `pendingFolder` is** (§8), paying the same three
+rules for the same reasons: it sits **inside `setActiveView`'s clear block**, so it lives for exactly
+one view change; every call site writes **`setActiveView` first and the hand-off second**, because
+the inverse type-checks and leaves the store holding nothing; and the consuming page reads it in a
+**render-phase adjustment, never a mount effect**, and spends it from an effect whether or not it
+changed anything — a `setState` in an effect body is the lint failure that dies only at `verify`.
+`store.test.ts`'s *the home page's three other hand-offs* pins each in both write orders and pins
+that one page spending its own leaves the other two standing.
+
+**`pendingReviewFilter: { scope: "collection" | "wishlist" }`** — To review's binder and wishes
+rows, answered on both cabinets by one hook, `src/lib/useReviewHandoff.ts`; `scope` is what keeps
+the two pages from reading each other's post. It adds two things `pendingFolder` never needed:
+
+* **The filter is seeded before the first fetch.** On a mount, the hand-off is the list hook's
+  *initial* `needsReview` (`initialNeedsReview`), read before the hook is called, and that is not a
+  style choice: a render-phase `setNeedsReview` on the first pass still fetched the unfiltered list
+  once, because TanStack builds its `QueryObserver` in a `useState` initializer, React keeps that
+  state through the pass it restarts, and the observer subscribes — and fetches — at commit with the
+  **first** pass's options (probed in `CollectionPage.test.tsx` on 2026-09-26). On a page already
+  mounted it is `settle`, the ordinary render-phase adjustment, which is what makes the widget's two
+  store writes safe in one commit or two.
+* **The page draws flattened for that visit, and the stored switch is never written.** To review
+  counts flagged rows in every drawer, but a page whose Flatten is off stands at its root — on the
+  collection, *filed nowhere* since v25 — so the filter alone would draw a flagged root, usually
+  empty, under a card that has just counted the flagged entries. So where the reader's stored
+  switch is off, the hand-off also turns on `reviewSweep`, a **local `useState`** the list hook ORs
+  into what it draws (`flattenLocally`) — never `collectionFlattened` or `wishlistFlattened`, which
+  are the reader's, and never the store, so leaving the view drops it. It lives exactly as long as
+  it does something: the filter goes and it goes; the stored switch comes on and it goes, since a
+  sweep over a list already read flat would make the reader's next Flatten press a no-op; and
+  Flatten pressed spends it and writes nothing (`onFlattenToggle`). The collection's switch starts
+  on, so there it rarely arms; the wishlist's starts **off**, so there it is the common case, and
+  without it a reader sent by the `Wishes` row would land on a flagged root holding none of the
+  wishes they were counted.
+
+**`pendingSettingsPanel: string`** — To review's deck-cards row, answered by `SettingsPage`. **It
+names a panel, `"review"`, and not a group — a disagreement with spec §2.2**, which named the `sync`
+group: the live pass found Settings opening on Sync scrolled to its top, with the Needs review
+heading at y=976 and its flagged rows below the fold at 1920×1080, because Needs review is that
+group's second panel under a tall Sync panel. The page opens the group `nav.ts`' `PANELS` files the
+panel under, in the render-phase adjustment, and then **brings the panel to the top of the pane** in
+the effect that spends the hand-off — `scrollIntoView({ block: "start" })` on the panel's own
+section, found by its heading's id, which `nav.ts` guarantees is the `SettingsSection` stem;
+`pickGroup`'s scroll aimed at a panel rather than the page. **A plain string and not `PanelId`**, so
+`store.ts` imports nothing from `features/settings`; the page narrows it against its own panels
+(`asPanelId`, an `includes` over `PANELS`' keys and never `in`, which walks the prototype and would
+take `"constructor"` for a panel) and **drops** a word it has no panel for, which a newer build's word
+or a renamed panel would otherwise turn into a refusal nobody can see. It clears the Settings search
+as well — even where the rail already stands on the right group — because a query outranks the group
+and a panel arriving under one would be a press that visibly did nothing.
+
+**One scroll was not enough, and the re-check found why the same afternoon.** With the Sync panel's
+reads already cached the landing was right — `scrollTop` 472, the heading at y=504, the first
+`Looks fine` row's bottom at 703. **On a first visit it was not**: at +26ms the Sync section was 437px
+and the page too short to scroll at all (`scrollTop` 0); the reads then answered, the section grew
+**437 → 754 → 824px**, and the heading was pushed to **y=976** with the first row at **1175**, below
+the fold, with nothing to re-scroll it — browser scroll anchoring holds a position already scrolled
+to, and from 0 there is none. So the landing **holds** the panel: `src/lib/holdInView.ts` aligns it
+at once and again on every size change of the page root or the panel (a `ResizeObserver`), and
+**lets go for good at the reader's first wheel, touch, press or key** — listened for on the window's
+capture phase, so no handler on the way can keep it alive — or after `HOLD_IN_VIEW_MS` (3s), or when
+the reader picks a group or the page unmounts. It never listens for `scroll`, because its own
+alignment fires those. The release lives in a ref rather than in the effect's cleanup, because
+spending the hand-off re-runs that effect on the next commit and a returned cleanup would end the
+hold there. jsdom lays nothing out, so `holdInView.test.ts` and `SettingsPage.test.tsx` pin the
+mechanism with a stand-in observer the tests fire; where the panel lands in the real window is the
+next live pass's to confirm.
+
+**`pendingOptimize: boolean`** — Wishlist savings' press, answered by `WishlistPage`, which opens
+`OptimizeWishlistDialog` with a **scope override**, `sweepOver: "whole"`, planning
+`wholeWishlistQuery` — **never by writing `wishlistFlattened` or a filter**, so closing the dialog
+leaves the page exactly as the reader left it. The override is left standing when the dialog closes,
+deliberately: the panel outlives the flag by its fade, and a scope put back on close would re-key the
+plan mid-fade and flash its loading sentence; the page's own Optimise button writes `"page"` on its
+press instead. A boolean because there is nothing else to say — the widget only ever asks about the
+whole list.

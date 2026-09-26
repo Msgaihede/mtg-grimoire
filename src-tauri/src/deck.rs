@@ -5298,7 +5298,7 @@ fn printed_power_toughness(json: &str) -> (Option<String>, Option<String>) {
 /// `card_id` is not in `cards` — was dropped from the map and read as owned 0 until the next
 /// sync gave it its identity back. At this grain there is nothing to look up: the deck row and
 /// the collection row name the same `card_id`, so the copy counts.
-fn owned_by_printing(
+pub(crate) fn owned_by_printing(
     conn: &Connection,
     deck_id: i64,
 ) -> Result<HashMap<(String, String), i64>, String> {
@@ -5358,7 +5358,7 @@ fn owned_by_printing(
 /// Grouped by `(card_id, finish)` and orphan-tolerant for [`owned_by_printing`]'s reasons, which
 /// are unchanged: a foil row wants a foil copy, and a printing that has left `cards` is still a
 /// `card_id` on both sides of the match.
-fn available_by_printing(
+pub(crate) fn available_by_printing(
     conn: &Connection,
     deck_id: i64,
 ) -> Result<HashMap<(String, String), i64>, String> {

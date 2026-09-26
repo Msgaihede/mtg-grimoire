@@ -122,6 +122,8 @@ import { widgetDensity } from "./widgetSettings";
 import type { WidgetKind } from "./widgets";
 import { ActivityWidget } from "./widgets/ActivityWidget";
 import { CollectionValueWidget } from "./widgets/CollectionValueWidget";
+import { ComingSoonWidget } from "./widgets/ComingSoonWidget";
+import { DeckCompletionWidget } from "./widgets/DeckCompletionWidget";
 import { DecksWidget, DecksWidgetSettings } from "./widgets/DecksWidget";
 import { FoldersWidget, FoldersWidgetSettings } from "./widgets/FoldersWidget";
 import { NewPrintingsWidget, NewPrintingsWidgetSettings } from "./widgets/NewPrintingsWidget";
@@ -130,7 +132,9 @@ import { RecentCardsWidget } from "./widgets/RecentCardsWidget";
 import { SetCompletionWidget } from "./widgets/SetCompletionWidget";
 import { StickyNotesWidget } from "./widgets/StickyNotesWidget";
 import { SummaryWidget, SummaryWidgetSettings } from "./widgets/SummaryWidget";
+import { ToReviewWidget } from "./widgets/ToReviewWidget";
 import { ValueHistoryWidget } from "./widgets/ValueHistoryWidget";
+import { WishlistSavingsWidget } from "./widgets/WishlistSavingsWidget";
 import { WishlistValueWidget } from "./widgets/WishlistValueWidget";
 
 /**
@@ -239,6 +243,16 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <NewPrintingsWidget {...props} />;
     case "stickyNotes":
       return <StickyNotesWidget {...props} />;
+    case "deckCompletion":
+      return <DeckCompletionWidget {...props} />;
+    // `ToReviewWidget` takes one prop the page never passes — `web`, which defaults to the build's
+    // own `isWebTarget()` and exists so a story can draw the browser build's face.
+    case "toReview":
+      return <ToReviewWidget {...props} />;
+    case "wishlistSavings":
+      return <WishlistSavingsWidget {...props} />;
+    case "comingSoon":
+      return <ComingSoonWidget {...props} />;
     default:
       return <UnknownWidgetBody />;
   }
@@ -256,6 +270,11 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
       return <FoldersWidgetSettings widget={widget} onConfig={onConfig} />;
     case "newPrintings":
       return <NewPrintingsWidgetSettings widget={widget} onConfig={onConfig} />;
+    // **The Decks widget's pin checklist, reused rather than copied** (spec §2.1): Deck completion
+    // reads its scope and its pins through `DecksWidget`'s own `deckScope` and `pinnedDeckIds`, so
+    // the checklist writes exactly what that body reads, and a fix to one is a fix to both.
+    case "deckCompletion":
+      return <DecksWidgetSettings widget={widget} onConfig={onConfig} />;
     default:
       return undefined;
   }

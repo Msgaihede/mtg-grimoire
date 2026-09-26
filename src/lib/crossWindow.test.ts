@@ -16,7 +16,7 @@ import { MARKETPLACE_KEY } from "./useMarketplace";
 import { NAV_COLLAPSED_KEY } from "./useNavCollapsed";
 import { START_VIEW_KEY } from "./useStartView";
 import { HOME_LAYOUT_KEY } from "@/features/home/useHomeLayout";
-import { RECENT_CARDS_ROOT } from "@/features/home/keys";
+import { RECENT_CARDS_ROOT, scannerTrayCountKey } from "@/features/home/keys";
 import { PRINTING_GROUP_BY_KEY } from "@/features/card/usePrintingGroupBy";
 import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
 import { FOLDER_PANE_KEY } from "@/features/decks/useFolderPane";
@@ -41,7 +41,15 @@ describe("the cross-window table map", () => {
 
   it("spells each key the way its own hook does", () => {
     const follow = FOLLOW_LIVE_APP_META.map((k) => JSON.stringify(k));
-    for (const key of [START_VIEW_KEY, HOME_LAYOUT_KEY, MARKETPLACE_KEY, MARK_COLORS_KEY, RECENT_CARDS_ROOT, MIRROR_KEY]) {
+    for (const key of [
+      START_VIEW_KEY,
+      HOME_LAYOUT_KEY,
+      MARKETPLACE_KEY,
+      MARK_COLORS_KEY,
+      RECENT_CARDS_ROOT,
+      MIRROR_KEY,
+      scannerTrayCountKey,
+    ]) {
       expect(follow).toContain(JSON.stringify(key));
     }
     const perWindow = PER_WINDOW_KEYS.map((k) => JSON.stringify(k));
@@ -96,6 +104,47 @@ describe("the cross-window table map", () => {
     // The rest of the rows still follow.
     for (const key of FOLLOW_LIVE_APP_META) expect(invalidated(client, key)).toBe(true);
     for (const stop of stops) stop();
+  });
+
+  /**
+   * **The home page's count of the tray follows a scan in another window, where the tray itself
+   * cannot.** With a second window the Scanner and the home page *are* on screen at once, and a
+   * scan there is an `app_meta` write here — which, without this, left To review's `Scanned cards`
+   * row at its old count until the page next mounted. It can follow because `scanner_tray` is a
+   * plain read of the stored row that writes nothing (so no refresh loop), and because its key sits
+   * *beside* `["scanner", "tray"]` rather than under it, so the single-writer predicate that spares
+   * the owner's tray never spares the count.
+   */
+  it("refetches a live tray count on another window's app_meta write, and leaves the tray alone", async () => {
+    const client = seeded([scannerTrayCountKey]);
+    const count = vi.fn(() => "fresh");
+    const stored = vi.fn(() => "stored");
+    client.setQueryData(["scanner", "tray"], "unsaved");
+    const stops = [
+      new QueryObserver(client, {
+        queryKey: [...scannerTrayCountKey],
+        queryFn: count,
+        staleTime: Infinity,
+      }).subscribe(() => undefined),
+      new QueryObserver(client, {
+        queryKey: ["scanner", "tray"],
+        queryFn: stored,
+        staleTime: Infinity,
+        structuralSharing: false,
+      }).subscribe(() => undefined),
+    ];
+    try {
+      expect(count, "the premise: a count on screen is not refetched by mounting").not.toHaveBeenCalled();
+
+      refreshForTables(client, ["app_meta"]);
+
+      await vi.waitFor(() => expect(client.getQueryData([...scannerTrayCountKey])).toBe("fresh"));
+      expect(count).toHaveBeenCalledTimes(1);
+      expect(client.getQueryData(["scanner", "tray"])).toBe("unsaved");
+      expect(stored).not.toHaveBeenCalled();
+    } finally {
+      for (const stop of stops) stop();
+    }
   });
 
   it("drops an idle tray and prefs, so the next scanning window reads them from scratch", () => {
