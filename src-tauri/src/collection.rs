@@ -2447,7 +2447,11 @@ const NOT_A_DIMENSION: &str = "That is not a way to break down a collection.";
 ///   files under the set it came from rather than under a hole. `c.set_name` rides along as the
 ///   name, and is `None` for exactly those orphans.
 /// * `finish` — `e.finish`, `TEXT NOT NULL` with a `CHECK`, so there is nothing to bucket.
-fn breakdown_columns(dimension: &str) -> Result<(&'static str, &'static str), String> {
+///
+/// **`pub(crate)` for [`crate::value_history`]**, whose colour split takes the `color` key from
+/// here rather than respelling the `CASE` — two spellings of one bucket would let the graph and
+/// the value widget file the same card under two colours the first time either changed.
+pub(crate) fn breakdown_columns(dimension: &str) -> Result<(&'static str, &'static str), String> {
     match dimension {
         "rarity" => Ok(("coalesce(c.rarity, 'unknown')", "NULL")),
         "color" => Ok((
