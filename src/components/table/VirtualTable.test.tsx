@@ -540,15 +540,87 @@ describe("VirtualTable's sticky band", () => {
     expect(screen.getByText("Bar 0")).toBeInTheDocument();
 
     const table = screen.getByRole("table");
-    const overlay = table.querySelector("[data-sticky-band]") as HTMLElement;
-    // Between the column header and the body — in flow, so `sticky` works where the rows
-    // cannot — and zero tall, so it moves no row.
-    expect(table.children[0]).toBe(screen.getAllByRole("row")[0]);
-    expect(table.children[1]).toBe(overlay);
-    expect(table.children[2]).toBe(screen.getByRole("rowgroup"));
+    const scroller = table.parentElement as HTMLElement;
+    const overlay = scroller.querySelector("[data-sticky-band]") as HTMLElement;
+    // The scroller's first child, ahead of the table rather than inside it: in flow, so `sticky`
+    // works where the rows cannot, and zero tall, so it moves no row.
+    expect(scroller.children).toHaveLength(2);
+    expect(scroller.children[0]).toBe(overlay);
+    expect(scroller.children[1]).toBe(table);
     expect(overlay).toHaveClass("sticky", "h-0", LAYER.header);
     expect(overlay.style.top).toBe(`${TABLE_HEADER_HEIGHT}px`);
+    // The table inside keeps its two children, and the scrollport and the frame are the
+    // scroller's now. The table carries neither.
+    expect(table.children[0]).toBe(screen.getAllByRole("row")[0]);
+    expect(table.children[1]).toBe(screen.getByRole("rowgroup"));
+    expect(scroller).toHaveClass("min-h-0", "flex-1", "overflow-auto", "border");
+    expect(table).not.toHaveAttribute("class");
+    // Rows still count from the header's bottom edge, because the anchor is zero tall.
     expect(rowOf("S0 heading").style.transform).toBe("translateY(0px)");
+  });
+
+  /**
+   * **The bar may not be owned by the table** (review of f50a19ec). The pages put a path, a Top
+   * button and a drop target in it, and a `role="table"` may own rows and row groups only. A
+   * generic `div` between them passes ownership through (axe `aria-required-children`,
+   * WCAG 1.3.1), so the only fix is for no table to be an ancestor of the bar at all.
+   */
+  it("keeps the bar's controls out of the table, and the table whole", () => {
+    drawLong({ stickyBand: () => <button type="button">Top</button> });
+    const button = screen.getByRole("button", { name: "Top" });
+    expect(button.closest('[role="table"]')).toBeNull();
+
+    // The table itself still carries everything that made it a table: its name, its count
+    // (90 cards + 10 bands + the header), its tab stop, its header row and its rows.
+    const table = screen.getByRole("table", { name: "Test rows" });
+    expect(table).toHaveAttribute("aria-rowcount", "101");
+    expect(table).toHaveAttribute("tabindex", "0");
+    expect(within(table).queryByRole("button", { name: "Top" })).toBeNull();
+    const [header] = within(table).getAllByRole("row");
+    expect(header).toHaveAttribute("aria-rowindex", "1");
+    expect(within(header).getAllByRole("columnheader")).toHaveLength(COLUMNS.length);
+    const body = within(table).getByRole("rowgroup");
+    expect(body.contains(rowOf("Card 1"))).toBe(true);
+    expect(body.contains(rowOf("S0 heading"))).toBe(true);
+    expect(rowOf("Card 1")).toHaveAttribute("aria-rowindex", "3");
+  });
+
+  /**
+   * The header and the bar take the top 76px of the scrollport, and a row is 44px, so a
+   * focused row can be wholly underneath them. Focusing it would then scroll nothing, because
+   * the browser counts it as in view (WCAG 2.4.11). Scroll padding moves that line to the bar's
+   * lower edge. It is set only while the bar can be drawn, and never anywhere else.
+   *
+   * jsdom scrolls nothing into view, so what this pins is the declaration. What it buys needs a
+   * browser, and the live pass owns that.
+   */
+  it("pads the scroll by the header and the bar while the bar is live, and only then", () => {
+    const { unmount } = drawLong({ stickyBand: bar() });
+    const scroller = () => screen.getByRole("table").parentElement as HTMLElement;
+    expect(scroller().style.scrollPaddingTop).toBe(
+      `${TABLE_HEADER_HEIGHT + TABLE_BAND_HEIGHT}px`,
+    );
+    unmount();
+
+    // It follows `bandHeight`, because that is the bar's height.
+    const told = drawLong({ stickyBand: bar(), bandHeight: 56 });
+    expect(scroller().style.scrollPaddingTop).toBe(`${TABLE_HEADER_HEIGHT + 56}px`);
+    told.unmount();
+
+    // Without `stickyBand` the table is the scroller, as it always was, and carries no style.
+    const plain = drawLong();
+    expect(screen.getByRole("table")).not.toHaveAttribute("style");
+    plain.unmount();
+
+    // Under `grow` nothing is drawn, so nothing is padded, and the table is the root again.
+    const grown = drawLong({ stickyBand: bar(), grow: true });
+    expect(grown.container.firstElementChild).toBe(screen.getByRole("table"));
+    expect(screen.getByRole("table")).not.toHaveAttribute("style");
+    grown.unmount();
+
+    // Over no rows the bar is not drawn, so there is nothing to pad for.
+    render(<VirtualTable {...BASE} rows={[]} total={0} band={bandOf} stickyBand={bar()} />);
+    expect(scroller()).not.toHaveAttribute("style");
   });
 
   /**
@@ -559,35 +631,39 @@ describe("VirtualTable's sticky band", () => {
   it("follows the scroll to the row under the header's edge", () => {
     const stickyBand = bar();
     drawLong({ stickyBand });
-    const table = screen.getByRole("table");
+    // The scroller, which with a live bar is the table's parent rather than the table.
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
 
     // S1's heading starts at 36 + 40 + 9 × 44 = 472, which is the header's edge at 436.
-    table.scrollTop = 436;
-    fireEvent.scroll(table);
+    scroller.scrollTop = 436;
+    fireEvent.scroll(scroller);
     expect(stickyBand).toHaveBeenLastCalledWith(10);
 
     // 64px further, the edge (536) is inside card 11 (512–556): the heading has scrolled away.
-    table.scrollTop = 500;
-    fireEvent.scroll(table);
+    scroller.scrollTop = 500;
+    fireEvent.scroll(scroller);
     expect(stickyBand).toHaveBeenLastCalledWith(11);
     expect(screen.getByText("Bar 11")).toBeInTheDocument();
   });
 
-  /** Passes before the change too — a fence on the `grow` path, which must not move. */
+  /**
+   * A fence on the `grow` path, which must not move. The whole document is searched rather than
+   * the table, since the anchor is never inside the table now.
+   */
   it("draws no overlay under grow, where no offset of the table names a row", () => {
     const stickyBand = bar();
-    drawLong({ stickyBand, grow: true });
+    const { container } = drawLong({ stickyBand, grow: true });
     expect(stickyBand).not.toHaveBeenCalled();
-    expect(screen.getByRole("table").querySelector("[data-sticky-band]")).toBeNull();
+    expect(container.querySelector("[data-sticky-band]")).toBeNull();
   });
 
-  /** So the index handed out is always a row of `rows`. Passes before the change too. */
+  /** So the index handed out is always a row of `rows`. */
   it("asks nothing of an empty table", () => {
     const stickyBand = bar();
-    render(
+    const { container } = render(
       <VirtualTable {...BASE} rows={[]} total={0} band={bandOf} stickyBand={stickyBand} />,
     );
     expect(stickyBand).not.toHaveBeenCalled();
-    expect(screen.getByRole("table").querySelector("[data-sticky-band]")).toBeNull();
+    expect(container.querySelector("[data-sticky-band]")).toBeNull();
   });
 });

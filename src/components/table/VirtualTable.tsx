@@ -241,6 +241,15 @@ export function VirtualTable<Row>({
    * heading's controls. Called only while there are rows, so the index is always one of them,
    * and **never under `grow`**: the page scrolls there and no offset of this table names a row —
    * and nothing that grows draws shelves.
+   *
+   * **Passing it moves the scroller off the `role="table"` element**, and that is the one
+   * structural change any prop here makes. The bar holds buttons (a path, Top) and a drop
+   * target, and a table may own only rows and row groups — so the bar cannot be inside it. The
+   * scroller becomes a plain `div` holding two siblings, the bar's anchor and the table, and the
+   * table keeps its name, its count and its tab stop. A caller that scrolls the table in a test
+   * scrolls `table.parentElement`. The scroller also takes a `scroll-padding-top` of the header
+   * plus {@link bandHeight}, so a row that takes focus scrolls clear of both rather than coming
+   * to rest underneath them.
    */
   stickyBand?: (firstVisibleRowIndex: number) => ReactNode;
 }) {
@@ -360,9 +369,13 @@ export function VirtualTable<Row>({
     ? rows.map((_row, index) => ({ index, key: index, item: null }))
     : virtualRows.map((v) => ({ index: v.index, key: v.key, item: v }));
 
-  return (
+  // The table. **It is the scroller too, except while a sticky band is live** — then a plain
+  // `div` around it scrolls instead (below), because the bar is not something a table may own.
+  // Everything that makes it a *table* (the role, the name, the count, the tab stop) stays here
+  // in both shapes; only the scroll container's own ref and classes move out.
+  const table = (
     <div
-      ref={scrollRef}
+      ref={stickyLive ? undefined : scrollRef}
       role="table"
       aria-label={label}
       // Every matching row plus the header, not just the rows currently in the DOM —
@@ -379,7 +392,14 @@ export function VirtualTable<Row>({
       // `overflow`, and the page scrolls it instead. The border and the radius stay — they are
       // what makes the table a table — and `role`, `aria-label`, `aria-rowcount` and the
       // `tabIndex` are untouched, because none of them is a statement about scrolling.
-      className={cn("rounded-md border border-border", !grow && "min-h-0 flex-1 overflow-auto")}
+      //
+      // While a sticky band is live the classes belong to the scroller around this element, so
+      // it carries none: the frame and the scrollport are one box's, and that box is the parent.
+      className={
+        stickyLive
+          ? undefined
+          : cn("rounded-md border border-border", !grow && "min-h-0 flex-1 overflow-auto")
+      }
     >
       {/* Sticky inside the scroll container rather than sitting above it: a header outside
           the scroller is wider than the rows by exactly the scrollbar, and the columns drift
@@ -433,28 +453,6 @@ export function VirtualTable<Row>({
           ),
         )}
       </div>
-
-      {/* The sticky band: an overlay pinned directly under the column header, showing whatever
-          `stickyBand` draws for the row at the header's edge. CSS `sticky` cannot pin a row —
-          rows are `absolute` and translated — so this is an element of its own, in flow for the
-          header's own reason: `sticky` works on an in-flow box and resolves against this
-          scroller. Zero tall, so it moves no row; its content is `absolute` inside it and is
-          drawn over the rows below. On the header's rung: the rows scroll under it, and it
-          follows the header in the DOM without overlapping it.
-
-          Inside the scroller rather than laid over it from outside, on purpose: a box over the
-          scroller covers the scrollbar and needs a wrapper around the table. Not under `grow`,
-          where the page scrolls and no offset of this element names a row; not over an empty
-          list, so the index handed out is always a row of `rows`. */}
-      {stickyBand && !grow && rows.length > 0 && (
-        <div
-          data-sticky-band=""
-          style={{ top: TABLE_HEADER_HEIGHT }}
-          className={cn("sticky h-0", LAYER.header)}
-        >
-          <div className="absolute inset-x-0 top-0">{stickyBand(firstVisibleRowIndex)}</div>
-        </div>
-      )}
 
       {/* Holds the scrollbar open to the full list height while the rows inside it are
           positioned absolutely — and wants neither number under `grow`, where the rows are in
@@ -618,6 +616,62 @@ export function VirtualTable<Row>({
           );
         })}
       </div>
+    </div>
+  );
+
+  // Without a live sticky band the table is its own scroller, exactly as it always was.
+  if (!stickyLive) return table;
+
+  // With one, a plain `div` scrolls and the table is the second of its two children. **The bar
+  // may not be inside the table**: it holds buttons and a drop target, and a `role="table"` may
+  // own rows and row groups only. A generic `div` in between passes ownership straight through
+  // (axe `aria-required-children`, WCAG 1.3.1). So the bar's anchor is the table's sibling, and
+  // nothing in it has a table for an ancestor.
+  //
+  // `scrollPaddingTop` is the header and the bar together, and it is here because of what they
+  // cover. They take the top 76px of the scrollport between them and a row is 44px, so a row the
+  // keyboard focuses can sit wholly underneath them, and focusing it scrolls nothing: the browser
+  // counts it as already in view (WCAG 2.4.11). Scroll padding moves that line down to the bar's
+  // lower edge. It is used for scroll-into-view and never for `scrollTo`, so the virtualiser's
+  // own offsets and the scroll reset are untouched. It is set only while rows exist, since the
+  // bar is drawn only then.
+  return (
+    <div
+      ref={scrollRef}
+      className="min-h-0 flex-1 overflow-auto rounded-md border border-border"
+      style={
+        rows.length > 0 ? { scrollPaddingTop: TABLE_HEADER_HEIGHT + bandSize } : undefined
+      }
+    >
+      {/* The sticky band: an overlay pinned directly under the column header, showing whatever
+          `stickyBand` draws for the row at the header's edge. CSS `sticky` cannot pin a row —
+          rows are `absolute` and translated — so this is an element of its own, and an in-flow
+          one, because `sticky` works on an in-flow box and resolves against this scroller.
+
+          **First, ahead of the table, and that order is what pins it.** A sticky box is pushed
+          down to its inset whenever its flow position is above it, so an anchor whose place in
+          the flow is the scroller's top edge sits at 36px at every scroll offset. Placed after
+          the table, its flow position would be the end of the list, and `top` never pulls a box
+          up. It is zero tall, so it moves no row and the rows' coordinates (`scrollMargin`) are
+          unchanged. Its content is `absolute` inside it and is drawn over the rows below. It is
+          on the header's rung, so the rows scroll under it. The header itself sits at 0–36 and
+          the bar starts at 36, so they never overlap and document order has nothing to decide.
+
+          Inside the scroller rather than laid over it from outside, on purpose: a box over the
+          scroller covers the scrollbar. Not over an empty list, so the index handed out is
+          always a row of `rows`. */}
+      {rows.length > 0 && (
+        <div
+          data-sticky-band=""
+          style={{ top: TABLE_HEADER_HEIGHT }}
+          className={cn("sticky h-0", LAYER.header)}
+        >
+          <div className="absolute inset-x-0 top-0">
+            {stickyBand?.(firstVisibleRowIndex)}
+          </div>
+        </div>
+      )}
+      {table}
     </div>
   );
 }

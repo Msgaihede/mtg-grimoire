@@ -173,7 +173,8 @@ const meta = {
           "runtime would emit no rule at all.\n\n" +
           "**Heading bands** are opt-in: a row `band` answers for is drawn as one cell across " +
           "every column, takes none of a row's gestures, and counts in `aria-rowcount`; " +
-          "`stickyBand` pins an overlay under the column header. See `Shelved`.",
+          "`stickyBand` pins an overlay under the column header, drawn beside the table rather " +
+          "than inside it, since a table may own only rows. See `Shelved`.",
       },
     },
   },
@@ -464,7 +465,8 @@ const shelfBar = (index: number) => {
  * a row to assistive tech: `aria-rowcount` is the 43 cards, the three headings and the header.
  * The bar is pinned under the column header and names the shelf of the row at the header's
  * edge; at the top it draws nothing, because the first heading is right there. Scroll to watch
- * it hand over at each heading.
+ * it hand over at each heading. The bar is the table's sibling in a scroller around both, not a
+ * child of the table, so a button in it is never owned by the table.
  */
 export const Shelved: Story = {
   args: { rows: SHELVED, total: ALL.length, band: shelfBand, stickyBand: shelfBar },
@@ -487,12 +489,17 @@ export const Shelved: Story = {
     // At the top the first heading is its own bar, so the overlay is empty.
     const bar = canvasElement.querySelector("[data-sticky-band]") as HTMLElement;
     await expect(bar.textContent).toBe("");
+    // The bar is the table's sibling and never its child, because a table may own only rows. So
+    // the scroller is the table's parent, and it is what scrolls below.
+    await expect(bar.closest('[role="table"]')).toBeNull();
+    const scroller = table.parentElement as HTMLElement;
+    await expect(bar.parentElement).toBe(scroller);
 
     // 800px down puts the header's edge at 836: past `Trade binder`'s heading (604–644) and
     // inside its fifth card, so the bar names it. Dispatched as well as set, because jsdom
     // fires no event for an assigned `scrollTop`; a browser's own arrives after and agrees.
-    table.scrollTop = 800;
-    table.dispatchEvent(new Event("scroll"));
+    scroller.scrollTop = 800;
+    scroller.dispatchEvent(new Event("scroll"));
     await expect(await within(bar).findByText("Trade binder")).toBeInTheDocument();
   },
 };
