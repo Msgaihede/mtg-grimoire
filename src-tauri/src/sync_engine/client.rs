@@ -104,7 +104,7 @@ pub struct RelayOutcome {
     /// Envelopes taken from it.
     pub pulled: usize,
     /// Envelopes that could not be opened — a device that has not caught up with a key
-    /// rotation, or a blob from before one.
+    /// rotation, or a blob from before one whose key this device does not hold.
     pub unreadable: usize,
     pub applied: usize,
     pub resurrected: usize,
@@ -492,27 +492,45 @@ pub async fn check_keys(conn: &Connection) -> Result<KeyOutcome, String> {
         }
     };
 
-    // **The answer does not say who rotated, so the candidates are tried in turn.** `/keys`
-    // carries the epoch, the blob and the manifest and nothing about the sealer — deliberately,
-    // because the relay is not a party to the rewrap. The blob's key is
-    // `X25519(remover_secret, my_public)` and its AAD binds the group, this device and the
-    // epoch, so exactly one peer's public key opens it and the rest fail the AEAD. The manifest
-    // is at most 64 ids and the remover is always on it (it rewraps for itself as well), so this
-    // is a short loop with a guaranteed hit. `adopt_epoch` unwraps *before* it opens its
-    // transaction, so a candidate that does not fit writes nothing.
-    let mut refusal = None;
-    for peer in page.devices.iter().filter(|id| id.as_str() != device) {
-        match identity::adopt_epoch(conn, peer, page.epoch, &sealed, &page.devices) {
-            Ok(()) => return Ok(KeyOutcome::Adopted),
-            Err(e) => refusal = Some(e),
+    // **The answer does not say who rotated, so every sealer this device can name is tried.**
+    // `/keys` carries the epoch, the blob and the manifest and nothing about the sealer —
+    // deliberately, because the relay is not a party to the rewrap. The blob's key is
+    // `X25519(sealer_secret, my_public)` and its AAD binds the group, this device and the epoch,
+    // so exactly one public key opens it and the rest fail the AEAD. `adopt_epoch` unwraps
+    // *before* it opens its transaction, so a candidate that does not fit writes nothing.
+    //
+    // ⚠️ **The manifest alone is not enough, and narrowing back to it stalls a device for good.**
+    // A departure is sealed by the leaver, which is on no manifest it publishes — so every device
+    // that stayed failed here on every trip after a *Leave group*. And `plan_excluding` seals a
+    // blob for the planner too, so a rotation this device published and never committed (a lost
+    // 2xx, a failed `commit_rotation`) is sealed by *this* device: excluding itself, it failed
+    // here for ever and never pushed again. Hence the manifest, then the whole local roster, then
+    // this device.
+    //
+    // **Trying more candidates trusts nothing new.** A candidate is only a public key to try, and
+    // every one is read from this device's own roster — taken at pairing, behind the six digits —
+    // or is its own; the relay supplies ids and never a key. The blob still opens only for whoever
+    // holds the matching secret, bound to this group, this device and this epoch. A device removed
+    // earlier is off the roster already — deleted, or on an older build's database stamped
+    // `revoked_at`, which is skipped here and refused by `adopt_epoch` — and anybody able to
+    // publish to `/rotate` at all could always have named itself on its own manifest.
+    let mut candidates: Vec<String> = page.devices.clone();
+    for known in identity::roster(conn).map_err(|e| e.to_string())? {
+        if known.revoked_at.is_none() && !candidates.contains(&known.device_id) {
+            candidates.push(known.device_id);
         }
     }
-    let message = match refusal {
-        Some(e) => format!("that new group key could not be opened by this device: {e}"),
-        None => "the relay sent a key for this device with nobody on the manifest to have \
-                 sealed it"
-            .to_owned(),
-    };
+    if !candidates.contains(&device) {
+        candidates.push(device.clone());
+    }
+    let mut refusal = String::new();
+    for sealer in &candidates {
+        match identity::adopt_epoch(conn, sealer, page.epoch, &sealed, &page.devices) {
+            Ok(()) => return Ok(KeyOutcome::Adopted),
+            Err(e) => refusal = e,
+        }
+    }
+    let message = format!("that new group key could not be opened by this device: {refusal}");
     note(conn, "keys", Kind::Parse, &message, Some(&url));
     Err(message)
 }
@@ -730,13 +748,12 @@ pub async fn get_rendezvous(
 /// `check_keys` itself says one screen up and what
 /// `identity::tests::a_departure_names_everyone_but_this_device` exists to pin. So the relay
 /// *would* hold a blob for this device at *N+1* and a missing commit is **not** read as a
-/// removal. What it is instead is harder to diagnose: this device sits at *N*, its next
-/// `check_keys` reads a higher epoch **with** a blob — and the adopt loop skips this device as a
-/// candidate sealer (`filter(|id| id != device)`), so every remaining candidate fails the AEAD
-/// and the device stalls at *N* with *"that new group key could not be opened by this device"*
-/// on every sync while every peer moves on. Committing makes the epochs equal, so `check_keys`
-/// answers `Current` and never reads the manifest at all. This is `remove_device`'s order
-/// exactly.
+/// removal. It is recovered instead: this device sits at *N*, its next `check_keys` reads a
+/// higher epoch **with** a blob, and tries this device itself as the sealer — so it adopts its own
+/// rotation. That is the fallback for a lost 2xx or a failed commit and not a licence to skip the
+/// commit: until it runs the device stands a trip behind. (Until `check_keys` tried itself, the
+/// adopt loop skipped this device, every candidate failed the AEAD and the device stalled at *N*
+/// for good.) This is `remove_device`'s order exactly.
 pub async fn publish_join(conn: &Connection) -> Result<(), String> {
     let Ok(plan) = identity::plan_join(conn) else {
         identity::set_roster_dirty(conn, true)?;
@@ -914,9 +931,13 @@ pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<usize, S
 /// * `envelope.epoch > group.epoch` — **this device is behind a key rotation** and has not been
 ///   handed the new key yet. Those ops become readable, so the cursor stays put and the page is
 ///   re-delivered until it does.
-/// * `envelope.epoch < group.epoch`, or a blob that fails the AEAD — **written before a
-///   rotation, or altered**. No key this device will ever hold opens it, so refusing to advance
-///   would stall the stream for the thirty days the relay keeps a tail, for nothing. It is
+/// * `envelope.epoch < group.epoch` — **written before a rotation**. It is opened with the key
+///   of its own epoch when [`identity::group_at`] still holds one, which it does across a join:
+///   `check_keys` adopts before this runs, so without that key a device offline across any
+///   pairing would step over everything the group wrote before it, deletes included, for good.
+///   A key it never held, or forgot at a removal (`identity::supersede` says why), opens nothing,
+///   and neither does a blob that fails the AEAD — **altered**. Refusing to advance past either
+///   would stall the stream for the thirty days the relay keeps a tail, for nothing, so it is
 ///   counted, written to `error_log`, and stepped over.
 pub async fn pull(
     conn: &Connection,
@@ -973,7 +994,12 @@ pub async fn pull(
     let mut unreadable = 0usize;
     let mut behind = false;
     for envelope in &page.envelopes {
-        match wire::open_batch(&group, envelope) {
+        let held = if envelope.epoch < group.epoch {
+            identity::group_at(conn, &group, envelope.epoch).map_err(|e| e.to_string())?
+        } else {
+            None
+        };
+        match wire::open_batch(held.as_ref().unwrap_or(&group), envelope) {
             Ok(mut batch) => ops.append(&mut batch),
             Err(e) => {
                 unreadable += 1;
