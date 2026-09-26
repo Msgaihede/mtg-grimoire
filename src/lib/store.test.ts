@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CardWalkStop } from "@/features/decks/deckWalk";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
-import { useAppStore, type PaneDeckContext } from "@/lib/store";
+import { useAppStore, type PaneDeckContext, type ViewId } from "@/lib/store";
 
 beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
 
@@ -308,6 +308,110 @@ describe("the set Search was asked to show", () => {
 
     expect(useAppStore.getState().pendingSearchSet).toBeNull();
   });
+});
+
+/**
+ * **The home page's three other one-shot hand-offs** (2026-09-26) — To review's needs-review filter
+ * and its Settings group, and Wishlist savings' whole-list price sweep.
+ *
+ * Each is `pendingFolder`'s shape, so each is pinned the way that one is: spent by a view change
+ * read or not, survived when the view is written first, and **wiped** when it is written second —
+ * the order that type-checks, reads correctly and leaves the store holding nothing.
+ */
+describe("the home page's three other hand-offs", () => {
+  interface Handoff {
+    name: string;
+    /** The view the press that writes it navigates to. */
+    view: ViewId;
+    write: () => void;
+    read: () => unknown;
+    written: unknown;
+    spent: unknown;
+  }
+
+  const HANDOFFS: readonly Handoff[] = [
+    {
+      name: "pendingReviewFilter",
+      view: "wishlist",
+      write: () => useAppStore.getState().setPendingReviewFilter({ scope: "wishlist" }),
+      read: () => useAppStore.getState().pendingReviewFilter,
+      written: { scope: "wishlist" },
+      spent: null,
+    },
+    {
+      name: "pendingSettingsGroup",
+      view: "settings",
+      write: () => useAppStore.getState().setPendingSettingsGroup("sync"),
+      read: () => useAppStore.getState().pendingSettingsGroup,
+      written: "sync",
+      spent: null,
+    },
+    {
+      name: "pendingOptimize",
+      view: "wishlist",
+      write: () => useAppStore.getState().setPendingOptimize(),
+      read: () => useAppStore.getState().pendingOptimize,
+      written: true,
+      spent: false,
+    },
+  ];
+
+  /** Nobody has pressed anything, so no page is being sent anywhere. */
+  it.each(HANDOFFS)("$name starts spent", ({ read, spent }) => {
+    expect(read()).toEqual(spent);
+  });
+
+  /** Three fields, three clears — a page spending its own hand-off must not spend another's. */
+  it("spends each through its own clear and leaves the other two standing", () => {
+    for (const handoff of HANDOFFS) handoff.write();
+
+    useAppStore.getState().clearPendingReviewFilter();
+    expect(useAppStore.getState().pendingReviewFilter).toBeNull();
+    expect(useAppStore.getState().pendingSettingsGroup).toBe("sync");
+    expect(useAppStore.getState().pendingOptimize).toBe(true);
+
+    useAppStore.getState().clearPendingSettingsGroup();
+    expect(useAppStore.getState().pendingSettingsGroup).toBeNull();
+    expect(useAppStore.getState().pendingOptimize).toBe(true);
+
+    useAppStore.getState().clearPendingOptimize();
+    expect(useAppStore.getState().pendingOptimize).toBe(false);
+  });
+
+  /** A hand-off nobody read does not outlive the navigation it was made for. */
+  it.each(HANDOFFS)("$name is spent by a view change, read or not", ({ write, read, spent }) => {
+    write();
+
+    useAppStore.getState().setActiveView("decks");
+
+    expect(read()).toEqual(spent);
+  });
+
+  /** The view first, the hand-off second — the order every call site in the widgets uses. */
+  it.each(HANDOFFS)(
+    "$name survives the view change that carries it, when the view is written first",
+    ({ view, write, read, written }) => {
+      useAppStore.getState().setActiveView(view);
+      write();
+
+      expect(useAppStore.getState().activeView).toBe(view);
+      expect(read()).toEqual(written);
+    },
+  );
+
+  /**
+   * **The inverse is the whole reason this case exists**: it type-checks, reads correctly, and
+   * lands the reader on the right page with nothing asked of it — no error anywhere.
+   */
+  it.each(HANDOFFS)(
+    "$name is wiped when it is written before the view change",
+    ({ view, write, read, spent }) => {
+      write();
+      useAppStore.getState().setActiveView(view);
+
+      expect(read()).toEqual(spent);
+    },
+  );
 });
 
 /**

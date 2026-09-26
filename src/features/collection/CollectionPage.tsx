@@ -681,7 +681,30 @@ const COLLECTION_TRAY: readonly TrayCell[] = [
 ];
 
 export function CollectionPage() {
-  const collection = useCollection();
+  /**
+   * **The needs-review hand-off, read before the list hook rather than after it** — `store.ts`'s
+   * `pendingReviewFilter`, whose whole consume site is argued further down beside `pendingFolder`'s.
+   *
+   * Read up here because the hook has to be *born* filtered: `initialNeedsReview` and
+   * `reviewSweep`'s initial value are what make the page's very first request the flagged one
+   * (`useCollection`'s `initialNeedsReview` has the measurement). The render-phase clauses below
+   * stay as the arrival path for a hand-off landing on a page that is already mounted.
+   */
+  const pendingReviewFilter = useAppStore((s) => s.pendingReviewFilter);
+  const clearPendingReviewFilter = useAppStore((s) => s.clearPendingReviewFilter);
+  const reviewHere = pendingReviewFilter?.scope === "collection";
+  const flattenStored = useAppStore((s) => s.collectionFlattened);
+  /**
+   * **Whether a review hand-off has this page reading the cabinet flat** — set by the consume site
+   * and by nothing else, and handed to `useCollection` as `flattenLocally` so the list, the chip and
+   * the cabinet all draw it. `useState` and never the store: leaving this view drops it, which is
+   * the whole of what "local" means here.
+   */
+  const [reviewSweep, setReviewSweep] = useState(() => reviewHere && !flattenStored);
+  const collection = useCollection({
+    flattenLocally: reviewSweep,
+    initialNeedsReview: reviewHere ? true : undefined,
+  });
   const { query, summary, rows, total, marketplace, folderId, flatten } = collection;
   const view = useAppStore((s) => s.collectionView);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
@@ -749,6 +772,58 @@ export function CollectionPage() {
   useEffect(() => {
     if (pendingHere !== null) clearPendingFolder();
   }, [pendingHere, clearPendingFolder]);
+
+  /**
+   * **The flagged rows another surface asked this page to open on** — `store.ts`'s
+   * `pendingReviewFilter`, whose only writer is the home page's To review widget.
+   *
+   * The folder hand-off's shape directly above, for its reasons: never a mount effect, which would
+   * fetch the whole binder first and then the flagged rows — and a `setNeedsReview` inside an
+   * effect body is the lint failure that dies only at `verify`. **On a mount it is the initial
+   * state** (read at the top of this component, and the reason it is read there): a render-phase
+   * `setNeedsReview` on the very first pass is too late for TanStack, whose observer keeps the
+   * first pass's options and fetched the unfiltered list once anyway. **On a page already mounted
+   * it is the render-phase adjustment below**, which is what makes the widget's two store writes
+   * safe to land in one commit or two. The effect spends it whether or not it changed anything,
+   * so it cannot fire on a later visit.
+   *
+   * **It sets the filter and nothing else.** Where the reader is standing and whether they read
+   * the cabinet flat are theirs; `collectionFlattened` starts on, which is what puts a flagged row
+   * filed in a drawer on screen. `!== true` rather than a falsy test for the banner's reason
+   * further down: `false` is the chip's "not flagged" state, and a hand-off asking for the
+   * flagged rows has to move off it.
+   *
+   * **Except where the reader has switched Flatten off, and then it also sets `reviewSweep`**
+   * (the controller's ruling of 2026-09-26). To review counts the flagged copies across every
+   * drawer, and an unflattened page stands at the root, which since v25 means "filed nowhere" —
+   * so the filter alone would draw a flagged root, usually empty, under a widget that has just
+   * said "5 binder entries". The sweep draws the cabinet flat **without writing the
+   * reader's switch**, `pendingOptimize`'s promise one page over, and it lives exactly as long as
+   * it is doing something:
+   *
+   * - **the filter goes, it goes** — the chip, its ✕ and Reset all all land on a `needsReview`
+   *   that is not `true`, and one clause here catches every one of them rather than a wrapper on
+   *   each setter;
+   * - **the switch comes on, it goes** — a sweep over a cabinet already read flat is no sweep, and
+   *   one left standing would make the reader's next Flatten press the no-op below;
+   * - **Flatten is pressed, it goes and writes nothing** — the chip draws the combined state, so
+   *   the press that turns it off has to turn off the half that is on, which is this one; the page
+   *   falls back on the stored switch, and the press after that is an ordinary one again.
+   *
+   * Both clauses are render-phase for the reason the first one is, and they cannot chase each
+   * other: the sweep is only ever turned on together with the filter — here, or in the two initial
+   * states at the top of this component.
+   */
+  if (reviewHere && collection.needsReview !== true) {
+    collection.setNeedsReview(true);
+    if (!flattenStored) setReviewSweep(true);
+  }
+  if (reviewSweep && (collection.needsReview !== true || flattenStored)) {
+    setReviewSweep(false);
+  }
+  useEffect(() => {
+    if (reviewHere) clearPendingReviewFilter();
+  }, [reviewHere, clearPendingReviewFilter]);
 
   /**
    * Which folder layer is open, and what the caret goes back to when it closes.
@@ -2911,7 +2986,15 @@ export function CollectionPage() {
         // no drill-down, and every copy in the list at once — each tile captioned with the drawer
         // it is filed in instead, which is the only way a reader sees where a copy is without
         // opening it. One press either way, since there is no third state to walk.
-        flatten={{ pressed: collection.flatten, onToggle: collection.toggleFlatten }}
+        //
+        // **Pressed is the combined state and a press turns off whichever half is on** — while a
+        // review hand-off's `reviewSweep` is standing that is the sweep, and the reader's stored
+        // switch is not written (the consume site near the top of this component has the whole
+        // rule).
+        flatten={{
+          pressed: collection.flatten,
+          onToggle: reviewSweep ? () => setReviewSweep(false) : collection.toggleFlatten,
+        }}
       />
 
       {/* **The row the list and the search column share** (design §4), and the one thing on this

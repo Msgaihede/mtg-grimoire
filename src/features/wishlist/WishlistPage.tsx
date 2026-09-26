@@ -66,6 +66,7 @@ import { OptimizeWishlistDialog } from "./OptimizeWishlistDialog";
 import { useWishlist, type Wishlist } from "./useWishlist";
 import { useWishlistFolders } from "./useWishlistFolders";
 import { useWishlistOptimize } from "./useWishlistOptimize";
+import { wholeWishlistQuery } from "./wholeWishlistQuery";
 import type { WishDrop } from "./wishDrag";
 
 /**
@@ -333,7 +334,25 @@ const WISHLIST_TRAY: readonly TrayCell[] = [
 ];
 
 export function WishlistPage() {
-  const wishlist = useWishlist();
+  /**
+   * **The needs-review hand-off, read before the list hook** — `CollectionPage`'s arrangement one
+   * cabinet over, for its reason: the hook has to be *born* filtered, or TanStack's first-pass
+   * observer fetches the unfiltered list once before the filter lands.
+   */
+  const pendingReviewFilter = useAppStore((s) => s.pendingReviewFilter);
+  const clearPendingReviewFilter = useAppStore((s) => s.clearPendingReviewFilter);
+  const reviewHere = pendingReviewFilter?.scope === "wishlist";
+  const flattenStored = useAppStore((s) => s.wishlistFlattened);
+  /**
+   * **Whether a review hand-off has this page reading the list flat** — `CollectionPage`'s
+   * `reviewSweep`, one cabinet over. Set by the `pendingReviewFilter` consume site, handed to
+   * `useWishlist` as `flattenLocally`, and `useState` so leaving the view drops it.
+   */
+  const [reviewSweep, setReviewSweep] = useState(() => reviewHere && !flattenStored);
+  const wishlist = useWishlist({
+    flattenLocally: reviewSweep,
+    initialNeedsReview: reviewHere ? true : undefined,
+  });
   const { query, rows, total, marketplace, folderId, flatten } = wishlist;
   const view = useAppStore((s) => s.wishlistView);
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
@@ -373,6 +392,30 @@ export function WishlistPage() {
   }, [pendingHere, clearPendingFolder]);
 
   /**
+   * **The flagged wishes another surface asked this page to open on** — `store.ts`'s
+   * `pendingReviewFilter`, To review's `Wishes` row. `CollectionPage`'s consume site is the
+   * argument, one cabinet over: the initial state on a mount so the first request is already
+   * filtered, a render-phase adjustment on a page already mounted, spent by the effect whether or
+   * not it changed anything, and read only when its `scope` names this page.
+   *
+   * **And `reviewSweep` with it, on that page's three rules** — on with the filter wherever the
+   * reader's Flatten is off, off when the filter goes or the switch comes on, and a Flatten press
+   * spends it without writing `wishlistFlattened`. It matters more here than there:
+   * `wishlistFlattened` *starts* off, so without the sweep a reader sent by the `Wishes` row would
+   * land on a flagged root that holds none of the wishes they were counted.
+   */
+  if (reviewHere && wishlist.needsReview !== true) {
+    wishlist.setNeedsReview(true);
+    if (!flattenStored) setReviewSweep(true);
+  }
+  if (reviewSweep && (wishlist.needsReview !== true || flattenStored)) {
+    setReviewSweep(false);
+  }
+  useEffect(() => {
+    if (reviewHere) clearPendingReviewFilter();
+  }, [reviewHere, clearPendingReviewFilter]);
+
+  /**
    * The export dialog, and the sweep that fills it — `CollectionPage`'s twin, for the same
    * reason: `ExportDialog` is mounted unconditionally below so its close can fade rather than
    * vanish, so this hook runs every render and `enabled: exporting` is what stops it sweeping
@@ -399,7 +442,44 @@ export function WishlistPage() {
    * the header above.
    */
   const [optimizing, setOptimizing] = useState(false);
-  const optimize = useWishlistOptimize(wishlist.filters, optimizing);
+  /**
+   * **Which list the sweep is taken over** — the one on screen, or the whole wishlist.
+   *
+   * `"page"` is the Optimise button's, and it is `wishlist.filters` exactly as it always was.
+   * `"whole"` is the home page's Wishlist savings widget, arriving through `store.ts`'s
+   * `pendingOptimize`: the widget counted what *every* pinned wish would save, so the dialog it
+   * opens plans {@link wholeWishlistQuery} — the widget's own question, and therefore its own cache
+   * entry. **A scope override and never a write**: `wishlistFlattened` is the reader's persisted
+   * switch and the filters are theirs, so the hand-off touches neither.
+   *
+   * **Left where it is when the dialog closes**, deliberately: the panel outlives the flag by the
+   * length of its fade, and a scope put back on close would re-key the plan mid-fade and flash the
+   * body to its loading sentence. The button writes `"page"` on its own press instead.
+   */
+  const [sweepOver, setSweepOver] = useState<"page" | "whole">("page");
+  const optimize = useWishlistOptimize(
+    sweepOver === "whole" ? wholeWishlistQuery(marketplace.id) : wishlist.filters,
+    optimizing,
+  );
+  /**
+   * **The sweep another page asked for** — `store.ts`'s `pendingOptimize`, read as this page
+   * renders rather than in a mount effect, for the `pendingFolder` reasons above: the dialog is up
+   * on the first commit, and `setOptimizing` inside an effect body is the lint failure that dies
+   * only at `verify`. The guard is what makes the adjustment terminate — the hand-off stays in the
+   * store until the effect below spends it.
+   *
+   * **No `apply.reset()` on the way in**, unlike the button's: `App.tsx` draws one view at a time,
+   * so a hand-off always arrives on a freshly mounted page whose mutation has no receipt to clear.
+   */
+  const pendingOptimize = useAppStore((s) => s.pendingOptimize);
+  const clearPendingOptimize = useAppStore((s) => s.clearPendingOptimize);
+  if (pendingOptimize && !(optimizing && sweepOver === "whole")) {
+    setSweepOver("whole");
+    setOptimizing(true);
+  }
+  useEffect(() => {
+    if (pendingOptimize) clearPendingOptimize();
+  }, [pendingOptimize, clearPendingOptimize]);
 
   /**
    * Which folder layer is open, and what the caret goes back to when it closes.
@@ -1570,6 +1650,8 @@ export function WishlistPage() {
               // answered is up.
               onClick={() => {
                 optimize.apply.reset();
+                // The page's own list, whatever a home-page hand-off last asked about.
+                setSweepOver("page");
                 setOptimizing(true);
               }}
               aria-haspopup="dialog"
@@ -1650,7 +1732,14 @@ export function WishlistPage() {
         // the list at once, each captioned with the folder it is filed in instead — the only way
         // a reader sees a card's folder without opening it. One press either way, since there is
         // no third state to walk.
-        flatten={{ pressed: wishlist.flatten, onToggle: wishlist.toggleFlatten }}
+        //
+        // **Pressed is the combined state and a press turns off whichever half is on** — while a
+        // review hand-off's `reviewSweep` is standing that is the sweep, and `wishlistFlattened` is
+        // not written. `CollectionPage`'s consume site has the whole rule.
+        flatten={{
+          pressed: wishlist.flatten,
+          onToggle: reviewSweep ? () => setReviewSweep(false) : wishlist.toggleFlatten,
+        }}
       />
 
       {/* **The row the sidebar made necessary.** This page was `flex-col` from its root down, so
@@ -2136,11 +2225,17 @@ export function WishlistPage() {
         // folder is named through `folderNameOf`, which answers the root's own word for `null`;
         // a folder id this page cannot name resolves to the root too, which is the same "resolve
         // towards the root" rule `trailOf` applies to a broken trail.
-        scope={{
-          folder: folderNameOf(folderId) ?? ROOT_LABEL,
-          flatten,
-          filtered: wishlist.activeCount > 0,
-        }}
+        scope={
+          // The hand-off's override says what it planned — every folder, nothing filtered — rather
+          // than naming the drawer and the filters the page happens to be standing in.
+          sweepOver === "whole"
+            ? { folder: ROOT_LABEL, flatten: true, filtered: false }
+            : {
+                folder: folderNameOf(folderId) ?? ROOT_LABEL,
+                flatten,
+                filtered: wishlist.activeCount > 0,
+              }
+        }
         plan={optimize.plan.data ?? null}
         loading={optimize.plan.isLoading}
         readError={optimize.plan.isError ? ipcError(optimize.plan.error) : null}

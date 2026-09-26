@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SyncStatus } from "@/lib/ipc";
 import type { Update } from "@/lib/useUpdate";
+import { useAppStore } from "@/lib/store";
 
 /**
  * Every panel on this page is stubbed, because what is under test is **which of them the page
@@ -511,6 +512,59 @@ describe("the rail decides what the pane draws", () => {
 
     expect(searchBox()).toHaveValue("");
     expect(screen.getByText("panel:prices")).toBeInTheDocument();
+    expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * **The group another page asked this one to open on** — `store.ts`'s `pendingSettingsGroup`, the
+ * To review widget's `Deck cards` row, which sends the reader to the Needs review panel under
+ * `Sync`.
+ *
+ * The store is a module singleton this file does not otherwise reset, so every case here puts the
+ * field back — a hand-off left written would open every later case on that group.
+ */
+describe("a group another page asked for", () => {
+  afterEach(() => {
+    useAppStore.setState({ pendingSettingsGroup: null });
+  });
+
+  /** Drawn on the first commit: a render-phase adjustment, so there is no frame of `Updates`. */
+  it("opens on the group it names, and spends the hand-off doing it", async () => {
+    useAppStore.setState({ pendingSettingsGroup: "sync" });
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    expect(screen.getByRole("region", { name: "Needs review" })).toBeInTheDocument();
+    expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingSettingsGroup).toBeNull());
+  });
+
+  /**
+   * **A word this rail has no group for is dropped, and still spent.** The store holds a plain
+   * string so it needs nothing from this feature; the narrowing is the page's, and a prototype key
+   * is not a group either.
+   */
+  it.each(["review", "constructor"])(
+    "drops %s, opens on Updates, and spends the hand-off anyway",
+    async (word) => {
+      useAppStore.setState({ pendingSettingsGroup: word });
+      render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+      expect(screen.getByText("panel:update")).toBeInTheDocument();
+      await waitFor(() => expect(useAppStore.getState().pendingSettingsGroup).toBeNull());
+    },
+  );
+
+  it("does not survive to a second visit", async () => {
+    useAppStore.setState({ pendingSettingsGroup: "storage" });
+    const first = render(wrap(<SettingsPage update={NO_UPDATE} />));
+    expect(screen.getByText("panel:backup")).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingSettingsGroup).toBeNull());
+
+    first.unmount();
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    expect(screen.getByText("panel:update")).toBeInTheDocument();
     expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
   });
 });

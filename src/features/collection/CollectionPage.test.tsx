@@ -863,6 +863,9 @@ beforeEach(() => {
     // `cleanup()`, exactly as `collectionFlattened` above does, and the block that is about the
     // hand-off writes one in every case.
     pendingFolder: null,
+    // **The needs-review hand-off, for the folder's reason one line up** — this page consumes it,
+    // and a case that left one written would open the next case on the flagged rows.
+    pendingReviewFilter: null,
   });
 });
 
@@ -6351,5 +6354,165 @@ describe("sharing from the cabinet", () => {
     await user.click(await screen.findByRole("button", { name: "Open a shared collection" }));
 
     expect(await screen.findByLabelText("Link to a shared collection")).toBeInTheDocument();
+  });
+});
+
+/**
+ * **The flagged rows another page asked this one to open on** — `store.ts`'s
+ * `pendingReviewFilter`, whose only writer is the home page's To review widget.
+ *
+ * `pendingFolder`'s block above, one filter over: read as the page renders, spent as it is read,
+ * and remembered by nothing. Each case asserts the *query* and the *field*, because three of the
+ * four ways this could be wrong draw a page that looks fine.
+ */
+describe("a needs-review filter another page asked for", () => {
+  /**
+   * **Every request, not the last one.** A render-phase adjustment puts the filter on before the
+   * first commit, so no unfiltered list is ever asked for; a mount effect would fetch the whole
+   * binder first and then the flagged rows, which a `lastQuery()` assertion cannot tell apart.
+   */
+  it("asks for the flagged rows from its first request, and spends the hand-off", async () => {
+    useAppStore.setState({ pendingReviewFilter: { scope: "collection" } });
+    wrap(<CollectionPage />);
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(
+      collectionList.mock.calls.every(([q]) => (q as CollectionQuery).needsReview === true),
+    ).toBe(true);
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+  });
+
+  /** A hand-off that survived its read would open every later visit on the flagged rows. */
+  it("does not survive to a second visit", async () => {
+    useAppStore.setState({ pendingReviewFilter: { scope: "collection" } });
+    const first = wrap(<CollectionPage />);
+    await waitFor(() => expect(lastQuery().needsReview).toBe(true));
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+
+    first.unmount();
+    collectionList.mockClear();
+    wrap(<CollectionPage />);
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(lastQuery().needsReview).toBeUndefined();
+  });
+
+  /** One field serves both lists, so the check is "is there one for me". */
+  it("leaves the wishlist's hand-off untouched", async () => {
+    useAppStore.setState({ pendingReviewFilter: { scope: "wishlist" } });
+    wrap(<CollectionPage />);
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(lastQuery().needsReview).toBeUndefined();
+    expect(useAppStore.getState().pendingReviewFilter).toEqual({ scope: "wishlist" });
+  });
+});
+
+/**
+ * **A needs-review hand-off over a cabinet the reader has not flattened** — the controller's
+ * ruling of 2026-09-26, and the case the block above cannot see because this file opens flattened.
+ *
+ * To review counts the flagged copies across **every** drawer, but an unflattened page stands at
+ * the root, which since v25 means "filed nowhere" — so the filter alone would draw a flagged
+ * *root*, empty under a widget that has just said "5 binder entries". The page therefore draws
+ * flat for as long as the hand-off's filter stands, through a **local** flag and never through
+ * `collectionFlattened`, which is the reader's persisted switch and `pendingOptimize`'s promise
+ * one page over.
+ */
+describe("a needs-review hand-off over a cabinet the reader has not flattened", () => {
+  /** A flagged copy filed in `Trade binder` — the drawer the root does not show. */
+  const FLAGGED: CollectionRow = {
+    ...BOLT,
+    id: 11,
+    cardId: "c-pearl",
+    oracleId: "o-pearl",
+    name: "Mox Pearl",
+    collectorNumber: "263",
+    folderId: 3,
+    folderName: "Trade binder",
+    needsReview: REVIEW_NOTE,
+  };
+
+  /**
+   * The backend's answer, by level: the whole cabinet when neither folder field is sent, the one
+   * drawer by id, and the root — which holds only the healthy Bolt — under `rootOnly`. Each level
+   * honours the filter, so a flagged root is honestly empty.
+   */
+  const listByLevel = async (q: CollectionQuery) => {
+    const level =
+      q.rootOnly === true ? [BOLT] : q.folderId === 3 ? [FLAGGED] : [BOLT, FLAGGED];
+    return page(level.filter((row) => q.needsReview !== true || row.needsReview !== null));
+  };
+
+  const flattenChip = () => screen.getByRole("button", { name: "Flatten" });
+
+  beforeEach(() => {
+    useAppStore.setState({
+      collectionFlattened: false,
+      pendingReviewFilter: { scope: "collection" },
+    });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockImplementation(listByLevel);
+  });
+
+  /**
+   * **Every request asks for every drawer**, so there is no flagged root fetched and thrown away —
+   * and the switch the reader persisted is exactly where they left it.
+   */
+  it("draws the flagged copy wherever it is filed, and leaves the stored switch off", async () => {
+    wrap(<CollectionPage />);
+
+    expect(await screen.findByText("Mox Pearl")).toBeInTheDocument();
+    expect(
+      collectionList.mock.calls.every(([q]) => {
+        const asked = q as CollectionQuery;
+        return asked.needsReview === true && asked.rootOnly === undefined;
+      }),
+    ).toBe(true);
+    // The chip says what the page is drawing, which is flat.
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+    expect(useAppStore.getState().collectionFlattened).toBe(false);
+  });
+
+  /**
+   * **The press takes the override away and writes nothing**, so the page falls back on the
+   * reader's own switch — off, the root — and the press after it is the reader's again.
+   */
+  it("goes back to the root when Flatten is pressed, without writing the stored switch", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Mox Pearl");
+
+    await user.click(flattenChip());
+
+    await waitFor(() => expect(lastQuery().rootOnly).toBe(true));
+    await waitFor(() => expect(screen.queryByText("Mox Pearl")).toBeNull());
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "false");
+    expect(await screen.findByRole("button", { name: /^Trade binder folder/ })).toBeInTheDocument();
+    expect(useAppStore.getState().collectionFlattened).toBe(false);
+    // The override is spent, so the next press is the ordinary one and does write.
+    await user.click(flattenChip());
+    expect(useAppStore.getState().collectionFlattened).toBe(true);
+  });
+
+  /** The override is the filter's: take the filter away, by its chip or by Reset all, and the
+   *  page is standing at the root it was standing at before the hand-off arrived. */
+  it.each([
+    ["its chip", "Remove filter — Needs review"],
+    ["Reset all", /^Reset all/],
+  ] as const)("goes back to the root when the filter is cleared by %s", async (_how, name) => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Mox Pearl");
+
+    await user.click(onPage(screen.getAllByRole("button", { name })));
+
+    await waitFor(() => expect(lastQuery().rootOnly).toBe(true));
+    expect(lastQuery().needsReview).toBeUndefined();
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(screen.queryByText("Mox Pearl")).toBeNull();
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "false");
+    expect(useAppStore.getState().collectionFlattened).toBe(false);
   });
 });

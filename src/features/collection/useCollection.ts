@@ -172,8 +172,23 @@ export function nextOffset(pages: readonly CountedPage[]): number | undefined {
  * the same filters**, not a field of the page. A header that describes a different set of
  * rows than the table under it is worse than no header, and recomputing nine aggregates on
  * every scrolled page would be worse still.
+ *
+ * @param options.flattenLocally Draw the cabinet flat **without writing** `collectionFlattened` —
+ *   `CollectionPage`'s `reviewSweep`, which a To review hand-off turns on so the flagged copies it
+ *   counted across every drawer are on screen wherever they are filed. OR'd with the stored switch
+ *   into the one `flatten` this hook sends and returns; see that field.
+ * @param options.initialNeedsReview The needs-review filter this list **mounts** with — read once,
+ *   by `useState`, and ignored afterwards. `CollectionPage` passes `true` when a To review hand-off
+ *   is waiting for it, and that has to be the *initial* state rather than a render-phase
+ *   `setNeedsReview`: TanStack builds its observer in a `useState` initializer on the first pass,
+ *   keeps it through the pass React restarts, and subscribes it at commit with the first pass's
+ *   options — so a filter switched on while rendering still fetched the unfiltered list once, and
+ *   threw it away (measured in `CollectionPage.test.tsx`, 2026-09-26).
  */
-export function useCollection() {
+export function useCollection({
+  flattenLocally = false,
+  initialNeedsReview,
+}: { flattenLocally?: boolean; initialNeedsReview?: boolean } = {}) {
   // Which marketplace this list quotes — an input to both queries below, and part of both
   // keys: it decides what a Value cell contains, not merely how it is written.
   const { marketplace } = useMarketplace();
@@ -204,7 +219,7 @@ export function useCollection() {
   const [priceMax, setPriceMax] = useState<number | undefined>(undefined);
   const [finishes, setFinishes] = useState<readonly Finish[]>([]);
   const [conditions, setConditions] = useState<readonly Condition[]>([]);
-  const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
+  const [needsReview, setNeedsReview] = useState<boolean | undefined>(initialNeedsReview);
   // Empty is name order — the view's own default, which is what a cleared sort falls back
   // to. Not a filter, so `resetAll` leaves it alone.
   const [sort, setSort] = useState<SortSpec<CollectionSortKey>>([]);
@@ -245,8 +260,16 @@ export function useCollection() {
    * is a new reference on every store write, so this hook — and the whole collection view under
    * it — would re-render on a card zoom or a view switch. `FilterBar`'s `ViewToggle` reads its
    * eight fields the same way and for the same reason.
+   *
+   * **What the list draws is the stored switch _or_ the caller's `flattenLocally`**, and the
+   * second is never written back: it is a page's reason to read the cabinet flat for a moment
+   * (a review hand-off, which counted every drawer) rather than the reader's preference, so it
+   * must neither survive the visit nor move the switch they persisted. Everything below — the
+   * wire, the key, the returned `flatten` — reads the combined value, so the page draws one
+   * cabinet rather than two that disagree.
    */
-  const flatten = useAppStore((s) => s.collectionFlattened);
+  const flattenStored = useAppStore((s) => s.collectionFlattened);
+  const flatten = flattenStored || flattenLocally;
   const toggleFlatten = useAppStore((s) => s.toggleCollectionFlattened);
   const [debouncedText, setDebouncedText] = useState("");
 
@@ -559,8 +582,10 @@ export function useCollection() {
      * the reason `folderId` is: it says how much of the cabinet is on screen, not which copies
      * qualify.
      *
-     * The store's `collectionFlattened`, read straight through: the page and the filter bar are
-     * unchanged, so this pair is still the whole of what a caller sees.
+     * The store's `collectionFlattened`, read straight through — **or'd with the caller's
+     * `flattenLocally`**, which is the one way this can be `true` while the stored switch is off.
+     * The page and the filter bar read this and nothing else, so the list, the chip and the
+     * cabinet on screen all agree about which of the two is in force.
      */
     flatten,
     /** Off shows the current folder; on shows the whole collection. The store's own action —

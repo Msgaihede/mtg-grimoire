@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BackupPanel } from "@/features/settings/BackupPanel";
 import { CachePanel } from "@/features/settings/CachePanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
@@ -14,13 +14,20 @@ import { SyncPanel } from "@/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { WebStoragePanel, useWebStorage } from "@/features/settings/WebStoragePanel";
-import { visiblePanels, type BadgeId, type GroupId, type PanelId } from "@/features/settings/nav";
+import {
+  GROUP_ORDER,
+  visiblePanels,
+  type BadgeId,
+  type GroupId,
+  type PanelId,
+} from "@/features/settings/nav";
 import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
 import { useHiddenTags } from "@/features/settings/useHiddenTags";
 import { SettingsSection } from "@/features/settings/panelChrome";
 import { count } from "@/lib/counts";
 import { ipc } from "@/lib/ipc";
 import { REVIEW_KEY } from "@/lib/query";
+import { useAppStore } from "@/lib/store";
 import type { Update } from "@/lib/useUpdate";
 import { useErrorLog } from "@/lib/useErrorLog";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -49,6 +56,18 @@ export function imageFailureLine(failures: number | undefined): string {
     `${count(failures)} card image${failures === 1 ? "" : "s"} could not be saved there ` +
     "this session — the folder may be read-only or full."
   );
+}
+
+/**
+ * A stored word as one of this rail's groups, or `null` for a word it has none for.
+ *
+ * `store.ts` keeps `pendingSettingsGroup` a plain `string` so it needs nothing from this feature,
+ * and this is the other half of that bargain: the narrowing lives here, beside the rail. **An
+ * `includes` over `GROUP_ORDER` and never `word in GROUPS`**, `isWidgetKind`'s reason — `in` walks
+ * the prototype and would take `"constructor"` for a group.
+ */
+function asGroupId(word: string): GroupId | null {
+  return (GROUP_ORDER as readonly string[]).includes(word) ? (word as GroupId) : null;
 }
 
 /**
@@ -120,6 +139,27 @@ export function SettingsPage({ update }: { update: Update }) {
    */
   const [group, setGroup] = useState<GroupId>("updates");
   const [query, setQuery] = useState("");
+  /**
+   * **The group another page asked this one to open on** — `store.ts`'s `pendingSettingsGroup`,
+   * whose only writer is the home page's To review widget sending a reader to Needs review.
+   *
+   * `CollectionPage`'s `pendingFolder` arrangement: a render-phase adjustment rather than a mount
+   * effect, so the pane draws the asked-for group on its first commit with no frame of `Updates`
+   * and no `setState` in an effect body; and spent by the effect below whether or not it named a
+   * group, so a word this rail has none for is **dropped** rather than left to fire on a later
+   * visit. The query goes with it, `pickGroup`'s rule: a query outranks the group, so a group
+   * arriving under one would be a press that visibly did nothing.
+   */
+  const pendingGroup = useAppStore((s) => s.pendingSettingsGroup);
+  const clearPendingGroup = useAppStore((s) => s.clearPendingSettingsGroup);
+  const askedGroup = pendingGroup === null ? null : asGroupId(pendingGroup);
+  if (askedGroup !== null && group !== askedGroup) {
+    setGroup(askedGroup);
+    if (query !== "") setQuery("");
+  }
+  useEffect(() => {
+    if (pendingGroup !== null) clearPendingGroup();
+  }, [pendingGroup, clearPendingGroup]);
   /**
    * The page's own root, so that picking a group can put the reader back at the top of it.
    *
