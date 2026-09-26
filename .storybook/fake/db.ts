@@ -243,6 +243,9 @@ import type {
   SetCompletion,
   SetSummary,
   ShareRow,
+  ShelfCount,
+  ShelfFoldPage,
+  ShelfFolds,
   StickyNote,
   SupporterStatus,
   SwapResult,
@@ -1753,6 +1756,17 @@ export interface FakeDb {
    */
   searchOpen: Record<string, boolean>;
   /**
+   * `app_meta.shelf_folds` — the shelves the reader moved off their default fold, per page:
+   * folder id (decimal) → collapsed.
+   *
+   * **Both pages always present and both empty to begin with**, which is every shelf at its
+   * default — `@/lib/shelves`' `defaultCollapsed` says what that is, and a seeded fold would be a
+   * story about a press nobody made. See {@link readHandlers.shelf_folds} and
+   * {@link writeHandlers.set_shelf_folds}: the read copies, and the write refuses an unknown page
+   * or a key that is not a folder id, and takes an override off on `null`.
+   */
+  shelfFolds: ShelfFolds;
+  /**
    * `app_meta.deck_sort` — how the deck gallery was last ordered, as `"<key>:<direction>"`.
    *
    * A **stored string** and `null` for the row not being there, which is
@@ -3076,6 +3090,8 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // `DEFAULT_SEARCH_OPEN` draws it: every column open, which is what the app ships. A story that
     // wants one railed passes that one section and leaves the others out.
     searchOpen: {},
+    // Every shelf at its default on both pages — `shelf_folds`' answer for a row never written.
+    shelfFolds: { collection: {}, wishlist: {} },
     // The gallery's order, and a `null` rather than a value again: `deck_sort` answers
     // `updated:desc` for a wall nobody has re-ordered, so every deck story that says nothing
     // about the picker is standing in the order the app ships — most recently touched first,
@@ -6714,8 +6730,16 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     // **`folderId` outranks `rootOnly` rather than intersecting with it**, which is the arm a
     // test has to hold: a stale flag riding beside a folder id would otherwise answer the empty
     // intersection and read as an emptied drawer.
+    //
+    // **A `shelves` list replaces all three states above** — `collection::scope`'s first arm:
+    // membership of `folderId ?? 0` in the list, `0` for the rows filed nowhere. A list that names
+    // every folder it wants has said where it is standing, so `folderId`, `rootOnly` and
+    // `excludeLocked` are not read, and an id no folder answers to simply matches nothing.
+    const shelves = q.shelves ?? null;
     const named = q.folderId ?? null;
-    if (named !== null) {
+    if (shelves !== null) {
+      if (!shelves.includes(e.folderId ?? 0)) return false;
+    } else if (named !== null) {
       if (e.folderId !== named) return false;
     } else if (q.rootOnly === true && e.folderId !== null) {
       return false;
@@ -6738,7 +6762,7 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     //
     // The lock asked about is the **effective** one, so a folder inside a locked folder drops
     // out too — {@link collectionFolderLocked}.
-    if (q.excludeLocked === true && named === null) {
+    if (q.excludeLocked === true && named === null && shelves === null) {
       if (e.folderId !== null && collectionFolderLocked(db, e.folderId)) return false;
     }
     // `"unallocated"` drops the copies a **deck** is holding and nothing else: the root, a
@@ -6917,7 +6941,16 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
     // the omission as "no filter" would draw a list the app never shows. And **`flatten` is a
     // second field rather than a third value of the first**, because `null` is already spoken
     // for as the root — flattened, the reader is standing everywhere and no term applies at all.
-    if (q.flatten !== true && w.folderId !== (q.folderId ?? null)) return false;
+    //
+    // **`shelves` replaces both of those questions** — `wishlist::wishlist_scope`'s first arm:
+    // membership of `folderId ?? 0`, with `0` the root. A `null` is the crate's `None`, as it is
+    // in {@link collectionScope}.
+    const shelves = q.shelves ?? null;
+    if (shelves !== null) {
+      if (!shelves.includes(w.folderId ?? 0)) return false;
+    } else if (q.flatten !== true && w.folderId !== (q.folderId ?? null)) {
+      return false;
+    }
     const card = wishCard(db, w);
     if (!matchesCardFilters(db, card, { ...q, text: undefined, paperOnly: false }, w.setCode)) {
       return false;
@@ -8059,6 +8092,98 @@ function wishlistOrder(
   );
 }
 
+/**
+ * `shelf_position(…) ASC` in front of a list's own `ORDER BY` — position in the list the page
+ * sent, then the reader's sort, then the id tiebreak the wrapped comparator already ends on.
+ * `undefined` hands the comparator back untouched, which is `shelves` absent meaning today's
+ * order. A duplicate id keeps its **first** place — the crate's `min(key)`.
+ */
+function shelfFirst<T extends { folderId: number | null }>(
+  shelves: readonly number[] | undefined,
+  order: Compare<T>,
+): Compare<T> {
+  if (shelves === undefined) return order;
+  const place = new Map<number, number>();
+  shelves.forEach((id, i) => {
+    if (!place.has(id)) place.set(id, i);
+  });
+  const at = (row: T) => place.get(row.folderId ?? 0) ?? shelves.length;
+  return (a, b) => at(a) - at(b) || order(a, b);
+}
+
+/** One row as a shelf count sees it — the inner `SELECT` of `collection::shelf_counts` and
+ *  `wishlist::shelf_counts`. */
+interface ShelfRow {
+  shelf: number;
+  /** What makes a tile: `cardId/finish` on the collection, the wish's own id on the wishlist. */
+  tile: string;
+  copies: number;
+  unit: number | null;
+  /** What this row adds to `unpriced` when `unit` is `null`: its copies on the collection (the
+   *  unit of the heading's "n cards"), `1` on the wishlist (the unit of its "n wishes"). */
+  unpricedBy: number;
+}
+
+/** One **unfiltered** row as a shelf's peek sees it — the inner `SELECT` of the crate's peek
+ *  statements: the id the card's tile is drawn from, and the name it sorts under. */
+interface PeekRow {
+  shelf: number;
+  cardId: string;
+  name: string;
+}
+
+/** `collection::SHELF_PEEK`. */
+const SHELF_PEEK = 4;
+
+/**
+ * `GROUP BY shelf ORDER BY shelf` over `rows`. `value` stays `null` until a priced row lands
+ * — `sum()` over nothing but NULLs — and `unpriced` adds each unpriced row's `unpricedBy`.
+ *
+ * **The peek comes from `peekRows`, which the caller passes unfiltered** — the crate's peek
+ * statement reads shelf membership and nothing else — sorted by name then card id, one id per
+ * card, cut to {@link SHELF_PEEK}; only shelves that have a count row get one.
+ */
+function shelfCounts(rows: readonly ShelfRow[], peekRows: readonly PeekRow[]): ShelfCount[] {
+  const shelves = new Map<
+    number,
+    { tiles: Set<string>; copies: number; value: number | null; unpriced: number }
+  >();
+  for (const row of rows) {
+    const shelf = shelves.get(row.shelf) ?? {
+      tiles: new Set<string>(),
+      copies: 0,
+      value: null,
+      unpriced: 0,
+    };
+    shelf.tiles.add(row.tile);
+    shelf.copies += row.copies;
+    if (row.unit === null) shelf.unpriced += row.unpricedBy;
+    else shelf.value = (shelf.value ?? 0) + row.unit * row.copies;
+    shelves.set(row.shelf, shelf);
+  }
+  const peekOf = (shelf: number): string[] => {
+    const ids: string[] = [];
+    const sorted = peekRows
+      .filter((p) => p.shelf === shelf)
+      .sort((a, b) => cmp(a.name, b.name) || cmp(a.cardId, b.cardId));
+    for (const p of sorted) {
+      if (ids.length === SHELF_PEEK) break;
+      if (!ids.includes(p.cardId)) ids.push(p.cardId);
+    }
+    return ids;
+  };
+  return [...shelves.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([folderId, s]) => ({
+      folderId,
+      tiles: s.tiles.size,
+      copies: s.copies,
+      value: s.value,
+      unpriced: s.unpriced,
+      peek: peekOf(folderId),
+    }));
+}
+
 /* ------------------------------------------------------------------ the handlers ------ */
 
 /** `search.rs`'s page size when the caller does not choose one, and the ceiling when it
@@ -9148,7 +9273,7 @@ export function readHandlers(db: FakeDb) {
       const mp = marketplaceOf(q.marketplace);
       const rows = collectionScope(db, q);
       const limit = pageLimit(q.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
-      const sorted = [...rows].sort(collectionOrder(db, rows, q.sort, mp));
+      const sorted = [...rows].sort(shelfFirst(q.shelves, collectionOrder(db, rows, q.sort, mp)));
       return {
         items: sorted
           .slice(q.offset, q.offset + limit)
@@ -9194,6 +9319,32 @@ export function readHandlers(db: FakeDb) {
         unpriced: sum((r) => (r.unit === null ? r.e.quantity : 0)),
         needsReview: rows.filter((e) => e.needsReview !== null).length,
       };
+    },
+
+    /**
+     * `collection::shelf_counts` — one row per non-empty shelf over {@link collectionScope}, search
+     * and filters included. A tile is a printing and a finish **on one shelf** (spec decision 11),
+     * priced by {@link finishPriceAt} like the list's own `unitPrice`; `unpriced` counts **copies**,
+     * {@link readHandlers.collection_summary}'s unit.
+     */
+    collection_shelf_counts: (args: { query: CollectionQuery }): ShelfCount[] => {
+      const mp = marketplaceOf(args.query.marketplace);
+      return shelfCounts(
+        collectionScope(db, args.query).map((e) => ({
+          shelf: e.folderId ?? 0,
+          tile: `${e.cardId}/${e.finish}`,
+          copies: e.quantity,
+          unit: finishPriceAt(db, cardById(db, e.cardId), e.finish, mp),
+          unpricedBy: e.quantity,
+        })),
+        // The peek reads every entry, not the scope: a filter narrows the figures and never the
+        // pictures. An orphan sorts under its card id, `COLLECTION_DEFAULT_ORDER`'s rule.
+        db.collectionEntries.map((e) => ({
+          shelf: e.folderId ?? 0,
+          cardId: e.cardId,
+          name: cardById(db, e.cardId)?.name ?? e.cardId,
+        })),
+      );
     },
 
     /**
@@ -9275,11 +9426,36 @@ export function readHandlers(db: FakeDb) {
       const mp = marketplaceOf(q.marketplace);
       const rows = wishlistScope(db, q);
       const limit = pageLimit(q.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
-      const sorted = [...rows].sort(wishlistOrder(db, rows, q.sort, mp));
+      const sorted = [...rows].sort(shelfFirst(q.shelves, wishlistOrder(db, rows, q.sort, mp)));
       return {
         items: sorted.slice(q.offset, q.offset + limit).map((w) => toWishRow(db, w, mp)),
         total: rows.length,
       };
+    },
+
+    /**
+     * `wishlist::shelf_counts` — {@link readHandlers.collection_shelf_counts} one table over. One
+     * wish is one tile, priced by {@link wishPriceAt} like the row's own `unitPrice`, and one
+     * unpriced wish is one unpriced whatever its quantity — the heading counts wishes.
+     */
+    wishlist_shelf_counts: (args: { query: WishlistQuery }): ShelfCount[] => {
+      const mp = marketplaceOf(args.query.marketplace);
+      return shelfCounts(
+        wishlistScope(db, args.query).map((w) => ({
+          shelf: w.folderId ?? 0,
+          tile: String(w.id),
+          copies: w.quantity,
+          unit: wishPriceAt(db, wishCard(db, w), w.preferredFinish, mp),
+          unpricedBy: 1,
+        })),
+        // Every wish, unfiltered, peeking at the printing its tile is drawn as —
+        // {@link toWishRow}'s `artCardId`, which is {@link wishCard}'s answer — and a genuine
+        // orphan, with no picture, is left out as the crate's `c.id IS NOT NULL` leaves it.
+        db.wishlistEntries.flatMap((w) => {
+          const card = wishCard(db, w);
+          return card === null ? [] : [{ shelf: w.folderId ?? 0, cardId: card.id, name: w.name }];
+        }),
+      );
     },
 
     /**
@@ -10794,6 +10970,15 @@ export function readHandlers(db: FakeDb) {
      */
     search_open: (): Record<string, boolean> =>
       Object.fromEntries(Object.entries(db.searchOpen).filter(([section]) => section !== "")),
+
+    /**
+     * `shelffolds::shelf_folds` — every folded-shelf override, both pages always present. A copy,
+     * so a caller mutating the answer cannot reach the store. A read, so it answers through a sync.
+     */
+    shelf_folds: (): ShelfFolds => ({
+      collection: { ...db.shelfFolds.collection },
+      wishlist: { ...db.shelfFolds.wishlist },
+    }),
 
     /**
      * `decksort::deck_sort` — how the deck gallery was last ordered, or the default.
@@ -14292,6 +14477,10 @@ function takeLoneWish(
   }
   return take;
 }
+
+/** `shelffolds::UNKNOWN_PAGE` and `shelffolds::NOT_A_SHELF`, verbatim. */
+const SHELF_PAGE_UNKNOWN = "Shelves are folded on the collection or the wishlist, and nowhere else.";
+const NOT_A_SHELF = "A shelf is named by its folder id, or 0 for Not sorted.";
 
 /**
  * Every write command, bound to the same store {@link readHandlers} answers from.
@@ -18779,6 +18968,28 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       if (args.section === "") throw refuse("A search section cannot be blank.");
       db.searchOpen = { ...db.searchOpen, [args.section]: args.open };
+    },
+
+    /**
+     * `shelffolds::set_shelf_folds` — set (`true`/`false`) or remove (`null`) overrides on one
+     * page. The lock first, like every write here; then the page, then **every** key, so a refused
+     * change set writes nothing. `null` deletes the entry: the absence is the default.
+     */
+    set_shelf_folds: (args: { page: string; changes: Record<string, boolean | null> }): void => {
+      refuseIfBusy(db);
+      if (args.page !== "collection" && args.page !== "wishlist") {
+        throw refuse(SHELF_PAGE_UNKNOWN);
+      }
+      if (Object.keys(args.changes).some((id) => !/^[0-9]+$/.test(id))) {
+        throw refuse(NOT_A_SHELF);
+      }
+      const page: ShelfFoldPage = args.page;
+      const next = Object.fromEntries(
+        Object.entries({ ...db.shelfFolds[page], ...args.changes }).filter(
+          (entry): entry is [string, boolean] => entry[1] !== null,
+        ),
+      );
+      db.shelfFolds = { ...db.shelfFolds, [page]: next };
     },
 
     /**

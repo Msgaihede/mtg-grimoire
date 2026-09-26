@@ -24,8 +24,8 @@ use crate::{
     deck_tokens, deck_undo, deckpane, decksort, errors, export, flatten, home, images, import,
     index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, new_printings, paths,
     price_history, recent_cards, reset, scanner, schema, scryfall, search, searchopen,
-    set_completion, share, startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags,
-    update, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    set_completion, share, shelffolds, startup, startview, sticky_notes, sync, sync_engine,
+    sync_pair, tags, update, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -413,6 +413,9 @@ pub fn run() {
             collection::collection_remove,
             collection::collection_list,
             collection::collection_summary,
+            // The Shelves wall's per-shelf figures — `collection_summary`'s scope, grouped by
+            // shelf. A read like its neighbour, so it sits with it.
+            collection::collection_shelf_counts,
             // The home page's value widget: the same money as `collection_summary`, one
             // dimension at a time. A read like its neighbour, so it sits with it.
             collection::collection_breakdown,
@@ -466,6 +469,8 @@ pub fn run() {
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,
             wishlist::wishlist_list,
+            // The same, one table over — and summed, the wishlist header's Total cost.
+            wishlist::wishlist_shelf_counts,
             // The home page's wishlist widget — the header figures, and the same money one
             // dimension at a time. Both are reads, so they sit with `wishlist_list`.
             wishlist::wishlist_summary,
@@ -585,6 +590,9 @@ pub fn run() {
             listview::set_list_view,
             searchopen::search_open,
             searchopen::set_search_open,
+            // Which shelves the reader folded — `search_open`'s pair, one level deeper.
+            shelffolds::shelf_folds,
+            shelffolds::set_shelf_folds,
             markcolors::mark_colors,
             markcolors::set_mark_color,
             decksort::deck_sort,

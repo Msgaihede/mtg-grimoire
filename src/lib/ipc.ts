@@ -1403,6 +1403,19 @@ export interface CollectionQuery extends CardFilters {
    */
   rootOnly?: boolean;
   /**
+   * **The shelves to answer, in the order to answer them** — folder ids, `0` for Not sorted (the
+   * rows filed nowhere). A Shelves wall sends the ids it draws expanded, depth-first, for the list,
+   * and every shelf at and below its level for {@link ipc.collectionShelfCounts} and
+   * {@link ipc.collectionSummary}; `@/lib/shelves` builds both lists.
+   *
+   * **Sent, it replaces {@link folderId}, {@link rootOnly} and {@link excludeLocked}** — none of
+   * the three is read. Rows come back in list position, then {@link sort}, then id; `limit`,
+   * `offset` and `total` are unchanged. An id no folder answers to matches nothing and refuses
+   * nothing. **Absent is today's answer**, which the mirror, the export sweep and the importer all
+   * still ask by saying nothing.
+   */
+  shelves?: number[];
+  /**
    * `true` drops the copies filed in a **locked** folder — a drawer the reader set aside
    * ({@link CollectionFolder.locked}) — and in every folder underneath one, since the lock
    * inherits down the tree. Default `false`; **ignored entirely when {@link folderId} names a
@@ -1639,6 +1652,45 @@ export interface CollectionSummary {
 }
 
 /**
+ * One shelf of a Shelves wall, counted — `collection::ShelfCount`, which `wishlist.rs` answers
+ * too. One row per **non-empty** shelf in the query's scope, ordered by folder id; a shelf with
+ * nothing in scope has no row at all. The four figures honour search and filters; {@link peek}
+ * does not.
+ */
+export interface ShelfCount {
+  /** The folder, or `0` for Not sorted. */
+  folderId: number;
+  /** What the wall draws: on the collection one per printing and finish on this shelf (two grades
+   *  of one printing are one tile), on the wishlist one per wish. */
+  tiles: number;
+  /** `sum(quantity)`. */
+  copies: number;
+  /** Priced at the query's marketplace; `null` when it prices nothing on the shelf — an em dash,
+   *  never `0.00`. */
+  value: number | null;
+  /** What the marketplace could not price, in the heading's own unit: on the collection
+   *  **copies** (the unit of its "n cards" and of {@link CollectionSummary.unpriced}), on the
+   *  wishlist **wishes** (the unit of its "n wishes"). */
+  unpriced: number;
+  /** Up to four card ids for a **collapsed** heading's thumbnails — the only source, because a
+   *  collapsed shelf's cards are never fetched. By card name then id, one id per card, each the
+   *  id that card's tile is drawn from (a wish's `artCardId`). **Unfiltered**: a filter opens
+   *  every shelf, so a peek is only drawn with none active. */
+  peek: string[];
+}
+
+/** The two pages that draw shelves — `shelffolds::PAGES`, and the keys of {@link ShelfFolds}. */
+export type ShelfFoldPage = "collection" | "wishlist";
+
+/**
+ * The shelves the reader folded away from their default, per page: folder id (decimal) →
+ * collapsed. **Only overrides** — a shelf with no entry is at its default, which is
+ * `@/lib/shelves`' `defaultCollapsed` to say. An id whose folder is gone is answered like any
+ * other and matches nothing.
+ */
+export type ShelfFolds = Record<ShelfFoldPage, Record<string, boolean>>;
+
+/**
  * One bucket of a list, sliced along one dimension — the home page's two value widgets.
  *
  * **One struct for two commands**, and the two are deliberately not one: `collection.rs` owns the
@@ -1737,6 +1789,13 @@ export interface WishlistQuery extends CardFilters {
    * rather than smuggled into `folderId` as some other sentinel.
    */
   flatten?: boolean;
+  /**
+   * **The shelves to answer, in the order to answer them** — {@link CollectionQuery.shelves} one
+   * table over: folder ids, `0` for the root. **Sent, it replaces {@link folderId} and
+   * {@link flatten}**; rows come back in list position, then the sort, then id. Absent is today's
+   * answer — the root, or every wish when flattened.
+   */
+  shelves?: number[];
   /** How to order the list, first column deciding. Empty or absent is name order. */
   sort?: SortSpec<WishlistSortKey>;
   /** Which marketplace every price is quoted from, and therefore what the `cost` and `price`
@@ -7386,6 +7445,13 @@ export const ipc = {
   collectionSummary: (query: CollectionQuery) =>
     invoke<CollectionSummary>("collection_summary", { query }),
   /**
+   * One {@link ShelfCount} per non-empty shelf, over the **same** query the list and the summary
+   * take — send `shelves` as every shelf at and below the level, collapsed ones too. `sort`,
+   * `limit` and `offset` are read by nothing on the far side.
+   */
+  collectionShelfCounts: (query: CollectionQuery) =>
+    invoke<ShelfCount[]>("collection_shelf_counts", { query }),
+  /**
    * The whole collection sliced along one dimension — `rarity`, `color`, `set` or `finish`.
    *
    * **The whole collection, and no query**: this is the home page's figure, not the wall's, so it
@@ -7634,6 +7700,10 @@ export const ipc = {
     invoke<EntryChange>("wishlist_set_quantity", { id, quantity }),
   wishlistRemove: (id: number) => invoke<EntryChange>("wishlist_remove", { id }),
   wishlistList: (query: WishlistQuery) => invoke<WishlistPage>("wishlist_list", { query }),
+  /** {@link collectionShelfCounts} one table over: a tile is a wish, and summed over every shelf
+   *  the counts are the wishlist header's Total cost. */
+  wishlistShelfCounts: (query: WishlistQuery) =>
+    invoke<ShelfCount[]>("wishlist_shelf_counts", { query }),
   /**
    * The whole wishlist as one aggregate — see {@link WishlistSummary}, where the reason it is not
    * a folder subtotal is written out.
@@ -9203,6 +9273,20 @@ export const ipc = {
    */
   setSearchOpen: (section: string, open: boolean) =>
     invoke<void>("set_search_open", { section, open }),
+  /**
+   * The folded-shelf overrides on both pages. {@link searchOpen}'s contract one level deeper:
+   * **infallible by signature** — an unreadable row answers both pages empty, which is every
+   * shelf at its default.
+   */
+  shelfFolds: () => invoke<ShelfFolds>("shelf_folds"),
+  /**
+   * Set (`true`/`false`) or remove (`null`) overrides on one page, leaving every other entry
+   * alone. Refuses a page with no shelves and a key that is not a folder id; answers
+   * `collection::BUSY` under a running sync, which the caller swallows — {@link setSearchOpen}'s
+   * trade.
+   */
+  setShelfFolds: (page: ShelfFoldPage, changes: Record<string, boolean | null>) =>
+    invoke<void>("set_shelf_folds", { page, changes }),
   /**
    * How the decks page's folder tree was last left — how wide the reader dragged it, and whether
    * it is folded to its rail.

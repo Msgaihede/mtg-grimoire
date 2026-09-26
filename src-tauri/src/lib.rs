@@ -190,6 +190,11 @@ pub mod set_completion;
 /// collection does; the publish that puts the bytes on the relay carries its own gate at its
 /// own site.
 pub mod share;
+/// **Which shelves the reader folded, per page** — one `app_meta` row, [`searchopen`]'s shape one
+/// level deeper: an infallible read, a write that refuses an unknown page or a key that is not a
+/// folder id, and `None` taking an override back off. No filesystem, no clock and no network, so
+/// it is on the every-target half of this map and its two commands carry the gate.
+pub mod shelffolds;
 pub mod slug;
 pub mod sorting;
 /// **Compiles for wasm and can never succeed there**, which is cheaper than gating it and is

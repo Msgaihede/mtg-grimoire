@@ -137,6 +137,8 @@ pub const COMMANDS: &[&str] = &[
     // The Collection destination, and the pair that moves a row across the deck boundary.
     "collection_list",
     "collection_summary",
+    // The Shelves wall's per-shelf figures — `collection_summary`'s scope, grouped by shelf.
+    "collection_shelf_counts",
     // The same money as `collection_summary`, one dimension at a time — the home page's value
     // widget. Routed with its neighbour because it is that read with a `GROUP BY` on it.
     "collection_breakdown",
@@ -187,6 +189,8 @@ pub const COMMANDS: &[&str] = &[
     "deck_missing_to_collection",
     // The Wishlist destination.
     "wishlist_list",
+    // The same, one table over.
+    "wishlist_shelf_counts",
     // The home page's wishlist widget: the header figures, and the same money one dimension at
     // a time. Reads, so they sit with `wishlist_list` — and both take the marketplace as the
     // enum rather than as an `Option<String>`, which is what their arms read off the wrappers.
@@ -307,6 +311,10 @@ pub const COMMANDS: &[&str] = &[
     // wishlist's too, so the pair belongs here with the other view state.
     "search_open",
     "set_search_open",
+    // **Which shelves the reader folded**, both halves for `deck_sort`'s reason: a browser that
+    // could read the folds and not write them would open every session on the desktop's.
+    "shelf_folds",
+    "set_shelf_folds",
     "error_log_list",
     "error_log_clear",
     "get_marketplace",
@@ -1363,6 +1371,16 @@ pub fn call(
             )
         }
 
+        // A read over `collection_summary`'s own scope, grouped by shelf — `lock_db_read` like it.
+        "collection_shelf_counts" => {
+            let query: crate::collection::CollectionQuery = field(command, args, "query")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::collection::shelf_counts(&conn, &query).map_err(RouteError::Failed)?,
+            )
+        }
+
         // The home page's value widget: `collection_summary`'s money with a `GROUP BY` on it.
         // `collection_folder_summary`'s marketplace spelling, and the wrapper's — an
         // `Option<String>` through `Marketplace::from_opt`, so an id this build does not know
@@ -1718,6 +1736,15 @@ pub fn call(
             encode(
                 command,
                 crate::wishlist::list_wishes(&conn, &query).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_shelf_counts" => {
+            let query: crate::wishlist::WishlistQuery = field(command, args, "query")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::wishlist::shelf_counts(&conn, &query).map_err(RouteError::Failed)?,
             )
         }
 
@@ -2507,6 +2534,25 @@ pub fn call(
             )
         }
 
+        // `search_open`'s pair one level deeper, and infallible on this side for its reason.
+        "shelf_folds" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::shelffolds::stored(&conn))
+        }
+
+        // **`changes` is a map whose values may be `null`**, and `field` reads the whole object —
+        // a `null` value is `None`, which is "take the override off", never a missing argument.
+        "set_shelf_folds" => {
+            let page: String = field(command, args, "page")?;
+            let changes: std::collections::HashMap<String, Option<bool>> =
+                field(command, args, "changes")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::shelffolds::store(c, &page, &changes))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
         // ── The error log ───────────────────────────────────────────────────────────
         //
         // **Both wrappers live in `desktop.rs`, which can never compile for wasm** — it is the
@@ -3246,6 +3292,64 @@ mod tests {
                 .expect("collection_list answers a page with `items`")
                 .len(),
             0
+        );
+    }
+
+    /// **The Shelves wall's four commands, routed and advertised.** Both halves, for
+    /// `the_card_combo_read_is_both_routed_and_advertised`'s reason: an arm left out of `COMMANDS`
+    /// answers a `call` perfectly well and is still invisible to the page.
+    #[test]
+    fn the_shelf_commands_are_routed_and_advertised() {
+        let s = state("web-route-shelves");
+        for name in [
+            "collection_shelf_counts",
+            "wishlist_shelf_counts",
+            "shelf_folds",
+            "set_shelf_folds",
+        ] {
+            assert!(
+                COMMANDS.contains(&name),
+                "`{name}` has an arm the page is never told about"
+            );
+        }
+
+        // Nothing is owned or wished for here, so every shelf is empty — and an empty shelf
+        // answers no row, which is a page-shaped `[]` rather than a refusal.
+        let owned = call(
+            &s,
+            "collection_shelf_counts",
+            &json!({ "query": { "shelves": [0, 7] } }),
+        )
+        .unwrap();
+        assert_eq!(owned, json!([]));
+        let wished = call(
+            &s,
+            "wishlist_shelf_counts",
+            &json!({ "query": { "shelves": [0] } }),
+        )
+        .unwrap();
+        assert_eq!(wished, json!([]));
+
+        // `changes` carries a `null`, which the arm must read as "take the override off".
+        call(
+            &s,
+            "set_shelf_folds",
+            &json!({ "page": "wishlist", "changes": { "7": true, "9": null } }),
+        )
+        .unwrap();
+        assert_eq!(
+            call(&s, "shelf_folds", &json!({})).unwrap(),
+            json!({ "collection": {}, "wishlist": { "7": true } })
+        );
+        let refused = call(
+            &s,
+            "set_shelf_folds",
+            &json!({ "page": "decks", "changes": {} }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            refused,
+            RouteError::Failed(crate::shelffolds::UNKNOWN_PAGE.to_owned())
         );
     }
 
@@ -4130,9 +4234,13 @@ mod tests {
         // **181 since a mover's detail routed `price_history`**, counted with that `awk` over the
         // array as it stands here — which answered 180 before it, not the 179 above, so the
         // literal had already moved once without this paragraph.
+        //
+        // **185 since the Shelves wall routed four** — two per-shelf counts and the folds pair —
+        // counted with that `awk` over the array as it stands here. If a later merge turns this
+        // red, take the number from `left`.
         assert_eq!(
             COMMANDS.len(),
-            181,
+            185,
             "update this number when a command is added"
         );
     }

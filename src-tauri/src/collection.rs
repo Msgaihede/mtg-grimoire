@@ -1674,6 +1674,29 @@ pub struct CollectionQuery {
     /// widens the root to everything, this one narrows everything to the root — because the two
     /// surfaces mean opposite things by an absent folder. Same page control, opposite polarity.
     pub root_only: bool,
+    /// **The shelves to answer, in the order to answer them** — folder ids, with `0` standing for
+    /// the shelf of rows filed nowhere (`e.folder_id IS NULL`). The collection page's Shelves wall
+    /// sends the shelves it draws expanded, depth-first, for the list; and every shelf at and below
+    /// the level it stands on for [`shelf_counts`] and [`summarise`].
+    ///
+    /// **Present, it replaces the folder question outright**: [`Self::folder_id`],
+    /// [`Self::root_only`] and [`Self::exclude_locked`] are not read. A list that names every
+    /// folder it wants has said where it is standing — the named-folder rule those three fields
+    /// already follow, applied to a list — so a stale folder id riding beside it cannot narrow it,
+    /// and a locked folder it names is served whole. Rows come back in **list position first**,
+    /// then the sort, then the `e.id` tiebreak [`crate::sorting::order_by`] appends.
+    ///
+    /// **The list is TypeScript's, and this crate never walks the tree to build one.**
+    /// `folderTree.ts` orders siblings `sortOrder, name, id` and `collection_folders.rs` orders
+    /// them `sort_order, id`; with the list arriving from one side, only one of them ever decides.
+    /// An id no folder answers to matches nothing and refuses nothing — a folder deleted in
+    /// another window is a shelf with no rows, not an error.
+    ///
+    /// **Absent is today's behaviour, byte for byte** — `root_only`'s argument again: the mirror,
+    /// the export sweep, the importer and the deck builder's Collection Search never send it, and
+    /// an unasked question keeps its old answer.
+    #[serde(default)]
+    pub shelves: Option<Vec<i64>>,
     /// `true` leaves out the copies filed in a **locked** folder — a drawer the reader has set
     /// aside — and in every folder inside one, because a lock inherits down the tree. Ignored
     /// entirely when [`Self::folder_id`] names a folder, which is [`Self::root_only`]'s own rule
@@ -1918,6 +1941,33 @@ fn from_sql() -> String {
     "collection_entries e LEFT JOIN cards c ON c.id = e.card_id".to_owned()
 }
 
+/// The bound value behind every shelf term — the list as a JSON array, `[3,0,12]`.
+///
+/// **One bound string rather than a `?` per id**, so a statement's text is the same whatever the
+/// list's length, and nothing a caller sent is ever interpolated. Built by hand because every
+/// element is an `i64`, which has exactly one spelling and nothing to escape.
+pub(crate) fn shelf_list(ids: &[i64]) -> String {
+    let joined = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    format!("[{joined}]")
+}
+
+/// `column`'s shelf is one the list names — `coalesce(…, 0)`, so a NULL is the unfiled shelf.
+/// Binds [`shelf_list`] once. Shared with `wishlist::wishlist_scope`, which passes `w.folder_id`.
+///
+/// An id nothing answers to is simply a value no row has: no error, no row.
+pub(crate) fn shelf_member(column: &str) -> String {
+    format!("coalesce({column}, 0) IN (SELECT j.value FROM json_each(?) AS j)")
+}
+
+/// Where `column`'s shelf stands in the list, `0` for the first. Binds [`shelf_list`] once more.
+///
+/// `min` is what makes a list naming one shelf twice answer its **first** place rather than
+/// either. It is an `ORDER BY` term, and a computed position defeats any index the sort could
+/// have used — the cost spec §4.4 asks to be measured before merge (Task 9).
+pub(crate) fn shelf_position(column: &str) -> String {
+    format!("(SELECT min(j.key) FROM json_each(?) AS j WHERE j.value = coalesce({column}, 0))")
+}
+
 /// The `WHERE` shared by the page, the count and the summary — because a summary taken
 /// over different rows than the list is a header that describes a different screen.
 fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
@@ -1991,10 +2041,17 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
     // `crate::wishlist::scope`'s `folder_id IS ?`: there is no value to bind here, because the
     // root is not a folder id this query carries. (The wishlist binds because its one term
     // serves both the root and a named folder.)
-    match (q.folder_id, q.root_only) {
-        (Some(folder), _) => p.push("e.folder_id = ?".to_owned(), Box::new(folder)),
-        (None, true) => p.wheres.push("e.folder_id IS NULL".to_owned()),
-        (None, false) => {}
+    //
+    // **A shelves list replaces all three states above**: it names every folder it wants, so it
+    // is where the reader is standing and `folder_id` / `root_only` are not read — see
+    // [`CollectionQuery::shelves`].
+    match (&q.shelves, q.folder_id, q.root_only) {
+        (Some(shelves), _, _) => {
+            p.push(shelf_member("e.folder_id"), Box::new(shelf_list(shelves)));
+        }
+        (None, Some(folder), _) => p.push("e.folder_id = ?".to_owned(), Box::new(folder)),
+        (None, None, true) => p.wheres.push("e.folder_id IS NULL".to_owned()),
+        (None, None, false) => {}
     }
     // A correlated lookup rather than a join, for [`from_sql`]'s reason: the page, the count
     // and the summary all read that one `FROM`, and widening it for a filter two of them do not
@@ -2027,7 +2084,11 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
     // inside is [`crate::collection_folders::LOCKED_FOLDER_IDS`], spelled once there because
     // `deck_theory` reads it too — a second copy here would be a second place for the
     // inheritance rule to drift — and it binds nothing.
-    if q.exclude_locked && q.folder_id.is_none() {
+    //
+    // `q.shelves.is_none()` for `folder_id`'s reason: a shelves list names its folders, and a
+    // named folder is served whole — and a field the list makes the query ignore must not be
+    // what decides this term.
+    if q.exclude_locked && q.folder_id.is_none() && q.shelves.is_none() {
         p.wheres.push(format!(
             "(e.folder_id IS NULL
               OR e.folder_id NOT IN ({locked}))",
@@ -2214,6 +2275,24 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
     // The front face's picture, as two `json_extract`s off the `cards` row this statement
     // already holds — no join and no second query. `c` is [`from_sql`]'s alias for it.
     let image_uris = crate::image_uri::front_face_selects("c").join(", ");
+    let sorted = crate::sorting::order_by(
+        q.sort.as_deref(),
+        &crate::sorting::sorts_for(COLLECTION_SORTS, COLLECTION_PRICE_SORTS, UNIT_PRICE_ALIAS),
+        COLLECTION_DEFAULT_ORDER,
+        "e.id ASC",
+    );
+    // **Shelves order the page before the reader's sort does**, and the sort only ever reorders
+    // inside a shelf. The position term binds the list a second time, and its `?` sits after every
+    // `WHERE` hole and before `LIMIT ? OFFSET ?` — so it is pushed here, after the count above has
+    // run over the scope's own parameters and before the two paging values below.
+    let order = match &q.shelves {
+        Some(shelves) => {
+            params.push(Box::new(shelf_list(shelves)));
+            let position = shelf_position("e.folder_id");
+            format!("{position} ASC, {sorted}")
+        }
+        None => sorted,
+    };
     let sql = format!(
         "SELECT e.id, e.card_id, c.name, e.set_code, c.set_name, e.collector_number, e.lang,
                 c.rarity, c.mana_cost, c.type_line, c.layout,
@@ -2233,12 +2312,6 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                 {image_uris}
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH),
-        order = crate::sorting::order_by(
-            q.sort.as_deref(),
-            &crate::sorting::sorts_for(COLLECTION_SORTS, COLLECTION_PRICE_SORTS, UNIT_PRICE_ALIAS),
-            COLLECTION_DEFAULT_ORDER,
-            "e.id ASC",
-        )
     );
     params.push(Box::new(limit));
     params.push(Box::new(q.offset));
@@ -2379,6 +2452,172 @@ pub async fn collection_summary(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         summarise(&crate::sync::lock_db_read(&state), &query)
+    })
+    .await
+    .map_err(|e| format!("the collection could not be read: {e}"))?
+}
+
+/// How many card ids a shelf's heading peeks at while it is collapsed.
+pub const SHELF_PEEK: i64 = 4;
+
+/// One shelf of a Shelves wall, counted — the heading's figures, the size the grid reserves for a
+/// shelf before a page of its cards has arrived, the pictures a collapsed heading shows, and
+/// (summed) the wishlist's Total cost.
+///
+/// **One struct for two commands**, [`BreakdownRow`]'s arrangement: defined here and answered by
+/// [`crate::wishlist::shelf_counts`] too, because a shelf of wishes and a shelf of copies are the
+/// same questions asked of different rows.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShelfCount {
+    /// The folder, or `0` for the shelf of rows filed nowhere.
+    pub folder_id: i64,
+    /// What the wall draws. Here `count(DISTINCT card_id, finish)` — two grades of one printing
+    /// in one folder are one tile, and the same printing in two folders is one tile on each shelf
+    /// (spec decision 11). On the wishlist, one per wish.
+    pub tiles: i64,
+    /// `sum(quantity)`.
+    pub copies: i64,
+    /// `sum(quantity × unit price)` at the query's marketplace, over the rows it prices — the same
+    /// `price_expr` the list's `unit_price` column is. **`None` when it prices none of them**,
+    /// [`crate::collection_folders::CollectionFolderSummary::value`]'s rule: an em dash, never
+    /// `0.00`.
+    pub value: Option<f64>,
+    /// What the marketplace has no price for, **in the unit the shelf's heading counts in**. Here
+    /// **copies** — `sum(quantity)` of the unpriced entries — so "42 cards · $x · 3 unpriced"
+    /// reads in one unit, the same one [`CollectionSummary::unpriced`] uses. On the wishlist,
+    /// **wishes** (rows), matching its "6 wishes".
+    pub unpriced: i64,
+    /// Up to [`SHELF_PEEK`] card ids for a **collapsed** heading's thumbnails — the only source,
+    /// because a collapsed shelf's cards are never fetched. Ordered by card name then id, one id
+    /// per card (a printing held at two grades or in two finishes is one picture), and each the
+    /// id the wall draws that card's tile from: the entry's printing here, the wish row's
+    /// `art_card_id` on the wishlist. **Unfiltered**: a search or a filter opens every shelf, so a
+    /// peek is only ever drawn with none active, and it shows what the shelf holds.
+    pub peek: Vec<String>,
+}
+
+/// Fill each count's `peek` from `sql` — a statement that binds the returned shelves as **one**
+/// [`shelf_list`] and answers `(shelf, card id)` rows already ordered and already cut to
+/// [`SHELF_PEEK`] per shelf. Shared with [`crate::wishlist::shelf_counts`], which passes its own
+/// statement; an empty `counts` asks nothing.
+pub(crate) fn fill_peek(
+    conn: &Connection,
+    counts: &mut [ShelfCount],
+    sql: &str,
+) -> Result<(), String> {
+    if counts.is_empty() {
+        return Ok(());
+    }
+    let shelves: Vec<i64> = counts.iter().map(|c| c.folder_id).collect();
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([shelf_list(&shelves)], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (shelf, card_id) = row.map_err(|e| e.to_string())?;
+        if let Some(count) = counts.iter_mut().find(|c| c.folder_id == shelf) {
+            count.peek.push(card_id);
+        }
+    }
+    Ok(())
+}
+
+/// The collection's peek statement: per shelf, the first [`SHELF_PEEK`] printings by card name
+/// (an orphan under its card id, [`COLLECTION_DEFAULT_ORDER`]'s rule) then id, one row per
+/// printing — the `GROUP BY` is what lists a printing held at two grades once.
+///
+/// **No [`scope`] and no filter**, only shelf membership: the peek describes what a shelf holds.
+/// One `row_number()` window over every returned shelf rather than a query per shelf, so it is
+/// one round trip whatever the shelf count, and the per-shelf `LIMIT 4` is the window's `n`.
+fn collection_peek_sql() -> String {
+    format!(
+        "SELECT shelf, card_id FROM (
+             SELECT shelf, card_id,
+                    row_number() OVER (PARTITION BY shelf ORDER BY name, card_id) AS n
+               FROM (SELECT coalesce(e.folder_id, 0) AS shelf,
+                            e.card_id AS card_id,
+                            min(coalesce(c.name, e.card_id)) AS name
+                       FROM {from}
+                      WHERE {member}
+                      GROUP BY shelf, e.card_id))
+          WHERE n <= {SHELF_PEEK}
+          ORDER BY shelf, n",
+        from = from_sql(),
+        member = shelf_member("e.folder_id"),
+    )
+}
+
+/// One [`ShelfCount`] per non-empty shelf in the query's scope, ordered by folder id.
+///
+/// **The figures are over [`scope`], search and filters included**, so a count and the list it
+/// sizes can never describe different rows; **the peek is not** — see [`collection_peek_sql`].
+/// The page sends `shelves` set to every shelf at and below its level, collapsed ones too; `sort`,
+/// `limit` and `offset` are read by nothing here.
+///
+/// The price is evaluated once per row in the inner `SELECT` and aggregated by name outside it —
+/// `wishlist_folders::folder_summary`'s note: a feed marketplace's price is a correlated subquery,
+/// and spelling it in three aggregates would run it three times per row. The tile key joins the
+/// two columns with a `/`, which neither a card id (a uuid) nor a finish can contain.
+///
+/// **`unpriced` sums the unpriced entries' copies**, `summarise`'s own `CASE … THEN e.quantity`
+/// — a heading's "n unpriced" sits beside its "n cards", and the two must be one unit.
+pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfCount>, String> {
+    let p = scope(q);
+    let where_sql = p.where_sql();
+    let sql = format!(
+        "SELECT shelf,
+                count(DISTINCT tile),
+                coalesce(sum(copies), 0),
+                sum(copies * unit_price),
+                coalesce(sum(CASE WHEN unit_price IS NULL THEN copies ELSE 0 END), 0)
+           FROM (SELECT coalesce(e.folder_id, 0) AS shelf,
+                        e.card_id || '/' || e.finish AS tile,
+                        e.quantity AS copies,
+                        {price} AS unit_price
+                   FROM {from} WHERE {where_sql})
+          GROUP BY shelf
+          ORDER BY shelf",
+        from = from_sql(),
+        price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH)
+    );
+    let mut counts = {
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(p.params.iter().map(|p| p.as_ref())),
+                |r| {
+                    Ok(ShelfCount {
+                        folder_id: r.get(0)?,
+                        tiles: r.get(1)?,
+                        copies: r.get(2)?,
+                        value: r.get(3)?,
+                        unpriced: r.get(4)?,
+                        peek: Vec::new(),
+                    })
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?
+    };
+    fill_peek(conn, &mut counts, &collection_peek_sql())?;
+    Ok(counts)
+}
+
+/// The Shelves wall's per-shelf figures. **Read-only** connection, blocking pool, like
+/// [`collection_list`] beside it.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn collection_shelf_counts(
+    state: tauri::State<'_, Arc<AppState>>,
+    query: CollectionQuery,
+) -> Result<Vec<ShelfCount>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        shelf_counts(&crate::sync::lock_db_read(&state), &query)
     })
     .await
     .map_err(|e| format!("the collection could not be read: {e}"))?
@@ -3468,6 +3707,550 @@ mod tests {
         );
         let asked: CollectionQuery = serde_json::from_str(r#"{"excludeLocked":true}"#).unwrap();
         assert!(asked.exclude_locked, "camelCase on the way in, too");
+    }
+
+    /// One row at a grain these tests choose — printing, finish, condition and folder — written
+    /// straight into the table for [`filed_in`]'s reason. `filed_in` holds finish and condition
+    /// constant, and a shelf's tile count is a question about exactly those two.
+    fn shelved(
+        conn: &Connection,
+        card_id: &str,
+        finish: &str,
+        condition: &str,
+        folder_id: Option<i64>,
+        quantity: i64,
+    ) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                 folder_id, created_at, updated_at)
+             VALUES (?1, 'lea', '161', 'en', ?2, ?3, ?4, ?5, unixepoch(), unixepoch())
+             RETURNING id",
+            params![card_id, finish, condition, quantity, folder_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The shelves fixture, with every id named so an assertion reads as a sentence.
+    struct Shelved {
+        conn: Connection,
+        binder: i64,
+        sleeve: i64,
+        foils: i64,
+        empty: i64,
+        binder_nm: i64,
+        binder_lp: i64,
+        binder_foil: i64,
+        sleeve_nm: i64,
+        foils_foil: i64,
+        root_card: i64,
+        root_foil: i64,
+    }
+
+    /// A binder with a sleeve inside it, a drawer of foils, an empty folder, and two rows at the
+    /// root. At TCGplayer: `bolt-lea` nonfoil is 400.50 and its foil is **unpriced**
+    /// (`usd_foil: null`), `bolt-jp` foil is 90.00, `card-1` nonfoil is 1.00.
+    ///
+    /// Every row writes `set_code 'lea'`, `collector_number '161'`, so the default order inside a
+    /// shelf is name, then the `e.id` tiebreak — which is insertion order below.
+    fn shelved_collection() -> Shelved {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let sleeve = nested(&conn, binder, "Sleeve");
+        let foils = folder(&conn, "user", "Foils");
+        let empty = folder(&conn, "user", "Empty");
+        // The binder: one printing at two grades — one tile — and a foil of the other printing.
+        let binder_nm = shelved(&conn, "bolt-lea", "nonfoil", "NM", Some(binder), 2);
+        let binder_lp = shelved(&conn, "bolt-lea", "nonfoil", "LP", Some(binder), 1);
+        let binder_foil = shelved(&conn, "bolt-jp", "foil", "NM", Some(binder), 1);
+        // The same printing one folder down: a tile of its own on its own shelf.
+        let sleeve_nm = shelved(&conn, "bolt-lea", "nonfoil", "NM", Some(sleeve), 1);
+        // A shelf the marketplace prices nothing on.
+        let foils_foil = shelved(&conn, "bolt-lea", "foil", "NM", Some(foils), 2);
+        // Not sorted: a priced row and an unpriced one.
+        let root_card = shelved(&conn, "card-1", "nonfoil", "NM", None, 5);
+        let root_foil = shelved(&conn, "bolt-lea", "foil", "NM", None, 1);
+        Shelved {
+            conn,
+            binder,
+            sleeve,
+            foils,
+            empty,
+            binder_nm,
+            binder_lp,
+            binder_foil,
+            sleeve_nm,
+            foils_foil,
+            root_card,
+            root_foil,
+        }
+    }
+
+    /// A query that asks for these shelves and nothing else.
+    fn on_shelves(shelves: Vec<i64>) -> CollectionQuery {
+        CollectionQuery {
+            shelves: Some(shelves),
+            limit: 50,
+            ..Default::default()
+        }
+    }
+
+    fn row_ids(page: &CollectionPage) -> Vec<i64> {
+        page.items.iter().map(|r| r.id).collect()
+    }
+
+    /// **List position first, then the reader's sort, then the id** — and the sort never moves a
+    /// row across a shelf. `0` is Not sorted and only that. Paging is a window over the same
+    /// order, with a total over the whole scope.
+    #[test]
+    fn shelves_order_the_list_by_position_then_sort_then_id() {
+        let s = shelved_collection();
+
+        let page = list_entries(&s.conn, &on_shelves(vec![s.foils, 0, s.binder])).unwrap();
+        assert_eq!(
+            row_ids(&page),
+            vec![
+                s.foils_foil,
+                s.root_foil,
+                s.root_card,
+                s.binder_nm,
+                s.binder_lp,
+                s.binder_foil
+            ],
+            "the foils shelf, then Not sorted (Lightning Bolt before Test Card), then the binder"
+        );
+        assert_eq!(page.total, 6);
+
+        let unfiled = list_entries(&s.conn, &on_shelves(vec![0])).unwrap();
+        assert_eq!(row_ids(&unfiled), vec![s.root_foil, s.root_card]);
+        assert_eq!(
+            unfiled.total, 2,
+            "`0` is the rows filed nowhere, and only those"
+        );
+
+        let by_quantity = list_entries(
+            &s.conn,
+            &CollectionQuery {
+                sort: Some(vec![term("quantity", "desc")]),
+                ..on_shelves(vec![s.binder, 0])
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            row_ids(&by_quantity),
+            vec![
+                s.binder_nm,
+                s.binder_lp,
+                s.binder_foil,
+                s.root_card,
+                s.root_foil
+            ],
+            "the sort reorders inside a shelf; the root's 5 copies never jump the binder"
+        );
+
+        let window = list_entries(
+            &s.conn,
+            &CollectionQuery {
+                limit: 2,
+                offset: 2,
+                ..on_shelves(vec![s.foils, 0, s.binder])
+            },
+        )
+        .unwrap();
+        assert_eq!(row_ids(&window), vec![s.root_card, s.binder_nm]);
+        assert_eq!(
+            window.total, 6,
+            "the total is over the scope, not the window"
+        );
+    }
+
+    /// **`shelves` wins over every folder field** — the pinned precedence. `exclude_locked` is on
+    /// the list because its gate reads `folder_id`, and a field `shelves` makes the query ignore
+    /// cannot be allowed to change what a shelves query answers.
+    #[test]
+    fn shelves_win_over_folder_id_root_only_and_exclude_locked() {
+        let s = shelved_collection();
+        lock(&s.conn, s.binder);
+        let stale = CollectionQuery {
+            folder_id: Some(s.foils),
+            root_only: true,
+            exclude_locked: true,
+            ..on_shelves(vec![s.binder])
+        };
+
+        let page = list_entries(&s.conn, &stale).unwrap();
+        assert_eq!(
+            row_ids(&page),
+            vec![s.binder_nm, s.binder_lp, s.binder_foil],
+            "the named shelf, lock and all — not the stale folder, not the root, not nothing"
+        );
+        assert_eq!(page.total, 3);
+
+        let header = summarise(&s.conn, &stale).unwrap();
+        assert_eq!((header.entries, header.total_cards), (3, 4));
+
+        let unfiled = list_entries(
+            &s.conn,
+            &CollectionQuery {
+                folder_id: Some(s.binder),
+                ..on_shelves(vec![0])
+            },
+        )
+        .unwrap();
+        assert_eq!(row_ids(&unfiled), vec![s.root_foil, s.root_card]);
+    }
+
+    /// **Review Focus 5**: a folder deleted in another window leaves a stale id in the list. It
+    /// answers nothing and refuses nothing, and costs its own shelf and no other.
+    #[test]
+    fn an_unknown_shelf_id_returns_no_rows_and_no_error() {
+        let s = shelved_collection();
+
+        let gone = list_entries(&s.conn, &on_shelves(vec![9_999])).unwrap();
+        assert!(gone.items.is_empty());
+        assert_eq!(gone.total, 0);
+        let header = summarise(&s.conn, &on_shelves(vec![9_999])).unwrap();
+        assert_eq!((header.entries, header.total_cards), (0, 0));
+
+        let mixed = list_entries(&s.conn, &on_shelves(vec![9_999, s.sleeve])).unwrap();
+        assert_eq!(row_ids(&mixed), vec![s.sleeve_nm]);
+
+        // An empty list names no shelves: nothing, never everything.
+        assert_eq!(list_entries(&s.conn, &on_shelves(vec![])).unwrap().total, 0);
+    }
+
+    /// **Absent is today's answer, byte for byte.** The callers that must keep it are fenced by
+    /// their own tests — `root_only_at_its_default_answers_every_folder` and
+    /// `a_query_that_never_asks_still_sees_a_locked_folders_copies` here,
+    /// `mirror::read::tests::the_whole_collection_means_every_folder_and_a_folder_means_its_direct_members`
+    /// for the mirror and the export sweep — and this is the direct pin: the wire's default, and
+    /// every row in the old order.
+    #[test]
+    fn a_query_without_shelves_answers_exactly_what_it_did_before() {
+        let bare: CollectionQuery = serde_json::from_str("{}").unwrap();
+        assert_eq!(bare.shelves, None);
+        let null: CollectionQuery = serde_json::from_str(r#"{"shelves":null}"#).unwrap();
+        assert_eq!(null.shelves, None);
+        let asked: CollectionQuery = serde_json::from_str(r#"{"shelves":[4,0]}"#).unwrap();
+        assert_eq!(asked.shelves, Some(vec![4, 0]));
+
+        let s = shelved_collection();
+        let page = list_entries(
+            &s.conn,
+            &CollectionQuery {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            row_ids(&page),
+            vec![
+                s.binder_nm,
+                s.binder_lp,
+                s.binder_foil,
+                s.sleeve_nm,
+                s.foils_foil,
+                s.root_foil,
+                s.root_card
+            ],
+            "every folder, in name order with the id tiebreak"
+        );
+        assert_eq!(page.total, 7);
+        let header = summarise(&s.conn, &CollectionQuery::default()).unwrap();
+        assert_eq!((header.entries, header.total_cards), (7, 13));
+    }
+
+    /// **The summary takes `shelves` through `scope`**, and the subtree is what the page sends —
+    /// the crate walks no tree.
+    #[test]
+    fn the_summary_takes_shelves_and_covers_the_subtree_it_is_handed() {
+        let s = shelved_collection();
+
+        let subtree = summarise(&s.conn, &on_shelves(vec![s.binder, s.sleeve])).unwrap();
+        assert_eq!(
+            (subtree.entries, subtree.total_cards, subtree.unique_cards),
+            (4, 5, 2)
+        );
+        assert_eq!(subtree.value, 1692.0, "801 + 400.50 + 90 + 400.50");
+        assert_eq!(subtree.unpriced, 0);
+
+        let binder_alone = summarise(&s.conn, &on_shelves(vec![s.binder])).unwrap();
+        assert_eq!(
+            (binder_alone.entries, binder_alone.total_cards),
+            (3, 4),
+            "the sleeve is below the binder, and only the list says so"
+        );
+    }
+
+    /// A [`ShelfCount`] in one line — the four figures, then the peek's card ids in order.
+    fn counted(
+        folder_id: i64,
+        tiles: i64,
+        copies: i64,
+        value: Option<f64>,
+        unpriced: i64,
+        peek: &[&str],
+    ) -> ShelfCount {
+        ShelfCount {
+            folder_id,
+            tiles,
+            copies,
+            value,
+            unpriced,
+            peek: peek.iter().map(|id| (*id).to_owned()).collect(),
+        }
+    }
+
+    /// **One row per non-empty shelf**, ordered by folder id: tiles, copies, value, unpriced and
+    /// the peek. `value` is `None` where the marketplace prices nothing
+    /// (`CollectionFolderSummary::value`'s rule), and `unpriced` counts **copies** — the foils
+    /// shelf's one unpriced row of two copies is `2` — the unit of the heading's own "n cards" and
+    /// of `CollectionSummary::unpriced`. The peek is card name then id: the binder's two Lightning
+    /// Bolts sort `bolt-jp` before `bolt-lea`.
+    #[test]
+    fn shelf_counts_are_tiles_copies_value_and_unpriced_per_shelf() {
+        let s = shelved_collection();
+        let counts = shelf_counts(
+            &s.conn,
+            &on_shelves(vec![0, s.binder, s.sleeve, s.foils, s.empty]),
+        )
+        .unwrap();
+        assert_eq!(
+            counts,
+            vec![
+                counted(0, 2, 6, Some(5.0), 1, &["bolt-lea", "card-1"]),
+                counted(s.binder, 2, 4, Some(1291.5), 0, &["bolt-jp", "bolt-lea"]),
+                counted(s.sleeve, 1, 1, Some(400.5), 0, &["bolt-lea"]),
+                counted(s.foils, 1, 2, None, 2, &["bolt-lea"]),
+            ]
+        );
+        assert!(
+            !counts.iter().any(|c| c.folder_id == s.empty),
+            "an empty shelf answers no row at all"
+        );
+    }
+
+    /// **Decision 11**: a collection tile is a printing and a finish **on one shelf**. Two grades
+    /// of one printing in one folder are one tile; the same printing in a second folder is a tile
+    /// there as well.
+    #[test]
+    fn a_tile_is_a_printing_and_finish_on_one_shelf() {
+        let s = shelved_collection();
+        let counts = shelf_counts(&s.conn, &on_shelves(vec![s.binder, s.sleeve])).unwrap();
+        let tiles = |id: i64| counts.iter().find(|c| c.folder_id == id).unwrap().tiles;
+        assert_eq!(
+            tiles(s.binder),
+            2,
+            "NM and LP of bolt-lea are one tile; bolt-jp's foil is the second"
+        );
+        assert_eq!(
+            tiles(s.sleeve),
+            1,
+            "bolt-lea one folder down is a tile of its own"
+        );
+    }
+
+    /// **The counts read the list's own `scope`**, so the search box and every filter narrow the
+    /// figures — which is what makes a heading's "3 of 42" and hiding a shelf with no match
+    /// possible. **The peek does not narrow**: a filter opens every shelf, so a peek is only ever
+    /// drawn with no filter active, and it shows what the shelf holds — the root's peek keeps the
+    /// Test Card the search dropped.
+    #[test]
+    fn shelf_counts_honour_the_search_and_every_filter() {
+        let s = shelved_collection();
+        // External-content FTS with no triggers: rows added after the schema is built are
+        // invisible to the index until it is rebuilt.
+        s.conn
+            .execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        let every = vec![0, s.binder, s.sleeve, s.foils, s.empty];
+
+        let searched = shelf_counts(
+            &s.conn,
+            &CollectionQuery {
+                cards: crate::filters::CardFilters {
+                    text: Some("light bol".into()),
+                    ..Default::default()
+                },
+                ..on_shelves(every.clone())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            searched,
+            vec![
+                counted(0, 1, 1, None, 1, &["bolt-lea", "card-1"]),
+                counted(s.binder, 2, 4, Some(1291.5), 0, &["bolt-jp", "bolt-lea"]),
+                counted(s.sleeve, 1, 1, Some(400.5), 0, &["bolt-lea"]),
+                counted(s.foils, 1, 2, None, 2, &["bolt-lea"]),
+            ],
+            "the Test Card at the root is the one row the search drops — from the figures only"
+        );
+
+        let foil_only = shelf_counts(
+            &s.conn,
+            &CollectionQuery {
+                finishes: Some(vec!["foil".into()]),
+                ..on_shelves(every.clone())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            foil_only,
+            vec![
+                counted(0, 1, 1, None, 1, &["bolt-lea", "card-1"]),
+                counted(s.binder, 1, 1, Some(90.0), 0, &["bolt-jp", "bolt-lea"]),
+                counted(s.foils, 1, 2, None, 2, &["bolt-lea"]),
+            ],
+            "the sleeve holds no foil, so it answers no row"
+        );
+
+        let graded = shelf_counts(
+            &s.conn,
+            &CollectionQuery {
+                conditions: Some(vec!["LP".into()]),
+                ..on_shelves(every)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            graded,
+            vec![counted(
+                s.binder,
+                1,
+                1,
+                Some(400.5),
+                0,
+                &["bolt-jp", "bolt-lea"]
+            )]
+        );
+    }
+
+    /// **An unpriced entry of three copies is three unpriced on the collection** — the unit of the
+    /// heading's "n cards" beside it and of the header's own `unpriced`, which is why the header is
+    /// asserted over the same shelf. (`wishlist::tests::an_unpriced_wish_of_three_copies_counts_one_unpriced_on_the_wishlist`
+    /// is the other half: there it is one, because that heading counts wishes.)
+    #[test]
+    fn an_unpriced_entry_of_three_copies_counts_three_unpriced_on_a_collection_shelf() {
+        let s = shelved_collection();
+        let unpriced = folder(&s.conn, "user", "Unpriced");
+        shelved(&s.conn, "bolt-lea", "foil", "NM", Some(unpriced), 3);
+        assert_eq!(
+            shelf_counts(&s.conn, &on_shelves(vec![unpriced])).unwrap(),
+            vec![counted(unpriced, 1, 3, None, 3, &["bolt-lea"])]
+        );
+        let header = summarise(&s.conn, &on_shelves(vec![unpriced])).unwrap();
+        assert_eq!(
+            header.unpriced, 3,
+            "the heading and the header count one unit"
+        );
+    }
+
+    /// Review Focus 5 for the counts: a stale id counts nothing and refuses nothing.
+    #[test]
+    fn shelf_counts_for_an_unknown_shelf_are_empty() {
+        let s = shelved_collection();
+        assert!(shelf_counts(&s.conn, &on_shelves(vec![9_999]))
+            .unwrap()
+            .is_empty());
+    }
+
+    /// One card row straight into `cards`, for the peek tests — which need more distinct names
+    /// than [`seeded`]'s three. Its own oracle card, and unpriced everywhere (`prices` is `{}`).
+    fn peek_card(conn: &Connection, id: &str, name: &str) {
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,prices,raw)
+             VALUES (?1,?1,?2,'tst','1','en','normal','{}','{}')",
+            params![id, name],
+        )
+        .unwrap();
+    }
+
+    /// A shelf of six distinct cards, filed in scrambled order: `aa` Ancestral Recall, `bb` Black
+    /// Lotus, `bolt-jp` and `bolt-lea` (both Lightning Bolt), `card-1` Test Card and `zz` Zodiac
+    /// Dragon — every copy NM except `zz`, the one LP row a filter below matches.
+    fn six_card_shelf() -> (Connection, i64) {
+        let conn = seeded();
+        peek_card(&conn, "aa", "Ancestral Recall");
+        peek_card(&conn, "bb", "Black Lotus");
+        peek_card(&conn, "zz", "Zodiac Dragon");
+        let six = folder(&conn, "user", "Six");
+        for card in ["zz", "card-1", "bolt-lea", "bb", "bolt-jp", "aa"] {
+            let condition = if card == "zz" { "LP" } else { "NM" };
+            shelved(&conn, card, "nonfoil", condition, Some(six), 1);
+        }
+        (conn, six)
+    }
+
+    /// **The peek is the first four cards by name, then id** — whatever order they were filed in,
+    /// and with the two Lightning Bolts told apart by id.
+    #[test]
+    fn a_shelf_of_six_cards_peeks_at_the_first_four_by_name_then_id() {
+        let (conn, six) = six_card_shelf();
+        let counts = shelf_counts(&conn, &on_shelves(vec![six])).unwrap();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0].tiles, 6);
+        assert_eq!(counts[0].peek, vec!["aa", "bb", "bolt-jp", "bolt-lea"]);
+    }
+
+    /// **A filter narrows the figures and never the peek** — it is the collapsed heading's only
+    /// source of pictures, and a collapsed heading is only drawn with no filter active.
+    #[test]
+    fn a_filter_matching_one_card_still_peeks_at_four_on_the_shelf() {
+        let (conn, six) = six_card_shelf();
+        let graded = shelf_counts(
+            &conn,
+            &CollectionQuery {
+                conditions: Some(vec!["LP".into()]),
+                ..on_shelves(vec![six])
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            graded,
+            vec![counted(
+                six,
+                1,
+                1,
+                None,
+                1,
+                &["aa", "bb", "bolt-jp", "bolt-lea"]
+            )],
+            "the figures are the one LP card; the peek is the shelf"
+        );
+    }
+
+    /// **One printing is one picture**, so a printing held at two grades — or in two finishes — is
+    /// one id in the peek, never two thumbnails of the same card.
+    #[test]
+    fn one_printing_at_two_grades_is_one_card_in_the_shelf_peek() {
+        let s = shelved_collection();
+        let counts = shelf_counts(&s.conn, &on_shelves(vec![s.binder])).unwrap();
+        assert_eq!(
+            counts[0].peek,
+            vec!["bolt-jp", "bolt-lea"],
+            "bolt-lea at NM and at LP is listed once"
+        );
+    }
+
+    /// The wire names `src/lib/ipc.ts`'s `ShelfCount` reads — `value` crosses as `null`, never as
+    /// `0`, and `peek` as an array of card ids.
+    #[test]
+    fn a_shelf_count_serialises_under_the_names_the_page_reads() {
+        let json = serde_json::to_value(counted(0, 2, 6, None, 1, &["bolt-lea"])).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "folderId": 0,
+                "tiles": 2,
+                "copies": 6,
+                "value": null,
+                "unpriced": 1,
+                "peek": ["bolt-lea"]
+            })
+        );
     }
 
     /// The default query, priced somewhere other than the default.
