@@ -2810,7 +2810,8 @@ downloaded**: 2 988 `token`, 137 `emblem` and 120 `double_faced_token` rows are 
 §4) split what the reader stores in two**, and the subsections below are written against that
 shape unless they say otherwise. `deck_tokens` keeps what is the **token's** and shared by both
 lists — its state, `auto` / `hidden` / `manual` — and its `card_id` and `quantity` became
-**legacy**: read for an implicit entry's count, never written again. What the reader keeps of a
+**legacy**: read for an implicit entry's count, and written again only by the launch conversion
+that clears them (*The launch conversion*, below). What the reader keeps of a
 token moved to **`deck_token_printings`**: *entries*, one printing in one finish in one list with a
 quantity, so a deck can bring a Treasure in two arts, or a foil one, and the plan can ask for a
 different Treasure from the live list. The six commands replaced the four; every token write
@@ -2939,8 +2940,9 @@ CREATE UNIQUE INDEX idx_deck_tokens_uid ON deck_tokens (sync_uid);
   the reader deliberately zeroed, and the row went on carrying the art they picked. Since v52 a
   zero lives on an entry (rule 3, below), and a legacy `0` left on a pre-v52 row still reads as the
   implicit entry's count — `implicit_quantity` is `legacy.unwrap_or(1)`, so it stays zeroed.
-  **v52's rung leaves one row the old write path never made**: `state = 'auto'` with both legacy
-  columns cleared, where the override's art moved out. It is harmless — the resolver reads it as
+  **v52's launch conversion leaves one row the old write path never made**: `state = 'auto'` with
+  both legacy columns cleared, where the override's art moved out. It is harmless — the resolver
+  reads it as
   *no deviation* — and the next `auto` written to that token deletes it, as an empty `auto` row
   always was.
 
@@ -3299,7 +3301,8 @@ derives nothing — so a bare reconcile would have deleted the Treasure arts the
 of letting them follow the deck that became the plan. The switch runs in this order:
 
 1. **Both lists are reconciled first, and only then is the step's before-image read.** Every deck
-   that never had a plan holds a theory copy of each old pick (the v52 rung made one per list), and
+   that never had a plan holds a theory copy of each old pick (the launch conversion makes one per
+   list), and
    a plan with no cards makes no token, so rule 7 owes those entries' removal whatever the press
    does. Read into the before-image, an undo would put such an entry back, the `with_write`
    backstop would delete it the moment the undo committed, and the redo — which checks that the
@@ -3369,13 +3372,76 @@ structural.
   drawn on the wall. `adding_a_card_that_is_not_a_token_is_refused_and_writes_nothing` and
   `a_reversible_token_is_added_and_a_reversible_card_is_refused`.
 
-### `repair_entry_finishes`, the launch half of the v52 rung
+### The launch conversion: v51's picks become entries, captured (v52)
 
-The rung copied every picked art into an entry at **`nonfoil`**, knowing it was a guess: no
-migration rung reads the corpus (`migrate_user` runs before `migrate_corpus`, and the corpus may not
-be at head or there at all). `deck_tokens::repair_entry_finishes` is the other half, run from
-`schema::prepare_database` beside `managed_wishlist::settle_all` and, like it, **logged and left
-owing** on failure. It moves every entry whose finish its printing is not sold in to the printing's
+**The v52 rung creates the table and converts nothing.** Every v51 art pick — a `deck_tokens` row
+whose legacy `card_id` is set, one art shared by both lists — becomes entries in
+`deck_tokens::convert_legacy_picks`, which `schema::prepare_database` runs at **every** launch,
+after `capture::install` and before the finish repair below, **logged and left owing** on failure.
+Its writes are **captured**, and that is the whole reason it is not in the rung.
+
+⚠️ **Until 2026-09-26 the rung did the converting, uncaptured**, naming each entry
+`<override uid>-<list>` on the argument that every device climbs over the same synced picks and so
+derives the same rows under the same names. **A group with a device still on v51 broke that both
+ways, and each break stalled a sync stream for good.** A pick made on the v51 device *after* another
+device climbed was converted by the picker alone, when it climbed, under a name the first device had
+never heard — so the picker's next count step reached it as a sparse `{quantity}` update for a row it
+could not find: deferred, and the picker's whole stream held behind it. A throwaway two-device test
+reproduced exactly that before the move (`deferred = 1`, the one op a `{quantity}` update for
+`u-pick-live`). And a pick the v51 device *reset* left the converter the only holder of an entry,
+whose own later steps stalled its stream the other way —
+`an_art_reset_on_a_v51_device_after_the_conversion_leaves_nothing_deferred` went red with
+`deferred = 1` against the rung-time conversion.
+**An entry that announces itself with a captured insert cannot be unknown to a peer**: a peer that
+derived it too merges on the uid, and one that did not builds the row from the put.
+
+Per pick, per list, in `(deck_id, oracle_id)` order:
+
+1. **The list already holds the token at the picked printing, in any finish** — it keeps what it
+   holds. The finish repair may have moved an earlier conversion to `foil`, or a reader on v52 added
+   the printing; a second row would be a second entry for one art.
+   `a_list_already_holding_the_picked_printing_in_any_finish_keeps_it`.
+2. **Another token's entry holds the grain** — skipped. `deck_tokens`' grain is `(deck_id,
+   oracle_id)`, so two tokens of one deck can have picked one printing (a double-faced token carries
+   two), and the pick first in **`oracle_id` order, never rowid** has it. Every device sorts one
+   synced row set alike, so each keeps the same winner under the same name. The loser keeps its
+   count as its token's implicit one and loses only the art.
+3. **The entry this pick named at an earlier conversion is still there** — it is **moved**: a v51
+   device re-picked after this one converted, `apply` wrote the new `card_id` onto the legacy
+   column, and the next launch rewrites the entry's printing and finish in place — same row, same
+   count, same name, so the captured update lands on every peer holding it.
+   `a_pick_that_arrives_after_the_conversion_moves_the_entry_it_named`.
+4. **Otherwise it is inserted**, named `<pick uid>-<list>` (random for a pick with no uid of its
+   own, which only a write behind `capture::suppressed` leaves, and different per list), at
+   `max(coalesce(quantity, 1), 0)` — floored because `deck_tokens.quantity` is a synced field with no
+   `CHECK` — and in `nonfoil`, for the repair below to settle.
+
+Then every pick's `card_id` is cleared, and its `quantity` wherever an entry of its token now
+exists — **all the entries first and the clears after**, so each clear rides behind an entry op in
+the device's stream. A v51 peer holds that stream at the first op for a table it does not know, so it
+holds the clears too and goes on drawing its art until it upgrades — the accepted new-table stall.
+**Idempotent and cheap**: a cleared pick is never read again, so every later launch scans a table of
+one row per deviated token and writes nothing, no op included
+(`a_second_conversion_writes_nothing_and_announces_nothing`). The capture itself is
+`the_conversion_announces_every_entry_it_derives_and_the_cleared_pick_behind_them`: two puts named
+`u-pick-live` / `u-pick-theory` carrying the whole row, then the `deck_tokens` op clearing both
+legacy columns. The two stalls are pinned end to end through `sync_engine::apply` by
+`a_pick_made_on_a_v51_device_after_the_climb_converges_with_nothing_deferred` and
+`an_art_reset_on_a_v51_device_after_the_conversion_leaves_nothing_deferred`.
+**Two losses are accepted**, both confined to a v51 device's last days: a reset made there after
+another device converted (the other device's entry reaches it after the upgrade, and the reset has
+nothing left to clear), and a count stepped there on a pick another device had already cleared,
+which lands on the legacy column a converted token no longer reads.
+
+### `repair_entry_finishes`, the conversion's other half
+
+The conversion writes every art at **`nonfoil`**, knowing it is a guess: v51 stored a printing and
+no finish, and the rows the conversion announces must be the same on every device — a device whose
+corpus has not downloaded yet cannot read a printing's finishes. (While the rung converted, the
+reason was stronger still: no migration rung reads the corpus, because `migrate_user` runs before
+`migrate_corpus`.) `deck_tokens::repair_entry_finishes` is the other half, run from
+`schema::prepare_database` straight after the conversion and, like it, **logged and left owing** on
+failure. It moves every entry whose finish its printing is not sold in to the printing's
 `default_finish` — its sole finish, for a foil-only or etched-only printing — and **folds** into an
 entry the list already holds at that grain rather than failing the launch on the unique index. A
 printing gone from the corpus, or whose `finishes` says nothing, is left alone. It can touch
@@ -3390,7 +3456,16 @@ never a delete and a re-insert. The capture triggers' uid mint sits inside the g
 switches off, so a re-inserted row would come back nameless, and the next captured write to it —
 a stepper, whose update trigger has no uid guard — would put a NULL into `sync_ops.uid NOT NULL`
 and fail on every press from then on. Every device runs the same repair over the same rows, so the
-name the rung gave the entry stays the one every peer knows it by.
+name the conversion gave the entry stays the one every peer knows it by.
+⚠️ **The walk is in `sync_uid` order, so a fold keeps the lower uid** — `sync_engine::apply`'s `min`
+rule. Where one list holds two wrong finishes of one printing, both move to the one right finish:
+the first moved keeps its row and the second folds into it. Walked in each device's own row order,
+two devices could keep the entry under two names, each then holding a row the other's edits cannot
+find. `the_finish_repair_folds_two_wrong_finishes_into_the_lower_uid` inserts the higher uid first
+and went red (`u-b` kept) before the `ORDER BY`.
+**Its one cost**: a peer's announced `nonfoil` that lands after this device's repair, with a later
+stamp than this device's own announcement, writes the guess back; the entry draws in the wrong
+finish until the next launch repairs it again.
 `the_finish_repair_moves_an_unsold_finish_to_the_sole_one_and_is_idempotent` and
 `the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured`.
 

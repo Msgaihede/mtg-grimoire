@@ -1003,36 +1003,61 @@ far device may not hold the printing to derive it from. `decks.token_mode` repla
 `decks.token_stack` on the `decks` spec under a **new name**, v49's precedent: a v51 peer skips a
 field it does not know, where a word landing in its INTEGER column would fail its deck read.
 
-**Two things that rung did which no rung before it had to.** It moves rows into a table born in
-the same rung, before any capture trigger exists for it — so it **names them itself**,
-`<override uid>-live` and `-theory`. A NULL uid fails the reader's own write on a paired device;
-a random one leaves each device holding the entry under a name no peer has heard, so the first
-edit on one device reaches the other as a sparse update for a row it cannot find — deferred, and
-the sender's stream stalled behind it. Derived from the synced override, every device names the
-entry alike with nothing sent. And it **keeps its own writes off the wire**: clearing the override
-is derived per device, so the rung drops `deck_tokens`' three capture triggers beside `decks`'
-(v43's move) and `capture::install` puts them back. Captured, the clear would reach a peer still
-on v51 and wipe the art that peer's own climb has yet to move.
+**v51's art picks become entries in a captured launch pass, and until 2026-09-26 the rung did it
+uncaptured.** The rung copied each picked override into one entry per list, named
+`<override uid>-live` and `-theory`, on the argument that every device climbs over the same synced
+override and so derives the same row under the same name with nothing sent — and it dropped
+`deck_tokens`' three capture triggers so that its clear of the override stayed off the wire too.
+**A group with a device still on v51 broke that argument in both directions**, each break a stream
+stalled for good:
 
-**What a mixed group does across the rung**, as read off the code rather than driven (2026-09-26,
-no two-device pass yet): a v52 device's `deck_token_printings` ops **defer** on a v51 peer until it
-upgrades, which is the ordinary cost of a new table; a v51 peer's `deck_tokens.card_id` /
-`quantity` ops still land in the legacy columns on a v52 device, where only the legacy quantity is
-read (an untouched token's implicit count) and a picked art is ignored. Two windows follow from
-"every device names the entry alike", and neither is closed:
+- **A pick made on the v51 device after the other device climbed** was converted by the picker
+  alone, when *it* climbed, under a name the first device had never derived. The picker's next count
+  step reached the first device as a sparse `{quantity}` update: `apply::find_row` could not match
+  it (the uid was unknown, and a sparse op carries no grain term), the insert fallback failed
+  `NOT NULL`, and the op deferred — the picker's whole stream held behind it. A throwaway two-device
+  test against the rung-time design measured it: the one op, a `{quantity}` update for
+  `u-pick-live`, `deferred = 1`.
+- **A pick the v51 device reset** left the converter the only holder of `<uid>-live`, so the
+  converter's own later steps stalled its stream to that device the same way.
 
-- ⚠️ **One name, two contents.** An art the v51 laggard picks after this device climbed reaches
-  this device as an update to a column nothing reads any more; when the laggard climbs, it derives
-  `<uid>-live` over its *newer* art. The one name then carries two printings until the next write
-  that rewrites the entry's printing on either side (a swap sends `card_id`; a count step sends only
-  `quantity` and settles nothing). Nothing stalls — each device holds a row under the name and every
-  op finds it — and what it costs is a reader seeing the older art here. Closing it would mean
-  sending the rung's writes, which is the captured-derived-write trap the trigger drop exists to
-  avoid. (The rung's own comment in `schema.rs` is the record.)
-- ⚠️ **Two names, one entry.** The derivation assumes both devices' `deck_tokens` row had converged
-  on one uid before either climbed; an override still in flight at that moment gives its entries
-  two names, and a later sparse edit to one of them defers on the other device (Task RA's reading,
-  2026-09-26 — unmeasured).
+This page said "one name, two contents — nothing stalls" about the first case until the same day.
+That held only for a *re*-pick of a pick both devices had converted, and the rung's own comment
+repeated it.
+
+`deck_tokens::convert_legacy_picks` now runs from `prepare_database` at **every** launch, after
+`capture::install`, **not suppressed**. Every entry it derives is a captured insert, so a peer
+that derived the same row merges on the uid and a peer that did not builds it from the put; a pick
+arriving after the climb is converted at the receiver's next launch and announced; a re-pick
+moves the named entry to the new art in place, captured, so the "two contents" window closes at
+the next launch rather than at the next swap. The clears are captured as well, and recorded
+**after** the entries, so a v51 peer — holding the stream at the first op for a table it does not
+know — holds the clears with it and keeps drawing its art until it upgrades. Two losses are
+accepted, both confined to a v51 device's last days: a reset made there in that window (the other
+device's entry reaches it after the upgrade, with nothing left to clear), and a count stepped there
+on a pick another device has already cleared, which lands on a legacy column a converted token no
+longer reads. `a_pick_made_on_a_v51_device_after_the_climb_converges_with_nothing_deferred` and
+`an_art_reset_on_a_v51_device_after_the_conversion_leaves_nothing_deferred` drive both through
+`apply` with nothing deferred; the second went red, `deferred = 1`, against the rung-time
+conversion. (The first cannot go red against a stub that converts at every launch, which is why
+the stall was measured by the throwaway test instead.)
+
+**What a mixed group does across v52**, then: a v52 device's `deck_token_printings` ops **defer**
+on a v51 peer until it upgrades, which is the ordinary cost of a new table, and the clears wait
+behind them; a v51 peer's `deck_tokens.card_id` / `quantity` ops land in the legacy columns on a
+v52 device, where the next launch converts a picked art and otherwise only an untouched token's
+implicit count is read. **"Two names, one entry"** — a pick still in flight between two devices
+under two uids when each converts it — now converges through the grain rule rather than stalling,
+because the announcement is an insert and carries every grain term: `apply` finds the other
+device's entry on `(deck, variant, card, finish)` and both adopt the lower uid. ⚠️ **One corner is
+still open, read off the code and unmeasured**: the grain includes the finish, and each device's
+finish repair (below) is uncaptured. If that in-flight pick names a **foil-only** printing and one
+device has already repaired its entry to `foil` when the other's `nonfoil` announcement arrives, the
+announcement finds no grain match and inserts a second row; that device's next repair folds the two
+(doubling the count) and deletes the other device's name uncaptured, after which an edit to that
+name from the other device defers. It needs two v51 devices to have picked the same token's art
+independently, offline, and a foil-only printing; writing the corpus's own finish in the
+conversion wherever the corpus can say it would close it, and was not done.
 
 **And the registrations number twelve, not ten**, counted while landing it: the ten above, plus
 `src/lib/userTables.json` — which `changes.rs`' `the_json_both_suites_read_is_the_user_side_of_
@@ -1185,15 +1210,16 @@ by uid. An *insert* op carries every field, which is what makes the grain rule w
 `(namespace, tag_id)` and `device_names` on `device_id` alone. Addressing by `sync_uid` is one
 spelling for all of them.
 
-**Minting takes four sites, not one**, and two of them are the ladder (it read "three" until
-v52 moved rows into a table it had just created):
+**Minting takes four sites, not one**, and one of them is the ladder (it read "three" until v52;
+the fourth row was the v52 rung itself until the pick conversion moved to a launch pass the same
+day, which took it off the ladder):
 
 | Path | Who mints |
 | --- | --- |
 | an *upgraded* file | the v29 rung's `UPDATE … SET sync_uid = lower(hex(randomblob(16)))` |
 | a *converted* file | `schema::mint_missing_uids` inside `split::extract_user_file` |
 | a *fresh* file | `USER_SEED_SQL`, plus the capture trigger for every row written afterwards |
-| a row **a rung moves into a table that rung creates** | the rung itself — v52 names each entry `<override uid>-<list>`, or a random uid per row for an override that has none, see the seventeenth table above |
+| a row **a launch pass derives from a synced row** | the pass itself — `deck_tokens::convert_legacy_picks` names each entry `<pick uid>-<list>`, or a random uid per row for a pick that has none, so two devices converting one pick announce one name; see the seventeenth table above |
 
 A converted file is the one that was missed first: a legacy `mtg.db` has no such column to
 copy, and `split::convert` stamps *head*, so the ladder never reaches it. A NULL uid is not
@@ -1302,19 +1328,25 @@ and captured nothing, across any number of relaunches (measured 2026-09-26, debu
 written inside `capture::suppressed`.) v52 adds three writes, and they land on both sides of the
 rule on purpose:
 
-- **The rung's own clear of the old override is kept off the wire** — not through `suppressed`,
-  which needs the capture machinery the rung runs before, but by dropping `deck_tokens`' three
-  capture triggers for the rung's length (*The seventeenth*, above). Captured, the clear would reach
-  a peer still on v51 and wipe the art that peer's own climb had yet to move into entries.
-- **`deck_tokens::repair_entry_finishes` runs behind `capture::suppressed`**, at every launch: it
-  moves an entry the rung filed at `nonfoil` onto its printing's sole finish, and whether a printing
-  is foil-only is a fact of *this* device's corpus. A captured fold would arrive on the other
-  device as a second sum — the `card_migrations` failure one table over. ⚠️ **And it rewrites in
-  place, never deleting and re-inserting**: `suppressed` also switches off the insert trigger's
-  uid mint, so a re-inserted entry would come back nameless and its next captured stepper press
-  would put a NULL into `sync_ops.uid NOT NULL` — a write that fails on every press from then on.
-  `the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured` holds it on a paired
-  fixture.
+- **`deck_tokens::convert_legacy_picks` is captured, deliberately, although every device derives
+  it too** — the rule's one exception that is not a delete. It turns v51's art picks into entries at
+  every launch (*The seventeenth*, above), and an entry derived on one device has to reach the peers
+  that never derived it, or their edits to it stall a stream; the rung that did this uncaptured
+  stalled one in each direction. What makes capturing a derived *insert* safe here is the name:
+  every device converting one pick announces the same `<pick uid>-<list>`, so the second copy of a
+  put merges on the uid instead of adding a row — and there is no counter on the table to double.
+- **`deck_tokens::repair_entry_finishes` runs behind `capture::suppressed`**, at every launch, after
+  the conversion: it moves an entry the conversion filed at `nonfoil` onto its printing's sole
+  finish, and whether a printing is foil-only is a fact of *this* device's corpus. A captured fold
+  would arrive on the other device as a second sum — the `card_migrations` failure one table over.
+  ⚠️ **And it rewrites in place, never deleting and re-inserting**: `suppressed` also switches off
+  the insert trigger's uid mint, so a re-inserted entry would come back nameless and its next
+  captured stepper press would put a NULL into `sync_ops.uid NOT NULL` — a write that fails on every
+  press from then on. `the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured` holds
+  it on a paired fixture. ⚠️ **And it walks in `sync_uid` order**, so where one list holds two wrong
+  finishes of one printing the fold keeps the lower uid on every device — `apply`'s `min` rule;
+  walked in local row order, two devices could keep the entry under two names.
+  `the_finish_repair_folds_two_wrong_finishes_into_the_lower_uid` went red (`u-b` kept) without it.
 - **Rule 7's token reconcile is captured, deliberately, although every device derives it too.**
   `deck_tokens::reconcile_in` deletes the entries of a token nothing makes any more, after card
   writes and as a `sync::with_write` backstop — including after a sync apply. It is captured

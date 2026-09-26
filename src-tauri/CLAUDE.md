@@ -149,8 +149,10 @@ both plus the frontend.
   argument and `vacuum_into_incremental` runs `VACUUM corpus`.
 - Only `schema::migrate_user` / `migrate_corpus` may stop a launch. `prepare_database`'s other
   steps (an FTS rebuild an interrupted compaction owed; the staging table an interrupted ingest
-  left; `managed_wishlist::settle_all` and `deck_tokens::repair_entry_finishes`, the two launch
-  settles) are logged and left owing — their likeliest cause is a full or read-only disk,
+  left; `managed_wishlist::settle_all`; and v52's pair, `deck_tokens::convert_legacy_picks` then
+  `deck_tokens::repair_entry_finishes` — the conversion **after `capture::install` and captured**,
+  the repair after it and suppressed) are logged and left owing — their likeliest cause is a full
+  or read-only disk,
   and `init_state` turns any error into "move it aside", which that disk cannot do. **A corpus
   that will not open is not one of those failures**: it is deleted and rebuilt, and the
   collection is untouched — `split::tests::a_destroyed_corpus_costs_a_resync_and_nothing_else`.
@@ -198,23 +200,29 @@ both plus the frontend.
   regular printing twice) — and replaces `decks.token_stack` with `decks.token_mode`
   (`managed|collection|hidden`, `DEFAULT 'managed'`, a `CHECK` carrying PR 3's word already so
   PR 3 owes no rung). `deck_tokens` keeps the token's state and its `card_id` and `quantity` go
-  legacy. Three things it did that no rung before it had to, each argued in the rung's comment:
-  ⚠️ **it names the rows it moves** (`<override uid>-live` / `-theory`), because the table is born
-  in the rung, `capture::install` runs after `migrate_user`, and a NULL uid fails the reader's own
-  write on a paired device where a random one stalls the peer's stream — and it is **total over
-  every override a v51 file can hold**, flooring a negative synced count at 0 and letting two
-  tokens that picked one printing keep one entry by `INSERT OR IGNORE` in **`oracle_id` order,
-  never rowid**, so every device keeps the same winner (the loser keeps its count and loses only
-  the art), because a rung that fails fails again at every launch after; ⚠️ **it drops
-  `deck_tokens`' three capture triggers beside `decks`' three** (v43's move), because clearing the
-  override is a write every device derives and, captured, would wipe the art on a peer still on
-  v51 before that peer's own climb had moved it; and ⚠️ **it writes `nonfoil` as a known guess**,
-  since no rung reads the corpus — `deck_tokens::repair_entry_finishes` corrects a foil-only
-  printing's entry at the end of the same launch, in `prepare_database` beside
-  `managed_wishlist::settle_all`, logged and left owing like it, behind `capture::suppressed`
-  because whether a printing is foil-only is a fact of *this* device's corpus — and **in place**,
-  keeping each entry's row and `sync_uid`, because a row re-inserted under `suppressed` comes back
-  nameless and its next captured stepper press fails on `sync_ops.uid NOT NULL`. It leaves the user
+  legacy. ⚠️ **The rung converts no pick, and it did until 2026-09-26** — it copied every v51 art
+  pick into one entry per list uncaptured, named `<override uid>-live` / `-theory`, on the argument
+  that every device climbs over the same synced picks and so derives the same rows. A group with a
+  device still on v51 broke that both ways, each break a sync stream stalled for good: a pick made
+  there after this device climbed was converted by the picker alone, so its next count step
+  arrived here as a sparse update for a row never heard of; and a pick reset there left this device
+  the only holder of an entry, whose steps stalled the other way. **The conversion is
+  `deck_tokens::convert_legacy_picks` now, a launch pass after `capture::install`, captured**:
+  every entry it derives announces itself with a put under the derived name, so a peer that
+  derived it too merges on the uid and one that did not builds it; a pick arriving after the
+  climb is converted at the next launch, and a re-pick moves the named entry in place. It is total
+  (a negative synced count floored at 0; two tokens that picked one printing keep one entry, the
+  first in **`oracle_id` order, never rowid**, the loser keeping its count), idempotent, and clears
+  each pick after all the entries so a v51 peer holding the stream at the new table holds the clears
+  too. The rung drops only `decks`' three capture triggers now (v43's move); `deck_tokens`' stay.
+  ⚠️ **The conversion writes `nonfoil` as a known guess** — v51 stored no finish, and the rows it
+  announces must be the same on every device, corpus or none — so
+  `deck_tokens::repair_entry_finishes` corrects a foil-only printing's entry straight after it in
+  the same launch, logged and left owing like it, behind `capture::suppressed` because whether a
+  printing is foil-only is a fact of *this* device's corpus — **in place**, keeping each entry's row
+  and `sync_uid`, because a row re-inserted under `suppressed` comes back nameless and its next
+  captured stepper press fails on `sync_ops.uid NOT NULL`, and **in `sync_uid` order**, so a fold of
+  two wrong finishes keeps the lower uid on every device. It leaves the user
   file at thirty-one tables and fifty indexes, counted off `USER_SCHEMA_SQL` when it landed. That
   is one above **v51**, which
   added `decks.token_rail_index`, where the Tokens & Emblems pile sits in the rail — `NOT NULL
@@ -1570,8 +1578,8 @@ record, with every measurement, is
 - **A foreign row travels as the parent's `sync_uid`, never as a local id** — including
   `decks.default_category_id`, which is a parent with `Absent::Zero` rather than a field, because
   a raw id names a row in a database the far device has never seen.
-- **A write every device derives for itself must NOT be captured**, and `reconcile.rs` is the
-  only module that makes one. `card_migrations` is on the user side and is deliberately not
+- **A write every device derives for itself must NOT be captured**, and `reconcile.rs` is where
+  the rule was first paid. `card_migrations` is on the user side and is deliberately not
   synced, so each machine applies Scryfall's id log against its own rows after its own ingest.
   Captured, both devices would do the fold **and** then receive the other's — and
   `fold_into_existing` sums the source row into the survivor, which is a counter delta, and a
@@ -1579,7 +1587,16 @@ record, with every measurement, is
   behind `capture::Suppressed` (the `&mut` shape of the guard) and `sweep_orphans` behind
   `capture::suppressed`. The sweep is the same rule from the other end: whether a printing is in
   *this* device's card database is a fact about this device, and two machines that synced on
-  different days can honestly disagree.
+  different days can honestly disagree. The managed wishlist and
+  `deck_tokens::repair_entry_finishes` are suppressed for the same reason.
+  ⚠️ **The rule has two deliberate exceptions, and suppressing either would reopen a stall.**
+  `deck_tokens::reconcile_in` is captured because a delete applied twice is a no-op and its undo
+  needs a captured delete to restore. **`deck_tokens::convert_legacy_picks` is captured** because
+  an entry derived on one device must reach peers that never derived it — the v52 rung did the same
+  conversion uncaptured and stalled a stream in each direction in a mixed-version group — and it
+  is safe because every device announces one pick's entry under the same derived name, so a second
+  put merges on the uid, and the table carries no counter to double. [sync.md](../docs/reference/sync.md)
+  has both arguments in full.
 - **`apply` runs inside `capture::suppressed`**, or two devices ping-pong an op forever. It folds
   each row **twice**: incoming ops for the counter deltas, incoming plus this device's own
   `sync_ops` history for existence and for which side won each field. Without the second fold,
@@ -2168,8 +2185,8 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   `deck_id, oracle_id`, deliberately not `variant` and deliberately not `card_id`, and
   `state = 'auto'` with no legacy column set is deleted rather than written because it carries
   nothing. **Since user schema v52 that is the token's state alone**, shared by both lists; its
-  `card_id` and `quantity` are legacy, read only as an untouched token's implicit count and never
-  written again.
+  `card_id` and `quantity` are legacy, read only as an untouched token's implicit count and written
+  again only by `convert_legacy_picks`, which clears them.
   **What the reader keeps of a token is `deck_token_printings`** (v52, token stacks spec §4):
   **entries**, one printing in one finish in one list with a quantity, on
   `DECK_TOKEN_PRINTING_GRAIN` (`deck_id, variant, card_id, finish` — `finish` NOT NULL, because a
@@ -2213,8 +2230,9 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
     the deletes to the group. The deletes are otherwise ordinary captured writes, since every
     device derives the same answer.
   - **The theory switch moves the live list's entries into the plan with the cards.** It
-    reconciles both lists **before** reading its before-image — the v52 rung copied every old pick
-    into *both* lists, a plan with no cards makes no token, and an undo that restored such an entry
+    reconciles both lists **before** reading its before-image — the launch conversion copies every
+    old pick into *both* lists, a plan with no cards makes no token, and an undo that restored such
+    an entry
     would hand the backstop a row to delete and the redo a reason to refuse for ever — then deletes
     the plan's surviving entries (a move onto one would fail the unique index), moves the live
     ones, reconciles again, and records the **net** difference as one `Op::Tokens` pair; a separate
@@ -2710,7 +2728,7 @@ The whole record, including the pipeline the crate implements:
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [search-syntax.md](../docs/reference/search-syntax.md) | `filters.rs`' predicate arms and `fts_match`, `tags/query.rs`' `tag_resolve`, and **corpus schema 5** — the fourteen keywords and why `:` resolves per keyword, FTS against LIKE measured on the real corpus, the two fields that emit no SQL, `kw:`'s delimiter and the bridge that keeps it from answering zero, and which failures close and which open |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
-| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, the v37 table, and v52's entries: the six commands, the `add_card` / `collection_to_deck` reroute, the reconcile's two layers and the launch repair |
+| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, the v37 table, and v52's entries: the six commands, the `add_card` / `collection_to_deck` reroute, the reconcile's two layers, and the captured launch conversion of v51's picks and the finish repair behind it |
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs`, the v26 rung and **corpus schema 2** — the feed measured end to end, what is kept and what is skipped, **both** match queries and the card side's three statements, the shape gate and why a version gate skips every fresh install, the launch gate and the clear, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |

@@ -559,8 +559,10 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// Treasure in two arts, or a foil one, where `deck_tokens` held one pick shared by both lists.
 /// That table keeps what is about the *token* (`auto`, `hidden`, `manual`) and its `card_id` and
 /// `quantity` become legacy. The mode is `managed`, `collection` or `hidden`, and every deck
-/// starts on `managed`. The rung's own comment has the reasons, including the two things it does
-/// that no rung before it had to: name the rows it moves, and keep its own writes off the wire.
+/// starts on `managed`. **The rung converts no pick**: the v51 art picks become entries in
+/// [`crate::deck_tokens::convert_legacy_picks`], a captured launch pass, because an entry derived
+/// on one device has to be announced to the peers that did not derive it — the rung's own
+/// comment has the two sync stalls that taught that, from when the rung did the converting.
 pub const USER_SCHEMA_VERSION: i64 = 52;
 
 /// `corpus.db`'s version, on a number line of its own.
@@ -5104,11 +5106,26 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
              catches up at the next change to its deck."
         );
     }
+    // Logged and left owing, the same reason again: a v51 art pick not yet converted draws as
+    // the token's implicit entry — the resolver's printing — until the next launch converts it,
+    // and nothing a reader could act on is gained by refusing to start over one. **After
+    // `capture::install` and never inside a rung**, because this is the one launch step whose
+    // writes must be captured: every entry it derives has to reach the peers that never derived
+    // it, or their edits to it stall a sync stream (the v52 rung's comment and the function's own
+    // say how). Idempotent, so every later launch costs one read that finds nothing.
+    if let Err(e) = crate::deck_tokens::convert_legacy_picks(conn) {
+        eprintln!(
+            "the decks' pre-v52 token art picks could not be converted at launch: {e}\nThey \
+             are tried again at the next launch; until then each draws its default printing."
+        );
+    }
     // Logged and left owing, the same reason once more: a token entry in a finish its printing
     // is not sold in draws the wrong chin until the next launch, and nothing a reader could act
-    // on is gained by refusing to start over one. At launch at all because the v52 rung writes
-    // `nonfoil` for every art it moves — no rung reads the corpus — and this is the half of that
-    // move which can. Idempotent, so every later launch costs one read that finds nothing.
+    // on is gained by refusing to start over one. **After the conversion**, because the
+    // conversion writes `nonfoil` for every pick it moves — v51 stored no finish, and the rows it
+    // announces must be the same on every device, corpus or none — and this is the half of that
+    // move which reads the corpus. Idempotent, so every later launch costs one read that finds
+    // nothing.
     if let Err(e) = crate::deck_tokens::repair_entry_finishes(conn) {
         eprintln!(
             "the finishes of the decks' token printings could not be checked at launch: \
@@ -6883,76 +6900,38 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // **An entry is one printing, in one finish, in one list, with a quantity**, so a deck can
     // bring a Treasure in two arts, or a foil one, where `deck_tokens` held one pick shared by
     // both lists. `deck_tokens` keeps what is about the *token* — `auto`, `hidden` or `manual`,
-    // one answer for both lists — and its `card_id` and `quantity` become legacy: never written
-    // again, the quantity read only as an untouched token's implicit count.
+    // one answer for both lists — and its `card_id` and `quantity` become legacy: written again
+    // only by the launch conversion below, which clears them, and the quantity read only as an
+    // untouched token's implicit count.
     // [`DECK_TOKEN_PRINTING_GRAIN`] says why `variant` and a NOT NULL `finish` are in the grain
     // and `oracle_id` is not.
     //
-    // **Every picked art moves into one entry per list, at `coalesce(quantity, 1)`, and the
-    // override is then cleared.** Both lists, because today's pick is shared by both and copying
-    // it keeps what each list draws unchanged. A row holding only a `quantity` is left alone —
-    // that number goes on meaning the implicit entry's count — because resolving a default
-    // printing here would invent a choice the reader never made, and the resolver reads the
-    // deck's cards and the corpus, which no rung may.
+    // ⚠️ **The rung creates the table and converts nothing.** Every v51 art pick — a
+    // `deck_tokens` row whose `card_id` is set — becomes one entry per list in
+    // [`crate::deck_tokens::convert_legacy_picks`], which [`prepare_database`] runs at every
+    // launch after `capture::install`, **captured**; its comment has the four cases it takes and
+    // the two losses it accepts. **Until 2026-09-26 this rung did the converting**, uncaptured,
+    // naming each entry `<pick uid>-<list>` on the argument that every device climbs over the
+    // same synced picks and so derives the same rows under the same names. A group with a device
+    // still on v51 broke that argument in both directions, and each break stalled a sync stream
+    // for good. A pick made on the v51 device after this one climbed was converted by the picker
+    // alone, so the picker's next count step reached this device as a sparse update for a row it
+    // had never heard of — deferred, and the picker's whole stream held behind it. And a pick the
+    // v51 device reset left this device the only holder of an entry, whose own later steps
+    // stalled the other way. An entry announced by a captured insert cannot be unknown to a
+    // peer, and a rung can announce nothing: it runs before `capture::install`. So the rung
+    // leaves every pick where it is, and a pick that arrives after the climb is converted at the
+    // next launch like any other.
     //
-    // ⚠️ **The rung writes `'nonfoil'`, which is a known guess rather than a fact.** No rung reads
-    // the corpus: `migrate_user` runs before `migrate_corpus`, and a rung selecting from `cards`
-    // would be reading a file that may not be at head yet — or there at all. So a foil-only
-    // printing lands as a nonfoil entry, and [`crate::deck_tokens::repair_entry_finishes`]
-    // corrects exactly those at the end of this launch, in [`prepare_database`]. It can touch
-    // nothing a reader chose: the picker only offers a finish a printing is sold in.
-    //
-    // ⚠️ **Each moved entry is given a uid here, and the uid is derived rather than random** —
-    // the override's own `sync_uid` and the list, `<uid>-live` and `<uid>-theory`. The table is
-    // born in this rung, and `capture::install` runs after `migrate_user`, so no insert trigger
-    // exists to mint one: a row written now is nameless unless the rung names it. **A NULL uid
-    // would fail the reader's own write** — the first edit to the entry on a paired device emits
-    // an op with no uid into a `NOT NULL` column. *Derived* because every device in a group
-    // climbs this rung over the same synced `deck_tokens` row, so each names the same entry the
-    // same way and nothing has to be sent. A random one would leave every device holding the
-    // entry under a name no other device has heard, and the first edit to it would reach a peer
-    // as a sparse update for a row it cannot find — deferred, and the sender's whole stream
-    // stalled behind it. The random arm is for an override with no uid of its own — one written
-    // behind `capture::suppressed`, where the insert trigger's mint is guarded off.
-    //
-    // ⚠️ **"Alike" holds only between devices that climb over the same override, and there is a
-    // window in which they do not.** A peer still on v51 goes on writing `deck_tokens.card_id`.
-    // An art it picks after this device climbed reaches this device as an update to a column
-    // nothing reads any more, and when that peer climbs it derives `<uid>-live` over its *newer*
-    // art. From then the one name carries two contents — this device's older art, the peer's
-    // newer one — and it stays that way until the next write that rewrites the entry's printing
-    // on either side (an art swap sends `card_id`; a count step sends only `quantity` and
-    // settles nothing). Nothing stalls in that window, because each device holds a row under the
-    // name and every op finds it; what it costs is a reader who picked an art on the laggard
-    // seeing the older one here. Closing it would mean sending the rung's writes, which is the
-    // captured-derived-write trap the trigger drop below exists to avoid.
-    //
-    // **The move is total over every override a v51 file can hold**, not only the ones a command
-    // writes, because a rung that fails rolls back and fails again at every launch after. Two
-    // shapes would have failed it. `deck_tokens.quantity` has no `CHECK` — it is a synced field,
-    // so a peer or an old build can have put any integer there — and the entry table refuses a
-    // count below zero, so the count is floored at 0 (the entry's own "stepped to nothing").
-    // And `deck_tokens`' grain is `(deck_id, oracle_id)`, so two tokens of one deck can have
-    // picked **one printing** — a double-faced token carries two tokens on one card — which is a
-    // single entry on the grain here. `INSERT OR IGNORE` keeps the first and skips the second,
-    // and **"first" is `oracle_id` order, never rowid**: every device sorts one synced row set
-    // alike, so each keeps the same override and derives the same uid, where rowid order is local
-    // and would give two devices two names for one entry. The skipped override keeps its
-    // **count** — the `UPDATE` clears a `quantity` only where an entry now holds it — so its
-    // token loses only the art, and draws an implicit entry at the number the reader set. Nothing
-    // else can reach the `IGNORE`: every other constraint on the table is met by construction.
-    //
-    // ⚠️ **Six capture triggers come off first, for two different reasons.** The three on `decks`
-    // are v43's move verbatim: `sync_upd_decks` reads `NEW.token_stack` in its `WHEN` and its
-    // body, SQLite refuses `DROP COLUMN` on a column a trigger reads (`error in trigger … after
-    // drop column: no such column: NEW.token_stack` — naming it in the `OF` list alone is not
-    // refused, which v43's comment records the measurement of), and without them the rung dies on
-    // every paired database
-    // and on none a worktree can build. The three on `deck_tokens` are this rung's own: clearing
-    // the override is a write every device derives for itself, which `src-tauri/CLAUDE.md` says
-    // must not be captured — and here it would do harm, travelling to a peer still on v51 and
-    // wiping the art that peer's own climb has not moved yet. `capture::install` puts all six
-    // back right after this function, as it did for v43 and v49.
+    // ⚠️ **Only the three `decks` capture triggers come off first**, v43's move verbatim:
+    // `sync_upd_decks` reads `NEW.token_stack` in its `WHEN` and its body, SQLite refuses
+    // `DROP COLUMN` on a column a trigger reads (`error in trigger … after drop column: no such
+    // column: NEW.token_stack` — naming it in the `OF` list alone is not refused, which v43's
+    // comment records the measurement of), and without them the rung dies on every paired
+    // database and on none a worktree can build. `capture::install` puts them back right after
+    // this function, as it did for v43 and v49. **`deck_tokens`' three stay**: the rung dropped
+    // them too while it cleared the picks itself, uncaptured, and it writes nothing to that
+    // table now.
     //
     // **`token_mode` carries a `CHECK` of three words, and PR 2 draws two of them.** `collection`
     // is PR 3's, in the constraint now so that PR 3 adds a behaviour and a button and no rung. A
@@ -6968,14 +6947,11 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     if v < 52 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(
-            "-- Off before the move and the drop; `capture::install` puts all six back right
-             -- after this function. `decks` for v43's reason, `deck_tokens` for this rung's own.
+            "-- Off before the drop, v43's move: `capture::install` puts all three back right
+             -- after this function.
              DROP TRIGGER IF EXISTS sync_ins_decks;
              DROP TRIGGER IF EXISTS sync_upd_decks;
              DROP TRIGGER IF EXISTS sync_del_decks;
-             DROP TRIGGER IF EXISTS sync_ins_deck_tokens;
-             DROP TRIGGER IF EXISTS sync_upd_deck_tokens;
-             DROP TRIGGER IF EXISTS sync_del_deck_tokens;
 
              CREATE TABLE deck_token_printings (
                  id INTEGER PRIMARY KEY,
@@ -7003,34 +6979,6 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
              CREATE UNIQUE INDEX idx_deck_token_printings_uid ON deck_token_printings (sync_uid);
 
              ALTER TABLE decks ADD COLUMN token_mode TEXT NOT NULL DEFAULT 'managed' CHECK (token_mode IN ('managed','collection','hidden'));
-
-             -- One entry per list for every picked art, named after the override it came
-             -- from so that every device names it alike. `nonfoil` is a guess the launch
-             -- repair corrects; see the comment above this rung. `OR IGNORE`, the floor and
-             -- the `ORDER BY` make it total and alike on every device; see the same comment.
-             INSERT OR IGNORE INTO deck_token_printings
-                 (deck_id, variant, oracle_id, card_id, finish, quantity, created_at,
-                  updated_at, sync_uid)
-             SELECT t.deck_id, v.variant, t.oracle_id, t.card_id, 'nonfoil',
-                    max(coalesce(t.quantity, 1), 0), t.created_at, unixepoch(),
-                    coalesce(t.sync_uid || '-' || v.variant, lower(hex(randomblob(16))))
-               FROM deck_tokens t,
-                    (SELECT 'live' AS variant UNION ALL SELECT 'theory') v
-              WHERE t.card_id IS NOT NULL
-              ORDER BY t.deck_id, t.oracle_id, v.variant;
-
-             -- The override is legacy from here: the art lives in the entries above, and a
-             -- row that held only a quantity keeps it as the implicit entry's count — as does
-             -- one whose printing another token of its deck took, since no entry holds its
-             -- count. The table was born empty in this rung, so an entry on the override's
-             -- deck and oracle can only have come from the override itself.
-             UPDATE deck_tokens
-                SET quantity = CASE WHEN EXISTS (SELECT 1 FROM deck_token_printings e
-                                                  WHERE e.deck_id = deck_tokens.deck_id
-                                                    AND e.oracle_id = deck_tokens.oracle_id)
-                                    THEN NULL ELSE quantity END,
-                    card_id = NULL
-              WHERE card_id IS NOT NULL;
 
              ALTER TABLE decks DROP COLUMN token_stack;",
         )?;
@@ -13053,19 +13001,25 @@ pub(crate) mod tests {
         );
     }
 
-    /// **v52 over a real v51 file holding the three kinds of override a reader can have.** Seeded
-    /// before the climb, v47's argument: a row inserted at head could not hold a picked art on
-    /// `deck_tokens` or a `token_stack` at all, so a test that started there would be asserting
-    /// about rows the rung never met.
+    /// **v52 over a real v51 file holding the three kinds of override a reader can have, and the
+    /// launch conversion after it.** Seeded before the climb, v47's argument: a row inserted at
+    /// head could not hold a `token_stack` at all, so a test that started there would be
+    /// asserting about rows the rung never met.
     ///
     /// Deck A draws its pile (`token_stack = 1`) and picked an art for `o1` at 3 copies; deck B
-    /// draws none and stepped `o2` to 2 without picking an art. After the climb A's pick is one
-    /// entry **per list** — both lists drew the shared pick, so both keep drawing it — named
-    /// after the override it came from, and the override is legacy. B's row is untouched, because
-    /// a quantity alone is the implicit entry's count and no printing may be invented for it.
-    /// Both decks are on `managed`, B included — the reader's answer — and `token_stack` is gone.
+    /// draws none and stepped `o2` to 2 without picking an art. **The rung converts nothing**:
+    /// after the climb every override is as it was and the entry table is empty, because an entry
+    /// derived from a pick has to be announced to peers that never derived it, and no rung runs
+    /// with capture live. Both decks are on `managed`, B included — the reader's answer — and
+    /// `token_stack` is gone.
+    ///
+    /// Then [`crate::deck_tokens::convert_legacy_picks`], a later step of `prepare_database`,
+    /// makes A's pick one entry **per list** — both lists drew the shared pick, so both keep
+    /// drawing it — named after the override it came from, and the override is legacy. B's row is
+    /// untouched, because a quantity alone is the implicit entry's count and no printing may be
+    /// invented for it.
     #[test]
-    fn v52_creates_deck_token_printings_moves_overrides_and_swaps_the_stack_for_a_mode() {
+    fn v52_swaps_the_stack_for_a_mode_and_leaves_the_picks_to_the_launch_conversion() {
         let conn = user_file_at_51();
         conn.execute_batch(
             "INSERT INTO decks (id, name, format_key, token_stack, created_at, updated_at)
@@ -13076,6 +13030,24 @@ pub(crate) mod tests {
                         (2, 'o2', NULL, 2, 'auto', 6, 6, 'u-b');",
         )
         .unwrap();
+        type Override = (i64, Option<String>, Option<i64>, String);
+        let overrides = |conn: &Connection| -> Vec<Override> {
+            conn.prepare(
+                "SELECT deck_id, card_id, quantity, state FROM deck_tokens ORDER BY deck_id",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+        };
+        let count_entries = |conn: &Connection| -> i64 {
+            conn.query_row("SELECT count(*) FROM deck_token_printings", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        let before = overrides(&conn);
 
         migrate_user(&conn).unwrap();
 
@@ -13083,6 +13055,27 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, 52);
+        assert_eq!(
+            overrides(&conn),
+            before,
+            "the rung touches no override: converting a pick is the launch's, where it is captured"
+        );
+        assert_eq!(count_entries(&conn), 0, "and the entry table is born empty");
+        let modes: Vec<String> = conn
+            .prepare("SELECT token_mode FROM decks ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            modes,
+            ["managed", "managed"],
+            "every deck starts on managed, the one whose pile was off included"
+        );
+        assert_eq!(has_column(&conn, "decks", "token_stack"), 0);
+
+        crate::deck_tokens::convert_legacy_picks(&conn).unwrap();
 
         let mut stmt = conn
             .prepare(
@@ -13124,16 +13117,8 @@ pub(crate) mod tests {
              repair, and named after the override so every device names it alike — and nothing \
              for the quantity-only override"
         );
-
-        let overrides: Vec<(i64, Option<String>, Option<i64>, String)> = conn
-            .prepare("SELECT deck_id, card_id, quantity, state FROM deck_tokens ORDER BY deck_id")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
         assert_eq!(
-            overrides,
+            overrides(&conn),
             [
                 (1, None, None, "auto".to_owned()),
                 (2, None, Some(2), "auto".to_owned()),
@@ -13141,30 +13126,12 @@ pub(crate) mod tests {
             "the moved override is legacy and keeps its state; the quantity-only one is untouched"
         );
 
-        let modes: Vec<String> = conn
-            .prepare("SELECT token_mode FROM decks ORDER BY id")
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert_eq!(
-            modes,
-            ["managed", "managed"],
-            "every deck starts on managed, the one whose pile was off included"
-        );
-        assert_eq!(has_column(&conn, "decks", "token_stack"), 0);
-
-        // Twice is the same as once: a second launch finds the version stamped and moves
-        // nothing a second time — which the `DROP COLUMN` would otherwise refuse loudly and the
-        // `INSERT` would otherwise do quietly.
+        // Twice is the same as once: a second launch finds the version stamped and the picks
+        // cleared, so it moves nothing a second time — which the `DROP COLUMN` would otherwise
+        // refuse loudly and the conversion's `INSERT` would otherwise do quietly.
         migrate_user(&conn).unwrap();
-        let n: i64 = conn
-            .query_row("SELECT count(*) FROM deck_token_printings", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(n, 2, "the second launch moved nothing");
+        crate::deck_tokens::convert_legacy_picks(&conn).unwrap();
+        assert_eq!(count_entries(&conn), 2, "the second launch moved nothing");
     }
 
     /// The fixture is a real v51 file and not head wearing a v51 label: no entry table, the
@@ -13200,18 +13167,19 @@ pub(crate) mod tests {
     }
 
     /// **The rung on a paired database: it survives the capture triggers already in the file,
-    /// and it sends none of its own writes.** A fixture built from [`USER_SCHEMA_SQL`] carries no
-    /// trigger at all — `capture::install` runs after `migrate_user`, in `prepare_database` — so
-    /// every other test here climbs a file no paired device has. This one plants the two that
-    /// matter under the names `capture::install` gives them.
+    /// and it writes nothing a trigger could send.** A fixture built from [`USER_SCHEMA_SQL`]
+    /// carries no trigger at all — `capture::install` runs after `migrate_user`, in
+    /// `prepare_database` — so every other test here climbs a file no paired device has. This one
+    /// plants two under the names `capture::install` gives them.
     ///
     /// `sync_upd_decks` reads `NEW.token_stack` the way the real one does, and SQLite refuses
     /// `DROP COLUMN` on a column a trigger reads: without the rung's trigger drop the climb
-    /// fails. `sync_upd_deck_tokens` records that it fired: clearing the override is a write every
-    /// device derives for itself, and captured it would reach a peer still on v51 and wipe the
-    /// art that peer's own climb has yet to move.
+    /// fails. `sync_upd_deck_tokens` records whether it fired. **The rung writes no `deck_tokens`
+    /// row since the conversion moved to the launch**, so it no longer drops that table's
+    /// triggers: the stand-in survives the climb and never fires, and the pick is still on the row
+    /// for `deck_tokens::convert_legacy_picks` to convert — captured — later in the same launch.
     #[test]
-    fn the_v52_rung_survives_a_paired_database_and_sends_none_of_its_own_writes() {
+    fn the_v52_rung_survives_a_paired_database_and_writes_nothing_a_trigger_could_send() {
         let conn = user_file_at_51();
         conn.execute_batch(
             "CREATE TABLE fired (tbl TEXT);
@@ -13234,21 +13202,31 @@ pub(crate) mod tests {
             .query_row("SELECT count(*) FROM fired", [], |r| r.get(0))
             .unwrap();
         assert_eq!(fired, 0, "the rung's own writes reached a capture trigger");
-        let cleared: Option<String> = conn
+        let pick: Option<String> = conn
             .query_row("SELECT card_id FROM deck_tokens", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(cleared, None, "the override was still cleared");
-        let triggers: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master
-                  WHERE type = 'trigger' AND name IN ('sync_upd_decks', 'sync_upd_deck_tokens')",
-                [],
+        assert_eq!(
+            pick.as_deref(),
+            Some("p1"),
+            "the pick is left for the launch conversion"
+        );
+        let trigger = |name: &str| -> i64 {
+            conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+                [name],
                 |r| r.get(0),
             )
-            .unwrap();
+            .unwrap()
+        };
         assert_eq!(
-            triggers, 0,
-            "both come off, and `capture::install` is what puts the current set back"
+            trigger("sync_upd_decks"),
+            0,
+            "`decks`' comes off for the drop, and `capture::install` puts the current set back"
+        );
+        assert_eq!(
+            trigger("sync_upd_deck_tokens"),
+            1,
+            "`deck_tokens`' stays: the rung writes nothing there any more"
         );
     }
 
@@ -13337,20 +13315,23 @@ pub(crate) mod tests {
         assert_eq!(left, 0, "an entry leaves with the deck that holds it");
     }
 
-    /// **The v52 rung is total over every override a v51 file can hold, not only the ones a
-    /// command would write.** `deck_tokens.quantity` has no `CHECK` — a synced field, so a peer
-    /// or an old build can have put any integer there — while the entry table refuses a count
-    /// below zero; and `deck_tokens`' grain is `(deck_id, oracle_id)`, so two tokens of one deck
-    /// can have picked **one printing** (a double-faced token carries two tokens on one card),
-    /// which is a single entry on [`DECK_TOKEN_PRINTING_GRAIN`]. Either would fail the `INSERT`,
-    /// roll the rung back, and stop every launch of that reader's database for good.
+    /// **The climb and the launch conversion are total over every override a v51 file can hold,
+    /// not only the ones a command would write.** `deck_tokens.quantity` has no `CHECK` — a
+    /// synced field, so a peer or an old build can have put any integer there — while the entry
+    /// table refuses a count below zero; and `deck_tokens`' grain is `(deck_id, oracle_id)`, so
+    /// two tokens of one deck can have picked **one printing** (a double-faced token carries two
+    /// tokens on one card), which is a single entry on [`DECK_TOKEN_PRINTING_GRAIN`]. Either
+    /// would fail an unguarded `INSERT`: in the rung, where the conversion used to run, that
+    /// stopped every launch of the reader's database for good; in the launch pass it would be a
+    /// conversion that never happens, logged at every launch.
     ///
-    /// So the negative count lands at 0, and the second pick of one printing is skipped rather
-    /// than refused: the override first in `oracle_id` order keeps the entry — every device
-    /// orders one synced row set alike, so each names the same winner and derives the same uid —
-    /// and the other keeps its **count** as its token's implicit one, losing only the art.
+    /// The rung leaves all three overrides as they were. The conversion floors the negative count
+    /// at 0, and skips the second pick of one printing rather than refusing it: the override
+    /// first in `oracle_id` order keeps the entry — every device orders one synced row set
+    /// alike, so each names the same winner and derives the same uid — and the other keeps its
+    /// **count** as its token's implicit one, losing only the art.
     #[test]
-    fn the_v52_rung_is_total_over_a_negative_count_and_two_picks_of_one_printing() {
+    fn the_climb_and_the_conversion_are_total_over_a_negative_count_and_a_shared_printing() {
         let conn = user_file_at_51();
         conn.execute_batch(
             "INSERT INTO decks (id, name, format_key, created_at, updated_at)
@@ -13364,6 +13345,16 @@ pub(crate) mod tests {
         .unwrap();
 
         migrate_user(&conn).expect("no override a v51 file can hold may stop the climb");
+        let untouched: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_tokens WHERE card_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(untouched, 3, "the climb leaves every pick where it was");
+        crate::deck_tokens::convert_legacy_picks(&conn)
+            .expect("no override a v51 file can hold may stop the conversion");
 
         let entries: Vec<(String, String, String, i64, String)> = conn
             .prepare(
@@ -13424,7 +13415,7 @@ pub(crate) mod tests {
     /// random arm is the insert trigger's own mint (32 lowercase hex), evaluated once per row, so
     /// the entry in each list is a row of its own on the wire.
     #[test]
-    fn the_v52_rung_names_an_override_with_no_uid_at_random() {
+    fn the_launch_conversion_names_a_pick_with_no_uid_at_random() {
         let conn = user_file_at_51();
         conn.execute_batch(
             "INSERT INTO decks (id, name, format_key, created_at, updated_at)
@@ -13436,6 +13427,7 @@ pub(crate) mod tests {
         .unwrap();
 
         migrate_user(&conn).unwrap();
+        crate::deck_tokens::convert_legacy_picks(&conn).unwrap();
 
         let uids: Vec<Option<String>> = conn
             .prepare("SELECT sync_uid FROM deck_token_printings ORDER BY variant")

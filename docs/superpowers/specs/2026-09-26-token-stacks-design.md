@@ -280,12 +280,13 @@ entry's `finish` is what the chin names, what `FoilOverlay` sheens and what the 
 - Every `deck_tokens` row with a non-null `card_id` becomes one entry **per list** (`live` and
   `theory`) at `coalesce(quantity, 1)`; its `card_id` and `quantity` are then cleared. Both lists,
   because today's override is shared by both — copying it keeps what each list draws unchanged.
-  **The rung writes `nonfoil`**: no migration rung reads the corpus (`migrate_user` runs before
-  `migrate_corpus`, and no rung selects from `cards`). A **launch-time idempotent repair**,
-  `deck_tokens::repair_entry_finishes`, run beside `managed_wishlist::settle_all`, then sets each
-  entry whose finish its printing is not sold in to the printing's sole finish — the reader can
-  never have chosen such a finish, since the picker only offers what is sold, so the repair
-  touches only what the rung could not know.
+  **The conversion writes `nonfoil`**: v51 stored no finish, and a migration rung — where this was
+  first placed — reads no corpus at all (`migrate_user` runs before `migrate_corpus`, and no rung
+  selects from `cards`). A **launch-time idempotent repair**, `deck_tokens::repair_entry_finishes`,
+  then sets each entry whose finish its printing is not sold in to the printing's sole finish — the
+  reader can never have chosen such a finish, since the picker only offers what is sold, so the
+  repair touches only what the conversion could not know. *(Where the conversion runs, and why it
+  is captured, is the second amendment below.)*
 - A row with only a `quantity` is left as it is: that quantity keeps meaning "the implicit entry's
   quantity" (rule 1). No printing is resolved inside the migration — the resolver's default comes
   from the deck's cards and the corpus, and a rung that guessed it would invent a choice the reader
@@ -293,20 +294,39 @@ entry's `finish` is what the chin names, what `FoilOverlay` sheens and what the 
 - `decks.token_mode` is added at `managed`; `token_stack` is dropped.
 - Proven on a copy of the real dev database (the `prove-a-migration-on-the-real-dev-db` memory).
 
-*(Amended at PR 2's fan-in and task reviews, 2026-09-26 — the rung as built.)*
-- **Each migrated entry gets a derived `sync_uid`**, `<override uid>-live` / `-theory`. A NULL
-  uid would fail the first edit on a paired device (`sync_ops.uid NOT NULL`), and a random one
-  would name the same entry differently on every device that climbs. The rung drops
-  `deck_tokens`' capture triggers while it runs, so its clear of the override is not sent to a v51
-  peer.
-- **The rung is total, because only a migration may stop a launch and this one must not.** It
-  clamps a negative v51 quantity with `max(coalesce(quantity, 1), 0)` — v51's column had no
-  `CHECK` — and ignores a grain collision, ordered by `oracle_id` so every device keeps the same
-  override.
-- **The finish repair updates in place.** Moving an entry to its printing's sold finish is an
-  `UPDATE` when that grain is free, so the entry keeps its uid, and a fold into the held row only
-  when it is not. It runs under capture suppression — every device derives it — where a delete
-  and re-insert would have come back with no uid at all.
+*(Amended at PR 2's fan-in and task reviews, 2026-09-26, and again at the third review round the
+same day — the conversion as built.)*
+- **The conversion is a captured launch pass, not the rung.** The rung creates the table, adds
+  `token_mode` and drops `token_stack`, and converts no pick.
+  `deck_tokens::convert_legacy_picks` runs from `prepare_database` at every launch, **after
+  `capture::install`, not suppressed**, and before the finish repair. The first version of this
+  amendment described the rung doing the converting uncaptured, trusting every device to derive
+  the same rows from the same synced picks; a group with a device still on v51 breaks that. A pick
+  made on the v51 device after another device climbed was converted by the picker alone, so the
+  picker's next count step reached the other device as a sparse update for an entry it had never
+  derived — deferred, stalling the picker's stream for good (reproduced by a two-device test). And a
+  pick the v51 device reset left the converter the only holder of an entry, stalling the other
+  way. **Every derived entry now announces itself with a captured insert**, so a peer that never
+  derived it receives it, and a pick arriving after the climb is converted at the next launch.
+- **Each converted entry is named, not minted**: `<pick uid>-live` / `-theory`, random for a pick
+  with no uid of its own. Every device converting one pick announces the same name, so a second
+  put merges on the uid rather than adding a row; a NULL name would fail the first edit on a paired
+  device (`sync_ops.uid NOT NULL`).
+- **Per pick and list, four cases**: a list already holding the token at that printing in any
+  finish keeps it; a grain another token's entry holds is skipped (two tokens can pick one printing
+  — a double-faced token — and the first in `oracle_id` order wins on every device, the loser
+  keeping its count); the entry this pick named at an earlier conversion is moved to the new art in
+  place (a v51 re-pick); otherwise it is inserted at `max(coalesce(quantity, 1), 0)` — v51's column
+  had no `CHECK`. The picks are cleared after all the entries, captured, so a v51 peer holding the
+  stream at the new table holds the clears too. Idempotent. Accepted: a v51 reset in the window
+  before that device upgrades, and a v51 count stepped on a pick another device has cleared.
+- **The rung drops only `decks`' capture triggers** (for the `DROP COLUMN`); it writes no
+  `deck_tokens` row, so that table's triggers stay.
+- **The finish repair updates in place, in `sync_uid` order.** Moving an entry to its printing's
+  sold finish is an `UPDATE` when that grain is free, so the entry keeps its uid, and a fold into the
+  held row only when it is not; walked in `sync_uid` order, a fold of two wrong finishes keeps the
+  lower uid on every device. It runs under capture suppression — every device derives it — where a
+  delete and re-insert would have come back with no uid at all.
 
 ### 4.4 Commands
 
