@@ -26,13 +26,24 @@ import { keepCaretForCard } from "@/lib/caretWalk";
 import type { Finish } from "@/lib/finish";
 import type { Treatment } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
-import { WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
+import { CARD_ASPECT, WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import { LAYER } from "@/lib/layers";
+import {
+  SHELF_INDENT_PX,
+  SHELF_RAIL_OFFSET_PX,
+  layoutShelves,
+  rowHeight,
+  rowOfTile,
+  shelfAtRow,
+  type ShelfLayout,
+  type ShelfSection,
+} from "@/lib/shelfLayout";
+import type { Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
 import { NO_SELECTION, suppressRangeSelection, useCardSelection } from "@/lib/useCardSelection";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
-import { nextGridIndex } from "./gridNav";
+import { nextGridIndex, nextShelfTileIndex } from "./gridNav";
 import { needsNextPage } from "./useCardSearch";
 
 /**
@@ -62,6 +73,19 @@ export interface GridCard {
    * This tile's identity, where it differs from the card's. Defaults to {@link id}.
    */
   key?: string;
+  /**
+   * Which open card rings this tile, where that is wider than the tile itself. Defaults to the
+   * tile's own key ({@link key}, then {@link id}).
+   *
+   * **The collection's shelves are why this exists** (spec 2026-09-26 §5.6). A tile there is one
+   * printing and finish *in one folder*, so one printing filed in two folders is two tiles with two
+   * keys — and opening it has to ring both, because the pane shows the card and not the folder. The
+   * collection passes the card-and-finish key here and the per-folder key as {@link key}.
+   *
+   * **Only the ring reads it.** The picked set, the arrow walk and the drag stay on the tile key,
+   * because a Ctrl-click picks *this* tile on *this* shelf and not every copy of the card on screen.
+   */
+  ringKey?: string;
   name: string;
   setCode: string;
   collectorNumber: string;
@@ -126,6 +150,17 @@ const TILE_BASE_WIDTH = 170;
 
 /** Gap between tiles, matching the `gap-3` used elsewhere. */
 const GAP = 12;
+
+/**
+ * The wall's own `p-3`: how far into a **bounded** wall's scroll content its first row starts. The
+ * virtualiser does not know about it (its `scrollMargin` is 0 there), so the sticky bar's edge is
+ * corrected by it; under `grow` the measured `scrollMargin` already includes it.
+ *
+ * That correction assumes the bar is flush with the top of the scrollport, which a plain
+ * `sticky top-0` is **not** in Chromium — it pins at the scroller's padding edge, 12px down here.
+ * The anchor's measured negative `top` is what makes it flush; see `stickyInset` in `CardGrid`.
+ */
+const WALL_INSET_PX = 12;
 
 /**
  * The nearest ancestor that actually scrolls, for a wall drawn with {@link CardGrid}'s `grow`.
@@ -233,6 +268,13 @@ export const PHONE_TILE_WIDTH = 141;
  * states a fact about the tile rather than about a feature — a conditional attribute would be a
  * second thing to keep in step with the prop, for nothing: nothing reads it unless the handler
  * is armed.
+ *
+ * **On a sectioned wall it is the tile's slot in the layout's flat order** — the `[start, end)`
+ * runs `layoutShelves` hands out, which is what `nextShelfTileIndex` and `rowOfTile` count in. It
+ * equals the tile's place in `sections.flatMap(tilesOf)` whenever each shelf's loaded tiles fill
+ * its first slots, which is the ordinary case because pages arrive in shelf order. It keeps
+ * counting correctly when they do not, which the loaded order alone could not: a shelf whose count
+ * is ahead of its pages leaves holes, and every shelf after it would otherwise be numbered short.
  */
 const GRID_INDEX_ATTR = "data-grid-index";
 
@@ -331,6 +373,109 @@ export function sideGutterFor(width: number, tileWidth: number = TILE_BASE_WIDTH
 }
 
 /**
+ * The wall drawn as **shelves** — one heading per folder with that folder's tiles under it, nested
+ * to any depth (spec 2026-09-26 §5.2). Handed to {@link CardGrid} as `sections`; absent, the wall is
+ * the flat one.
+ *
+ * The wall owns the geometry and the page owns every word: the headings, the empty boxes, the
+ * `Decks` / `Managed by decks` labels and the sticky bar are the caller's render props, so the
+ * collection and the wishlist draw their own (`features/shelves/`: `ShelfHeading`, `EmptyShelf`,
+ * `ShelfLabel`, `ShelfStickyBar`) and this file knows nothing about folders beyond `Shelf`'s shape.
+ *
+ * **Hold `sections` and `tilesOf` still** (a `useMemo` at the call site): the layout is keyed on
+ * those two, and a fresh one per render is a new layout per render. The four render props are read
+ * at draw time and may be fresh arrows.
+ */
+export interface GridSections<T extends GridCard> {
+  /** Every shelf to draw, in order, with its tile count from the page's shelf counts. */
+  sections: readonly ShelfSection[];
+  /** The tiles one shelf has loaded, in order. Keys must be unique across shelves. */
+  tilesOf: (shelfId: number) => readonly T[];
+  renderHeading: (shelf: Shelf) => ReactNode;
+  renderEmpty: (shelf: Shelf) => ReactNode;
+  renderLabel: (group: "decks" | "managed") => ReactNode;
+  /**
+   * The bar over the top of the wall (spec §5.3) — `shelf` is the one the reader is scrolled
+   * inside, or `null` when there is none to name; `scrollToTop` is the bar's **Top**, held still.
+   */
+  renderSticky: (shelf: Shelf | null, scrollToTop: () => void) => ReactNode;
+  /**
+   * **A shelf to bring into view** — its heading row, or its first row if it is headless — the
+   * moment this *changes* to its id. Pages set it when **Add folder** opens a placeholder heading,
+   * so the name field being typed into is never below the fold.
+   *
+   * Scrolled once per id: a later re-render carrying the same id (a page landing, a count
+   * refetch) does not drag the reader back to it. An id the layout does not hold, and `null`, do
+   * nothing — a shelf deleted in another window is not an error.
+   */
+  revealShelfId?: number | null;
+}
+
+/**
+ * **Which shelf the sticky bar names**, given the rows the virtualiser has drawn and where the
+ * bar's top edge sits in the virtualiser's coordinates.
+ *
+ * The row under the edge is the last drawn row whose `start` is at or above it. Three answers are
+ * `null`, and each is a place where a bar would say something false or hide something true:
+ *
+ * - **Nothing drawn at the edge** — the wall has not reached the top of the scrollport yet (a
+ *   growing wall below the page's header), or the edge is in the wall's own padding.
+ * - **Above the first heading** — an opened folder's own cards, which sit under the path row with
+ *   no heading because the path row already names them (spec §3.1).
+ * - **A heading whose own top is still on screen** — it names itself, and a bar laid over it would
+ *   hide the very buttons it copies. At rest, that is the first heading.
+ *
+ * Pure, and exported for exactly that: jsdom lays nothing out, so `CardGrid.shelves.test.tsx`
+ * asks this row by row over a real `layoutShelves` result.
+ */
+export function stickyShelfAt(
+  layout: ShelfLayout,
+  drawn: readonly { index: number; start: number }[],
+  edge: number,
+): Shelf | null {
+  let top: { index: number; start: number } | undefined;
+  for (const item of drawn) {
+    if (item.start > edge) break;
+    top = item;
+  }
+  if (!top) return null;
+  const firstHeading = layout.rows.findIndex((row) => row.kind === "heading");
+  if (firstHeading < 0 || top.index < firstHeading) return null;
+  if (layout.rows[top.index]?.kind === "heading" && top.start >= edge) return null;
+  return shelfAtRow(layout, top.index);
+}
+
+/**
+ * A sectioned row's virtualiser key: **what the row is**, not where it sits.
+ *
+ * A heading keyed by its shelf keeps its React identity when the rows above it change — a shelf
+ * folding, a page landing, every shelf folding to its heading for a folder drag (spec §3.9) — so
+ * the element being dragged, a rename field being typed in and a drop target that has armed all
+ * survive it. A tile row is keyed by its shelf and its offset *within* that shelf for the same
+ * reason. Shelf ids are unique in one list, and `Not sorted` is `0`, which no folder is.
+ */
+function shelfRowKey(layout: ShelfLayout, index: number): string {
+  const row = layout.rows[index];
+  if (!row) return `row:${index}`;
+  switch (row.kind) {
+    case "label":
+      return `label:${row.group}`;
+    case "heading":
+      return `heading:${row.shelf.id}`;
+    case "empty":
+      return `empty:${row.shelf.id}`;
+    case "tiles":
+      return `tiles:${row.shelf.id}:${row.start - (layout.tileStart.get(row.shelf.id) ?? 0)}`;
+  }
+}
+
+/** The four keys `nextShelfTileIndex` answers, as a guard over a `KeyboardEvent.key`. */
+type ShelfArrow = Parameters<typeof nextShelfTileIndex>[2];
+function isShelfArrow(key: string): key is ShelfArrow {
+  return key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown";
+}
+
+/**
  * A list of cards as a wall of art — search results, or a collection.
  *
  * Virtualised by *row*, not by tile: the virtualizer measures a list, and a grid is a
@@ -370,7 +515,9 @@ export function CardGrid<T extends GridCard>({
   selectionScope,
   baseTileWidth = TILE_BASE_WIDTH,
   grow = false,
+  sections,
 }: {
+  /** The cards to draw — **not drawn under {@link sections}**, which lays out its own. */
   rows: T[];
   /**
    * Open the card a tile is about.
@@ -412,6 +559,10 @@ export function CardGrid<T extends GridCard>({
    * `string`.
    *
    * The same is true of the picked set, which is keyed the same way — see {@link selectionScope}.
+   *
+   * **Or against `card.ringKey`, where a tile carries one** — the collection's shelves, where one
+   * printing filed in two folders is two tiles with two keys and opening it rings both. A tile with
+   * no `ringKey` is compared exactly as above, which is every tile on the other walls.
    */
   selectedId?: string | null;
   /** What the wall is, for anyone who cannot see that it is a wall of cards. */
@@ -828,6 +979,17 @@ export function CardGrid<T extends GridCard>({
    * bottom of the window, which is the bounded box's look without the bounded box.
    */
   grow?: boolean;
+  /**
+   * **Draw the wall as shelves** — a heading per folder with that folder's tiles under it, nested
+   * to any depth (spec 2026-09-26 §5.2). Absent, this is the flat wall, row for row: the search
+   * page, the Tags page and the three docked search columns never pass it.
+   *
+   * With it, `rows` is not drawn. The virtualiser runs over `layoutShelves`' rows instead — a
+   * shelf's last row may be short, two shelves never share a row, and a slot whose page has not
+   * landed is an empty frame. The picked set, the arrow walk and the paging follow the layout; the
+   * zoom resizes the tiles and never a heading. See {@link GridSections}.
+   */
+  sections?: GridSections<T>;
 }) {
   const wallRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -914,10 +1076,55 @@ export function CardGrid<T extends GridCard>({
   // reflows to the window, and it tells the virtualiser a row is a height it is not.
   const tileSize = scaled(baseTileWidth, cardZoom);
 
-  const columns = columnsFor(width, tileSize);
-  const rowCount = Math.ceil(rows.length / columns);
-  const tileWidth = tileWidthFor(width, tileSize);
-  const gutter = sideGutterFor(width, tileSize);
+  /**
+   * Each shelf with the tiles it has loaded and the count it is laid out at — `null` on a flat
+   * wall, which is what keeps every wall that passes no `sections` exactly the wall it was.
+   *
+   * **Keyed on the list and the lookup, never on the `sections` object**, so a caller that builds
+   * `{ sections, tilesOf, renderHeading, … }` inline re-lays nothing; see {@link GridSections}.
+   *
+   * **A shelf is laid out at whichever is larger, its count or what has loaded.** The counts and
+   * the pages are two queries, and a card added between them leaves a shelf with one more tile
+   * than its count says — laid out at the count, that tile would have no slot and would simply not
+   * be drawn. The other direction, a count ahead of the pages, is the ordinary state of a wall
+   * mid-scroll, and is what the empty frames are for.
+   */
+  const sectionList = sections?.sections;
+  const tilesOf = sections?.tilesOf;
+  const shelfTiles = useMemo(() => {
+    if (!sectionList || !tilesOf) return null;
+    return sectionList.map((section) => {
+      // A collapsed shelf is its heading alone — `layoutShelves` gives it no slots — so whatever a
+      // page still holds for it (the previous query's rows, kept on screen while a fold refetches)
+      // is not drawn, walked or picked. Read here, it would be written into the next shelf's slots.
+      const tiles: readonly T[] = section.shelf.collapsed ? [] : tilesOf(section.shelf.id);
+      return {
+        section: { shelf: section.shelf, tileCount: Math.max(section.tileCount, tiles.length) },
+        tiles,
+      };
+    });
+  }, [sectionList, tilesOf]);
+
+  /**
+   * What the deepest shelf's rows are pushed in by, taken off the wall **before** the column count
+   * is decided: `layoutShelves` takes one column count for every shelf, so it has to be one the
+   * most-indented shelf can still draw. `0` on a flat wall, where `tileArea` is `width` exactly.
+   */
+  const indentReserve = useMemo(
+    () =>
+      sectionList
+        ? sectionList.reduce((deepest, { shelf }) => Math.max(deepest, shelf.indent), 0) *
+          SHELF_INDENT_PX
+        : 0,
+    [sectionList],
+  );
+  // `width > 0` keeps an unmeasured wall unmeasured: `tileWidthFor` reads 0 as "no answer yet" and
+  // draws the base size, which a reserve subtracted from 0 would turn into a clamp to 1px.
+  const tileArea = indentReserve > 0 && width > 0 ? Math.max(1, width - indentReserve) : width;
+
+  const columns = columnsFor(tileArea, tileSize);
+  const tileWidth = tileWidthFor(tileArea, tileSize);
+  const gutter = sideGutterFor(tileArea, tileSize);
 
   // The chin is **attached** to the card rather than spaced under it, so there is no gap in this
   // budget any more — the tile is the art plus the chin less the rise, which is exactly what
@@ -925,6 +1132,37 @@ export function CardGrid<T extends GridCard>({
   // caption; that control is over the art now and costs the wall no height at all.
   const captionHeight = chinHeight(cardZoom) - CHIN_RISE;
   const tileHeight = Math.round(tileWidth * (7 / 5)) + captionHeight;
+
+  /**
+   * The shelves laid out at this column count: the rows, which loaded tile fills which slot, where
+   * the loaded run ends, and every row's key.
+   *
+   * `slots` is indexed by a tile's slot in the layout's flat order — the number published as
+   * `data-grid-index` here, see {@link GRID_INDEX_ATTR} — and a hole is a slot whose page has not
+   * landed. `frontier` is the slot after the last loaded tile in shelf order; the paging effect
+   * watches its row. `keys` is what the virtualiser keys rows by — see {@link shelfRowKey}.
+   */
+  const shelved = useMemo(() => {
+    if (!shelfTiles) return null;
+    const layout = layoutShelves(
+      shelfTiles.map((s) => s.section),
+      columns,
+    );
+    const slots = new Array<T | undefined>(layout.totalTiles).fill(undefined);
+    let frontier = 0;
+    for (const { section, tiles } of shelfTiles) {
+      const start = layout.tileStart.get(section.shelf.id);
+      if (start === undefined || tiles.length === 0) continue;
+      tiles.forEach((card, i) => {
+        if (start + i < slots.length) slots[start + i] = card;
+      });
+      frontier = start + tiles.length;
+    }
+    const keys = layout.rows.map((_, index) => shelfRowKey(layout, index));
+    return { layout, slots, frontier, keys };
+  }, [shelfTiles, columns]);
+
+  const rowCount = shelved ? shelved.layout.rows.length : Math.ceil(rows.length / columns);
 
   /**
    * The box the rows are scrolled through — this wall's own, or under {@link grow} whatever
@@ -995,10 +1233,66 @@ export function CardGrid<T extends GridCard>({
     return () => observer.disconnect();
   }, [grow, scroller]);
 
+  /**
+   * **How far below its scroller's top edge a `sticky top-0` element really pins** — the scroller's
+   * own `padding-top`, which the sticky bar's anchor takes off again as a negative `top` so the bar
+   * sits flush against the top of the scrollport.
+   *
+   * Chromium contracts a sticky element's constraint rectangle by the scroll container's padding,
+   * so `top: 0` means "the padding edge", not "the top of what the reader sees". Measured
+   * 2026-09-26 in headless Edge (WebView2's engine): a `top: 0` child of a `p-3` scroller pinned
+   * **12px** down at every scroll offset, of a `p-5` one **20px** down — which on both shelved
+   * pages (`grow`, so the scroller is `AppShell`'s `main`, `p-5`) is a bar floating 20px under the
+   * top with tiles sliding past in the strip above it. With `top` at minus the padding, both pinned
+   * at **0**, and moved with the content until they got there.
+   *
+   * Measured rather than written down, because the scroller is not this component's under `grow` —
+   * `main`'s padding is `AppShell`'s to change. Re-read on the scroller's resizes for the one
+   * change that could move it, a breakpoint. `0` in jsdom (no stylesheet), where the anchor then
+   * keeps its plain `top-0`; sectioned walls only, so a flat wall reads nothing.
+   */
+  const sectioned = shelfTiles !== null;
+  const [stickyInset, setStickyInset] = useState(0);
+  useLayoutEffect(() => {
+    if (!sectioned || !scroller) return;
+    const read = () => {
+      const next = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
+      setStickyInset((prev) => (prev === next ? prev : next));
+    };
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, [sectioned, scroller]);
+
+  /**
+   * The virtualiser's row keys on a sectioned wall — {@link shelfRowKey}, held still per layout.
+   *
+   * **This is the wall's structure key, and it does two jobs.** A row keyed by what it *is* keeps
+   * its React identity when the rows above it change (see `shelfRowKey`). And `getItemKey` is one
+   * of the virtualiser's measurement inputs (`getMeasurementOptions` in `@tanstack/virtual-core`),
+   * so a new layout is re-measured **in the render that produced it** — where a `measure()` in an
+   * effect, the route the zoom takes below, draws one frame at the old pitch first.
+   *
+   * `undefined` on a flat wall, which the virtualiser reads as its default index key — so those
+   * walls are keyed exactly as they were.
+   */
+  const rowKey = useMemo(
+    () => (shelved ? (index: number) => shelved.keys[index] ?? `row:${index}` : undefined),
+    [shelved],
+  );
+
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scroller,
-    estimateSize: () => tileHeight + GAP,
+    // A flat wall's rows are one pitch. A sectioned wall's are one of four: a tile row is the same
+    // pitch as a flat one, and a heading, a label and an empty box are `shelfLayout.ts`'s
+    // constants — **chrome, which the zoom does not scale** (spec §5.2), so a ctrl+wheel reflows
+    // the tiles and leaves every heading its own height.
+    estimateSize: shelved
+      ? (index) => rowHeight(shelved.layout.rows[index], tileHeight + GAP)
+      : () => tileHeight + GAP,
+    getItemKey: rowKey,
     scrollMargin,
     // Two rows of tiles beyond the viewport, which is the prefetch: their `<img>`s mount
     // and the protocol fills the cache before the reader scrolls onto them.
@@ -1043,7 +1337,20 @@ export function CardGrid<T extends GridCard>({
    * `useCardSelection` prunes against it on every render and because a fresh array would make its
    * callbacks new every time — and one of those callbacks ends up in a drag registration.
    */
-  const selectionOrder = useMemo(() => rows.map((card) => tileKey(card)), [rows]);
+  /**
+   * The tiles this wall has loaded, in the order it draws them — `rows` itself on a flat wall (the
+   * same array, so nothing downstream sees a new identity), and on a sectioned one every shelf's
+   * loaded tiles in shelf order (spec §5.5). A collapsed shelf contributes nothing because nothing
+   * of it was fetched, which is what keeps a Shift range from reaching into one.
+   *
+   * **Keys must be unique across shelves, and that is the caller's to make true** — the collection
+   * puts the folder in its tile key for exactly this (`tileKeyOf(cardId, finish, folderId)`).
+   */
+  const drawn = useMemo(
+    () => (shelfTiles ? shelfTiles.flatMap((s) => s.tiles) : rows),
+    [shelfTiles, rows],
+  );
+  const selectionOrder = useMemo(() => drawn.map((card) => tileKey(card)), [drawn]);
   const picked = useCardSelection(selectionScope ?? NO_SELECTION, selectionOrder);
 
   const select = useCallback(
@@ -1102,10 +1409,10 @@ export function CardGrid<T extends GridCard>({
    * `undefined` on a wall that cannot be dragged from or has no scope, so nothing there registers
    * a preview callback and every existing wall behaves exactly as it did.
    */
-  const dragRef = useRef({ picked, rows, dragPayload, dragRecord });
+  const dragRef = useRef({ picked, rows: drawn, dragPayload, dragRecord });
   useEffect(() => {
-    dragRef.current = { picked, rows, dragPayload, dragRecord };
-  }, [picked, rows, dragPayload, dragRecord]);
+    dragRef.current = { picked, rows: drawn, dragPayload, dragRecord };
+  }, [picked, drawn, dragPayload, dragRecord]);
   const draggableWall = selectionScope !== undefined && (dragPayload ?? dragRecord) !== undefined;
   const dragRest = useMemo(
     () =>
@@ -1145,8 +1452,8 @@ export function CardGrid<T extends GridCard>({
    * says so.
    */
   const pickedRows = useMemo(
-    () => (picked.count > 1 ? rows.filter((card) => picked.selected(tileKey(card))) : []),
-    [rows, picked],
+    () => (picked.count > 1 ? drawn.filter((card) => picked.selected(tileKey(card))) : []),
+    [drawn, picked],
   );
   const tileMenu = useCallback(
     (card: T) => cardMenu?.(card, picked.selected(tileKey(card)) ? pickedRows : []),
@@ -1161,6 +1468,8 @@ export function CardGrid<T extends GridCard>({
   const lastRendered = virtualRows.length
     ? Math.min(rows.length - 1, (virtualRows[virtualRows.length - 1].index + 1) * columns - 1)
     : -1;
+  /** The last row drawn, as a *row* — the sectioned wall's paging reads rows, not tiles. */
+  const lastRenderedRow = virtualRows.length ? virtualRows[virtualRows.length - 1].index : -1;
 
   // A new list reuses this scroll container, and a browser clamps the old offset into
   // the new content rather than resetting it.
@@ -1174,8 +1483,65 @@ export function CardGrid<T extends GridCard>({
   }, [listKey, virtualizer]);
 
   useEffect(() => {
+    // A sectioned wall pages by its own rule, below; `rows` is not what it draws.
+    if (shelved) return;
     if (needsNextPage(lastRendered, rows.length)) onNeedNextPage();
-  }, [lastRendered, rows.length, onNeedNextPage]);
+  }, [shelved, lastRendered, rows.length, onNeedNextPage]);
+
+  /**
+   * **A sectioned wall asks for the next page once the slot after its last loaded tile is drawn** —
+   * or, with nothing left unloaded, once its last tile is. Every shelf's size comes from its count,
+   * so that slot's row is known before its page exists; a reader scrolling onto the empty frames is
+   * a reader about to need them, and the virtualiser's two rows of overscan are the look-ahead the
+   * flat wall's 80% rule buys.
+   *
+   * Re-run whenever `shelved` changes — which is every page that lands, since a page is a new
+   * `tilesOf` — so a frontier still in the window after a page arrives asks again, as the flat
+   * wall's does. The page's own `hasNextPage` / `isFetchingNextPage` gate stays the caller's.
+   */
+  useEffect(() => {
+    if (!shelved) return;
+    const { layout, frontier } = shelved;
+    if (layout.totalTiles === 0) return;
+    const frontierRow = rowOfTile(layout, Math.min(frontier, layout.totalTiles - 1));
+    if (frontierRow >= 0 && lastRenderedRow >= frontierRow) onNeedNextPage();
+  }, [shelved, lastRenderedRow, onNeedNextPage]);
+
+  /**
+   * **Bring the shelf a page names into view** — `GridSections.revealShelfId`, set when **Add
+   * folder** opens a placeholder heading, so the name field being typed into is never below the
+   * fold. Its heading row, or — for a headless shelf, an opened folder's own cards — its first row.
+   *
+   * `scrollToIndex` with the virtualiser's default `"auto"` alignment, which is `block: "nearest"`:
+   * a row already on screen is not moved, one below the window lands flush with its bottom edge.
+   * The virtualiser rather than `scrollIntoView`, because the row is very often not drawn yet.
+   *
+   * **Once per id**, remembered in a ref (a ref write, not a `setState`, so the effect rule is not
+   * in play): the effect re-runs whenever `shelved` changes — every page that lands — and a reader
+   * who scrolled away from a folder they are naming must not be dragged back to it by a refetch.
+   * The ref is cleared when the page clears the id, so revealing the same shelf twice in a row
+   * works. An id the layout does not hold does nothing and is not remembered, so a placeholder
+   * whose row arrives a render after its id is still revealed when it does.
+   */
+  const revealShelfId = sections?.revealShelfId ?? null;
+  const revealed = useRef<number | null>(null);
+  useEffect(() => {
+    if (revealShelfId === null) {
+      revealed.current = null;
+      return;
+    }
+    if (!shelved || revealed.current === revealShelfId) return;
+    const layoutRows = shelved.layout.rows;
+    let at = layoutRows.findIndex(
+      (row) => row.kind === "heading" && row.shelf.id === revealShelfId,
+    );
+    if (at < 0) {
+      at = layoutRows.findIndex((row) => row.kind !== "label" && row.shelf.id === revealShelfId);
+    }
+    if (at < 0) return;
+    revealed.current = revealShelfId;
+    virtualizer.scrollToIndex(at);
+  }, [revealShelfId, shelved, virtualizer]);
 
   /**
    * The second half of an arrow press: put the caret on the tile the handler asked for, once
@@ -1202,7 +1568,7 @@ export function CardGrid<T extends GridCard>({
    */
   useEffect(() => {
     if (pendingIndex === null) return;
-    if (pendingIndex >= rows.length) {
+    if (pendingIndex >= (shelved ? shelved.layout.totalTiles : rows.length)) {
       setPendingIndex(null);
       return;
     }
@@ -1215,7 +1581,10 @@ export function CardGrid<T extends GridCard>({
       `[${GRID_INDEX_ATTR}="${pendingIndex}"]`,
     );
     if (!tile) {
-      virtualizer.scrollToIndex(Math.floor(pendingIndex / columns));
+      // A sectioned wall's row is the layout's to say — a short row upstream moves every row below.
+      virtualizer.scrollToIndex(
+        shelved ? rowOfTile(shelved.layout, pendingIndex) : Math.floor(pendingIndex / columns),
+      );
       return;
     }
     const caret = tile.querySelector<HTMLElement>(CARET_SELECTOR) ?? tile;
@@ -1229,7 +1598,7 @@ export function CardGrid<T extends GridCard>({
     // where scrolling the tile lands it the intended **6px** clear.
     tile.scrollIntoView?.({ block: "nearest" });
     setPendingIndex(null);
-  }, [pendingIndex, virtualRows, columns, rows.length, virtualizer]);
+  }, [pendingIndex, virtualRows, columns, rows.length, virtualizer, shelved]);
 
   /**
    * One arrow press: move the selection, and take the caret with it.
@@ -1281,7 +1650,26 @@ export function CardGrid<T extends GridCard>({
     const caret = from.querySelector<HTMLElement>(CARET_SELECTOR);
     if (target !== from && !caret?.contains(target)) return;
 
-    const next = nextGridIndex(Number(from.dataset.gridIndex), e.key, columns, rows.length);
+    const at = Number(from.dataset.gridIndex);
+    if (shelved) {
+      // **The shelves' own table** (spec §5.4, `nextShelfTileIndex`): Left/Right walk the
+      // depth-first order across shelf boundaries, Up/Down move within a shelf and past its edge to
+      // the nearest column of the next or previous shelf's row, skipping headings. Every other key
+      // is not this wall's, exactly as `nextGridIndex` answers it.
+      if (!isShelfArrow(e.key) || !Number.isInteger(at)) return;
+      const next = nextShelfTileIndex(shelved.layout, at, e.key);
+      if (next === null) return;
+      e.preventDefault();
+      const card = shelved.slots[next];
+      // `select` for the caret note, as below. A slot whose page has not landed selects nothing —
+      // there is no card to open — but the wall still scrolls to it, which draws its row, which is
+      // what asks for the page; the next press then has a card to land on.
+      if (card) select(card, e);
+      virtualizer.scrollToIndex(rowOfTile(shelved.layout, next));
+      if (card) setPendingIndex(next);
+      return;
+    }
+    const next = nextGridIndex(at, e.key, columns, rows.length);
     if (next === null) return;
 
     e.preventDefault();
@@ -1299,6 +1687,87 @@ export function CardGrid<T extends GridCard>({
     virtualizer.scrollToIndex(Math.floor(next / columns));
     setPendingIndex(next);
   };
+
+  /**
+   * Back to the top of the wall — the sticky bar's **Top** (spec §5.3). Held still because it is
+   * handed to the caller's `renderSticky` on every render.
+   */
+  const scrollToTop = useCallback(() => virtualizer.scrollToOffset(0), [virtualizer]);
+
+  /**
+   * The shelf the sticky bar names — see {@link stickyShelfAt}. The edge is where the bar's top
+   * sits in the virtualiser's coordinates: the scroller's offset, less the wall's own `p-3` on a
+   * bounded wall, and exactly the offset under `grow`, where `scrollMargin` is already inside every
+   * row's `start`. Both assume the bar is pinned flush with the top of the scrollport, which the
+   * anchor's `stickyInset` correction is what makes true.
+   *
+   * **As fresh as the last render, and no fresher**: the virtualiser re-renders when its range or
+   * its is-scrolling flag changes, not per pixel, so inside one row the bar can trail by that row
+   * and settles when the scroll ends. The live pass is where this is judged (spec §8).
+   */
+  const stickyShelf = shelved
+    ? stickyShelfAt(
+        shelved.layout,
+        virtualRows,
+        (virtualizer.scrollOffset ?? 0) - (grow ? 0 : WALL_INSET_PX),
+      )
+    : null;
+
+  /**
+   * The gap the virtualiser counts after the last row, which the sizer leaves off — a tile row's
+   * `GAP` on the flat wall, as it always was. A sectioned wall can end on a heading or an empty
+   * box, whose constants carry gaps of their own sizes, so only a trailing tile row's is removed.
+   */
+  const lastLayoutRow = shelved
+    ? shelved.layout.rows[shelved.layout.rows.length - 1]
+    : undefined;
+  const trailingGap = shelved ? (lastLayoutRow?.kind === "tiles" ? GAP : 0) : GAP;
+
+  /** One tile, as both kinds of wall draw it — one list of the tile's slots, not two. */
+  const renderTile = (card: T, gridIndex: number, key: string) => (
+    <Tile
+      key={key}
+      card={card}
+      // Where this tile sits in the whole list — not in the row it is drawn in. See
+      // `GRID_INDEX_ATTR` for why the absolute number is the one that survives the reflow an arrow
+      // press causes, and what the number is on a sectioned wall.
+      gridIndex={gridIndex}
+      width={tileWidth}
+      zoom={cardZoom}
+      onSelect={select}
+      // **The pane's card, or a member of the picked set** — one gold ring for both, which is issue
+      // #214's answer rather than an economy: gold already means *picked* on this wall, and a
+      // reader who has Ctrl-clicked four tiles has picked four. The pane shows the last one they
+      // opened, as a pane always has.
+      //
+      // **The pane's half compares the ring key, the set's half the tile key** — see
+      // `GridCard.ringKey`: one printing on two shelves is two tiles and one open card, and both
+      // ring; a Ctrl-click still picks the one tile. Without a `ringKey` both halves are the tile
+      // key, which is what stops a wall that draws a foil and a nonfoil of one printing from
+      // ringing both when the reader pressed one — see {@link tileKey}.
+      selected={
+        (card.ringKey ?? tileKey(card)) === selectedId || picked.selected(tileKey(card))
+      }
+      dragRest={dragRest}
+      badge={badge}
+      badgeChrome={badgeChrome}
+      topLeft={topLeft}
+      topLeftPlacement={topLeftPlacement}
+      bottomRight={bottomRight}
+      finish={finish}
+      treatment={treatment}
+      gameChanger={gameChanger}
+      action={action}
+      column={column}
+      caption={caption}
+      money={money}
+      cardMenu={tileMenu}
+      cardMenuKey={tileMenuKey}
+      tileRef={tileRef}
+      dragPayload={dragPayload}
+      dragRecord={dragRecord}
+    />
+  );
 
   return (
     <div
@@ -1332,6 +1801,30 @@ export function CardGrid<T extends GridCard>({
           : "min-h-0 flex-1 overflow-auto rounded-md border border-border",
       )}
     >
+      {shelved && sections && (
+        // **The sticky bar** (spec §5.3). CSS `sticky` cannot work on the rows — they are
+        // `absolute` and `translateY`'d — but it works on a normal-flow child of the scroller, and
+        // a zero-height one moves nothing: the sizer below starts exactly where it did. The bar is
+        // then `absolute` inside that anchor, over the rows, on `LAYER.header` so tile rows (even
+        // one raised for an open popup, `LAYER.raised`) scroll under it. One arrangement for both
+        // shapes: on a bounded wall `sticky` resolves against the wall, under `grow` against
+        // `main`, which an `absolute` overlay could never reach. The anchor is always mounted on a
+        // sectioned wall, so a drop target the caller draws in it (spec §6) is permanent.
+        //
+        // **`top-0` is corrected by the scroller's own padding** — see `stickyInset`: Chromium pins
+        // a sticky box at the scroller's padding edge, so without the negative `top` the bar would
+        // float 12px (bounded) or 20px (`main`, under `grow`) below the top of the scrollport. Flush
+        // is also what the edge `stickyShelf` measures from assumes.
+        <div
+          data-shelf-sticky=""
+          className={cn("sticky top-0 h-0", LAYER.header)}
+          style={stickyInset ? { top: -stickyInset } : undefined}
+        >
+          <div className="absolute inset-x-0 top-0">
+            {sections.renderSticky(stickyShelf, scrollToTop)}
+          </div>
+        </div>
+      )}
       {/* Holds the scrollbar open to the full height of the wall while the rows inside it
           are positioned absolutely — and, having no padding of its own, is the honest
           answer to how wide a row of tiles may be. The virtualiser's total counts a gap
@@ -1339,83 +1832,162 @@ export function CardGrid<T extends GridCard>({
           separating. */}
       <div
         ref={rowsRef}
-        style={{ height: Math.max(0, virtualizer.getTotalSize() - GAP), position: "relative" }}
+        style={{
+          height: Math.max(0, virtualizer.getTotalSize() - trailingGap),
+          position: "relative",
+        }}
       >
-        {virtualRows.map((v) => (
-          <div
-            key={v.key}
-            // The row a quick-add is open in comes to the front. Its `transform` makes it a
-            // stacking context, so the popup's own layer cannot lift it above the *next*
-            // row — which paints later simply for being later in the DOM, and would cover
-            // the popup with the tiles below it. `:has` keeps that fact where the stacking
-            // context is, rather than threading "is a popup open in me" up through a tile.
-            className={cn("absolute inset-x-0 top-0 flex gap-3", LAYER.raisedWhenPopupOpen)}
-            // The gutter is padding on **every** row rather than `justify-center` on them, so a
-            // part-full last row still lines its tiles up under the full rows above it — three
-            // tiles centred under six is a wall that looks like it lost its grid. See
-            // `sideGutterFor` for why it is not on the box around them either.
-            style={{
-              height: tileHeight,
-              // **`- scrollMargin`, because a virtual item's `start` is measured from the
-              // scroller's origin and this row is positioned from the sizer's.** The two are the
-              // same box only when the wall *is* the scroller, which is why this read `v.start`
-              // for as long as it was. Under `grow` they differ by everything above the wall —
-              // measured live at 165px on the search page (`main`'s padding, the filter bar and
-              // the status line), which is exactly how far down the page the first row was drawn
-              // before this subtraction existed. `getTotalSize` already takes it off, so the
-              // sizer was the right height and only the rows inside it were displaced: a wall
-              // that looks correct until you compare its first tile with its own top edge.
-              transform: `translateY(${v.start - scrollMargin}px)`,
-              paddingLeft: gutter,
-              paddingRight: gutter,
-            }}
-          >
-            {rows.slice(v.index * columns, v.index * columns + columns).map((card, i) => (
-              // Keyed by slot rather than by card id: two pages fetched either side of a
-              // sync can carry one printing twice, and a duplicate key drops a card.
-              <Tile
-                key={`${v.index}-${i}`}
-                card={card}
-                // Where this tile sits in `rows` — not in the row it is drawn in. See
-                // `GRID_INDEX_ATTR` for why the absolute number is the one that survives the
-                // reflow an arrow press causes.
-                gridIndex={v.index * columns + i}
-                width={tileWidth}
-                zoom={cardZoom}
-                onSelect={select}
-                // **The pane's card, or a member of the picked set** — one gold ring for both,
-                // which is issue #214's answer rather than an economy: gold already means
-                // *picked* on this wall, and a reader who has Ctrl-clicked four tiles has picked
-                // four. The pane shows the last one they opened, as a pane always has.
-                //
-                // **Both halves key on the tile**, which is what stops a wall that draws a foil
-                // and a nonfoil of one printing from ringing both when the reader pressed one —
-                // see {@link tileKey}. `selectedId` is therefore a tile's identity on a wall that
-                // has any, and a card id on the six that do not.
-                selected={tileKey(card) === selectedId || picked.selected(tileKey(card))}
-                dragRest={dragRest}
-                badge={badge}
-                badgeChrome={badgeChrome}
-                topLeft={topLeft}
-                topLeftPlacement={topLeftPlacement}
-                bottomRight={bottomRight}
-                finish={finish}
-                treatment={treatment}
-                gameChanger={gameChanger}
-                action={action}
-                column={column}
-                caption={caption}
-                money={money}
-                cardMenu={tileMenu}
-                cardMenuKey={tileMenuKey}
-                tileRef={tileRef}
-                dragPayload={dragPayload}
-                dragRecord={dragRecord}
-              />
+        {shelved && sections
+          ? virtualRows.map((v) => {
+              const row = shelved.layout.rows[v.index];
+              if (!row) return null;
+              // A label belongs to no shelf and stands at the wall's own edge.
+              const indent = row.kind === "label" ? 0 : row.shelf.indent;
+              const place = {
+                // `- scrollMargin` for the flat rows' reason, below.
+                transform: `translateY(${v.start - scrollMargin}px)`,
+                // The gutter on every row, as on the flat wall, plus 32px a level — so a nested
+                // shelf's heading, its tiles and its empty box all start at one left edge.
+                paddingLeft: gutter + indent * SHELF_INDENT_PX,
+                paddingRight: gutter,
+              };
+              const rails = <ShelfRails indent={indent} from={gutter} height={v.size} />;
+              if (row.kind === "tiles") {
+                return (
+                  <div
+                    key={v.key}
+                    data-shelf-row="tiles"
+                    // Raised when a popup is open in it, exactly as a flat row is — see below.
+                    className={cn(
+                      "absolute inset-x-0 top-0 flex gap-3",
+                      LAYER.raisedWhenPopupOpen,
+                    )}
+                    style={{ height: tileHeight, ...place }}
+                  >
+                    {rails}
+                    {Array.from({ length: row.end - row.start }, (_, i) => {
+                      const slot = row.start + i;
+                      const card = shelved.slots[slot];
+                      // Keyed by place in the row, as the flat wall keys by slot: a card that
+                      // lands in a frame replaces it, and nothing else in the row remounts.
+                      return card ? (
+                        renderTile(card, slot, `slot-${i}`)
+                      ) : (
+                        <PendingSlot key={`slot-${i}`} slot={slot} width={tileWidth} />
+                      );
+                    })}
+                  </div>
+                );
+              }
+              // **Not `LAYER.raisedWhenPopupOpen`**: a heading's collapse chevron is
+              // `aria-expanded="true"` whenever its shelf is open, so that variant would lift every
+              // open heading to the raised layer — and a tile row's quick-add, opening down into
+              // the heading below it, would then lose to the heading on document order.
+              //
+              // As tall as the row's whole pitch (`v.size`, its gap included): the caller's heading
+              // sits at the top of it, and the rails reach the next row's top.
+              return (
+                <div
+                  key={v.key}
+                  data-shelf-row={row.kind}
+                  className="absolute inset-x-0 top-0"
+                  style={{ height: v.size, ...place }}
+                >
+                  {rails}
+                  {row.kind === "heading"
+                    ? sections.renderHeading(row.shelf)
+                    : row.kind === "empty"
+                      ? sections.renderEmpty(row.shelf)
+                      : sections.renderLabel(row.group)}
+                </div>
+              );
+            })
+          : virtualRows.map((v) => (
+              <div
+                key={v.key}
+                // The row a quick-add is open in comes to the front. Its `transform` makes it a
+                // stacking context, so the popup's own layer cannot lift it above the *next*
+                // row — which paints later simply for being later in the DOM, and would cover
+                // the popup with the tiles below it. `:has` keeps that fact where the stacking
+                // context is, rather than threading "is a popup open in me" up through a tile.
+                className={cn("absolute inset-x-0 top-0 flex gap-3", LAYER.raisedWhenPopupOpen)}
+                // The gutter is padding on **every** row rather than `justify-center` on them, so a
+                // part-full last row still lines its tiles up under the full rows above it — three
+                // tiles centred under six is a wall that looks like it lost its grid. See
+                // `sideGutterFor` for why it is not on the box around them either.
+                style={{
+                  height: tileHeight,
+                  // **`- scrollMargin`, because a virtual item's `start` is measured from the
+                  // scroller's origin and this row is positioned from the sizer's.** The two are the
+                  // same box only when the wall *is* the scroller, which is why this read `v.start`
+                  // for as long as it was. Under `grow` they differ by everything above the wall —
+                  // measured live at 165px on the search page (`main`'s padding, the filter bar and
+                  // the status line), which is exactly how far down the page the first row was drawn
+                  // before this subtraction existed. `getTotalSize` already takes it off, so the
+                  // sizer was the right height and only the rows inside it were displaced: a wall
+                  // that looks correct until you compare its first tile with its own top edge.
+                  transform: `translateY(${v.start - scrollMargin}px)`,
+                  paddingLeft: gutter,
+                  paddingRight: gutter,
+                }}
+              >
+                {rows
+                  .slice(v.index * columns, v.index * columns + columns)
+                  .map((card, i) =>
+                    // Keyed by slot rather than by card id: two pages fetched either side of a
+                    // sync can carry one printing twice, and a duplicate key drops a card.
+                    renderTile(card, v.index * columns + i, `${v.index}-${i}`),
+                  )}
+              </div>
             ))}
-          </div>
-        ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The rails of one nested shelf's row — a 1px line per level of indent, in `border-border`,
+ * standing under the parent heading's chevron (spec §3.3).
+ *
+ * **Drawn per row and as tall as the row's whole pitch** (`v.size`, gap included), so the rail of
+ * one row meets the rail of the next and a nested shelf reads as one line down its left side
+ * rather than a dotted one. Positioned from the row's own left edge (`from` is the row's gutter),
+ * so it does not move with the row's padding.
+ */
+function ShelfRails({ indent, from, height }: { indent: number; from: number; height: number }) {
+  if (indent <= 0) return null;
+  return (
+    <>
+      {Array.from({ length: indent }, (_, level) => (
+        <span
+          key={level}
+          aria-hidden="true"
+          data-shelf-rail=""
+          className="pointer-events-none absolute top-0 border-l border-border"
+          style={{ left: from + level * SHELF_INDENT_PX + SHELF_RAIL_OFFSET_PX, height }}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * A slot whose page has not landed — the art's 5:7 box in the frame's own felt, with nothing to
+ * press, nothing to walk onto and nothing announced.
+ *
+ * It exists because a shelf's size comes from its count (`*_shelf_counts`) and not from its pages,
+ * so every heading can be placed before the cards arrive and nothing reflows when they do. **Not a
+ * `Tile`**: no `data-grid-index`, no button, no drag — the arrow walk scrolls toward it and waits.
+ * `CardArt`'s own `rounded-lg border border-border bg-surface`, so the card that lands draws over
+ * exactly this box.
+ */
+function PendingSlot({ slot, width }: { slot: number; width: number }) {
+  return (
+    <div data-pending-slot={slot} aria-hidden="true" className="shrink-0" style={{ width }}>
+      <div
+        className="w-full rounded-lg border border-border bg-surface"
+        style={{ aspectRatio: CARD_ASPECT }}
+      />
     </div>
   );
 }
