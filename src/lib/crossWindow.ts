@@ -165,6 +165,10 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   deck_labels: DECKS,
   deck_note_cards: DECKS,
   deck_notes: DECKS,
+  // A token's entries (user schema v52), read by `useDeckTokens` under `["decks", "tokens", …]`
+  // exactly as `deck_tokens` beside it is — so `["decks"]` is what another window's step makes
+  // stale.
+  deck_token_printings: DECKS,
   deck_tokens: DECKS,
   deck_undo: DECKS,
   // A deck's name titles its group in the collection's cabinet — `mirror/watch.rs` maps it to both

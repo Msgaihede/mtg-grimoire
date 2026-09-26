@@ -106,7 +106,7 @@ impl Spec {
 }
 
 /// One spec per synced table. `schema::SYNCED_TABLES` is the census this is held to.
-pub const TABLES: [Spec; 16] = [
+pub const TABLES: [Spec; 17] = [
     Spec {
         table: "collection_entries",
         keys: &["id"],
@@ -301,6 +301,34 @@ pub const TABLES: [Spec; 16] = [
         append_only: false,
     },
     Spec {
+        table: "deck_token_printings",
+        keys: &["id"],
+        // A token's **entries** (user schema v52): one printing, in one finish, in one list.
+        //
+        // **`quantity` is a field and not a counter, and here that had to be decided rather than
+        // forced.** `deck_tokens.quantity` below is nullable, so it could not carry `NEW - OLD`;
+        // this column is `NOT NULL` and could. It is a field for that spec's *second* reason —
+        // "how many Treasures of this art I want to bring" is a setting, and two devices each
+        // setting it to 4 must mean 4, not the 8 a counter would sum them to. `deck_cards` sums
+        // because two devices each sleeving a copy means two copies; nobody sleeves a token.
+        //
+        // **All four grain terms are fields** — `variant`, `card_id` and `finish`, beside the
+        // `deck` parent — for `deck_tokens`' reason: the far device has to be able to *build*
+        // the row, and the grain `apply::META` restates is a way of recognising one already
+        // there. `oracle_id` travels too, because the far device cannot derive it: the printing
+        // may not be in its corpus yet, and a NOT NULL column cannot wait for one.
+        fields: &["variant", "oracle_id", "card_id", "finish", "quantity"],
+        counters: &[],
+        parents: &[Parent {
+            key: "deck",
+            col: "deck_id",
+            table: "decks",
+            absent: Absent::Null,
+            soft: false,
+        }],
+        append_only: false,
+    },
+    Spec {
         table: "deck_tokens",
         keys: &["id"],
         // **`quantity` is a field and not a counter, on two grounds.** Mechanically a counter
@@ -397,11 +425,20 @@ pub const TABLES: [Spec; 16] = [
             // arrives at what that device can only have meant — the band open, which is what
             // every deck on that device is showing.
             "stats_open",
-            // Whether the deck views draw a trailing Tokens & Emblems pile (user schema v47).
-            // A setting chosen in Deck settings, so it travels for `separate_x_group`'s reason
-            // — how *this* list is read — and `DEFAULT 0` makes the old-peer direction safe the
-            // way it is for `virtual_only` above.
-            "token_stack",
+            // How the deck treats its tokens — `managed`, `collection` or `hidden` (user schema
+            // v52, replacing v47's `token_stack` switch under a **new name**, as v49 did with
+            // `managed_wishlist_mode` below: a peer still on v51 skips a field it does not know,
+            // where a word landing in its INTEGER `token_stack` would fail its deck read). An
+            // answer about the deck, so it travels for `separate_x_group`'s reason. Dropping
+            // `token_stack` costs nothing on the wire: `apply::updates` walks the *local* spec,
+            // so a v51 peer's `token_stack` op is skipped rather than deferred, and a v51 device
+            // receiving this field skips it the same way.
+            //
+            // ⚠️ **The column carries a `CHECK`, so a word this build does not know is refused at
+            // apply** — deferred, and the sender's stream held behind it. The three words are
+            // this app's model rather than a palette that grows, and all three are in the
+            // `CHECK` from v52, so the PR that draws `collection` sends nothing v52 refuses.
+            "token_mode",
             // And where that pile sits in the rail (user schema v51) — an arrangement of the
             // deck the reader dragged, so it travels with the deck the way the order of its
             // categories does. `DEFAULT -1` (*last*) makes the old-peer direction safe: a device
@@ -836,7 +873,7 @@ fn delete_trigger(spec: &Spec) -> String {
 
 /// The clock follows the op it just stamped.
 ///
-/// A separate trigger rather than a second statement inside each of the thirty-seven, so the rule
+/// A separate trigger rather than a second statement inside every capture trigger, so the rule
 /// lives once. It is not recursive — a different table — so `PRAGMA recursive_triggers` has no
 /// bearing on it either way, and nothing here depends on that pragma's value.
 const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
@@ -851,11 +888,14 @@ const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
 /// **`DROP` then `CREATE`, never `CREATE … IF NOT EXISTS`.** A trigger is stored SQL: a build
 /// that changed the generator and shipped `IF NOT EXISTS` would leave every existing database
 /// running last year's rules forever, silently, and a bug fixed here would reach nobody who
-/// already had the app. Thirty-seven drops and creates at open is a fraction of a millisecond.
+/// already had the app. Dropping and creating every one at open — an insert trigger per
+/// [`TABLES`] entry, an update and a delete for every one but `deck_audit`, and the clock — is a
+/// fraction of a millisecond. (This carried a count, and said thirty-seven while the array made
+/// forty-seven; the array is the count.)
 ///
 /// Called from [`crate::schema::prepare_database`], so it reaches the desktop, Android and the
 /// browser through the one door. **Not** on a read-only connection: it never writes, and a
-/// trigger there is thirty-seven objects nobody fires.
+/// trigger there is an object nobody fires.
 pub fn install(conn: &Connection) -> rusqlite::Result<()> {
     for spec in &TABLES {
         conn.execute_batch(&insert_trigger(spec))?;
@@ -1185,11 +1225,13 @@ mod tests {
         );
     }
 
-    /// **A deck's token-pile setting travels** (user schema v47) — the hand-written spec's
-    /// missing-fence argument above, for a column that would otherwise draw a pile on one
-    /// device and none on the other.
+    /// **A deck's token mode travels** (user schema v52, in place of v47's `token_stack`) — the
+    /// hand-written spec's missing-fence argument above, for a column that would otherwise hide
+    /// a deck's pile on one device and draw it on the other. `token_stack` itself must be gone
+    /// from the wire, which is the half a spec left naming a dropped column would fail in a
+    /// quieter way: `every_column_a_spec_names_exists_on_its_table` catches that one.
     #[test]
-    fn a_decks_token_pile_setting_is_captured() {
+    fn a_decks_token_mode_is_captured() {
         let conn = db();
         conn.execute(
             "INSERT INTO decks (id, name, format_key, created_at, updated_at)
@@ -1199,16 +1241,93 @@ mod tests {
         .unwrap();
         conn.execute("DELETE FROM sync_ops", []).unwrap();
 
-        conn.execute("UPDATE decks SET token_stack = 1 WHERE id = 1", [])
+        conn.execute("UPDATE decks SET token_mode = 'hidden' WHERE id = 1", [])
             .unwrap();
 
         let rows = ops(&conn);
         assert_eq!(rows.len(), 1, "one write, one op");
         let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
         assert_eq!(
-            fields.get("token_stack"),
-            Some(&serde_json::json!(1)),
-            "the setting must reach the reader's other devices, in {fields}"
+            fields.get("token_mode"),
+            Some(&serde_json::json!("hidden")),
+            "the mode must reach the reader's other devices, in {fields}"
+        );
+        assert!(
+            fields.get("token_stack").is_none(),
+            "the switch it replaced is off the wire: {fields}"
+        );
+    }
+
+    /// **A token entry travels whole on insert** (user schema v52) — every field the far device
+    /// needs to *build* the row and to find it on the grain, and the deck as its uid rather than
+    /// a local id. `created_at`/`updated_at` stay home, [`Spec::fields`]' rule.
+    ///
+    /// And a step is a **field**, not a delta: the update op carries the count the reader set,
+    /// which is what makes two devices each setting 4 end at 4.
+    #[test]
+    fn a_deck_token_printing_is_captured() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let deck_uid: String = conn
+            .query_row("SELECT sync_uid FROM decks WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute(
+            "INSERT INTO deck_token_printings
+                 (deck_id, variant, oracle_id, card_id, finish, quantity, created_at, updated_at)
+             VALUES (1, 'theory', 'o-treasure', 'p-treasure', 'foil', 2, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 1, "one insert, one op: {rows:?}");
+        assert_eq!(
+            (rows[0].0.as_str(), rows[0].1.as_str()),
+            ("deck_token_printings", "put")
+        );
+        let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(
+            fields,
+            serde_json::json!({
+                "variant": "theory",
+                "oracle_id": "o-treasure",
+                "card_id": "p-treasure",
+                "finish": "foil",
+                "quantity": 2,
+            }),
+            "every field, and nothing local"
+        );
+        assert_eq!(
+            rows[0].3, "{}",
+            "a quantity here is a field, never a counter"
+        );
+        let parents: serde_json::Value = conn
+            .query_row(
+                "SELECT parents FROM sync_ops WHERE tbl = 'deck_token_printings'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .map(|p| serde_json::from_str(&p).unwrap())
+            .unwrap();
+        assert_eq!(parents, serde_json::json!({ "deck": deck_uid }));
+
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute("UPDATE deck_token_printings SET quantity = 4", [])
+            .unwrap();
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 1, "one step, one op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(
+            fields,
+            serde_json::json!({ "quantity": 4 }),
+            "the count the reader set, and only that"
         );
     }
 

@@ -13,12 +13,13 @@
 //!
 //! # The row handle here is the `sync_uid`, not the rowid
 //!
-//! Every statement this module builds addresses a row by `WHERE sync_uid = ?`. Fourteen of the
-//! sixteen synced tables have an `INTEGER PRIMARY KEY` and two have none at all — `muted_tags`
+//! Every statement this module builds addresses a row by `WHERE sync_uid = ?`. Every synced
+//! table but two has an `INTEGER PRIMARY KEY`, and those two have none at all — `muted_tags`
 //! is `WITHOUT ROWID` on `(namespace, tag_id)` and `device_names` on `device_id` — so a rowid
-//! would need a second spelling of every statement for both. The uid is `UNIQUE` on all
-//! sixteen and every row has one, which is what `schema::mint_missing_uids` and the capture
-//! trigger's mint are between them for.
+//! would need a second spelling of every statement for both. The uid is `UNIQUE` on every one
+//! and every row has one, which is what `schema::mint_missing_uids`, the capture trigger's mint
+//! and — for the rows user schema v52 moves before any trigger exists for their table — that
+//! rung's own derived names are between them for.
 //!
 //! # Add-wins needs this device's own history, and `sync_ops` is where it is
 //!
@@ -160,15 +161,16 @@ struct Meta {
     /// `created_at` / `updated_at`. `deck_audit` and `muted_tags` carry their own stamp
     /// (`at`, `muted_at`) as an ordinary field and have neither column.
     timestamps: bool,
-    /// Whether the table can hold a sentence for the reader at all. Ten of the sixteen
-    /// cannot: `decks`, `deck_categories`, `deck_labels`, `deck_tokens`, `deck_notes`,
-    /// `deck_note_cards`, `deck_audit`, `muted_tags`, `device_names` and `sticky_notes`.
+    /// Whether the table can hold a sentence for the reader at all. Eleven of the seventeen
+    /// cannot: `decks`, `deck_categories`, `deck_labels`, `deck_tokens`, `deck_token_printings`,
+    /// `deck_notes`, `deck_note_cards`, `deck_audit`, `muted_tags`, `device_names` and
+    /// `sticky_notes`.
     needs_review: bool,
     /// The self-referencing column a cycle can form on, for the three folder tables.
     tree: Option<&'static str>,
 }
 
-const META: [Meta; 16] = [
+const META: [Meta; 17] = [
     Meta {
         table: "deck_folders",
         order: 0,
@@ -441,6 +443,43 @@ const META: [Meta; 16] = [
         // read for themselves, and the conflict a sentence exists to report (a row deleted on
         // one device and edited on another) resolves add-wins with the note still in front of
         // them.
+        needs_review: false,
+        tree: None,
+    },
+    Meta {
+        table: "deck_token_printings",
+        // Appended rather than slotted in behind `decks`, `deck_tokens`' reason: the rank is only
+        // ever *sorted* by, so what it has to say is "after the deck this row hangs off", which
+        // any number above 1 says. Renumbering the tail for a tidier one moves ranks to change
+        // nothing an emission can observe.
+        order: 16,
+        // `idx_deck_token_printings_grain`, restating `schema::DECK_TOKEN_PRINTING_GRAIN` as a
+        // predicate, and owed for `deck_tokens`' reason: two devices that each add the same
+        // printing, in the same finish, to the same list hold one row under two uids, so without
+        // this the far op is not a row to update but a row to insert — which hits the unique
+        // index, rolls the group's savepoint back and defers that op for ever.
+        //
+        // **`deck_id` from the parent and the other three from the fields**, because a local
+        // deck id means nothing on the far device, while a list name, a Scryfall printing id and
+        // a finish word mean the same thing everywhere. **No `coalesce`**, unlike `deck_cards`'
+        // grain above: `finish` is NOT NULL here, so `=` is the index's own test.
+        grains: &[Grain {
+            predicate: "deck_id = ? AND variant = ? AND card_id = ? AND finish = ?",
+            sources: &[
+                Source::Parent("deck"),
+                Source::Field("variant"),
+                Source::Field("card_id"),
+                Source::Field("finish"),
+            ],
+        }],
+        // **No counter, so no `Floor`**, although the column is NOT NULL and could carry a delta:
+        // the count is a setting, which `super::capture`'s spec argues, and a stored zero is a
+        // token's last entry the reader stepped down — kept on purpose, never arithmetic's
+        // accident.
+        counters: &[],
+        timestamps: true,
+        // No `needs_review` column on the table. An entry whose printing leaves the corpus is an
+        // orphan drawn from the row's own `oracle_id`, not a conflict to report.
         needs_review: false,
         tree: None,
     },

@@ -483,10 +483,11 @@ else holds — confusion rather than injection: the blob is this device's own an
 the roster at that epoch**. A device that adopts *N+1* deletes every `sync_devices` row the
 manifest does not name.
 
-**That is deliberately not a synced table** — it would be the **seventeenth** now, and this line
-read *thirteenth* until `deck_tokens` took that number at user schema v37 and *fourteenth* until
-v43's two note tables and v46's `sticky_notes` moved it twice more, which is the argument
-against writing a count into prose at all. A manifest that *is* the key distribution
+**That is deliberately not a synced table** — it would be the **eighteenth** now, and this line
+read *thirteenth* until `deck_tokens` took that number at user schema v37, *fourteenth* until
+v43's two note tables and v46's `sticky_notes` moved it twice more, and *seventeenth* until v52's
+`deck_token_printings` moved it again, which is the argument against writing a count into prose
+at all. A manifest that *is* the key distribution
 cannot disagree with it, where a synced `device_removals` table could arrive late, arrive out of
 order, or arrive at a device that cannot decrypt it — which is precisely the state a rotation puts
 every peer in.
@@ -875,15 +876,16 @@ Spec §7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees
 
 ---
 
-## What syncs: sixteen tables, and the spec's twelfth still does not exist
+## What syncs: seventeen tables, and the spec's twelfth still does not exist
 
 `schema::SYNCED_TABLES`:
 
 `collection_entries` · `collection_folders` · `deck_audit` · `deck_cards` · `deck_categories` ·
-`deck_folders` · `deck_labels` · `deck_note_cards` · `deck_notes` · `deck_tokens` · `decks` ·
-`device_names` · `muted_tags` · `sticky_notes` · `wishlist_entries` · `wishlist_folders`
+`deck_folders` · `deck_labels` · `deck_note_cards` · `deck_notes` · `deck_token_printings` ·
+`deck_tokens` · `decks` · `device_names` · `muted_tags` · `sticky_notes` · `wishlist_entries` ·
+`wishlist_folders`
 
-**Sixteen, and not for the reason the spec's own count would suggest.** The spec's list names
+**Seventeen, and not for the reason the spec's own count would suggest.** The spec's list names
 `deck_allocations`, which **schema v25 dropped** — which deck holds a card is now which folder
 its row sits in, so the work that table did is inside `collection_folders`, which is on the
 list. A table that does not exist cannot be synced, and that argument has not changed: it is
@@ -982,6 +984,37 @@ so it goes red on any new synced table that has a grain. It is easy to miss beca
 `UNDO_V<N>`, `schema::TABLES`, `mirror::watch::surface_of`, the `sync_uid` column and index,
 `SYNCED_TABLES`, a `capture::Spec` and an `apply::Meta` — and because nothing at a registration
 site points at it.
+
+**The seventeenth is `deck_token_printings`, at user schema v52** (2026-09-26, the token-stacks
+spec §4) — a token's printings as **entries**, one printing in one finish in one list with a
+quantity, split out of `deck_tokens`, which keeps the token-level state (`auto`, `hidden`,
+`manual`) and whose `card_id` and `quantity` are legacy from that rung on. Its `quantity` is a
+**field**, on `deck_tokens.quantity`'s second argument alone this time: the column is `NOT NULL`
+and could carry a delta, and a count of Treasures is still a setting. Its grain is
+`(deck_uid, variant, card_id, finish)`, restating `schema::DECK_TOKEN_PRINTING_GRAIN`; `finish` is
+`NOT NULL`, so the predicate needs no `coalesce`, and `oracle_id` travels as a field because the
+far device may not hold the printing to derive it from. `decks.token_mode` replaced
+`decks.token_stack` on the `decks` spec under a **new name**, v49's precedent: a v51 peer skips a
+field it does not know, where a word landing in its INTEGER column would fail its deck read.
+
+**Two things that rung did which no rung before it had to.** It moves rows into a table born in
+the same rung, before any capture trigger exists for it — so it **names them itself**,
+`<override uid>-live` and `-theory`. A NULL uid fails the reader's own write on a paired device;
+a random one leaves each device holding the entry under a name no peer has heard, so the first
+edit on one device reaches the other as a sparse update for a row it cannot find — deferred, and
+the sender's stream stalled behind it. Derived from the synced override, every device names the
+entry alike with nothing sent. And it **keeps its own writes off the wire**: clearing the override
+is derived per device, so the rung drops `deck_tokens`' three capture triggers beside `decks`'
+(v43's move) and `capture::install` puts them back. Captured, the clear would reach a peer still
+on v51 and wipe the art that peer's own climb has yet to move.
+
+**And the registrations number twelve, not ten**, counted while landing it: the ten above, plus
+`src/lib/userTables.json` — which `changes.rs`' `the_json_both_suites_read_is_the_user_side_of_
+the_registry` holds to `schema::TABLES` — and `src/lib/crossWindow.ts`' `TABLE_KEYS`, which
+`crossWindow.test.ts` holds to that same file. Both are owed by any new *user* table, synced or
+not. The three length fences (`capture::TABLES`, `apply::META`, `SYNCED_TABLES.len()`) and the
+mirror's census in `every_table_in_the_schema_has_been_decided_about` are what go red first, and
+are counted inside the sites they fence rather than beside them.
 
 Two further corrections, both found by reading `schema.rs` rather than the spec:
 
@@ -1090,10 +1123,14 @@ applier resolves by grain first, uid second, with a `min(uid)` tiebreak.**
 | `deck_categories` | `deck_uid, name` |
 | `deck_labels` | `name_key` |
 | `deck_note_cards` | `note_uid, oracle_id` (the parent is the **note**, not the deck) |
+| `deck_tokens` | `deck_uid, oracle_id` (deliberately **not** per variant) |
+| `deck_token_printings` | `deck_uid, variant, card_id, finish` (v52 — per variant, and `finish` NOT NULL so no `coalesce`) |
 | `muted_tags` | `namespace, tag_id` |
+| `device_names` | `device_id` (its `WITHOUT ROWID` primary key) |
 
-`decks`, `deck_folders`, `wishlist_folders`, `deck_audit` and `deck_notes` have no grain and are
-uid-only.
+`decks`, `deck_folders`, `wishlist_folders`, `deck_audit`, `deck_notes` and `sticky_notes` have no
+grain and are uid-only. (`deck_tokens`, `device_names` and `sticky_notes` were missing from this
+table and this sentence until v52's row was added beside them; `apply::META` is the list.)
 
 **A table can have more than one grain, and three of them are PARTIAL indexes** — which the
 plan's table misses entirely, and one of them matters from the first minute a group exists:
@@ -1117,18 +1154,20 @@ while every count still reads one.
 **A sparse update op cannot describe a grain and does not need to** — the row it edits is found
 by uid. An *insert* op carries every field, which is what makes the grain rule work at all.
 
-**The row handle in `apply` is the uid and never the rowid.** Fourteen of the sixteen tables have
-an `INTEGER PRIMARY KEY`; two have none at all — `muted_tags` is `WITHOUT ROWID` on
+**The row handle in `apply` is the uid and never the rowid.** Every synced table but two has an
+`INTEGER PRIMARY KEY`; those two have none at all — `muted_tags` is `WITHOUT ROWID` on
 `(namespace, tag_id)` and `device_names` on `device_id` alone. Addressing by `sync_uid` is one
-spelling for all sixteen.
+spelling for all of them.
 
-**Minting takes three sites, not one**, and only one of them is the ladder:
+**Minting takes four sites, not one**, and two of them are the ladder (it read "three" until
+v52 moved rows into a table it had just created):
 
 | Path | Who mints |
 | --- | --- |
 | an *upgraded* file | the v29 rung's `UPDATE … SET sync_uid = lower(hex(randomblob(16)))` |
 | a *converted* file | `schema::mint_missing_uids` inside `split::extract_user_file` |
 | a *fresh* file | `USER_SEED_SQL`, plus the capture trigger for every row written afterwards |
+| a row **a rung moves into a table that rung creates** | the rung itself — v52 names each entry `<override uid>-<list>`, see the seventeenth table above |
 
 A converted file is the one that was missed first: a legacy `mtg.db` has no such column to
 copy, and `split::convert` stamps *head*, so the ladder never reaches it. A NULL uid is not
@@ -1142,10 +1181,10 @@ would fail **the reader's own write**.
 `sync_engine::capture` installs its triggers from one census, and the shape is the number rather
 than the other way round: **an insert trigger for every table, an update and a delete for every
 table but `deck_audit`** — the one `Spec` with `append_only: true`, since a log that is only ever
-appended to needs no other arm — **plus one that advances the clock.** At sixteen tables that is
-16 + 15 + 15 + 1 = **47**, re-derived off `capture::TABLES` on 2026-09-20; this line said 31 and
-named ten non-append-only tables, which had been wrong since before `deck_tokens`. Count the
-array, never add to the figure above.
+appended to needs no other arm — **plus one that advances the clock.** At seventeen tables that
+is 17 + 16 + 16 + 1 = **50**, re-derived off `capture::TABLES` when v52 landed; it read 47 at
+sixteen, and before that said 31 and named ten non-append-only tables, which had been wrong since
+before `deck_tokens`. Count the array, never add to the figure above.
 They are `DROP` + `CREATE` at every open and never `CREATE … IF NOT EXISTS`: a trigger is stored
 SQL, and a build that changed the generator would otherwise leave every existing database
 running last year's rules forever.
@@ -2022,7 +2061,7 @@ of the two ways it happens:
 
 | Object | What it is |
 | --- | --- |
-| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v37, **fifteen** at v43 and **sixteen** at v46 |
+| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v37, **fifteen** at v43, **sixteen** at v46 and **seventeen** at v52 |
 | `device_names` (v31) | `device_id` → `name`, and nothing else. **The twelfth synced table**, so a rename reaches the group and a joiner stops reading "Paired device". `sync_devices` stays unsynced beside it, because it holds keys |
 | `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
 | `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |
