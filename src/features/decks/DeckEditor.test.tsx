@@ -49,6 +49,7 @@ import { CUT_CARDS_NOTE } from "./PriceStrip";
 import { theorySlot } from "./theoryMatch";
 import { QUICK_ZONE_ATTR } from "./QuickZones";
 import { card, resetRowIds, spec } from "./validation/fixtures";
+import { MARKER_WORDS } from "./views/GroupHeader";
 
 const deckGet = vi.hoisted(() => vi.fn());
 const deckUpdate = vi.hoisted(() => vi.fn());
@@ -355,6 +356,9 @@ const DECK: DeckRow = {
   // Schema v47, and `0` is the column's own default: the token pile in the deck views is opt-in
   // per deck, so a test that says nothing about it draws the views exactly as they were.
   tokenStack: false,
+  // Schema v50, and `-1` is the column's own default: the token pile draws last in the rail, which
+  // is where it drew before the pile could be moved at all.
+  tokenRailIndex: -1,
   statsOpen: true,
   // Schema v43, and `0` is the column's own default: the Notes band is new, so no deck on any
   // disk has ever shown one and a shut default takes nothing from anybody.
@@ -3144,7 +3148,7 @@ describe("DeckEditor", () => {
    * zone that counted toward nothing. Schema v8 moves that fact onto `is_active`, which any
    * category can carry, so the Maybeboard is one seeded row that starts switched off and there
    * is no word left for a drawer to be attached to. Its cards are on screen from the first
-   * paint, under an `INACTIVE` marker.
+   * paint, under the switched-off mark.
    *
    * Its `0` owned is by design and not a shortage — the allocator claims nothing for an
    * inactive category — which is why the card draws no shortage mark.
@@ -3158,7 +3162,7 @@ describe("DeckEditor", () => {
 
     const pile = await screen.findByRole("region", { name: "Maybeboard" });
     expect(within(pile).getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
-    expect(within(pile).getByText("INACTIVE")).toBeInTheDocument();
+    expect(within(pile).getByText(MARKER_WORDS.inactive)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Maybeboard/ })).not.toBeInTheDocument();
     expect(within(pile).queryByText("0/3")).not.toBeInTheDocument();
   });
@@ -7917,6 +7921,14 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     toughness: null,
     colors: "",
     oracleText: "{T}, Sacrifice this token: Add one mana of any color.",
+    // The effective printing's chin (user schema v50). Unpriced on purpose: a price here would be
+    // a figure on the desk that no test in this block is about.
+    setCode: "tmh3",
+    collectorNumber: "12",
+    setName: null,
+    rarity: "common",
+    finishes: `["nonfoil"]`,
+    unitPrice: null,
     ...over,
   });
 
@@ -8059,6 +8071,170 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     await waitFor(() => expect(pile()).not.toBeNull());
 
     expect(deckTokens).toHaveBeenCalledTimes(1);
-    expect(deckTokens).toHaveBeenCalledWith(4, "live");
+    // The third argument is the marketplace the chin's price is read at (user schema v50) — any
+    // one; this case is about the count and the list.
+    expect(deckTokens).toHaveBeenCalledWith(4, "live", expect.any(String));
+  });
+
+  /** Whether `deck_tokens` has been asked for the plan's list — by position rather than by a
+   *  whole argument list, so the pin survives the marketplace argument the read takes too. */
+  const askedForTheory = () =>
+    deckTokens.mock.calls.some(([id, variant]) => id === 4 && variant === "theory");
+
+  /**
+   * **The editor turns a grip press into the deck's own `update`, and hands the grip the stored
+   * slot.** The rail is the Sideboard and the Maybeboard, and the deck stores the pile between
+   * them — slot 1, drawn `2 of 3`. Stored anywhere but `-1` on purpose: `-1` is also what an
+   * unwired `railIndex` would fall back to, so a pile opened last could not tell the column being
+   * read from the column being ignored.
+   */
+  it("moves the token pile one rail slot through the deck's own update", async () => {
+    deckWith({ tokenStack: true, tokenRailIndex: 1 });
+    const user = userEvent.setup();
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+
+    const grip = await screen.findByRole("button", { name: `Move ${TOKENS_HEADING}, 2 of 3` });
+    grip.focus();
+    await user.keyboard("{ArrowLeft}");
+
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { tokenRailIndex: 0 }));
+  });
+
+  /** The pile's grip, by the position its accessible name states — the one thing on screen that
+   *  says where the pile is. */
+  const tokenGrip = (position: string) =>
+    screen.findByRole("button", { name: `Move ${TOKENS_HEADING}, ${position}` });
+
+  /** A backend whose `decks.token_rail_index` is `stored`, answered by every `deck_get` and moved
+   *  by every `deck_update` that names it — so a test can say what the column holds at each beat. */
+  function railBackend(start: number) {
+    const rail = { stored: start };
+    deckGet.mockImplementation(async () =>
+      detail({ tokenStack: true, tokenRailIndex: rail.stored }, [
+        bolt(),
+        card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
+      ]),
+    );
+    return rail;
+  }
+
+  /**
+   * **The pile moves on the press, not on the answer** — the category grip's rule
+   * (`localCategoryOrder`) for the one pile that is not a category. The writes are held, so the
+   * stored column says last the whole time: a pile drawn from the column alone would leave the
+   * grip on `3 of 3` after the first press, and the second press would send the first one's index
+   * again — two presses, one place.
+   */
+  it("moves the token pile two slots on two presses inside one round trip", async () => {
+    const rail = railBackend(-1);
+    const held: Array<() => void> = [];
+    deckUpdate.mockImplementation(
+      (_deckId: number, patch: { tokenRailIndex?: number }) =>
+        new Promise<DeckRow>((resolve) => {
+          held.push(() => {
+            rail.stored = patch.tokenRailIndex ?? rail.stored;
+            resolve({ ...DECK, tokenStack: true, tokenRailIndex: rail.stored });
+          });
+        }),
+    );
+    const user = userEvent.setup();
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+
+    (await tokenGrip("3 of 3")).focus();
+    await user.keyboard("{ArrowLeft}");
+    (await tokenGrip("2 of 3")).focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(await tokenGrip("1 of 3")).toBeInTheDocument();
+
+    expect(deckUpdate).toHaveBeenCalledTimes(2);
+    expect(deckUpdate).toHaveBeenNthCalledWith(1, 4, { tokenRailIndex: 1 });
+    expect(deckUpdate).toHaveBeenNthCalledWith(2, 4, { tokenRailIndex: 0 });
+
+    // Both answer, and the column the pile is read from again says what the reader pressed.
+    await act(async () => held.forEach((answer) => answer()));
+    await waitFor(() => expect(rail.stored).toBe(0));
+    expect(await tokenGrip("1 of 3")).toBeInTheDocument();
+  });
+
+  /**
+   * **And the press gives way to the column once the move has landed.** A pile that kept drawing
+   * the reader's press for ever would stand still under an undo or another device's move; so
+   * after the write and the read behind it, a column changed by something else — here a second
+   * device, reached through the next read any deck write triggers — is where the pile goes.
+   */
+  it("hands the token pile back to the stored column once its move has landed", async () => {
+    const rail = railBackend(-1);
+    deckUpdate.mockImplementation(async (_deckId: number, patch: { tokenRailIndex?: number }) => {
+      rail.stored = patch.tokenRailIndex ?? rail.stored;
+      return { ...DECK, tokenStack: true, tokenRailIndex: rail.stored };
+    });
+    const user = userEvent.setup();
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+
+    (await tokenGrip("3 of 3")).focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(await tokenGrip("2 of 3")).toBeInTheDocument();
+    await waitFor(() => expect(deckGet.mock.calls.length).toBeGreaterThan(1));
+
+    // Another device moves the pile to the head of the rail; the band's disclosure is a deck write
+    // like any other, so its invalidation is what reads the column again.
+    rail.stored = 0;
+    await user.click(await within(band()).findByRole("button", { name: TOKENS_HEADING }));
+    expect(await tokenGrip("1 of 3")).toBeInTheDocument();
+  });
+
+  /** A lie about where the pile is must not outlive the write that failed — and the banner says
+   *  why, because the move rides `deck.update`, which is in the editor's refused-write family. */
+  it("puts the token pile back and says so when its move is refused", async () => {
+    railBackend(-1);
+    deckUpdate.mockRejectedValue("The database is busy with a sync.");
+    const user = userEvent.setup();
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+
+    (await tokenGrip("3 of 3")).focus();
+    await user.keyboard("{ArrowLeft}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync.");
+    expect(await tokenGrip("3 of 3")).toBeInTheDocument();
+  });
+
+  /**
+   * **A deck that keeps a plan, read on its Live list, marks the pile's tokens as it marks its
+   * cards** (token stacks, spec §3.5). The plan's half is the theory list's own `deck_tokens`
+   * answer, so the read has to happen — and a Treasure both lists make, in the one printing the
+   * shared override gives it, is the exact tier's tick.
+   */
+  it("marks a token the theory list also makes, reading the plan's tokens on the Live list", async () => {
+    deckWith({ tokenStack: true, theoryEnabled: true });
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+
+    await waitFor(() => expect(askedForTheory()).toBe(true));
+    await waitFor(() =>
+      expect(pile()!.querySelector('[data-theory-match="exact"]')).not.toBeNull(),
+    );
+  });
+
+  /**
+   * **And no mark at all while the plan's tokens are still on their way** — never the wall of X
+   * an empty plan would draw. `useDeckTokens` answers `[]` until its read lands, so a derivation
+   * that took that list without asking whether it had loaded would mark every token off-plan for
+   * one round trip; the case above is what makes this absence a claim rather than a harness that
+   * draws no marks.
+   */
+  it("marks no token while the theory list's tokens have not answered", async () => {
+    deckTokens.mockImplementation((_deckId: number, variant: string) =>
+      variant === "theory" ? new Promise<never>(() => {}) : Promise.resolve([treasure()]),
+    );
+    deckWith({ tokenStack: true, theoryEnabled: true });
+    await open();
+    await waitFor(() => expect(pile()).not.toBeNull());
+    await waitFor(() => expect(askedForTheory()).toBe(true));
+
+    expect(pile()!.querySelector("[data-theory-match]")).toBeNull();
   });
 });

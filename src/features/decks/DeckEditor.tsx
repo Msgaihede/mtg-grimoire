@@ -87,6 +87,7 @@ import { DeckStats } from "./DeckStats";
 import { DeckTokensPanel } from "./DeckTokensPanel";
 import { TokenArtPicker } from "./TokenArtPicker";
 import { useDeckTokens } from "./useDeckTokens";
+import { tokenTheoryMark, tokenTheoryPlan } from "./tokenTheory";
 import type { TokenPile } from "./views/TokenPile";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
@@ -3919,10 +3920,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * The tokens and emblems this deck makes — **read once, here, for every surface that draws
    * them** (issue #507). The Tokens & Emblems band and, on a deck with `tokenStack` on, the pile
-   * each view appends are two drawings of one answer: a quantity stepped on one is the number the
+   * each view draws are two drawings of one answer: a quantity stepped on one is the number the
    * other draws, and a dismissal made on the band takes the token out of the pile. A hook call per
    * surface would be two `showDismissed` switches and two write observers, each free to own a
-   * refusal the other never hears about.
+   * refusal the other never hears about. ({@link planTokens} is a second call and not a second
+   * drawing: it reads the *other* list, for the plan's marks, and draws nothing.)
    */
   const deckTokens = useDeckTokens(deckId, variant);
 
@@ -3943,34 +3945,179 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *  a swap does not read as one — `DeckTokensPanel`'s header has the whole argument. */
   const tokenZoom = useAppStore((s) => s.cardZoom.deck);
 
-  /**
-   * The pile each view appends after every other pile, or `undefined` — which is the whole of
-   * the off switch, since a view handed nothing draws exactly what it drew before `tokenStack`.
-   *
-   * **Never a dismissed token, whatever the band's `Show dismissed` says.** That switch is the
-   * band's own tool for finding a token to put back, and a pile on the desk is a statement of what
-   * the deck brings, which a dismissed token is not.
-   *
-   * **Nothing here enters `groups`, `deck.cards` or `buildGroups`**, and that is what keeps a
-   * token out of the deck's size, every pile total, the ledger, the stats and validation — the
-   * views append it in their own layer, after the groups this editor hands them.
-   *
-   * Memoised on the tokens and a `setQuantity` that `useDeckTokens` keeps stable while the rows
-   * are, so a keystroke anywhere in the editor does not hand four views a new pile.
-   */
   const tokenStack = row?.tokenStack === true;
   const tokenList = deckTokens.tokens;
   const setTokenQuantity = deckTokens.setQuantity;
+
+  /**
+   * The tokens the deck **brings** — every token the band draws less the dismissed ones, whatever
+   * the band's `Show dismissed` says. That switch is the band's own tool for finding a token to put
+   * back, and a pile on the desk is a statement of what the deck brings, which a dismissed token is
+   * not.
+   *
+   * **One list for the pile and for the live side of {@link tokenPlan}**, so a mark is only ever
+   * about a token the pile draws and the two sides of the plan are one population: the plan's
+   * side is filtered the same way below, and a live side that took the band's switch in would be
+   * a plan whose answer moved with a press on the band.
+   */
+  const keptTokens = useMemo(
+    () => tokenList.filter((view) => view.state !== "hidden"),
+    [tokenList],
+  );
+
+  /**
+   * The **theory** list's tokens — the plan's half of the token pile's marks (token stacks, spec
+   * §3.5), and emphatically not a second drawing of anything.
+   *
+   * **Only `tokens` is read here, never a write.** The hook comes with its writes and a
+   * `showDismissed` switch, and every one of them belongs to {@link deckTokens}: the override is
+   * grained on `(deck, oracle_id)` with no variant term, so a write through this copy would land
+   * on the very row the band's writes do while reporting its refusal to nobody. One picker, one
+   * write observer — this is a read.
+   *
+   * **A `null` deck id unless the question is being asked**, which is `theoryPlan`'s pair one
+   * read over: a deck that keeps a plan, read on its Live list. `null` disables the query (the
+   * hook gates on it) *and* moves its key off this deck's, so a disabled read cannot serve a
+   * cached answer the way issue #159's did — though the gate that means it is still on the
+   * derivation below, where the question is asked.
+   */
+  const planTokens = useDeckTokens(theoryEnabled && variant === "live" ? deckId : null, "theory");
+  const planTokenRows = planTokens.tokens;
+  const planTokensLoaded = planTokens.query.isSuccess;
+
+  /**
+   * The plan as a lookup over tokens — `tokenTheory.ts`, which is `theoryMatchPlan` fed the two
+   * lists' tokens, under the deck's own three mark switches.
+   *
+   * **`undefined` until the theory list's tokens have answered**, and that gate is the whole of
+   * why a plan with tokens does not flash a wall of red X on every open. `useDeckTokens` answers
+   * `[]` while its read is in flight, and `[]` is a plan that asks for nothing — every live token
+   * would be marked as off-plan for the length of one round trip. `isSuccess` rather than the
+   * list's length: a plan that genuinely makes no tokens is an answer, and its marks are the X.
+   *
+   * Gated on exactly the pair {@link theoryPlan} is gated on, for that memo's reason; `row !==
+   * null` narrows the three switches into reach.
+   */
+  const tokenPlan = useMemo(
+    () =>
+      row === null || !(theoryEnabled && variant === "live")
+        ? undefined
+        : tokenTheoryPlan(
+            planTokensLoaded
+              ? planTokenRows.filter((view) => view.state !== "hidden")
+              : undefined,
+            keptTokens,
+            {
+              exact: row.theoryMarkExact,
+              name: row.theoryMarkName,
+              unplanned: row.theoryMarkUnplanned,
+            },
+          ),
+    [row, theoryEnabled, variant, planTokensLoaded, planTokenRows, keptTokens],
+  );
+
+  /**
+   * Where the reader last put the token pile, drawn **before** the write that stores it has
+   * answered — {@link localCategoryOrder}'s arrangement, for the one pile that is not a category.
+   *
+   * A move is a round trip *and* a re-read of the deck, so a pile drawn from the column alone
+   * stays where it was until both land: the grip goes on saying `3 of 3` after the press, and a
+   * second press inside that beat sends the first one's index again — two presses, one place. So
+   * the press is drawn at once and the column takes over again at one of two moments:
+   *
+   * - **A refusal drops it**, which is the case that matters: a lie about where the pile is must
+   *   not outlive the write that failed, and the banner says why (`deck.update` is in `writes`).
+   * - **Success drops it once the deck has been read again behind the write**, never at the
+   *   answer itself. The answer arrives with the re-read still in flight, and the column in hand
+   *   is the one from before the press; drawing it then would jump the pile back for a beat. Once
+   *   the write has settled *and* nothing is fetching, the column is the answer — whatever put it
+   *   there, so an undo or another device's move is followed from then on rather than masked.
+   *   That is the "clear once the stored row agrees" rule stated so it cannot stick: waiting for
+   *   the column to *equal* the press would hold a stale press for ever the day something else
+   *   moved the pile in the same beat.
+   *
+   * **`seq` is what makes that the latest press's answer.** Each press is its own `mutateAsync`,
+   * and the promise belongs to the call rather than to the observer (`startLabelCreate`'s note), so
+   * an older write answering between two presses is recognised and ignored rather than settling
+   * the newer one early — or dropping it on its own refusal, when the newer write is what the
+   * reader meant.
+   */
+  const [localTokenRail, setLocalTokenRail] = useState<{
+    index: number;
+    seq: number;
+    settled: boolean;
+  } | null>(null);
+  const tokenRailSeq = useRef(0);
+  // Reset during render — this file's own pattern for state that has to follow a read — and
+  // monotone, so it cannot cycle: it only ever writes `null`, and only while there is a press.
+  if (localTokenRail?.settled === true && !deck.query.isFetching) setLocalTokenRail(null);
+
+  /**
+   * Put the token pile at rail slot `index` — `-1` is last — through the deck's own `update`, the
+   * one `tokensOpen` and `Split X` ride. `decks.token_rail_index` is a deck column like those, so
+   * the write needs no mutation of its own and joins the refused-write family by already being in
+   * it: a refused move says so in the editor's banner, and the rejection is swallowed here rather
+   * than reported twice.
+   *
+   * `mutateAsync` rather than the mutation object, because it is stable across renders and the
+   * object is not — this callback is in {@link tokenPile}'s memo, and a new pile on every change of
+   * the mutation's own state would redraw four views for nothing — and rather than `mutate`,
+   * because a `mutate` call's callbacks belong to the observer and the next `deck.update` of any
+   * kind (the band's disclosure, a rename) takes them away, which would leave a press unsettled.
+   */
+  const updateDeckAsync = deck.update.mutateAsync;
+  const moveTokenPile = useCallback(
+    (index: number) => {
+      tokenRailSeq.current += 1;
+      const seq = tokenRailSeq.current;
+      setLocalTokenRail({ index, seq, settled: false });
+      updateDeckAsync({ tokenRailIndex: index }).then(
+        () => setLocalTokenRail((now) => (now?.seq === seq ? { ...now, settled: true } : now)),
+        () => setLocalTokenRail((now) => (now?.seq === seq ? null : now)),
+      );
+    },
+    [updateDeckAsync],
+  );
+
+  /**
+   * The pile each view draws among the rail's piles, or `undefined` — which is the whole of the
+   * off switch, since a view handed nothing draws exactly what it drew before `tokenStack`.
+   *
+   * Its tokens are {@link keptTokens}, never a dismissed one.
+   *
+   * **Nothing here enters `groups`, `deck.cards` or `buildGroups`**, and that is what keeps a
+   * token out of the deck's size, every pile total, the ledger, the stats and validation — the
+   * views place it in their own layer, beside the groups this editor hands them.
+   *
+   * **Three fields beyond the tokens and their two writes** (token stacks, PR 1):
+   * - `railIndex` is the reader's last press while it is in flight ({@link localTokenRail}), and
+   *   otherwise `decks.token_rail_index` as stored — `-1`, or any slot the rail no longer has,
+   *   reads as last. The views clamp it on read (`tokenRailSlot`); this passes the column through
+   *   untouched, so a rail that shrinks and grows back puts the pile where it was.
+   * - `moveTo` is {@link moveTokenPile}, and its presence is what draws the pile's grip.
+   * - `theoryMark` is {@link tokenPlan} asked about one token, or absent where there is no plan
+   *   to ask — a deck without one, the Theory tab, or a plan still loading. Absent draws no marks,
+   *   which is the same statement `theoryPlan` being `undefined` makes about the deck's cards.
+   *
+   * Memoised on the tokens, a `setQuantity` that `useDeckTokens` keeps stable while the rows are,
+   * the stored index, a stable move and the plan, so a keystroke anywhere in the editor does not
+   * hand four views a new pile.
+   */
+  const tokenRailIndex = localTokenRail?.index ?? row?.tokenRailIndex ?? -1;
   const tokenPile = useMemo<TokenPile | undefined>(
     () =>
       tokenStack
         ? {
-            tokens: tokenList.filter((view) => view.state !== "hidden"),
+            tokens: keptTokens,
             setQuantity: setTokenQuantity,
             pickArt: setPickingToken,
+            railIndex: tokenRailIndex,
+            moveTo: moveTokenPile,
+            theoryMark:
+              tokenPlan === undefined ? undefined : (view) => tokenTheoryMark(tokenPlan, view),
           }
         : undefined,
-    [tokenStack, tokenList, setTokenQuantity],
+    [tokenStack, keptTokens, setTokenQuantity, tokenRailIndex, moveTokenPile, tokenPlan],
   );
 
   const viewProps = {

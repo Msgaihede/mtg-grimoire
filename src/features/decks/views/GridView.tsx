@@ -47,6 +47,7 @@ import type { ValidationIssue } from "../validation/types";
 import { splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 import { hasTokenPile, TokenGridPile, type TokenPile } from "./TokenPile";
+import { TOKEN_ITEM, tokenRailSlot, withTokenPile } from "./tokenRail";
 
 /**
  * A tile at 1× and the gutter around it — what is left of the wall's geometry, and both of these
@@ -137,8 +138,9 @@ export function GridView({
   /** `deck_cards.id` → the nonce of the add that put it there. See `cardControl`'s
    *  `LandedMark`. */
   landed?: ReadonlyMap<number, number>;
-  /** The deck's tokens and emblems, drawn as a trailing group after every other one (issue
-   *  #507). Absent, or with no tokens, the wall is exactly what it was — see `TokenPile.tsx`. */
+  /** The deck's tokens and emblems, drawn as a group among the rail's piles at the slot the reader
+   *  put them in — last until they move them (issue #507, spec §3.4). Absent, or with no tokens,
+   *  the wall is exactly what it was — see `TokenPile.tsx`. */
   tokenPile?: TokenPile;
   className?: string;
 }) {
@@ -179,7 +181,19 @@ export function GridView({
   // as wide as the desk, so a 19-card Maybeboard in a one-tile column is ~4,500px of scroll for a
   // pile that is read at a glance. Full-width groups throughout, last instead of first.
   const { command, flow, rail } = splitRail(groups);
-  const ordered = [...command, ...flow, ...rail];
+  // **The tokens are spent as order too**, at the slot the reader gave them among the rail's piles
+  // (spec §3.4) — `tokenRail.tsx`' `tokenRailSlot`, which reads a slot the rail has lost as last.
+  // The same index `StackView` draws the pile at in its rail, so a pile moved there is found in
+  // the same place among the Sideboard and the Maybeboard here, one toolbar press away. No grip:
+  // the gesture belongs to the rail, which this wall does not draw.
+  const drawsTokens = hasTokenPile(tokenPile);
+  const ordered = [
+    ...command,
+    ...flow,
+    ...(drawsTokens
+      ? withTokenPile(rail, tokenRailSlot(tokenPile.railIndex, rail.length), TOKEN_ITEM)
+      : rail),
+  ];
 
   return (
     // Down the page rather than across it: a wall wraps, so the columns the other two views
@@ -209,31 +223,36 @@ export function GridView({
         className,
       )}
     >
-      {ordered.map((group) => (
-        <GridGroup
-          key={group.key}
-          group={group}
-          marketplace={marketplace}
-          violations={violations}
-          theoryPlan={theoryPlan}
-          noted={noted}
-          tracksCollection={tracksCollection}
-          onSelect={onSelect}
-          actions={actions}
-          selectedSlot={selectedSlot}
-          landed={landed}
-          zoom={cardZoom}
-        />
-      ))}
-      {/* The tokens, after every other group — the rail's piles included, since they are still
-          cards of this deck and these are not. Tiles at this wall's own width for the zoom. */}
-      {hasTokenPile(tokenPile) && (
-        <TokenGridPile
-          pile={tokenPile}
-          zoom={cardZoom}
-          tileWidth={scaled(TILE_WIDTH, cardZoom)}
-          gap={TILE_GAP}
-        />
+      {ordered.map((item) =>
+        item === TOKEN_ITEM ? (
+          // The tokens, at their place among the rail's groups — last until the reader moves
+          // them. Tiles at this wall's own width for the zoom. `drawsTokens` is always true here
+          // (the item is inserted only then) and is asked so the type narrows.
+          drawsTokens && (
+            <TokenGridPile
+              key="token-pile"
+              pile={tokenPile}
+              zoom={cardZoom}
+              tileWidth={scaled(TILE_WIDTH, cardZoom)}
+              gap={TILE_GAP}
+            />
+          )
+        ) : (
+          <GridGroup
+            key={item.key}
+            group={item}
+            marketplace={marketplace}
+            violations={violations}
+            theoryPlan={theoryPlan}
+            noted={noted}
+            tracksCollection={tracksCollection}
+            onSelect={onSelect}
+            actions={actions}
+            selectedSlot={selectedSlot}
+            landed={landed}
+            zoom={cardZoom}
+          />
+        ),
       )}
     </div>
   );

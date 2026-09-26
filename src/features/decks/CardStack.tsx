@@ -479,6 +479,59 @@ export function useFlipThrough(): FlipThrough {
  */
 const STILL: Transition = { duration: 0 };
 
+/**
+ * A stacked card's body — the box the face and the chin sit in — **shared with the Tokens &
+ * Emblems pile** (`views/TokenPile.tsx`), so a token in the rail and a card beside it cannot
+ * drift into two objects. The edge's *colour* is the caller's (a rule break reddens a deck card;
+ * a token has no rule to break), and so is everything that makes a deck card a control.
+ *
+ * **No z-index here, deliberately, and an open card is no exception.** These are `relative`
+ * siblings with a negative bottom margin, so painting order is document order: every card is
+ * drawn over the one before it, and that *is* the stacked look — the reveal strip a reader runs
+ * down is the top 34px of a card its successor has not covered. Raising the open card inverts
+ * that for the whole tail of the stack, and it does it at the worst moment: `LAYER.raised` lands
+ * on the first frame while the cards after it are still 293px from where they are going, so the
+ * card appears to jump in front of the stack and then have the stack catch up around it.
+ *
+ * Doing nothing is the fix. The cards after it move out of the way and uncover it, and once they
+ * have settled nothing is over it anyway — an open card's bottom is `N·34 + 319` and its
+ * successor's top is `N·34 + 327`, 8px clear. The list keeps its own `LAYER.raised` (see
+ * `CardStack`): that one lifts the *group* over the groups below it in the column, which is a
+ * different question and still needs answering, because the cards it pushes down leave the box on
+ * purpose.
+ *
+ * **No `overflow-hidden` either, and that moved rather than went away.** The card's face clips
+ * its own corners now, and the data line under it clips its own — because the data line has to be
+ * able to hang 24px *below* the face and a clip here would cut it off at the picture's edge.
+ *
+ * **`bg-surface` is the card being an opaque object, and it became load-bearing on 2026-09-10.**
+ * This box painted nothing until then and got away with it, because the face over-filled its own
+ * corners by the 2px `DeckCardFace`'s `FACE_RADIUS` has now taken back: the padding box was
+ * covered edge to edge and the desk could not show through it. It can now — the face's bottom
+ * corners curve away in the *middle* of the card, where what is behind them is this element
+ * rather than the border — and measured over the dev server that was **two pixels of felt** at
+ * each bottom corner, just above the chin. The face and the chin are both `bg-surface`, so a card
+ * that paints its own is one unbroken surface at every radius either of them picks.
+ */
+export const STACKED_CARD_BODY = "relative block rounded-lg border bg-surface";
+
+/**
+ * A stacked card's shadow, resting or open — **shared with the Tokens & Emblems pile** for
+ * {@link STACKED_CARD_BODY}'s reason.
+ *
+ * Deeper than Tailwind's own `shadow-lg`/`shadow-2xl`, whose alphas are 0.1 and 0.25 — written
+ * for a card on white. These sit on the app's felt at 0.16 lightness, where a 10 % shadow is not
+ * a shadow, and a stack whose cards do not separate is a texture.
+ *
+ * Both strings are written out whole and chosen between, never assembled: Tailwind scans source
+ * text for whole class names, so an interpolated arbitrary value emits no rule at all.
+ */
+export function stackedCardShadow(open: boolean): string {
+  return open
+    ? "shadow-[0_25px_50px_-12px_rgb(0_0_0/0.55)]"
+    : "shadow-[0_10px_15px_-3px_rgb(0_0_0/0.45),0_4px_6px_-4px_rgb(0_0_0/0.45)]";
+}
+
 export interface CardStackProps {
   cards: readonly DeckCard[];
   /**
@@ -858,43 +911,11 @@ function StackedCard({
       animate={{ marginBottom: open ? STACK_LIFTED_MARGIN : stackCollapsedMargin(zoom) }}
       transition={transition}
       className={cn(
-        // **No z-index here, deliberately, and an open card is no exception.** These are
-        // `relative` siblings with a negative bottom margin, so painting order is document
-        // order: every card is drawn over the one before it, and that *is* the stacked look —
-        // the reveal strip a reader runs down is the top 34px of a card its successor has not
-        // covered. Raising the open card inverts that for the whole tail of the stack, and it
-        // does it at the worst moment: `LAYER.raised` lands on the first frame while the cards
-        // after it are still 293px from where they are going, so the card appears to jump in
-        // front of the stack and then have the stack catch up around it.
-        //
-        // Doing nothing is the fix. The cards after it move out of the way and uncover it, and
-        // once they have settled nothing is over it anyway — an open card's bottom is
-        // `N·34 + 319` and its successor's top is `N·34 + 327`, 8px clear. The list keeps its
-        // own `LAYER.raised` (see `CardStack`): that one lifts the *group* over the groups
-        // below it in the column, which is a different question and still needs answering,
-        // because the cards it pushes down leave the box on purpose.
-        //
-        // **No `overflow-hidden` either, and that moved rather than went away.** The card's
-        // face clips its own corners now, and the data line under it clips its own — because
-        // the data line has to be able to hang 24px *below* the face and a clip here would cut
-        // it off at the picture's edge.
-        //
-        // **`bg-surface` is the card being an opaque object, and it became load-bearing on
-        // 2026-09-10.** This box painted nothing until then and got away with it, because the
-        // face over-filled its own corners by the 2px `DeckCardFace`'s `FACE_RADIUS` has now
-        // taken back: the padding box was covered edge to edge and the desk could not show
-        // through it. It can now — the face's bottom corners curve away in the *middle* of the
-        // card, where what is behind them is this element rather than the border — and measured
-        // over the dev server that was **two pixels of felt** at each bottom corner, just above
-        // the chin. The face and the chin are both `bg-surface`, so a card that paints its own
-        // is one unbroken surface at every radius either of them picks.
-        "relative block rounded-lg border bg-surface",
-        // Deeper than Tailwind's own `shadow-lg`/`shadow-2xl`, whose alphas are 0.1 and 0.25 —
-        // written for a card on white. These sit on the app's felt at 0.16 lightness, where a
-        // 10 % shadow is not a shadow, and a stack whose cards do not separate is a texture.
-        open
-          ? "shadow-[0_25px_50px_-12px_rgb(0_0_0/0.55)]"
-          : "shadow-[0_10px_15px_-3px_rgb(0_0_0/0.45),0_4px_6px_-4px_rgb(0_0_0/0.45)]",
+        // The body and the shadow are shared with the Tokens & Emblems pile, so a token in the
+        // rail and a card beside it are one object — why there is no z-index, no
+        // `overflow-hidden` and an opaque surface here is on {@link STACKED_CARD_BODY}.
+        STACKED_CARD_BODY,
+        stackedCardShadow(open),
         // The caret lands here when the menu this card opened is closed — see
         // `deckCardMenuProps`, which is what makes the element focusable at all. An outline
         // rather than nothing, because a hand-back the reader cannot see is half a hand-back;
