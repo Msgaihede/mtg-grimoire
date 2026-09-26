@@ -141,9 +141,11 @@ they are summed only in the token pile's heading.
   category drag over the token pile is refused — the pile is not in either category run.
 - **Undoable**: a move writes one `Op::Deck { token_rail_index }` step, the shape every other deck
   field's undo already takes, so Ctrl+Z puts the pile back and Ctrl+Shift+Z moves it again.
-- **The other views** spend the index as **order**, as `splitRail` is already spent: Grid and Table
-  insert the pile at `command + flow + index` in their `[...command, ...flow, ...rail]`; Text
-  inserts it at `index` in its rail.
+- **The other views** spend the index as **order**, as `splitRail` is already spent: Grid inserts
+  the pile at `command + flow + index` in its `[...command, ...flow, ...rail]`; Text inserts it at
+  `index` in its rail. **Table does not**: its token section is a compact list drawn *after* the
+  virtualised table rather than rows inside it (a token row would be six empty cells — `TokenPile`
+  says why), so there is no position among the bands for it to take, and it stays after them.
 
 ### 3.5 Theory marks on tokens
 
