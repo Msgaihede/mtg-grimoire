@@ -6854,8 +6854,9 @@ export interface UpcomingSet {
   /** The set's **earliest** card date in the window, `YYYY-MM-DD` — cards of one set can carry
    *  different dates. */
   releasedAt: string;
-  /** Distinct collector numbers previewed so far — a second language of one card is not a second
-   *  card. */
+  /** The number the search draws for the set's chip on `Any card` — its paper printings, **one per
+   *  card** (`search.rs`' `COLLAPSE_KEY`), whatever their date — so a showcase, a borderless or a
+   *  second language of one card is not a second card, and a row agrees with the page it opens. */
   previewed: number;
   /** Distinct oracle cards in it that the reader's non-virtual decks hold, live or theory, basic
    *  lands left out — `new_printings`' defaults. */

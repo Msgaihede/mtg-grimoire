@@ -99,7 +99,7 @@ const meta = {
           "always in that order.\n\n" +
           "A press is a view change and, where the page does not open in the right state by " +
           "itself, a one-shot hand-off after it — the binder and the wishlist open filtered to " +
-          "Needs review, the deck cards open Settings on Sync.\n\n" +
+          "Needs review, the deck cards open Settings with the Needs review panel in view.\n\n" +
           "**The browser build** has no scanner, so there is no tray row, and no Needs review list " +
           "to open, so the deck cards row is drawn without a press.",
       },
@@ -112,7 +112,9 @@ type Story = StoryObj<typeof meta>;
 
 /**
  * Every row at once: `needsReview` flags one binder entry, one wish and one deck card, and the
- * staged writes add the tray and a copy in `Recently removed`.
+ * staged writes add the tray and a copy in `Recently removed`. The tray is the scanner fixture's
+ * four rows and **six copies**, one row still waiting on a printing — so the row reads the copies
+ * and the cards to pick exactly as the Scanner's own tray heads them.
  */
 export const EverythingWaiting: Story = {
   args: { widget: review(3, 4) },
@@ -126,11 +128,7 @@ export const EverythingWaiting: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "To review" }, LANDED));
     await expect(
-      await card.findByRole(
-        "button",
-        { name: "Scanned cards · 1 needs a printing chosen · 4" },
-        LANDED,
-      ),
+      await card.findByRole("button", { name: "Scanned cards · 1 card to pick · 6" }, LANDED),
     ).toBeInTheDocument();
     await expect(
       card.getByRole("button", { name: "Binder entries · Flagged for review · 1" }),
@@ -145,7 +143,7 @@ export const EverythingWaiting: Story = {
   },
 };
 
-/** The two-cell tile: each count moved under its name. */
+/** The two-cell tile: each count moved under its name, and each press named by what it draws. */
 export const Tile: Story = {
   args: { widget: review(2, 2) },
   parameters: { fake: { seed: "needsReview" } },
@@ -153,6 +151,7 @@ export const Tile: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "To review" }, LANDED));
     await expect(await card.findAllByText("1 flagged", {}, LANDED)).toHaveLength(3);
+    await expect(card.getByRole("button", { name: "Binder entries · 1 flagged" })).toBeInTheDocument();
   },
 };
 

@@ -3,7 +3,8 @@
  * many of their cards are out and how many of those the reader's decks already play.
  *
  * **A body, not a card.** `WidgetCard` draws the title, the `Window` chip, the popover and the
- * Customize tray; this draws two figures and the rows, cut to the box `fit` describes.
+ * Customize tray; this draws two figures and the rows, cut to the box `fit` describes — and in a
+ * box too small for both and a row, the first figure alone ({@link layoutFor}).
  *
  * ## Over the corpus's own dates, counted in UTC
  *
@@ -30,7 +31,10 @@
  * `showSetInSearch(code)` is the view change and the hand-off in one store action, so no caller can
  * write them in the order that wipes the second — and the Search page answers it with
  * `useCardSearch`'s `showOnlySet`, which puts the format picker on `Any card`, so legality does not
- * hide a card that is not legal anywhere yet.
+ * hide a card that is not legal anywhere yet. **A row's `seen` is that search's own number** — the
+ * set's paper printings, one per card, which is what `upcoming_sets` counts — so the row and the
+ * page it opens say one figure. The live pass read `461 seen` over a search of `285 cards` for one
+ * set (2026-09-26), before the read stopped counting showcase and borderless printings as cards.
  *
  * ## The face is its own component
  *
@@ -49,9 +53,15 @@ import { count } from "@/lib/counts";
 import { ipc, ipcError, type UpcomingSet, type UpcomingSets } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 
-import type { WidgetFit } from "../fit";
+import { bodyGapPx, type WidgetFit } from "../fit";
 import { upcomingSetsKey } from "../keys";
-import { WidgetFigures, WidgetMessage, WidgetRow, WidgetRowList } from "../WidgetParts";
+import {
+  WidgetFigures,
+  WidgetMessage,
+  WidgetRow,
+  WidgetRowList,
+  type WidgetFigureItem,
+} from "../WidgetParts";
 import type { WidgetBodyProps } from "../widgetProps";
 import { pickOf } from "../widgetSettings";
 
@@ -97,6 +107,37 @@ function figuresPx(fit: WidgetFit): number {
   const line = fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX;
   const shared = fit.bodyWidthPx >= 2 * FIGURE_BASIS_PX + FIGURE_GAP_X_PX;
   return shared ? line : line + FIGURE_GAP_Y_PX + FIGURE_PX;
+}
+
+/**
+ * What a body this size draws: both figures or only the first, and how many set rows.
+ *
+ * **Never a row the body cannot hold, at any footprint down to `CELL_MIN`.** Rows are counted with
+ * `fitCount`, whose zero is a real answer, and never with `rowsFit`, which floors at one: that floor
+ * drew a set row into a 2×2 on cells of ~100px or less and the body scrolled, 4–28px (the live pass,
+ * 2026-09-26, 1100 and 1024px windows). Three answers, tried in order:
+ *
+ * 1. **Both figures and the rows that fit under them** — a 2×2 from 98px cells up compact and 105
+ *    comfortable, and any box three or more cells tall at every cell the grid draws.
+ * 2. **The first figure alone and the rows that fit under its one line** — a figure gives way to a
+ *    row, because the rows are what the card presses into and the second figure is a total the
+ *    wider boxes carry.
+ * 3. **No row**, and both figures only where the two fit on their own — the reservation less the
+ *    gap nothing follows. At `CELL_MIN` a 2×2 body is 96px comfortable and 98 compact, shorter than
+ *    the two wrapped figures (101px measured), so there it is the first figure alone; a stacked 2×2,
+ *    as wide as the canvas and as tall as that footprint, keeps both on one line.
+ *
+ * Every figure here is a reservation the live pass found to cover what is drawn, so no answer can
+ * overflow.
+ */
+export function layoutFor(fit: WidgetFit): { figures: 1 | 2; rows: number } {
+  const rows = (reserved: number) => fit.fitCount(ROW_PX, reserved) * fit.listColumns;
+  const both = rows(figuresPx(fit));
+  if (both > 0) return { figures: 2, rows: both };
+  const one = rows(fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX);
+  if (one > 0) return { figures: 1, rows: one };
+  const alone = figuresPx(fit) - bodyGapPx(fit.h, fit.compact);
+  return { figures: alone <= fit.bodyHeightPx ? 2 : 1, rows: 0 };
 }
 
 const PENDING = "Looking for announced sets…";
@@ -162,7 +203,8 @@ function releaseHint(set: UpcomingSet): string | undefined {
 }
 
 /**
- * One answer, drawn: the empty sentence, or the two figures over the rows.
+ * One answer, drawn: the empty sentence, or the figures over the rows — as many of each as
+ * {@link layoutFor} says the box holds, down to the first figure alone and no row at all.
  *
  * **Rows flow into `fit.listColumns` columns** (`WidgetRowList`), and are cut to whole rows after
  * the figure line is reserved — two lines of it where the figures wrap ({@link figuresPx}). On a
@@ -187,44 +229,50 @@ export function ComingSoonFace({
   const previewed = answer.sets.reduce((sum, set) => sum + set.previewed, 0);
   const inDecks = answer.sets.reduce((sum, set) => sum + set.inDecks, 0);
   const tile = fit.tier === 0;
-  const shown = answer.sets.slice(0, fit.rowsFit(ROW_PX, figuresPx(fit)));
+  const layout = layoutFor(fit);
+  const shown = answer.sets.slice(0, layout.rows);
+  const figures: WidgetFigureItem[] = [
+    {
+      key: "previewed",
+      label: "Previewed so far",
+      value: count(previewed),
+      note: "cards",
+      tone: "text",
+    },
+    { key: "reprints", label: "Reprints of your deck cards", value: count(inDecks), tone: "text" },
+  ];
 
   return (
     <>
+      {/* The rule under the figures divides them from rows, so it is drawn only above some. */}
       <WidgetFigures
         fit={fit}
-        divided
-        figures={[
-          {
-            key: "previewed",
-            label: "Previewed so far",
-            value: count(previewed),
-            note: "cards",
-            tone: "text",
-          },
-          { key: "reprints", label: "Reprints of your deck cards", value: count(inDecks), tone: "text" },
-        ]}
+        divided={shown.length > 0}
+        figures={figures.slice(0, layout.figures)}
       />
-      <WidgetRowList fit={fit} label="Announced sets">
-        {shown.map((set) => {
-          // The day counted once per set: the tile draws the short caption, and the press label
-          // carries the whole one whatever the box is drawing.
-          const short = shortCaption(set, answer.today);
-          const caption = withCounts(short, set);
-          return (
-            <WidgetRow
-              key={set.code}
-              name={set.name}
-              caption={tile ? short : caption}
-              hint={releaseHint(set)}
-              onPress={still ? undefined : () => showSetInSearch(set.code)}
-              // The whole row in one string — a `gap` between the name and the caption computes to
-              // "Horizon TrekTRK · in 12 days" (`DecksWidget`'s row press, and the same reason).
-              pressLabel={still ? undefined : `${set.name} · ${caption}`}
-            />
-          );
-        })}
-      </WidgetRowList>
+      {/* No list at all when no row fits: an empty one would still take the body's gap. */}
+      {shown.length > 0 && (
+        <WidgetRowList fit={fit} label="Announced sets">
+          {shown.map((set) => {
+            // The day counted once per set: the tile draws the short caption, and the press label
+            // carries the whole one whatever the box is drawing.
+            const short = shortCaption(set, answer.today);
+            const caption = withCounts(short, set);
+            return (
+              <WidgetRow
+                key={set.code}
+                name={set.name}
+                caption={tile ? short : caption}
+                hint={releaseHint(set)}
+                onPress={still ? undefined : () => showSetInSearch(set.code)}
+                // The whole row in one string — a `gap` between the name and the caption computes
+                // to "Horizon TrekTRK · in 12 days" (`DecksWidget`'s row press, and the same reason).
+                pressLabel={still ? undefined : `${set.name} · ${caption}`}
+              />
+            );
+          })}
+        </WidgetRowList>
+      )}
     </>
   );
 }

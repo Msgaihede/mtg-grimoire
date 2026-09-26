@@ -290,11 +290,28 @@ describe("completionFooter", () => {
       cost: 12.5,
       unpriced: 0,
       text: "1 deck complete · $12.50 to finish the rest",
+      line: "1 complete · $12.50 to finish",
     });
   });
 
   it("says every deck when none is complete", () => {
     expect(completionFooter([short], "usd").text).toBe("$12.50 to finish every deck here");
+    expect(completionFooter([short], "usd").line).toBe("$12.50 to finish");
+  });
+
+  /**
+   * **The line is the sentence's clauses in their short words, in the same order** — so an
+   * ellipsis at a narrow width cuts the unpriced copies first, which the sentence (the footer's
+   * hint and what a screen reader hears) and each row's own hint still say. The three-clause
+   * sentence is ~345–380px of 12px Geist, wider than a three-cell body at every cell size the grid
+   * draws (the final review's arithmetic, 2026-09-26); the line is ~250.
+   */
+  it("shortens each clause for the one line a footer has, keeping their order", () => {
+    const three = completionFooter([done, nothingPriced, short], "usd");
+    expect(three.text).toBe("1 deck complete · $12.50 to finish the rest · 40 copies unpriced");
+    expect(three.line).toBe("1 complete · $12.50 to finish · 40 unpriced");
+    expect(completionFooter([nothingPriced], "usd").line).toBe("40 unpriced");
+    expect(completionFooter([], "usd").line).toBe("");
   });
 
   /**
@@ -308,6 +325,7 @@ describe("completionFooter", () => {
       cost: 0,
       unpriced: 3,
       text: "1 deck complete · $0.00 to finish the rest · 3 copies unpriced",
+      line: "1 complete · $0.00 to finish · 3 unpriced",
     });
   });
 
@@ -317,6 +335,7 @@ describe("completionFooter", () => {
       cost: 12.5,
       unpriced: 40,
       text: "€12.50 to finish every deck here · 40 copies unpriced",
+      line: "€12.50 to finish · 40 unpriced",
     });
   });
 
@@ -326,6 +345,7 @@ describe("completionFooter", () => {
       cost: null,
       unpriced: 0,
       text: "1 deck complete",
+      line: "1 complete",
     });
     expect(completionFooter([], "usd").text).toBe("");
   });
@@ -439,6 +459,32 @@ describe("DeckCompletionWidget", () => {
 
       expect(screen.getByText("1 deck complete · $221.70 to finish the rest")).toBeInTheDocument();
       expect(screen.queryByText("Mono Red")).toBeNull();
+    });
+
+    /**
+     * **One line, the short words drawn and the whole sentence spoken** (final fix wave, live pass
+     * of 2026-09-26): the three-clause sentence wrapped at every three-cell width, onto a second
+     * line the rows had been counted without. `WidgetFooterLine` truncates to one line; the line is
+     * the sentence's clauses shortened so the ellipsis is rare.
+     */
+    it("draws the footer as one short line and speaks the whole sentence", () => {
+      const tokens = deck({ id: 6, name: "Tokens" });
+      seed(
+        [...DECKS, tokens],
+        [
+          ...ANSWERS,
+          completion({ deckId: 6, owned: 0, missing: 40, missingCost: null, unpricedMissing: 40 }),
+        ],
+      );
+
+      draw();
+
+      const drawn = screen.getByText("1 complete · $221.70 to finish · 40 unpriced");
+      expect(drawn).toHaveAttribute("aria-hidden", "true");
+      expect(drawn.closest("p")?.classList.contains("truncate")).toBe(true);
+      expect(
+        screen.getByText("1 deck complete · $221.70 to finish the rest · 40 copies unpriced"),
+      ).toHaveClass("sr-only");
     });
 
     it("lists complete decks when the switch is on, with no money to show", () => {
@@ -604,8 +650,34 @@ describe("DeckCompletionWidget", () => {
 
       draw(null, { fit });
 
-      // A captioned row with a track is 57px, and the footer takes 22 before rows are counted.
-      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(57, 22));
+      // A captioned row with a track is 57px, and the footer takes 24 before rows are counted.
+      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(57, 24));
+    });
+
+    /**
+     * **The footer is reserved at what one draws: a 16px line and the body's 8px gap above it**,
+     * 24 comfortable — the live pass measured both on 2026-09-26, against the 22 every footer used
+     * to reserve. At 99px cells a 3×3 holds four 57px rows under 22 and three under 24, so a body
+     * that went back to the old reservation draws a row into the footer's space and fails here.
+     */
+    it("reserves the footer's 16px line and the 8px gap above it before any row", () => {
+      const many = Array.from({ length: 12 }, (_, i) => deck({ id: 100 + i, name: `Deck ${i}` }));
+      seed(
+        many,
+        many.map((d) => completion({ deckId: d.id, owned: 50, missing: 10, missingCost: 4 })),
+      );
+      const fit = makeFit({
+        w: 3,
+        h: 3,
+        widthPx: spanPx(3, 99),
+        heightPx: spanPx(3, 99),
+        density: "comfortable",
+      });
+      expect(fit.rowsFit(57, 22)).toBeGreaterThan(fit.rowsFit(57, 24));
+
+      draw(null, { fit });
+
+      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(57, 24));
     });
 
     /**
@@ -616,7 +688,8 @@ describe("DeckCompletionWidget", () => {
      */
     it("counts rows at the captioned height on a compact card once a theory row is listed", () => {
       const fit = fitFor(3, 3, "compact");
-      expect(fit.rowsFit(42, 22)).not.toBe(fit.rowsFit(57, 22));
+      // A compact footer is its 16px line and the body's 5px gap.
+      expect(fit.rowsFit(42, 21)).not.toBe(fit.rowsFit(57, 21));
       const many = Array.from({ length: 12 }, (_, i) => deck({ id: 100 + i, name: `Deck ${i}` }));
       const answers = many.map((d) =>
         completion({ deckId: d.id, owned: 50, missing: 10, missingCost: 4 }),
@@ -625,14 +698,14 @@ describe("DeckCompletionWidget", () => {
 
       const { unmount } = draw(null, { fit });
 
-      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(42, 22));
+      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(42, 21));
       unmount();
 
       // The same decks with one of them measured on its plan.
       seed(many, [...answers.slice(0, 11), { ...answers[11], list: "theory" }]);
       draw(null, { fit });
 
-      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(57, 22));
+      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(57, 21));
     });
   });
 

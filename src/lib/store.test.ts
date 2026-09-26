@@ -339,11 +339,11 @@ describe("the home page's three other hand-offs", () => {
       spent: null,
     },
     {
-      name: "pendingSettingsGroup",
+      name: "pendingSettingsPanel",
       view: "settings",
-      write: () => useAppStore.getState().setPendingSettingsGroup("sync"),
-      read: () => useAppStore.getState().pendingSettingsGroup,
-      written: "sync",
+      write: () => useAppStore.getState().setPendingSettingsPanel("review"),
+      read: () => useAppStore.getState().pendingSettingsPanel,
+      written: "review",
       spent: null,
     },
     {
@@ -367,11 +367,11 @@ describe("the home page's three other hand-offs", () => {
 
     useAppStore.getState().clearPendingReviewFilter();
     expect(useAppStore.getState().pendingReviewFilter).toBeNull();
-    expect(useAppStore.getState().pendingSettingsGroup).toBe("sync");
+    expect(useAppStore.getState().pendingSettingsPanel).toBe("review");
     expect(useAppStore.getState().pendingOptimize).toBe(true);
 
-    useAppStore.getState().clearPendingSettingsGroup();
-    expect(useAppStore.getState().pendingSettingsGroup).toBeNull();
+    useAppStore.getState().clearPendingSettingsPanel();
+    expect(useAppStore.getState().pendingSettingsPanel).toBeNull();
     expect(useAppStore.getState().pendingOptimize).toBe(true);
 
     useAppStore.getState().clearPendingOptimize();

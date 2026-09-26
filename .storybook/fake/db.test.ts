@@ -16232,13 +16232,14 @@ describe("upcoming sets", () => {
   });
 
   it("answers the sets after today and inside the window, soonest first, at their earliest date", () => {
+    const COUNTERSPELL = CARDS.find((c) => c.name === "Counterspell")!;
     const db = makeDb({
       cards: [
         ...CARDS,
         future(BOLT, "bbb", "1", 20),
         future(BOLT, "aaa", "1", 5),
         // A later card of the same set: the set answers its earliest date and counts both.
-        future(BOLT, "aaa", "2", 9),
+        future(COUNTERSPELL, "aaa", "2", 9),
         // Releasing today is released, not upcoming.
         future(BOLT, "zzz", "1", 0),
         // Exactly at the window's edge is inside it; one day past is not.
@@ -16257,8 +16258,45 @@ describe("upcoming sets", () => {
     ]);
   });
 
+  /**
+   * **`previewed` is the number the search draws for the set** — its chip on `Any card`, collapsed
+   * to one row per card — because pressing the row opens exactly that search. The crate asks
+   * `run_search` in `previewed_is_the_number_the_search_draws_for_the_set`; this asks the fake's
+   * own `search_cards`, over the same five things that could make the two disagree: a card in
+   * three printings, a second language of it, a second card, a card dated past the window and a
+   * token filed under the set's own code.
+   */
+  it("counts what the search draws for the set, one per card, past the window and any layout", () => {
+    const COUNTERSPELL = CARDS.find((c) => c.name === "Counterspell")!;
+    const SOL_RING = CARDS.find((c) => c.name === "Sol Ring")!;
+    const TOKEN = { ...BOLT, oracleId: "token-oracle", layout: "token" };
+    const db = makeDb({
+      cards: [
+        ...CARDS,
+        future(BOLT, "fra", "1", 10),
+        future(BOLT, "fra", "301", 10),
+        future(BOLT, "fra", "402", 10),
+        future(BOLT, "fra", "1-ja", 10, { lang: "ja" }),
+        future(COUNTERSPELL, "fra", "2", 10),
+        future(SOL_RING, "fra", "3", 200),
+        future(TOKEN, "fra", "T1", 10),
+      ],
+    });
+    const search = readHandlers(db).search_cards({
+      req: { sets: ["fra"], collapse: true, limit: 200, offset: 0 },
+    }) as { total: number };
+
+    const got = readHandlers(db).upcoming_sets({ days: 90 }).sets;
+
+    expect(got.map((s) => s.code)).toEqual(["fra"]);
+    expect(search.total).toBe(4);
+    expect(got[0].previewed).toBe(search.total);
+  });
+
   /** `search.rs`' `NON_CARD_LAYOUTS`, all five — `front_card` included, which the widget's spec
-   *  did not name and the crate's shared list carries. */
+   *  did not name and the crate's shared list carries. They decide nothing about **which** sets are
+   *  coming; what a set that is coming counts is the search's number, and every card here is cut
+   *  from one oracle card, so that is one. */
   it("leaves out tokens, emblems, art cards, front cards and digital printings", () => {
     const db = makeDb({
       cards: [
@@ -16288,6 +16326,8 @@ describe("upcoming sets", () => {
    * and a digital printing released long ago does not.
    */
   it("leaves out a set any of whose paper cards has already released", () => {
+    const COUNTERSPELL = CARDS.find((c) => c.name === "Counterspell")!;
+    const SOL_RING = CARDS.find((c) => c.name === "Sol Ring")!;
     const db = makeDb({
       cards: [
         ...CARDS,
@@ -16298,8 +16338,9 @@ describe("upcoming sets", () => {
         future(BOLT, "tdy", "1", 0),
         future(BOLT, "tdy", "2", 10),
         future(BOLT, "new", "1", 10),
-        future(BOLT, "new", "2", 12),
-        future(BOLT, "new", "A-1", -30, { isPaper: false, digital: true }),
+        future(COUNTERSPELL, "new", "2", 12),
+        // A third card, digital: it neither releases the set nor counts in it.
+        future(SOL_RING, "new", "A-1", -30, { isPaper: false, digital: true }),
       ],
     });
 

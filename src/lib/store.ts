@@ -842,20 +842,25 @@ interface AppState {
   /** Spend it — the page its `scope` names, on the commit it read it. */
   clearPendingReviewFilter: () => void;
   /**
-   * **The Settings rail group a press somewhere else asked that page to open on** — To review's
-   * `Deck cards` row, which sends the reader to `sync` because that is the group holding the Needs
-   * review panel.
+   * **The Settings panel a press somewhere else asked that page to bring into view** — To review's
+   * `Deck cards` row, which sends the reader to `review`, the Needs review panel. The page opens
+   * the rail group that panel is drawn under and scrolls the panel to the top of the pane.
    *
-   * **A plain string and not `GroupId`**, so this module imports nothing from `features/settings`:
-   * `SettingsPage` narrows it against its own rail and **drops** a word it has no group for, which
-   * a newer build's word or a renamed group would otherwise turn into a refusal nobody can see.
-   * Cleared by {@link setActiveView}; written after it.
+   * **A panel and not a group, since the final fix wave of 2026-09-26**: it named the `sync` group
+   * until then, and the live pass found Settings opening on Sync scrolled to its top, with Needs
+   * review — the group's second panel, under a tall Sync panel — below the fold at 1920×1080. A
+   * panel says where the reader is going; its group is a fact `nav.ts` already holds.
+   *
+   * **A plain string and not `PanelId`**, so this module imports nothing from `features/settings`:
+   * `SettingsPage` narrows it against its own panels and **drops** a word it has no panel for,
+   * which a newer build's word or a renamed panel would otherwise turn into a refusal nobody can
+   * see. Cleared by {@link setActiveView}; written after it.
    */
-  pendingSettingsGroup: string | null;
-  /** Ask Settings to open on a group. **Call {@link setActiveView} before this, never after.** */
-  setPendingSettingsGroup: (group: string) => void;
+  pendingSettingsPanel: string | null;
+  /** Ask Settings to show a panel. **Call {@link setActiveView} before this, never after.** */
+  setPendingSettingsPanel: (panel: string) => void;
   /** Spend it — `SettingsPage`, on the commit it read it. */
-  clearPendingSettingsGroup: () => void;
+  clearPendingSettingsPanel: () => void;
   /**
    * **Whether a press somewhere else asked the Wishlist to open its price sweep over the whole
    * list** — the home page's Wishlist savings widget, which counted what every pinned wish would
@@ -1383,7 +1388,7 @@ export const useAppStore = create<AppState>((set) => ({
         // The home page's three other hand-offs, for the folder's reason three lines up: each is
         // written after the view change that carries it, so this clears only one nobody read.
         pendingReviewFilter: null,
-        pendingSettingsGroup: null,
+        pendingSettingsPanel: null,
         pendingOptimize: false,
       };
     }),
@@ -1705,9 +1710,9 @@ export const useAppStore = create<AppState>((set) => ({
   pendingReviewFilter: null,
   setPendingReviewFilter: (pendingReviewFilter) => set({ pendingReviewFilter }),
   clearPendingReviewFilter: () => set({ pendingReviewFilter: null }),
-  pendingSettingsGroup: null,
-  setPendingSettingsGroup: (pendingSettingsGroup) => set({ pendingSettingsGroup }),
-  clearPendingSettingsGroup: () => set({ pendingSettingsGroup: null }),
+  pendingSettingsPanel: null,
+  setPendingSettingsPanel: (pendingSettingsPanel) => set({ pendingSettingsPanel }),
+  clearPendingSettingsPanel: () => set({ pendingSettingsPanel: null }),
   pendingOptimize: false,
   setPendingOptimize: () => set({ pendingOptimize: true }),
   clearPendingOptimize: () => set({ pendingOptimize: false }),

@@ -14,7 +14,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => {
 });
 
 import { useAppStore } from "@/lib/store";
-import { makeFit, spanPx, type WidgetFit } from "../fit";
+import { CELL_MIN, makeFit, spanPx, type WidgetFit } from "../fit";
 import { upcomingSetsKey } from "../keys";
 import {
   ComingSoonWidget,
@@ -242,6 +242,71 @@ describe("ComingSoonWidget", () => {
       // The guard, the other way: a two-line reservation here would draw fewer.
       expect(fit.rowsFit(51, 62)).toBeGreaterThan(fit.rowsFit(51, WRAPPED_COMPACT));
       expect(MANY.sets.length).toBeGreaterThanOrEqual(fit.rowsFit(51, 62));
+    });
+
+    /**
+     * **Never a row the body cannot hold, down to `CELL_MIN`** (the live pass, 2026-09-26: a 2×2
+     * on cells of ~100px or less drew one set row under two wrapped figures and scrolled, 4–28px).
+     * `rowsFit` floors at one row, and that floor is the row the body used to draw. At the smallest
+     * cell the grid draws, a 2×2 body is 96px comfortable and 98 compact — shorter than even the two
+     * wrapped figures (measured at 101px) — so it draws the first figure alone and no row: the
+     * one-line reservation less the gap nothing follows is what fits, and the two-line one is not.
+     */
+    it.each(["comfortable", "compact"] as const)(
+      "draws one figure and no row on a %s 2×2 at the smallest cell",
+      (density) => {
+        qc.setQueryData(upcomingSetsKey(90), MANY);
+        const fit = fitFor(2, 2, density, CELL_MIN);
+        const line = density === "compact" ? 62 : 74;
+        const gap = density === "compact" ? 5 : 8;
+
+        draw(null, { fit });
+
+        expect(screen.queryByRole("listitem")).toBeNull();
+        expect(screen.queryByRole("list")).toBeNull();
+        expect(screen.getByText("Previewed so far")).toBeInTheDocument();
+        expect(screen.queryByText("Reprints of your deck cards")).toBeNull();
+        // Why: no row fits under either figure line, and only the one-line figure fits at all.
+        expect(fit.fitCount(51, line)).toBe(0);
+        expect(line - gap).toBeLessThanOrEqual(fit.bodyHeightPx);
+        expect(line + 6 + 38 - gap).toBeGreaterThan(fit.bodyHeightPx);
+      },
+    );
+
+    /**
+     * **The second figure gives way to a row**, where the two wrapped figures leave room for none
+     * and one figure on its own line leaves room for one: a 2×2 comfortable on the grid's own 104px
+     * cells. The set rows are what the card presses into; the second figure is a total the wider
+     * boxes carry.
+     */
+    it("drops the second figure to make room for a set row", () => {
+      qc.setQueryData(upcomingSetsKey(90), MANY);
+      const fit = fitFor(2, 2);
+      expect(fit.fitCount(51, 74 + 6 + 38)).toBe(0);
+      expect(fit.fitCount(51, 74)).toBe(1);
+
+      draw(null, { fit });
+
+      expect(drawnNames()).toEqual(["Glass Tides"]);
+      expect(screen.getByText("Previewed so far")).toBeInTheDocument();
+      expect(screen.queryByText("Reprints of your deck cards")).toBeNull();
+    });
+
+    /**
+     * **Both figures, and no row, where they share a line and no row fits under them** — the
+     * stacked page's shape: a 2×2 drawn the canvas's width wide and a `CELL_MIN` footprint tall.
+     */
+    it("keeps both figures and draws no row where no row fits under one line of them", () => {
+      qc.setQueryData(upcomingSetsKey(90), MANY);
+      const fit = makeFit({ w: 2, h: 2, widthPx: 500, heightPx: spanPx(2, CELL_MIN), density: "comfortable" });
+      expect(fit.bodyWidthPx).toBeGreaterThanOrEqual(2 * 120 + 14);
+      expect(fit.fitCount(51, 74)).toBe(0);
+
+      draw(null, { fit });
+
+      expect(screen.queryByRole("listitem")).toBeNull();
+      expect(screen.getByText("Previewed so far")).toBeInTheDocument();
+      expect(screen.getByText("Reprints of your deck cards")).toBeInTheDocument();
     });
 
     it("shortens the caption to the code and the day on a two-cell tile", () => {

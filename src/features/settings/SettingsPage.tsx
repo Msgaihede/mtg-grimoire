@@ -15,7 +15,7 @@ import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { WebStoragePanel, useWebStorage } from "@/features/settings/WebStoragePanel";
 import {
-  GROUP_ORDER,
+  PANELS,
   visiblePanels,
   type BadgeId,
   type GroupId,
@@ -59,15 +59,15 @@ export function imageFailureLine(failures: number | undefined): string {
 }
 
 /**
- * A stored word as one of this rail's groups, or `null` for a word it has none for.
+ * A stored word as one of this page's panels, or `null` for a word it has none for.
  *
- * `store.ts` keeps `pendingSettingsGroup` a plain `string` so it needs nothing from this feature,
- * and this is the other half of that bargain: the narrowing lives here, beside the rail. **An
- * `includes` over `GROUP_ORDER` and never `word in GROUPS`**, `isWidgetKind`'s reason — `in` walks
- * the prototype and would take `"constructor"` for a group.
+ * `store.ts` keeps `pendingSettingsPanel` a plain `string` so it needs nothing from this feature,
+ * and this is the other half of that bargain: the narrowing lives here, beside the panels. **An
+ * `includes` over the panels' own keys and never `word in PANELS`**, `isWidgetKind`'s reason —
+ * `in` walks the prototype and would take `"constructor"` for a panel.
  */
-function asGroupId(word: string): GroupId | null {
-  return (GROUP_ORDER as readonly string[]).includes(word) ? (word as GroupId) : null;
+function asPanelId(word: string): PanelId | null {
+  return (Object.keys(PANELS) as string[]).includes(word) ? (word as PanelId) : null;
 }
 
 /**
@@ -140,27 +140,6 @@ export function SettingsPage({ update }: { update: Update }) {
   const [group, setGroup] = useState<GroupId>("updates");
   const [query, setQuery] = useState("");
   /**
-   * **The group another page asked this one to open on** — `store.ts`'s `pendingSettingsGroup`,
-   * whose only writer is the home page's To review widget sending a reader to Needs review.
-   *
-   * `CollectionPage`'s `pendingFolder` arrangement: a render-phase adjustment rather than a mount
-   * effect, so the pane draws the asked-for group on its first commit with no frame of `Updates`
-   * and no `setState` in an effect body; and spent by the effect below whether or not it named a
-   * group, so a word this rail has none for is **dropped** rather than left to fire on a later
-   * visit. The query goes with it, `pickGroup`'s rule: a query outranks the group, so a group
-   * arriving under one would be a press that visibly did nothing.
-   */
-  const pendingGroup = useAppStore((s) => s.pendingSettingsGroup);
-  const clearPendingGroup = useAppStore((s) => s.clearPendingSettingsGroup);
-  const askedGroup = pendingGroup === null ? null : asGroupId(pendingGroup);
-  if (askedGroup !== null && group !== askedGroup) {
-    setGroup(askedGroup);
-    if (query !== "") setQuery("");
-  }
-  useEffect(() => {
-    if (pendingGroup !== null) clearPendingGroup();
-  }, [pendingGroup, clearPendingGroup]);
-  /**
    * The page's own root, so that picking a group can put the reader back at the top of it.
    *
    * The scroller is `AppShell.tsx`'s `<main>` and this element is inside it, so scrolling *this*
@@ -168,6 +147,45 @@ export function SettingsPage({ update }: { update: Update }) {
    * ancestor happens to carry the `overflow`.
    */
   const root = useRef<HTMLDivElement>(null);
+  /**
+   * **The panel another page asked this one to bring into view** — `store.ts`'s
+   * `pendingSettingsPanel`, whose only writer is the home page's To review widget sending a reader
+   * to Needs review.
+   *
+   * `CollectionPage`'s `pendingFolder` arrangement: a render-phase adjustment rather than a mount
+   * effect, so the pane draws the group that holds the panel on its first commit with no frame of
+   * `Updates` and no `setState` in an effect body; and spent by the effect below whether or not it
+   * named a panel, so a word this page has none for is **dropped** rather than left to fire on a
+   * later visit. The query goes with it, `pickGroup`'s rule, **even where the rail already stands
+   * on that group**: a query outranks the group, so a panel arriving under one would be a press that
+   * visibly did nothing.
+   *
+   * **The effect then brings the panel to the top of the pane**, `pickGroup`'s scroll aimed at the
+   * panel instead of the page, and for the same reason: the group alone was not enough. Needs
+   * review is the second panel under `Sync`, below a Sync panel tall enough to hold it off the
+   * screen — the live pass (2026-09-26, 1920×1080) found its heading at y=976 and its rows below
+   * the fold. It runs after the commit that drew the group, and it finds the panel by its heading's
+   * id, which `nav.ts` guarantees is the panel's own `SettingsSection` stem. `?.()` for
+   * `pickGroup`'s jsdom reason.
+   */
+  const pendingPanel = useAppStore((s) => s.pendingSettingsPanel);
+  const clearPendingPanel = useAppStore((s) => s.clearPendingSettingsPanel);
+  const askedPanel = pendingPanel === null ? null : asPanelId(pendingPanel);
+  const askedGroup = askedPanel === null ? null : PANELS[askedPanel].group;
+  if (askedGroup !== null && (group !== askedGroup || query !== "")) {
+    setGroup(askedGroup);
+    if (query !== "") setQuery("");
+  }
+  useEffect(() => {
+    if (pendingPanel === null) return;
+    clearPendingPanel();
+    const panel = asPanelId(pendingPanel);
+    if (panel === null) return;
+    root.current
+      ?.querySelector(`#${panel}-heading`)
+      ?.closest("section")
+      ?.scrollIntoView?.({ block: "start" });
+  }, [pendingPanel, clearPendingPanel]);
 
   const log = useErrorLog();
   const marketplace = useMarketplace();

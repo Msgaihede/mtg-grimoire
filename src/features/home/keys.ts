@@ -70,10 +70,12 @@
  * after every card added to any deck and stay stale after the sync that actually brings the new
  * printings in. The whole argument is at the constant itself.
  *
- * {@link scannerTrayCountKey} sits under `["scanner"]`, and it is the one key in this file **no
- * write invalidates at all**: the scanner writes its tray with `setQueryData` on its own entry, and
- * never on the same screen as the home page. What keeps it fresh is its reader's `staleTime`, which
- * its declaration argues.
+ * {@link scannerTrayCountKey} sits under `["scanner"]`, and **with one window open it is the one key
+ * in this file no write invalidates**: the scanner writes its tray with `setQueryData` on its own
+ * entry, and never on the same screen as the home page, so what keeps it fresh there is its
+ * reader's `staleTime`. **A second window's tray write refreshes it** — that write is an `app_meta`
+ * commit, and `lib/crossWindow.ts` answers it in every other window through
+ * `FOLLOW_LIVE_APP_META`. Its declaration argues both.
  *
  * ## What is deliberately not here
  *
@@ -348,8 +350,9 @@ export const wishlistSavingsKey = (marketplace: MarketplaceId): QueryKey =>
   optimizePlanKey(wholeWishlistQuery(marketplace));
 
 /**
- * How many rows the scanner's review tray holds, and how many still wait on a printing —
- * To review's `Scanned cards` row reads `scanner_tray` under this key.
+ * How many copies the scanner's review tray holds, and how many of its rows still wait on a
+ * printing — the Scanner's own two numbers; To review's `Scanned cards` row reads `scanner_tray`
+ * under this key.
  *
  * **Never `["scanner", "tray"]`**, which *is* the tray in the window that owns the scanner, written
  * with `setQueryData` (`useTray.ts`); the stored copy can lag that entry by the tray's debounce, and

@@ -448,7 +448,11 @@ const ORDER_NAME: &str = "c.name ASC, c.released_at DESC";
 /// index but will not treat it as *covering*, and the page went to 700 ms (measured
 /// 2026-08-11). [`crate::schema::CARDS_INDEXES`]' `idx_cards_collapse` leads with the plain
 /// `oracle_id` column, and the group step computes the coalesce as it scans.
-const COLLAPSE_KEY: &str = "coalesce(c.oracle_id, c.id)";
+///
+/// **`crate::upcoming_sets` counts with it too**, over a `cards c` of its own: a Coming soon row's
+/// `seen` is the number the search draws for that set, so the two share the one spelling of
+/// "the same card" rather than each keeping one.
+pub(crate) const COLLAPSE_KEY: &str = "coalesce(c.oracle_id, c.id)";
 
 /// The representative printing's `id`, straight out of the aggregate that picks it.
 ///

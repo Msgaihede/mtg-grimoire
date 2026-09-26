@@ -70,7 +70,7 @@ import {
 
 const REMOVED_FOLDER = 9;
 
-function trayRow(i: number, unresolved: boolean): ScannerTrayRow {
+function trayRow(i: number, unresolved: boolean, quantity = 1): ScannerTrayRow {
   return {
     key: `row-${i}`,
     cardId: `card-${i}`,
@@ -79,7 +79,7 @@ function trayRow(i: number, unresolved: boolean): ScannerTrayRow {
     setCode: "mh3",
     collectorNumber: String(100 + i),
     finish: "nonfoil",
-    quantity: 1,
+    quantity,
     choices: unresolved
       ? [
           {
@@ -121,8 +121,12 @@ const FOLDERS: CollectionFolder[] = [
 ];
 
 interface World {
+  /** Tray rows. */
   scanned?: number;
+  /** How many of those rows still wait on a printing — the first ones. */
   unresolved?: number;
+  /** Each row's copies, one where unsaid. */
+  quantities?: number[];
   binder?: number;
   wishes?: number;
   deckCards?: number;
@@ -135,6 +139,7 @@ interface World {
 function world({
   scanned = 0,
   unresolved = 0,
+  quantities = [],
   binder = 0,
   wishes = 0,
   deckCards = 0,
@@ -142,7 +147,7 @@ function world({
   folders = FOLDERS,
 }: World = {}): void {
   scannerTray.mockResolvedValue(
-    Array.from({ length: scanned }, (_, i) => trayRow(i, i < unresolved)),
+    Array.from({ length: scanned }, (_, i) => trayRow(i, i < unresolved, quantities[i] ?? 1)),
   );
   collectionSummary.mockResolvedValue(summary(binder));
   wishlistList.mockResolvedValue({ items: [], total: wishes });
@@ -153,7 +158,17 @@ function world({
   );
 }
 
-const EVERYTHING: World = { scanned: 4, unresolved: 1, binder: 2, wishes: 1, deckCards: 3, removed: 5 };
+/** The scanner fixture's tray shape — four rows, six copies, one row waiting on a printing — and
+ *  something in every other place. */
+const EVERYTHING: World = {
+  scanned: 4,
+  unresolved: 1,
+  quantities: [1, 3, 1, 1],
+  binder: 2,
+  wishes: 1,
+  deckCards: 3,
+  removed: 5,
+};
 
 function widget(config: unknown = null): HomeWidget {
   return { id: "toReview", kind: "toReview", x: 0, y: 0, w: 3, h: 6, config };
@@ -212,9 +227,9 @@ function recordWrites(): string[] {
       writes.push(`review:${value.scope}`);
       real.setPendingReviewFilter(value);
     },
-    setPendingSettingsGroup: (group) => {
-      writes.push(`group:${group}`);
-      real.setPendingSettingsGroup(group);
+    setPendingSettingsPanel: (panel) => {
+      writes.push(`panel:${panel}`);
+      real.setPendingSettingsPanel(panel);
     },
     setPendingFolder: (value) => {
       writes.push(`folder:${value.scope}:${value.id}`);
@@ -245,9 +260,15 @@ beforeEach(() => {
 });
 
 describe("trayCounts", () => {
-  it("counts every row, and the rows still waiting on a printing", () => {
-    expect(trayCounts([trayRow(0, true), trayRow(1, false), trayRow(2, true)])).toEqual({
-      scanned: 3,
+  /**
+   * **Copies, as the Scanner counts them, and rows for what waits on a printing** — the Scanner
+   * heads its tray `Scanned cards 2` over one row of two, and the live pass (2026-09-26) found this
+   * row reading `1` beside it. A row still waiting is one card to pick, however many copies of it
+   * are stacked, which is how the tray's own `N cards to pick` counts.
+   */
+  it("counts every copy, and the rows still waiting on a printing", () => {
+    expect(trayCounts([trayRow(0, true), trayRow(1, false, 3), trayRow(2, true, 2)])).toEqual({
+      scanned: 6,
       unresolved: 2,
     });
     expect(trayCounts([])).toEqual({ scanned: 0, unresolved: 0 });
@@ -281,21 +302,29 @@ describe("reviewRows", () => {
     ).toEqual(["scanned", "deckCards", "removed"]);
   });
 
-  it("says what the scanned cards need, in the singular and the plural", () => {
+  /**
+   * **The Scanner's own words for its two numbers** (`TrayPanel`): the figure is copies, as the
+   * tray's heading counts them, and the caption is cards to pick, as its line beside the heading
+   * says — so the row and the page it opens read the same two numbers the same way. The tile, with
+   * no heading to lean on, names the copies.
+   */
+  it("says what the scanned cards need in the Scanner's words, in the singular and the plural", () => {
     const one = reviewRows(ALL, { web: false, removed: true })[0];
     expect(one).toEqual(
       expect.objectContaining({
         name: "Scanned cards",
-        caption: "1 needs a printing chosen",
-        tileCaption: "4 · 1 to choose",
+        caption: "1 card to pick",
+        tileCaption: "4 copies · 1 to pick",
         value: "4",
       }),
     );
     expect(reviewRows({ ...ALL, unresolved: 3 }, { web: false, removed: true })[0].caption).toBe(
-      "3 need a printing chosen",
+      "3 cards to pick",
     );
     const ready = reviewRows({ ...ALL, unresolved: 0 }, { web: false, removed: true })[0];
-    expect([ready.caption, ready.tileCaption]).toEqual(["Ready to add", "4 ready"]);
+    expect([ready.caption, ready.tileCaption]).toEqual(["Ready to add", "4 copies ready"]);
+    const single = reviewRows({ ...ALL, scanned: 1, unresolved: 0 }, { web: false, removed: true });
+    expect(single[0].tileCaption).toBe("1 copy ready");
   });
 
   /** Rows where the table counts rows, copies where the reader thinks in copies — and the
@@ -341,8 +370,9 @@ describe("ToReviewWidget", () => {
 
       draw();
 
+      // Six copies over four rows, one of them waiting: the tray's copies, and its cards to pick.
       expect(
-        await screen.findByRole("button", { name: "Scanned cards · 1 needs a printing chosen · 4" }),
+        await screen.findByRole("button", { name: "Scanned cards · 1 card to pick · 6" }),
       ).toBeInTheDocument();
       expect(drawnNames()).toEqual([
         "Scanned cards",
@@ -411,10 +441,49 @@ describe("ToReviewWidget", () => {
 
       draw(null, { fit: fitFor(2, 6) });
 
-      expect(await screen.findByText("4 · 1 to choose")).toBeInTheDocument();
+      expect(await screen.findByText("6 copies · 1 to pick")).toBeInTheDocument();
       expect(screen.getByText("2 flagged")).toBeInTheDocument();
       expect(screen.getByText("5 copies")).toBeInTheDocument();
       expect(screen.queryByText("Flagged for review")).toBeNull();
+    });
+
+    /**
+     * **A press's name is the text it draws** (WCAG 2.5.3, label in name) — the tile is the kind's
+     * default face, and its rows drew `3 flagged` while speaking `Wishes · Flagged for review · 3`,
+     * a name that does not contain what a voice-control reader can see. Each name is the drawn
+     * parts joined, so it is the visible text exactly.
+     */
+    it("names each tile row by the text it draws", async () => {
+      world(EVERYTHING);
+
+      draw(null, { fit: fitFor(2, 6) });
+
+      const names = [
+        "Scanned cards · 6 copies · 1 to pick",
+        "Binder entries · 2 flagged",
+        "Wishes · 1 flagged",
+        "Deck cards · 3 flagged",
+        "Recently removed · 5 copies",
+      ];
+      expect(await screen.findByRole("button", { name: names[0] })).toBeInTheDocument();
+      for (const name of names) {
+        const row = screen.getByRole("button", { name });
+        // The drawn text, with the separator the name reads between two drawn lines.
+        const drawn = [...row.querySelectorAll("span.truncate")].map((el) => el.textContent);
+        expect(drawn.join(" · ")).toBe(name);
+      }
+    });
+
+    /** And a compact panel, which draws the figure and not the caption, is named by the figure. */
+    it("names a compact panel's rows by the figure it draws, not the caption it drops", async () => {
+      world({ binder: 2, removed: 5 });
+
+      draw(null, { fit: fitFor(3, 3, "compact") });
+
+      expect(
+        await screen.findByRole("button", { name: "Binder entries · 2" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Recently removed · 5 copies" })).toBeInTheDocument();
     });
 
     it("keeps the count and drops the caption on a compact card", async () => {
@@ -462,7 +531,7 @@ describe("ToReviewWidget", () => {
       ["Scanned cards", ["view:scanner"]],
       ["Binder entries", ["view:collection", "review:collection"]],
       ["Wishes", ["view:wishlist", "review:wishlist"]],
-      ["Deck cards", ["view:settings", "group:sync"]],
+      ["Deck cards", ["view:settings", "panel:review"]],
       ["Recently removed", ["view:collection", `folder:collection:${REMOVED_FOLDER}`]],
     ])("%s opens its place, the view first", async (name, expected) => {
       const user = userEvent.setup();
@@ -487,7 +556,7 @@ describe("ToReviewWidget", () => {
 
       await user.click(screen.getByRole("button", { name: /^Deck cards · / }));
       expect(useAppStore.getState().activeView).toBe("settings");
-      expect(useAppStore.getState().pendingSettingsGroup).toBe("sync");
+      expect(useAppStore.getState().pendingSettingsPanel).toBe("review");
       // The previous hand-off went with the view change, which is what makes it one-shot.
       expect(useAppStore.getState().pendingReviewFilter).toBeNull();
 

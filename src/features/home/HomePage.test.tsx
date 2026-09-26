@@ -73,7 +73,7 @@ vi.mock("./widgets/WishlistSavingsWidget", () => ({ WishlistSavingsWidget: stubs
 vi.mock("./widgets/ComingSoonWidget", () => ({ ComingSoonWidget: stubs.body }));
 
 /**
- * **The one mock whose settings stub says something.**
+ * **A settings stub that says something**, as `DecksWidget`'s above does for the pin checklist.
  *
  * Both of the page's switches are over `widget.kind`, which is a free `string` with a `default`
  * arm — so a missing `case` compiles, type-checks and draws `UnknownWidgetBody` in silence. The

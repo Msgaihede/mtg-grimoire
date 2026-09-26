@@ -12,9 +12,12 @@ reference for everything already built is [home-page.md](../../reference/home-pa
 
 **Considered and dropped the same day, so nobody proposes them again without a reason:** Commander
 brackets, a `For trade` figure on Summary, Combos in your binder, What your cards do (oracle-tag
-counts), Value history, From your binder, Sample hand. Value history was chosen and then scrapped;
-its finding is worth keeping — `price_snapshots` stores prices and no quantities, so the only line
-it can draw is *today's cards at each day's price*.
+counts), Value history, From your binder, Sample hand. Value history was chosen and then **dropped
+from this round**, and shipped separately: main's collection value graph (`valueHistory`) landed
+with user schema v50, which added `price_snapshots.copies`, and this branch merged it
+(home-page.md §14). What dropped it here was true on 2026-09-26 before v50 — `price_snapshots`
+stored prices and no quantities, so the only line it could draw was *today's cards at each day's
+price* — and v50 is the rung that answered it.
 
 ---
 
@@ -23,7 +26,7 @@ it can draw is *today's cards at each day's price*.
 | Decision | Answer | Why |
 | --- | --- | --- |
 | Where the kinds go | The catalogue only. `DEFAULT_LAYOUT` does not move, in any of its three copies. | home-page.md §3: the catalogue and the first-launch layout are two lists, and the default fills an 8×7 rectangle a new kind would break. |
-| How they are built | Four independent kinds, each a registry row, a body and at most one new read. | The eleven existing kinds' shape; it fans out cleanly. Rejected: computing in TS from existing reads (one `deck_get` per deck per render, gaps on web) and one combined "digest" read (couples four widgets, breaks the key-root rule). |
+| How they are built | Four independent kinds, each a registry row, a body and at most one new read. | The existing kinds' shape; it fans out cleanly. Rejected: computing in TS from existing reads (one `deck_get` per deck per render, gaps on web) and one combined "digest" read (couples four widgets, breaks the key-root rule). |
 | What Deck completion calls owned | **Exactly what the deck editor calls owned.** | Chosen by the reader. A widget saying "4 missing" about a deck that opens saying "6 missing" is a bug report. |
 | Where To review's flagged rows go | **One row per place**, each opening that place. | Chosen by the reader over a single row into Settings. |
 | Both targets | Every kind works in the browser build or says in words what it cannot do there. | `src/CLAUDE.md`'s rule for every surface. |

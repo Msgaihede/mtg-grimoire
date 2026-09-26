@@ -26,12 +26,14 @@
  * **A figure measured on the plan says `Plan` wherever the row is drawn** — {@link countCaption},
  * the tile's shortfall and the press's name all lead with it, and a compact panel, which draws no
  * count at all, keeps the word alone as the row's caption: its price and its track are still the
- * plan's. The rows of one list share a height, so once any listed row is a plan's, a compact
- * panel counts every row at the captioned height. A theory deck's `81 of 100` is its plan against
- * every copy it could use, not its sleeved list, and a reader who opens a deck holding sixty cards
- * beside a card saying "of 100" would read the two as disagreeing. The hint says it in full; the
- * word is what survives without a pointer. The press is unchanged: it opens the deck exactly as
- * every other row's does, and which list the editor then shows is the editor's own decision.
+ * plan's. The list is counted at one height — the tallest row it may draw, since `rowsFit` takes
+ * one — so once any listed row is a plan's, a compact panel counts every row at the captioned
+ * height, and a live row beside it draws bare in room counted for more. A theory deck's
+ * `81 of 100` is its plan against every copy it could use, not its sleeved list, and a reader who
+ * opens a deck holding sixty cards beside a card saying "of 100" would read the two as
+ * disagreeing. The hint says it in full; the word is what survives without a pointer. The press is
+ * unchanged: it opens the deck exactly as every other row's does, and which list the editor then
+ * shows is the editor's own decision.
  *
  * ## A deck that asks for nothing is not on the card
  *
@@ -58,6 +60,12 @@
  * rows the box had room for**, so a card resized smaller does not change what "$221.70 to finish
  * the rest" is a total of. See {@link completionFooter}.
  *
+ * **It is one line at any width** — `WidgetFooterLine`, drawing {@link CompletionFooter.line} and
+ * speaking the sentence — and it is reserved at what that line draws, `fit.ts`' `footerLinePx`: the
+ * 16px line and the body's gap above it, 24px comfortable and 21 compact. The live pass of
+ * 2026-09-26 measured both, against the 22 this reserved before, and found the whole sentence
+ * wrapping onto a second line at three cells wide.
+ *
  * ## Staying fresh: one bridge, from `["collection"]`
  *
  * The key sits under `["decks"]`, which every deck write already invalidates. **But owned copies
@@ -79,7 +87,7 @@
 import { useEffect, type ReactElement } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { plural } from "@/lib/counts";
+import { count, plural } from "@/lib/counts";
 import { ipc, ipcError, type DeckCompletion, type DeckRow } from "@/lib/ipc";
 import { DEFAULT_MARKETPLACE, type Currency, type Marketplace } from "@/lib/marketplace";
 import { sortOptions } from "@/lib/options";
@@ -87,8 +95,9 @@ import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 
+import { footerLinePx } from "../fit";
 import { deckCompletionKey, deckListKey } from "../keys";
-import { WidgetFooter, WidgetMessage, WidgetRow, WidgetRowList } from "../WidgetParts";
+import { WidgetFooterLine, WidgetMessage, WidgetRow, WidgetRowList } from "../WidgetParts";
 import type { WidgetBodyProps } from "../widgetProps";
 import { pickOf, toggleOnOf } from "../widgetSettings";
 import { widgetMeta } from "../widgets";
@@ -103,15 +112,15 @@ export type CompletionRow = DeckCompletion & { name: string };
 
 /**
  * A row's height — `SetCompletionWidget.tsx:55-57`'s sum (36 bare, +15 a caption, +6 the track),
- * and this kind always draws its track. **Asked of the row actually drawn**, for that function's
- * reason: a tile moves its figure under the name, so it is a captioned row whatever its density.
+ * and this kind always draws its track. **The height the list is counted at**, which is not always
+ * the height a given row draws: `rowsFit` takes one height for the whole list, so the body asks this
+ * of the tallest row it may draw — a tile moves its figure under the name, so every tile row is
+ * captioned, and once a compact panel lists a plan's row every row is counted as captioned while a
+ * live row beside it still draws bare.
  */
 function rowPx(caption: boolean): number {
   return 36 + (caption ? 15 : 0) + 6;
 }
-
-/** The footer's line and the gap above it — `DecksWidget.tsx:92`'s `FOOTER_ROOM`. */
-const FOOTER_ROOM = 22;
 
 /** The bridge's marker segment — a word no other reader of `["collection"]` uses, so nothing that
  *  matches by prefix (`setQueriesData(["collection", "list"])`) can reach it. */
@@ -221,7 +230,7 @@ export function sortCompletions(
   }
 }
 
-/** The footer's facts and its sentence. */
+/** The footer's facts and its two spellings. */
 export interface CompletionFooter {
   /** Decks in scope missing nothing. */
   complete: number;
@@ -229,8 +238,12 @@ export interface CompletionFooter {
   cost: number | null;
   /** Missing copies across the rest with no price at this marketplace. */
   unpriced: number;
-  /** `2 decks complete · $221.70 to finish the rest · 3 copies unpriced`, or `""`. */
+  /** `2 decks complete · $221.70 to finish the rest · 3 copies unpriced`, or `""` — the footer's
+   *  hint and what a screen reader hears. */
   text: string;
+  /** The same clauses in their short words, in the same order — `2 complete · $221.70 to finish ·
+   *  3 unpriced` — which is what the footer's one line draws. */
+  line: string;
 }
 
 /**
@@ -239,6 +252,12 @@ export interface CompletionFooter {
  * Complete is `missing === 0`. The cost sums every incomplete deck's `missingCost` that is not
  * `null`; the unpriced copies are counted beside it at the same marketplace and never summed as
  * zero, so a deck short only unpriced copies adds `$0.00` and says its copies.
+ *
+ * **Two spellings, because a footer is one line** (`WidgetFooterLine`). The whole sentence ran to
+ * ~345–380px of 12px Geist and wrapped at every three-cell width into space the rows had been
+ * counted without; `line` is ~250 and keeps the clauses in the sentence's order, so where even it
+ * is cut, the ellipsis takes the unpriced copies first — which the sentence and each row's hint
+ * still say.
  */
 export function completionFooter(
   rows: readonly CompletionRow[],
@@ -256,14 +275,21 @@ export function completionFooter(
     unpriced += row.unpricedMissing;
   }
   const parts: string[] = [];
-  if (complete > 0) parts.push(`${plural(complete, "deck")} complete`);
-  if (cost !== null) {
-    parts.push(
-      `${formatPrice(cost, currency)} to finish ${complete > 0 ? "the rest" : "every deck here"}`,
-    );
+  const short: string[] = [];
+  if (complete > 0) {
+    parts.push(`${plural(complete, "deck")} complete`);
+    short.push(`${count(complete)} complete`);
   }
-  if (unpriced > 0) parts.push(`${plural(unpriced, "copy", "copies")} unpriced`);
-  return { complete, cost, unpriced, text: parts.join(" · ") };
+  if (cost !== null) {
+    const money = formatPrice(cost, currency);
+    parts.push(`${money} to finish ${complete > 0 ? "the rest" : "every deck here"}`);
+    short.push(`${money} to finish`);
+  }
+  if (unpriced > 0) {
+    parts.push(`${plural(unpriced, "copy", "copies")} unpriced`);
+    short.push(`${count(unpriced)} unpriced`);
+  }
+  return { complete, cost, unpriced, text: parts.join(" · "), line: short.join(" · ") };
 }
 
 /**
@@ -424,7 +450,7 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
   const footerShown = fit.tier >= 1 && footer.text !== "";
   const shown = sortCompletions(listed, order).slice(
     0,
-    fit.rowsFit(rowPx(captioned), footerShown ? FOOTER_ROOM : 0),
+    fit.rowsFit(rowPx(captioned), footerShown ? footerLinePx(fit) : 0),
   );
 
   /**
@@ -479,7 +505,7 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
           );
         })}
       </WidgetRowList>
-      {footerShown && <WidgetFooter>{footer.text}</WidgetFooter>}
+      {footerShown && <WidgetFooterLine line={footer.line} said={footer.text} />}
     </>
   );
 }

@@ -46,6 +46,15 @@
  * face is unchanged and {@link skippedFooter} is one more line — counted, never summed. And moves
  * none of which is priced is the fourth sentence.
  *
+ * ## Footers are one line
+ *
+ * The cut, the unpriced and the skipped lines are each `WidgetFooterLine`: one line at any width,
+ * drawing a short `line` (`1 more: no Cardmarket price`) and speaking the whole sentence (`1 more has
+ * no price at Cardmarket to compare against`) as its hint and to a screen reader. Each is reserved
+ * at what one line draws, `fit.ts`' `footerLinePx` — 24px comfortable, 21 compact. The live pass of
+ * 2026-09-26 found the skipped sentence on two lines at every two-cell width and three at a 1024px
+ * window, against a reservation of one 22px line, and the body scrolling under it.
+ *
  * ## A press opens the dialog
  *
  * A row or the figure writes `setActiveView("wishlist")` and then `setPendingOptimize()` — the view
@@ -67,13 +76,15 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 
+import { footerLinePx } from "../fit";
 import { wishlistSavingsKey } from "../keys";
 import {
   WidgetFigures,
-  WidgetFooter,
+  WidgetFooterLine,
   WidgetMessage,
   WidgetRow,
   WidgetRowList,
+  type FooterWords,
 } from "../WidgetParts";
 import type { WidgetBodyProps } from "../widgetProps";
 
@@ -83,8 +94,6 @@ const ROW_BARE = 36;
 /** The figure line, comfortable and compact — `CollectionValueWidget.tsx`'s two numbers. */
 const FIGURES_PX = 74;
 const FIGURES_COMPACT_PX = 62;
-/** One footer line and the gap above it. */
-const FOOTER_PX = 22;
 
 const PENDING = "Pricing your pinned wishes…";
 export const NO_WISHES =
@@ -119,30 +128,47 @@ export function moveCaption(move: WishOptimizeMove, currency: Currency): string 
 }
 
 /**
- * The moves that did not fit: `4 more wishes save $11.45`.
+ * The moves that did not fit: `4 more save $11.45`, said as `4 more wishes save $11.45`.
  *
  * **Only the priced moves count, in the number as in the sum.** The body only ever cuts from the
  * priced list, so this is a fence for the next caller rather than a branch the card takes: an
  * unpriced move handed in is neither counted as a wish that saves nor added as zero, and a cut with
- * nothing priced in it answers `""` rather than `0 more wishes save $0.00`.
+ * nothing priced in it answers `null` rather than `0 more wishes save $0.00`.
+ *
+ * Each footer answers two spellings (`FooterWords`), because a footer is one line
+ * (`WidgetFooterLine`): the `line` is drawn and the `said` sentence is its hint and what a screen
+ * reader hears. See the module doc's *Footers are one line*.
  */
-export function cutFooter(cut: readonly WishOptimizeMove[], currency: Currency): string {
+export function cutFooter(cut: readonly WishOptimizeMove[], currency: Currency): FooterWords | null {
   const priced = cut.filter((move) => move.saved !== null);
-  if (priced.length === 0) return "";
-  const sum = priced.reduce((total, move) => total + (move.saved ?? 0), 0);
+  if (priced.length === 0) return null;
+  const sum = formatPrice(
+    priced.reduce((total, move) => total + (move.saved ?? 0), 0),
+    currency,
+  );
   const n = priced.length;
-  return `${count(n)} more ${n === 1 ? "wish saves" : "wishes save"} ${formatPrice(sum, currency)}`;
+  return {
+    line: `${count(n)} more ${n === 1 ? "saves" : "save"} ${sum}`,
+    said: `${count(n)} more ${n === 1 ? "wish saves" : "wishes save"} ${sum}`,
+  };
 }
 
-/** The moves with no current price, on their own line: `2 more have no current price`. */
-export function unpricedFooter(n: number): string {
-  return `${count(n)} more ${n === 1 ? "has" : "have"} no current price`;
+/** The moves with no current price, on their own line: `2 more: no current price`, said as
+ *  `2 more have no current price`. */
+export function unpricedFooter(n: number): FooterWords {
+  return {
+    line: `${count(n)} more: no current price`,
+    said: `${count(n)} more ${n === 1 ? "has" : "have"} no current price`,
+  };
 }
 
-/** The pinned wishes the plan could not compare, beside moves it could:
- *  `2 more have no price at Card Kingdom to compare against`. */
-export function skippedFooter(n: number, marketplace: Marketplace): string {
-  return `${count(n)} more ${n === 1 ? "has" : "have"} no price at ${marketplace.label} to compare against`;
+/** The pinned wishes the plan could not compare, beside moves it could: `2 more: no Card Kingdom
+ *  price`, said as `2 more have no price at Card Kingdom to compare against`. */
+export function skippedFooter(n: number, marketplace: Marketplace): FooterWords {
+  return {
+    line: `${count(n)} more: no ${marketplace.label} price`,
+    said: `${count(n)} more ${n === 1 ? "has" : "have"} no price at ${marketplace.label} to compare against`,
+  };
 }
 
 /** No move, and pinned wishes the plan could not compare — a sentence, never *already cheapest*. */
@@ -191,7 +217,7 @@ export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactEle
     );
   }
   const skippedLine =
-    skipped > 0 ? <WidgetFooter>{skippedFooter(skipped, marketplace)}</WidgetFooter> : null;
+    skipped > 0 ? <WidgetFooterLine {...skippedFooter(skipped, marketplace)} /> : null;
   const { priced, unpriced, total } = splitSavings(plan.moves);
   if (priced.length === 0) {
     return (
@@ -211,14 +237,15 @@ export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactEle
   const tile = fit.tier === 0;
   const captioned = tile || !fit.compact;
   const rowH = captioned ? ROW_CAPTIONED : ROW_BARE;
+  const footer = footerLinePx(fit);
   const base =
     (fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX) +
-    (unpriced > 0 ? FOOTER_PX : 0) +
-    (skipped > 0 ? FOOTER_PX : 0);
+    (unpriced > 0 ? footer : 0) +
+    (skipped > 0 ? footer : 0);
   const all = fit.rowsFit(rowH, base);
-  const room = priced.length > all ? fit.rowsFit(rowH, base + FOOTER_PX) : all;
+  const room = priced.length > all ? fit.rowsFit(rowH, base + footer) : all;
   const shown = priced.slice(0, room);
-  const cut = priced.slice(room);
+  const cutWords = cutFooter(priced.slice(room), currency);
 
   const openOptimise = still
     ? undefined
@@ -278,8 +305,8 @@ export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactEle
           );
         })}
       </WidgetRowList>
-      {cut.length > 0 && <WidgetFooter>{cutFooter(cut, currency)}</WidgetFooter>}
-      {unpriced > 0 && <WidgetFooter>{unpricedFooter(unpriced)}</WidgetFooter>}
+      {cutWords !== null && <WidgetFooterLine {...cutWords} />}
+      {unpriced > 0 && <WidgetFooterLine {...unpricedFooter(unpriced)} />}
       {skippedLine}
     </>
   );

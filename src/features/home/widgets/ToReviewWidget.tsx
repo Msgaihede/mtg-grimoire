@@ -12,16 +12,24 @@
  * it** — `setActiveView` first and the hand-off second, because the view change is what clears
  * every hand-off (`store.ts`'s `pendingFolder` argues it once for all of them). The binder and the
  * wishlist open with their needs-review filter on (`pendingReviewFilter`), the deck cards open
- * Settings on the `sync` group that holds Needs review (`pendingSettingsGroup`), and Recently
- * removed is the folder hand-off `FoldersWidget` already makes. The scanner needs none.
+ * Settings with the Needs review panel brought into view (`pendingSettingsPanel`, `"review"` — the
+ * page opens the `sync` group that holds it and scrolls it to the top, because the group alone left
+ * the flagged rows below the fold), and Recently removed is the folder hand-off `FoldersWidget`
+ * already makes. The scanner needs none.
  *
  * ## Rows or copies, and the caption says which
  *
  * The flagged rows count **rows** — `collection_summary.needsReview` counts entries, a flagged wish
  * is a wish, a flagged deck card a `deck_cards` row — and each row's name says the unit. The
  * removed folder counts **copies**, because that is how a reader thinks of a holding area, so its
- * caption says `5 copies` and it carries no second figure to say the same thing twice.
- * {@link reviewRows} is where every one of these words is decided, and it is pure.
+ * caption says `5 copies` and it carries no second figure to say the same thing twice. **The
+ * scanned cards count copies too, in the Scanner's own words** — its figure is the copies the
+ * tray's heading counts and its caption the tray's `N cards to pick` — because the row opens that
+ * tray, and the two must read one number the same way ({@link trayCounts}). {@link reviewRows} is
+ * where every one of these words is decided, and it is pure.
+ *
+ * **A press is named by what its row draws**, and only that ({@link spoken}): the name, then the
+ * caption and the figure this box drew — WCAG 2.5.3's label in name.
  *
  * ## Five reads, one of them new
  *
@@ -51,7 +59,7 @@ import { Camera, Heart, Inbox } from "lucide-react";
 
 import { CabinetFiling, Cards } from "@/components/icons";
 import { useCollectionFolders } from "@/features/collection/useCollectionFolders";
-import { unresolvedCount } from "@/features/scanner/reader/tray";
+import { totalCopies, unresolvedCount } from "@/features/scanner/reader/tray";
 import { count } from "@/lib/counts";
 import { ipc, ipcError, type ScannerTrayRow, type WishlistQuery } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -127,10 +135,20 @@ const ICONS: Record<ReviewRowKind, ReactNode> = {
   removed: <Inbox className="size-3.5" aria-hidden="true" />,
 };
 
-/** The tray's two numbers. A row is still a choice while it has `choices` — the tray's own
- *  {@link unresolvedCount}, asked rather than restated, so the rule has one spelling. */
+/**
+ * The tray's two numbers, **as the Scanner counts them**: `scanned` is copies — the tray's own
+ * {@link totalCopies}, which heads its tray `Scanned cards 2` over one row of two — and
+ * `unresolved` is rows still waiting on a printing, {@link unresolvedCount}, which the tray says as
+ * `1 card to pick`. Both asked rather than restated, so each rule has one spelling; the live pass
+ * (2026-09-26) found this row counting rows and reading `1` beside a Scanner reading `2`.
+ */
 export function trayCounts(rows: readonly ScannerTrayRow[]): { scanned: number; unresolved: number } {
-  return { scanned: rows.length, unresolved: unresolvedCount(rows) };
+  return { scanned: totalCopies(rows), unresolved: unresolvedCount(rows) };
+}
+
+/** `1 copy`, `6 copies` — with the thousands separator every other count here carries. */
+function copies(n: number): string {
+  return `${count(n)} ${n === 1 ? "copy" : "copies"}`;
 }
 
 function flaggedRow(
@@ -164,13 +182,16 @@ export function reviewRows(
 ): ReviewRow[] {
   const rows: ReviewRow[] = [];
   if (!opts.web && counts.scanned > 0) {
+    // `TrayPanel`'s words for its two numbers: the figure is the copies its heading counts, and
+    // the caption the `N cards to pick` beside it. The tile has no heading to lean on, so it names
+    // the copies.
     const n = counts.unresolved;
     rows.push({
       kind: "scanned",
       name: "Scanned cards",
-      caption: n > 0 ? `${count(n)} ${n === 1 ? "needs" : "need"} a printing chosen` : "Ready to add",
+      caption: n > 0 ? `${count(n)} ${n === 1 ? "card" : "cards"} to pick` : "Ready to add",
       tileCaption:
-        n > 0 ? `${count(counts.scanned)} · ${count(n)} to choose` : `${count(counts.scanned)} ready`,
+        n > 0 ? `${copies(counts.scanned)} · ${count(n)} to pick` : `${copies(counts.scanned)} ready`,
       value: count(counts.scanned),
       pressable: true,
     });
@@ -189,12 +210,12 @@ export function reviewRows(
     );
   }
   if (opts.removed && counts.removed > 0 && counts.removedFolderId !== null) {
-    const copies = `${count(counts.removed)} ${counts.removed === 1 ? "copy" : "copies"}`;
+    const held = copies(counts.removed);
     rows.push({
       kind: "removed",
       name: "Recently removed",
-      caption: copies,
-      tileCaption: copies,
+      caption: held,
+      tileCaption: held,
       value: null,
       pressable: true,
       folderId: counts.removedFolderId,
@@ -203,12 +224,18 @@ export function reviewRows(
   return rows;
 }
 
-/** The whole row in one string — a `gap` between flex children with no whitespace text node
- *  computes to "WishesFlagged for review1" (`DecksWidget.tsx:314-321`). */
-function spoken(row: ReviewRow): string {
-  return [row.name, row.caption, row.value]
-    .filter((part): part is string => part !== null && part !== "")
-    .join(" · ");
+/**
+ * A press's name: **the parts the row draws**, joined — never the parts it could have drawn.
+ *
+ * One string, because a `gap` between flex children with no whitespace text node computes to
+ * "WishesFlagged for review1" (`DecksWidget.tsx:314-321`). And only what is drawn, because a name
+ * that does not contain the visible text fails WCAG 2.5.3: the tile drew `3 flagged` and spoke
+ * `Wishes · Flagged for review · 3` (the final review, 2026-09-26), so a reader driving by voice
+ * could not say what they saw. The body hands over exactly the caption and figure it passes to the
+ * row, so the two cannot come apart.
+ */
+function spoken(...parts: (string | undefined)[]): string {
+  return parts.filter((part): part is string => part !== undefined && part !== "").join(" · ");
 }
 
 export function ToReviewWidget({
@@ -221,7 +248,7 @@ export function ToReviewWidget({
   const { marketplace } = useMarketplace();
   const setActiveView = useAppStore((s) => s.setActiveView);
   const setPendingReviewFilter = useAppStore((s) => s.setPendingReviewFilter);
-  const setPendingSettingsGroup = useAppStore((s) => s.setPendingSettingsGroup);
+  const setPendingSettingsPanel = useAppStore((s) => s.setPendingSettingsPanel);
   const setPendingFolder = useAppStore((s) => s.setPendingFolder);
 
   const tray = useQuery({
@@ -229,8 +256,11 @@ export function ToReviewWidget({
     queryFn: async () => trayCounts(await ipc.scannerTray()),
     // No scanner on the browser build, and `scanner_tray` is not routed there.
     enabled: !web,
-    // Nothing invalidates this key — the tray's writes feed `["scanner", "tray"]` by
-    // `setQueryData` — so it is read afresh on every mount rather than trusted for the app's 30 s.
+    // With one window open nothing invalidates this key — the tray's writes feed
+    // `["scanner", "tray"]` by `setQueryData`, and the Scanner and this card are never on screen
+    // together — so it is read afresh on every mount rather than trusted for the app's 30 s. A
+    // second window's tray write is an `app_meta` commit, which `lib/crossWindow.ts` answers by
+    // refreshing this key here (`FOLLOW_LIVE_APP_META`).
     staleTime: 0,
   });
   const collection = useQuery({
@@ -307,7 +337,7 @@ export function ToReviewWidget({
         return;
       case "deckCards":
         setActiveView("settings");
-        setPendingSettingsGroup("sync");
+        setPendingSettingsPanel("review");
         return;
       case "removed":
         if (row.folderId === undefined) return;
@@ -330,12 +360,15 @@ export function ToReviewWidget({
     <WidgetRowList fit={fit}>
       {shown.map((row) => {
         const onPress = still || !row.pressable ? undefined : () => open(row);
-        const pressLabel = onPress === undefined ? undefined : spoken(row);
+        // What this box draws under the name and at the right — and so what the press is named.
+        const caption = tile ? row.tileCaption : captioned ? row.caption : undefined;
+        const value = tile ? undefined : (row.value ?? (captioned ? undefined : row.caption));
+        const pressLabel = onPress === undefined ? undefined : spoken(row.name, caption, value);
         return tile ? (
           <WidgetRow
             key={row.kind}
             name={row.name}
-            caption={row.tileCaption}
+            caption={caption}
             captionStrong
             icon={ICONS[row.kind]}
             hint={row.hint}
@@ -346,8 +379,8 @@ export function ToReviewWidget({
           <WidgetRow
             key={row.kind}
             name={row.name}
-            caption={captioned ? row.caption : undefined}
-            value={row.value ?? (captioned ? undefined : row.caption)}
+            caption={caption}
+            value={value}
             icon={ICONS[row.kind]}
             hint={row.hint}
             onPress={onPress}

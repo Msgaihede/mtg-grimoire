@@ -343,6 +343,49 @@ export function WidgetFooter({ children }: { children: ReactNode }): ReactElemen
   return <p className="m-0 shrink-0 text-xs text-dim">{children}</p>;
 }
 
+/** A footer's two spellings: the `line` it draws, and the whole sentence it is `said` as. */
+export interface FooterWords {
+  line: string;
+  /** Omitted when the line is already the whole sentence. */
+  said?: string;
+}
+
+/**
+ * A footer that is **exactly one line at any width** — `truncate`, so a sentence too long for the
+ * box ends in an ellipsis instead of wrapping onto a second line nothing reserved.
+ *
+ * {@link WidgetFooter} wraps, and a body reserves one line for it; the live pass of 2026-09-26
+ * found three of those footers on two and three lines and a body scrolling under them. A body that
+ * counts its rows against `fit.ts`' `footerLinePx` draws its footer here, which is what makes that
+ * figure a reservation rather than an estimate.
+ *
+ * **Two spellings, and the short one is what makes the ellipsis rare**: `line` is drawn, and `said`
+ * — the whole sentence — is both the hint and what a screen reader hears, so the words a cut line
+ * lost are never lost to anybody. The drawn line is `aria-hidden` beside an `sr-only` sentence
+ * rather than an `aria-label`, because a `<p>` is a role whose name is prohibited. **`relative`**,
+ * so that `sr-only`'s absolute span has this line for its containing block rather than whatever
+ * positioned box is above the body's scroller (`src/CLAUDE.md`'s scroll-container rule). The hint
+ * does not describe: the sentence is already this element's text, and describing it again would
+ * say it twice. A line that is its own sentence is drawn once and hinted only when cut.
+ */
+export function WidgetFooterLine({ line, said }: FooterWords): ReactElement {
+  const tip = useTooltip();
+  const box = "relative m-0 shrink-0 truncate text-xs text-dim";
+  if (said === undefined || said === line) {
+    return (
+      <p className={box} {...tip(line, { whenClipped: true })}>
+        {line}
+      </p>
+    );
+  }
+  return (
+    <p className={box} {...tip(said, { describes: false })}>
+      <span aria-hidden="true">{line}</span>
+      <span className="sr-only">{said}</span>
+    </p>
+  );
+}
+
 /**
  * The one sentence a body draws instead of its content: *counting*, *nothing yet*, or a refusal.
  * A refusal is the destructive colour; everything else is dim.

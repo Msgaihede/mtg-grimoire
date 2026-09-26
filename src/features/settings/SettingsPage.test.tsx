@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SyncStatus } from "@/lib/ipc";
 import type { Update } from "@/lib/useUpdate";
 import { useAppStore } from "@/lib/store";
@@ -517,41 +517,67 @@ describe("the rail decides what the pane draws", () => {
 });
 
 /**
- * **The group another page asked this one to open on** — `store.ts`'s `pendingSettingsGroup`, the
- * To review widget's `Deck cards` row, which sends the reader to the Needs review panel under
- * `Sync`.
+ * **The panel another page asked this one to bring into view** — `store.ts`'s
+ * `pendingSettingsPanel`, the To review widget's `Deck cards` row, which sends the reader to the
+ * Needs review panel. It used to name the `Sync` group, and the live pass (2026-09-26, 1920×1080)
+ * found the page opening on Sync scrolled to the top, with the Needs review heading at y=976 and its
+ * flagged rows below the fold.
  *
  * The store is a module singleton this file does not otherwise reset, so every case here puts the
- * field back — a hand-off left written would open every later case on that group.
+ * field back — a hand-off left written would open every later case on that panel. And jsdom defines
+ * no `scrollIntoView` (`AnchoredPopup.test.tsx:16`), so the cases that read the scroll put a spy on
+ * the prototype and take it off again.
  */
-describe("a group another page asked for", () => {
+describe("a panel another page asked for", () => {
+  let scroll: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll as unknown as Element["scrollIntoView"];
+  });
   afterEach(() => {
-    useAppStore.setState({ pendingSettingsGroup: null });
+    useAppStore.setState({ pendingSettingsPanel: null });
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
   });
 
   /** Drawn on the first commit: a render-phase adjustment, so there is no frame of `Updates`. */
-  it("opens on the group it names, and spends the hand-off doing it", async () => {
-    useAppStore.setState({ pendingSettingsGroup: "sync" });
+  it("opens on the group that holds the panel, and spends the hand-off doing it", async () => {
+    useAppStore.setState({ pendingSettingsPanel: "review" });
     render(wrap(<SettingsPage update={NO_UPDATE} />));
 
     expect(screen.getByRole("region", { name: "Needs review" })).toBeInTheDocument();
     expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
-    await waitFor(() => expect(useAppStore.getState().pendingSettingsGroup).toBeNull());
+    await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
   });
 
   /**
-   * **A word this rail has no group for is dropped, and still spent.** The store holds a plain
-   * string so it needs nothing from this feature; the narrowing is the page's, and a prototype key
-   * is not a group either.
+   * **The panel is brought to the top of the pane**, not merely its group opened: Needs review is
+   * the second panel under Sync, below a Sync panel tall enough to hold it off the screen. jsdom
+   * lays nothing out, so what is pinned is the call — on the panel's own section, at `start`.
    */
-  it.each(["review", "constructor"])(
+  it("scrolls the panel it names to the top of the pane", async () => {
+    useAppStore.setState({ pendingSettingsPanel: "review" });
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    const panel = screen.getByRole("region", { name: "Needs review" });
+    await waitFor(() => expect(scroll.mock.contexts).toContain(panel));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll).toHaveBeenCalledWith({ block: "start" });
+  });
+
+  /**
+   * **A word this page has no panel for is dropped, and still spent** — scrolling nothing. The
+   * store holds a plain string so it needs nothing from this feature; the narrowing is the page's.
+   * A group's name is not a panel's (`carddata`), and a prototype key is neither.
+   */
+  it.each(["carddata", "constructor"])(
     "drops %s, opens on Updates, and spends the hand-off anyway",
     async (word) => {
-      useAppStore.setState({ pendingSettingsGroup: word });
+      useAppStore.setState({ pendingSettingsPanel: word });
       render(wrap(<SettingsPage update={NO_UPDATE} />));
 
       expect(screen.getByText("panel:update")).toBeInTheDocument();
-      await waitFor(() => expect(useAppStore.getState().pendingSettingsGroup).toBeNull());
+      await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+      expect(scroll).not.toHaveBeenCalled();
     },
   );
 
@@ -560,11 +586,11 @@ describe("a group another page asked for", () => {
    * path, which the cases above skip by writing the field before the render. It is the path the
    * widget's two store writes take when they land in two commits.
    */
-  it("opens on a group asked for after the page has mounted", async () => {
+  it("opens on a panel asked for after the page has mounted, and scrolls to it", async () => {
     render(wrap(<SettingsPage update={NO_UPDATE} />));
     expect(screen.getByText("panel:update")).toBeInTheDocument();
 
-    act(() => useAppStore.setState({ pendingSettingsGroup: "sync" }));
+    act(() => useAppStore.setState({ pendingSettingsPanel: "review" }));
 
     // The rail's own entry, scoped: the Sync panel now mounted beside it draws buttons of its own.
     const rail = screen.getByRole("navigation", { name: "Settings" });
@@ -572,16 +598,31 @@ describe("a group another page asked for", () => {
       "aria-current",
       "page",
     );
-    expect(screen.getByRole("region", { name: "Needs review" })).toBeInTheDocument();
+    const panel = screen.getByRole("region", { name: "Needs review" });
     expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
-    await waitFor(() => expect(useAppStore.getState().pendingSettingsGroup).toBeNull());
+    await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+    expect(scroll.mock.contexts).toContain(panel);
+  });
+
+  /** A query outranks the group, so a hand-off arriving under one clears it — or the press would
+   *  visibly do nothing — even where the rail already stands on the right group. */
+  it("clears a standing query so the panel it names is drawn", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+    await pickGroup("Sync");
+    await userEvent.type(searchBox(), "dropbox");
+    expect(screen.queryByRole("region", { name: "Needs review" })).not.toBeInTheDocument();
+
+    act(() => useAppStore.setState({ pendingSettingsPanel: "review" }));
+
+    expect(searchBox()).toHaveValue("");
+    expect(screen.getByRole("region", { name: "Needs review" })).toBeInTheDocument();
   });
 
   it("does not survive to a second visit", async () => {
-    useAppStore.setState({ pendingSettingsGroup: "storage" });
+    useAppStore.setState({ pendingSettingsPanel: "backup" });
     const first = render(wrap(<SettingsPage update={NO_UPDATE} />));
     expect(screen.getByText("panel:backup")).toBeInTheDocument();
-    await waitFor(() => expect(useAppStore.getState().pendingSettingsGroup).toBeNull());
+    await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
 
     first.unmount();
     render(wrap(<SettingsPage update={NO_UPDATE} />));

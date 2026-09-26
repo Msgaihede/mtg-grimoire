@@ -16,6 +16,12 @@
 //!   announced a set from 2020 as coming soon. Asked of `cards` too, so it holds in a browser.
 //!   Where `sets` has a row, `set_type` `token`, `promo`, `memorabilia` and `minigame` drop out
 //!   as well; a row with no type is kept.
+//! * **`previewed`** is the number the search draws for the set: its chip on `Any card`, every
+//!   paper printing in the set's code, one per card (`search.rs`' `COLLAPSE_KEY`). A press on the
+//!   row opens exactly that search, and the live pass read `461 seen` for one set beside a search
+//!   saying `285 cards` (2026-09-26) — the set's 461 collector numbers were 285 cards and their
+//!   showcase and borderless printings. So the window decides which sets are coming, and never
+//!   what a set counts.
 //! * **`in_decks`** is `new_printings`' defaults: decks that are not virtual, live and theory rows
 //!   alike, basic lands left out through [`crate::new_printings::BASIC_LAND_LIKE`].
 //!
@@ -29,9 +35,10 @@
 //! desktop.
 
 // Layouts that are not a card anyone plays — `search.rs`' ranking list, shared rather than
-// copied, so a layout Scryfall adds is left out of the search's ranking and this count by one
-// edit. It carries `front_card` as well as the four the widget's spec named.
-use crate::search::NON_CARD_LAYOUTS;
+// copied, so a layout Scryfall adds is left out of the search's ranking and this window by one
+// edit. It carries `front_card` as well as the four the widget's spec named. And the search's
+// spelling of "the same card", which `previewed` counts with so it is the search's number.
+use crate::search::{COLLAPSE_KEY, NON_CARD_LAYOUTS};
 #[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
@@ -65,7 +72,10 @@ pub struct UpcomingSet {
     pub name: String,
     /// The set's earliest card date in the window, `YYYY-MM-DD`.
     pub released_at: String,
-    /// `count(DISTINCT collector_number)` — a second language of one card is not a second card.
+    /// The number the search draws for the set's chip on `Any card`: every paper printing of the
+    /// set, **one per card** (`search.rs`' `COLLAPSE_KEY`) — so a showcase, a borderless or a
+    /// second language of one card is not a second card, and a card of the set dated past the
+    /// window still counts, as it does there.
     pub previewed: i64,
     /// Distinct oracle cards in the window that a deck which is not virtual already holds,
     /// basic lands left out.
@@ -94,11 +104,19 @@ pub fn upcoming_sets_for(conn: &Connection, days: i64) -> Result<UpcomingSets, S
     // `held` is `new_printings::feed`'s `held` CTE with that widget's defaults fixed:
     // every deck that is not virtual, both lists, basics out. `count(DISTINCT h.oracle_id)` is the
     // held cards among the window's — `held` is distinct, so the join never multiplies a row.
+    //
+    // **`previewed` is not asked of the window at all.** It is the search's own count for the
+    // set's chip on `Any card` — every paper printing of the set, one per `COLLAPSE_KEY` — because
+    // a press on the row opens exactly that search, and a row reading `461 seen` over a search
+    // reading `285 cards` is one set counted two ways (the live pass, 2026-09-26: FRA's 461
+    // collector numbers are 285 cards and their showcase and borderless printings). A correlated
+    // subquery rather than an aggregate over `upcoming`, which would count only the window's
+    // printings of the window's layouts; it is a result column, so it runs for the sets `HAVING`
+    // keeps and seeks `idx_cards_set_cn` on the code the released-set rule has already walked.
     let sql = format!(
         "WITH upcoming AS (
              SELECT c.set_code AS set_code, c.set_name AS set_name,
-                    c.collector_number AS collector_number, c.released_at AS released_at,
-                    c.oracle_id AS oracle_id
+                    c.released_at AS released_at, c.oracle_id AS oracle_id
                FROM cards c
                LEFT JOIN sets s ON s.code = c.set_code
               WHERE c.rowid IN (SELECT rowid FROM cards
@@ -120,7 +138,8 @@ pub fn upcoming_sets_for(conn: &Connection, days: i64) -> Result<UpcomingSets, S
          SELECT u.set_code,
                 coalesce(max(u.set_name), u.set_code),
                 min(u.released_at),
-                count(DISTINCT u.collector_number),
+                (SELECT count(DISTINCT {COLLAPSE_KEY}) FROM cards c
+                  WHERE c.set_code = u.set_code AND c.is_paper = 1),
                 count(DISTINCT h.oracle_id)
            FROM upcoming u
            LEFT JOIN held h ON h.oracle_id = u.oracle_id
@@ -266,8 +285,11 @@ mod tests {
         );
     }
 
-    /// **Each excluded layout, and a printing that is not paper.** A set is counted by its real
-    /// cards only, and a set of nothing but tokens is no set at all.
+    /// **Each excluded layout, and a printing that is not paper.** Only a real card can make a set
+    /// coming soon, so a set of nothing but tokens is no set at all. **What the set then counts is
+    /// the search's number** — see `previewed_is_the_number_the_search_draws_for_the_set` — which
+    /// draws every paper printing in the set's own code on `Any card`, non-cards included; the
+    /// digital one is left out of both.
     #[test]
     fn each_excluded_layout_and_a_digital_printing_are_left_out() {
         let c = conn();
@@ -299,7 +321,10 @@ mod tests {
 
         let out = upcoming_sets_for(&c, 90).unwrap();
         assert_eq!(codes(&out), ["tdm"]);
-        assert_eq!(out.sets[0].previewed, 1, "only the real card is previewed");
+        assert_eq!(
+            out.sets[0].previewed, 6,
+            "the real card and the five non-cards filed under its code, as the search draws them"
+        );
     }
 
     /// **`set_type` decides only where `sets` has a row.** The browser build never fills `sets`,
@@ -340,8 +365,8 @@ mod tests {
 
     /// **`in_decks` is `new_printings`' defaults**: a card counts once however many printings or
     /// languages of it the set previews, a theory row counts, and a card held only by a virtual
-    /// deck or a basic land does not. `previewed` counts collector numbers, so a second language
-    /// of one card is not a second card.
+    /// deck or a basic land does not. `previewed` counts cards, so neither a second language nor
+    /// a showcase printing of one card is a second card.
     #[test]
     fn in_decks_counts_held_cards_once_and_skips_basics_and_virtual_decks() {
         let c = conn();
@@ -372,8 +397,9 @@ mod tests {
         let out = upcoming_sets_for(&c, 90).unwrap();
         assert_eq!(codes(&out), ["tdm"]);
         assert_eq!(
-            out.sets[0].previewed, 6,
-            "1, 301, 2, 3, 4 and 5 — the Japanese Sol Ring shares 1"
+            out.sets[0].previewed, 5,
+            "Sol Ring, the bird, the Forest, the angel and the other — Sol Ring's Japanese and \
+             showcase printings are Sol Ring"
         );
         assert_eq!(
             out.sets[0].in_decks, 2,
@@ -435,6 +461,50 @@ mod tests {
         let out = upcoming_sets_for(&c, 90).unwrap();
         assert_eq!(codes(&out), ["new"], "only the wholly future set");
         assert_eq!(out.sets[0].previewed, 2);
+    }
+
+    /// **`previewed` is the number the search draws for that set**, because pressing the row opens
+    /// exactly that search: the set's chip on `Any card`, collapsed to one row per card. So it is
+    /// asked of [`crate::search::run_search`] here rather than restated — the live pass read
+    /// `461 seen` beside a search saying `285 cards` for one set, where the difference was the
+    /// set's showcase and borderless printings (2026-09-26, FRA). The fixture has what made the
+    /// two disagree and what could still: a card in three printings, a second language of it, a
+    /// second card, a card of the set dated **past** the window, which the search counts and the
+    /// window does not reach, and a token in the set's own code, which the window's layout rule
+    /// leaves out and the search on `Any card` does not.
+    #[test]
+    fn previewed_is_the_number_the_search_draws_for_the_set() {
+        let c = conn();
+        card(&c, "bolt-1", "o-bolt", "fra", "1", 10, "normal");
+        card(&c, "bolt-showcase", "o-bolt", "fra", "301", 10, "normal");
+        card(&c, "bolt-borderless", "o-bolt", "fra", "402", 10, "normal");
+        card(&c, "bolt-ja", "o-bolt", "fra", "1", 10, "normal");
+        card(&c, "ring-2", "o-ring", "fra", "2", 10, "normal");
+        card(&c, "late-3", "o-late", "fra", "3", 200, "normal");
+        // A token filed under the set's own code: the window's layout rule never lets it decide
+        // that a set is coming, and the search on `Any card` still draws it.
+        card(&c, "token-t1", "o-token", "fra", "T1", 10, "token");
+        c.execute("UPDATE cards SET lang = 'ja' WHERE id = 'bolt-ja'", [])
+            .unwrap();
+
+        let out = upcoming_sets_for(&c, 90).unwrap();
+        let search = crate::search::run_search(
+            &c,
+            &crate::search::SearchRequest {
+                sets: Some(vec!["fra".into()]),
+                collapse: Some(true),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(codes(&out), ["fra"]);
+        assert_eq!(
+            search.total, 4,
+            "the fixture is what it says: three cards however printed, and the token"
+        );
+        assert_eq!(out.sets[0].previewed, search.total);
     }
 
     /// An empty corpus is an ordinary answer — today, and no sets.

@@ -167,30 +167,47 @@ describe("the words", () => {
     expect(moveCaption(RING, "usd")).toBe("Pinned $5.00 · cheapest $1.74 · 2 copies");
   });
 
+  /**
+   * **Each footer has two spellings** — the short `line` its one line draws and the sentence it is
+   * `said` as (the hint, and what a screen reader hears). The sentences are the ones the card has
+   * always said; the lines are for a two-cell tile, because the skipped sentence (288–318px of 12px
+   * Geist) wrapped onto two lines at every two-cell width and three at a 1024px window.
+   */
   it("says what the cut rows save, in the singular and the plural", () => {
-    expect(cutFooter([BOLT], "usd")).toBe("1 more wish saves $18.40");
-    expect(cutFooter([BOLT, RING], "eur")).toBe("2 more wishes save €24.92");
+    expect(cutFooter([BOLT], "usd")).toEqual({
+      line: "1 more saves $18.40",
+      said: "1 more wish saves $18.40",
+    });
+    expect(cutFooter([BOLT, RING], "eur")).toEqual({
+      line: "2 more save €24.92",
+      said: "2 more wishes save €24.92",
+    });
   });
 
   /** The number and the sum are both over what is priced, and a cut with nothing priced in it
    *  says nothing rather than `$0.00`. */
   it("never counts or sums an unpriced move in the cut line", () => {
-    expect(cutFooter([BOLT, FROG], "usd")).toBe("1 more wish saves $18.40");
-    expect(cutFooter([FROG], "usd")).toBe("");
+    expect(cutFooter([BOLT, FROG], "usd")?.said).toBe("1 more wish saves $18.40");
+    expect(cutFooter([FROG], "usd")).toBeNull();
   });
 
   it("says the unpriced moves in their own line", () => {
-    expect(unpricedFooter(1)).toBe("1 more has no current price");
-    expect(unpricedFooter(2)).toBe("2 more have no current price");
+    expect(unpricedFooter(1)).toEqual({
+      line: "1 more: no current price",
+      said: "1 more has no current price",
+    });
+    expect(unpricedFooter(2).said).toBe("2 more have no current price");
   });
 
   it("says the wishes the plan could not compare, naming the marketplace", () => {
-    expect(skippedFooter(1, MARKETPLACES.tcgplayer)).toBe(
-      "1 more has no price at TCGplayer to compare against",
-    );
-    expect(skippedFooter(2, MARKETPLACES.cardkingdom)).toBe(
-      "2 more have no price at Card Kingdom to compare against",
-    );
+    expect(skippedFooter(1, MARKETPLACES.tcgplayer)).toEqual({
+      line: "1 more: no TCGplayer price",
+      said: "1 more has no price at TCGplayer to compare against",
+    });
+    expect(skippedFooter(2, MARKETPLACES.cardkingdom)).toEqual({
+      line: "2 more: no Card Kingdom price",
+      said: "2 more have no price at Card Kingdom to compare against",
+    });
     expect(skippedOnly(1, MARKETPLACES.tcgplayer)).toBe(
       "1 pinned wish has no price at TCGplayer to compare against — so there is no saving to count.",
     );
@@ -249,13 +266,16 @@ describe("WishlistSavingsWidget", () => {
 
       draw({ fit });
 
-      // A captioned row is 51px; the figure line takes 74 and the cut line 22 before rows count.
-      const shown = fit.rowsFit(51, 74 + 22);
+      // A captioned row is 51px; the figure line takes 74 and the cut line 24 before rows count.
+      const shown = fit.rowsFit(51, 74 + 24);
       expect(fit.rowsFit(51, 74)).toBeGreaterThan(shown);
       expect(screen.getAllByRole("listitem")).toHaveLength(shown);
       expect(
         screen.getByText(`${8 - shown} more wishes save ${formatPrice(8 - shown, "usd")}`),
       ).toBeInTheDocument();
+      expect(
+        screen.getByText(`${8 - shown} more save ${formatPrice(8 - shown, "usd")}`),
+      ).toHaveAttribute("aria-hidden", "true");
     });
 
     /** The unpriced line is furniture too, reserved before any row — at a cell where it matters. */
@@ -268,13 +288,33 @@ describe("WishlistSavingsWidget", () => {
 
       draw({ fit });
 
-      const shown = fit.rowsFit(51, 74 + 22 + 22);
-      expect(fit.rowsFit(51, 74 + 22)).toBeGreaterThan(shown);
+      const shown = fit.rowsFit(51, 74 + 24 + 24);
+      expect(fit.rowsFit(51, 74 + 24)).toBeGreaterThan(shown);
       expect(screen.getAllByRole("listitem")).toHaveLength(shown);
       expect(
         screen.getByText(`${8 - shown} more wishes save ${formatPrice(8 - shown, "usd")}`),
       ).toBeInTheDocument();
       expect(screen.getByText("1 more has no current price")).toBeInTheDocument();
+    });
+
+    /**
+     * **Every footer line is reserved at what it draws: a 16px line and the body's 8px gap**, 24
+     * comfortable, against the 22 each used to reserve (the live pass measured both on
+     * 2026-09-26). Three lines are 6px apart under the two rules, and at 92px cells that is a row:
+     * a 3×3 holds two under 3 × 22 and one under 3 × 24, so a body that went back to the old
+     * reservation draws a row into its footers' space and fails here.
+     */
+    it("reserves each footer line's 16px and the 8px gap above it", () => {
+      const eight = Array.from({ length: 8 }, (_, i) =>
+        move({ wishId: 10 + i, name: `Wish ${i}`, saved: 1, savedPerCopy: 1 }),
+      );
+      seed(plan([...eight, FROG], { considered: 12, alreadyCheapest: 2, skipped: 1 }));
+      const fit = fitFor(3, 3, 92);
+      expect(fit.rowsFit(51, 74 + 22 * 3)).toBeGreaterThan(fit.rowsFit(51, 74 + 24 * 3));
+
+      draw({ fit });
+
+      expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(51, 74 + 24 * 3));
     });
 
     /**
@@ -294,12 +334,17 @@ describe("WishlistSavingsWidget", () => {
       expect(
         screen.getByRole("button", { name: "Could save $8.00 on 8 wishes · Optimise prices" }),
       ).toBeInTheDocument();
-      const shown = fit.rowsFit(51, 74 + 22 + 22);
-      expect(fit.rowsFit(51, 74 + 22)).toBeGreaterThan(shown);
+      const shown = fit.rowsFit(51, 74 + 24 + 24);
+      expect(fit.rowsFit(51, 74 + 24)).toBeGreaterThan(shown);
       expect(screen.getAllByRole("listitem")).toHaveLength(shown);
-      expect(
-        screen.getByText("1 more has no price at TCGplayer to compare against"),
-      ).toBeInTheDocument();
+      // One line, the short words drawn and the sentence spoken — the sentence wrapped at every
+      // two-cell width (the live pass, 2026-09-26).
+      const drawn = screen.getByText("1 more: no TCGplayer price");
+      expect(drawn).toHaveAttribute("aria-hidden", "true");
+      expect(drawn.closest("p")?.classList.contains("truncate")).toBe(true);
+      expect(screen.getByText("1 more has no price at TCGplayer to compare against")).toHaveClass(
+        "sr-only",
+      );
       expect(screen.queryByText(ALL_CHEAPEST)).toBeNull();
     });
 

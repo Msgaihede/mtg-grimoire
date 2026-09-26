@@ -11212,9 +11212,14 @@ export function readHandlers(db: FakeDb) {
      * **Today is {@link CLOCK_BASE}'s UTC day**, the fake's own, exactly as
      * {@link readHandlers.new_printings} measures from it — and it is answered, so the page counts
      * *in N days* from the same day the read used. `days` is clamped into `1..=`
-     * {@link MAX_UPCOMING_DAYS}. A set answers its **earliest** card's date in the window, the
-     * greatest of its names there (`max(set_name)`), and the count of its **distinct** collector
-     * numbers; {@link UPCOMING_SKIPPED_LAYOUTS} and printings that are not paper are never counted.
+     * {@link MAX_UPCOMING_DAYS}. A set answers its **earliest** card's date in the window and the
+     * greatest of its names there (`max(set_name)`); {@link UPCOMING_SKIPPED_LAYOUTS} and printings
+     * that are not paper never make a set coming soon.
+     *
+     * **`previewed` is not asked of the window**: it is what {@link readHandlers.search_cards}
+     * draws for the set's chip on `Any card` — every paper printing in the set's code, one per
+     * {@link collapseKey}, whatever its layout or date — because a press on the row opens exactly
+     * that search, and the crate's correlated count is the same question.
      *
      * **A set any of whose paper cards has already released is not coming soon**, asked of every
      * card the set has rather than of the window's — the crate's `HAVING NOT EXISTS`, and like it
@@ -11241,15 +11246,21 @@ export function readHandlers(db: FakeDb) {
         held.add(card.oracleId);
       }
       // The released-set rule's subject: every set that already has a paper card out, whatever
-      // its layout and however far outside the window.
+      // its layout and however far outside the window. And `previewed`'s: what the search draws
+      // for each set's chip on `Any card` — every paper printing in the code, one per
+      // {@link collapseKey}, whatever its layout and date.
       const released = new Set<string>();
+      const searched = new Map<string, Set<string>>();
       for (const card of db.cards) {
-        if (card.isPaper && card.releasedAt <= today) released.add(card.setCode);
+        if (!card.isPaper) continue;
+        if (card.releasedAt <= today) released.add(card.setCode);
+        const keys = searched.get(card.setCode) ?? new Set<string>();
+        keys.add(collapseKey(card));
+        searched.set(card.setCode, keys);
       }
       type Upcoming = {
         name: string;
         releasedAt: string;
-        numbers: Set<string>;
         oracles: Set<string>;
       };
       const sets = new Map<string, Upcoming>();
@@ -11260,12 +11271,10 @@ export function readHandlers(db: FakeDb) {
         const set = sets.get(card.setCode) ?? {
           name: card.setName,
           releasedAt: card.releasedAt,
-          numbers: new Set<string>(),
           oracles: new Set<string>(),
         };
         if (card.releasedAt < set.releasedAt) set.releasedAt = card.releasedAt;
         if (card.setName > set.name) set.name = card.setName;
-        set.numbers.add(card.collectorNumber);
         if (held.has(card.oracleId)) set.oracles.add(card.oracleId);
         sets.set(card.setCode, set);
       }
@@ -11276,7 +11285,7 @@ export function readHandlers(db: FakeDb) {
           // the fallback arm has nothing to catch here.
           name: set.name,
           releasedAt: set.releasedAt,
-          previewed: set.numbers.size,
+          previewed: searched.get(code)?.size ?? 0,
           inDecks: set.oracles.size,
         }))
         .sort((a, b) => cmp(a.releasedAt, b.releasedAt) || cmp(a.code, b.code));
