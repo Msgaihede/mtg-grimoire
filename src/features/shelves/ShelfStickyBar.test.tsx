@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { SHELF_STICKY_HEIGHT } from "@/lib/shelfLayout";
 import type { Shelf } from "@/lib/shelves";
 import { SHELF_STICKY_ATTR, ShelfStickyBar } from "./ShelfStickyBar";
 
@@ -77,6 +78,19 @@ describe("ShelfStickyBar", () => {
     const nav = screen.getByRole("navigation", { name: "Current shelf" });
     expect(within(nav).queryAllByRole("button")).toHaveLength(0);
     expect(within(nav).getByText("Not sorted")).toHaveAttribute("aria-current", "location");
+  });
+
+  /**
+   * **The bar is exactly as tall as the room the wall reserves for it.** `CardGrid` hands the
+   * virtualiser `SHELF_STICKY_HEIGHT` as its scroll padding at the start (final review S-M2), so a
+   * row a reveal or an arrow walk aligns to the top lands under the bar's bottom edge. A bar sized
+   * by a class of its own could drift from that number and put the row back under the bar; sized
+   * from the constant, there is one number. No `h-*` class may sit beside it and win or lose.
+   */
+  it("takes its height from the room the wall reserves for it", () => {
+    render(<ShelfStickyBar shelf={FETCHLANDS} onOpen={onOpen} onTop={onTop} />);
+    expect(bar().style.height).toBe(`${SHELF_STICKY_HEIGHT}px`);
+    expect([...bar().classList].filter((name) => /^h-/.test(name))).toEqual([]);
   });
 
   it("goes back to the top", async () => {

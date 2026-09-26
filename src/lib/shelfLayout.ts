@@ -42,6 +42,15 @@ export interface ShelfLayout {
 export const SHELF_HEADING_HEIGHT = 48; // 40 + 8 gap
 export const SHELF_LABEL_HEIGHT = 40;
 export const SHELF_EMPTY_HEIGHT = 108; // 96 + 12 gap
+/**
+ * The sticky bar's height — the strip at the top of a sectioned wall that names the shelf the
+ * reader is scrolled inside. **The one number for it**: `ShelfStickyBar` is sized from this as an
+ * inline height, with no `h-*` class of its own (`ShelfStickyBar.test.tsx` pins both), and the grid
+ * reserves the same number as the virtualiser's scroll padding at the start, so a row a reveal or
+ * an arrow walk aligns to the top lands under the bar's bottom edge rather than behind it (final
+ * review S-M2).
+ */
+export const SHELF_STICKY_HEIGHT = 36;
 /** Indent per level, and where a level's 1px rail sits inside it — one pair for every wall (grid and tables). */
 export const SHELF_INDENT_PX = 32;
 export const SHELF_RAIL_OFFSET_PX = 11;

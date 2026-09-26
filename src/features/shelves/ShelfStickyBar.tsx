@@ -10,12 +10,19 @@
  * **A permanent drop target for cards**, which is what spec §6 needs it for: the headings come and
  * go as the wall scrolls, and this does not, so a reader holding a card always has somewhere to say
  * "the shelf I am in". It has no border of its own around it, so it wears the borderless marks.
+ *
+ * **Its `dropRef` has to come from `useShelfStickyDropTarget`, never from `useShelfDropTarget`.**
+ * Headings and table bands scroll *under* the bar, and dnd-kit ranks two targets the pointer is
+ * inside by distance to their centres rather than by what is painted on top — so a plain shelf
+ * target here lost the drop to a heading half under it whose centre was nearer (review finding
+ * S-M1). The sticky variant is an `overlay` target, which is pointer-inside and ranked first.
  */
 import type { ReactElement } from "react";
 import { ArrowUp } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
+import { SHELF_STICKY_HEIGHT } from "@/lib/shelfLayout";
 import type { Shelf } from "@/lib/shelves";
 import { cn } from "@/lib/utils";
 import { ShelfGlyph } from "./ShelfHeading";
@@ -44,8 +51,11 @@ export function ShelfStickyBar({
     <div
       ref={dropRef}
       {...{ [SHELF_STICKY_ATTR]: shelf.id }}
+      // The wall reserves exactly this much at its top as scroll padding (`CardGrid`, final review
+      // S-M2), so the bar is sized from that one number rather than from a class beside it.
+      style={{ height: SHELF_STICKY_HEIGHT }}
       className={cn(
-        "flex h-9 w-full min-w-0 items-center gap-2 border-b border-border bg-bg px-2",
+        "flex w-full min-w-0 items-center gap-2 border-b border-border bg-bg px-2",
         // Ringed for as long as the bar could take the card, and the ring goes to full strength
         // under the pointer — `DROP_OVER` raises the ring's colour rather than its width, so the two
         // together are an escalation, never a second outline (`CollectionBreadcrumb`'s pair).

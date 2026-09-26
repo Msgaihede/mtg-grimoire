@@ -2,27 +2,26 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useMemo } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { shelfCarry } from "@/features/shelves/shelfCarry";
+import { stickyShelfAt } from "@/features/shelves/shelfRows";
 import { useFoldAnchor } from "@/features/shelves/useFoldAnchor";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import { LAYER } from "@/lib/layers";
 import {
+  SHELF_EMPTY_HEIGHT,
   SHELF_HEADING_HEIGHT,
   SHELF_INDENT_PX,
   SHELF_RAIL_OFFSET_PX,
+  SHELF_STICKY_HEIGHT,
   layoutShelves,
   rowHeight,
   rowStartOf,
+  type LayoutRow,
   type ShelfLayout,
 } from "@/lib/shelfLayout";
 import { MAX_SHELF_INDENT, type Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
-import {
-  CardGrid,
-  shelfCarry,
-  stickyShelfAt,
-  type GridCard,
-  type GridSections,
-} from "./CardGrid";
+import { CardGrid, type GridCard, type GridSections } from "./CardGrid";
 import { nextShelfTileIndex } from "./gridNav";
 
 /**
@@ -592,6 +591,45 @@ describe("CardGrid shelves", () => {
   });
 
   /**
+   * **Top takes the bar away, so it has to hand the caret on** — final review S-I1. At the top of
+   * the wall the bar names nothing and is not drawn, so a Top pressed from the keyboard dropped the
+   * caret on `<body>` the moment its own scroll landed. It goes to the wall's first control instead:
+   * the first drawn row's, once the scroll has drawn it.
+   */
+  it("puts the caret on the wall's first control when Top's scroll takes the bar away", async () => {
+    const s = shelves(
+      [
+        { shelf: BINDER, tiles: [tile("a", "Card A"), tile("b", "Card B")] },
+        { shelf: STAPLES, tiles: [tile("c", "Card C")] },
+      ],
+      {
+        renderHeading: (sh) => <button type="button">{`Open ${sh.name}`}</button>,
+        renderSticky: (sh, toTop) =>
+          sh && (
+            <button type="button" onClick={toTop}>
+              Top
+            </button>
+          ),
+      },
+    );
+    wall(s);
+    const group = screen.getByRole("group", { name: "Your collection" });
+    group.scrollTop = offsetOf(rowOf(art("Card B"))) + 12 + 10;
+    fireEvent.scroll(group);
+    const top = screen.getByRole("button", { name: "Top" });
+    const user = userEvent.setup();
+
+    await user.click(top);
+    expect(document.activeElement).toBe(top); // the scroll has not landed: the bar is still here
+
+    group.scrollTop = 0;
+    fireEvent.scroll(group);
+
+    expect(screen.queryByRole("button", { name: "Top" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Open Binder" }));
+  });
+
+  /**
    * **The pure piece of the sticky bar** — `stickyShelfAt`, over a real layout and the starts the
    * virtualiser would give it. jsdom has no layout, so this is where "which shelf is the reader
    * inside" is asked row by row; the test above only proves the wall is wired to it.
@@ -727,6 +765,70 @@ describe("CardGrid shelves", () => {
     rerender(revealWall({ ...s, revealShelfId: null }));
 
     expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  /** Where a row starts at the pitch the wall draws, in the virtualiser's coordinates. */
+  const startOf = (s: GridSections<GridCard>, pitch: number, pick: (r: LayoutRow) => boolean) => {
+    const layout = layoutShelves(s.sections, 1);
+    return rowStartOf(layout, layout.rows.findIndex(pick), pitch);
+  };
+  const eightOf = (p: string) =>
+    Array.from({ length: 8 }, (_, i) => tile(`${p}${i}`, `Card ${p}${i}`));
+
+  /**
+   * **A row brought into view from above lands below the sticky bar** — final review S-M2, and the
+   * re-check's check H (headings revealed half under the bar). On a sectioned wall the
+   * virtualiser's scroll padding at the start is the bar's height, so a reveal or an arrow walk
+   * that aligns a row to the top puts it under the bar's bottom edge rather than behind it.
+   */
+  it("reveals a heading above the window below the sticky bar", () => {
+    const middle = shelf(6, "Middle");
+    const s = shelves([
+      { shelf: BINDER, tiles: eightOf("a") },
+      { shelf: middle, tiles: eightOf("m") },
+      { shelf: TRADE, tiles: eightOf("t") },
+    ]);
+    const { rerender } = render(revealWall(s));
+    giveScrollExtent();
+    const pitch = offsetOf(rowOf(art("Card a1"))) - offsetOf(rowOf(art("Card a0")));
+    const group = screen.getByRole("group", { name: "Your collection" });
+    group.scrollTop = 99999;
+    fireEvent.scroll(group);
+    const scrollTo = vi.mocked(HTMLElement.prototype.scrollTo);
+    scrollTo.mockClear();
+
+    rerender(revealWall({ ...s, revealShelfId: middle.id }));
+
+    const heading = startOf(s, pitch, (r) => r.kind === "heading" && r.shelf.id === middle.id);
+    expect((scrollTo.mock.lastCall?.[0] as ScrollToOptions).top).toBe(
+      heading - SHELF_STICKY_HEIGHT,
+    );
+  });
+
+  /**
+   * **A revealed heading brings its empty box with it** — final review S-M5. Add folder reveals the
+   * new folder's heading, and a new folder is empty: the dashed box the reader is about to drop on
+   * sat below the fold under a heading that had only just come into view.
+   */
+  it("reveals an empty shelf's box along with its heading", () => {
+    const spare = shelf(5, "Spare");
+    const s = shelves([
+      { shelf: BINDER, tiles: eightOf("a") },
+      { shelf: spare, tiles: [] },
+    ]);
+    const { rerender } = render(revealWall(s));
+    giveScrollExtent();
+    const pitch = offsetOf(rowOf(art("Card a1"))) - offsetOf(rowOf(art("Card a0")));
+    const scrollTo = vi.mocked(HTMLElement.prototype.scrollTo);
+    scrollTo.mockClear();
+
+    rerender(revealWall({ ...s, revealShelfId: spare.id }));
+
+    const box = startOf(s, pitch, (r) => r.kind === "empty" && r.shelf.id === spare.id);
+    const top = (scrollTo.mock.lastCall?.[0] as ScrollToOptions).top!;
+    // The box's whole height inside the 600px window, and the heading above it too.
+    expect(top + 600).toBeGreaterThanOrEqual(box + SHELF_EMPTY_HEIGHT);
+    expect(top).toBeLessThanOrEqual(box - SHELF_HEADING_HEIGHT);
   });
 });
 
@@ -921,6 +1023,78 @@ describe("CardGrid keeps the caret on its tile through a re-layout", () => {
 
     expect(scrollTo).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(document.body);
+  });
+
+  /** The wall's scroll geometry as a browser states it: a 600px window and a scroll height of the
+   *  sizer plus the wall's `p-3` either side — so a scroll the virtualiser asks for is not clamped
+   *  to 0 by jsdom's zeros. And the scroll it asked for, landed, as a browser would land it. */
+  function scrollGeometry() {
+    const group = screen.getByRole("group", { name: "Your collection" });
+    const sizer = group.lastElementChild as HTMLElement;
+    Object.defineProperty(group, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(group, "scrollHeight", {
+      configurable: true,
+      get: () => parseFloat(sizer.style.height) + 24,
+    });
+    const scrollTo = vi.mocked(HTMLElement.prototype.scrollTo);
+    const scrolledTo = () => (scrollTo.mock.lastCall?.[0] as ScrollToOptions | undefined)?.top;
+    const land = () => {
+      group.scrollTop = scrolledTo() ?? group.scrollTop;
+      fireEvent.scroll(group);
+    };
+    return { group, scrollTo, scrolledTo, land };
+  }
+
+  /**
+   * **A focused tile deep in a wall keeps the caret across a zoom** — final review S-I2, and the
+   * re-check's check C (collection tile 63, wishlist tile 60: the page scrolled to the tile and the
+   * caret was on `<body>`). The tile's new row is not drawn at the old offset, so the wall scrolls
+   * to it — and the zoom's own `measure()` commit arrives before the scroll's event draws the row.
+   * The caret must follow the scroll however many commits come first, and land on the tile.
+   *
+   * Eighty tiles on one shelf: tile 40 is row 20 of 40 at two across, row 10 of 20 at four.
+   */
+  it("keeps the caret on a deep tile whose new row is only drawn once the zoom's scroll lands", () => {
+    const eighty = Array.from({ length: 80 }, (_, i) => tile(`d${i}`, `Card ${i}`));
+    wall(shelves([{ shelf: BINDER, tiles: eighty }]));
+    const { group, scrollTo, land } = scrollGeometry();
+    group.scrollTop = SHELF_HEADING_HEIGHT + 20 * 274 - 100;
+    fireEvent.scroll(group);
+    art("Card 40").focus();
+
+    scrollTo.mockClear();
+    zoomOut(); // the zoom's commit, then the `measure()` commit its `tileHeight` effect makes
+    expect(screen.queryByRole("button", { name: "Card 40" })).toBeNull(); // not drawn yet
+    expect(scrollTo).toHaveBeenCalled(); // the wall went after it
+
+    land(); // the scroll's event: the row is drawn
+    expect(document.activeElement).toBe(art("Card 40"));
+  });
+
+  /**
+   * **And a focused tile whose row stays drawn is kept in view** — re-check new finding 6 (tile 40
+   * kept the caret through 4 → 5 across and ended at −491…−175, off-screen). Zooming in from four
+   * across to two: tile 6 moves from row 1 to row 3, which the virtualiser's overscan still draws
+   * below a 600px window at the top of the wall.
+   */
+  it("brings a focused tile back into view when a column change leaves its row off-screen", () => {
+    useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, collection: 0.5 } });
+    const eighty = Array.from({ length: 80 }, (_, i) => tile(`f${i}`, `Card ${i}`));
+    wall(undefined, { rows: eighty });
+    const { scrollTo, scrolledTo } = scrollGeometry();
+    art("Card 6").focus();
+
+    scrollTo.mockClear();
+    act(() => {
+      useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS } });
+    });
+
+    // Row 3 at two across: [3 × 274, 4 × 274) in the virtualiser's coordinates — below the window.
+    expect(document.activeElement).toBe(art("Card 6"));
+    const top = scrolledTo();
+    expect(top).toBeDefined();
+    expect(top!).toBeLessThanOrEqual(3 * 274);
+    expect(top! + 600).toBeGreaterThanOrEqual(4 * 274);
   });
 
   /** Keyed on the tile, not the slot: the art keeps the caret on the art, the tile on the tile. */

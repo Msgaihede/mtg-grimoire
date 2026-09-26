@@ -1,10 +1,6 @@
 import { fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  SHELF_ID_ATTR,
-  shelfCarry,
-  type ShelfAnchorRequest,
-} from "@/features/search/CardGrid";
+import { SHELF_ID_ATTR, shelfCarry, type ShelfAnchorRequest } from "./shelfCarry";
 import { useFoldAnchor } from "./useFoldAnchor";
 
 /**

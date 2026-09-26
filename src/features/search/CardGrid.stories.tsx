@@ -6,7 +6,7 @@ import { OwnedBadge } from "@/components/OwnedBadge";
 import type { DragPayload } from "@/features/decks/dnd";
 import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
 import { printing } from "../../../.storybook/fake/fixtures";
-import type { Shelf } from "@/lib/shelves";
+import { buildShelves, type ShelfFolder } from "@/lib/shelves";
 import { CardGrid, type GridCard, type GridSections } from "./CardGrid";
 
 /**
@@ -563,52 +563,35 @@ export const InTheDockedPanel: Story = {
   ],
 };
 
-/** A fixture shelf — a reader's folder at the root unless told otherwise. */
-const storyShelf = (id: number, name: string, over: Partial<Shelf> = {}): Shelf => ({
-  id,
-  kind: "folder",
-  group: "own",
-  name,
-  pathIds: [id],
-  path: [name],
-  depth: 0,
-  indent: 0,
-  lead: [],
-  leadIds: [],
-  headless: false,
-  collapsed: false,
-  locked: false,
-  ...over,
+/**
+ * The fixture cabinet, as the pages feed `buildShelves` — **and the shelves are `buildShelves`'
+ * own answer for it**, so the story can never draw a shelf the app would not (final review, ledger
+ * L87: a hand-written `Showcase` at depth 3 leading with `Fetchlands` alone was one). Binder ›
+ * Staples › Fetchlands › Foils › Showcase runs one level past the three-level indent cap; Spare is
+ * an empty folder; Atraxa is a deck group, stored open here so its cards show.
+ */
+const STORY_FOLDERS: ShelfFolder[] = [
+  { id: 1, parentId: null, name: "Binder", sortOrder: 0, kind: "folder", locked: false },
+  { id: 2, parentId: 1, name: "Staples", sortOrder: 0, kind: "folder", locked: false },
+  { id: 3, parentId: 2, name: "Fetchlands", sortOrder: 0, kind: "folder", locked: false },
+  { id: 6, parentId: 3, name: "Foils", sortOrder: 0, kind: "folder", locked: false },
+  { id: 4, parentId: 6, name: "Showcase", sortOrder: 0, kind: "folder", locked: false },
+  { id: 5, parentId: null, name: "Spare", sortOrder: 1, kind: "folder", locked: false },
+  {
+    id: 40,
+    parentId: null,
+    name: "Atraxa, Grand Unifier",
+    sortOrder: 0,
+    kind: "deck",
+    locked: false,
+  },
+];
+const STORY_SHELVES = buildShelves({
+  folders: STORY_FOLDERS,
+  levelId: null,
+  folds: { "40": false },
+  filtering: false,
 });
-
-const NOT_SORTED = storyShelf(0, "Not sorted", { kind: "unfiled" });
-const STORY_BINDER = storyShelf(1, "Binder");
-const STORY_STAPLES = storyShelf(2, "Staples", {
-  pathIds: [1, 2],
-  path: ["Binder", "Staples"],
-  depth: 1,
-  indent: 1,
-  lead: ["Binder"],
-  leadIds: [1],
-});
-const STORY_FETCHLANDS = storyShelf(3, "Fetchlands", {
-  pathIds: [1, 2, 3],
-  path: ["Binder", "Staples", "Fetchlands"],
-  depth: 2,
-  indent: 2,
-  lead: ["Binder", "Staples"],
-  leadIds: [1, 2],
-});
-const STORY_SHOWCASE = storyShelf(4, "Showcase", {
-  pathIds: [1, 2, 3, 4],
-  path: ["Binder", "Staples", "Fetchlands", "Showcase"],
-  depth: 3,
-  indent: 3,
-  lead: ["Fetchlands"],
-  leadIds: [3],
-});
-const STORY_SPARE = storyShelf(5, "Spare");
-const STORY_DECK = storyShelf(40, "Atraxa, Grand Unifier", { kind: "deck", group: "decks" });
 
 /** Which fixture printings each shelf has loaded — module scope, so `tilesOf` holds still. */
 const SHELF_TILES = new Map<number, StoryCard[]>([
@@ -616,21 +599,29 @@ const SHELF_TILES = new Map<number, StoryCard[]>([
   [1, ALL.slice(3, 8)],
   [2, ALL.slice(8, 11)],
   [3, ALL.slice(11, 13)],
-  [4, ALL.slice(13, 14)],
-  [40, ALL.slice(14, 16)],
+  [6, ALL.slice(13, 14)],
+  [4, ALL.slice(14, 15)],
+  [40, ALL.slice(15, 17)],
+]);
+
+/** Each shelf's count — Staples' is ahead of its pages: six counted, three loaded, so the last
+ *  three draw as empty frames. */
+const SHELF_COUNTS = new Map<number, number>([
+  [0, 3],
+  [1, 5],
+  [2, 6],
+  [3, 2],
+  [6, 1],
+  [4, 1],
+  [5, 0],
+  [40, 2],
 ]);
 
 const SHELVES: GridSections<StoryCard> = {
-  sections: [
-    { shelf: NOT_SORTED, tileCount: 3 },
-    { shelf: STORY_BINDER, tileCount: 5 },
-    // Six counted, three loaded: the last three draw as empty frames.
-    { shelf: STORY_STAPLES, tileCount: 6 },
-    { shelf: STORY_FETCHLANDS, tileCount: 2 },
-    { shelf: STORY_SHOWCASE, tileCount: 1 },
-    { shelf: STORY_SPARE, tileCount: 0 },
-    { shelf: STORY_DECK, tileCount: 2 },
-  ],
+  sections: STORY_SHELVES.map((shelf) => ({
+    shelf,
+    tileCount: SHELF_COUNTS.get(shelf.id) ?? 0,
+  })),
   tilesOf: (id) => SHELF_TILES.get(id) ?? [],
   renderHeading: (shelf) => (
     <div className="flex h-10 items-center gap-1.5 text-sm">
@@ -654,7 +645,7 @@ const SHELVES: GridSections<StoryCard> = {
   ),
   renderSticky: (shelf, toTop) =>
     shelf && (
-      <div className="flex h-10 items-center gap-2 border-b border-border bg-bg/95 px-3 text-sm">
+      <div className="flex h-9 items-center gap-2 border-b border-border bg-bg/95 px-3 text-sm">
         <span className="min-w-0 flex-1 truncate">{shelf.path.join(" › ")}</span>
         <button type="button" onClick={toTop} className="text-dim hover:text-text">
           Top
@@ -665,10 +656,12 @@ const SHELVES: GridSections<StoryCard> = {
 
 /**
  * **Shelves** — the wall as the collection and the wishlist draw it (spec 2026-09-26): a heading
- * per folder, each folder's cards under it, nested past the three-level indent cap (`Showcase`
- * keeps `Fetchlands`' indent and shows its path from there), an empty folder, the app-owned
- * `Decks` group under its label, and a shelf whose count is ahead of its pages drawing the rest as
- * empty frames. Scroll it to see the sticky bar take over from the heading it names.
+ * per folder, each folder's cards under it, nested past the three-level indent cap — `Foils`, three
+ * folders down, leads with the whole chain (`Binder › Staples › Fetchlands`); `Showcase`, four
+ * down, keeps the same three-level indent and leads with `Foils` alone, the ancestor on the cap —
+ * an empty folder, the app-owned `Decks` group under its label, and a shelf whose count is ahead
+ * of its pages drawing the rest as empty frames. Scroll it to see the sticky bar take over from
+ * the heading it names.
  *
  * **No `play`, for {@link InTheDockedPanel}'s reason**: under Vitest this wall is one column wide
  * and a few rows deep, so what the story is *about* — rails, short rows, the bar tracking its shelf

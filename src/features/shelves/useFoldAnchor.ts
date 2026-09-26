@@ -6,11 +6,12 @@
  * heading the reader is holding would jump out from under their hand, and the page would jump again
  * on the drop.
  *
- * **This hook is the page's half and `CardGrid`'s `shelfCarry` is the wall's.** The page knows the
- * pointer and when it folds; only the wall knows where a row *is* — during a drag the heading's own
- * element is dnd-kit's floating copy at the pointer, and its row is often not even drawn — so this
- * hook feeds `shelfCarry` and the sectioned wall answers from its layout. The whole argument, and
- * the live pass (2026-09-26) that measured the page-side version failing, is on `shelfCarry`.
+ * **This hook is the page's half, `CardGrid` is the wall's, and `shelfCarry` (`./shelfCarry`) is
+ * what passes between them.** The page knows the pointer and when it folds; only the wall knows
+ * where a row *is* — during a drag the heading's own element is dnd-kit's floating copy at the
+ * pointer, and its row is often not even drawn — so this hook feeds `shelfCarry` and the sectioned
+ * wall answers from its layout. The whole argument, and the live pass (2026-09-26) that measured
+ * the page-side version failing, is on `shelfCarry`'s state.
  *
  * - **The press**: a capture-phase `pointerdown` on `window` records the heading row the press
  *   landed in (`SHELF_HEADING_ROW`) and how far into it — a press anywhere else forgets it, so a
@@ -26,7 +27,7 @@
  * by position, and folding under a carried heading would remount it and end the drag.
  */
 import { useEffect, useLayoutEffect, useRef } from "react";
-import { SHELF_HEADING_ROW, SHELF_ID_ATTR, shelfCarry } from "@/features/search/CardGrid";
+import { SHELF_HEADING_ROW, SHELF_ID_ATTR, shelfCarry } from "./shelfCarry";
 
 export function useFoldAnchor(folding: boolean): void {
   useEffect(() => {
