@@ -5,15 +5,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
   `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
-  **not one file since schema 27**: the reader's **thirty** tables are `main` and the
+  **not one file since schema 27**: the reader's **thirty-one** tables are `main` and the
   rebuildable **twenty-five** are `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the
   split itself; the user side is what has grown since, and this line said eighteen until user
-  schema v43, twenty-seven until v44, twenty-eight until v45 and twenty-nine until v46 — a count in prose that no build checks, which is the rot
+  schema v43, twenty-seven until v44, twenty-eight until v45, twenty-nine until v46 and thirty
+  until v52 — a count in prose that no build checks, which is the rot
   this file's own header warns about. Both halves are
   `grep -c '^\s*("[a-z_]*", Side::User),'` and the same with `Side::Corpus` over
-  `schema.rs`; **a bare `grep -c 'Side::User'` over-counts**, because `mod tests` matches the
-  enum by name four more times. Count them, never add to the number above; `src/lib/userTables.json`
-  is the same thirty and a Rust test holds the two equal.)
+  `schema.rs` — re-run 2026-09-26 at v52: **31** and **25**; **a bare `grep -c 'Side::User'`
+  over-counts** — 36 against 31 at v52, because `mod tests` matches the enum by name five more
+  times (this said four until v52's stray-table test began asking the registry). Count them,
+  never add to the number above; `src/lib/userTables.json` is the same thirty-one and a Rust test
+  holds the two equal.)
   A folder still holding a single
   `mtg.db` is converted at the next launch by `split::convert`, which never touches that
   file until the new one is safely renamed into place. Delete that `data/` folder to force
@@ -572,9 +575,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **v29 is sync's own rung and it is the widest one on either ladder.** It adds `sync_uid` with a
   unique index to **the eleven tables that were on the census then** — this line said "all twelve"
   until 2026-09-07 and was wrong in both directions, since the rung's own `ALTER TABLE`s are
-  eleven (spelled out below) and the census is **sixteen** now: `device_names` joined
-  at v31, `deck_tokens` at v37, `deck_notes` and `deck_note_cards` at v43, and `sticky_notes` at
-  v46, and each carries
+  eleven (spelled out below) and the census is **seventeen** now: `device_names` joined
+  at v31, `deck_tokens` at v37, `deck_notes` and `deck_note_cards` at v43, `sticky_notes` at
+  v46 and `deck_token_printings` at v52, and each carries
   the column in its own `CREATE TABLE` rather than through this rung. It also adds `needs_review` to the three folder tables,
   the op log (`sync_ops`, `sync_clock`, `sync_state`, `sync_peers`), and it **rebuilds
   `error_log`** so `source` can be `'relay'` — that vocabulary is inside a `CHECK` and SQLite
@@ -910,15 +913,19 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **v43 gives a deck many notes and takes its one away** (2026-09-10, issue #447) — `deck_notes`
   and `deck_note_cards` in, `decks.notes` out, `decks.notes_open` in. It is the first rung on
   either ladder to **drop a synced column**, and the two directions cost very different things.
-  Adding a synced table is the ordinary ten-site job [sync.md](sync.md) lists. Dropping a synced
+  Adding a synced table is the ordinary job [sync.md](sync.md) lists — ten sites as it was
+  counted then, twelve since v52 counted the two TypeScript ones. Dropping a synced
   column turns out to cost nothing on the wire at all, because `apply::updates()` walks the
   *local* spec's field list rather than the incoming op's — so a v42 peer that goes on sending
   `notes` has it skipped rather than deferred, and the stream that an unknown *table* would stall
   keeps flowing.
   ⚠️ **Its real trap is local and would have landed at a reader's first upgrade, not in any
   test starting from a fresh database** — v25's lesson exactly. Capture triggers are persistent
-  objects, and `sync_upd_decks` names `notes` in its `AFTER UPDATE OF` list, so SQLite refuses
-  `DROP COLUMN` on it. The rung drops the three `decks` triggers first and `prepare_database`
+  objects, and `sync_upd_decks` reads `NEW.notes`, so SQLite refuses `DROP COLUMN` on it. *(This
+  said the `AFTER UPDATE OF` list was the reason until 2026-09-26, when an experiment on the
+  bundled SQLite 3.53.2 showed a column named only in that list drops cleanly — the read in the
+  `WHEN` or the body is what refuses, and the capture triggers always have one.)* The rung drops
+  the three `decks` triggers first and `prepare_database`
   reinstalls them on the next line, which is **v33's** move rather than a new one.
   **`notes_open` is `DEFAULT 0`, which is v37's answer and not v42's** — v42 gave `stats_open`
   a `1` because that band was already on screen for every deck on every disk, where this band is
@@ -998,8 +1005,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `NOT NULL DEFAULT 0` because the pile is new and off is today's behaviour, so it owes its
   `USER_SCHEMA_SQL` line and an `UNDO_V47` and changes no table or index count. On the `decks`
   capture spec; on no history row and no `deck_undo::DECK_FIELDS`; **carried by `duplicate_deck`**,
-  unlike the `*_open` disclosures beside it, because it is a setting.
-  [decks-storage.md](decks-storage.md) has the rest.
+  unlike the `*_open` disclosures beside it, because it is a setting. **v52 dropped it** for
+  `decks.token_mode`, below. [decks-storage.md](decks-storage.md) has the rest.
   (**v48 and v49 have no paragraph on this page** — the managed wishlist's two rungs, recorded in
   `schema.rs`'s `USER_SCHEMA_VERSION` doc and in
   [wishlist-folders.md](wishlist-folders.md). Named for v40–v42's reason above: so nobody reads
@@ -1035,10 +1042,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   piles drawn above it. **Written as v50 and renumbered before merging**: the v50 above landed on
   `main` first, and a shipped number is spent. One `ALTER TABLE … ADD COLUMN`, v47's shape, so it
   owes its `USER_SCHEMA_SQL` line and an `UNDO_V51`, and moves no table or index count: the head
-  is thirty tables and **forty-eight** indexes — v48's `idx_wishlist_folders_managed` moved the
-  second figure the v46 paragraph above states, and neither v50 nor this rung moves either — read
-  off `the_user_schema_is_byte_identical_to_what_the_ladder_builds`' own sentence rather than
-  added.
+  at this rung was thirty tables and **forty-eight** indexes — v48's `idx_wishlist_folders_managed`
+  moved the second figure the v46 paragraph above states, and neither v50 nor this rung moves
+  either — read off `the_user_schema_is_byte_identical_to_what_the_ladder_builds`' own sentence
+  rather than added.
   **`NOT NULL DEFAULT -1`, with `-1` meaning last**, where the spec asked for a nullable column
   with `NULL` for last: `deck::update_deck` writes every field through `coalesce(?n, col)`, which
   reads a bound `NULL` as *leave it*, so a nullable "last" could never be written back once the
@@ -1046,6 +1053,75 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `duplicate_deck`, like it — **and unlike it, on a history row and on
   `deck_undo::DECK_FIELDS`**, because it is an arrangement the reader drags rather than a setting.
   [decks-storage.md](decks-storage.md) has the rest.
+  **v52 makes a token's printings _entries_, and replaces `decks.token_stack` with
+  `decks.token_mode`** (2026-09-26,
+  [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §4). One
+  transaction: `deck_token_printings` created with its two unique indexes
+  (`idx_deck_token_printings_grain` on `DECK_TOKEN_PRINTING_GRAIN`, `deck_id, variant, card_id,
+  finish`, and `idx_deck_token_printings_uid`); `decks.token_mode TEXT NOT NULL DEFAULT 'managed'
+  CHECK (token_mode IN ('managed','collection','hidden'))` added; every `deck_tokens` row with a
+  picked `card_id` copied into **one entry per list** at `max(coalesce(quantity, 1), 0)` and its
+  `card_id`/`quantity` then cleared (a quantity-only row is left alone — that number goes on
+  meaning the implicit entry's count); and `decks.token_stack` dropped. **The move is total over
+  every override a v51 file can hold**, because a rung that fails rolls back and fails again at
+  every launch after: `deck_tokens.quantity` is a synced field with no `CHECK`, so a negative count
+  is floored at 0; and two tokens of one deck can have picked **one printing** (a double-faced token
+  carries two), which is one entry on the new grain — so the INSERT is `OR IGNORE` and ordered by
+  **`oracle_id`, never rowid**, which every device sorts alike, so each keeps the same override and
+  derives the same uid. The skipped override keeps its **count** as its token's implicit one and
+  loses only the art. It is the **thirty-first**
+  user table and the **seventeenth** synced one, and leaves the user file at thirty-one tables and
+  **fifty** indexes — `the_user_schema_is_byte_identical_to_what_the_ladder_builds` compared 84
+  objects at this rung, 31 + 50 + 3 autoindexes, counted off the literal rather than added. It owes
+  its `USER_SCHEMA_SQL` lines and an `UNDO_V52`, which headed all twenty rewind chains when it
+  landed. Four
+  things about it are this ladder's firsts or near-firsts, each argued at length in the rung's own
+  comment in `schema.rs`:
+  - ⚠️ **It writes `'nonfoil'` for every moved art, knowing it is a guess.** No rung reads the
+    corpus — `migrate_user` runs before `migrate_corpus` — so a foil-only printing lands as a
+    nonfoil entry, and `deck_tokens::repair_entry_finishes`, run at the end of `prepare_database`
+    beside `managed_wishlist::settle_all` and logged-and-left-owing like it, moves each entry whose
+    finish its printing is not sold in to the printing's sole finish, folding on the grain where it
+    has to. Idempotent, and behind `capture::suppressed`, because whether a printing is foil-only
+    is a fact of this device's corpus — and **in place**, keeping each entry's row and the uid the
+    rung gave it, because a row re-inserted under `suppressed` comes back with no name and its
+    next captured stepper press fails on `sync_ops.uid NOT NULL`. It can touch nothing a reader
+    chose: the picker offers only a finish a printing is sold in.
+  - ⚠️ **It names the rows it moves.** The table is born in the rung and `capture::install` runs
+    after `migrate_user`, so no insert trigger mints a uid; each entry is
+    `coalesce(<override uid> || '-' || <list>, <random>)`. A NULL uid would fail the reader's own
+    write on a paired device; a random one would leave each device holding the entry under a name
+    no peer has heard. The random arm is for an override with no uid of its own — one written
+    behind `capture::suppressed`, where the insert trigger's mint is guarded off — and it gives the
+    two lists' entries two different names. [sync.md](sync.md) has the minting table this adds a
+    row to, and the mixed-version windows.
+  - ⚠️ **It drops six capture triggers, not three**: `decks`' for v43's reason
+    (`sync_upd_decks` reads `NEW.token_stack`, and SQLite 3.53.0 refuses `DROP COLUMN` on a column
+    a trigger reads — measured; an `OF` list alone is not refused), and `deck_tokens`' because
+    clearing the override is a write every device derives and, captured, would reach a peer still
+    on v51 and wipe the art that peer's own climb had yet to move. `capture::install` puts all six
+    back.
+  - **`token_mode`'s `CHECK` carries `collection` a PR early**, so PR 3 adds a button and a
+    behaviour and no rung; `sticky_notes.color`'s objection to a CHECK on a synced column does not
+    bite, because these three words are this app's model rather than a palette that grows. **Every
+    deck starts on `managed`**, the ones whose stack was off included (the reader's answer), and
+    `token_stack` is dropped rather than read, because neither of its values names a mode to keep.
+    On the `decks` capture spec under the new name — v49's precedent: a v51 peer skips a field it
+    does not know, where a word landing in its INTEGER column would fail its deck read — on
+    `deck_undo::DECK_FIELDS` and on a history row (`tokenMode`), and carried by `duplicate_deck`.
+    `deck_row` reads it in `token_stack`'s slot at 27 and `update_deck` binds it in that column's
+    `?21`, so no positional read moved and `IMAGE_COL` stays 30.
+
+  **Proven on a copy of the real dev database** (2026-09-26, node:sqlite 3.53.0 replaying the
+  rung SQL, not a cargo build): a user file at v46 with five decks and one picked override climbed
+  v47 → v52 to two entries uid'd `<uid>-live` / `<uid>-theory`, the override cleared, all five
+  decks `managed`, **0 `sync_ops` written**, `foreign_key_check` clean, `integrity_check` ok, and
+  the real `decks` DDL byte-equal to the head literal. The copy was deleted afterwards. ⚠️ That
+  pass replayed the rung **as first written**; the floor, the `OR IGNORE` and the kept count above
+  landed in the review round after it and are held by `schema.rs`' own tests
+  (`the_v52_rung_is_total_over_a_negative_count_and_two_picks_of_one_printing`,
+  `the_v52_rung_names_an_override_with_no_uid_at_random`), not by a second real-database climb.
+  [decks-storage.md](decks-storage.md) has the entries, the commands and the reconcile.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

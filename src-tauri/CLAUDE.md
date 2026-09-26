@@ -83,8 +83,10 @@ both plus the frontend.
   **orphan row fails a predicate**, which is `push_card_filters`' documented rule inherited
   rather than a new one.
 - **The data folder holds two databases, and which one is `main` is the whole design**
-  (schema 27). `data/user.db` is the reader's — the thirty tables in `schema::TABLES` marked
-  `Side::User`, which nothing outside this app can produce again — and it is what
+  (schema 27). `data/user.db` is the reader's — the tables in `schema::TABLES` marked
+  `Side::User`, which nothing outside this app can produce again (thirty-one since user schema
+  v52's `deck_token_printings`; this line said thirty through v51, and
+  `grep -c '^\s*("[a-z_]*", Side::User),' src-tauri/src/schema.rs` is the count) — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
   a corpus that will not open has to be a delete and a re-`ATTACH`, not a process-wide reopen
@@ -146,8 +148,9 @@ both plus the frontend.
   `corpus.page_count` 192 149 — so `needs_conversion` and `freelist_pages` take a schema
   argument and `vacuum_into_incremental` runs `VACUUM corpus`.
 - Only `schema::migrate_user` / `migrate_corpus` may stop a launch. `prepare_database`'s other
-  two steps (an FTS rebuild an interrupted compaction owed; the staging table an interrupted
-  ingest left) are logged and left owing — their likeliest cause is a full or read-only disk,
+  steps (an FTS rebuild an interrupted compaction owed; the staging table an interrupted ingest
+  left; `managed_wishlist::settle_all` and `deck_tokens::repair_entry_finishes`, the two launch
+  settles) are logged and left owing — their likeliest cause is a full or read-only disk,
   and `init_state` turns any error into "move it aside", which that disk cannot do. **A corpus
   that will not open is not one of those failures**: it is deleted and rebuilt, and the
   collection is untouched — `split::tests::a_destroyed_corpus_costs_a_resync_and_nothing_else`.
@@ -187,10 +190,36 @@ both plus the frontend.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v51**
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v52**
+  (2026-09-26, the token-stacks spec §4) makes a token's printings **entries** —
+  `deck_token_printings`, the thirty-first user table and the **seventeenth synced** one, one
+  printing in one finish in one list with a quantity, grained on `DECK_TOKEN_PRINTING_GRAIN`
+  (`deck_id, variant, card_id, finish`, `finish` NOT NULL so the unique index cannot hold one
+  regular printing twice) — and replaces `decks.token_stack` with `decks.token_mode`
+  (`managed|collection|hidden`, `DEFAULT 'managed'`, a `CHECK` carrying PR 3's word already so
+  PR 3 owes no rung). `deck_tokens` keeps the token's state and its `card_id` and `quantity` go
+  legacy. Three things it did that no rung before it had to, each argued in the rung's comment:
+  ⚠️ **it names the rows it moves** (`<override uid>-live` / `-theory`), because the table is born
+  in the rung, `capture::install` runs after `migrate_user`, and a NULL uid fails the reader's own
+  write on a paired device where a random one stalls the peer's stream — and it is **total over
+  every override a v51 file can hold**, flooring a negative synced count at 0 and letting two
+  tokens that picked one printing keep one entry by `INSERT OR IGNORE` in **`oracle_id` order,
+  never rowid**, so every device keeps the same winner (the loser keeps its count and loses only
+  the art), because a rung that fails fails again at every launch after; ⚠️ **it drops
+  `deck_tokens`' three capture triggers beside `decks`' three** (v43's move), because clearing the
+  override is a write every device derives and, captured, would wipe the art on a peer still on
+  v51 before that peer's own climb had moved it; and ⚠️ **it writes `nonfoil` as a known guess**,
+  since no rung reads the corpus — `deck_tokens::repair_entry_finishes` corrects a foil-only
+  printing's entry at the end of the same launch, in `prepare_database` beside
+  `managed_wishlist::settle_all`, logged and left owing like it, behind `capture::suppressed`
+  because whether a printing is foil-only is a fact of *this* device's corpus — and **in place**,
+  keeping each entry's row and `sync_uid`, because a row re-inserted under `suppressed` comes back
+  nameless and its next captured stepper press fails on `sync_ops.uid NOT NULL`. It leaves the user
+  file at thirty-one tables and fifty indexes, counted off `USER_SCHEMA_SQL` when it landed. That
+  is one above **v51**, which
   added `decks.token_rail_index`, where the Tokens & Emblems pile sits in the rail — `NOT NULL
   DEFAULT -1` for *last*, an arrangement with a history row and a `deck_undo::DECK_FIELDS` entry
-  where `token_stack` has neither. It was written as v50 and renumbered before merging, because
+  where `token_stack` had neither. It was written as v50 and renumbered before merging, because
   the rung below it landed on `main` first. That is one above **v50**, which
   rebuilt `price_snapshots` into a record of **holdings**, v35's five statements, because SQLite
   cannot drop a `NOT NULL`. It added a `copies` column, the copies of each printing and finish held
@@ -1395,8 +1424,10 @@ with the arithmetic behind the 105-character code and the crate pins, is
   nobody removed it from, with no press anywhere that said the roster was changing. **The real fix
   is a wire change carrying public keys in the manifest** and is not built; until it is, a
   partial-view device declines rather than breaking the group.
-- **The manifest is deliberately not a synced table** — it would be the fourteenth now, and this
-  line said *thirteenth* until `deck_tokens` took that number at user schema v37, which is the
+- **The manifest is deliberately not a synced table** — it would be the eighteenth now, and this
+  line said *thirteenth* until `deck_tokens` took that number at user schema v37, then
+  *fourteenth* through v43's two note tables, v46's `sticky_notes` and v52's
+  `deck_token_printings` — three rungs and four tables it did not move for — which is the
   argument for not counting in prose at all. A manifest that *is* the key
   distribution cannot disagree with it, where a synced `device_removals` table could arrive late,
   arrive out of order, or arrive at a device that cannot decrypt it — which is precisely the state
@@ -1496,7 +1527,9 @@ record, with every measurement, is
   landed, and there is no such setting any more**: `sync_relay_set_url` and `valid_relay_url` are
   deleted, `RelayStatus` no longer carries a `relayUrl`, and what the panel draws in its place is
   `sync_supporter_status`'s answer.
-- **Fifteen tables sync and `schema::SYNCED_TABLES` is the census.** ⚠️ **This line said *eleven*
+- **Seventeen tables sync and `schema::SYNCED_TABLES` is the census.** (It read *fifteen* through
+  v46's `sticky_notes` and v52's `deck_token_printings`, the sixteenth and seventeenth — the
+  failure the next sentence records, twice more.) ⚠️ **This line said *eleven*
   from schema v25 until 2026-08-31**, on the argument that the spec's twelfth was
   `deck_allocations`, which v25 dropped — true when written, and made wrong by v31 adding
   `device_names` back to twelve without this page moving. **v37 makes it thirteen**: `deck_tokens`,
@@ -1505,8 +1538,10 @@ record, with every measurement, is
   carry, and last-write-wins is what a *setting* wants where two devices each sleeving a copy
   means two copies. **v43 makes it fifteen**: `deck_notes` and `deck_note_cards`, and that rung is
   the first on either ladder to take a column **off** a spec as well as putting tables on one —
-  `decks.notes` is gone. The two directions cost very differently. Adding a table is the ten-site
-  job [sync.md](../docs/reference/sync.md) lists; dropping a synced *column* costs nothing on the
+  `decks.notes` is gone. The two directions cost very differently. Adding a table is the job
+  [sync.md](../docs/reference/sync.md) lists — **twelve sites since v52 counted them**, the ten it
+  named plus `src/lib/userTables.json` and `crossWindow.ts`' `TABLE_KEYS`, which any new *user*
+  table owes, synced or not; dropping a synced *column* costs nothing on the
   wire at all, because `apply::updates()` walks the **local** spec's field list and looks each
   name up in the incoming op, so a field a v42 peer goes on sending is skipped rather than
   deferred. An unknown *table* stalls that peer's whole stream; an unknown *field* does not.
@@ -1973,16 +2008,24 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   `deck_audit::record`, for the same reason and a sharper one: a step that outlived its change
   would be applied into a deck that never had it done. **The audit log cannot be replayed
   backwards** — a swap keeps no from-printing id, a category delete keeps a *count* of the cards
-  the CASCADE took, a reorder keeps no order — so a step carries the rows themselves. Four
-  primitives (`cards` over an explicit scope of `deck_cards` cells, `categories`, `labels`,
-  `deck`); `restore` and `patch` are two lists because a pile that took a freed rowid belongs to
-  the same deck and an upsert would rename the reader's newest pile into the deleted one.
+  the CASCADE took, a reorder keeps no order — so a step carries the rows themselves. The
+  primitives are named on `deck_undo::Op` and not counted here (this said "four" through v43's
+  `notes` and v52's `tokens`): `cards` over an explicit scope of `deck_cards` cells,
+  `categories`, `labels`, `notes`, `deck`, and **`tokens`** — `deck_token_printings` rows by
+  grain plus `deck_tokens` states, which every token write files and which a card write whose
+  token reconcile removed entries appends after its card ops; `restore` and `patch` are two lists
+  because a pile that took a freed rowid belongs to the same deck and an upsert would rename the
+  reader's newest pile into the deleted one.
   **`AUDIT_KINDS` stays at nine** — an undo is a `deck` row with
   `{"field":"undo","of":<id>}`, because a CHECK cannot be altered and a tenth word would rebuild
-  every reader's history. (Schema **v33** renamed one of the nine, `'tag'` to `'label'`, and paid
-  exactly that rebuild once — the table copied through, the CHECK restated, the stored rows and
-  their payload key rewritten. It is the cost this rule exists to keep out of the ordinary case,
-  not a counter-example to it.) **The reversal's own row records no step**, so the stack stays linear.
+  every reader's history — and a token write (user schema v52) is a `deck` row with
+  `{"field":"token","action":…}` for a sharper reason still: `deck_audit` **syncs**, so a word a
+  paired device's `CHECK` does not know is refused there and its applier defers the op, stalling
+  that device's whole stream until it upgrades. (Schema **v33** renamed one of the nine, `'tag'`
+  to `'label'`, and paid exactly that rebuild once — the table copied through, the CHECK
+  restated, the stored rows and their payload key rewritten. It is the cost this rule exists to
+  keep out of the ordinary case, not a counter-example to it.) **The reversal's own row records no
+  step**, so the stack stays linear.
   `undone_at` persists (undo survives a restart); the redo queue is the webview's and does not.
   **A reversal is checked, never trusted — twice.** The id must be the cursor (`next_undo`, or for
   a redo `next_redo`: the undone step above the cursor with the newest `undone_at` — an ordinal
@@ -2121,25 +2164,81 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
     Both halves are pinned: `an_embalm_token_sharing_its_makers_name_is_kept` and
     `a_cards_own_printing_never_reaches_the_wall`.
 
-  The table stores **only deviations** — `DECK_TOKEN_GRAIN` is `deck_id, oracle_id`, deliberately
-  not `variant` and deliberately not `card_id`, and `state = 'auto'` with no printing and no
-  quantity is deleted rather than written because it carries nothing. **A stored zero is not that
-  case.** `decks.tokens_open` is the panel's disclosure, on the `decks` capture `Spec` beside
+  `deck_tokens` stores **only deviations of the token** — `DECK_TOKEN_GRAIN` is
+  `deck_id, oracle_id`, deliberately not `variant` and deliberately not `card_id`, and
+  `state = 'auto'` with no legacy column set is deleted rather than written because it carries
+  nothing. **Since user schema v52 that is the token's state alone**, shared by both lists; its
+  `card_id` and `quantity` are legacy, read only as an untouched token's implicit count and never
+  written again.
+  **What the reader keeps of a token is `deck_token_printings`** (v52, token stacks spec §4):
+  **entries**, one printing in one finish in one list with a quantity, on
+  `DECK_TOKEN_PRINTING_GRAIN` (`deck_id, variant, card_id, finish` — `finish` NOT NULL, because a
+  unique index holds NULLs as distinct, and `oracle_id` a stored fact rather than a grain term,
+  because a printing has one oracle). A token with no entries in a list is drawn as one
+  **implicit** entry — the resolver's printing in its `default_finish`, at the legacy quantity or
+  1 — and the first write to it materialises it in that list only. **A stored zero lives here
+  now**: stepping an entry to 0 deletes it unless it is the token's last in that list, which stays
+  at 0 so the implicit default does not reappear. Spec §4.2's seven entry rules are
+  `deck_tokens.rs`' (`src/features/decks/CLAUDE.md` states them from the page's side), and four
+  things about them are this crate's:
+  - **Routing is structural, at the two writes every add ends in.** `deck::add_card` and
+    `collection_alloc::collection_to_deck` ask `deck_tokens::printing_is_token` — a token layout
+    (`token`, `double_faced_token`, `emblem`) **or** a `flip`/`reversible_card` printing whose
+    type line or any ` // ` face begins `Token`/`Emblem` (six real tokens on the debug corpus,
+    measured 2026-09-26) —
+    and file a token as an entry through `add_printing_in`, inside their own transaction. No drag
+    payload and no add call carries the layout, which is why the router is here and not in
+    TypeScript. **`add_card` then answers `EntryChange { id: 0 }`**, a contract: no deck card was
+    made. **`collection_to_deck` moves no copy** and answers `quantity: 0` with no ids. The Add
+    printing command refuses anything else (`NOT_A_TOKEN`), so no card can reach the wall as a
+    hand-added token.
+  - **Every token write journals as a deck write**, through the one `journal_in`: a read of the
+    deck first (`GONE` ahead of every other sentence), and — **only if the write changed
+    something** — `touch_deck`, one `deck_audit` row of kind **`deck`** with `field: "token"`
+    (never a tenth kind — `deck_audit` syncs, and an unknown word stalls an older peer), and one
+    `Op::Tokens` step over the token's entries in that list, carrying `states` only when the state
+    moved. `touch_deck` is split off the fence because its `UPDATE` stamps as it checks, and a no-op
+    press must not move the deck up the gallery.
+  - **Rule 7's reconcile runs in two layers.** `reconcile_in` inside `deck_undo::record_cells`,
+    `record_variant` and the three hand-built steps (the theory switch, `set_category_active`,
+    `delete_category`), so its deletions ride the card write's own step; and
+    `reconcile_dirty_logged` in `sync::with_write` after every write, off the managed wishlist's
+    TEMP dirty-deck table — **before** `managed_wishlist::settle_logged`, which empties that table —
+    for the writers that file no step, undo and redo included (Scryfall's `reconcile::apply` goes
+    through `lock_db`, not `with_write`, so its marks are reconciled one write late). Its deletions
+    ride no step, so **a
+    redo does not bring back entries a post-undo reconcile removed**. ⚠️ **A list whose makers
+    cannot all be read deletes nothing** (`Derivation::unreadable`): a device synced before its
+    corpus downloads derives nothing, and without the guard it would delete every entry and push
+    the deletes to the group. The deletes are otherwise ordinary captured writes, since every
+    device derives the same answer.
+  - **The theory switch moves the live list's entries into the plan with the cards.** It
+    reconciles both lists **before** reading its before-image — the v52 rung copied every old pick
+    into *both* lists, a plan with no cards makes no token, and an undo that restored such an entry
+    would hand the backstop a row to delete and the redo a reason to refuse for ever — then deletes
+    the plan's surviving entries (a move onto one would fail the unique index), moves the live
+    ones, reconciles again, and records the **net** difference as one `Op::Tokens` pair; a separate
+    "restore what the reconcile removed" op would put back a row that never existed and make every
+    redo fail `holds`.
+
+  `decks.tokens_open` is the panel's disclosure, on the `decks` capture `Spec` beside
   `separate_x_group`, the last **named** column of `DECK_SELECT` when it landed for `deck_row`'s
   positional reason — which moved its `IMAGE_COL` from 21 to 22 — and on no history row and no
   `deck_undo::DECK_FIELDS`. **It is not the last named column any more** (user schema v51's
-  `token_rail_index` is, at 29, with `deck_row`'s `IMAGE_COL` at 30), and it is not the only
-  disclosure either: read both numbers off `deck_row` and never off this page. **`deck_tokens.rs`
-  has offsets of its own and they are a different list** — `printing_from`'s `IMAGE_COL` counts
-  `PRINTING_COLUMNS` and `picked_printing`'s counts that function's own `SELECT`, so neither moves
-  with a `decks` rung and neither is `deck_row`'s.
+  `token_rail_index` is, at 29, with `deck_row`'s `IMAGE_COL` at 30 — and v52's `token_mode` took
+  `token_stack`'s slot at 27 and its `?21` hole in `update_deck`, so it moved neither), and it is
+  not the only disclosure either: read both numbers off `deck_row` and never off this page.
+  **`deck_tokens.rs` has offsets of its own and they are a different list** — `printing_from`'s
+  `IMAGE_COL` counts `PRINTING_COLUMNS` and `picked_printing`'s counts that function's own
+  `SELECT`, so neither moves with a `decks` rung and neither is `deck_row`'s.
   ⚠️ **v43 is why this page insists on that**, and it is the sharpest case the ladder has produced:
   the rung removed `decks.notes` at column 12 *and* appended `notes_open`, so fourteen reads in
   `deck_row` and nine in the before-image mapper each shifted down by one — and `IMAGE_COL` came
   out at **27 both before and after**, because the two edits cancel at the end of the row and
   nowhere in the middle of it. The one number a reader would check to decide whether the read had
-  moved is the one number that did not. The four commands, the tie-break, the sync
-  registrations and every measurement:
+  moved is the one number that did not. The six commands (the read and five writes since v52,
+  which retired `deck_token_set`, `deck_token_clear` and `deck_token_add`), the tie-break, the
+  sync registrations, the reconcile and every measurement:
   [decks-storage.md](../docs/reference/decks-storage.md).
 
 ## Sharing a collection (`share/`)
@@ -2611,13 +2710,13 @@ The whole record, including the pipeline the crate implements:
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [search-syntax.md](../docs/reference/search-syntax.md) | `filters.rs`' predicate arms and `fts_match`, `tags/query.rs`' `tag_resolve`, and **corpus schema 5** — the fourteen keywords and why `:` resolves per keyword, FTS against LIKE measured on the real corpus, the two fields that emit no SQL, `kw:`'s delimiter and the bridge that keeps it from answering zero, and which failures close and which open |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
-| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, and the v36 table |
+| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, the v37 table, and v52's entries: the six commands, the `add_card` / `collection_to_deck` reroute, the reconcile's two layers and the launch repair |
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs`, the v26 rung and **corpus schema 2** — the feed measured end to end, what is kept and what is skipped, **both** match queries and the card side's three statements, the shape gate and why a version gate skips every fresh install, the launch gate and the clear, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
 | [home-page.md](../docs/reference/home-page.md) | `home.rs`, `startview.rs` and `activity.rs` (v44) — the layout document whose vocabulary is TypeScript's and what keeps its round trip, why an empty widget list is a layout, the activity log's three rules and the write-site census, why `activity` is not synced where `deck_audit` is, and the nine commands routed on both targets |
 | [collection-sharing.md](../docs/reference/collection-sharing.md) | `share/` and the second Worker (v41) — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher exists to avoid, the two-step upload, both partial indexes and the one that refused nothing, the `live`/`lapsed`/`revoked` pass, and what is not deployed |
-| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the fifteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
+| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the seventeen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |
 | [multi-window.md](../docs/reference/multi-window.md) | `changes.rs`, `window.rs`'s `open_new` and the scanner's lease — why a second *process* stays refused, the commit-driven mask and both of the update hook's blind spots, the emitter's locked take, and the live pass behind every figure |

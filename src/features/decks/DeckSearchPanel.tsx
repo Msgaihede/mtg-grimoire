@@ -209,8 +209,16 @@ export interface DeckSearchPanelProps {
    */
   add: Deck["addCard"];
   /**
-   * A press on this panel's Add button landed in a deck row — `EntryChange.id`, which is the row
-   * the write **created or folded into**.
+   * A press on this panel's Add button landed — `EntryChange.id`, which is the deck row the write
+   * **created or folded into**, or **`0` when no deck row was made at all**.
+   *
+   * `0` is Rust's answer for a token, a double-faced token or an emblem: since user schema v52
+   * `deck::add_card` files such a printing as a **token entry** rather than a deck card (token
+   * stacks spec §4.6 — tokens never become deck cards, whichever pile they were aimed at), and
+   * answers `id: 0` because there is no row to point at. SQLite numbers no row 0, so it is a
+   * sentinel and never an address; the editor's `markAdded` skips it (`NO_DECK_CARD`), and the
+   * token shows up in the Tokens & Emblems pile through the add's own `["decks"]` invalidation.
+   * This panel passes the id through untouched and decides nothing about it.
    *
    * It exists because this panel is the one add path in the editor that does not go through the
    * editor's own `addTo`: it holds the mutation and presses it itself, which is what makes the
@@ -504,9 +512,10 @@ export function DeckSearchPanel({
             moves no copies. Putting a card the reader *owns* into a deck is
             `collection_to_deck`, a different command with a different address, and sending
             both would put the card in the deck twice.
-          - **`onAdded`** carries the `deck_cards` row a write landed in, which is what the
-            editor glows for five seconds. `MoveOutcome.deckCardId` *is* that row and this tab
-            could hand it back — what it has instead is a status line of its own, which says
+          - **`onAdded`** carries the `deck_cards` row a write landed in (or `0` for a token filed
+            as a token entry), which is what the editor glows for five seconds.
+            `MoveOutcome.deckCardId` *is* that row and this tab could hand it back — what it
+            has instead is a status line of its own, which says
             the thing this press has that an ordinary add does not: which deck the copies came
             out of. Naming the donor is the report; a glow is not.
           - **`cardMenu` / `cardMenuKey`** are `(card: CardSummary) => …`, and this list draws

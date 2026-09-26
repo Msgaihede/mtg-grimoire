@@ -28,7 +28,7 @@
 
 1. **A reader zeroes the only printing of a token** — expected: the entry stays at 0 (the implicit default does not reappear). Pinned in Task RB.
 2. **Undo of a cut restores the reader's printings** — cut the card that makes Treasure (with Treasure at two printings), Ctrl+Z: card and both entries back. Pinned in Task RB (`card_write_cases`-style case).
-3. **A paired device on v51 receives a v52 device's token history** — expected: nothing stalls, because the row is kind `deck`. Pinned by the absence of any `CHECK` change (Task RA test: `AUDIT_KINDS` unchanged) and a Task RB test that a token audit row is `kind = 'deck'`.
+3. **A paired device on v51 receives a v52 device's token history** — expected: the *history row* does not stall it, because the row is kind `deck`. Pinned by the absence of any `CHECK` change (Task RA test: `AUDIT_KINDS` unchanged) and a Task RB test that a token audit row is `kind = 'deck'`. *(Amended at the task reviews, 2026-09-26: "nothing stalls" was false. Every entry write also emits a `deck_token_printings` op, a table a v51 peer does not sync, so its applier defers that op and holds the stream until the peer upgrades — the cost every new synced table has paid, `deck_notes` at v43 included. The kind choice keeps the history from adding a second, permanent reason; it does not buy a stall-free mixed-version group.)*
 4. **A token dropped from the search column onto the Main deck pile** — expected: a token entry, no `deck_cards` row, the deck's card count unchanged. Pinned in Task RA (`add_card` reroute) and Task TC (the editor shows it in the pile).
 5. **Swapping onto a printing+finish the list already holds** — expected: the two fold (quantities summed), one tile. Pinned in Task RB.
 
@@ -101,6 +101,14 @@ export function entryRef(view: DeckTokenView): TokenEntryRef;
   dismiss: (oracleId: string) => void, restore: (oracleId: string) => void, reset: (oracleId: string) => void }
 // ipc.ts: DeckRow.tokenMode: "managed" | "collection" | "hidden"; DeckPatch.tokenMode?: same; tokenStack removed.
 ```
+> **Amended at fan-in (2026-09-26):** the routing predicate is not `is_token_layout` /
+> `isTokenLayout`. A layout-only test let six two-sided tokens (five `flip` Role tokens and the
+> `reversible_card` Mechtitan, debug corpus) become deck cards through `add_card`, so RB's fix
+> round added `deck_tokens::is_token_printing(layout, type_line)` and `printing_is_token(conn,
+> card_id)` — the three layouts, or a `flip` / `reversible_card` printing whose type line or a
+> ` // ` face begins `Token` / `Emblem` — which both reroutes and `NOT_A_TOKEN` ask, and TA added
+> its twin `isTokenPrinting(layout, typeLine)` to `deckTokens.ts`. `is_token_layout` /
+> `isTokenLayout` survive as the first half only.
 **TS (TB defines, TC consumes):** `TokenModeControl({ value, onChange, idPrefix }: { value: TokenMode; onChange: (m: TokenMode) => void; idPrefix: string })` drawing **Managed** and **Hide** only; `TokenArtPicker` props become `{ mode: { kind: "swap"; entry: DeckTokenView } | { kind: "add"; tokens: readonly DeckTokenView[] } | null; zoom; onPick: (to: { cardId: string; finish: Finish }) => void; onDismiss; onClose }`; `DeckTokensPanel` props gain `onAddPrinting: () => void`, `mode: TokenMode`, `onMode: (m: TokenMode) => void`, and `onPick: (view: DeckTokenView) => void`.
 **TS (TC):** `TokenPile` interface: `setQuantity: (entry: TokenEntryRef, quantity: number) => void; pickArt: (view: DeckTokenView) => void` (the rest as PR 1); React keys are `view.entryKey`.
 

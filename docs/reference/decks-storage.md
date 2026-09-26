@@ -700,8 +700,13 @@ folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a
   called _inside the caller's already-open transaction_, which is what makes
   `a_recorded_change_that_rolls_back_leaves_no_history` and `a_refused_write_leaves_no_history_
 behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives
-  **27** cases, each carrying the number of rows it owes (count the list in `deck_audit.rs`,
-  never a remembered number — it has been written down wrong three times now). It reached 28 on
+  **33** cases, each carrying the number of rows it owes (count the list in `deck_audit.rs`,
+  never a remembered number — it has been written down wrong three times now; re-counted
+  2026-09-26 off the case names, 27 at `50a02da9` and 33 after). **User schema v52 added six**:
+  the five token writes — `deck_token_set_quantity`, `_swap`, `_add_printing`, `_state` and
+  `_reset` — and `collection_to_deck (a token)`, the Collection tab's reroute, which records the
+  token history row rather than a card move; the sweep also asserts that every token row is kind
+  `deck` and that `AUDIT_KINDS` is still nine. It reached 28 on
   2026-08-23 by taking in `collection_alloc`'s two commands, which had been writing history under
   it for two PRs while the list stayed at 25: a sweep that exists to catch "a new deck write
   records nothing" cannot skip the writes that move cards. It fell back to 27 on 2026-08-31, when
@@ -2801,6 +2806,19 @@ downloaded**: 2 988 `token`, 137 `emblem` and 120 `double_faced_token` rows are 
 **2 520 of the 2 523 distinct token printings some card's `all_parts` names resolve to a local
 `cards` row — 99.9 %**.
 
+**User schema v52 (2026-09-26, [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md)
+§4) split what the reader stores in two**, and the subsections below are written against that
+shape unless they say otherwise. `deck_tokens` keeps what is the **token's** and shared by both
+lists — its state, `auto` / `hidden` / `manual` — and its `card_id` and `quantity` became
+**legacy**: read for an implicit entry's count, never written again. What the reader keeps of a
+token moved to **`deck_token_printings`**: *entries*, one printing in one finish in one list with a
+quantity, so a deck can bring a Treasure in two arts, or a foil one, and the plan can ask for a
+different Treasure from the live list. The six commands replaced the four; every token write
+became a journalled deck write; a token dropped anywhere in the editor became a token entry rather
+than a deck card; and a token nothing makes any more is reconciled away after card writes. Every
+figure added for v52 was measured 2026-09-26 on the debug corpus (`cargo test` in the worktree, a
+debug build, or `node:sqlite` read-only where it says so).
+
 ### The filter rule is a union, and getting it wrong is the way to ship something that looks right
 
 > Keep an `all_parts` entry when its **`component` is `"token"`**, **or** when the `cards` row it
@@ -2901,20 +2919,99 @@ CREATE UNIQUE INDEX idx_deck_tokens_uid ON deck_tokens (sync_uid);
   what makes the column safe as a grain in a way `card_id` would not be.
 - **Deliberately not grained on `variant`.** The derived list is per-variant because deck cards
   are; the override is not. Choosing the Treasure art for a deck and finding it reverted in the
-  theory build would be a surprise with nothing to recommend it.
-- **The three states.** `auto` — the row exists only to carry a printing and/or a quantity for a
-  token the deck derives anyway. `hidden` — the reader dismissed it; still derived, deliberately
-  not drawn. `manual` — drawn whether or not anything derives it, which is both a token the reader
-  added by hand and what a derived token becomes when they want it kept after cutting the card
-  that made it. The vocabulary is spelled twice on purpose: the `CHECK` is the shape, and
+  theory build would be a surprise with nothing to recommend it. **v52 kept that answer for the
+  state and reversed it for the art**: a dismissal is still "not in this deck" whichever list the
+  reader is looking at, while the printings moved to per-list entries (below), because the plan
+  asking for a different Treasure than the live list holds is exactly what theory tracking is for.
+- **The three states.** `auto` — the row exists only to carry a legacy quantity (before v52, a
+  printing and/or a quantity) for a token the deck derives anyway. `hidden` — the reader dismissed
+  it; still derived, deliberately not drawn. `manual` — drawn whether or not anything derives it,
+  which is both a token the reader added by hand and what a derived token becomes when they want
+  it kept after cutting the card that made it — and, since v52, the one state the reconcile never
+  touches. The vocabulary is spelled twice on purpose: the `CHECK` is the shape, and
   `deck_tokens::TOKEN_STATES` is what lets an unknown word be a **sentence** (`BAD_STATE`) rather
   than a constraint failure — `deck::set_folder`'s rule, and it applies because a command
   parameter reaches this column.
 - **The empty row is not representable.** `state = 'auto'` with no `card_id` and no `quantity`
-  carries no information, so `set_token_override` **deletes** instead of writing it. That keeps
-  *the reader has not deviated* one state rather than two that have to be kept in agreement.
-  **A quantity of zero is not that case**: it is a token the reader deliberately zeroed, and the
-  row goes on carrying the art they picked.
+  carries no information, so the state write (`set_token_override` until v52, `write_state` since)
+  **deletes** instead of writing it. That keeps *the reader has not deviated* one state rather than
+  two that have to be kept in agreement. **A quantity of zero was not that case**: it was a token
+  the reader deliberately zeroed, and the row went on carrying the art they picked. Since v52 a
+  zero lives on an entry (rule 3, below), and a legacy `0` left on a pre-v52 row still reads as the
+  implicit entry's count — `implicit_quantity` is `legacy.unwrap_or(1)`, so it stays zeroed.
+  **v52's rung leaves one row the old write path never made**: `state = 'auto'` with both legacy
+  columns cleared, where the override's art moved out. It is harmless — the resolver reads it as
+  *no deviation* — and the next `auto` written to that token deletes it, as an empty `auto` row
+  always was.
+
+### Entries: `deck_token_printings`, per list, since user schema v52
+
+```sql
+CREATE TABLE deck_token_printings (
+    id INTEGER PRIMARY KEY,
+    deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+    variant TEXT NOT NULL CHECK (variant IN ('live','theory')),
+    oracle_id TEXT NOT NULL,
+    card_id TEXT NOT NULL,
+    finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+    quantity INTEGER NOT NULL CHECK (quantity >= 0),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  , sync_uid TEXT);
+CREATE UNIQUE INDEX idx_deck_token_printings_grain
+    ON deck_token_printings (deck_id, variant, card_id, finish);
+CREATE UNIQUE INDEX idx_deck_token_printings_uid ON deck_token_printings (sync_uid);
+```
+
+(The rung's own SQL comments are left out here; `schema.rs` carries them.)
+
+- **`schema::DECK_TOKEN_PRINTING_GRAIN` is `"deck_id, variant, card_id, finish"`**, interpolated
+  into every `ON CONFLICT` for `DECK_TOKEN_GRAIN`'s reason and fenced by
+  `every_plain_grain_constant_names_the_index_the_head_schema_carries` — it carries no `coalesce`.
+  **`finish` is NOT NULL on purpose**: SQLite's unique index treats every NULL as distinct, so a
+  nullable finish would let one list hold the same regular printing twice. It is the collection's
+  own three words, **not** `deck_cards.finish`'s NULL-for-regular — a token entry always names its
+  finish, and the page spells it the deck card's way only where it is fed to a deck card's
+  functions (`tokenDeckFinish`). `oracle_id` is a stored fact for grouping (and for an entry whose
+  printing has left the corpus) and not a grain term, because a printing has one oracle.
+- **An entry is always a concrete printing**, so `card_id` is NOT NULL — and a token with **no**
+  entries in a list is drawn as one **implicit entry** instead, which is the *absence* of a row
+  rather than a NULL: the resolver's printing (below), in its `default_finish` — `nonfoil` where
+  the printing is sold that way, else its first sold finish (its **sole** finish, for the 13 515
+  foil-only and 892 etched-only printings), and `nonfoil` where `finishes` says nothing — at
+  `deck_tokens.quantity ?? 1`. `default_finish` is one function because four readers must agree:
+  the implicit entry, rule 2's materialisation, an add naming no finish, and the launch repair.
+- **The seven rules** (spec §4.2), all in `deck_tokens.rs`:
+  1. A token with entries in a list draws exactly those; with none, its implicit entry.
+  2. **The first write to an implicit entry materialises it in that list only** — a step, a swap,
+     an added printing. The write resolves the default at write time with the resolver's own code
+     for that one oracle (`implicit_entry` → `derived_printing` → `implicit_of`), so it inserts
+     the entry the reader was looking at. `a_materialised_entry_starts_at_the_legacy_quantity`.
+  3. **Stepping an entry to 0 deletes it unless it is the token's last entry in that list**, which
+     stays at 0 — `stepping_one_of_two_entries_to_zero_deletes_it_and_the_last_one_stays_at_zero`
+     and `zeroing_the_only_printing_keeps_it_at_zero_rather_than_the_default`.
+  4. **A swap** replaces an entry's printing and/or finish, and landing on a grain the list holds
+     **folds** (quantities summed, one row). `to` must be a printing **of this token**
+     (`NOT_THIS_TOKEN`) in a finish it is sold in (`deck::FINISH_NOT_SOLD`); a swap onto the
+     entry's own grain writes and records nothing.
+  5. **Adding a printing** materialises the implicit entry first, then inserts the printing at
+     `quantity` or steps the held entry up by it; a token the list derives nothing for becomes
+     `manual`, and a `hidden` one it does derive comes back to `auto` (an add is *put this on the
+     wall*, and filing a printing that stays hidden would be a press nobody can see).
+  6. **Theory and live never share an entry**; every entry write names its list.
+  7. **A token nothing makes any more is removed** — *Rule 7*, below.
+
+  `null` for an entry on the wire means the implicit one. **A `null` sent to a list that already
+  holds entries is a stale page** — a second press computed before the first one's answer came
+  back — and it is answered by the stored entry at the implicit grain where there is one, and
+  refused (`ENTRY_GONE`) where there is not, because a write to a printing the reader was not
+  looking at would be worse than a sentence. A write naming the implicit entry of a token that is
+  not on the wall at all is `TOKEN_GONE`.
+- **Synced**, the seventeenth table, with `quantity` a **field** for the reason the next section
+  gives — NOT NULL this time, so a counter would be *possible*, and still wrong: two devices each
+  setting a count of 4 mean 4. Its `apply::Meta` grain is `(deck_uid, variant, card_id, finish)`,
+  its rank 16. The rung's derived uids and uncaptured writes are in
+  [sync.md](sync.md) and [data-and-sync.md](data-and-sync.md).
 
 ### `quantity` is a synced **field** and not a counter, on two grounds
 
@@ -2937,7 +3034,11 @@ matching lines in `USER_SCHEMA_SQL`; an `UNDO_V<N>` for the rewind fixtures; `sc
 `Side::User`; an arm in `mirror::watch::surface_of`; the `sync_uid` column and its unique index in
 **both** the rung and `USER_SCHEMA_SQL`; `schema::SYNCED_TABLES`; a `capture::Spec`; and an
 `apply::Meta`. The three array lengths (`SYNCED_TABLES`, `capture::TABLES`, `apply::META`) move
-together, and they are the one part of the list a compile error catches.
+together, and they are the one part of the list a compile error catches. **It is twelve since
+v52's `deck_token_printings` counted them while landing**: the ten, plus `src/lib/userTables.json`
+(held to `schema::TABLES` by `changes.rs`) and `src/lib/crossWindow.ts`' `TABLE_KEYS` (held to that
+file by `crossWindow.test.ts`), which any new *user* table owes, synced or not —
+[sync.md](sync.md) has the list.
 
 Three notes on the sync half that are this table's own:
 
@@ -2967,7 +3068,10 @@ cards in the open deck are ever inflated.
 
 A *stored* list would need a reconciliation pass on every deck edit and would go stale the next
 time a Scryfall sync changed a card's `all_parts`, with nothing to notice. What is written down is
-only the reader's deviation.
+only the reader's deviation. **v52 is the one place that argument had to be paid anyway**: *which*
+tokens a list needs is still derived, but the entries the reader keeps are stored, and an entry of
+a token nothing makes any more is exactly the stale row this paragraph warns about — so rule 7's
+reconcile (below) runs after card writes, against this same derivation.
 
 - **Active categories only** — `deck_categories.is_active = 1`. `is_active = 0` means *counts
   toward nothing*, which is the whole of what the old `maybe` zone meant, so the **Maybeboard
@@ -2985,7 +3089,12 @@ only the reader's deviation.
   reader.
 - **Every failure is `Ok(vec![])` and never an `Err`**: an unknown deck, an unknown printing, a
   `raw` that will not inflate or parse, a missing `all_parts`, an `all_parts` that is not an
-  array. A deck must not fail to open over an area most decks use lightly.
+  array. A deck must not fail to open over an area most decks use lightly. **Since v52 the walk
+  also says that it happened** — `derive` answers a `Derivation { tokens, unreadable }`, where
+  `unreadable` is set by a maker that has left the corpus, a `raw` that will not inflate or parse,
+  an `all_parts` that is not an array, or an entry naming a printing this corpus does not hold.
+  The resolver ignores it (a wall short of one token beats a deck that will not open); **the
+  reconcile does not**, because the reconcile *deletes* (*Rule 7*, below).
 
 ### The default printing, and why the tie-break is the common path
 
@@ -3005,6 +3114,12 @@ one.
 
 `newest_printing` is that same tail written as SQL, for the hand-added tail of the answer, so a
 `manual` row and a derived one cannot disagree about which art is the default.
+
+**Since v52 this printing is the implicit entry's**, and a write materialises exactly it — which is
+why "which printing is the default" had to stay a Rust answer rather than a TypeScript one: the
+page draws the implicit entry and the write inserts it, and two halves computing it could
+disagree. A stored entry may be any printing of the token; `defaultCardId` still travels on every
+row, and is simply not the entry's own `cardId` once the reader has picked.
 
 ### A token's name does not identify it
 
@@ -3026,35 +3141,258 @@ Two tiles announcing one accessible name is a bug that has already shipped here 
 collection wall, where a 2X2 and an LEA Lightning Bolt both announced *"Copies of Lightning
 Bolt"* — neither suite caught it, because both names were **correct** and merely not unique.
 
-### The four commands
+### The six commands (four until user schema v52)
 
 | command | what it does |
 | --- | --- |
-| `deck_tokens(deckId, variant, marketplace)` | the derived list with the stored override joined on, and — since 2026-09-26 — each row's chin facts and a price for its effective printing (*The chin and the price*, below). Read-only connection on the blocking pool, `card_meld_parts`' shape. **`marketplace` is `Option<String>` through `Marketplace::from_opt`**, `card_printings`' shape, so an id this build does not know lands on TCGplayer. It had no `marketplace` until then, when nothing in the answer was priced |
-| `deck_token_set(deckId, oracleId, cardId, quantity, tokenState)` | upsert on the grain, or **delete** when the result would carry nothing. A full replace and not a patch: the page composes the whole override and sends all three fields, `null` included |
-| `deck_token_clear(deckId, oracleId)` | back to the derived defaults; the row goes. A grain that resolves to no row is a **success** |
-| `deck_token_add(deckId, cardId)` | resolves `oracle_id` from the printing and writes `state = 'manual'` with that printing as the art. **An existing quantity survives** — adding is *put this on the wall with this art*, and a reader who had set four Treasures, dismissed them and added them back must not find the four silently gone |
+| `deck_tokens(deckId, variant, marketplace)` | **one row per entry** since v52 — every stored entry of each token in that list, or its one implicit entry (`implicit: true`) — with the token's derivation, sources and effective state on every row of it, and each row's chin facts and price for **its entry's printing at its entry's finish** (*The chin and the price*, below). Read-only connection on the blocking pool, `card_meld_parts`' shape. **`marketplace` is `Option<String>` through `Marketplace::from_opt`**, `card_printings`' shape, so an id this build does not know lands on TCGplayer. It had no `marketplace` until 2026-09-26's PR 1, when nothing in the answer was priced |
+| `deck_token_set_quantity(deckId, variant, oracleId, entry, quantity)` | rules 2 and 3: `entry` is `{ cardId, finish }`, or `null` for the implicit entry, which is materialised in that list; `0` deletes the entry unless it is the token's last in the list. A negative number is the collection's sentence for one |
+| `deck_token_swap(deckId, variant, oracleId, from, to)` | rule 4: `from` as above, `to` always a printing and a finish; folds onto a held grain (the history row says `folded`) |
+| `deck_token_add_printing(deckId, variant, cardId, finish)` | rule 5, one copy, through `add_printing_in`: the token is read off the printing, which must be a token or an emblem (`NOT_A_TOKEN`); a `null` finish is the printing's default |
+| `deck_token_state(deckId, oracleId, state)` | dismiss / restore / keep, **shared by both lists**, so it names no variant. Which of `auto` and `manual` a restore sends is TypeScript's conclusion (by whether the list derives the token); this writes the word it is handed and deletes a row `auto` would leave empty |
+| `deck_token_reset(deckId, variant, oracleId)` | back to the implicit entry: every entry of the token **in that list** goes, and not the other list's or the state. A token with none is a success that records nothing |
 
-- **The wire key for the state word is `tokenState` and the Rust parameter is `token_state`**,
-  because `state` is already the managed `AppState` every command takes. `src/lib/ipc.ts` is the
-  one place on the other side that knows the rename; callers there pass `{ state }`, which is what
-  the column is called. `ipc.test.ts` pins all four argument sets — it is the only fence that
-  boundary has.
-- **Plain `sync::with_write` and never `with_write_owned`.** That one is for the four commands
-  that move copies across the collection/deck boundary; nothing here changes what the reader owns,
-  and the facet index's `owned` bitset has nothing to rebuild.
+**Retired at v52: `deck_token_set`, `deck_token_clear` and `deck_token_add`** — the last had no
+caller at all (measured 2026-09-26). `desktop.rs`' handler list and `web/route.rs`' `COMMANDS` both
+dropped them, and `the_token_commands_are_both_routed_and_advertised` asserts each answers
+`RouteError::Unknown`. The rule the first one needed — *the page sends the whole triple, because
+the row is defined by what it carries* — went with it: no write is a triple now.
+
+- **The wire key for the state word is `state`, and the desktop wrapper names its managed
+  `AppState` `app` instead** — Tauri injects a `tauri::State` by its type and never by its name,
+  which frees the name for the argument the page sends. Until v52 it was the other way round
+  (`tokenState` on the wire, `token_state` in Rust, and `src/lib/ipc.ts` the one place that knew
+  the rename). `ipc.test.ts` pins every argument set against the crate's own parameter lists — it
+  is the only fence that boundary has.
+- **Plain `sync::with_write` and never `with_write_owned`**, for all five writes. That one is for
+  the commands that move copies across the collection/deck boundary; no token write changes what
+  the reader owns, and the facet index's `owned` bitset has nothing to rebuild.
 - **Every refusal is a sentence.** `BAD_STATE` for a word outside `TOKEN_STATES`; `deck::GONE` for
-  a deck that is not there — `deck_tokens.deck_id` has an enforced foreign key and
-  `PRAGMA foreign_keys` is per-connection, so a deck deleted in another window is
-  `FOREIGN KEY constraint failed` on the app's connections and a silent orphan on one without the
-  pragma, and a sentence in Rust answers both; `NO_SUCH_PRINTING` for an `add` whose printing has
-  left the corpus, because that id arrives from a printings grid the reader was just looking at
-  and a press that reported success and stored nothing would be worse than a refusal.
+  a deck that is not there — every write's journal opens with a read of the deck, and
+  `deck_tokens.deck_id` and
+  `deck_token_printings.deck_id` have enforced foreign keys while `PRAGMA foreign_keys` is
+  per-connection, so a deck deleted in another window is `FOREIGN KEY constraint failed` on the
+  app's connections and a silent orphan on one without the pragma, and a sentence in Rust answers
+  both; `NO_SUCH_PRINTING` for a printing that has left the corpus, because that id arrives from a
+  printings grid the reader was just looking at and a press that reported success and stored
+  nothing would be worse than a refusal; and v52's `NOT_A_TOKEN`, `NOT_THIS_TOKEN`, `ENTRY_GONE`,
+  `TOKEN_GONE` and `deck::FINISH_NOT_SOLD` as the rules above describe.
 - **The art picker adds no Rust.** `card_printings`' predicate is `oracle_id = ?1 AND is_paper = 1`
   (`card.rs:96`) with no `legal_mask` term at all, and every token row satisfies both. It needs no
   `playableOnly: false` either — **that flag belongs to `search_cards`**, which is what
   `DeckCoverPicker.tsx:148` passes it to, and reading the two as one command is how this picker
-  would come back empty for every token in the game.
+  would come back empty for every token in the game. **It still adds none at v52**, where the
+  picker's grain became the printing *and* the finish: `card_printings` already answers each
+  printing's `finishes` and `finishPrices`, and the page expands one printing into one tile per
+  finish (`src/features/decks/CLAUDE.md`).
+
+### Every token write is a deck write: one history row, one undo step (v52)
+
+This reverses what the module said from #388 to v52 — *token writes record nothing* — because the
+reader asked for undo, and a token write is a deck write in every sense the editor draws.
+**`deck_tokens::journal_in` is the one place the five writes record**, inside the caller's
+transaction, so they cannot differ in how: a **read** of the deck, answering `deck::GONE` for a
+stale editor's dead id before any other sentence a dead deck could hear (`TOKEN_GONE`,
+`ENTRY_GONE`); a read of every entry of the token in the list and of its state; the write; the
+same read again; then, **only if something changed**, `touch_deck` (the gallery's *recently
+touched*), one `deck_audit` row and one `deck_undo` step keyed on it. **The fence is a read and the
+touch comes last** — `touch_deck` split in two — because its `UPDATE` stamps as it checks, and a
+swap onto the entry's own art would otherwise move the deck to the top of the gallery for a press
+that changed nothing. `write_tokens` wraps it in a transaction of its own for four of the
+commands; `add_printing_in` calls it inside whatever transaction it was handed, which is what lets
+`deck::add_card` and `collection_to_deck` reroute a token in theirs.
+
+- **History is kind `deck` with `field: "token"`, and `AUDIT_KINDS` stays at nine** — asserted by
+  `every_token_write_is_one_deck_row_and_one_step`. The deck notes' `{ field: "note" }` precedent,
+  for a sharper reason than the rebuild a tenth word costs: `deck_audit` is synced and
+  append-only, so a word a paired device's `CHECK` does not know would be refused there, and its
+  applier defers the op — **stalling that device's whole stream until it upgrades**. `deck` is
+  already the deck-level kind, so no reader takes a token for a deck card. `delta` is 0 — the day
+  header's `+7 / −6` adds up cards — and the row names no card (`card_name` is `NULL`: a token is
+  never a `deck_cards` row).
+- **The payload** is `{ field: "token", action, name, subtitle, card_id, finish, list, from, to }`
+  plus one extra per action, snake_case throughout. `action` is `quantity`, `swap`, `add`, `state`
+  or `reset`; `card_id` / `finish` are the entry the row is about (the one a swap *landed* on) and
+  `null` for `state` and `reset`; `list` is `null` for `state`, shared by both lists. `add` records
+  the entry's count before and after **and `quantity`, the copies added** — a second press on a
+  held printing steps it by one, so `to` is not the number to word; `swap`'s `from` / `to` are
+  `entry_facts` objects `{ card_id, finish, set_code, collector_number }`, read off the corpus at
+  the write so the drawer can say which art without it, and the extra `folded` says it landed on a
+  held entry; `reset` carries `entries`, how many went. **`name` and `subtitle` are written down
+  at the write**, off `newest_printing`, because a history is read after the corpus has moved — and
+  the subtitle is `deckTokens.ts`' `tokenSubtitle` **ported into Rust term for term**
+  (`subtitle_of`), a second copy of that logic taken on so the drawer can tell two `Wurm`s apart;
+  it is pinned against the TypeScript doc's own Treasure line and a Wurm.
+  `auditText.ts`' `tokenLine` is the only thing that words it.
+- **Undo is `Op::Tokens { restore, delete, states }`**, `deck_undo`'s sixth op, all three lists
+  `#[serde(default)]`. Applying it deletes `delete` by grain, upserts `restore` on
+  `DECK_TOKEN_PRINTING_GRAIN` to the recorded quantity, then puts `states` back (a `None` state
+  deletes the row). A write records **every entry of the token in its list on both sides**, so
+  the undo deletes what the write left and restores what it found — a swap's fold comes back as two
+  rows — and `states` rides only when the state moved, because a quantity step that recorded the
+  state it did not change would be refused later by a dismissal it never touched. `holds` checks
+  each restore row is at its grain with the recorded quantity and each state row matches (a
+  recorded absence has to be an absence). Rows are addressed by grain and never by id:
+  nothing points at `deck_token_printings.id`, so a restored entry is a new row.
+  `every_token_write_undoes_and_redoes_exactly`, `undoing_any_token_write_restores_the_deck_exactly`
+  (twelve cases through `drive_cases_on`, with `snapshot` reading both token tables) and
+  `undoing_a_token_write_the_deck_has_moved_past_is_retired`.
+- **A mode change is `Op::Deck { token_mode }`** — `token_mode` is on `deck_undo::DECK_FIELDS`, an
+  arrangement the reader chose, on the rail index's footing.
+
+### Rule 7: a token nothing makes any more is removed, in two layers (v52)
+
+The reader: *"if you cut all cards that create a token, so a token is no longer needed in the deck,
+simply remove all tokens of that type"*. `deck_tokens::reconcile_in(tx, deck, variants)` deletes
+every entry, in each list asked about, of a token that list no longer derives and that is not
+`manual`, and **answers the rows it deleted** so the caller's step can put them back. A `hidden`
+token is taken like any other: a dismissal is still a token the deck makes, and once it is not, it
+has nothing left to be dismissed from. Cutting the card and adding it back brings the token back as
+its implicit entry. **A reconcile after every card write and never a read-time rule** — reading
+around a stale entry would leave it in the table, and in PR 3's Collection mode its copies in the
+deck's folder, which is the stranding the rule exists to prevent.
+
+**Where it runs was settled by a census of 18 writers (2026-09-26), in two layers:**
+
+- **Inside the write's own transaction, for every writer that files a step**, so the deletions ride
+  that step and one Ctrl+Z puts back the card **and** the reader's printings: at the two shared
+  choke points `deck_undo::record_cells` (over `variants_of(cells)`) and `record_variant` —
+  adding, a quantity, clearing a pile or a list, a move, a printing swap, copying live into
+  theory, importing — which append the rows through `push_removed_tokens` after the card ops;
+  and by hand at the three steps built without them: `deck_meta::set_category_active`,
+  `deck_meta::delete_category` (both lists each), and the theory switch (below).
+  `cutting_the_maker_removes_its_tokens_entries_inside_the_cut`,
+  `an_import_replacing_the_maker_removes_the_entries_and_undo_restores_them`,
+  `switching_the_makers_pile_off_or_deleting_it_removes_the_entries_and_undo_restores_them` and
+  `a_cut_that_reconciles_tokens_carries_them_on_its_own_step`.
+- **After every write, as a backstop**, for the writers that file no step —
+  `collection_alloc::collection_to_deck` and `deck_to_collection`, a sync apply, and **undo and
+  redo themselves**. **Scryfall's `reconcile::apply` is covered one write late**: it takes the
+  write connection through `sync::lock_db` rather than `with_write`, so no backstop runs after it,
+  and the marks its `deck_cards` writes leave are reconciled at the next write that does come
+  through `with_write`, on any deck. `sync::with_write` calls
+  `reconcile_dirty_logged` after the write commits, which reads the managed wishlist's TEMP
+  `managed_wishlist_dirty` table (filled by that module's triggers on `deck_cards`,
+  `deck_categories` and `decks`) and reconciles both lists of each dirty deck, one transaction per
+  deck, logging rather than failing — the reader's own write has already committed. ⚠️ **It runs
+  _before_ `managed_wishlist::settle_logged`, not after**, because the settle empties the dirty
+  table it reads; neither pass writes anything the other reads. **Its deletions sit in no step, so
+  a redo does not bring back entries a post-undo reconcile removed** — the one cost of the
+  arrangement, accepted rather than missed. `the_backstop_reconciles_a_cut_that_files_no_step`.
+
+**Three things keep it cheap and one keeps it safe.** A list with no non-`manual` entries at all
+is one indexed read and no derivation; a list is only derived when there is something it could
+delete; and the deletes are **ordinary captured writes** — every device derives the same answer, a
+delete that finds nothing is a no-op on the far device, and a captured delete keeps an undo's
+captured restore meaningful there. ⚠️ **A list whose makers cannot all be read deletes nothing**
+(`Derivation::unreadable`, above): it cannot prove a token unneeded, and **the one population where
+every maker is unreadable is the one that would lose everything** — a device paired before its
+first corpus download derives nothing from anything, and a reconcile there would delete every
+token printing the reader has and push the deletes to the whole group.
+`a_reconcile_over_a_list_it_cannot_read_deletes_nothing` is the pin, and a mutation removing the
+guard turned it red. The cost is small and permanent: a deck whose maker names a printing absent
+from the corpus — 3 or 4 printings corpus-wide — never reconciles that list.
+
+**The theory switch moves the live list's entries rather than reconciling them away.**
+`deck::update_deck`'s false → true switch pours the live deck into the plan, and the live list then
+derives nothing — so a bare reconcile would have deleted the Treasure arts the reader chose instead
+of letting them follow the deck that became the plan. The switch runs in this order:
+
+1. **Both lists are reconciled first, and only then is the step's before-image read.** Every deck
+   that never had a plan holds a theory copy of each old pick (the v52 rung made one per list), and
+   a plan with no cards makes no token, so rule 7 owes those entries' removal whatever the press
+   does. Read into the before-image, an undo would put such an entry back, the `with_write`
+   backstop would delete it the moment the undo committed, and the redo — which checks that the
+   deck still holds what the undo restored — would be refused for ever, with nothing on screen
+   saying why. So those deletions ride no step, like every backstop deletion, and **one Ctrl+Z
+   restores the live arts but not the plan's stale ones**.
+2. `deck_theory::move_live_into_theory` moves the cards.
+3. `move_live_tokens_into_theory` **deletes the plan's surviving entries** — after the reconcile
+   those can only be `manual` tokens' — because `theory_is_empty` asks about `deck_cards` alone and
+   moving a live entry onto a theory one at the same grain would fail
+   `idx_deck_token_printings_grain` and the whole press; then it moves every live entry to
+   `theory`. Replacing rather than folding is the switch's meaning: the deck the reader built *is*
+   the plan.
+4. Both lists are reconciled again, and the entries read again.
+
+**The step records the net change** — `token_step(before, after)`, one `Op::Tokens` a side, after
+the cards' `Op::Variant` pair — because a reconcile can remove a row the move has only just made,
+and a separate "restore what the reconcile removed" op would put back a theory row that never
+existed and make every redo fail `holds`; diffing rather than restoring everything also keeps
+untouched rows from being reinserted under new sync uids.
+`the_theory_switch_moves_token_entries_into_the_plan_and_undo_moves_them_back` and
+`the_theory_switch_replaces_the_plans_stale_token_entries_and_undo_puts_them_back`, the second of
+which runs the backstop's reconcile by hand between the undo and the redo, since a direct
+`apply_reversal` bypasses `with_write`.
+
+### A token is never a deck card: the reroute at `add_card` and `collection_to_deck` (v52)
+
+**Adding or dropping a token, a double-faced token or an emblem anywhere a card can be added files
+it as a token entry** (rule 5) and writes no `deck_cards` row. The routing is in Rust, **at the two
+writes every add path ends in**: `deck::add_card` (the Add button, a drop on any pile, quick add,
+the card menu's `Add to`, a drop on the sidebar's deck entry) and
+`collection_alloc::collection_to_deck` (the Collection tab). Measured 2026-09-26: no drag payload
+and no add call carries the card's `layout`, so a TypeScript router would have to thread it through
+six call sites and would miss the seventh, while here the card's own row is at hand and the rule is
+structural.
+
+- **The question is `deck_tokens::printing_is_token(conn, card_id)`** — `is_token_printing(layout,
+  type_line)` over the row: `token`, `double_faced_token` and `emblem` by themselves, **or** a
+  `flip` / `reversible_card` printing whose type line, or any ` // ` face of it, begins `Token` or
+  `Emblem`. A layout-only first cut let six real tokens become deck cards through `add_card`.
+  Measured read-only with `node:sqlite` over all 118 610 rows of the debug corpus, gunzipping each
+  `raw`: the keep rule's 78 `flip` / `reversible_card` token entries resolve to **six** printings
+  (five `flip` Role tokens and the `reversible_card` Mechtitan); the same two layouts hold **127**
+  rows, of which **7** are tokens, all 7 with a top-level `type_line` beginning `Token` and every
+  face saying so too, and **0** rows saying `Token` on a face and not at the top — so the stored
+  line is as good as the faces and costs no JSON parse. `legal_mask = 0` was rejected: it catches
+  all 7 and one non-token `flip` besides, and "legal nowhere" is not "a token".
+  `is_token_layout` survives as the first half only; `deckTokens.ts`' `isTokenPrinting` is the
+  TypeScript twin, which the Storybook fake routes on.
+- **A rerouted `add_card` answers `EntryChange { id: 0, quantity, removed: false }`** — `quantity`
+  the entry's, and **`id: 0` a contract**: no deck card was made, so there is no row to mark as
+  landed, and SQLite never numbers a row 0. The reroute sits right after the printing lookup,
+  ahead of `add_card`'s own `touch_deck` and its category resolution (`journal_in` touches the
+  deck itself), so no pile is invented for a token.
+  `a_token_card_added_to_a_pile_becomes_a_token_entry` (with a `reversible_card` Role case).
+- **A rerouted `collection_to_deck` moves no copy** and answers `MoveOutcome { entry_id: None,
+  from_deck: None, deck_card_id: None, quantity: 0 }`. It sits after the deck's `GONE` and virtual
+  fences and **before** `NOT_IN_DECK` — a deck never "plays" a token, so that fence would refuse
+  every one. The entry is the row's printing in the row's finish, in the live list. PR 2's Managed
+  mode touches the collection never; PR 3's Collection mode is what pulls a token's copies, from
+  the pool. **Unlike a card filed through that command, the token half files an undo step**, since
+  `add_printing_in` journals like every token add and there is no custody half it could fail to
+  restore. `filing_a_token_adds_a_token_entry_and_moves_no_copy` and
+  `filing_a_reversible_token_is_rerouted_too`.
+- **`deck_token_add_printing` refuses what the reroutes would never send** (`NOT_A_TOKEN`), so
+  Lightning Bolt handed to the band's Add printing is a sentence rather than a hand-added "token"
+  drawn on the wall. `adding_a_card_that_is_not_a_token_is_refused_and_writes_nothing` and
+  `a_reversible_token_is_added_and_a_reversible_card_is_refused`.
+
+### `repair_entry_finishes`, the launch half of the v52 rung
+
+The rung copied every picked art into an entry at **`nonfoil`**, knowing it was a guess: no
+migration rung reads the corpus (`migrate_user` runs before `migrate_corpus`, and the corpus may not
+be at head or there at all). `deck_tokens::repair_entry_finishes` is the other half, run from
+`schema::prepare_database` beside `managed_wishlist::settle_all` and, like it, **logged and left
+owing** on failure. It moves every entry whose finish its printing is not sold in to the printing's
+`default_finish` — its sole finish, for a foil-only or etched-only printing — and **folds** into an
+entry the list already holds at that grain rather than failing the launch on the unique index. A
+printing gone from the corpus, or whose `finishes` says nothing, is left alone. It can touch
+nothing the reader chose, because the picker only offers a finish a printing is sold in.
+**Idempotent**, so every later launch costs one read that finds nothing; and **behind
+`capture::suppressed`**, `src-tauri/CLAUDE.md`'s rule for a write every device derives for itself —
+whether a printing is foil-only is a fact of *this* device's corpus, and a captured fold would
+arrive on the other device as a second sum.
+⚠️ **The entry keeps its row, and so its `sync_uid`.** The finish is rewritten **in place**
+(`UPDATE … WHERE id`), and a fold is an `UPDATE` of the held row plus a `DELETE` of this one —
+never a delete and a re-insert. The capture triggers' uid mint sits inside the guard `suppressed`
+switches off, so a re-inserted row would come back nameless, and the next captured write to it —
+a stepper, whose update trigger has no uid guard — would put a NULL into `sync_ops.uid NOT NULL`
+and fail on every press from then on. Every device runs the same repair over the same rows, so the
+name the rung gave the entry stays the one every peer knows it by.
+`the_finish_repair_moves_an_unsold_finish_to_the_sole_one_and_is_idempotent` and
+`the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured`.
 
 ### The chin and the price, since 2026-09-26
 
@@ -3062,7 +3400,11 @@ The token-stacks work ([the spec](../superpowers/specs/2026-09-26-token-stacks-d
 draws a token in a deck view's pile with the deck card's own `DeckCardFace` and `CardChin`, so a
 row has to say what a deck card's chin says. `DeckTokenRow` gained six fields, **every one of them
 about the effective printing** — `card_id` where the reader picked art, `default_card_id`
-otherwise, the precedence `image_uris` already followed:
+otherwise, the precedence `image_uris` already followed. **Since v52 that is simply the entry's
+printing**: a row is one entry, `card_id` is always its printing (the resolver's default for an
+implicit entry), and the row also carries the entry's `finish`, its effective `quantity`, its
+`implicit` flag and the token's effective `state` (`auto` where `deck_tokens` holds no row). The
+six:
 
 | field | what it is |
 | --- | --- |
@@ -3073,21 +3415,28 @@ otherwise, the precedence `image_uris` already followed:
 | `finishes` | the JSON **text** `cards.finishes` holds (`["nonfoil","foil"]`) — `src/lib/finish.ts`' `parseFinishes` input, not a second shape |
 | `unitPrice` | what one copy costs in the asked marketplace, or `null` |
 
-- **All six are `null` together when a pick has left the corpus**, which is the picture's own
-  answer for that case: a stored `card_id` whose `cards` row is gone draws no art and no chin
-  rather than borrowing the resolver's. Where the pick *is* the resolver's printing, the row's own
-  columns answer and only the price is an extra read.
-- **The price is a deck row's, not a default finish's.** It goes through
-  `sorting::printing_price_by_finish_expr` — `nonfoil → foil → etched`, first priced link wins —
-  which is exactly how a `deck_cards` row that names no finish is priced. The first cut priced a
-  token at one *default finish* (the printing's sole finish, else nonfoil), and the two differ in
-  exactly one case: a printing listed in several finishes whose nonfoil is unpriced read `—` on
-  the token while the same printing in the deck read its foil rate — one card priced two ways on
-  one screen, beside a pile drawn to look like the deck's. The chain is what the rest of the crate
-  already had to learn: **13 515 foil-only and 892 etched-only printings have no nonfoil price at
-  any marketplace** (that function's own record, measured 2026-08-15). **Which finish the chin
-  _marks_ is a separate question**, answered in TypeScript by `playedFinish(null, finishes)` —
-  nothing in Rust answers it.
+- **All six are `null` together when an entry's printing has left the corpus**, which is the
+  picture's own answer for that case: a stored `card_id` whose `cards` row is gone draws no art
+  and no chin rather than borrowing the resolver's. Where the entry *is* the resolver's printing,
+  the row's own columns answer and only the price is an extra read.
+- **Since v52 the price is the entry's, at the entry's finish, with no chain** — reversing PR 1's
+  bullet that stood here. It goes through `sorting::price_expr(market, ?2)` with the finish bound
+  as a parameter, which is how a `deck_cards` row that **names** a finish is priced: a foil
+  Treasure is not priced as the nonfoil one, and a foil entry the marketplace does not quote reads
+  `None` rather than borrowing the nonfoil rate. PR 1 (2026-09-26, before a token had a finish of
+  its own) priced through `sorting::printing_price_by_finish_expr` — `nonfoil → foil → etched`,
+  first priced link wins — exactly as a deck row that names **no** finish is priced, because a
+  first cut at one *default finish* had read `—` on a printing whose nonfoil was unpriced while
+  the same printing in the deck read its foil rate. The chain was right while the token named no
+  finish, and the reason it was right is the reason it is gone: an entry always names one now.
+  **The one case that moves** is an implicit entry on a printing listed nonfoil + foil with only a
+  foil price — its default finish is `nonfoil`, so it reads unpriced where PR 1 read the foil
+  rate; `an_entry_is_priced_at_its_own_finish_and_never_down_a_chain` pins the new rule and PR 1's
+  test was rewritten. The foil-only case the chain existed for is unaffected, because such a
+  printing's default finish *is* its foil (**13 515 foil-only and 892 etched-only printings have no
+  nonfoil price at any marketplace**, `printing_price_by_finish_expr`'s own record, measured
+  2026-08-15) — `a_foil_only_token_is_priced_at_its_foil_price`. **Which finish the chin _marks_**
+  is the entry's own since v52, passed to `playedFinish` by the page; nothing in Rust answers it.
 - **`None` where the marketplace has no figure — never `0`**, which the pile heading's sum would
   count as a free card, and never another marketplace's. Cardmarket's etched hole is
   `price_expr`'s and survives here unchanged.
@@ -3160,10 +3509,14 @@ not a default that disagrees with itself. The Storybook fake is a third: `toDeck
 `statsOpen: d.statsOpen ?? true` sits directly under `tokensOpen: d.tokensOpen ?? false`, and
 copying the line above it is the bug.
 
-### `decks.token_stack`, the setting that sits among the disclosures
+### `decks.token_stack`, the setting that sat among the disclosures — dropped at v52
+
+**User schema v52 dropped this column for `decks.token_mode`** (next section); what follows is its
+record as it stood from v47 to v51, kept because the rung that dropped it, the capture spec's
+history and `deck_undo.rs`' comments still name it.
 
 User schema **v47** (2026-09-24, [issue #507](https://github.com/Msgaihede/mtg-grimoire/issues/507))
-is `decks.token_stack INTEGER NOT NULL DEFAULT 0` — whether the deck views draw the deck's tokens
+was `decks.token_stack INTEGER NOT NULL DEFAULT 0` — whether the deck views draw the deck's tokens
 and emblems as a **Tokens & Emblems** pile (a trailing one until v51, below, made its place the
 reader's), read as `DeckRow.tokenStack` and written as
 `DeckPatch.tokenStack` on the ordinary `deck_update`. It is on the `decks` capture `Spec`, appended
@@ -3178,6 +3531,48 @@ about how the list is read — `separate_x_group`'s footing — so a copy reads 
 did. Rust stores the bit and nothing more: the pile is drawn in the view layer from the same
 `deck_tokens` answer the band draws and never enters `deck.cards`, so it counts toward nothing.
 Not on `DeckInput` — a deck is born with it off.
+
+### `decks.token_mode`, which replaced it — undoable, audited, and a word the page does not draw yet
+
+User schema **v52** (2026-09-26, [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md)
+§4.1, §4.5) is `decks.token_mode TEXT NOT NULL DEFAULT 'managed' CHECK (token_mode IN
+('managed','collection','hidden'))` — how the deck keeps its tokens. `managed` and `collection`
+draw the Tokens & Emblems pile in the four views; `hidden` takes it out of all four and leaves the
+band. It rides `DeckPatch.tokenMode` / `DeckRow.tokenMode` on the ordinary `deck_update` with no
+per-field arm, and is refused in words for any other word (`deck::BAD_TOKEN_MODE`, *"A deck's
+tokens are Managed, Collection or Hidden."*, checked by `valid_token_mode` before the transaction
+opens).
+
+- **The same rung dropped `token_stack` and added this, so the two were never two answers.**
+  **Every deck starts on `managed`**, the ones whose stack was off included — the reader's answer,
+  so after the upgrade every deck that makes tokens shows a pile — and `token_stack` is dropped
+  rather than read, because neither of its values names a mode to keep. The drop is v43's move:
+  `sync_upd_decks` reads `NEW.token_stack`, SQLite refuses `DROP COLUMN` on a column a trigger
+  reads, so the rung drops the `decks` capture triggers first and `capture::install` puts them back.
+- **`collection` is in the `CHECK` a PR before anything means it.** PR 3 gives it custody (the
+  collection's Tokens pool), and carrying the word now means PR 3 adds a behaviour and a button and
+  no rung. The page draws **Managed and Hide only**; a synced `collection` from a newer build
+  presses neither button, and this build draws the pile for it as it does for Managed. A `CHECK` on
+  a synced column is what `sticky_notes.color` refuses one for, and the difference is the same one
+  `deck_tokens.state` stands on: these words are this app's model, and a fourth would be a rung,
+  which moves every device together.
+- **Positional reads did not move**: `deck_row` reads it in `token_stack`'s slot at **27** —
+  a TEXT beside `managed_wishlist_mode`'s TEXT at 28, the trap `deck_row`'s comment records — so
+  `IMAGE_COL` stays **30**; `DeckBefore` reads it at **18**, and `update_deck` binds it as
+  **`?21`**, the hole `token_stack` used, so nothing renumbered.
+- **Where it parts company with `token_stack`: a history row and an undo step.** `record_deck_edit`
+  writes a `deck_audit` row with field **`tokenMode`** and the two words, which `auditText.ts`
+  reads as *"Hid Tokens & Emblems"* / *"Set Tokens & Emblems to Managed"*; `token_mode` is on
+  `deck_undo::DECK_FIELDS`, so a change files one `Op::Deck { token_mode }` step and Ctrl+Z puts
+  the mode back. A mode is an arrangement the reader chose, the rail index's footing rather than a
+  disclosure's. Re-sending the same word writes no row. `duplicate_deck` carries it, as it carried
+  `token_stack`; not on `DeckInput` — a deck is born `managed` by the `DEFAULT`.
+  `token_mode_round_trips_audits_and_undoes` pins the default, the patch beside `notes_open` (to
+  catch a crossed `?21` or read at 27), the audit payload, the no-op re-send, the refusal, the
+  duplicate and the undo.
+- **On the `decks` capture spec under the new name**, v49's precedent: a v51 peer skips a field it
+  does not know, where a word landing in its INTEGER `token_stack` would have failed its deck read.
+  `a_decks_token_mode_is_captured` also asserts `token_stack` is off the wire.
 
 ### `decks.token_rail_index`, the pile's place in the rail — and the one of these that is undoable
 
@@ -3204,15 +3599,16 @@ because `main` shipped its own v50 first — `price_snapshots.copies`. It rides
   nullable "last" could never be written back once the reader had moved the pile. `-1` is a value
   and `coalesce` passes it through; the page stores last as `-1` and never as the rail's length,
   so a pile put at the bottom stays there when a pile is switched on or off later.
-- **It is the one column of this family with a history row and an undo step**, and that is where
-  it parts company with `token_stack` above it. A disclosure is where the reader left a deck and
-  `token_stack` is a setting; this is an **arrangement the reader drags**, the footing a category
+- **It was the one column of this family with a history row and an undo step when it landed**
+  (v52's `token_mode`, above, is the second), and that is where it parts company with
+  `token_stack`. A disclosure is where the reader left a deck and
+  `token_stack` was a setting; this is an **arrangement the reader drags**, the footing a category
   reorder is on. So it is on `deck_undo::DECK_FIELDS` — a move files one `Op::Deck
   { token_rail_index }` step, the shape every other deck field's undo takes, and Ctrl+Z puts the
   pile back — and `record_deck_edit` writes a `deck_audit` row with the field **`tokenRail`**
   (`from` and `to` the stored numbers, `-1` meaning last), which `auditText.ts` reads as
   *"Moved Tokens & Emblems"*. A re-send of the same index writes no row. `duplicate_deck` carries
-  it, as it carries `token_stack`.
+  it, as it carried `token_stack` and carries `token_mode`.
 - **Positional reads moved, again.** `DECK_SELECT` appends `d.token_rail_index` after
   `d.managed_wishlist_mode`; `deck_row` reads it at **29**, and `IMAGE_COL` moved **29 → 30**.
   `DeckBefore` — the before-image `update_deck` audits against — reads it at **17**, and
@@ -3275,7 +3671,7 @@ and it draws the empty frame rather than a broken image. A card merely **cut fro
 not that case and keeps both, because the fallback arm searches the whole corpus.
 
 **No migration, and that is the point.** `deck_note_cards` is unchanged — the same columns, the
-same `idx_deck_note_cards_grain` on `(note_id, oracle_id)` — so the fifteen synced tables, its
+same `idx_deck_note_cards_grain` on `(note_id, oracle_id)` — so the synced-table census, its
 `apply::Meta` rank of 14 and `deck_undo`'s `attachments` snapshot are all untouched. The redesign
 that asked for the pictures added columns to a **read**, which is why it spent no schema rung.
 
@@ -3377,8 +3773,10 @@ new: no deck has ever shown one, so a collapsed default takes nothing from anybo
 ### ⚠️ The rung has to drop three triggers before it drops the column
 
 Capture triggers are **persistent** objects — the sync engine writes real `CREATE TRIGGER`s, not
-temp ones — and `sync_upd_decks` is `AFTER UPDATE OF …` with `notes` in its list. SQLite refuses
-`DROP COLUMN` on a column a trigger references, so the rung drops `sync_ins_decks`,
+temp ones — and `sync_upd_decks` reads `NEW.notes`. SQLite refuses `DROP COLUMN` on a column a
+trigger **reads** — measured on the bundled 3.53.2 on 2026-09-26, a column named only in an
+`AFTER UPDATE OF` list drops cleanly, which is what this paragraph wrongly gave as the reason
+before — so the rung drops `sync_ins_decks`,
 `sync_upd_decks` and `sync_del_decks` first and `prepare_database` reinstalls them on the very
 next line. That is **v33's** move rather than a new one, and it is invisible in any test that
 starts from a fresh database: a fresh file has no triggers yet, so only a real upgraded file

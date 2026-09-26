@@ -242,13 +242,20 @@ User schema **v52**. Rust-heavy; the UI changes are the band and the mode contro
      `record_variant` (adding, a quantity, clearing a pile or a list, a move, a printing swap,
      copying live into theory, importing), and by hand at the three steps built without them —
      the theory switch (`update_deck` → `move_live_into_theory`), switching a pile on or off
-     (`set_category_active`) and deleting a pile (`delete_category`).
+     (`set_category_active`) and deleting a pile (`delete_category`). *(Amended at PR 2's
+     fan-in, 2026-09-26: the theory switch **moves** the live list's entries into the plan with
+     the cards, replacing the plan's own, before it reconciles — a bare reconcile deleted the arts
+     the reader chose instead of letting them follow the deck that became the plan — and records
+     the net change as one `Op::Tokens` pair.)*
    - **After every write, as a backstop**, on the hook `sync::with_write` already runs for the
      managed wishlist (its TEMP dirty-deck triggers on `deck_cards` and `deck_categories`), for
-     the writers that file no step: `collection_to_deck`, `deck_to_collection`, sync apply, the
-     reconcile of vanished printings, and **undo/redo itself**. Its deletions sit in no step — so
-     a redo does not bring back entries a post-undo reconcile removed, the one cost of this
-     arrangement.
+     the writers that file no step: `collection_to_deck`, `deck_to_collection`, sync apply and
+     **undo/redo itself**. Its deletions sit in no step — so a redo does not bring back entries a
+     post-undo reconcile removed, the one cost of this arrangement. *(Amended at the task reviews,
+     2026-09-26: this listed Scryfall's reconcile of vanished printings as covered. It runs outside
+     `with_write`, so the decks it marks dirty are reconciled at the **next** write rather than
+     after it. And the theory switch reconciles both lists **before** it reads its before-image,
+     or a redo of it met rows the backstop had already removed and was refused.)*
 
    Reconcile deletions are **ordinary captured writes**: every device derives the same result, a
    delete that finds nothing is a no-op, and capturing them keeps an undo's restore (a captured
@@ -285,6 +292,21 @@ entry's `finish` is what the chin names, what `FoilOverlay` sheens and what the 
   never made.
 - `decks.token_mode` is added at `managed`; `token_stack` is dropped.
 - Proven on a copy of the real dev database (the `prove-a-migration-on-the-real-dev-db` memory).
+
+*(Amended at PR 2's fan-in and task reviews, 2026-09-26 — the rung as built.)*
+- **Each migrated entry gets a derived `sync_uid`**, `<override uid>-live` / `-theory`. A NULL
+  uid would fail the first edit on a paired device (`sync_ops.uid NOT NULL`), and a random one
+  would name the same entry differently on every device that climbs. The rung drops
+  `deck_tokens`' capture triggers while it runs, so its clear of the override is not sent to a v51
+  peer.
+- **The rung is total, because only a migration may stop a launch and this one must not.** It
+  clamps a negative v51 quantity with `max(coalesce(quantity, 1), 0)` — v51's column had no
+  `CHECK` — and ignores a grain collision, ordered by `oracle_id` so every device keeps the same
+  override.
+- **The finish repair updates in place.** Moving an entry to its printing's sold finish is an
+  `UPDATE` when that grain is free, so the entry keeps its uid, and a fold into the held row only
+  when it is not. It runs under capture suppression — every device derives it — where a delete
+  and re-insert would have come back with no uid at all.
 
 ### 4.4 Commands
 
@@ -332,7 +354,8 @@ button and a behaviour and no rung.
   the printings of **every token the deck has** (the tokens on the wall), with a search box over
   name and set. A pick is rule 5 at quantity 1.
 - **From the search column** (either tab): adding or dropping a card whose layout is `token`,
-  `double_faced_token` or `emblem` files it as a **token entry** (rule 5) rather than a deck card,
+  `double_faced_token` or `emblem` (or a two-sided token — the predicate below, as amended) files
+  it as a **token entry** (rule 5) rather than a deck card,
   whichever pile it was dropped on — tokens never become deck cards. A token the deck does not
   make becomes a hand-added token.
 
@@ -341,8 +364,15 @@ button and a behaviour and no rung.
   entry) and `collection_alloc::collection_to_deck` (the Collection tab). Measured 2026-09-26: no
   drag payload and no add call carries the card's `layout`, so a TypeScript router would have to
   thread it through six call sites and would miss the next one; in Rust the card's own row is at
-  hand and the rule is structural. `deck_tokens::is_token_layout` is the predicate, and
-  `deckTokens.ts`' `isTokenLayout` its TypeScript twin for drawing. A rerouted `add_card` answers
+  hand and the rule is structural. **The predicate is `deck_tokens::is_token_printing(layout,
+  type_line)`** — asked over a row by `printing_is_token(conn, card_id)` — and `deckTokens.ts`'
+  `isTokenPrinting` its TypeScript twin, which the Storybook fake routes on. *(Amended at PR 2's
+  fan-in, 2026-09-26: this read `is_token_layout` / `isTokenLayout`, a layout-only test, and that
+  let six real tokens — five `flip` Role tokens and the `reversible_card` Mechtitan, measured on
+  the debug corpus — become deck cards through `add_card`. The predicate is the three layouts
+  **or** a `flip` / `reversible_card` printing whose type line, or any ` // ` face of it, begins
+  `Token` or `Emblem`; `is_token_layout` / `isTokenLayout` survive as its first half only.)* A
+  rerouted `add_card` answers
   an `EntryChange` with **`id: 0`** — no deck card was made, so nothing is marked as landed — and a
   rerouted `collection_to_deck` moves **no copy** in PR 2 (PR 3's custody pulls from the pool).
   The finish is the add's own where it names one, else the printing's default.
@@ -367,7 +397,10 @@ nothing". A token write is a deck write, so it goes where every deck write goes:
   (`{ field: "note", action }`), measured 2026-09-26: `deck_audit` **is synced** (append-only),
   so a new word in its `CHECK` would be refused by any paired device still on an older build, and
   its applier defers the op — stalling that device's stream until it upgrades. `deck` is already
-  the deck-level kind, so no reader takes a token for a deck card.
+  the deck-level kind, so no reader takes a token for a deck card. *(Amended at the task reviews,
+  2026-09-26: this keeps the **history** from stalling a v51 peer, and no more. The entries
+  themselves live in a table that peer does not sync, so every entry write defers there too until
+  it upgrades — the cost every new synced table has paid.)*
 - **The undo button's label** is the audit row's text, as for every step, so the button reads
   *"Undo — Treasure 1 → 3"*.
 - `every_deck_write_leaves_exactly_one_audit_row` gains the token commands, and the fake's
@@ -408,8 +441,10 @@ User schema **v53**. Rust-heavy, and the one PR that moves the reader's cardboar
   entry.
 - **A token lives in Tokens and nowhere else** (the reader: "tokens should never go in a binder,
   only the tokens folder"). A token is a printing whose corpus `layout` is `token`,
-  `double_faced_token` or `emblem` — Rust's `is_token_layout`, the twin of `deckTokens.ts`'
-  `isTokenLayout`. Every door into the collection honours it, as a fence in Rust and never only a
+  `double_faced_token` or `emblem`, **or** a `flip` / `reversible_card` printing whose type line
+  or a face of it begins `Token` or `Emblem` — Rust's `is_token_printing` (PR 2, §4.6's amended
+  paragraph), the twin of `deckTokens.ts`' `isTokenPrinting`. Every door into the collection
+  honours it, as a fence in Rust and never only a
   greyed control:
   - **Adding** one (search, the card menu, quick add, the importer) files it into the pool whatever
     folder the reader was standing in or the add named.

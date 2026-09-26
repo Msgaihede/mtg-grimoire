@@ -896,7 +896,9 @@ twelfth" at different times, and they are not the same table: the spec's was dro
 gone for good, this tree's is real and the spec never spoke of it. The count moved twice; the
 intent behind the first move did not. **The thirteenth is `deck_tokens`, at user schema v37** —
 one row per token a deck's reader has deviated on, holding the art they picked, how many copies
-they want and whether the row is dismissed or hand-added.
+they want and whether the row is dismissed or hand-added. (Since v52 it holds only the last of
+those three; the art and the count moved to the seventeenth, below, and its `card_id` and
+`quantity` still travel as fields a v52 device writes no more.)
 
 **The fourteenth and fifteenth are `deck_notes` and `deck_note_cards`, at user schema v43**
 (2026-09-10, issue #447) — many notes to a deck where there used to be one `decks.notes` column,
@@ -949,12 +951,16 @@ back. What is new is only that a parentless table on this census now holds the r
 beside the field it describes, and the spec is the one that was written against the array.
 
 ⚠️ **`color` carries no CHECK, and the rule is not "a synced column may not have one".** Seven
-tables on this census carry an enumerated one between them: `collection_entries.finish` and
-`condition`, `decks.cover_kind`, `deck_categories.kind`, `deck_cards.variant`,
-`deck_audit.variant`, `collection_folders.kind` and `deck_tokens.state`. Those vocabularies are Magic's or this app's
+tables on this census carried an enumerated one between them when this was written:
+`collection_entries.finish` and `condition`, `decks.cover_kind`, `deck_categories.kind`,
+`deck_cards.variant`, `deck_audit.variant`, `collection_folders.kind` and `deck_tokens.state` — and
+user schema v52 made it eight, with `deck_token_printings.variant` and `.finish`, plus
+`decks.token_mode` on a table already counted. Those vocabularies are Magic's or this app's
 own model, and a build does not get to add to them unilaterally — a rung would, and a rung moves
-every device. **A note's colour is a palette the page owns and expects to grow**, which is what
-turns a constraint into a forward-compatibility hazard: a build that added a sixth colour would
+every device. (`token_mode`'s `CHECK` carries PR 3's `collection` from the start for exactly that
+reason: the word is in the constraint before any build writes it, so no rung is owed later.)
+**A note's colour is a palette the page owns and expects to grow**, which is what turns a
+constraint into a forward-compatibility hazard: a build that added a sixth colour would
 emit rows an older build refuses **at apply**, and a failed apply rolls the group's savepoint back
 rather than showing a note that looks wrong. So Rust stores the string it is handed and the page
 maps a word it has never heard of to `slate`. It is *A table's NAME is on the wire* below, one
@@ -1007,6 +1013,26 @@ entry alike with nothing sent. And it **keeps its own writes off the wire**: cle
 is derived per device, so the rung drops `deck_tokens`' three capture triggers beside `decks`'
 (v43's move) and `capture::install` puts them back. Captured, the clear would reach a peer still
 on v51 and wipe the art that peer's own climb has yet to move.
+
+**What a mixed group does across the rung**, as read off the code rather than driven (2026-09-26,
+no two-device pass yet): a v52 device's `deck_token_printings` ops **defer** on a v51 peer until it
+upgrades, which is the ordinary cost of a new table; a v51 peer's `deck_tokens.card_id` /
+`quantity` ops still land in the legacy columns on a v52 device, where only the legacy quantity is
+read (an untouched token's implicit count) and a picked art is ignored. Two windows follow from
+"every device names the entry alike", and neither is closed:
+
+- ⚠️ **One name, two contents.** An art the v51 laggard picks after this device climbed reaches
+  this device as an update to a column nothing reads any more; when the laggard climbs, it derives
+  `<uid>-live` over its *newer* art. The one name then carries two printings until the next write
+  that rewrites the entry's printing on either side (a swap sends `card_id`; a count step sends only
+  `quantity` and settles nothing). Nothing stalls — each device holds a row under the name and every
+  op finds it — and what it costs is a reader seeing the older art here. Closing it would mean
+  sending the rung's writes, which is the captured-derived-write trap the trigger drop exists to
+  avoid. (The rung's own comment in `schema.rs` is the record.)
+- ⚠️ **Two names, one entry.** The derivation assumes both devices' `deck_tokens` row had converged
+  on one uid before either climbed; an override still in flight at that moment gives its entries
+  two names, and a later sparse edit to one of them defers on the other device (Task RA's reading,
+  2026-09-26 — unmeasured).
 
 **And the registrations number twelve, not ten**, counted while landing it: the ten above, plus
 `src/lib/userTables.json` — which `changes.rs`' `the_json_both_suites_read_is_the_user_side_of_
@@ -1167,7 +1193,7 @@ v52 moved rows into a table it had just created):
 | an *upgraded* file | the v29 rung's `UPDATE … SET sync_uid = lower(hex(randomblob(16)))` |
 | a *converted* file | `schema::mint_missing_uids` inside `split::extract_user_file` |
 | a *fresh* file | `USER_SEED_SQL`, plus the capture trigger for every row written afterwards |
-| a row **a rung moves into a table that rung creates** | the rung itself — v52 names each entry `<override uid>-<list>`, see the seventeenth table above |
+| a row **a rung moves into a table that rung creates** | the rung itself — v52 names each entry `<override uid>-<list>`, or a random uid per row for an override that has none, see the seventeenth table above |
 
 A converted file is the one that was missed first: a legacy `mtg.db` has no such column to
 copy, and `split::convert` stamps *head*, so the ladder never reaches it. A NULL uid is not
@@ -1270,6 +1296,35 @@ both shapes write the row as a statement of its own ahead of their work, so
 triggers go in. Until it did, the only thing that cleared one at launch was
 `managed_wishlist::settle_all` opening a window per deck — so a database with no deck kept the row,
 and captured nothing, across any number of relaunches (measured 2026-09-26, debug).
+
+**`reconcile.rs` is no longer the only such module, and user schema v52 is where it shows most.**
+(`managed_wishlist`'s folder is the earlier one: derived per device from the deck's plan and
+written inside `capture::suppressed`.) v52 adds three writes, and they land on both sides of the
+rule on purpose:
+
+- **The rung's own clear of the old override is kept off the wire** — not through `suppressed`,
+  which needs the capture machinery the rung runs before, but by dropping `deck_tokens`' three
+  capture triggers for the rung's length (*The seventeenth*, above). Captured, the clear would reach
+  a peer still on v51 and wipe the art that peer's own climb had yet to move into entries.
+- **`deck_tokens::repair_entry_finishes` runs behind `capture::suppressed`**, at every launch: it
+  moves an entry the rung filed at `nonfoil` onto its printing's sole finish, and whether a printing
+  is foil-only is a fact of *this* device's corpus. A captured fold would arrive on the other
+  device as a second sum — the `card_migrations` failure one table over. ⚠️ **And it rewrites in
+  place, never deleting and re-inserting**: `suppressed` also switches off the insert trigger's
+  uid mint, so a re-inserted entry would come back nameless and its next captured stepper press
+  would put a NULL into `sync_ops.uid NOT NULL` — a write that fails on every press from then on.
+  `the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured` holds it on a paired
+  fixture.
+- **Rule 7's token reconcile is captured, deliberately, although every device derives it too.**
+  `deck_tokens::reconcile_in` deletes the entries of a token nothing makes any more, after card
+  writes and as a `sync::with_write` backstop — including after a sync apply. It is captured
+  because a **delete** is not a counter: a second copy of it finds nothing and is a no-op, so
+  convergence costs one redundant tombstone rather than a doubled sum; and because the deletions
+  ride the card write's undo step, and a *captured* restore on this device is only meaningful on
+  the other one if the delete it reverses was captured too. The guard that makes capturing it safe
+  is `Derivation::unreadable`: a list whose makers cannot all be read deletes nothing, because a
+  device synced before its corpus downloads would otherwise derive nothing, delete every entry and
+  **push** those deletes to the whole group.
 
 ---
 
@@ -2320,7 +2375,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 - **The debug APK is `com.mtggrimoire.app.debug`**, not the identifier in `tauri.conf.json` —
   `applicationIdSuffix = ".debug"`. `monkey` answers "No activities found to run" for the
   unsuffixed name, which reads like a broken build.
-- **Two clangs, and each leg needs the other one.** `wasm32` needs `C:\Program Files\LLVMin`;
+- **Two clangs, and each leg needs the other one.** `wasm32` needs `C:\Program Files\LLVM\bin`;
   `aarch64-linux-android` needs the **NDK's** toolchain first on PATH, or `ring` fails with
   `fatal error: 'assert.h' file not found` — an error that names a missing C header when the
   cause is a clang with no Android sysroot. Neither is on PATH by default.
