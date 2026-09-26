@@ -159,11 +159,13 @@ is a refusal.
 went is the whole of the group-wide removal.** Between `86a9b8e` (2026-08-29) and `3f7bbeb`
 (2026-08-30) the layout was `<group_id>\0<epoch>\0<refresh>\0<32-byte key>`, so a device that
 joined an already-connected group was entitled without opening a browser. **A device holding that
-secret can re-register the group's auth and therefore evict the devices that removed it** —
-`/rotate` takes the refresh secret as its second door (§2.4 of
+secret could re-register the group's auth and therefore evict the devices that removed it** —
+`/rotate` took the refresh secret as a second credential then (§2.4 of
 [the group-wide design](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md)),
 so leaving it on every paired device would have made a removal something any of them could
-reverse. Restricting the Patreon-side secret to the device that pressed Connect is what makes a
+reverse. That door has since been removed; the rule stands because the relay retires a secret
+with the one device `/claim` recorded as its holder, so a copy anywhere else would survive that
+device's removal and go on minting tokens for the group. Restricting the Patreon-side secret to the device that pressed Connect is what makes a
 removal stick, and [the group door](#the-group-door-an-entitlement-belongs-to-a-group) is what
 pays for the field's absence: a paired device mints its own token from the group key instead.
 
@@ -1402,7 +1404,7 @@ wire and against that cap; base64 is four thirds and URL-safe.
 | `POST {relay}/g/{group}/push` | one `Envelope` | 200 with the stored cursor | **bearer** |
 | `GET {relay}/g/{group}/pull?since={cursor}&device={id}` | | 200 with `{ envelopes, cursor }` | **bearer** |
 | `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads | **bearer** |
-| `POST {relay}/g/{group}/rotate` | `{ epoch, auth, keys }` | 200 with the epoch; 409 if it does not advance | the group auth, or the refresh secret |
+| `POST {relay}/g/{group}/rotate` | `{ epoch, auth, keys }` | 200 with the epoch; 409 if it does not advance; 422 if it skips past the next one | the group's current auth, and nothing else |
 | `GET {relay}/g/{group}/keys?device={id}` | | 200 with `{ epoch, blob, devices }` | any auth this group has used in eight epochs |
 
 **The last two are `/g/…` routes that stand *ahead* of the bearer gate, and the placement is the
@@ -1415,6 +1417,33 @@ front of the DO because a request that reaches one costs a Durable Object reques
 honoured or refused, and nothing these two can be made to spend is on that line. The residual —
 a removed device spending `/keys` reads until its auth ages out of the eight-epoch window — is
 accepted for the same reason.
+
+**`/rotate` takes exactly the next epoch, and the refresh secret dies with its device's place in
+the group.** Every device plans its own epoch plus one and presents the auth of the epoch it
+stands on, which is current only if that is the relay's — so no shipped client sends anything but
+the next epoch, and anything further is a **422**. Beside that, `/claim` mints a fresh secret on
+every press and records the claiming device in `entitlements.refresh_device`, and an accepted
+rotation whose manifest omits that device sets both to NULL. **They close one hole between them,
+with a third change**: a lost phone that pressed Connect and was then removed keeps whatever its
+`user.db` holds, and `/rotate` used to accept the refresh secret — so whoever held that file could
+publish `{epoch: 1e9, keys: {}}`, every remaining device would read a higher epoch with no blob for
+itself, and `check_keys` would take each of them out of the group. **`/rotate` now takes the
+group's current auth and nothing else**: no shipped client ever presented the secret there
+(`client::post_rotation` always sends the group auth), and a removed phone still logged into
+Patreon could otherwise press Connect, be handed a fresh secret recorded against itself, and
+publish a manifest naming itself back in. The retirement still matters for `/token`'s refresh
+door, where a removed device's secret would otherwise go on minting tokens for the group. A secret
+with no recorded holder — every row claimed before the column existed — is retired by the next
+accepted rotation. `/claim` is held to the same epoch rule from the other side: a group that has
+key rows is seeded only at its own epoch and only with the auth already registered there, so a
+claim can neither skip it ahead nor swap in an auth of its own.
+
+⚠️ **Not fixed here, and older than all of this: a device that only ever uses the group door never
+sees a lapse.** The relay answers a lapsed membership 401 on the group door, and so does a stale
+auth; `entitlement::STALE_GROUP_AUTH` reads both as the second, so a paired device whose
+membership ended goes on reading its last stored status — *Supporting since …* — until something
+else clears it. Only the device that pressed Connect is told, because its refresh door is refused
+first and `entitlement::refused_secret` then takes both refusals as the lapse they are.
 
 ### A second Worker binds the same D1 and the same secret
 
@@ -1567,8 +1596,12 @@ source. `SyncPanel` re-reads the supporter query when a round trip finishes, so 
 sync.
 
 **The two doors fail differently on the same status code, and that is the sharpest thing here.** A
-401 on the refresh door is a lapse: the grant is revoked and the panel offers Connect again. A 401
-on the **group** door is `entitlement::STALE_GROUP_AUTH` and is *not* a lapse — the auth is
+401 on the refresh door says the *secret* is dead, which is not the same as the membership: every
+`/claim` mints a fresh secret, so a Connect press on the phone leaves the desktop holding one the
+relay will never accept again. So `entitlement::refused_secret` drops the secret and asks the
+group door — which mints for a superseded secret, and refuses a lapse too, because the relay's
+revocation marks the row `dead` and leaves its group auth in place. Only both refusals revoke the
+grant and offer Connect again. A 401 on the **group** door alone is `entitlement::STALE_GROUP_AUTH` and is *not* a lapse — the auth is
 derived from the group key, so a rotation this device has not caught up with produces exactly the
 same refusal a cancelled membership does. Revoking on it would tell a reader their membership
 ended because a sibling device removed somebody an hour ago. The two are told apart out of band:
@@ -1625,9 +1658,14 @@ row at its own older epoch and then re-pointed `entitlements.group_auth` at an a
 key the group had already rotated past. Every device that *was* caught up then failed
 `authIsCurrent` — a 401 on the group door — until somebody rotated again, while the stale row was
 meanwhile accepted by `authIsRecent`, so the one device that should have stopped was the one that
-kept working. **Both statements now carry the same guard — this epoch must be at least the highest
-the group has — and both halves are load-bearing**, since dropping either one alone turns the test
-red. Behind, the claim still succeeds and still mints a grant, because it is a legitimate press by
+kept working. **Both statements now carry the same guard — a group that has key rows is seeded
+only at the epoch it is standing on, and the mirror moves only to the auth that epoch's row
+already holds — and both halves are load-bearing**, since dropping either one alone turns a test
+red. Ahead is refused for `/rotate`'s reason (a row at `max + 1` with an empty manifest is a
+removal notice to every device), and a foreign auth at the group's own epoch is refused because
+it would make the claimer's auth current. `entitlement::claim` sends the device's own current
+epoch and the auth it derives there, so a caught-up device's re-claim changes nothing and loses
+nothing. A group with no rows at all still takes any epoch. Behind, the claim still succeeds and still mints a grant, because it is a legitimate press by
 a paying reader; it simply leaves the key registration where it already correctly pointed. **This
 is reachable through the ordinary repair rather than by contrivance**, and
 [hosted-relay-deploy.md](hosted-relay-deploy.md) step 2 is where that matters.
@@ -1695,7 +1733,8 @@ which is the hottest route the relay has.
 
 `MAX_GROUP_DEVICES = 5` and `DEVICE_TTL_MS = 90 days` live in `groupauth.ts` beside
 `EPOCH_HISTORY`, with four functions over the table: `liveDeviceCount` (prune, then count),
-`admitDevice` (count, then one `INSERT … ON CONFLICT DO UPDATE SET last_seen`, so a *returning*
+`admitDevice` (one `INSERT … SELECT … WHERE <count> ON CONFLICT DO UPDATE SET last_seen`, the count
+inside the statement so that devices arriving together cannot all read four, and a *returning*
 device never trips the cap), `keepOnly` (delete the rows a manifest does not name) and
 `forgetGroup` (empty one group, for the rebind above).
 
@@ -2166,8 +2205,8 @@ and the state it describes is no longer reachable.** ⚠️ **Corrected 2026-08-
 removal now reaches every device that stays** and re-pairing by hand is no longer the only route
 back from one. The mutual case that produced the reading above is closed from two directions
 rather than repaired: with no membership the press is refused outright before anything moves, and
-with one, only the *first* rotation is accepted — `/rotate` refuses an epoch that does not strictly
-advance the group, so the second device gets a 409, its removal simply does not happen, and it
+with one, only the *first* rotation is accepted — `/rotate` refuses an epoch that is not the
+group's next, so the second device gets a 409, its removal simply does not happen, and it
 learns from `/keys` that it is the one that was removed and leaves cleanly. Two devices can no
 longer arrive at the same epoch holding two keys neither can read.
 

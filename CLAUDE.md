@@ -90,8 +90,9 @@ real id now**, public on the same terms and verified live against Patreon's auth
 **An entitlement is a property of the GROUP, not of the device that pressed Connect** — so a
 reader may pair first and connect second, and every device in the group reads *Supporting since
 …*. Any paired device derives its own relay credential from the group key and mints its own token,
-which is why **pairing does not carry the refresh secret**: a device holding that secret could
-re-register the group's auth and evict the devices that removed it. **A removal reaches every
+which is why **pairing does not carry the refresh secret**: the relay retires that secret with
+the one device `/claim` recorded as holding it, so a copy on any other device would outlive that
+device's removal and go on minting tokens for the group that removed it. **A removal reaches every
 device**: it rotates the group key, rewraps it per remaining device, publishes the set, and
 commits only when the relay accepts it — and the published manifest's key set *is* the roster, so
 a device it omits leaves the group on its next sync. **A device can also leave of its own accord,
