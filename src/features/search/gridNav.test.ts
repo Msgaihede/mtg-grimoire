@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { nextGridIndex } from "./gridNav";
+import { layoutShelves } from "@/lib/shelfLayout";
+import type { Shelf } from "@/lib/shelves";
+import { nextGridIndex, nextShelfTileIndex } from "./gridNav";
 
 /**
  * A 4-column wall of 10 tiles — three rows, the last of them part-full:
@@ -118,5 +120,135 @@ describe("nextGridIndex", () => {
   it("brings a caret that has fallen off the end of the list back onto it", () => {
     expect(move(40, "ArrowLeft")).toBe(9);
     expect(move(40, "ArrowUp")).toBe(9);
+  });
+});
+
+type Arrow = Parameters<typeof nextShelfTileIndex>[2];
+
+const navShelf = (id: number, over: Partial<Shelf> = {}): Shelf => ({
+  id,
+  kind: "folder",
+  group: "own",
+  name: `Folder ${id}`,
+  pathIds: [id],
+  path: [`Folder ${id}`],
+  depth: 0,
+  indent: 0,
+  lead: [],
+  leadIds: [],
+  headless: false,
+  collapsed: false,
+  locked: false,
+  ...over,
+});
+
+/**
+ * Five shelves, four columns. B is collapsed over five cards it never fetched and C is an empty
+ * folder, so between A's short last row and D's first row sit three headings and a dashed box:
+ *
+ *     A   0  1  2  3
+ *         4  5
+ *     B   (collapsed)
+ *     C   (empty)
+ *     D   6  7  8  9
+ *        10 11 12
+ *     E  13
+ */
+const SHELVES = layoutShelves(
+  [
+    { shelf: navShelf(1), tileCount: 6 },
+    { shelf: navShelf(2, { collapsed: true }), tileCount: 5 },
+    { shelf: navShelf(3), tileCount: 0 },
+    { shelf: navShelf(4), tileCount: 7 },
+    { shelf: navShelf(5), tileCount: 1 },
+  ],
+  4,
+);
+
+describe("nextShelfTileIndex", () => {
+  it("is laid out as the picture says", () => {
+    expect(SHELVES.totalTiles).toBe(14);
+    expect(SHELVES.rows.map((row) => row.kind)).toEqual([
+      "heading",
+      "tiles",
+      "tiles",
+      "heading",
+      "heading",
+      "empty",
+      "heading",
+      "tiles",
+      "tiles",
+      "heading",
+      "tiles",
+    ]);
+  });
+
+  it.each<[number, Arrow, number | null]>([
+    // Left and right walk the flat order, across rows and across shelves.
+    [5, "ArrowRight", 6],
+    [3, "ArrowRight", 4],
+    [6, "ArrowLeft", 5],
+    [12, "ArrowRight", 13],
+    [13, "ArrowLeft", 12],
+    // …and neither end wraps.
+    [0, "ArrowLeft", null],
+    [13, "ArrowRight", null],
+    // Up and down within a shelf are a whole row.
+    [1, "ArrowDown", 5],
+    [5, "ArrowUp", 1],
+    [7, "ArrowDown", 11],
+    // Down onto a short row keeps the column where it exists and lands on the last card where not.
+    [2, "ArrowDown", 5],
+    [3, "ArrowDown", 5],
+    [9, "ArrowDown", 12],
+    // Past a shelf's last row: the next shelf's first row, stepping over the collapsed B, the
+    // empty C and three headings.
+    [4, "ArrowDown", 6],
+    [5, "ArrowDown", 7],
+    [11, "ArrowDown", 13],
+    // Past a shelf's first row: the previous shelf's last row — which is short.
+    [6, "ArrowUp", 4],
+    [7, "ArrowUp", 5],
+    [9, "ArrowUp", 5],
+    [13, "ArrowUp", 10],
+    // Nothing above the first row or below the last.
+    [2, "ArrowUp", null],
+    [13, "ArrowDown", null],
+  ])("moves from tile %i on %s to %s", (from, key, to) => {
+    expect(nextShelfTileIndex(SHELVES, from, key)).toBe(to);
+  });
+
+  it("walks every shelf top to bottom in a single column", () => {
+    const column = layoutShelves(
+      [
+        { shelf: navShelf(1), tileCount: 2 },
+        { shelf: navShelf(2), tileCount: 1 },
+      ],
+      1,
+    );
+    expect(nextShelfTileIndex(column, 1, "ArrowDown")).toBe(2);
+    expect(nextShelfTileIndex(column, 2, "ArrowUp")).toBe(1);
+  });
+
+  it("has nowhere to send anybody on a wall of headings", () => {
+    const empty = layoutShelves([{ shelf: navShelf(1, { collapsed: true }), tileCount: 4 }], 4);
+    for (const key of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"] as const) {
+      expect(nextShelfTileIndex(empty, 0, key)).toBeNull();
+    }
+  });
+
+  it("refuses an index it has not been given honestly", () => {
+    expect(nextShelfTileIndex(SHELVES, Number.NaN, "ArrowRight")).toBeNull();
+    expect(nextShelfTileIndex(SHELVES, 1.5, "ArrowDown")).toBeNull();
+  });
+
+  it("brings a caret that has fallen off the end back onto the wall", () => {
+    expect(nextShelfTileIndex(SHELVES, 40, "ArrowLeft")).toBe(13);
+    expect(nextShelfTileIndex(SHELVES, 40, "ArrowUp")).toBe(13);
+  });
+
+  /** `CardGrid` reads `KeyboardEvent.key`, a `string`, so the cast is the realistic caller. */
+  it("takes no interest in a key that is not an arrow", () => {
+    expect(nextShelfTileIndex(SHELVES, 5, "Enter" as Arrow)).toBeNull();
   });
 });
