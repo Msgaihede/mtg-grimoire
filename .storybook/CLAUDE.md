@@ -72,7 +72,7 @@ deliberately**: no screenshots are stored.
   a derived token to none — and is left alone. **The rule it is an instance of: a shared seed
   states what the app can produce, and nothing else.**
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  **Ten** seeds
+  The seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`/
   `virtualDeck`/`shared`/`waiting`),
   **twenty-eight** faults
@@ -173,14 +173,16 @@ deliberately**: no screenshots are stored.
   *publisher's* half of a membership ending is `collection_shares.state`, a stored word a seed can
   carry, so it needs no fault to be storyable. **The fault sits below the shape check** so a bad
   paste still earns its own sentence, and `db.ts`'s comment on it is the long form.
-  **`waiting` is `needsReview` plus two copies in `Recently removed` and seven unreleased
-  printings in three invented sets** — the home page's To review and Coming soon world. The
+  **`waiting` is `needsReview` plus copies held in `Recently removed` and unreleased printings in
+  invented sets** — the home page's To review and Coming soon world. The
   printings are real corpus rows re-dated past `CLOCK_BASE`, `large`'s derive-don't-write rule, and
   **the seed carries no scanner tray**, `FakeDb.scannerTray`'s rule: a story that wants the tray's
   row writes `TRAY_ROWS` through `set_scanner_tray` first, as `ScannerPage.stories.tsx` does.
-  A seed of its own for `virtualDeck`'s reason — seven more `cards` rows would move every count in
-  every story `needsReview` serves.
-  **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
+  A seed of its own for `virtualDeck`'s reason — more `cards` rows would move every count in
+  every story `needsReview` serves. How many of each it holds is pinned in `db.test.ts` and
+  `world.test.ts`, and is not written down here.
+  **Re-count the faults when you add one** (the seeds are named and not counted) — it said "four"
+  for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.
 - **The combo feed is a *seed* where the two taxonomies are a fault, and on 2026-09-08 the reason

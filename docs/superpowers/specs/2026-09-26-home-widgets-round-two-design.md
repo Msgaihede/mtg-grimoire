@@ -274,9 +274,19 @@ pub struct UpcomingSet {
   whole rule.
 * **`in_decks`** uses `new_printings`' defaults: decks that are not virtual, live and theory rows,
   basic lands left out (`BASIC_LAND_LIKE`).
-* **Not index-assisted**: no index on `cards` leads with `released_at`, so the window is a scan of
-  `cards`. The live pass times it on the real corpus; an index is a follow-up only if that number
-  says so.
+* **The window is a `rowid IN (SELECT …)` subquery, not a scan of `cards`** — *amended after the
+  build; this bullet first said the read was not index-assisted and would scan `cards`.* No index
+  on `cards` leads with `released_at`, and with the window's terms in the outer `WHERE` the planner
+  walked `idx_cards_set_cn` for the `GROUP BY` and looked every printing up in `cards`, whose rows
+  carry the `raw` blob, while holding the one read-only connection every other read queues on. The
+  subquery reads only `is_paper`, `released_at` and the rowid, all in `idx_cards_collapse`, so it
+  scans that index and fetches only the printings inside the window. **~1.4 s against ~60–72 ms on
+  the real corpus**, answers identical, measured on 2026-09-26 through `node:sqlite` — **a release
+  build of SQLite, not the app**; the upper figure includes the rule the build added beside it,
+  that a set any of whose paper cards has already released is not coming soon (a `HAVING`, once per
+  set). No new index; the app's own time for the read is the live pass's to take.
+  `upcoming_sets.rs` carries the reasoning at the query, and
+  [home-page.md](../../reference/home-page.md) §15 is the record.
 
 Routed on both targets.
 

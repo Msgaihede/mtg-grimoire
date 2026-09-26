@@ -2,8 +2,8 @@
  * The worlds a story can mount against.
  *
  * A story asks for one by name — `parameters: { fake: { seed: "empty" } }` — and
- * `preview.tsx` hands the result to {@link allHandlers}. The names are the four questions a
- * screen has to answer rather than four sizes of the same answer:
+ * `preview.tsx` hands the result to {@link allHandlers}. The names are questions a screen has to
+ * answer rather than sizes of the same answer:
  *
  * * **`empty`** — first run. No cards at all, so every zero state is reachable at once: the
  *   search with nothing to search, the collection with nothing in it, the deck gallery before
@@ -43,9 +43,10 @@
  *   `combos_clear` puts one back. See {@link combosMissingSeed}. (The reason used to be that
  *   `combos::refresh_if_due` never fetched the file uninvited. It does since 2026-09-08, and the
  *   conclusion outlived the premise.)
- * * **`waiting`** — `needsReview` plus two copies in `Recently removed` and seven unreleased
- *   printings in three invented sets: the world the home page's To review and Coming soon widgets
- *   are storied in. See {@link waitingSeed}, including why it carries no scanner tray.
+ * * **`waiting`** — `needsReview` plus copies held in `Recently removed` and unreleased printings
+ *   in invented sets: the world the home page's To review and Coming soon widgets are storied in.
+ *   See {@link waitingSeed}, including why it carries no scanner tray; how many of each it holds is
+ *   pinned in `db.test.ts` and `world.test.ts` rather than written here.
  *
  * **Every seed builds its rows fresh on every call**, and that is load-bearing rather than
  * tidy: the writes in `db.ts` mutate row objects in place (`existing.quantity += …`), so a
