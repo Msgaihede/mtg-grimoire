@@ -117,6 +117,37 @@ export function bodyPadPx(h: number, compact: boolean): number {
   return compact || h === 1 ? 8 : 10;
 }
 
+/** The body's gap between two of its children, and the tighter one — `WidgetCard`'s two rhythms. */
+export const BODY_GAP_PX = 8;
+export const BODY_GAP_TIGHT_PX = 5;
+
+/**
+ * The gap `WidgetCard` draws between two children of a body — a figure line and a list, a list and
+ * a footer. The card reads it from here, `titleRowPx`'s and `bodyPadPx`'s arrangement, so a body
+ * reserving room for a second child counts the gap the card actually draws.
+ */
+export function bodyGapPx(h: number, compact: boolean): number {
+  return compact || h === 1 ? BODY_GAP_TIGHT_PX : BODY_GAP_PX;
+}
+
+/** One line of `text-xs`: Tailwind's `--text-xs--line-height`, `calc(1 / 0.75)` of a 0.75rem
+ *  face — 16px. */
+export const XS_LINE_PX = 16;
+
+/**
+ * What one footer line costs a body: the line and the body's gap above it — **24px comfortable,
+ * 21 compact**, the two figures the live pass measured in the shipped window on 2026-09-26 (debug
+ * build, `tauri dev`, 1920×1080). Every footer on the page used to reserve a guessed 22, which is
+ * 2px short of a comfortable one.
+ *
+ * **A reservation, not an estimate, only for a footer that cannot wrap** — `WidgetParts`'
+ * `WidgetFooterLine`, which truncates to one line at any width. A footer that may wrap is a second
+ * line nothing here reserved, and that is how the live pass found Wishlist savings scrolling.
+ */
+export function footerLinePx(fit: Pick<WidgetFit, "h" | "compact">): number {
+  return XS_LINE_PX + bodyGapPx(fit.h, fit.compact);
+}
+
 /**
  * One widget's fit.
  *

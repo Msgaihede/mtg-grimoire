@@ -21,6 +21,14 @@ import { OWNED_WRITE_KEYS, RELAY_KEY, REVIEW_KEY, SYNC_KEY } from "./query";
  * The `app_meta`-backed queries every window follows: Settings choices, and the home layout — a
  * whole-value save, refreshed so every window writes it from fresh data rather than overwriting
  * another window's change.
+ *
+ * **And the home page's count of the scanner's tray** (`features/home/keys.ts`'
+ * `scannerTrayCountKey`, spelled rather than imported because `lib` imports nothing from
+ * `features`). It reads the same stored row as `["scanner", "tray"]` below and is the opposite
+ * case: a reader that writes nothing — `scanner_tray` is a plain `SELECT` of the row, so a refresh
+ * answers no write and starts no loop — and whose key sits *beside* the tray's rather than under
+ * it, so the single-writer predicate never spares it. With a second window the Scanner and the home
+ * page are on screen at once, and a scan there is an `app_meta` write here.
  */
 export const FOLLOW_LIVE_APP_META: readonly QueryKey[] = [
   ["startView"],
@@ -30,6 +38,7 @@ export const FOLLOW_LIVE_APP_META: readonly QueryKey[] = [
   ["recentCards"],
   ["decks", "lastFormat"],
   ["mirror"],
+  ["scanner", "trayCount"],
 ];
 
 /**

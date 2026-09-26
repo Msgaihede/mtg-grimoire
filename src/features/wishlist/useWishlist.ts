@@ -137,8 +137,14 @@ export function activeFilterCount(f: WishlistFilterState): number {
  * **Two reads, not one, since the shelves (2026-09-26):** the list, and `wishlist_shelf_counts`
  * over the same scope — the counts are what the header, the headings and every unfetched slot are
  * drawn from, because the list only ever holds the shelves that are open.
+ *
+ * @param options.initialNeedsReview The needs-review filter this list **mounts** with, read once by
+ *   `useState` — `useCollection`'s parameter of the same name, and `useReviewHandoff` has the
+ *   measurement behind it. **There is no `flattenLocally` beside it**, which `useReviewHandoff`'s
+ *   sweep was handed until Flatten went: the root's shelves already hold every wish, so a review
+ *   hand-off needs the filter and the root and nothing else (`WishlistPage` has the consume site).
  */
-export function useWishlist() {
+export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boolean } = {}) {
   // Which marketplace this list quotes — an input to the query and part of its key, because
   // it decides what a Cost cell contains and not merely how it is written.
   const { marketplace } = useMarketplace();
@@ -164,7 +170,7 @@ export function useWishlist() {
   // a `{X}{B}{B}{B}` on the list answers the `3` chip and this one both.
   const [manaX, setManaX] = useState(false);
   const [rarities, setRarities] = useState<readonly string[]>([]);
-  const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
+  const [needsReview, setNeedsReview] = useState<boolean | undefined>(initialNeedsReview);
   // Empty is name order — the view's own default, which is what a cleared sort falls back
   // to. Not a filter, so `resetAll` leaves it alone.
   const [sort, setSort] = useState<SortSpec<WishlistSortKey>>([]);

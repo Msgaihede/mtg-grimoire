@@ -1648,6 +1648,13 @@ it("does not walk back onto a card the reader has stepped away from", async () =
   await userEvent.click(down);
   await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("c2"));
   publishDeckWalk([DECK_WALK[0], DECK_WALK[2]]);
+  // The press that removed the card dropped the caret to `<body>`, and `Dialog`'s `caretPulse`
+  // settle hands it back to the panel on an animation frame — the case above says why. An arrow
+  // pressed before that frame lands on `<body>` and walks nothing: CI's `expected 'c2' to be
+  // 'c0'`, reproduced every time with `requestAnimationFrame` delayed by 150ms.
+  await waitFor(() =>
+    expect(document.activeElement?.closest('[role="dialog"]')).not.toBeNull(),
+  );
 
   await userEvent.keyboard("{ArrowLeft}");
   expect(useAppStore.getState().selectedCardId).toBe("c0");

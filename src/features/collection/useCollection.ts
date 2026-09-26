@@ -182,8 +182,16 @@ export function nextOffset(pages: readonly CountedPage[]): number | undefined {
  * rows than the table under it is worse than no header, and recomputing nine aggregates on
  * every scrolled page would be worse still. The per-shelf counts are the third, over the same
  * scope again, for the headings.
+ *
+ * @param options.initialNeedsReview The needs-review filter this list **mounts** with — read once,
+ *   by `useState`, and ignored afterwards. `CollectionPage` passes `useReviewHandoff`'s
+ *   `initialNeedsReview`, which has to be the *initial* state rather than a render-phase write:
+ *   TanStack's observer keeps the first render pass's options, so a filter switched on while
+ *   rendering still fetched the unfiltered list once. `useReviewHandoff` has the measurement.
+ *   **There is no `flattenLocally` beside it any more**: that was the hand-off's sweep, a flat read
+ *   of every drawer, and the root's shelves are every drawer already.
  */
-export function useCollection() {
+export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boolean } = {}) {
   // Which marketplace this list quotes — an input to both queries below, and part of both
   // keys: it decides what a Value cell contains, not merely how it is written.
   const { marketplace } = useMarketplace();
@@ -214,7 +222,7 @@ export function useCollection() {
   const [priceMax, setPriceMax] = useState<number | undefined>(undefined);
   const [finishes, setFinishes] = useState<readonly Finish[]>([]);
   const [conditions, setConditions] = useState<readonly Condition[]>([]);
-  const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
+  const [needsReview, setNeedsReview] = useState<boolean | undefined>(initialNeedsReview);
   // Empty is name order — the view's own default, which is what a cleared sort falls back
   // to. Not a filter, so `resetAll` leaves it alone.
   const [sort, setSort] = useState<SortSpec<CollectionSortKey>>([]);

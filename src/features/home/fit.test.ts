@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  bodyGapPx,
   bodyPadPx,
   CELL_MIN,
   cellFor,
   columnsFor,
+  footerLinePx,
   GAP,
   GRID_MIN_COLUMNS,
   isStacked,
@@ -14,6 +16,7 @@ import {
   TARGET_CELL,
   tierFor,
   titleRowPx,
+  XS_LINE_PX,
 } from "./fit";
 import { MIN_COLUMNS } from "./layout";
 
@@ -131,6 +134,28 @@ describe("the card's chrome", () => {
     expect(bodyPadPx(2, true)).toBe(8);
     expect(bodyPadPx(1, false)).toBe(8);
     expect(bodyPadPx(1, true)).toBe(8);
+  });
+
+  it("gaps the body's children 8px, or 5px when compact or one cell tall", () => {
+    expect(bodyGapPx(2, false)).toBe(8);
+    expect(bodyGapPx(2, true)).toBe(5);
+    expect(bodyGapPx(1, false)).toBe(5);
+    expect(bodyGapPx(1, true)).toBe(5);
+  });
+
+  /**
+   * **One footer line is a 16px `text-xs` line and the body's gap above it** — 24px comfortable
+   * and 21 compact, the two figures the live pass measured in the shipped window on 2026-09-26
+   * (debug build, 1920×1080), where every footer on the page reserved a guessed 22 and a
+   * comfortable one drew 2px more than that.
+   */
+  it("reserves a footer line as its 16px line and the body's own gap above it", () => {
+    const fit = (h: number, density: "comfortable" | "compact") =>
+      makeFit({ w: 3, h, widthPx: 336, heightPx: spanPx(h, 104), density });
+    expect(XS_LINE_PX).toBe(16);
+    expect(footerLinePx(fit(3, "comfortable"))).toBe(24);
+    expect(footerLinePx(fit(3, "compact"))).toBe(21);
+    expect(footerLinePx(fit(1, "comfortable"))).toBe(21);
   });
 });
 

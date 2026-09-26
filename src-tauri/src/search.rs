@@ -448,7 +448,11 @@ const ORDER_NAME: &str = "c.name ASC, c.released_at DESC";
 /// index but will not treat it as *covering*, and the page went to 700 ms (measured
 /// 2026-08-11). [`crate::schema::CARDS_INDEXES`]' `idx_cards_collapse` leads with the plain
 /// `oracle_id` column, and the group step computes the coalesce as it scans.
-const COLLAPSE_KEY: &str = "coalesce(c.oracle_id, c.id)";
+///
+/// **`crate::upcoming_sets` counts with it too**, over a `cards c` of its own: a Coming soon row's
+/// `seen` is the number the search draws for that set, so the two share the one spelling of
+/// "the same card" rather than each keeping one.
+pub(crate) const COLLAPSE_KEY: &str = "coalesce(c.oracle_id, c.id)";
 
 /// The representative printing's `id`, straight out of the aggregate that picks it.
 ///
@@ -559,7 +563,8 @@ const ORDER_NAME_COLLAPSED: &str = "min(c.name) ASC";
 /// `idx_cards_collapse`. Ranking still needs a list, because it applies to a corpus the reader
 /// has asked to include the unplayable printings in — and an art card that outranks the card it
 /// depicts is wrong whether or not it was asked for.
-const NON_CARD_LAYOUTS: &str = "('art_series','front_card','token','double_faced_token','emblem')";
+pub(crate) const NON_CARD_LAYOUTS: &str =
+    "('art_series','front_card','token','double_faced_token','emblem')";
 
 /// 1 for a non-card, 0 for a card — the first term of the relevance fallback.
 ///

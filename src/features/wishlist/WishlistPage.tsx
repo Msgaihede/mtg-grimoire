@@ -57,6 +57,7 @@ import { useAppStore } from "@/lib/store";
 import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
+import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { ManagedFolderNote } from "./ManagedFolderNote";
@@ -69,6 +70,7 @@ import { OptimizeWishlistDialog } from "./OptimizeWishlistDialog";
 import { useWishlist, type Wishlist } from "./useWishlist";
 import { useWishlistFolders } from "./useWishlistFolders";
 import { useWishlistOptimize } from "./useWishlistOptimize";
+import { wholeWishlistQuery } from "./wholeWishlistQuery";
 import type { WishDrop } from "./wishDrag";
 import {
   WishEmptyShelf,
@@ -374,7 +376,22 @@ const WISHLIST_TRAY: readonly TrayCell[] = [
 ];
 
 export function WishlistPage() {
-  const wishlist = useWishlist();
+  /**
+   * **The To review widget's needs-review hand-off** — `useReviewHandoff` has the whole rule, and
+   * its two halves sit either side of the list hook: `initialNeedsReview` so the list is *born*
+   * filtered, `settle` for a hand-off landing on a page already mounted.
+   *
+   * **Its sweep never arms here, and that is the shelves answering the question it existed for.**
+   * The hook turns on a local flat read wherever the reader's own Flatten is off, because a flat
+   * list was once the only way to see every flagged wish at once — without it a reader sent by the
+   * `Wishes` row landed on a flagged root holding none of the wishes they were counted. Flatten is
+   * gone and the root's shelves hold every wish, filed or not, so the page already reads the whole
+   * list the way the sweep did: `true` is that answer, passed where the hook asks whether the list
+   * is read flat. What is left for the page is to be **at the root** — see the adjustment below.
+   */
+  const review = useReviewHandoff("wishlist", true);
+  const wishlist = useWishlist({ initialNeedsReview: review.initialNeedsReview });
+  review.settle(wishlist.needsReview, wishlist.setNeedsReview);
   const {
     query,
     rows,
@@ -426,6 +443,24 @@ export function WishlistPage() {
   }, [pendingHere, clearPendingFolder]);
 
   /**
+   * **A review hand-off opens the root**, which is the whole wishlist on shelves — To review
+   * counted the flagged wishes in every folder, and a folder's wall holds only its own subtree. A
+   * page freshly mounted is at the root already (`folderId` is `useState`, never restored), so this
+   * acts only when the hand-off lands on a page standing in a folder. `initialNeedsReview` is `true`
+   * exactly while a hand-off naming this page is waiting, and `folderId !== null` is what makes the
+   * render-phase write terminate — the folder hand-off's arrangement above, for its reasons.
+   *
+   * **A folder hand-off waiting at the same time wins**, and the guard is not decoration: two
+   * render-phase writes pulling `folderId` opposite ways would re-render each other until React
+   * gives up, before either effect could spend its hand-off. `setActiveView` clears both, so the
+   * pair cannot arrive together from a press today; the guard keeps a future writer from finding
+   * that out in a crash.
+   */
+  if (review.initialNeedsReview && folderId !== null && pendingFolder?.scope !== "wishlist") {
+    openFolder(null);
+  }
+
+  /**
    * The export dialog, and the sweep that fills it — `CollectionPage`'s twin, for the same
    * reason: `ExportDialog` is mounted unconditionally below so its close can fade rather than
    * vanish, so this hook runs every render and `enabled: exporting` is what stops it sweeping
@@ -452,7 +487,44 @@ export function WishlistPage() {
    * the `Wishes` figure in the header above.
    */
   const [optimizing, setOptimizing] = useState(false);
-  const optimize = useWishlistOptimize(wishlist.filters, optimizing);
+  /**
+   * **Which list the sweep is taken over** — the one on screen, or the whole wishlist.
+   *
+   * `"page"` is the Optimise button's, and it is `wishlist.filters` exactly as it always was.
+   * `"whole"` is the home page's Wishlist savings widget, arriving through `store.ts`'s
+   * `pendingOptimize`: the widget counted what *every* pinned wish would save, so the dialog it
+   * opens plans {@link wholeWishlistQuery} — the widget's own question, and therefore its own cache
+   * entry. **A scope override and never a write**: the folder the reader stands in and the filters
+   * are theirs, so the hand-off touches neither — it plans every wish whatever the wall is showing.
+   *
+   * **Left where it is when the dialog closes**, deliberately: the panel outlives the flag by the
+   * length of its fade, and a scope put back on close would re-key the plan mid-fade and flash the
+   * body to its loading sentence. The button writes `"page"` on its own press instead.
+   */
+  const [sweepOver, setSweepOver] = useState<"page" | "whole">("page");
+  const optimize = useWishlistOptimize(
+    sweepOver === "whole" ? wholeWishlistQuery(marketplace.id) : wishlist.filters,
+    optimizing,
+  );
+  /**
+   * **The sweep another page asked for** — `store.ts`'s `pendingOptimize`, read as this page
+   * renders rather than in a mount effect, for the `pendingFolder` reasons above: the dialog is up
+   * on the first commit, and `setOptimizing` inside an effect body is the lint failure that dies
+   * only at `verify`. The guard is what makes the adjustment terminate — the hand-off stays in the
+   * store until the effect below spends it.
+   *
+   * **No `apply.reset()` on the way in**, unlike the button's: `App.tsx` draws one view at a time,
+   * so a hand-off always arrives on a freshly mounted page whose mutation has no receipt to clear.
+   */
+  const pendingOptimize = useAppStore((s) => s.pendingOptimize);
+  const clearPendingOptimize = useAppStore((s) => s.clearPendingOptimize);
+  if (pendingOptimize && !(optimizing && sweepOver === "whole")) {
+    setSweepOver("whole");
+    setOptimizing(true);
+  }
+  useEffect(() => {
+    if (pendingOptimize) clearPendingOptimize();
+  }, [pendingOptimize, clearPendingOptimize]);
 
   /**
    * Which folder layer is open, and what the caret goes back to when it closes.
@@ -1793,6 +1865,8 @@ export function WishlistPage() {
               // answered is up.
               onClick={() => {
                 optimize.apply.reset();
+                // The page's own list, whatever a home-page hand-off last asked about.
+                setSweepOver("page");
                 setOptimizing(true);
               }}
               aria-haspopup="dialog"
@@ -2207,11 +2281,17 @@ export function WishlistPage() {
         // the folder, whose sweep takes its sub-folders with it. A folder id this page cannot name
         // resolves to the root's word, the same "resolve towards the root" rule `trailOf` applies
         // to a broken trail.
-        scope={{
-          folder: folderNameOf(folderId) ?? ROOT_LABEL,
-          everyFolder: folderId === null,
-          filtered: wishlist.activeCount > 0,
-        }}
+        scope={
+          // The hand-off's override says what it planned — every folder, nothing filtered — rather
+          // than naming the drawer and the filters the page happens to be standing in.
+          sweepOver === "whole"
+            ? { folder: ROOT_LABEL, everyFolder: true, filtered: false }
+            : {
+                folder: folderNameOf(folderId) ?? ROOT_LABEL,
+                everyFolder: folderId === null,
+                filtered: wishlist.activeCount > 0,
+              }
+        }
         plan={optimize.plan.data ?? null}
         loading={optimize.plan.isLoading}
         readError={optimize.plan.isError ? ipcError(optimize.plan.error) : null}

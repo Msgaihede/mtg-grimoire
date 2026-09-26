@@ -189,10 +189,20 @@ export const CatalogueOpen: Story = {
     const dialog = within(
       await canvas.findByRole("dialog", { name: "Widget catalogue" }, MOUNT_TIMEOUT),
     );
-    for (const label of ["Summary", "Recently viewed", "Set completion", "Price movers"]) {
+    for (const label of [
+      "Summary",
+      "Recently viewed",
+      "Set completion",
+      "Price movers",
+      "Deck completion",
+      "To review",
+      "Wishlist savings",
+      "Coming soon",
+    ]) {
       await expect(dialog.getByRole("button", { name: `Add ${label}` })).toBeInTheDocument();
     }
-    // The previews are pictures: nine real cards, and not one of them a region a reader can reach.
+    // The previews are pictures: every one a real card, and not one of them a region a reader can
+    // reach. (This said "nine" until a round of new kinds made it wrong — `WIDGETS` is the count.)
     await expect(dialog.queryAllByRole("region")).toHaveLength(0);
     await expect(
       within(dialog.getByRole("heading", { name: "Summary" }).closest("li")!).getByText(

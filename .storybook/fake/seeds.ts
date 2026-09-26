@@ -1,9 +1,9 @@
 /**
- * The six worlds a story can mount against.
+ * The worlds a story can mount against.
  *
  * A story asks for one by name — `parameters: { fake: { seed: "empty" } }` — and
- * `preview.tsx` hands the result to {@link allHandlers}. The names are the four questions a
- * screen has to answer rather than four sizes of the same answer:
+ * `preview.tsx` hands the result to {@link allHandlers}. The names are questions a screen has to
+ * answer rather than sizes of the same answer:
  *
  * * **`empty`** — first run. No cards at all, so every zero state is reachable at once: the
  *   search with nothing to search, the collection with nothing in it, the deck gallery before
@@ -43,6 +43,10 @@
  *   `combos_clear` puts one back. See {@link combosMissingSeed}. (The reason used to be that
  *   `combos::refresh_if_due` never fetched the file uninvited. It does since 2026-09-08, and the
  *   conclusion outlived the premise.)
+ * * **`waiting`** — `needsReview` plus copies held in `Recently removed` and unreleased printings
+ *   in invented sets: the world the home page's To review and Coming soon widgets are storied in.
+ *   See {@link waitingSeed}, including why it carries no scanner tray; how many of each it holds is
+ *   pinned in `db.test.ts` and `world.test.ts` rather than written here.
  *
  * **Every seed builds its rows fresh on every call**, and that is load-bearing rather than
  * tidy: the writes in `db.ts` mutate row objects in place (`existing.quantity += …`), so a
@@ -110,7 +114,8 @@ export type SeedName =
   | "combosMissing"
   | "virtualDeck"
   | "paired"
-  | "shared";
+  | "shared"
+  | "waiting";
 
 /* ------------------------------------------------------------------ row builders ------- */
 
@@ -2884,6 +2889,128 @@ function virtualDeckSeed(): FakeDb {
   return db;
 }
 
+/* ------------------------------------------------------------------ waiting ------------ */
+
+/**
+ * `YYYY-MM-DD`, `days` after the fixture's today, in UTC — what `date('now', '+N days')` answers
+ * and what `cards.released_at` holds. `db.ts`'s `dayOf` is the same arithmetic and is private to
+ * that module.
+ */
+function dayAfter(days: number): string {
+  return new Date((CLOCK_BASE + days * DAY) * 1_000).toISOString().slice(0, 10);
+}
+
+/**
+ * Three sets Scryfall has started previewing and not yet released — **invented** names on **real**
+ * rows, {@link largeCards}' split: every column of every printing is the corpus row it is cut from,
+ * and only the set, the number, the date and the id are this seed's.
+ *
+ * Three rather than two so each of Coming soon's windows answers a different list — 30 days sees
+ * `Foretold Frontiers` alone, 90 adds `Vigil of the Drowned`, a year adds `Lumen Reach` — and each
+ * clause of a row's caption has a set that draws it and one that does not:
+ *
+ * * **`Foretold Frontiers`** — four previewed, **two in your decks**: Lightning Bolt and
+ *   Counterspell. Its Forest is held by decks too and is left out because it is a basic; its
+ *   Emrakul is in no deck. The Counterspell lands three days after the rest, so the set answers
+ *   its **earliest** date.
+ * * **`Vigil of the Drowned`** — two previewed and **none** in a deck, so the caption's last clause
+ *   is absent. Its Emrakul is the same oracle card as the first set's: a second set's reprint.
+ * * **`Lumen Reach`** — one previewed, one in a deck (Sol Ring).
+ *
+ * **Every code is one no real printing uses**, which the crate's released-set rule makes a
+ * requirement rather than a nicety: a set holding one paper card already out is not coming soon,
+ * so a template's own set code here would silently answer nothing.
+ */
+const UPCOMING_SETS: readonly {
+  code: string;
+  name: string;
+  printings: readonly (readonly [setCode: string, collectorNumber: string, inDays: number])[];
+}[] = [
+  {
+    code: "ftf",
+    name: "Foretold Frontiers",
+    printings: [
+      ["2x2", "117", 12],
+      ["mh2", "267", 15],
+      ["unf", "239", 12],
+      ["roe", "4", 12],
+    ],
+  },
+  {
+    code: "vgd",
+    name: "Vigil of the Drowned",
+    printings: [
+      ["avr", "6", 40],
+      ["roe", "4", 40],
+    ],
+  },
+  { code: "lmr", name: "Lumen Reach", printings: [["c21", "263", 200]] },
+];
+
+/**
+ * The unreleased printings themselves, cut from real rows.
+ *
+ * **Unpriced and unpictured, which is what a preview is**: Scryfall publishes no price before a
+ * card is on sale, and `artCropUrl`/`normalUrl` are nulled so Live art falls back to the synthetic
+ * frame naming *this* printing rather than drawing the picture of the one it was cut from. The
+ * TCGplayer ids go for the same reason — an `Open on` link would name the template's product.
+ * Ids are {@link synthId}'s third block, clear of `large`'s two.
+ */
+function upcomingCards(): FakeCard[] {
+  const out: FakeCard[] = [];
+  for (const set of UPCOMING_SETS) {
+    set.printings.forEach(([setCode, collectorNumber, inDays], i) => {
+      out.push({
+        ...printing(setCode, collectorNumber),
+        id: synthId(2, out.length),
+        setCode: set.code,
+        setName: set.name,
+        collectorNumber: String(i + 1),
+        releasedAt: dayAfter(inDays),
+        prices:
+          '{"eur":null,"eur_foil":null,"tix":null,"usd":null,"usd_etched":null,"usd_foil":null}',
+        priceUsd: null,
+        tcgplayerId: null,
+        tcgplayerEtchedId: null,
+        artCropUrl: null,
+        normalUrl: null,
+      });
+    });
+  }
+  return out;
+}
+
+/**
+ * `needsReview`, plus the two things the home page's To review and Coming soon widgets read that no
+ * other world carries: **copies waiting in `Recently removed`** and **sets not yet released**.
+ *
+ * So To review has a count behind four of its five rows here — the flagged binder entry, the
+ * flagged wish, the flagged deck card (all three `needsReview`'s) and the two removed copies — and
+ * **the fifth, the scanner's tray, is deliberately not seeded**: that is `FakeDb.scannerTray`'s
+ * rule, because a tray row is a card somebody scanned. A story that wants it writes `TRAY_ROWS` —
+ * which already carries a Lightning Bolt still waiting on a printing — through `set_scanner_tray`,
+ * `ScannerPage.stories.tsx`'s `Written` arrangement.
+ *
+ * **A seed of its own rather than rows added to `needsReview`**, {@link virtualDeckSeed}'s reason:
+ * seven more `cards` rows move every count over the corpus in every story that world serves, and a
+ * Recently removed row changes that folder's card on every collection story. **`cards` is a new
+ * array**, never a push onto the shared one — every other world holds `CARDS` by reference.
+ */
+function waitingSeed(): FakeDb {
+  const db = needsReviewSeed();
+  db.cards = [...db.cards, ...upcomingCards()];
+  const removed = db.collectionFolders.find((f) => f.kind === "removed");
+  if (removed === undefined) throw new Error("the starter world has no Recently removed folder");
+  // Two copies a cut filed away — what `deck_to_collection` leaves behind — so the To review row
+  // says `2 copies`, and the folder answers a summary row at all: an empty folder answers none.
+  db.collectionEntries.push(
+    entry(db.collectionEntries.length + 1, printing("2ed", "48"), "nonfoil", "NM", 2, {
+      folderId: removed.id,
+    }),
+  );
+  return db;
+}
+
 /* ------------------------------------------------------------------ the switch --------- */
 
 /**
@@ -2910,6 +3037,8 @@ export function seed(name: SeedName): FakeDb {
       return pairedSeed();
     case "shared":
       return sharedSeed();
+    case "waiting":
+      return waitingSeed();
     default:
       return starterSeed();
   }

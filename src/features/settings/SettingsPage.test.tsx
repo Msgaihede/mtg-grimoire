@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SyncStatus } from "@/lib/ipc";
 import type { Update } from "@/lib/useUpdate";
+import { useAppStore } from "@/lib/store";
 
 /**
  * Every panel on this page is stubbed, because what is under test is **which of them the page
@@ -511,6 +512,228 @@ describe("the rail decides what the pane draws", () => {
 
     expect(searchBox()).toHaveValue("");
     expect(screen.getByText("panel:prices")).toBeInTheDocument();
+    expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * **The panel another page asked this one to bring into view** — `store.ts`'s
+ * `pendingSettingsPanel`, the To review widget's `Deck cards` row, which sends the reader to the
+ * Needs review panel. It used to name the `Sync` group, and the live pass (2026-09-26, 1920×1080)
+ * found the page opening on Sync scrolled to the top, with the Needs review heading at y=976 and its
+ * flagged rows below the fold.
+ *
+ * The store is a module singleton this file does not otherwise reset, so every case here puts the
+ * field back — a hand-off left written would open every later case on that panel. And jsdom defines
+ * no `scrollIntoView` (`AnchoredPopup.test.tsx:16`), so the cases that read the scroll put a spy on
+ * the prototype and take it off again.
+ */
+describe("a panel another page asked for", () => {
+  let scroll: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll as unknown as Element["scrollIntoView"];
+  });
+  afterEach(() => {
+    useAppStore.setState({ pendingSettingsPanel: null });
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  /** Drawn on the first commit: a render-phase adjustment, so there is no frame of `Updates`. */
+  it("opens on the group that holds the panel, and spends the hand-off doing it", async () => {
+    useAppStore.setState({ pendingSettingsPanel: "review" });
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    expect(screen.getByRole("region", { name: "Needs review" })).toBeInTheDocument();
+    expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+  });
+
+  /**
+   * **The panel is brought to the top of the pane**, not merely its group opened: Needs review is
+   * the second panel under Sync, below a Sync panel tall enough to hold it off the screen. jsdom
+   * lays nothing out, so what is pinned is the call — on the panel's own section, at `start`.
+   */
+  it("scrolls the panel it names to the top of the pane", async () => {
+    useAppStore.setState({ pendingSettingsPanel: "review" });
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    const panel = screen.getByRole("region", { name: "Needs review" });
+    await waitFor(() => expect(scroll.mock.contexts).toContain(panel));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll).toHaveBeenCalledWith({ block: "start" });
+  });
+
+  /**
+   * **And it keeps the panel there while the page above it settles** (round 2 of the final fix
+   * wave). The live re-check (2026-09-26, debug build, 1920×1080) landed on a first visit with
+   * nothing to scroll yet: the Sync panel's reads then answered, it grew 437 → 824px, and the Needs
+   * review heading was pushed to y=976 with its rows below the fold. So the page watches its own
+   * root and the panel, and every size change puts the panel back at the top — until the reader
+   * does anything. jsdom lays nothing out, so the observer here is a stand-in the test fires; the
+   * real window is the live pass's to confirm.
+   */
+  describe("holding the panel in view while the page settles", () => {
+    class FakeResizeObserver {
+      static all: FakeResizeObserver[] = [];
+      observed: Element[] = [];
+      disconnected = false;
+      constructor(private readonly callback: ResizeObserverCallback) {
+        FakeResizeObserver.all.push(this);
+      }
+      observe(el: Element) {
+        this.observed.push(el);
+      }
+      unobserve() {}
+      disconnect() {
+        this.disconnected = true;
+      }
+      fire() {
+        this.callback([], this as unknown as ResizeObserver);
+      }
+    }
+    /** Every observer watching the Needs review panel — the page's hold, and nothing else here. */
+    const holding = () =>
+      FakeResizeObserver.all.filter((o) =>
+        o.observed.includes(screen.getByRole("region", { name: "Needs review" })),
+      );
+    /** The browser noticing the page change size: every observer on the panel hears it. */
+    const settle = () => act(() => holding().forEach((o) => o.fire()));
+    const panelScrolls = () =>
+      scroll.mock.contexts.filter(
+        (el) => el === screen.queryByRole("region", { name: "Needs review" }),
+      ).length;
+
+    beforeEach(() => {
+      FakeResizeObserver.all = [];
+      vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("puts the panel back at the top each time the page above it grows", async () => {
+      useAppStore.setState({ pendingSettingsPanel: "review" });
+      render(wrap(<SettingsPage update={NO_UPDATE} />));
+      // Spent first: the hold has to outlive the hand-off that started it.
+      await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+      expect(panelScrolls()).toBe(1);
+      expect(holding()).toHaveLength(1);
+
+      settle();
+      settle();
+
+      expect(panelScrolls()).toBe(3);
+    });
+
+    /** **Never fight the reader**: their first key, press or wheel ends the hold for good. */
+    it.each(["keydown", "pointerdown", "wheel"])(
+      "lets the reader have the page back from their first %s",
+      async (type) => {
+        useAppStore.setState({ pendingSettingsPanel: "review" });
+        render(wrap(<SettingsPage update={NO_UPDATE} />));
+        await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+        // Not vacuous: there is a hold to end.
+        expect(holding()).toHaveLength(1);
+
+        act(() => void window.dispatchEvent(new Event(type)));
+        settle();
+
+        expect(panelScrolls()).toBe(1);
+        expect(holding().every((o) => o.disconnected)).toBe(true);
+      },
+    );
+
+    it("lets go when the page goes away", async () => {
+      useAppStore.setState({ pendingSettingsPanel: "review" });
+      const page = render(wrap(<SettingsPage update={NO_UPDATE} />));
+      await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+      const observers = holding();
+      expect(observers).toHaveLength(1);
+
+      page.unmount();
+
+      expect(observers.every((o) => o.disconnected)).toBe(true);
+    });
+
+    /** Picking a group on the rail is the reader's own press, and it lands them somewhere else. */
+    it("lets go when the reader picks a group", async () => {
+      useAppStore.setState({ pendingSettingsPanel: "review" });
+      render(wrap(<SettingsPage update={NO_UPDATE} />));
+      await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+      const observers = holding();
+      expect(observers).toHaveLength(1);
+
+      await pickGroup("Updates");
+
+      expect(observers.every((o) => o.disconnected)).toBe(true);
+    });
+  });
+
+  /**
+   * **A word this page has no panel for is dropped, and still spent** — scrolling nothing. The
+   * store holds a plain string so it needs nothing from this feature; the narrowing is the page's.
+   * A group's name is not a panel's (`carddata`), and a prototype key is neither.
+   */
+  it.each(["carddata", "constructor"])(
+    "drops %s, opens on Updates, and spends the hand-off anyway",
+    async (word) => {
+      useAppStore.setState({ pendingSettingsPanel: word });
+      render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+      expect(screen.getByText("panel:update")).toBeInTheDocument();
+      await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+      expect(scroll).not.toHaveBeenCalled();
+    },
+  );
+
+  /**
+   * **A hand-off landing on a page that is already mounted** — the render-phase adjustment's own
+   * path, which the cases above skip by writing the field before the render. It is the path the
+   * widget's two store writes take when they land in two commits.
+   */
+  it("opens on a panel asked for after the page has mounted, and scrolls to it", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+    expect(screen.getByText("panel:update")).toBeInTheDocument();
+
+    act(() => useAppStore.setState({ pendingSettingsPanel: "review" }));
+
+    // The rail's own entry, scoped: the Sync panel now mounted beside it draws buttons of its own.
+    const rail = screen.getByRole("navigation", { name: "Settings" });
+    expect(within(rail).getByRole("button", { name: /^Sync/ })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    const panel = screen.getByRole("region", { name: "Needs review" });
+    expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+    expect(scroll.mock.contexts).toContain(panel);
+  });
+
+  /** A query outranks the group, so a hand-off arriving under one clears it — or the press would
+   *  visibly do nothing — even where the rail already stands on the right group. */
+  it("clears a standing query so the panel it names is drawn", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+    await pickGroup("Sync");
+    await userEvent.type(searchBox(), "dropbox");
+    expect(screen.queryByRole("region", { name: "Needs review" })).not.toBeInTheDocument();
+
+    act(() => useAppStore.setState({ pendingSettingsPanel: "review" }));
+
+    expect(searchBox()).toHaveValue("");
+    expect(screen.getByRole("region", { name: "Needs review" })).toBeInTheDocument();
+  });
+
+  it("does not survive to a second visit", async () => {
+    useAppStore.setState({ pendingSettingsPanel: "backup" });
+    const first = render(wrap(<SettingsPage update={NO_UPDATE} />));
+    expect(screen.getByText("panel:backup")).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+
+    first.unmount();
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    expect(screen.getByText("panel:update")).toBeInTheDocument();
     expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
   });
 });

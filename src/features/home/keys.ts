@@ -70,6 +70,13 @@
  * after every card added to any deck and stay stale after the sync that actually brings the new
  * printings in. The whole argument is at the constant itself.
  *
+ * {@link scannerTrayCountKey} sits under `["scanner"]`, and **with one window open it is the one key
+ * in this file no write invalidates**: the scanner writes its tray with `setQueryData` on its own
+ * entry, and never on the same screen as the home page, so what keeps it fresh there is its
+ * reader's `staleTime`. **A second window's tray write refreshes it** — that write is an `app_meta`
+ * commit, and `lib/crossWindow.ts` answers it in every other window through
+ * `FOLLOW_LIVE_APP_META`. Its declaration argues both.
+ *
  * ## What is deliberately not here
  *
  * `FoldersWidget` reads through `useCollectionFolders` and `useWishlistFolders`, which own their
@@ -81,6 +88,8 @@
 
 import type { QueryKey } from "@tanstack/react-query";
 
+import { optimizePlanKey } from "@/features/wishlist/useWishlistOptimize";
+import { wholeWishlistQuery } from "@/features/wishlist/wholeWishlistQuery";
 import type { Finish } from "@/lib/finish";
 import type { PriceMoverDirection, PriceMoverWindow, ValueSplit } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
@@ -282,3 +291,77 @@ export const newPrintingsKey = (
   `${flags.virtual ? "v" : ""}${flags.theory ? "t" : ""}${flags.basics ? "b" : ""}`,
   limit,
 ];
+
+/**
+ * How much of each deck the reader owns — `ipc.deckCompletion`, the Deck completion widget's read.
+ *
+ * Under `["decks"]` because a deck write changes what a deck *wants* — but **owned copies are
+ * collection rows**, so an add to the binder, a move into a deck's group or a cut into Recently
+ * removed changes the answer with no deck write at all. The widget bridges that itself, exactly as
+ * `ActivityWidget` bridges {@link activityKey}: a marker query under `["collection"]` so the signal
+ * exists, and a cache subscription that turns an invalidation there into one of this key. **Both
+ * halves are load-bearing** — `invalidateQueries` dispatches nothing when it matches no cached
+ * query. The marketplace is in the key because `missingCost` is priced at it.
+ */
+export const deckCompletionKey = (marketplace: MarketplaceId): QueryKey => [
+  "decks",
+  "completion",
+  marketplace,
+];
+
+/**
+ * The sets still to come within `days` — `ipc.upcomingSets`, Coming soon's read.
+ *
+ * Under `["decks"]` with no bridge, and the sync is why that is enough: the answer is half the
+ * corpus and half `deck_cards`, a deck write changes the second half, and a finished sync — the
+ * only thing that changes the first — invalidates `["decks"]` along with every other root
+ * (`SYNC_INVALIDATED` in `src/lib/useSyncInvalidation.ts`). {@link NEW_PRINTINGS_ROOT} made the
+ * other call for a feed that also carries a cursor write of its own; this one has none. The window
+ * is in the key because it is the question.
+ */
+export const upcomingSetsKey = (days: number): QueryKey => ["decks", "upcoming", days];
+
+/**
+ * How many deck rows carry a review sentence — `ipc.deckReviewCount`, To review's `Deck cards` row.
+ * Under `["decks"]`: a deck write that clears a row, a sync that flags one, and Needs review's own
+ * clear (which invalidates the cleared table's root) all reach it.
+ */
+export const deckReviewCountKey: QueryKey = ["decks", "reviewCount"];
+
+/**
+ * How many wishes carry a review sentence — `wishlist_list({ needsReview: true, flatten: true,
+ * limit: 1, offset: 0 }).total`, To review's `Wishes` row. A key of its own rather than
+ * `useWishlist`'s list key, which is fourteen segments of one page's local state; under
+ * `["wishlist"]`, which every wishlist write and Needs review's clear already fire.
+ */
+export const wishlistReviewCountKey: QueryKey = ["wishlist", "reviewCount"];
+
+/**
+ * What every pinned wish would save — `wishlist_optimize_plan` over {@link wholeWishlistQuery},
+ * the Wishlist savings widget's read.
+ *
+ * **`useWishlistOptimize`'s own key for the whole list, and deliberately not a key of this file's
+ * shape.** The widget's press opens the Wishlist's sweep dialog over the same list (`store.ts`'s
+ * `pendingOptimize`), so the two are one question and should be one cache entry: the dialog opens
+ * on the widget's answer, and the dialog's apply — which invalidates `["wishlist"]` — refreshes the
+ * widget with it. The marketplace rides inside the query object, which is the key's last segment.
+ */
+export const wishlistSavingsKey = (marketplace: MarketplaceId): QueryKey =>
+  optimizePlanKey(wholeWishlistQuery(marketplace));
+
+/**
+ * How many copies the scanner's review tray holds, and how many of its rows still wait on a
+ * printing — the Scanner's own two numbers; To review's `Scanned cards` row reads `scanner_tray`
+ * under this key.
+ *
+ * **Never `["scanner", "tray"]`**, which *is* the tray in the window that owns the scanner, written
+ * with `setQueryData` (`useTray.ts`); the stored copy can lag that entry by the tray's debounce, and
+ * a second reader able to refetch it would race the scanner's own write. **With one window open
+ * nothing invalidates this key**, because in one window the scanner and the home page are never on
+ * screen together: its reader re-reads on every mount (`staleTime: 0`) rather than trusting the
+ * app's 30-second default across a trip to the Scanner and back. **A second window is the case
+ * where they are**, and there every tray write is an `app_meta` commit that `lib/crossWindow.ts`
+ * answers by refreshing this key in each window — it follows `app_meta` live, beside the tray it
+ * must never touch.
+ */
+export const scannerTrayCountKey: QueryKey = ["scanner", "trayCount"];

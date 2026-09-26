@@ -67,6 +67,7 @@ import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
+import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
@@ -651,7 +652,23 @@ const COLLECTION_TRAY: readonly TrayCell[] = [
 ];
 
 export function CollectionPage() {
-  const collection = useCollection();
+  /**
+   * **The To review widget's needs-review hand-off** — `useReviewHandoff` has the whole rule, and
+   * its two halves sit either side of the list hook: `initialNeedsReview` so the list is *born*
+   * filtered, `settle` for a hand-off landing on a page already mounted.
+   *
+   * **Its sweep never arms here, and that is the shelves answering the question it existed for.**
+   * The hook turns on a local flat read wherever the reader's own Flatten is off, because To review
+   * counts the flagged copies in every drawer and an unflattened root once held only the copies
+   * filed nowhere. Flatten is gone and the root's shelves are every drawer — Not sorted, each
+   * folder, the deck groups and `Recently removed`, with collapse suspended while the filter is on —
+   * so the page already reads the whole cabinet the way the sweep did: `true` is that answer, passed
+   * where the hook asks whether the list is read flat. What is left for the page is to be **at the
+   * root**; see the adjustment under `pendingFolder` below.
+   */
+  const review = useReviewHandoff("collection", true);
+  const collection = useCollection({ initialNeedsReview: review.initialNeedsReview });
+  review.settle(collection.needsReview, collection.setNeedsReview);
   const { query, summary, rows, total, marketplace, folderId } = collection;
   const view = useAppStore((s) => s.collectionView);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
@@ -719,6 +736,19 @@ export function CollectionPage() {
   useEffect(() => {
     if (pendingHere !== null) clearPendingFolder();
   }, [pendingHere, clearPendingFolder]);
+  /**
+   * **A review hand-off opens the root**, which is the whole cabinet on shelves — To review counted
+   * the flagged copies in every drawer, and a folder's wall holds only its own subtree. A page
+   * freshly mounted is at the root already (`folderId` is `useState`, never restored), so this acts
+   * only when the hand-off lands on a page standing in a folder. `initialNeedsReview` is `true`
+   * exactly while a hand-off naming this page is waiting, and `folderId !== null` is what makes the
+   * render-phase write terminate. **A named drawer outranks it** (`pendingHere === null`): no
+   * surface posts both, but two render-phase writes aimed at two levels would chase each other
+   * until React gave up, so the pair is ordered rather than trusted.
+   */
+  if (review.initialNeedsReview && pendingHere === null && folderId !== null) {
+    collection.openFolder(null);
+  }
 
   /**
    * Which folder layer is open, and what the caret goes back to when it closes.

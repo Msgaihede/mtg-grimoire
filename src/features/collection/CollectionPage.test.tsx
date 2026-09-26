@@ -985,6 +985,9 @@ beforeEach(() => {
     // `cleanup()`, as every field here does, and the block that is about the hand-off writes one
     // in every case.
     pendingFolder: null,
+    // **The needs-review hand-off, for the folder's reason one line up** — this page consumes it,
+    // and a case that left one written would open the next case on the flagged rows.
+    pendingReviewFilter: null,
   });
 });
 
@@ -5860,5 +5863,256 @@ describe("sharing from the cabinet", () => {
     await user.click(await screen.findByRole("button", { name: "Open a shared collection" }));
 
     expect(await screen.findByLabelText("Link to a shared collection")).toBeInTheDocument();
+  });
+});
+
+/**
+ * **The flagged rows another page asked this one to open on** — `store.ts`'s
+ * `pendingReviewFilter`, whose only writer is the home page's To review widget.
+ *
+ * `pendingFolder`'s block above, one filter over: read as the page renders, spent as it is read,
+ * and remembered by nothing. Each case asserts the *query* and the *field*, because three of the
+ * four ways this could be wrong draw a page that looks fine.
+ */
+describe("a needs-review filter another page asked for", () => {
+  /**
+   * **Every request, not the last one.** A render-phase adjustment puts the filter on before the
+   * first commit, so no unfiltered list is ever asked for; a mount effect would fetch the whole
+   * binder first and then the flagged rows, which a `lastQuery()` assertion cannot tell apart.
+   */
+  it("asks for the flagged rows from its first request, and spends the hand-off", async () => {
+    useAppStore.setState({ pendingReviewFilter: { scope: "collection" } });
+    wrap(<CollectionPage />);
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(
+      collectionList.mock.calls.every(([q]) => (q as CollectionQuery).needsReview === true),
+    ).toBe(true);
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+  });
+
+  /**
+   * **The same promise over a folder census that has already answered** — the arrival a reader
+   * actually makes, since the census outlives a visit in the app's one `QueryClient`. On shelves
+   * the case above cannot see the seed at all: every read waits for a *cold* census, and by then
+   * `settle`'s render-phase write has landed, so it stays green with `initialNeedsReview` deleted.
+   * A warm census lets the list subscribe on the first pass, which is the pass the seed is for.
+   */
+  it("asks for the flagged rows first over a census that has already answered", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (ui: ReactElement) => (
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <ContextMenuProvider>{ui}</ContextMenuProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree(<CollectionPage />));
+    await screen.findByText("Lightning Bolt");
+    rerender(tree(<div />));
+    collectionList.mockClear();
+
+    useAppStore.setState({ pendingReviewFilter: { scope: "collection" } });
+    rerender(tree(<CollectionPage />));
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(
+      collectionList.mock.calls.every(([q]) => (q as CollectionQuery).needsReview === true),
+    ).toBe(true);
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+  });
+
+  /** A hand-off that survived its read would open every later visit on the flagged rows. */
+  it("does not survive to a second visit", async () => {
+    useAppStore.setState({ pendingReviewFilter: { scope: "collection" } });
+    const first = wrap(<CollectionPage />);
+    await waitFor(() => expect(lastQuery().needsReview).toBe(true));
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+
+    first.unmount();
+    collectionList.mockClear();
+    wrap(<CollectionPage />);
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(lastQuery().needsReview).toBeUndefined();
+  });
+
+  /** One field serves both lists, so the check is "is there one for me". */
+  it("leaves the wishlist's hand-off untouched", async () => {
+    useAppStore.setState({ pendingReviewFilter: { scope: "wishlist" } });
+    wrap(<CollectionPage />);
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(lastQuery().needsReview).toBeUndefined();
+    expect(useAppStore.getState().pendingReviewFilter).toEqual({ scope: "wishlist" });
+  });
+});
+
+/**
+ * **A needs-review hand-off over a filed cabinet** — main's *cabinet the reader has not flattened*
+ * block (the controller's ruling of 2026-09-26), ported to shelves.
+ *
+ * To review counts the flagged copies across **every** drawer. Before shelves an unflattened root
+ * meant "filed nowhere", so the filter alone drew a flagged root — usually empty — under a widget
+ * that had just said "5 binder entries", and the page read the cabinet flat for as long as the
+ * hand-off's filter stood. On shelves the root's wall *is* every drawer, and a filter suspends
+ * collapse, so the same promise is kept with no switch at all: each flagged copy on its own shelf,
+ * a shut deck group's included. What the old block also guarded — that the hand-off writes nothing
+ * the reader persisted (`collectionFlattened` then) — is the stored folds now, which the filter
+ * overrides without writing. The two Flatten-press cases went with the chip; `draws no Flatten
+ * switch` above is the fence on its absence.
+ */
+describe("a needs-review hand-off over a filed cabinet", () => {
+  /** A flagged copy filed in `Trade binder` — a drawer of the reader's own. */
+  const FLAGGED: CollectionRow = {
+    ...BOLT,
+    id: 11,
+    cardId: "c-pearl",
+    oracleId: "o-pearl",
+    name: "Mox Pearl",
+    collectorNumber: "263",
+    folderId: BINDER.id,
+    folderName: BINDER.name,
+    needsReview: REVIEW_NOTE,
+  };
+  /** A flagged copy in a **deck group** — a shelf that starts shut, so its cards are fetched only
+   *  while something suspends the collapse. */
+  const FLAGGED_IN_DECK: CollectionRow = {
+    ...BOLT,
+    id: 12,
+    cardId: "c-sapphire",
+    oracleId: "o-sapphire",
+    name: "Mox Sapphire",
+    collectorNumber: "265",
+    folderId: DECK_GROUP.id,
+    folderName: DECK_GROUP.name,
+    needsReview: REVIEW_NOTE,
+  };
+
+  /**
+   * The backend's answer, by shelf: the rows on the shelves the query names, honouring the filter —
+   * so the healthy Bolt on Not sorted drops out under it, and a shelf left off the list is empty.
+   */
+  const listByShelf = async (q: CollectionQuery) =>
+    page(
+      [BOLT, FLAGGED, FLAGGED_IN_DECK].filter(
+        (row) =>
+          (q.shelves === undefined || q.shelves.includes(row.folderId ?? UNFILED_SHELF)) &&
+          (q.needsReview !== true || row.needsReview !== null),
+      ),
+    );
+
+  beforeEach(() => {
+    useAppStore.setState({ pendingReviewFilter: { scope: "collection" } });
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP]);
+    collectionList.mockImplementation(listByShelf);
+  });
+
+  /**
+   * **Every request asks for every drawer**, the shut one included, so there is no flagged root
+   * fetched and thrown away — and the folds the reader stored are exactly where they left them.
+   */
+  it("draws each flagged copy on its own shelf, a shut deck group's included, and writes no fold", async () => {
+    wrap(<CollectionPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Mox Pearl")).toBeInTheDocument();
+      expect(screen.getByText("Mox Sapphire")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Lightning Bolt")).toBeNull();
+    expect(
+      collectionList.mock.calls.every(([q]) => {
+        const asked = q as CollectionQuery;
+        return (
+          asked.needsReview === true &&
+          asked.rootOnly === undefined &&
+          asked.folderId === undefined &&
+          asked.shelves?.includes(BINDER.id) === true &&
+          asked.shelves.includes(DECK_GROUP.id)
+        );
+      }),
+    ).toBe(true);
+    expect(standingIn()).toBeNull();
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+    expect(setShelfFolds).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A hand-off landing on a page that is already mounted** — `useReviewHandoff`'s `settle`, the
+   * render-phase path, which every other case here skips by writing the hand-off before the mount.
+   * It is the path the widget's two store writes take when they land in two commits.
+   */
+  it("answers a hand-off that lands after the page has mounted", async () => {
+    useAppStore.setState({ pendingReviewFilter: null });
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    expect(lastQuery().needsReview).toBeUndefined();
+    // The deck group is shut, so its copy is not on the wall before the hand-off.
+    expect(screen.queryByText("Mox Sapphire")).toBeNull();
+
+    act(() => useAppStore.setState({ pendingReviewFilter: { scope: "collection" } }));
+
+    await waitFor(() => expect(lastQuery().needsReview).toBe(true));
+    expect(lastQuery().rootOnly).toBeUndefined();
+    // **One wait over the whole wall, never a `findByText("Mox Pearl")`**: Pearl was on screen
+    // before the hand-off too — its shelf is open at the root — so a find resolves on the
+    // pre-filter node, which the filtered wall then replaces. What proves the filter landed is
+    // the healthy Bolt leaving and the shut deck group's copy arriving, in the same frame.
+    await waitFor(() => {
+      expect(screen.queryByText("Lightning Bolt")).toBeNull();
+      expect(screen.getByText("Mox Pearl")).toBeInTheDocument();
+      expect(screen.getByText("Mox Sapphire")).toBeInTheDocument();
+    });
+    expect(
+      onPage(screen.getAllByRole("button", { name: "Remove filter — Needs review" })),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+    expect(setShelfFolds).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A hand-off that lands on a page standing in a folder opens the root** — the one thing left of
+   * the old sweep. A folder's wall holds only its own subtree, so the filter alone would draw that
+   * drawer's flagged copies under a widget that counted every drawer's.
+   */
+  it("opens the root when the hand-off lands on a page standing in a folder", async () => {
+    useAppStore.setState({ pendingReviewFilter: null });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await openShelf(user, "Trade binder");
+    await waitFor(() => expect(standingIn()).toBe(BINDER.id));
+
+    act(() => useAppStore.setState({ pendingReviewFilter: { scope: "collection" } }));
+
+    await waitFor(() => expect(standingIn()).toBeNull());
+    expect(lastQuery().needsReview).toBe(true);
+    // Sapphire is filed in a deck group, which no wall inside `Trade binder` can hold — so its
+    // arrival is the root's, and Pearl beside it is the same wall rather than the folder's.
+    await waitFor(() => {
+      expect(screen.getByText("Mox Sapphire")).toBeInTheDocument();
+      expect(screen.getByText("Mox Pearl")).toBeInTheDocument();
+    });
+    await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
+  });
+
+  /** The filter is what opened the shut shelves: take it away, by its chip or by Reset all, and the
+   *  page is the root it was before the hand-off — every card back, the deck group shut again. */
+  it.each([
+    ["its chip", "Remove filter — Needs review"],
+    ["Reset all", /^Reset all/],
+  ] as const)("keeps the root, and its folds, when the filter is cleared by %s", async (_how, name) => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Mox Sapphire");
+
+    await user.click(onPage(screen.getAllByRole("button", { name })));
+
+    await waitFor(() => expect(lastQuery().needsReview).toBeUndefined());
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    // Filed in the reader's own drawer, which the root's wall shows with or without a filter.
+    expect(screen.getByText("Mox Pearl")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Mox Sapphire")).toBeNull());
+    expect(standingIn()).toBeNull();
+    expect(setShelfFolds).not.toHaveBeenCalled();
   });
 });

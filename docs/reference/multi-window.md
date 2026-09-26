@@ -228,7 +228,7 @@ everything not on it stays where its window put it.
 
 | Follows live | Stays per window |
 | --- | --- |
-| `["startView"]`, `["homeLayout"]`, `["marketplace"]`, `["markColors"]`, `["recentCards"]`, `["decks","lastFormat"]`, `["mirror"]` | `["navCollapsed"]`, `["searchOpen"]`, `["deckFolderPane"]`, `["deckSort"]`, `["deckSearchTab"]`, `["printingGroupBy"]`, `["shelfFolds"]` |
+| `["startView"]`, `["homeLayout"]`, `["marketplace"]`, `["markColors"]`, `["recentCards"]`, `["decks","lastFormat"]`, `["mirror"]`, `["scanner","trayCount"]` | `["navCollapsed"]`, `["searchOpen"]`, `["deckFolderPane"]`, `["deckSort"]`, `["deckSearchTab"]`, `["printingGroupBy"]`, `["shelfFolds"]` |
 
 **`["shelfFolds"]` joined the per-window column on 2026-09-26** — the `shelf_folds` row, which
 records the collection's and the wishlist's shelves the reader folded away from their default.
@@ -247,6 +247,12 @@ Card zoom and list/grid are on neither list because they are **store state seede
 never a query**. (Flatten was a third until 2026-09-26, when folder shelves deleted it.) Refetching
 the follow-live keys is what closes the whole-value race: every window writes the home layout from
 fresh data rather than over another window's change.
+
+**`["scanner","trayCount"]` follows because a second window is the only place the Scanner and the
+home page's To review count are on screen together**, and a scan there is an `app_meta` write here;
+it is safe to follow because `scanner_tray` is a plain `SELECT` that answers no write, and its key
+sits *beside* `["scanner","tray"]` rather than under it, so the single-writer rule below never spares
+it and it never touches the tray ([home-page.md](home-page.md) §15).
 
 ⚠️ **Two fences keep a view preference per window, and the first is the one that matters.** The
 predicate on this refresh spares the per-window keys — but the *writing* window's own invalidations

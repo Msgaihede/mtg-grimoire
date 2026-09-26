@@ -51,7 +51,7 @@ import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
-import { bodyPadPx, titleRowPx } from "./fit";
+import { bodyGapPx, bodyPadPx, titleRowPx } from "./fit";
 import type { WidgetCardProps } from "./widgetProps";
 import { WidgetSettingsPanel } from "./WidgetSettingsPanel";
 import { chipLabel, customTitle, defaultTitle, widgetTitle } from "./widgetSettings";
@@ -113,9 +113,11 @@ export function WidgetCard({
 
   // The design's two rhythms: a one-cell-tall or compact card is packed tighter on every side. The
   // title line's height is `titleRowPx`, the same number `makeFit` subtracts, so the body a widget
-  // was told it has is the body it gets.
+  // was told it has is the body it gets — and the gap between the body's children is `bodyGapPx`,
+  // the same number `footerLinePx` reserves above a footer.
   const tight = fit.compact || fit.h === 1;
   const pad = bodyPadPx(fit.h, fit.compact);
+  const gap = bodyGapPx(fit.h, fit.compact);
   const chip = fit.tier >= 2 ? chipLabel(widget) : "";
 
   const onPointerDown = (event: PointerEvent<HTMLElement>) => {
@@ -292,7 +294,7 @@ export function WidgetCard({
         <div
           inert={customizing || still}
           className="flex flex-auto flex-col"
-          style={{ gap: tight ? 5 : 8 }}
+          style={{ gap }}
         >
           {children}
         </div>

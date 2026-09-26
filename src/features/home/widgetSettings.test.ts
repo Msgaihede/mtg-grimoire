@@ -214,3 +214,43 @@ describe("chipLabel", () => {
     expect(chipLabel(widget("fromTheFuture", { dimension: "set" }))).toBe("");
   });
 });
+
+/**
+ * Round two's rows, read through the one set of readers every body and the settings panel use —
+ * so a default here is the default the card draws, not a restatement of the registry.
+ */
+describe("round two's rows, through the settings readers", () => {
+  it("defaults each pick to its registry answer", () => {
+    expect(pickDefault(pickFor("deckCompletion", "scope"))).toBe("recent");
+    expect(pickDefault(pickFor("deckCompletion", "order"))).toBe("done");
+    // `dflt` names 90 while listing 30 first — `activity`'s shape, and `newPrintings`' number.
+    expect(pickDefault(pickFor("comingSoon", "window"))).toBe(90);
+    expect(pickValue(widget("comingSoon", { window: 45 }), pickFor("comingSoon", "window"))).toBe(
+      90,
+    );
+  });
+
+  /** One switch that starts off and one that starts on, each read the right way round. */
+  it("reads the two switches off their own rows", () => {
+    expect(toggleOnOf(widget("deckCompletion"), "complete")).toBe(false);
+    expect(toggleOnOf(widget("deckCompletion", { complete: true }), "complete")).toBe(true);
+    expect(toggleOnOf(widget("toReview"), "removed")).toBe(true);
+    expect(toggleOnOf(widget("toReview", { removed: false }), "removed")).toBe(false);
+  });
+
+  it("draws a chip for the two kinds that name one, and nothing for the two that do not", () => {
+    expect(chipLabel(widget("deckCompletion"))).toBe("Nearest done");
+    expect(chipLabel(widget("deckCompletion", { order: "cheapest" }))).toBe("Cheapest to finish");
+    expect(chipLabel(widget("comingSoon"))).toBe("90 days");
+    expect(chipLabel(widget("comingSoon", { window: 365 }))).toBe("A year");
+    expect(chipLabel(widget("toReview"))).toBe("");
+    expect(chipLabel(widget("wishlistSavings"))).toBe("");
+  });
+
+  it("names an unrenamed card by its kind", () => {
+    expect(defaultTitle(widget("deckCompletion"))).toBe("Deck completion");
+    expect(defaultTitle(widget("toReview"))).toBe("To review");
+    expect(defaultTitle(widget("wishlistSavings"))).toBe("Wishlist savings");
+    expect(defaultTitle(widget("comingSoon"))).toBe("Coming soon");
+  });
+});
