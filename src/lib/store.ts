@@ -754,9 +754,9 @@ interface AppState {
    * list** — the home page's Wishlist savings widget, which counted what every pinned wish would
    * save and has to open a dialog planning the same wishes.
    *
-   * `WishlistPage` answers it with a **scope override** on the dialog — every wish, flattened, no
-   * filters — and never by writing `wishlistFlattened` or a filter: those are the reader's, and
-   * closing the dialog leaves the page exactly as they left it. A boolean because there is nothing
+   * `WishlistPage` answers it with a **scope override** on the dialog — every wish in every
+   * folder, no filters — and never by writing a filter or the folder the reader stands in: those
+   * are the reader's, and closing the dialog leaves the page exactly as they left it. A boolean because there is nothing
    * else to say; the widget only ever asks about the whole list. Cleared by {@link setActiveView};
    * written after it.
    */

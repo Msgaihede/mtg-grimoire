@@ -1,7 +1,10 @@
+import { useLayoutEffect, type RefObject } from "react";
+
 /**
  * **The caret a page hands back to a shelf heading** — one type for both cabinets
  * (`CollectionShelfParts`' `CollectionShelfHeading` and the wishlist's `WishShelfHeading`), after
  * Add folder in that heading (`"add"`) or after a Move up / Move down of it (`"manage"`, its `⋯`).
+ * The page side is `useHeadingCaret`; this is the heading side.
  *
  * The page cannot focus the control itself: the heading may not be drawn when the request is made
  * (the wall virtualises), and the element it remembered is often a detached one. So the heading
@@ -35,3 +38,40 @@ export const HEADING_CARET_CONTROL: Record<HeadingCaret["control"], string> = {
   add: 'button[aria-label^="Add folder"]',
   manage: 'button[aria-haspopup="menu"]',
 };
+
+/**
+ * **A heading takes the caret when it is drawn with a request on it** — the one effect both heading
+ * components call, with the heading's own row (the element `ShelfHeading` hands its drop ref, which
+ * carries `data-shelf-heading`).
+ *
+ * - **Only while nothing else has it**: the caret is on `<body>`, where a detached opener or a
+ *   closed field leaves it, or still on the element the reader pressed (`from`).
+ * - **Only once per request**, so a heading scrolled back into view later never pulls the caret off
+ *   whatever the reader has moved on to.
+ * - **Found through the row, never through `document`**: a lookup across the page answers with
+ *   whichever heading's control comes first, and during a reorder two rows can briefly stand for
+ *   one folder.
+ * - **A layout effect**, so the caret is placed in the commit that draws the heading rather than a
+ *   frame after it. A control not drawn (a field is open over the heading) is not a claim: the
+ *   request waits for it.
+ *
+ * ⚠️ **`claim` sets the page's state from this effect, and that is a deliberate exception** to the
+ * house rule against a `setState` in an effect. The rule is about *derived* state synced after the
+ * fact; this is an **event** — the heading reached the screen and the caret was handed over — and
+ * the page cannot see it happen, because only this commit knows the control is drawn. It is guarded
+ * and loop-free: `claim` answers `true` once per id (the page's ref, which also stops StrictMode's
+ * second run from taking twice), the state it clears is the request itself, and the render that
+ * follows hands this heading no `caret`, so the effect has nothing left to do.
+ */
+export function useTakeHeadingCaret(
+  caret: HeadingCaret | undefined,
+  row: RefObject<HTMLElement | null>,
+): void {
+  useLayoutEffect(() => {
+    if (caret === undefined) return;
+    const control = row.current?.querySelector<HTMLElement>(HEADING_CARET_CONTROL[caret.control]);
+    if (control == null || !caret.claim(caret.id)) return;
+    const active = document.activeElement;
+    if (active === null || active === document.body || active === caret.from) control.focus();
+  }, [caret, row]);
+}
