@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ComponentProps } from "react";
+import { useLayoutEffect, type ComponentProps } from "react";
 import { compile } from "tailwindcss";
 import twEntry from "tailwindcss/index.css?raw";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -1216,5 +1216,263 @@ describe("VirtualTable's revealIndex", () => {
       <VirtualTable {...BASE} rows={LONG} total={90} band={bandOf} grow revealIndex={55} />,
     );
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * **`keepRow` keeps one row drawn wherever the window goes** (final review, S-I3). A shelf heading
+ * dragged in the table is a drag source inside a virtualised row. Carried more than the overscan
+ * (ten rows) past the window's edge, it unmounted, and the drag went with it: the drag ended, or
+ * its floating copy vanished. The grid keeps its carried heading's row the same way
+ * (`CardGrid`'s `rangeExtractor`).
+ *
+ * Positions come from the table's own arithmetic (header 36, band 40, row 44, a band at every
+ * tenth row). jsdom keeps a `scrollTop` it is given, and `fireEvent.scroll` moves the window, as
+ * in the sticky band's tests.
+ */
+describe("VirtualTable's kept row", () => {
+  const LONG: Row[] = Array.from({ length: 100 }, (_, i) =>
+    i % 10 === 0 ? shelf(`S${i / 10}`) : card(i),
+  );
+  const startOf = (i: number) => {
+    const bands = i === 0 ? 0 : Math.floor((i - 1) / 10) + 1;
+    return 36 + 40 * bands + 44 * (i - bands);
+  };
+  const scrollTo = (scroller: HTMLElement, top: number) => {
+    scroller.scrollTop = top;
+    fireEvent.scroll(scroller);
+  };
+  const draw = (keepRow: number | null | undefined, extra: Partial<Props> = {}) =>
+    render(
+      <VirtualTable
+        {...BASE}
+        rows={LONG}
+        total={90}
+        band={bandOf}
+        stickyBand={() => null}
+        keepRow={keepRow}
+        {...extra}
+      />,
+    );
+  const scrollerOf = () => screen.getByRole("table").parentElement as HTMLElement;
+
+  /** The premise, and a fence: without a kept row the window lets a far heading go. */
+  it("lets a far row go with the window when nothing is kept", () => {
+    draw(null);
+    expect(screen.getByText("S1 heading")).toBeInTheDocument();
+    scrollTo(scrollerOf(), 3000);
+    expect(screen.queryByText("S1 heading")).toBeNull();
+  });
+
+  it("keeps a row above the window drawn, as the same element, at its own place", () => {
+    draw(10);
+    const kept = rowOf("S1 heading");
+    scrollTo(scrollerOf(), 3000);
+
+    // The window has moved: row 68 starts at 3000. A row between it and the kept one is gone.
+    expect(startOf(68)).toBe(3000);
+    expect(screen.queryByText("Card 25")).toBeNull();
+    expect(screen.getByText("Card 71")).toBeInTheDocument();
+    // The kept heading is still there, and it is the element it was: whatever the caller drew
+    // inside it (a drag source) was never unmounted.
+    expect(rowOf("S1 heading")).toBe(kept);
+    expect(kept.style.transform).toBe(`translateY(${startOf(10) - TABLE_HEADER_HEIGHT}px)`);
+    // Keyed as every row is, by its index, and placed by the same rules: nothing else changes.
+    expect(kept).toHaveAttribute("aria-rowindex", "12");
+
+    scrollTo(scrollerOf(), 0);
+    expect(rowOf("S1 heading")).toBe(kept);
+  });
+
+  it("keeps a row below the window drawn too", () => {
+    draw(95);
+    expect(screen.queryByText("Card 60")).toBeNull();
+    expect(rowOf("Card 95").style.transform).toBe(
+      `translateY(${startOf(95) - TABLE_HEADER_HEIGHT}px)`,
+    );
+  });
+
+  /**
+   * The paging rule reads the last row of the virtualiser's own window. A kept row parked far
+   * below that window is not the reader reaching the end of the list. Read as one, a drag held
+   * over a heading near the end would load the next page in the middle of the drag.
+   */
+  it("does not page because a kept row sits near the end of what is loaded", () => {
+    const onNeedNextPage = vi.fn();
+    draw(95, { onNeedNextPage });
+    expect(onNeedNextPage).not.toHaveBeenCalled();
+  });
+
+  /** Absent, or `null`, the table is exactly what it was. */
+  it("draws exactly what it drew without the prop when nothing is kept", () => {
+    const without = render(
+      <VirtualTable {...BASE} rows={LONG} total={90} band={bandOf} stickyBand={() => null} />,
+    );
+    const plain = without.container.innerHTML;
+    without.unmount();
+    const nulls = draw(null);
+    expect(nulls.container.innerHTML).toBe(plain);
+  });
+});
+
+/**
+ * **Top hands the caret on** (final review, S-I1, the table's half). The sticky bar is the page's
+ * drawing, and the page draws nothing over a heading, so pressing its Top lands the list on the
+ * first heading and takes the bar away with the caret in it. The caret fell to `<body>`, and the
+ * next Tab started from the top of the app. It goes to the heading that took the bar's place
+ * instead, onto that row's first control, once the scroll has landed.
+ */
+describe("VirtualTable's sticky band hands the caret on", () => {
+  const LONG: Row[] = Array.from({ length: 100 }, (_, i) =>
+    i % 10 === 0 ? shelf(`S${i / 10}`) : card(i),
+  );
+  /** A heading with a control in it, as the pages' headings have (chevron, title). */
+  const openBand = (r: Row) => (r.shelf ? <button type="button">Open {r.shelf}</button> : null);
+
+  /**
+   * The page's bar: nothing over a heading, and a Top that sets `scrollTop` the way the pages'
+   * `scrollToTop` does. The browser's `scroll` event arrives after, so the test fires it.
+   */
+  const drawWithTop = (band: Props["band"] = openBand) => {
+    const bar = (i: number) =>
+      LONG[i]?.shelf ? null : (
+        <button
+          type="button"
+          onClick={() => {
+            (screen.getByRole("table").parentElement as HTMLElement).scrollTop = 0;
+          }}
+        >
+          Top
+        </button>
+      );
+    render(<VirtualTable {...BASE} rows={LONG} total={90} band={band} stickyBand={bar} />);
+    return screen.getByRole("table").parentElement as HTMLElement;
+  };
+
+  it("puts the caret on the first heading's first control when Top takes the bar away", async () => {
+    const user = userEvent.setup();
+    const scroller = drawWithTop();
+    scroller.scrollTop = 500;
+    fireEvent.scroll(scroller);
+
+    const top = screen.getByRole("button", { name: "Top" });
+    await user.click(top);
+    expect(document.activeElement).toBe(top);
+
+    // The scroll lands at the top; row 0 is S0's heading, so the bar goes with the caret in it.
+    fireEvent.scroll(scroller);
+    expect(screen.queryByRole("button", { name: "Top" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Open S0" }));
+  });
+
+  /** From far down the window has to move first; the heading is drawn by the time the bar goes. */
+  it("does the same from far down the list", async () => {
+    const user = userEvent.setup();
+    const scroller = drawWithTop();
+    scroller.scrollTop = 3000;
+    fireEvent.scroll(scroller);
+    expect(screen.queryByRole("button", { name: "Open S0" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Top" }));
+    fireEvent.scroll(scroller);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Open S0" }));
+  });
+
+  /** A heading with nothing to press still keeps the caret in the table: its own stop. */
+  it("falls back to the table's own stop when that heading has no control", async () => {
+    const user = userEvent.setup();
+    const scroller = drawWithTop(bandOf);
+    scroller.scrollTop = 500;
+    fireEvent.scroll(scroller);
+    await user.click(screen.getByRole("button", { name: "Top" }));
+    fireEvent.scroll(scroller);
+    expect(document.activeElement).toBe(scroller);
+  });
+
+  /**
+   * The hand-on is a fallback, never a second opinion. If something else claimed the caret in
+   * the commit that took the bar away, that claim stands. Here a heading's own layout effect
+   * points the caret at a control outside the table as it mounts; the pages' caret machinery is
+   * the real case.
+   */
+  it("leaves a caret that something else claimed in the same commit", async () => {
+    const user = userEvent.setup();
+    function Claims() {
+      useLayoutEffect(() => {
+        document.getElementById("claimed")?.focus();
+      }, []);
+      return null;
+    }
+    const claimingBand = (r: Row) =>
+      r.shelf === "S0" ? (
+        <span>
+          <Claims />
+          <button type="button">Open S0</button>
+        </span>
+      ) : r.shelf ? (
+        <button type="button">Open {r.shelf}</button>
+      ) : null;
+    render(
+      <>
+        <button type="button" id="claimed">
+          Claimed
+        </button>
+        <VirtualTable
+          {...BASE}
+          rows={LONG}
+          total={90}
+          band={claimingBand}
+          stickyBand={(i) =>
+            LONG[i]?.shelf ? null : (
+              <button
+                type="button"
+                onClick={() => {
+                  (screen.getByRole("table").parentElement as HTMLElement).scrollTop = 0;
+                }}
+              >
+                Top
+              </button>
+            )
+          }
+        />
+      </>,
+    );
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
+    // Far enough down that S0's heading unmounts, so it mounts again when Top lands.
+    scroller.scrollTop = 3000;
+    fireEvent.scroll(scroller);
+    expect(screen.queryByRole("button", { name: "Open S0" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Top" }));
+    fireEvent.scroll(scroller);
+    expect(screen.getByRole("button", { name: "Open S0" })).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Claimed" }));
+  });
+
+  /** Only a caret the bar took with it is handed on; a caret somewhere else is left alone. */
+  it("leaves a caret that was never in the bar where it is", () => {
+    const view = (
+      <>
+        <button type="button">Elsewhere</button>
+        <VirtualTable
+          {...BASE}
+          rows={LONG}
+          total={90}
+          band={openBand}
+          stickyBand={(i) => (LONG[i]?.shelf ? null : <button type="button">Top</button>)}
+        />
+      </>
+    );
+    render(view);
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
+    scroller.scrollTop = 500;
+    fireEvent.scroll(scroller);
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+    act(() => elsewhere.focus());
+
+    scroller.scrollTop = 0;
+    fireEvent.scroll(scroller);
+    expect(screen.queryByRole("button", { name: "Top" })).toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
   });
 });

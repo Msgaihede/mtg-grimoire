@@ -1,13 +1,19 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
+import {
+  defaultRangeExtractor,
+  useVirtualizer,
+  type Range,
+  type VirtualItem,
+} from "@tanstack/react-virtual";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { needsNextPage } from "@/features/search/useCardSearch";
 import { FOCUS_INSET } from "@/lib/focus";
@@ -34,6 +40,34 @@ export const TABLE_BAND_HEIGHT = 40;
  *  rather than a literal `[]`, which would be a new array on every render and a new dependency
  *  for the paging effect that reads its last item. */
 const NO_VIRTUAL_ROWS: VirtualItem[] = [];
+
+/**
+ * The last row of the virtualiser's **own** window, for the paging rule. A kept row
+ * (`keepRow`) parked past that window is the last drawn row, but not the reader nearing the end
+ * of the list. Read as one, a drag held over a heading near the end would load a page mid-drag.
+ * The window is one contiguous run, so a kept row is an outlier only when a gap separates it from
+ * the row before it.
+ */
+function lastInWindow(drawn: readonly VirtualItem[], keep: number | null | undefined): number {
+  const n = drawn.length;
+  if (n === 0) return -1;
+  const last = drawn[n - 1].index;
+  if (keep != null && last === keep && n > 1 && drawn[n - 2].index !== keep - 1) {
+    return drawn[n - 2].index;
+  }
+  return last;
+}
+
+/** What a caret can land on: a stop of its own, or a control. `aria-disabled` stays a stop. */
+const TABBABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+  'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** A row's first control: the row itself when it is a stop (a data row), else its first. */
+function firstControlOf(row: Element | null | undefined): HTMLElement | null {
+  if (!row) return null;
+  return row.matches(TABBABLE) ? (row as HTMLElement) : row.querySelector<HTMLElement>(TABBABLE);
+}
 
 /**
  * **The table's own keyboard focus, drawn on the table's frame**: the box with the border and
@@ -169,6 +203,7 @@ export function VirtualTable<Row>({
   bandHeight,
   stickyBand,
   revealIndex,
+  keepRow,
 }: {
   rows: Row[];
   columns: TableColumn<Row>[];
@@ -301,6 +336,18 @@ export function VirtualTable<Row>({
    * page scrolls.
    */
   revealIndex?: number | null;
+  /**
+   * A row index to keep drawn wherever the virtualiser's window goes, at its own place in the
+   * list. The pages pass the band of the folder heading in flight, so a heading carried past the
+   * overscan keeps its drag source mounted. Without this, the drag ends or its floating copy
+   * vanishes (final review, S-I3). This mirrors the grid's carried row.
+   *
+   * Rows stay keyed by index, which is enough here: the table never folds or reorders mid-drag,
+   * so the kept row's index, and so its React identity, hold for the length of the drag. The
+   * paging rule reads the window's own last row, never a kept row parked past it. `null` or
+   * absent draws exactly what the table always drew. Inert under `grow`, which draws every row.
+   */
+  keepRow?: number | null;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const tip = useTooltip();
@@ -325,6 +372,21 @@ export function VirtualTable<Row>({
   // twice, the two would part the first time either moved.
   const topCover = TABLE_HEADER_HEIGHT + (stickyLive && rows.length > 0 ? bandSize : 0);
 
+  // `keepRow`: the window the virtualiser picks, plus that one row when it falls outside it.
+  // It is `undefined` without one (and for an index this list does not have). That is the
+  // virtualiser's own default extractor, so a table with nothing kept is exactly what it was.
+  const kept = keepRow != null && keepRow >= 0 && keepRow < rows.length ? keepRow : null;
+  const rangeExtractor = useMemo(
+    () =>
+      kept === null
+        ? undefined
+        : (range: Range) => {
+            const drawn = defaultRangeExtractor(range);
+            return drawn.includes(kept) ? drawn : [...drawn, kept].sort((a, b) => a - b);
+          },
+    [kept],
+  );
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -343,6 +405,7 @@ export function VirtualTable<Row>({
     // Read only by `scrollToIndex`, which only `revealIndex` calls. A revealed row stops below
     // the header and the bar rather than underneath them.
     scrollPaddingStart: topCover,
+    rangeExtractor,
   });
 
   // Row heights are cached from the first `estimateSize` call, so a page that lands with a
@@ -375,7 +438,7 @@ export function VirtualTable<Row>({
   // below — so neither of these is asked for. `NO_VIRTUAL_ROWS` is a module constant rather
   // than a fresh `[]` so the paging effect's deps do not change every render.
   const virtualRows = grow ? NO_VIRTUAL_ROWS : virtualizer.getVirtualItems();
-  const lastRendered = virtualRows.length ? virtualRows[virtualRows.length - 1].index : -1;
+  const lastRendered = lastInWindow(virtualRows, kept);
 
   // A new list reuses this scroll container, and a browser does not reset scrollTop for new
   // content — it clamps the old offset into the new, usually far shorter, list. Changing the
@@ -452,6 +515,41 @@ export function VirtualTable<Row>({
     return virtualizer.getVirtualItemForOffset(el.scrollTop + TABLE_HEADER_HEIGHT)?.index ?? 0;
   }, [stickyLive, virtualizer]);
   const firstVisibleRowIndex = useSyncExternalStore(subscribeToScroll, readFirstVisibleRow);
+
+  // The page's bar for the row at the header's edge. It is asked only where it can be drawn,
+  // which is `stickyBand`'s contract.
+  const barNode = stickyLive && rows.length > 0 ? stickyBand?.(firstVisibleRowIndex) : null;
+  const barDrawn = barNode != null;
+
+  // **Top hands the caret on** (final review, S-I1). The page draws no bar over a heading, so its
+  // Top lands the list on the first heading and takes the bar away, caret and all, which dropped
+  // the caret on `<body>`. The bar's box notes, as it goes, whether it held the caret. A callback
+  // ref's cleanup runs while React detaches the box, before its node leaves the DOM, so
+  // `contains` can still answer. The layout effect in the same commit then hands the caret to
+  // the heading that took the bar's place: its first control, or the table's own stop if it has
+  // none, but never `<body>`. The scroll has landed by then, because the scroll is what took
+  // the bar away. It acts only when the caret really did fall to `<body>`.
+  const caretLeftWithBar = useRef(false);
+  const holdBarCaret = useCallback((box: HTMLDivElement | null) => {
+    if (!box) return;
+    return () => {
+      if (box.contains(document.activeElement)) caretLeftWithBar.current = true;
+    };
+  }, []);
+  useLayoutEffect(() => {
+    if (barDrawn || !caretLeftWithBar.current) return;
+    caretLeftWithBar.current = false;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    const scroller = scrollRef.current;
+    // The row at the header's edge, found by its `aria-rowindex` (index + 2), which every row
+    // carries whoever renders it. It is the first drawn row a reader sees, and at Top it is row
+    // 0. `preventScroll`: the list has just landed where the reader asked.
+    const row = scroller?.querySelector(
+      `[role="row"][aria-rowindex="${firstVisibleRowIndex + 2}"]`,
+    );
+    (firstControlOf(row) ?? scroller)?.focus({ preventScroll: true });
+  }, [barDrawn, firstVisibleRowIndex]);
 
   // The one place the two modes part: `grow` draws every row, in document order, in normal
   // flow, and reads nothing off the virtualiser; otherwise it is the window as before.
@@ -784,9 +882,13 @@ export function VirtualTable<Row>({
           style={{ top: TABLE_HEADER_HEIGHT }}
           className={cn("sticky h-0", LAYER.header)}
         >
-          <div className="absolute inset-x-0 top-0">
-            {stickyBand?.(firstVisibleRowIndex)}
-          </div>
+          {/* Only while the page draws a bar, so that its going is an unmount, which
+              `holdBarCaret` sees. */}
+          {barDrawn && (
+            <div ref={holdBarCaret} className="absolute inset-x-0 top-0">
+              {barNode}
+            </div>
+          )}
         </div>
       )}
       {table}
