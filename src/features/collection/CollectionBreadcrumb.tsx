@@ -123,10 +123,15 @@ function Segment({
   onDropFolder: (drag: FolderDrag, folderId: number | null) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
+  // **Both targets take a drop only while the pointer is inside the segment** (`pointerOnly`).
+  // dnd-kit's default detector falls back to the carried card's whole rectangle, and the path row
+  // sits straight above the wall — so a card released over the first row of tiles inside an opened
+  // folder overlapped a segment and landed in it, the stray drop T3 fixed for the headings.
   const card = useCollectionDropTarget({
     ref,
     canDrop: (drop) => canDrop(drop, folderId),
     onDrop: (drop) => onDropCard(drop, folderId),
+    pointerOnly: true,
   });
   // The edge is ignored on purpose: a segment is one landing, and "last in this level" is the
   // only thing a drop on it can say. `axis` only decides which way `folderEdge` measures.
@@ -136,6 +141,7 @@ function Segment({
     axis: "horizontal",
     canDrop: (drag) => canDropFolder(drag, folderId),
     onDrop: (drag) => onDropFolder(drag, folderId),
+    pointerOnly: true,
   });
 
   return (

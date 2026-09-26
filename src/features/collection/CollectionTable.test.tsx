@@ -743,3 +743,118 @@ describe("CollectionTable", () => {
     expect(document.querySelector("[data-shelf-rail]")).toBeNull();
   });
 });
+
+/**
+ * **The table's half of the caret's return** (live pass, check 8): a heading band that never
+ * changes which folder it draws, and a requested heading brought into view (`revealShelfId`,
+ * handed to `VirtualTable` as `revealIndex`).
+ */
+describe("CollectionTable's heading bands", () => {
+  /** A reader's folder at the top level, with one row filed in it. */
+  const folderShelf = (id: number, name: string): Shelf => ({
+    id,
+    kind: "folder",
+    group: "own",
+    name,
+    pathIds: [id],
+    path: [name],
+    depth: 0,
+    indent: 0,
+    lead: [],
+    leadIds: [],
+    headless: false,
+    collapsed: false,
+    locked: false,
+  });
+  const rowIn = (shelf: Shelf): CollectionRow => ({
+    ...ROW,
+    id: 1000 + shelf.id,
+    cardId: `c-${shelf.id}`,
+    name: `${shelf.name} card`,
+    folderId: shelf.id,
+    folderName: shelf.name,
+  });
+  const shelvesOf = (
+    order: readonly Shelf[],
+    over: Partial<CollectionTableShelves> = {},
+  ): CollectionTableShelves => {
+    const byId = new Map(order.map((shelf) => [shelf.id, [rowIn(shelf)]]));
+    return {
+      layout: layoutShelves(
+        order.map((shelf) => ({ shelf, tileCount: 1 })),
+        1,
+      ).rows,
+      rowsOf: (id) => byId.get(id) ?? [],
+      complete: true,
+      renderHeading: (s) => <button type="button">{`Manage ${s.name}`}</button>,
+      renderLabel: () => null,
+      renderEmpty: () => null,
+      renderSticky: () => null,
+      ...over,
+    };
+  };
+  const table = (shelves: CollectionTableShelves) => (
+    <CollectionTable
+      rows={[]}
+      total={shelves.layout.length}
+      listKey="test"
+      sort={[]}
+      onSort={vi.fn()}
+      onNeedNextPage={vi.fn()}
+      onSetQuantity={vi.fn()}
+      onRemove={vi.fn()}
+      marketplace={MARKETPLACES.tcgplayer}
+      shelves={shelves}
+    />
+  );
+
+  /**
+   * **A move is not a relabel.** `VirtualTable` keys its rows by position, so a Move up used to hand
+   * the moved folder's old place — its heading, `⋯` and all — to the folder that took it, and the
+   * caret the menu had just put back on that `⋯` stayed on a control that now named another
+   * folder. Keyed by the shelf, the old heading goes with its folder.
+   */
+  it("never redraws one folder's heading as another's", () => {
+    const binder = folderShelf(3, "Trade binder");
+    const sealed = folderShelf(4, "Sealed");
+    const { rerender } = render(table(shelvesOf([binder, sealed])));
+    const before = screen.getByRole("button", { name: "Manage Trade binder" });
+
+    rerender(table(shelvesOf([sealed, binder])));
+
+    expect(before.isConnected).toBe(false);
+    expect(screen.getByRole("button", { name: "Manage Trade binder" })).not.toBe(before);
+  });
+
+  /**
+   * **A requested heading is brought into view** — a moved folder's, or Add folder's draft — which
+   * on a long table is a band the virtualiser has not drawn. jsdom is made to scroll for this case:
+   * the reveal is a `scrollTo`, clamped by the virtualiser to `scrollHeight`, which jsdom answers as 0.
+   */
+  it("reveals the heading band of the shelf it is asked for", async () => {
+    const order = Array.from({ length: 40 }, (_, i) => folderShelf(100 + i, `F${i}`));
+    const scrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value(this: HTMLElement, to: ScrollToOptions | number, y?: number) {
+        this.scrollTop = typeof to === "number" ? (y ?? 0) : (to.top ?? this.scrollTop);
+        this.dispatchEvent(new Event("scroll"));
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get: () => 1_000_000,
+    });
+    try {
+      const { rerender } = render(table(shelvesOf(order)));
+      expect(screen.queryByRole("button", { name: "Manage F39" })).toBeNull();
+
+      rerender(table(shelvesOf(order, { revealShelfId: 139 })));
+
+      expect(await screen.findByRole("button", { name: "Manage F39" })).toBeInTheDocument();
+    } finally {
+      if (scrollTo) Object.defineProperty(HTMLElement.prototype, "scrollTo", scrollTo);
+      delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+    }
+  });
+});

@@ -3,7 +3,7 @@ import { buildFolderTree } from "@/lib/folderTree";
 import type { CollectionFolder, ShelfCount } from "@/lib/ipc";
 import { UNFILED_SHELF, type Shelf } from "@/lib/shelves";
 import {
-  DRAFT_SHELF,
+  NEW_FOLDER_SHELF,
   countsById,
   draftFolder,
   foldAll,
@@ -77,7 +77,7 @@ describe("shelfFolderOf", () => {
 describe("draftFolder", () => {
   it("sorts after every sibling and inherits its parent's lock", () => {
     expect(draftFolder(3, new Set([3]))).toEqual({
-      id: DRAFT_SHELF,
+      id: NEW_FOLDER_SHELF,
       parentId: 3,
       name: "",
       sortOrder: Number.MAX_SAFE_INTEGER,
@@ -178,7 +178,7 @@ describe("foldChange and foldAll", () => {
       shelf({ id: 3, headless: true }),
       shelf({ id: 9 }),
       shelf({ id: 20, kind: "deck", group: "decks" }),
-      shelf({ id: DRAFT_SHELF }),
+      shelf({ id: NEW_FOLDER_SHELF }),
     ];
     expect(foldAll(shelves, true)).toEqual({ "9": true, "20": null });
     expect(foldAll(shelves, false)).toEqual({ "9": null, "20": false });
@@ -230,22 +230,22 @@ describe("keepShelf", () => {
   const drawn = [
     shelf({ id: 0, kind: "unfiled" }),
     shelf({ id: 3 }),
-    shelf({ id: DRAFT_SHELF }),
+    shelf({ id: NEW_FOLDER_SHELF }),
     shelf({ id: 20, kind: "deck", group: "decks" }),
   ];
 
   it("changes nothing for a shelf that is already drawn, or for no shelf", () => {
-    expect(keepShelf(drawn, drawn, DRAFT_SHELF)).toEqual(drawn);
+    expect(keepShelf(drawn, drawn, NEW_FOLDER_SHELF)).toEqual(drawn);
     expect(keepShelf(drawn, drawn, null)).toEqual(drawn);
   });
 
   it("puts a hidden heading back before the next drawn shelf that follows it", () => {
     const shown = [drawn[1], drawn[3]];
-    expect(keepShelf(shown, drawn, DRAFT_SHELF).map((s) => s.id)).toEqual([3, DRAFT_SHELF, 20]);
+    expect(keepShelf(shown, drawn, NEW_FOLDER_SHELF).map((s) => s.id)).toEqual([3, NEW_FOLDER_SHELF, 20]);
   });
 
   it("appends it when nothing after it is drawn", () => {
-    expect(keepShelf([drawn[1]], drawn, DRAFT_SHELF).map((s) => s.id)).toEqual([3, DRAFT_SHELF]);
+    expect(keepShelf([drawn[1]], drawn, NEW_FOLDER_SHELF).map((s) => s.id)).toEqual([3, NEW_FOLDER_SHELF]);
   });
 
   /** Under a filter the draft's parent can be hidden too — and a heading drawn without the one it
@@ -254,10 +254,10 @@ describe("keepShelf", () => {
     const tree = [
       shelf({ id: 3, pathIds: [3] }),
       shelf({ id: 9, pathIds: [3, 9], depth: 1 }),
-      shelf({ id: DRAFT_SHELF, pathIds: [3, 9, DRAFT_SHELF], depth: 2 }),
+      shelf({ id: NEW_FOLDER_SHELF, pathIds: [3, 9, NEW_FOLDER_SHELF], depth: 2 }),
       shelf({ id: 4, pathIds: [4] }),
     ];
-    expect(keepShelf([tree[3]], tree, DRAFT_SHELF).map((s) => s.id)).toEqual([3, 9, DRAFT_SHELF, 4]);
+    expect(keepShelf([tree[3]], tree, NEW_FOLDER_SHELF).map((s) => s.id)).toEqual([3, 9, NEW_FOLDER_SHELF, 4]);
   });
 });
 

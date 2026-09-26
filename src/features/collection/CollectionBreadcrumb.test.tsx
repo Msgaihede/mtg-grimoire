@@ -279,3 +279,86 @@ describe("CollectionBreadcrumb", () => {
     expect(onDropFolder).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * **A segment takes a drop only while the pointer is inside it** (`pointerOnly`). dnd-kit's default
+ * detector falls back to the carried card's whole rectangle, and the path row sits straight above
+ * the wall — so a card released over the first row of tiles inside an opened folder overlapped a
+ * segment and landed in it: the stray drop T3 fixed for the headings, one row up.
+ *
+ * **The overlap is staged from the source's box**, `dndTarget.test.ts`'s reason: jsdom measures the
+ * carried rectangle once, off the source, and never moves it with the pointer. The root segment is
+ * 200–240; a source at 230–270 reaches 10px into it with its centre — where the press lands — below
+ * it. The pointer is then walked off to where nothing is.
+ */
+describe("CollectionBreadcrumb's segments and a pointer outside them", () => {
+  const OVERLAPPING = new DOMRect(0, 230, 240, 40);
+  const OFF = { x: 100, y: 600 };
+
+  function Overlapping({ drag }: { drag: "copy" | "folder" }) {
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+      const element = ref.current;
+      if (!element) return;
+      element.getBoundingClientRect = () => OVERLAPPING;
+      return drag === "copy"
+        ? collectionDraggable({
+            element,
+            entry: () => ENTRY,
+            card: () => ({ kind: "card", cardId: "c1", name: ENTRY.name, typeLine: "Instant" }),
+          })
+        : folderDraggable({ element, folder: () => SLEEVED });
+    }, [drag]);
+    return <div ref={ref}>{`the ${drag}`}</div>;
+  }
+
+  function mountBar(drag: "copy" | "folder") {
+    render(
+      <>
+        <Overlapping drag={drag} />
+        <CollectionBreadcrumb
+          trail={[BINDER]}
+          onOpen={onOpen}
+          canDrop={() => true}
+          onDropCard={onDropCard}
+          canDropFolder={() => true}
+          onDropFolder={onDropFolder}
+        />
+      </>,
+    );
+    boxed(screen.getByRole("button", { name: "Collection" }), 200);
+    boxed(screen.getByText("Trade binder"), 400);
+  }
+
+  it("files no copy whose card only overlaps a segment", async () => {
+    mountBar("copy");
+    const root = screen.getByRole("button", { name: "Collection" });
+    const held = await startPointerDrag(screen.getByText("the copy"));
+
+    await held.moveTo(OFF.x, OFF.y);
+    expect(marked(root, DROP_OVER)).toBe(false);
+    await held.drop();
+    expect(onDropCard).not.toHaveBeenCalled();
+  });
+
+  it("moves no folder whose box only overlaps a segment", async () => {
+    mountBar("folder");
+    const held = await startPointerDrag(screen.getByText("the folder"));
+
+    await held.moveTo(OFF.x, OFF.y);
+    await held.drop();
+    expect(onDropFolder).not.toHaveBeenCalled();
+  });
+
+  /** Inside, a segment is exactly what it was. */
+  it("still takes a copy once the pointer is inside the segment", async () => {
+    mountBar("copy");
+    const root = screen.getByRole("button", { name: "Collection" });
+    const held = await startPointerDrag(screen.getByText("the copy"));
+
+    await held.moveTo(OFF.x, OFF.y);
+    await held.over(root);
+    await held.drop();
+    expect(onDropCard).toHaveBeenCalledWith(ENTRY_DROP, null);
+  });
+});

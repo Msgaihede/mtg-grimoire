@@ -313,10 +313,13 @@ export function useCollectionDropTarget({
   ref,
   canDrop,
   onDrop,
+  pointerOnly = false,
 }: {
   ref: RefObject<HTMLElement | null>;
   canDrop: (drop: CollectionDrop) => boolean;
   onDrop: (drop: CollectionDrop) => void;
+  /** `useDndDropTarget`'s opt-in: over, and taking the drop, only while the pointer is inside. */
+  pointerOnly?: boolean;
 }): { armed: boolean; over: boolean } {
-  return useDndDropTarget({ ref, read: readCollectionDrop, canDrop, onDrop });
+  return useDndDropTarget({ ref, read: readCollectionDrop, canDrop, onDrop, pointerOnly });
 }

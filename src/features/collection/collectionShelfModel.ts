@@ -26,7 +26,7 @@ import { DECK_KIND } from "./PinnedFolders";
  * can never collide with a real shelf. It never reaches the wire: the page adds the draft only to
  * the shelves it *draws*, never to the ones `useCollection` fetches or counts.
  */
-export const DRAFT_SHELF = -1;
+export const NEW_FOLDER_SHELF = -1;
 
 /**
  * One `collection_folders` row as `buildShelves` takes it.
@@ -60,7 +60,7 @@ export function shelfFolderOf(
  */
 export function draftFolder(parentId: number | null, lockedIds: ReadonlySet<number>): ShelfFolder {
   return {
-    id: DRAFT_SHELF,
+    id: NEW_FOLDER_SHELF,
     parentId,
     name: "",
     sortOrder: Number.MAX_SAFE_INTEGER,
@@ -170,7 +170,7 @@ export function foldAll(
 ): Record<string, boolean | null> {
   const out: Record<string, boolean | null> = {};
   for (const shelf of shelves) {
-    if (shelf.headless || shelf.id === DRAFT_SHELF) continue;
+    if (shelf.headless || shelf.id === NEW_FOLDER_SHELF) continue;
     out[String(shelf.id)] = foldChange(shelf, collapsed);
   }
   return out;

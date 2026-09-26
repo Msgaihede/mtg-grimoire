@@ -31,7 +31,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { activeFilterCount, nextOffset, useCollection } from "./useCollection";
+import { activeFilterCount, nextOffset, useCollection, type Collection } from "./useCollection";
 
 /**
  * The app store is a module singleton, so unlike every `useState` in this hook it is not handed
@@ -620,7 +620,10 @@ describe("useCollection", () => {
     expect(result.current.queryKeyString).not.toBe(root);
     expect(result.current.scrollKey).toBe(scroll);
 
+    // With the level **drawn**, not the moment it is asked for: the jump to the top lands with
+    // the new wall rather than a round trip early, under the old one (`useCollection`'s `shown`).
     act(() => result.current.openFolder(3));
+    await waitFor(() => expect(result.current.folderId).toBe(3));
     expect(result.current.scrollKey).not.toBe(scroll);
 
     act(() => result.current.openFolder(null));
@@ -641,7 +644,9 @@ describe("useCollection", () => {
     act(() => result.current.resetAll());
 
     expect(result.current.text).toBe("");
-    expect(result.current.folderId).toBe(3);
+    // The level asked for at once, and the level drawn once it has answered — neither moved.
+    expect(result.current.requestedFolderId).toBe(3);
+    await waitFor(() => expect(result.current.folderId).toBe(3));
     expect(setShelfFolds).not.toHaveBeenCalled();
   });
 
@@ -699,5 +704,322 @@ describe("useCollection", () => {
 
     await waitFor(() => expect(lastQuery().text).toBe("bolt"));
     expect(lastQuery().predicates).toBeUndefined();
+  });
+});
+
+/**
+ * **FAIL 14 of the Folder Shelves live pass: walking to a level nothing has cached.** For 36–106 ms
+ * the collection drew the new level's shelves over the old level's rows and counts — the three
+ * reads' `keepPreviousData` placeholders — beside the old level's figures (`Showcase` read
+ * `Cards 5 · $13.55` over a wall missing its own leading row). The rule, shared word for word with
+ * the wishlist: until the new level's figures, shelf counts and first page have all answered, the
+ * page draws the previous level whole, and it switches in one render once all three have.
+ *
+ * The cabinet is `F3` with `F9` inside it, and each level answers differently so a mix is visible:
+ * the root holds 30 cards over rows 1–3, `F3` 10 over rows 31–32, `F9` 5 over row 91. A read is
+ * told which level it is for by the first shelf it names — a level's own shelf leads its list.
+ */
+describe("walking to a level nothing has cached", () => {
+  type Level = number | null;
+  const FIGURES = new Map<Level, number>([
+    [null, 30],
+    [3, 10],
+    [9, 5],
+  ]);
+  const ROWS = new Map<Level, number[]>([
+    [null, [1, 2, 3]],
+    [3, [31, 32]],
+    [9, [91]],
+  ]);
+  const levelOf = (q: CollectionQuery): Level => {
+    const first = q.shelves?.[0];
+    return first === undefined || first === UNFILED_SHELF ? null : first;
+  };
+
+  /** Answers for the level named here are parked, per read, until a test lets them go. */
+  let parkedLevel: Level | undefined;
+  let parkOnly: "list" | undefined;
+  const parked: Record<"list" | "summary" | "counts", (() => void)[]> = {
+    list: [],
+    summary: [],
+    counts: [],
+  };
+  const reply = <T>(read: keyof typeof parked, q: CollectionQuery, value: T): Promise<T> =>
+    levelOf(q) === parkedLevel && (parkOnly === undefined || parkOnly === read)
+      ? new Promise((resolve) => parked[read].push(() => resolve(value)))
+      : Promise.resolve(value);
+  const release = async (read: keyof typeof parked) => {
+    await waitFor(() => expect(parked[read].length).toBeGreaterThan(0));
+    await act(async () => parked[read].splice(0).forEach((go) => go()));
+  };
+
+  beforeEach(() => {
+    parkedLevel = undefined;
+    parkOnly = undefined;
+    parked.list = [];
+    parked.summary = [];
+    parked.counts = [];
+    collectionFolderList.mockReset().mockResolvedValue([folder(3), folder(9, { parentId: 3 })]);
+    shelfFolds.mockReset().mockResolvedValue({ collection: {}, wishlist: {} });
+    setShelfFolds.mockReset().mockResolvedValue(undefined);
+    collectionList.mockReset().mockImplementation((q: CollectionQuery) => {
+      const ids = ROWS.get(levelOf(q)) ?? [];
+      return reply("list", q, { items: ids.map((id) => ({ id })), total: ids.length });
+    });
+    collectionSummary.mockReset().mockImplementation((q: CollectionQuery) =>
+      reply("summary", q, {
+        totalCards: FIGURES.get(levelOf(q)) ?? 0,
+        uniqueCards: 0,
+        entries: 0,
+        tradelistCards: 0,
+        value: 0,
+        unpriced: 0,
+        needsReview: 0,
+      }),
+    );
+    collectionShelfCounts.mockReset().mockImplementation((q: CollectionQuery) =>
+      reply(
+        "counts",
+        q,
+        (q.shelves ?? []).map((shelf) => ({
+          folderId: shelf,
+          tiles: 1,
+          copies: 1,
+          value: null,
+          unpriced: 0,
+          peek: [],
+        })),
+      ),
+    );
+  });
+
+  /** One render as the page would draw it: the level, what its figures say, its rows, and the
+   *  shelf the wall leads with. */
+  interface Drawn {
+    level: Level;
+    figures: number | undefined;
+    rows: string;
+    lead: number | undefined;
+  }
+  const mount = () => {
+    const drawn: Drawn[] = [];
+    const hook = renderHook(
+      () => {
+        const c = useCollection();
+        drawn.push({
+          level: c.folderId,
+          figures: c.figures?.totalCards,
+          rows: c.rows.map((r) => r.id).join(","),
+          lead: c.shelves[0]?.id,
+        });
+        return c;
+      },
+      { wrapper },
+    );
+    return { ...hook, drawn };
+  };
+  /** Every render drew one level: its own figures, its own rows and its own leading shelf — or,
+   *  before a level has ever answered (and before the census has, when there is no shelf to lead
+   *  with at all), nothing yet. Returns the renders that broke that. */
+  const allWhole = (drawn: readonly Drawn[]) =>
+    drawn.filter(
+      (d) =>
+        (d.figures !== undefined && d.figures !== FIGURES.get(d.level)) ||
+        (d.rows !== "" && d.rows !== ROWS.get(d.level)?.join(",")) ||
+        (d.lead !== undefined && d.lead !== (d.level ?? UNFILED_SHELF)),
+    );
+  const settledAt = async (result: { current: Collection }, level: Level) =>
+    waitFor(() => {
+      expect(result.current.folderId).toBe(level);
+      expect(result.current.figures?.totalCards).toBe(FIGURES.get(level));
+      expect(result.current.rows.map((r) => r.id)).toEqual(ROWS.get(level));
+    });
+
+  it("draws the level being left, whole, until all three reads of the new one have answered", async () => {
+    const { result, drawn } = mount();
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+
+    parkedLevel = 3;
+    act(() => result.current.openFolder(3));
+
+    // Asked for at once; drawn only once it has answered.
+    expect(result.current.requestedFolderId).toBe(3);
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.folderId).toBe(9);
+    expect(result.current.figures?.totalCards).toBe(5);
+    expect(result.current.rows.map((r) => r.id)).toEqual([91]);
+
+    // Two of three is not enough, in either order.
+    await release("list");
+    expect(result.current.folderId).toBe(9);
+    expect(result.current.figures?.totalCards).toBe(5);
+    await release("summary");
+    expect(result.current.folderId).toBe(9);
+    expect(result.current.rows.map((r) => r.id)).toEqual([91]);
+
+    await release("counts");
+    await settledAt(result, 3);
+    expect(result.current.levelHeld).toBe(false);
+    // And no render in the whole walk mixed two levels.
+    expect(allWhole(drawn)).toEqual([]);
+  });
+
+  /**
+   * **The held figures are a copy, not the placeholders.** The figures and the counts are keyed
+   * without the sort; the list is keyed with it. So `F3`, visited once, then left and re-sorted,
+   * has its figures cached and its list not — and a hold made of `keepPreviousData` alone would
+   * draw `F3`'s cached `10` over `F9`'s wall, the very mix the rule forbids.
+   */
+  it("keeps the figures it was drawn with when only the new level's list is missing", async () => {
+    const { result, drawn } = mount();
+    act(() => result.current.openFolder(3));
+    await settledAt(result, 3);
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+    act(() => result.current.setSortKey("price"));
+    await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "price", dir: "desc" }]));
+
+    parkedLevel = 3;
+    parkOnly = "list";
+    act(() => result.current.openFolder(3));
+
+    expect(result.current.folderId).toBe(9);
+    expect(result.current.figures?.totalCards).toBe(5);
+
+    await release("list");
+    await settledAt(result, 3);
+    expect(allWhole(drawn)).toEqual([]);
+  });
+
+  /** **A level already answered switches in the render that asks for it** — the live pass's
+   *  cached walks were right, and a hold that waited on a background refetch would break them. */
+  it("switches at once to a level it has already drawn", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(3));
+    await settledAt(result, 3);
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+
+    parkedLevel = 3;
+    act(() => result.current.openFolder(3));
+
+    expect(result.current.levelHeld).toBe(false);
+    expect(result.current.folderId).toBe(3);
+    expect(result.current.figures?.totalCards).toBe(10);
+    expect(result.current.rows.map((r) => r.id)).toEqual([31, 32]);
+  });
+
+  /** **A refusal is an answer.** A hold that waited for data a read will never bring would keep the
+   *  page on the level the reader left for as long as they stayed — so a failed read ends it, and
+   *  the page is on the new level saying why. */
+  it("moves on when a read of the new level is refused", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+    collectionSummary.mockRejectedValueOnce("database is locked");
+
+    act(() => result.current.openFolder(3));
+
+    await waitFor(() => {
+      expect(result.current.folderId).toBe(3);
+      expect(result.current.figures).toBeUndefined();
+    });
+    expect(result.current.levelHeld).toBe(false);
+    expect(result.current.rows.map((r) => r.id)).toEqual([31, 32]);
+  });
+
+  /**
+   * **An Export pressed during a hold sweeps the wall on screen** (review Minor 2). `filters` is what
+   * `useExportScope` sweeps, and its `shelves` said the level asked for while the page — and the
+   * dialog's sentence, built from `folderId` — said the level being left.
+   */
+  it("hands the export the level it draws while a level is held", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+
+    parkedLevel = 3;
+    act(() => result.current.openFolder(3));
+
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.filters.shelves).toEqual([9]);
+
+    await release("list");
+    await release("summary");
+    await release("counts");
+    await settledAt(result, 3);
+    expect(result.current.filters.shelves).toEqual([3, 9]);
+  });
+
+  /** **The held level's filters whole, not its shelves spliced into the current ones.** A chip
+   *  pressed during the hold belongs to the level being asked for; swept with the held wall, the
+   *  export would write the rows on screen narrowed by a filter they were never fetched under. */
+  it("keeps a filter pressed during the hold out of the export until the level it belongs to is drawn", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+
+    parkedLevel = 3;
+    act(() => result.current.openFolder(3));
+    act(() => result.current.toggleFinish("foil"));
+
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.filters.shelves).toEqual([9]);
+    expect(result.current.filters.finishes).toBeUndefined();
+
+    await release("list");
+    await release("summary");
+    await release("counts");
+    await waitFor(() => expect(result.current.folderId).toBe(3));
+    expect(result.current.filters.finishes).toEqual(["foil"]);
+  });
+
+  /**
+   * **The held wall is laid out from the frame's own filtering and folds** (review Minor 3's
+   * collection half). A filter switched on during the hold belongs to the level being asked for;
+   * laid out under it, the previous level's rows would sit under shelves they were never fetched
+   * for — a wall that is neither level.
+   */
+  it("lays the held level out from the filter it was fetched under", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+
+    parkedLevel = 3;
+    act(() => result.current.openFolder(3));
+    const heldShelves = result.current.shelves;
+    act(() => result.current.toggleFinish("foil"));
+
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.filtering).toBe(false);
+    // Not re-laid at all: the same shelves, built from the frame.
+    expect(result.current.shelves).toBe(heldShelves);
+
+    await release("list");
+    await release("summary");
+    await release("counts");
+    await waitFor(() => expect(result.current.folderId).toBe(3));
+    expect(result.current.filtering).toBe(true);
+  });
+
+  /** And from the folds it was fetched under: a shelf folded during the hold is folded on the level
+   *  being asked for, whose list is fetched without it — never on the held wall, whose rows for it
+   *  are on screen. */
+  it("lays the held level out from the folds it was fetched under", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(3));
+    await settledAt(result, 3);
+
+    parkedLevel = 9;
+    act(() => result.current.openFolder(9));
+    act(() => result.current.setFold(9, true));
+    // The fold is written and its optimistic answer has reached the hook.
+    await waitFor(() => expect(setShelfFolds).toHaveBeenCalled());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.folderId).toBe(3);
+    expect(result.current.shelves.find((shelf) => shelf.id === 9)?.collapsed).toBe(false);
   });
 });

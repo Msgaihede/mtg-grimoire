@@ -19,8 +19,9 @@
  * `reorder_folders` refuses a deck group or `Recently removed` at either end in words, and a mark
  * over a target the backend always refuses is a promise the next press breaks.
  */
-import type { ReactElement } from "react";
+import { useCallback, useLayoutEffect, useRef, type ReactElement } from "react";
 import { EmptyShelf } from "@/features/shelves/EmptyShelf";
+import { HEADING_CARET_CONTROL, type HeadingCaret } from "@/features/shelves/headingCaret";
 import { ShelfHeading, type ShelfHeadingProps } from "@/features/shelves/ShelfHeading";
 import { ShelfStickyBar } from "@/features/shelves/ShelfStickyBar";
 import { useShelfDragSource, useShelfDropTarget } from "@/features/shelves/useShelfDrag";
@@ -49,10 +50,18 @@ export interface FolderTarget {
 const REFUSE = (): boolean => false;
 const IGNORE = (): void => {};
 
+/**
+ * **The caret the page is handing back to this heading** — `CollectionPage`'s `caretBack`. One type
+ * for both cabinets, declared once in `features/shelves/headingCaret.ts` and re-exported here for
+ * the page and the suite that already import it from this file.
+ */
+export type { HeadingCaret };
+
 export function CollectionShelfHeading({
   cards,
   folders,
   dragFolder,
+  caret,
   ...heading
 }: Omit<ShelfHeadingProps, "dropRef" | "dropMark" | "dragRef"> & {
   /** Absent: the heading takes no card (an app-owned shelf, a folder still being named). */
@@ -61,6 +70,8 @@ export function CollectionShelfHeading({
   folders?: FolderTarget;
   /** Absent: the heading cannot be picked up. */
   dragFolder?: CollectionFolder;
+  /** Absent: nothing is handing this heading the caret. */
+  caret?: HeadingCaret;
 }): ReactElement {
   const to = shelfTarget(heading.shelf);
   const drop = useShelfDropTarget(
@@ -80,14 +91,52 @@ export function CollectionShelfHeading({
     "collection",
   );
 
-  return (
-    <ShelfHeading
-      {...heading}
-      dropRef={cards || folders ? drop.attach : undefined}
-      dropMark={drop.mark}
-      dragRef={drag}
-    />
+  // The heading's own element — `ShelfHeading` hands its drop ref the row, the element carrying
+  // `data-shelf-heading` — kept beside the registration so the caret is looked for inside **this**
+  // row and nowhere else. Always passed, so the row is known on a heading that takes nothing too;
+  // only a heading that takes a card or a folder registers as a target.
+  const row = useRef<HTMLElement | null>(null);
+  const takes = cards !== undefined || folders !== undefined;
+  const attach = drop.attach;
+  const dropRef = useCallback(
+    (element: HTMLElement | null) => {
+      row.current = element;
+      const release = takes ? attach(element) : undefined;
+      return () => {
+        row.current = null;
+        release?.();
+      };
+    },
+    [attach, takes],
   );
+
+  /**
+   * Take the caret when drawn with a request on it — **only while nothing else has it** (it is on
+   * `<body>`, where a detached opener leaves it, or still on the element the reader pressed), and
+   * only once per request, so scrolling this heading back into view later never pulls the caret off
+   * whatever the reader has moved on to. A layout effect, so the caret is placed in the commit that
+   * draws the heading rather than a frame after it. A control not drawn (a field is open over the
+   * heading) is not a claim: the request waits for it.
+   *
+   * **Found through the row, never through `document`**: a lookup across the page answers with
+   * whichever heading's control comes first, and during a reorder two rows can briefly stand for
+   * one folder.
+   *
+   * ⚠️ **`claim` spends the request with a `setState` in the page, called from this effect — a
+   * deliberate, guarded exception to "no `setState` inside an effect"**: it reports an event (the
+   * caret was placed, or declined) rather than synchronising a value, it answers `true` once per
+   * id and `false` to every later call, and the write removes the very prop that made this run —
+   * so it cannot loop. `CollectionPage`'s `claimCaret` carries the same note.
+   */
+  useLayoutEffect(() => {
+    if (caret === undefined) return;
+    const control = row.current?.querySelector<HTMLElement>(HEADING_CARET_CONTROL[caret.control]);
+    if (control == null || !caret.claim(caret.id)) return;
+    const active = document.activeElement;
+    if (active === null || active === document.body || active === caret.from) control.focus();
+  }, [caret]);
+
+  return <ShelfHeading {...heading} dropRef={dropRef} dropMark={drop.mark} dragRef={drag} />;
 }
 
 /** An empty folder's dashed box (spec §3.8) — a drop target for a card, filed into that folder. */

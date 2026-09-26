@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import {
   colorParam,
   cycleTriState,
@@ -17,7 +22,14 @@ import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import { CONDITIONS, type Condition } from "@/lib/conditions";
 import { FINISHES, type Finish } from "@/lib/finish";
 import { lockedFolderIds } from "@/lib/folderTree";
-import { ipc, type CollectionQuery, type CollectionSortKey } from "@/lib/ipc";
+import {
+  ipc,
+  type CollectionPage,
+  type CollectionQuery,
+  type CollectionSortKey,
+  type CollectionSummary,
+  type ShelfCount,
+} from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
 import {
   buildShelves,
@@ -173,6 +185,43 @@ export function nextOffset(pages: readonly CountedPage[]): number | undefined {
 }
 
 /**
+ * **One level as the page draws it** — the last level whose figures, shelf counts and list all
+ * answered for their own keys, and what they were asked with. It is what the page is drawn from
+ * while a walk to an uncached level is in flight (see `useCollection`'s `shown`), and it is drawn
+ * **whole from the frame**: the three answers are one answer about one level, and a held wall laid
+ * out with the *current* filtering and folds, scrolled on the *current* list identity or exported
+ * with the *current* filters would be the old level's rows under a question they were never asked.
+ * `useWishlist`'s `ShownLevel` holds the same fields for the same reason, less the figures its page
+ * has no read of its own for.
+ */
+interface ShownLevel {
+  levelId: number | null;
+  figures: CollectionSummary | undefined;
+  counts: ShelfCount[] | undefined;
+  pages: InfiniteData<CollectionPage> | undefined;
+  /** Whether a filter was on, and the folds, as the frame's answers were asked for. */
+  filtering: boolean;
+  folds: ReturnType<typeof useShelfFolds>["folds"];
+  /** What the wall resets its scroll on — held with the rest, so the jump lands with the wall. */
+  scrollKey: string;
+  /** What a sweep of the frame's wall asks — the export's scope while it is held, so an Export
+   *  pressed in that round trip covers the wall on screen and not the level still arriving.
+   *  `countsKey` is its identity: the counts' own key, which every field of it is a segment of, so
+   *  the frame catches up when the scope moves and only then. */
+  filters: Omit<CollectionQuery, "limit" | "offset" | "sort">;
+  countsKey: string;
+}
+
+/**
+ * Whether a read has answered **for its own key**: not still waiting for a first answer, and not
+ * showing the previous key's (`keepPreviousData`). A refusal counts as an answer — it is one, and a
+ * hold that waited out an error would never end.
+ */
+function answered(read: { isPending: boolean; isPlaceholderData: boolean }): boolean {
+  return !read.isPending && !read.isPlaceholderData;
+}
+
+/**
  * Filter state, the debounce, the shelves, and the three queries behind the collection view.
  *
  * The same shape as `useCardSearch` — one key built from every input, `keepPreviousData` so
@@ -241,8 +290,12 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
    *
    * **`store.ts`'s `pendingFolder` is a one-shot hand-off, not a memory**: `CollectionPage` reads
    * it once as it renders and spends it, so nothing restores a folder at launch.
+   *
+   * **This is where the reader *asked* to stand, and the level the queries are keyed on.** What the
+   * page draws can trail it by a round trip — see {@link ShownLevel} — so the hook publishes it as
+   * `requestedFolderId` and publishes the level on screen as `folderId`.
    */
-  const [folderId, setFolderId] = useState<number | null>(null);
+  const [asked, setAsked] = useState<number | null>(null);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -326,12 +379,14 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
       conditions,
       needsReview,
     }) > 0;
-  const shelves = useMemo(
-    () => buildShelves({ folders: shelfFolders, levelId: folderId, folds, filtering }),
-    [shelfFolders, folderId, folds, filtering],
+  /** The shelves at the level the reader **asked** for — what the three queries below cover. The
+   *  wall is drawn from `shelves` further down, which is these once that level has answered. */
+  const askedShelves = useMemo(
+    () => buildShelves({ folders: shelfFolders, levelId: asked, folds, filtering }),
+    [shelfFolders, asked, folds, filtering],
   );
-  const toCount = useMemo(() => shelvesToCount(shelves), [shelves]);
-  const toFetch = useMemo(() => shelvesToFetch(shelves), [shelves]);
+  const toCount = useMemo(() => shelvesToCount(askedShelves), [askedShelves]);
+  const toFetch = useMemo(() => shelvesToFetch(askedShelves), [askedShelves]);
   /**
    * **Nothing is asked until the census has answered.** Before it, `buildShelves` has no folders
    * and the list would be Not sorted alone — the empty page of a reader who files everything,
@@ -436,7 +491,7 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
     // themselves are keyed beside this rather than in it — see `countKey` and `fetchKey` below —
     // so that `scrollKey`, which is built from this array, moves with the level and not with a
     // collapse.
-    folderId === null ? "root" : String(folderId),
+    asked === null ? "root" : String(asked),
   ];
 
   // `["collection", …]` on all three, so the one `invalidateQueries({ queryKey: ["collection"] })`
@@ -493,14 +548,103 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
     placeholderData: keepPreviousData,
     enabled: censusReady,
   });
-  const counts = useMemo(() => countsById(shelfCounts.data), [shelfCounts.data]);
+
+  /**
+   * **The level on screen, which is not always the level asked for** (live pass, FAIL 14). Walking
+   * to a level none of the three reads has cached used to draw the new level's *shelves* over the
+   * old level's rows and counts — `keepPreviousData`'s placeholders — beside the old level's
+   * figures: for 36–106 ms `Showcase` was `Cards 5 · $13.55` over a wall missing its own leading
+   * row, then its cards popped in above the first heading. The rule, shared word for word with the
+   * wishlist: **until the new level's figures, shelf counts and first page have all answered, the
+   * page draws the previous level whole; it switches in one render once all three have.**
+   *
+   * So the hook keeps the last level it could draw whole — `shown`, a {@link ShownLevel} — and serves
+   * every level-shaped answer (the level, its shelves, the counts, the rows, the figures, the scroll
+   * key and the export's filters) from it while the asked level is still arriving. Three things make
+   * it the rule rather than a softer one:
+   *
+   * - **All three, each answered for the asked level's own key** — `isPlaceholderData` is how a
+   *   read says it is showing the previous key's answer, and `isPending` how it says it has none.
+   *   A refusal answers too, so a read that fails ends the hold and the page says so.
+   * - **The frame is a copy, not the placeholders.** The three reads cache apart: the figures and
+   *   the counts are keyed without the sort or the folds and the list with both, so a level visited
+   *   under another sort has its figures cached and its list not. Held on the placeholders alone,
+   *   that walk drew the *new* figures over the *old* wall — the very mix this exists to prevent.
+   * - **A level already answered switches at once**, frame or no frame: a cached level is drawn in
+   *   the render that asked for it, which the live pass measured as correct and is kept.
+   *
+   * `shown` is written **during render**, the way `CollectionPage` answers a `pendingFolder` — never
+   * from an effect (the lint rule and its cascading renders) and never from a ref read in render
+   * (React's `refs` rule) — and only when an answer or its question actually changed, so it costs one
+   * extra render per answer. It is `null` until a level has answered whole, so the first level a page
+   * ever draws — a hand-off included — is never held behind nothing. `held` is `shown` while a level
+   * change is in flight, and `null` otherwise: nothing but a level change holds, and a filter typed
+   * or a shelf folded during the hold is drawn with the new level. `useWishlist` spells it the same.
+   */
+  const scrollKey = JSON.stringify(["collection", "list", filterKey, sortKey]);
+  const countsKey = JSON.stringify(["collection", "shelfCounts", filterKey, countKey]);
+  const levelAnswered = answered(query) && answered(summary) && answered(shelfCounts);
+  const [shown, setShown] = useState<ShownLevel | null>(null);
+  if (
+    levelAnswered &&
+    (shown === null ||
+      shown.levelId !== asked ||
+      shown.figures !== summary.data ||
+      shown.counts !== shelfCounts.data ||
+      shown.pages !== query.data ||
+      shown.filtering !== filtering ||
+      shown.folds !== folds ||
+      shown.scrollKey !== scrollKey ||
+      shown.countsKey !== countsKey)
+  ) {
+    setShown({
+      levelId: asked,
+      figures: summary.data,
+      counts: shelfCounts.data,
+      pages: query.data,
+      filtering,
+      folds,
+      scrollKey,
+      filters,
+      countsKey,
+    });
+  }
+  const held = !levelAnswered && shown !== null && shown.levelId !== asked ? shown : null;
+  const levelId = held === null ? asked : held.levelId;
+  const drawnFiltering = held === null ? filtering : held.filtering;
+  const drawnFolds = held === null ? folds : held.folds;
+
+  /**
+   * The wall's shelves: the asked level's once it has answered, and until then the held level's —
+   * **built from the frame's filtering and folds**, never the current ones, so the held wall is the
+   * previous level whole rather than its rows under shelves laid out for a filter it never asked.
+   */
+  const heldShelves = useMemo(
+    () =>
+      held === null
+        ? null
+        : buildShelves({
+            folders: shelfFolders,
+            levelId: held.levelId,
+            folds: held.folds,
+            filtering: held.filtering,
+          }),
+    // Nothing of the asked level's in here: a filter or a fold changed during the hold re-lays the
+    // level being asked for, never the held one.
+    [held, shelfFolders],
+  );
+  const shelves = heldShelves ?? askedShelves;
+  const figures = held === null ? summary.data : held.figures;
+  const shelfCountRows = held === null ? shelfCounts.data : held.counts;
+  const pages = held === null ? query.data : held.pages;
+  const counts = useMemo(() => countsById(shelfCountRows), [shelfCountRows]);
   /** The shelves that get a place on the wall — `lib/shelves.ts`'s rule, over the counts. */
   const visible = useMemo(
-    () => visibleShelves(shelves, counts, filtering),
-    [shelves, counts, filtering],
+    () => visibleShelves(shelves, counts, drawnFiltering),
+    [shelves, counts, drawnFiltering],
   );
 
-  const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
+  const rows = useMemo(() => pages?.pages.flatMap((p) => p.items) ?? [], [pages]);
 
   return {
     text,
@@ -583,19 +727,33 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
      *  offering the flagged rows, not cycling the chip the reader has not touched. */
     setNeedsReview,
     /**
-     * Which folder the reader is standing in. `null` is the root of the cabinet — a real
-     * destination, the drawer every unfiled copy lands in, and not "no folder chosen".
-     * Navigation, not a filter: excluded from {@link CollectionFilterState} on purpose, so it is
-     * invisible to {@link activeFilterCount} and untouched by `resetAll` below.
+     * Which folder the reader is standing in **as the page draws it**. `null` is the root of the
+     * cabinet — a real destination, the drawer every unfiled copy lands in, and not "no folder
+     * chosen". Navigation, not a filter: excluded from {@link CollectionFilterState} on purpose, so
+     * it is invisible to {@link activeFilterCount} and untouched by `resetAll` below.
+     *
+     * **It trails {@link requestedFolderId} while a level nothing has cached is arriving** — see
+     * {@link ShownLevel} — so everything drawn from it (the path row, the wall, the export's
+     * sentence, the Share control) names the level that is on screen.
      */
-    folderId,
+    folderId: levelId,
+    /**
+     * Where the reader last **asked** to stand — `folderId` one round trip early. The page's
+     * navigation reads this and nothing else does: Escape's step up (two presses in quick
+     * succession are two levels, not one level twice), and the two render-phase hand-offs, which
+     * would chase a level the queries have already moved to and loop.
+     */
+    requestedFolderId: asked,
+    /** Whether the page is still drawing the previous level while {@link requestedFolderId}
+     *  arrives. The rows on screen are that level's, so nothing may page past them meanwhile. */
+    levelHeld: held !== null,
     /** Open a folder, or `null` for the root. This hook only tracks where the reader now is; it
      *  does not create, rename, move or delete a folder — those live on the page, beside the
      *  folder cards. */
-    openFolder: setFolderId,
+    openFolder: setAsked,
     /**
-     * The wall's shelves at this level, in drawing order, **as built** — collapsed ones and an
-     * empty Not sorted included. The page draws `visible`; this is what the fold controls and
+     * The wall's shelves at the level on screen, in drawing order, **as built** — collapsed ones and
+     * an empty Not sorted included. The page draws `visible`; this is what the fold controls and
      * **Expand all** / **Collapse all** act on, and what a draft folder is added to.
      */
     shelves,
@@ -609,10 +767,13 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
      * round trip — so a refusal here has to be said rather than left as a wall that never arrives.
      */
     countsError: shelfCounts.isError ? shelfCounts.error : null,
-    /** Whether any search text or filter is on — collapse is suspended while it is (decision 4). */
-    filtering,
-    /** The stored folds for this page (`useShelfFolds("collection")`), and its two writes. */
-    folds,
+    /** Whether any search text or filter is on — collapse is suspended while it is (decision 4).
+     *  **The wall's answer**: while a level is held, the frame's, which is what its shelves were
+     *  laid out from. */
+    filtering: drawnFiltering,
+    /** The stored folds for this page (`useShelfFolds("collection")`) as the wall is drawn from —
+     *  the frame's while a level is held — and its two writes, which always write the reader's. */
+    folds: drawnFolds,
     setFold,
     setMany,
     /** The folder census as `buildShelves` takes it — the page adds a draft to it while naming. */
@@ -756,13 +917,35 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
      * list" needs and a request for "the page on screen" does not. `useExportScope`'s sweep is
      * the one other reader: exporting "matching your filters" means this object plus a page size
      * of its own (`SWEEP_PAGE`), never the 100-row page this view happens to have loaded.
+     *
+     * **Over the level the page draws**: while a level is held, the held level's filters **whole** —
+     * its shelves, and the text and chips its answers were asked with — so an Export pressed in that
+     * round trip sweeps the wall on screen, even with a filter typed since, and the sentence that
+     * names it — built from `folderId`, the level drawn — says the same thing the sweep does.
      */
-    filters,
+    filters: held === null ? filters : held.filters,
+    /**
+     * The list read **for the level asked for** — for its paging and its refusal. The rows on
+     * screen are {@link rows}, which are the held level's while a level is held.
+     */
     query,
-    summary,
+    /**
+     * `collection_summary` for the level on screen — the figures band. **Never the summary read
+     * itself**, which answers for the level asked for and would put that level's figures over the
+     * held level's wall: the one frame this hook exists to rule out.
+     */
+    figures,
+    /** The rows of the level on screen, in wall order. */
     rows,
-    /** Rows matching the filters, counted in full. `0` until the first page answers. */
-    total: query.data?.pages[0]?.total ?? 0,
+    /** Rows matching the filters at the level on screen, counted in full. `0` until the first page
+     *  answers. */
+    total: pages?.pages[0]?.total ?? 0,
+    /**
+     * Whether every row of the level on screen has been loaded — what the table's shelved rows stop
+     * short of while pages remain. From the list drawn rather than from `query.hasNextPage`, which
+     * answers about the level asked for.
+     */
+    listComplete: nextOffset(pages?.pages ?? []) === undefined,
     /**
      * Identity of the current list — the rows being fetched, collapse included. Derived from the
      * query key itself rather than rebuilt from the same fields, so the two cannot drift.
@@ -772,9 +955,10 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
      * What the wall and the table reset their scroll on: the level, the filters and the sort —
      * **not** which shelves are open. A reader who folds a shelf half-way down the wall is still
      * reading the same wall, and throwing them back to the top for it would be the page moving
-     * under their hand.
+     * under their hand. **The level on screen's**, so the wall jumps to the top as the new level
+     * is drawn rather than a round trip before, under the old one.
      */
-    scrollKey: JSON.stringify(["collection", "list", filterKey, sortKey]),
+    scrollKey: held === null ? scrollKey : held.scrollKey,
   };
 }
 

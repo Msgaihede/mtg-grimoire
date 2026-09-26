@@ -4456,6 +4456,732 @@ describe("renaming a folder on its heading", () => {
 });
 
 /**
+ * **Where the caret goes after Add folder in a heading and after Move up / Move down** (live pass,
+ * check 8): to that heading's own control — its `Add folder`, or its `⋯` — brought into view
+ * first. Both landed on `<body>` in the shipped window, because the heading the page remembered
+ * had been virtualised away (or moved out of the virtual window) by the time the caret came back.
+ */
+describe("the caret after Add folder in a heading and after a move", () => {
+  /**
+   * **Let jsdom scroll, for the cases that reveal a heading.** Both views reveal through the
+   * virtualiser's `scrollTo`, which jsdom does not implement (this file stubs it as a no-op), clamped
+   * to the scroller's `scrollHeight`, which jsdom answers as 0. Returns the undo.
+   */
+  const letJsdomScroll = () => {
+    const scrollTo = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTo");
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value(this: HTMLElement, to: ScrollToOptions | number, y?: number) {
+        this.scrollTop = typeof to === "number" ? (y ?? 0) : (to.top ?? this.scrollTop);
+        this.dispatchEvent(new Event("scroll"));
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get: () => 1_000_000,
+    });
+    return () => {
+      if (scrollTo) Object.defineProperty(HTMLElement.prototype, "scrollTo", scrollTo);
+      // jsdom's own `scrollHeight` lives on `Element.prototype`; removing the shadow restores it.
+      delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+    };
+  };
+
+  /** `count` copies filed in folder `id`, each a card of its own — enough rows to push a band out
+   *  of the table's window, or a heading out of the wall's. */
+  const filedIn = (id: number, count: number): CollectionRow[] =>
+    Array.from({ length: count }, (_, i) => ({
+      ...BOLT,
+      id: 1000 + i,
+      cardId: `c-filed-${i}`,
+      name: `Filed ${i}`,
+      folderId: id,
+      folderName: id === BINDER.id ? BINDER.name : SEALED.name,
+    }));
+  /** The list over those rows, paged and narrowed to the shelves the query names. */
+  const listOf = (rows: readonly CollectionRow[]) => async (q: CollectionQuery) => {
+    const shown = rows.filter((row) => q.shelves === undefined || q.shelves.includes(row.folderId!));
+    const from = q.offset ?? 0;
+    return page(shown.slice(from, from + (q.limit ?? 100)), shown.length);
+  };
+
+  /**
+   * The census as a move's write leaves it — `order`, in that order — answered only when the case
+   * says so, because in the app the write's own answer lands well before the folder list has
+   * re-read. Returns the release.
+   */
+  const rereadAfterReorder = (order: readonly CollectionFolder[]) => {
+    const after = order.map((folder, sortOrder) => ({ ...folder, sortOrder }));
+    const waiting: (() => void)[] = [];
+    let released = false;
+    collectionFolderReorder.mockImplementation(async () => {
+      collectionFolderList.mockImplementation(() =>
+        released
+          ? Promise.resolve(after)
+          : new Promise((resolve) => waiting.push(() => resolve(after))),
+      );
+      return [];
+    });
+    return () => {
+      released = true;
+      waiting.splice(0).forEach((go) => go());
+    };
+  };
+
+  /**
+   * The move's **write** held until the case answers it (`answer`). The folder list then reads
+   * `order` — at once, or, with `reread: "held"`, only once the case lets that read go too
+   * (`reread`), which is the app's order of events: the write's answer, then the list's.
+   */
+  const holdWrite = (
+    order: readonly CollectionFolder[],
+    { reread = "at once" }: { reread?: "at once" | "held" } = {},
+  ) => {
+    const after = order.map((folder, sortOrder) => ({ ...folder, sortOrder }));
+    const waiting: (() => void)[] = [];
+    let released = reread === "at once";
+    let answer: (() => void) | undefined;
+    collectionFolderReorder.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = () => {
+            collectionFolderList.mockImplementation(() =>
+              released
+                ? Promise.resolve(after)
+                : new Promise((go) => waiting.push(() => go(after))),
+            );
+            resolve([]);
+          };
+        }),
+    );
+    return {
+      answer: async () => {
+        await waitFor(() => expect(answer).toBeDefined());
+        await act(async () => answer!());
+      },
+      reread: async () => {
+        released = true;
+        await act(async () => waiting.splice(0).forEach((go) => go()));
+      },
+    };
+  };
+
+  /** A few turns of the event loop, for anything a case says must **not** happen to have had its
+   *  chance. */
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+  };
+
+  /** Whether anything on the page has been scrolled — a reveal is a scroll, in either view. */
+  const scrolled = () =>
+    [...document.querySelectorAll<HTMLElement>("*")].filter((el) => el.scrollTop > 0);
+
+  /**
+   * **The table keys its rows by position**, so a move used to leave the `⋯` the reader pressed
+   * mounted and focused — drawing whichever folder took the moved one's place. The caret has to
+   * follow the folder, not the row.
+   */
+  it("hands the caret to the moved folder's ⋯ after Move up", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    const reread = rereadAfterReorder([SEALED, BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Sealed");
+
+    await shelfMenu(user, "Sealed");
+    await user.click(screen.getByRole("menuitem", { name: /^Move up/ }));
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalled());
+    // The write has answered; the folder list has not. The heading is still where it was.
+    for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    expect(follows(heading("Trade binder"), heading("Sealed"))).toBe(true);
+
+    await act(async () => reread());
+
+    await waitFor(() => expect(follows(heading("Sealed"), heading("Trade binder"))).toBe(true));
+    await waitFor(() => expect(manageOf("Sealed")).toHaveFocus());
+  });
+
+  /**
+   * **A move far down the table reveals the heading where it landed**, then hands it the caret —
+   * `Trade binder` stepped past `Sealed`'s forty rows is a band the virtualiser has not drawn. And
+   * **the caret is never left on another folder's control** on the way: the row that drew
+   * `Trade binder` draws `Sealed` now, and its `⋯` goes with its folder.
+   */
+  it("reveals the moved heading in the table, then hands it the caret", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation(listOf(filedIn(SEALED.id, 40)));
+    const reread = rereadAfterReorder([SEALED, BINDER]);
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+
+      await shelfMenu(user, "Trade binder");
+      // The ⋯ the reader pressed. Were its row re-used for the folder that takes its place, this
+      // very element would be relabelled `Manage Sealed` with the caret still on it — so every
+      // relabelling is recorded.
+      const pressed = manageOf("Trade binder")!;
+      const relabelled: string[] = [];
+      const watch = new MutationObserver((records) =>
+        records.forEach((r) => relabelled.push((r.target as Element).getAttribute("aria-label")!)),
+      );
+      watch.observe(pressed, { attributes: true, attributeFilter: ["aria-label"] });
+      await user.click(screen.getByRole("menuitem", { name: /^Move down/ }));
+      await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [4, 3]));
+      await act(async () => reread());
+
+      // Forty rows down — its band's row index says so, and a band that far down is drawn only
+      // because it was revealed — and holding the caret.
+      await waitFor(() => {
+        expect(manageOf("Trade binder")).toHaveFocus();
+        const band = heading("Trade binder").closest('[role="row"]');
+        expect(Number(band?.getAttribute("aria-rowindex"))).toBeGreaterThan(40);
+      });
+      watch.disconnect();
+      expect(relabelled).toEqual([]);
+      expect(pressed.isConnected).toBe(false);
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **A caret handed back is spent.** The table answers every new `revealIndex`, so a request left
+   * standing after the heading took the caret would drag the reader back to it whenever something
+   * above it moved — here, `Sealed` re-reading with ten rows fewer after the reader has scrolled
+   * back to the top.
+   */
+  it("does not bring the heading back once it has taken the caret", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation(listOf(filedIn(SEALED.id, 40)));
+    const reread = rereadAfterReorder([SEALED, BINDER]);
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      const { client } = wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await shelfMenu(user, "Trade binder");
+      await user.click(screen.getByRole("menuitem", { name: /^Move down/ }));
+      await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalled());
+      await act(async () => reread());
+      await waitFor(() => {
+        expect(manageOf("Trade binder")).toHaveFocus();
+        const band = heading("Trade binder").closest('[role="row"]');
+        expect(Number(band?.getAttribute("aria-rowindex"))).toBeGreaterThan(40);
+      });
+
+      // The reader scrolls back to the top…
+      const scroller = [...document.querySelectorAll<HTMLElement>("*")].find(
+        (el) => el.scrollTop > 0,
+      )!;
+      act(() => {
+        scroller.scrollTop = 0;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
+      // …and the rows above the heading change under it.
+      const asked = collectionList.mock.calls.length;
+      collectionList.mockImplementation(listOf(filedIn(SEALED.id, 30)));
+      act(() => void client.invalidateQueries({ queryKey: ["collection", "list"] }));
+      await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+      for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+
+      expect(scroller.scrollTop).toBe(0);
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **The table reveals Add folder's draft heading**, which lands after the parent's forty rows —
+   * and, once the name is committed, reveals the parent's heading again and hands its Add folder
+   * the caret.
+   */
+  it("reveals the draft heading in the table, and gives the caret back to Add folder", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockImplementation(listOf(filedIn(BINDER.id, 40)));
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+
+      await user.click(addIn("Trade binder")!);
+      const field = await screen.findByRole("textbox", { name: "Folder name" });
+      // The reveal took the parent's heading out of the table's window.
+      await waitFor(() => expect(queryHeading("Trade binder")).toBeNull());
+
+      await user.type(field, "Sleeves{Enter}");
+
+      await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(3, "Sleeves"));
+      await waitFor(() => expect(addIn("Trade binder")).toHaveFocus());
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **The grid reveals the name field at the end of the parent's subtree**, which on a long wall
+   * scrolls the parent's own heading out of the virtual window — so the opener is detached by the
+   * time the field closes. The wall is made long with two hundred cards in `Trade binder`.
+   */
+  it("hands the caret back to the heading's Add folder once the name is committed", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockImplementation(listOf(filedIn(BINDER.id, 200)));
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+
+      await user.click(addIn("Trade binder")!);
+      const field = await screen.findByRole("textbox", { name: "Folder name" });
+      // The reveal took the parent's heading out of the virtual window.
+      await waitFor(() => expect(queryHeading("Trade binder")).toBeNull());
+
+      await user.type(field, "Sleeves{Enter}");
+
+      await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(3, "Sleeves"));
+      await waitFor(() => expect(addIn("Trade binder")).toHaveFocus());
+    } finally {
+      undo();
+    }
+  });
+
+  /** The ✕ is a keyboard cancel's twin: the name is given up, and the caret goes back to the
+   *  heading's Add folder, revealed first. */
+  it("hands the caret back to the heading's Add folder when the field is cancelled", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockImplementation(listOf(filedIn(BINDER.id, 200)));
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+
+      await user.click(addIn("Trade binder")!);
+      await screen.findByRole("textbox", { name: "Folder name" });
+      await waitFor(() => expect(queryHeading("Trade binder")).toBeNull());
+
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() => expect(addIn("Trade binder")).toHaveFocus());
+      expect(collectionFolderCreate).not.toHaveBeenCalled();
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **A click away is an outside click, and an outside click hands nothing back** (review Minor 5).
+   * The reader clicks a tile below the draft: the field is given up, and the wall neither scrolls
+   * back up to the parent's heading nor takes the caret off the tile they pressed.
+   */
+  it("leaves the wall and the caret where a click away put them", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockImplementation(listOf(filedIn(BINDER.id, 200)));
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await user.click(addIn("Trade binder")!);
+      await screen.findByRole("textbox", { name: "Folder name" });
+      await waitFor(() => expect(queryHeading("Trade binder")).toBeNull());
+
+      const tiles = [...document.querySelectorAll<HTMLElement>("[data-grid-index]")];
+      const tile = tiles[tiles.length - 1].querySelector<HTMLElement>("button")!;
+      await user.click(tile);
+      for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+
+      expect(screen.queryByRole("textbox", { name: "Folder name" })).toBeNull();
+      expect(tile).toHaveFocus();
+      expect(queryHeading("Trade binder")).toBeNull();
+    } finally {
+      undo();
+    }
+  });
+
+  /** **A blur that leaves the caret nowhere** — away to nothing focusable — is the one blur that
+   *  records the return: with nowhere else to be, the caret goes back to the heading's Add folder. */
+  it("hands the caret back to the heading's Add folder when a blur leaves it nowhere", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockImplementation(listOf(filedIn(BINDER.id, 200)));
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await user.click(addIn("Trade binder")!);
+      const field = await screen.findByRole("textbox", { name: "Folder name" });
+      await waitFor(() => expect(queryHeading("Trade binder")).toBeNull());
+
+      act(() => field.blur());
+
+      await waitFor(() => expect(addIn("Trade binder")).toHaveFocus());
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **A blur's decision goes with the page** (D4). It waits one task, so a page unmounted in that
+   * task — the reader leaving with the very click that blurred the field — must not leave it behind
+   * to write into a page that is gone. Nothing a reader sees can witness that, because React drops a
+   * write to an unmounted component without a word, so the timer is the witness: the page clears
+   * the one its blur scheduled.
+   */
+  it("clears a blur's waiting decision when the page goes", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    const { unmount } = wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+    await user.click(addIn("Trade binder")!);
+    const field = await screen.findByRole("textbox", { name: "Folder name" });
+    const scheduled = vi.spyOn(window, "setTimeout");
+    const cleared = vi.spyOn(window, "clearTimeout");
+    try {
+      act(() => field.blur());
+      unmount();
+
+      const decision = scheduled.mock.calls.findIndex(([callback]) =>
+        String(callback).includes("blurDecision"),
+      );
+      expect(decision).toBeGreaterThanOrEqual(0);
+      expect(cleared).toHaveBeenCalledWith(scheduled.mock.results[decision].value);
+    } finally {
+      scheduled.mockRestore();
+      cleared.mockRestore();
+    }
+  });
+
+  /**
+   * **A Move is decided at the first folder-list answer after the write** (review Minor 4). Here
+   * that answer does not carry the planned order, so the request is dropped — and a later re-read
+   * that does carry it must not bring the caret back to the heading the reader has moved on from.
+   */
+  it.each([
+    ["an answer without the planned order", "stale"],
+    ["a refusal", "refused"],
+  ] as const)("drops a Move's caret on %s, whatever a later re-read says", async (_how, first) => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    const moved = [
+      { ...SEALED, sortOrder: 0 },
+      { ...BINDER, sortOrder: 1 },
+    ];
+    collectionFolderReorder.mockImplementation(async () => {
+      if (first === "stale") collectionFolderList.mockResolvedValueOnce([BINDER, SEALED]);
+      else collectionFolderList.mockRejectedValueOnce("database is locked");
+      collectionFolderList.mockResolvedValue(moved);
+      return [];
+    });
+    const user = userEvent.setup();
+    const { client } = wrap(<CollectionPage />);
+    await findHeading("Sealed");
+
+    await shelfMenu(user, "Sealed");
+    await user.click(screen.getByRole("menuitem", { name: /^Move up/ }));
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalled());
+    for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+    // The first answer is in, and it left the heading where it was.
+    expect(follows(heading("Trade binder"), heading("Sealed"))).toBe(true);
+
+    act(() => void client.invalidateQueries({ queryKey: ["collection", "folders"] }));
+    await waitFor(() => expect(follows(heading("Sealed"), heading("Trade binder"))).toBe(true));
+    for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+
+    expect(manageOf("Sealed")).not.toHaveFocus();
+  });
+
+  /**
+   * **A layer opened while the write is in flight supersedes the move** (D1). The reader pressed
+   * Move down, then Rename on another heading before the write answered: the request is the last
+   * layer's business, so when the write lands nothing is recorded — no reveal drags the table down
+   * to `Trade binder`, and the rename field keeps the caret.
+   */
+  it("records nothing for a move whose write answers after a layer opened", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation(listOf(filedIn(SEALED.id, 40)));
+    const write = holdWrite([SEALED, BINDER]);
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await shelfMenu(user, "Trade binder");
+      await user.click(screen.getByRole("menuitem", { name: /^Move down/ }));
+      await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [4, 3]));
+
+      await user.click(renameOf("Sealed")!);
+      const field = await screen.findByRole("textbox");
+      await waitFor(() => expect(field).toHaveFocus());
+
+      await write.answer();
+      // The move is on screen: `Trade binder` is past Sealed's forty rows, and not drawn.
+      await waitFor(() => expect(queryHeading("Trade binder")).toBeNull());
+      await settle();
+
+      expect(queryHeading("Trade binder")).toBeNull();
+      expect(scrolled()).toEqual([]);
+      expect(screen.getByRole("textbox")).toHaveFocus();
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **And a request already recorded is dropped by the next layer** — the move's write has answered
+   * and its folder list has not, so the request is waiting on its order when Rename opens. It must
+   * not wake up when the order lands.
+   */
+  it("drops a waiting move's request when a layer opens", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation(listOf(filedIn(SEALED.id, 40)));
+    const reread = rereadAfterReorder([SEALED, BINDER]);
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await shelfMenu(user, "Trade binder");
+      await user.click(screen.getByRole("menuitem", { name: /^Move down/ }));
+      await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalled());
+      await settle();
+
+      await user.click(renameOf("Sealed")!);
+      await screen.findByRole("textbox");
+
+      await act(async () => reread());
+      await waitFor(() => expect(queryHeading("Trade binder")).toBeNull());
+      await settle();
+
+      expect(queryHeading("Trade binder")).toBeNull();
+      expect(scrolled()).toEqual([]);
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **A move is decided by the first answer after its write, not by the first answer after the
+   * press** (D2). Another window's change re-reads the folder list while this write is still in
+   * flight — an answer carrying the order as it was, which is no verdict on a write that has not
+   * landed. Counted from the press, that answer decided the request the moment the write answered,
+   * before the write's own re-read had come back, and dropped it.
+   */
+  it("is not decided by a folder-list answer that lands while the write is in flight", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    const write = holdWrite([SEALED, BINDER], { reread: "held" });
+    const user = userEvent.setup();
+    const { client } = wrap(<CollectionPage />);
+    await findHeading("Sealed");
+    await shelfMenu(user, "Sealed");
+    await user.click(screen.getByRole("menuitem", { name: /^Move up/ }));
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalled());
+
+    const reads = collectionFolderList.mock.calls.length;
+    act(() => void client.invalidateQueries({ queryKey: ["collection", "folders"] }));
+    await waitFor(() => expect(collectionFolderList.mock.calls.length).toBeGreaterThan(reads));
+    await settle();
+    expect(follows(heading("Trade binder"), heading("Sealed"))).toBe(true);
+
+    await write.answer();
+    // The write has answered and its re-read is out; the heading is still where it was.
+    await settle();
+    expect(follows(heading("Trade binder"), heading("Sealed"))).toBe(true);
+    await write.reread();
+
+    await waitFor(() => expect(follows(heading("Sealed"), heading("Trade binder"))).toBe(true));
+    await waitFor(() => expect(manageOf("Sealed")).toHaveFocus());
+  });
+
+  /**
+   * **A request walked away from is not brought back on the return.** The reader moved `Trade
+   * binder` down, walked into `Sealed` before the folder list had re-read, and came back up: the
+   * table must not jump to `Trade binder` forty rows down, which they left a level ago.
+   */
+  it("drops a move's request when the reader walks to another level", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation(listOf(filedIn(SEALED.id, 40)));
+    const reread = rereadAfterReorder([SEALED, BINDER]);
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await shelfMenu(user, "Trade binder");
+      await user.click(screen.getByRole("menuitem", { name: /^Move down/ }));
+      await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalled());
+      await settle();
+
+      await openShelf(user, "Sealed");
+      await waitFor(() => expect(standingIn()).toBe(SEALED.id));
+      await act(async () => reread());
+      await settle();
+
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(standingIn()).toBeNull());
+      await findHeading("Sealed");
+      await settle();
+
+      expect(queryHeading("Trade binder")).toBeNull();
+      expect(scrolled()).toEqual([]);
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **And when the level asked for changes, even while the level drawn has not** (D3). The reader
+   * asks for `Sealed` while its reads are still arriving, so the page goes on drawing the root —
+   * and the move's folder list lands in that hold. The request was made for the root the reader
+   * has asked to leave, so the held wall is not scrolled to `Trade binder`.
+   */
+  it("drops a move's request when another level is asked for, during the hold", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    const rows = filedIn(SEALED.id, 40);
+    const parked: (() => void)[] = [];
+    const answer = listOf(rows);
+    // `Sealed`'s own level is the one whose reads have not answered: its first shelf is its own.
+    collectionList.mockImplementation((q: CollectionQuery) =>
+      q.shelves?.[0] === SEALED.id
+        ? new Promise((resolve) => parked.push(() => void answer(q).then(resolve)))
+        : answer(q),
+    );
+    const reread = rereadAfterReorder([SEALED, BINDER]);
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await shelfMenu(user, "Trade binder");
+      await user.click(screen.getByRole("menuitem", { name: /^Move down/ }));
+      await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalled());
+      await settle();
+
+      await openShelf(user, "Sealed");
+      await waitFor(() => expect(parked.length).toBeGreaterThan(0));
+      // Still drawing the root: `Trade binder`'s heading leads the wall.
+      expect(queryHeading("Trade binder")).not.toBeNull();
+
+      await act(async () => reread());
+      await waitFor(() => expect(queryHeading("Trade binder")).toBeNull());
+      await settle();
+
+      expect(queryHeading("Trade binder")).toBeNull();
+      expect(scrolled()).toEqual([]);
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **A view change drops the request**: a move made in the table, whose folder list lands after the
+   * reader switched to the cards, does not scroll the wall they switched to.
+   */
+  it("drops a move's request when the reader switches view", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation(listOf(filedIn(SEALED.id, 200)));
+    const reread = rereadAfterReorder([SEALED, BINDER]);
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await shelfMenu(user, "Trade binder");
+      await user.click(screen.getByRole("menuitem", { name: /^Move down/ }));
+      await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalled());
+      await settle();
+
+      const cards = onPage(screen.getAllByRole("button", { name: "Card view" }));
+      await user.click(cards);
+      await waitFor(() => expect(document.querySelector("[data-grid-index]")).not.toBeNull());
+
+      await act(async () => reread());
+      await waitFor(() => expect(queryHeading("Trade binder")).toBeNull());
+      await settle();
+
+      expect(queryHeading("Trade binder")).toBeNull();
+      expect(scrolled()).toEqual([]);
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **The heading takes the caret only while nothing else has it** — at the page, not only in the
+   * heading's own suite. The reader moved `Trade binder` down and then put the caret in the search
+   * box while the folder list re-read: the table still reveals the moved heading, and the caret
+   * stays where the reader put it.
+   */
+  it("reveals the moved heading without taking the caret the reader has put elsewhere", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation(listOf(filedIn(SEALED.id, 40)));
+    const reread = rereadAfterReorder([SEALED, BINDER]);
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await shelfMenu(user, "Trade binder");
+      await user.click(screen.getByRole("menuitem", { name: /^Move down/ }));
+      await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalled());
+      await settle();
+
+      const box = screen.getByRole("searchbox", { name: "Search your collection" });
+      await user.click(box);
+      expect(box).toHaveFocus();
+
+      await act(async () => reread());
+
+      await waitFor(() => {
+        const band = heading("Trade binder").closest('[role="row"]');
+        expect(Number(band?.getAttribute("aria-rowindex"))).toBeGreaterThan(40);
+      });
+      await settle();
+      expect(manageOf("Trade binder")).not.toHaveFocus();
+      expect(box).toHaveFocus();
+    } finally {
+      undo();
+    }
+  });
+
+  /**
+   * **The grid's half of a move** — `Trade binder` stepped past `Sealed`'s two hundred cards is a
+   * heading the wall has not drawn, revealed where it landed and handed the caret.
+   */
+  it("reveals the moved heading on the wall, then hands it the caret", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation(listOf(filedIn(SEALED.id, 200)));
+    const reread = rereadAfterReorder([SEALED, BINDER]);
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+
+      await shelfMenu(user, "Trade binder");
+      await user.click(screen.getByRole("menuitem", { name: /^Move down/ }));
+      await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [4, 3]));
+      await act(async () => reread());
+
+      // After Sealed's wall, drawn only because it was revealed, and holding the caret.
+      await waitFor(() => {
+        expect(manageOf("Trade binder")).toHaveFocus();
+        expect(queryHeading("Sealed")).toBeNull();
+      });
+    } finally {
+      undo();
+    }
+  });
+});
+
+/**
  * **A drawer the reader has set aside** — issue #365, design §§3–6.
  *
  * The one sentence the whole feature is a consequence of: a locked folder is a drawer the app
@@ -5391,6 +6117,136 @@ describe("Escape walks out of a folder", () => {
 
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "Folder name" })).toBeNull());
     expect(standingIn()).toBe(3);
+  });
+});
+
+/**
+ * **FAIL 14 of the Folder Shelves live pass, on the page** — walking up to a level nothing has
+ * cached drew `Cards 5 · $13.55` (the level being left) over a wall missing its own leading row,
+ * for 36–106 ms. `useCollection`'s own suite pins the rule render by render; this pins the page's
+ * half of it: the figures band, the breadcrumb and the wall are all drawn from the level on
+ * screen, and the page's navigation from the level asked for.
+ *
+ * `Foils` is opened straight from the root's wall, so its parent `Trade binder` has never been
+ * asked for — and each level answers with a card and a figure of its own, so a mix is visible.
+ */
+describe("walking up to a level nothing has cached", () => {
+  const LEVEL_ROWS = new Map<number | null, CollectionRow[]>([
+    [null, [BOLT]],
+    [3, [{ ...BOLT, id: 13, cardId: "c-binder", name: "Binder Bolt", folderId: 3 }]],
+    [9, [{ ...BOLT, id: 19, cardId: "c-foils", name: "Foils Bolt", folderId: 9 }]],
+  ]);
+  const LEVEL_CARDS = new Map<number | null, number>([
+    [null, 111],
+    [3, 333],
+    [9, 555],
+  ]);
+  const levelOf = (q: CollectionQuery): number | null => {
+    const first = q.shelves?.[0];
+    return first === undefined || first === UNFILED_SHELF ? null : first;
+  };
+  /** The answers for `Trade binder`, parked until a case lets them go. The counts are derived from
+   *  the list's own answer, so parking the list parks them too — `parkList` off parks the figures
+   *  alone. */
+  let parked: (() => void)[] = [];
+  let parkList = true;
+  const answerFor = <T,>(q: CollectionQuery, value: T, list = false): Promise<T> =>
+    levelOf(q) === 3 && (parkList || !list)
+      ? new Promise((resolve) => parked.push(() => resolve(value)))
+      : Promise.resolve(value);
+  const releaseBinder = async () => {
+    await waitFor(() => expect(parked.length).toBeGreaterThan(0));
+    await act(async () => parked.splice(0).forEach((go) => go()));
+  };
+  const escape = () => fireEvent.keyDown(document.body, { key: "Escape", code: "Escape" });
+
+  beforeEach(() => {
+    parked = [];
+    parkList = true;
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    collectionList.mockImplementation((q: CollectionQuery) =>
+      // `Trade binder` says it holds more than one page, so a wall that asks for the next one can.
+      answerFor(q, page(LEVEL_ROWS.get(levelOf(q)) ?? [], levelOf(q) === 3 ? 250 : undefined), true),
+    );
+    collectionSummary.mockImplementation((q: CollectionQuery) =>
+      answerFor(q, summary({ totalCards: LEVEL_CARDS.get(levelOf(q)) ?? 0 })),
+    );
+  });
+
+  /** The breadcrumb's segment for the level it says the reader is standing in. */
+  const current = () => crumbs().querySelector('[aria-current="page"]');
+
+  it("keeps drawing the level being left until the one walked to has answered", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await openShelf(user, "Foils");
+    expect(await screen.findByText("555")).toBeInTheDocument();
+    expect(await screen.findByText("Foils Bolt")).toBeInTheDocument();
+
+    expect(escape()).toBe(false);
+
+    // Asked for — the reads have gone out — and not yet drawn: the breadcrumb, the figures and the
+    // wall are all still `Foils`', with nothing of `Trade binder`'s beside them.
+    await waitFor(() => expect(standingIn()).toBe(3));
+    expect(current()).toHaveTextContent("Foils");
+    expect(screen.getByText("555")).toBeInTheDocument();
+    expect(screen.getByText("Foils Bolt")).toBeInTheDocument();
+    expect(screen.queryByText("333")).toBeNull();
+
+    await releaseBinder();
+
+    await waitFor(() => expect(current()).toHaveTextContent("Trade binder"));
+    expect(screen.getByText("333")).toBeInTheDocument();
+    expect(await screen.findByText("Binder Bolt")).toBeInTheDocument();
+    expect(screen.queryByText("555")).toBeNull();
+  });
+
+  /** **Two presses are two levels.** Escape steps up from the level asked for, so a second press
+   *  inside the round trip goes on to the root rather than asking for `Trade binder` again. */
+  it("walks two levels on two quick presses", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await openShelf(user, "Foils");
+    await screen.findByText("555");
+
+    expect(escape()).toBe(false);
+    await waitFor(() => expect(standingIn()).toBe(3));
+    expect(escape()).toBe(false);
+
+    await waitFor(() => expect(standingIn()).toBeNull());
+    await waitFor(() => expect(within(crumbs()).queryByText("Foils")).toBeNull());
+    expect(await screen.findByText("111")).toBeInTheDocument();
+  });
+
+  /**
+   * **Nothing pages past the rows of a level that is not drawn yet.** With `Trade binder`'s first
+   * page in and its figures still out, the wall on screen is `Foils`' — so a wall reaching its end
+   * is at the end of *those* rows, and `query` (already `Trade binder`'s list, which says 250) must
+   * not be asked for a second page of a list the reader cannot see.
+   */
+  it("asks for no second page of a level while the previous one is still drawn", async () => {
+    parkList = false;
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await openShelf(user, "Foils");
+    await screen.findByText("Foils Bolt");
+
+    escape();
+    await waitFor(() =>
+      expect(collectionList.mock.calls.some(([q]) => levelOf(q as CollectionQuery) === 3)).toBe(
+        true,
+      ),
+    );
+    // Let the first page land, re-render the page and give the table's end-of-list check its turn.
+    for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+
+    expect(screen.getByText("Foils Bolt")).toBeInTheDocument();
+    expect(
+      collectionList.mock.calls.filter(([q]) => {
+        const asked = q as CollectionQuery;
+        return levelOf(asked) === 3 && (asked.offset ?? 0) > 0;
+      }),
+    ).toEqual([]);
   });
 });
 

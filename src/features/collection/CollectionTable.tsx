@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -419,6 +420,16 @@ export interface CollectionTableShelves {
   renderLabel: (group: "decks" | "managed") => ReactNode;
   renderEmpty: (shelf: Shelf) => ReactNode;
   renderSticky: (shelf: Shelf | null, scrollToTop: () => void) => ReactNode;
+  /**
+   * The shelf whose heading band to bring into view — `CardGrid`'s `revealShelfId`, the table's
+   * half: Add folder's draft heading while its field is open, and afterwards the heading the caret
+   * is being handed back to (after Add folder in a heading, or a Move up / Move down). Handed to
+   * `VirtualTable` as that band's row index (`revealIndex`), which scrolls it clear of the header
+   * and the sticky bar and never moves focus — the heading takes the caret itself once it is drawn.
+   * A shelf with no band among the rows drawn (past the loaded edge, or not on this wall) reveals
+   * nothing.
+   */
+  revealShelfId?: number | null;
 }
 
 /** A band row: a label, a heading, or an empty folder's box — drawn by `VirtualTable` itself. */
@@ -430,6 +441,13 @@ type TableRow = CollectionRow | { band: Band };
 
 /** `CollectionRow` has no `band` field, so its presence is the whole discriminant. */
 const isBand = (row: TableRow): row is { band: Band } => "band" in row;
+
+/** Which shelf's band a row is — its folder's id for a heading or an empty box, the group for a
+ *  label, which belongs to no shelf. `WishlistTable`'s keys, spelt the same way. */
+function bandKey(band: Band): string {
+  if (band.kind === "label") return `label:${band.group}`;
+  return band.kind === "heading" ? `band:${band.shelf.id}` : `empty:${band.shelf.id}`;
+}
 
 /**
  * The layout as one list of table rows, and the shelf each row belongs to — a band per label,
@@ -715,6 +733,15 @@ export function CollectionTable({
     [layout, rowsOfShelf, complete],
   );
   const tableRows: TableRow[] = shelved ? shelved.rows : rows;
+  /** The requested shelf's heading band, as a row index — or nothing to reveal. */
+  const revealShelfId = shelves?.revealShelfId ?? null;
+  const revealIndex = useMemo(() => {
+    if (shelved === null || revealShelfId === null) return null;
+    const at = shelved.rows.findIndex(
+      (row) => isBand(row) && row.band.kind === "heading" && row.band.shelf.id === revealShelfId,
+    );
+    return at < 0 ? null : at;
+  }, [shelved, revealShelfId]);
 
   // A band never reaches a column's cell (`VirtualTable` draws it itself), so the guard below is
   // for the type, which is the union. The first column also carries the row's rails and is
@@ -745,14 +772,23 @@ export function CollectionTable({
   // Indented and railed exactly as the rows under it are. It changes with the page's drawings,
   // which is every render — accepted: `VirtualTable` redraws the bands with it, and the row list
   // above, which is what a relayout would cost, holds still.
+  //
+  // **Keyed by the shelf, so a band never changes which folder it draws.** `VirtualTable` keys its
+  // rows by position, so without a key a Move up / Move down re-used the heading at the old place
+  // for the folder that took it — `⋯` and all — and the caret the menu had just put back on the
+  // moved folder's `⋯` stayed there, on another folder's control. Keyed, the old heading goes with
+  // its folder: the caret falls to `<body>`, and the moved heading takes it back where it lands
+  // (`CollectionShelfHeading`'s `caret`). The keys are `WishlistTable`'s, spelt the same way.
   const band = useCallback(
     (row: TableRow): ReactNode => {
       if (!isBand(row) || !shelves) return null;
       const { band: b } = row;
-      if (b.kind === "label") return shelves.renderLabel(b.group);
+      if (b.kind === "label") {
+        return <Fragment key={bandKey(b)}>{shelves.renderLabel(b.group)}</Fragment>;
+      }
       const indent = b.shelf.indent;
       return (
-        <>
+        <Fragment key={bandKey(b)}>
           <TableRails indent={indent} />
           <span
             className="flex min-w-0 flex-1 items-center self-stretch"
@@ -760,7 +796,7 @@ export function CollectionTable({
           >
             {b.kind === "heading" ? shelves.renderHeading(b.shelf) : shelves.renderEmpty(b.shelf)}
           </span>
-        </>
+        </Fragment>
       );
     },
     [shelves],
@@ -808,6 +844,7 @@ export function CollectionTable({
               : 0
         }
         stickyBand={shelves ? stickyBand : undefined}
+        revealIndex={revealIndex}
         // A row opens the card, from the mouse and from the keyboard both.
         onActivate={(row) => {
           if (!isBand(row)) selectCard(row.cardId);
