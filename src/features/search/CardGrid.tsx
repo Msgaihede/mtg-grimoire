@@ -41,6 +41,7 @@ import {
   SHELF_INDENT_PX,
   SHELF_STICKY_HEIGHT,
   anchorPlan,
+  layoutHeight,
   layoutShelves,
   rowHeight,
   rowOfTile,
@@ -1364,13 +1365,22 @@ export function CardGrid<T extends GridCard>({
         return;
       }
       const box = scroller.getBoundingClientRect();
+      const rowsTop = grow ? scrollMargin : WALL_INSET_PX;
       const plan = anchorPlan({
-        rowTop:
-          (grow ? scrollMargin : WALL_INSET_PX) +
-          rowStartOf(shelved.layout, index, tileHeight + GAP),
+        rowTop: rowsTop + rowStartOf(shelved.layout, index, tileHeight + GAP),
         target: request.top - box.top - scroller.clientTop,
         viewport: scroller.clientHeight,
-        content: scroller.scrollHeight - room.start - room.end,
+        // **The page without the room, which the page cannot tell us** once a stretched row has
+        // swallowed some of it (see `anchorPlan`): taking the whole room off is too little and
+        // leaving it on too much. So each request errs where its own scroll corrects it. One that
+        // may add room takes it all off — at worst it adds room it did not need, and still lands.
+        // One that may not leaves it on — its scroll runs after the room has gone, so the
+        // browser's own end clamps it, where a figure that subtracted swallowed room stopped the
+        // Escape from a short page hundreds of pixels early.
+        content: scroller.scrollHeight - (request.room ? room.start + room.end : 0),
+        // The wall's own end, which is where room below starts to count — see `anchorPlan` for
+        // the row a taller dock stretches, where the page's end is not the wall's.
+        end: rowsTop + layoutHeight(shelved.layout, tileHeight + GAP),
         room: request.room,
       });
       if (plan.padStart !== room.start || plan.padEnd !== room.end) {

@@ -155,6 +155,17 @@ export function rowStartOf(layout: ShelfLayout, index: number, tileRowHeight: nu
   return start;
 }
 
+/**
+ * How tall the wall's rows are, top to bottom — every row at its own {@link rowHeight}, tile rows at
+ * `tileRowHeight`. {@link rowStartOf}'s sum carried past the last row, which is where the wall's
+ * own content ends.
+ */
+export function layoutHeight(layout: ShelfLayout, tileRowHeight: number): number {
+  let height = 0;
+  for (const row of layout.rows) height += rowHeight(row, tileRowHeight);
+  return height;
+}
+
 /** What {@link anchorPlan} is given — all in px, in the scroller's own coordinates. */
 export interface AnchorInput {
   /** The row's top in the scroll content, measured without any room this plan adds. */
@@ -163,8 +174,26 @@ export interface AnchorInput {
   target: number;
   /** The scrollport's height. */
   viewport: number;
-  /** The scroll content's height, measured without any room this plan adds. */
+  /**
+   * The scroll content's height — and what it has to be depends on `room`, so read this before
+   * "fixing" a caller that passes the page with its room still on.
+   *
+   * - **`room: true`**: the page **without** any room already added. Too small is safe here: the
+   *   plan only adds room it did not strictly need, and the row still lands.
+   * - **`room: false`**: an **upper bound** is enough, and the page with its room still on is the
+   *   one the caller has. It scrolls to this plan's offset only after the room is gone, so the
+   *   browser makes the final clamp against the real page. Subtracting the room here instead is
+   *   wrong once a stretched row has swallowed some of it (see {@link anchorPlan}): the figure
+   *   comes out too small, the clamp below lands early, and the Escape from a short page stopped
+   *   hundreds of pixels short of where the page could go.
+   */
   content: number;
+  /**
+   * Where the wall's own rows end in the scroll content, without room — which is where room added
+   * below them starts to count. Defaults to `content`, for a wall that is the whole of its
+   * scroller's content. See {@link anchorPlan} for the page where it is not.
+   */
+  end?: number;
   /** Whether temporary room may be added — a folded wall's, never the real page's. */
   room: boolean;
 }
@@ -186,11 +215,30 @@ export interface AnchorPlan {
  * set 222. **With `room`, the gap is added as temporary space instead** — above the wall when the
  * row must sit lower than the page's top allows, below it when the wall ends too soon — so the row
  * lands exactly where it is wanted; the unfold asks again without room and the space goes. Without
- * `room` (the real page) the offset is clamped, which is as close as the page allows.
+ * `room` (the real page) the offset is clamped to `content` — which there may be an upper bound, the
+ * page with its room still on (see {@link AnchorInput.content}), so this clamp is only a ceiling.
+ * What makes it as close as the page allows is the caller scrolling after the room is gone, where
+ * the browser's own end is the last clamp.
+ *
+ * **Room below is measured from the wall's own `end`, never from the page's** (the final re-check's
+ * finding A, 2026-09-27). Both pages draw the wall in a flex row beside the docked search column,
+ * which is as tall as the scrollport — so a folded wall shorter than the dock sits in a row the
+ * dock decides (766px of folded wishlist in a 988px row), and room added below the wall grows the
+ * wall inside that row without moving the page's end at all. The room is therefore whatever makes
+ * **the wall's own rows** reach the bottom of the scrollport at the offset wanted: that holds
+ * whatever stretches around the wall, and where nothing does it overshoots by only what the page
+ * draws under the wall — blank space the unfold takes away with the rest.
  *
  * Room is rounded **up** to whole pixels, so the offset it was added for is always inside the page.
  */
-export function anchorPlan({ rowTop, target, viewport, content, room }: AnchorInput): AnchorPlan {
+export function anchorPlan({
+  rowTop,
+  target,
+  viewport,
+  content,
+  end = content,
+  room,
+}: AnchorInput): AnchorPlan {
   const wanted = rowTop - target;
   const most = Math.max(0, content - viewport);
   if (wanted < 0) {
@@ -199,8 +247,9 @@ export function anchorPlan({ rowTop, target, viewport, content, room }: AnchorIn
       : { scrollTop: 0, padStart: 0, padEnd: 0 };
   }
   if (wanted > most) {
+    const below = Math.max(wanted - most, wanted + viewport - end);
     return room
-      ? { scrollTop: wanted, padStart: 0, padEnd: Math.ceil(wanted - most) }
+      ? { scrollTop: wanted, padStart: 0, padEnd: Math.ceil(below) }
       : { scrollTop: most, padStart: 0, padEnd: 0 };
   }
   return { scrollTop: wanted, padStart: 0, padEnd: 0 };

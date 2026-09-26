@@ -5,6 +5,7 @@ import {
   SHELF_HEADING_HEIGHT,
   SHELF_LABEL_HEIGHT,
   anchorPlan,
+  layoutHeight,
   layoutShelves,
   rowHeight,
   rowOfTile,
@@ -367,12 +368,18 @@ describe("rowStartOf", () => {
   it("has no start for a row the layout does not have", () => {
     for (const row of [-1, 7, 1.5, Number.NaN]) expect(rowStartOf(layout, row, 250)).toBe(-1);
   });
+
+  it("carries the sum past the last row for the wall's whole height", () => {
+    expect(layoutHeight(layout, 250)).toBe(rowStartOf(layout, 6, 250) + SHELF_HEADING_HEIGHT);
+    expect(layoutHeight(layoutShelves([], 2), 250)).toBe(0);
+  });
 });
 
 /**
  * **The fold anchor's arithmetic** (spec §3.9) — which scroll offset puts a row's top at a given
  * point of the scrollport, and how much temporary room above or below makes that offset reachable.
- * `rowTop` and `content` are measured without any room already added.
+ * `rowTop` is measured without any room already added. So is `content` when the plan may add room;
+ * when it may not, `content` may be an upper bound (see `AnchorInput.content`).
  */
 describe("anchorPlan", () => {
   const VIEW = 600;
@@ -401,7 +408,26 @@ describe("anchorPlan", () => {
       .toEqual({ scrollTop: 900, padStart: 0, padEnd: 290 });
   });
 
-  /** An unfolded wall is the real page: the anchor gets as close as the page allows. */
+  /**
+   * **The live re-check's finding A**: 576px of folded wall, 150px below the page's top, in a row a
+   * 988px dock stretches — so the page is 1162px whatever the wall does, and the first 262px of
+   * room below the wall only fill that row. Measured from the page's end the room was 28px and the
+   * row swallowed it; measured from the wall's own end (726), it reaches past the row.
+   */
+  it("measures room below from the wall's own end when the page runs on past it", () => {
+    const page = { rowTop: 630, target: 40, viewport: VIEW, content: 1162, room: true };
+    expect(anchorPlan({ ...page, end: 150 + 576 })).toEqual({
+      scrollTop: 590,
+      padStart: 0,
+      padEnd: 590 + VIEW - 726,
+    });
+    // A wall that is all of its page's content, `end`'s default, is the page's end.
+    expect(anchorPlan(page)).toEqual({ scrollTop: 590, padStart: 0, padEnd: 28 });
+  });
+
+  /** An unfolded wall is the real page: the plan clamps to `content`. The caller may pass the page
+   *  with its room still on, so this clamp is only a ceiling. It scrolls after the room is gone, and
+   *  the browser's own end makes the last clamp. */
   it("clamps instead, at both ends, when no room may be added", () => {
     expect(anchorPlan({ rowTop: 196, target: 598, viewport: VIEW, content: 1210, room: false }))
       .toEqual({ scrollTop: 0, padStart: 0, padEnd: 0 });

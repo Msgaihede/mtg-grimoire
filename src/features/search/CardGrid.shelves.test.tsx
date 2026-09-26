@@ -1518,4 +1518,108 @@ describe("CardGrid keeps a carried heading under the pointer through a fold", ()
       main.remove();
     }
   });
+
+  /**
+   * **A wall in a row a taller sibling stretches** — the wishlist's live finding A (final re-check,
+   * 2026-09-27). Both pages put the wall in a flex row beside the docked search column, and the dock
+   * is as tall as the scrollport, so a folded wall shorter than it sits in a row the dock decides:
+   * 766px of folded wishlist in a 988px row. Room added to the wall's end grows the *wall* and not
+   * the page until the wall outgrows that row, so the page's end — and the scroll's clamp — never
+   * moved: a heading pressed high near the folded wall's end was held 78–126px under the pointer
+   * for the whole drag.
+   *
+   * `main` here is that page: 150px above the wall, 24px under it, and the row at least 988px tall
+   * whatever the wall is — the stretch jsdom cannot lay out, stated as the browser measures it.
+   */
+  const ROW = 988;
+  function stretchedPage(entries: Entry[]) {
+    const main = document.createElement("main");
+    const boxes = vi
+      .spyOn(HTMLDivElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => new DOMRect(0, 150 - main.scrollTop, 400, 0));
+    main.style.overflowY = "auto";
+    document.body.appendChild(main);
+    const view = render(<Page folding={false} entries={entries} grow />, { container: main });
+    const sizer = screen.getByRole("group", { name: "Your collection" }).lastElementChild!;
+    Object.defineProperty(main, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(main, "scrollHeight", {
+      configurable: true,
+      get: () => 150 + Math.max(parseFloat((sizer as HTMLElement).style.height), ROW) + 24,
+    });
+    const scrollTo = vi.mocked(HTMLElement.prototype.scrollTo);
+    const scrolledTo = () => (scrollTo.mock.lastCall?.[0] as ScrollToOptions | undefined)?.top;
+    const most = () => main.scrollHeight - main.clientHeight;
+    const pitch = () => {
+      const rows = [...main.querySelectorAll<HTMLElement>('[data-shelf-row="tiles"]')];
+      return rows.length < 2 ? 0 : offsetOf(rows[1]) - offsetOf(rows[0]);
+    };
+    /** Put a shelf's heading `onScreen` px below `main`'s top, and press it `grab` px into its row. */
+    const pressAt = (name: string, entriesNow: Entry[], onScreen: number, grab: number) => {
+      const layout = layoutShelves(shelves(entriesNow).sections, 1);
+      const at = layout.rows.findIndex((r) => r.kind === "heading" && r.shelf.name === name);
+      main.scrollTop = 150 + rowStartOf(layout, at, pitch()) - onScreen;
+      fireEvent.scroll(main);
+      const row = rowOf(heading(name));
+      row.getBoundingClientRect = () => new DOMRect(0, onScreen, 400, SHELF_HEADING_HEIGHT);
+      fireEvent.pointerDown(heading(name), { clientX: 100, clientY: onScreen + grab });
+    };
+    const done = () => {
+      view.unmount();
+      boxes.mockRestore();
+      main.remove();
+    };
+    return { view, main, scrollTo, scrolledTo, most, pressAt, done };
+  }
+
+  /** Twelve shelves: folded, 12 × 48 = 576px — shorter than the 988px row. */
+  const TWELVE = MANY.slice(0, 12);
+
+  it("adds room that lengthens the page when the folded wall sits in a taller row", () => {
+    const { view, scrollTo, scrolledTo, most, pressAt, done } = stretchedPage(TWELVE);
+    try {
+      // Shelf 10's heading pressed 20px into its row, the row's top 40px down the scrollport.
+      pressAt("Shelf 10", TWELVE, 40, 20);
+      scrollTo.mockClear();
+
+      view.rerender(<Page folding entries={TWELVE} grow />);
+
+      // Folded, its top is 150 + 10 × 48 = 630 down the page and wanted at 40: an offset of 590,
+      // past the 562 the stretched row allows — so the room has to reach past the row's end.
+      const wanted = 150 + 10 * SHELF_HEADING_HEIGHT - 40;
+      expect(wanted).toBeGreaterThan(150 + ROW + 24 - 600);
+      expect(scrolledTo()).toBe(wanted);
+      expect(most()).toBeGreaterThanOrEqual(wanted);
+    } finally {
+      done();
+    }
+  });
+
+  /**
+   * **And the room's share of the page is not its size**, which the unfold has to know too. On
+   * Escape the anchor asks for the heading at the pointer on the real page, which here is as short
+   * as the folded one; it plans against the page it can see, room included, and scrolls once the
+   * room has gone — so the browser's own end is the clamp, not a figure that subtracted room the
+   * row had swallowed.
+   */
+  it("on Escape from a short page, goes as far toward the pointer as the page allows", () => {
+    const SHUT = folded(TWELVE);
+    const { view, scrollTo, scrolledTo, most, pressAt, done } = stretchedPage(SHUT);
+    try {
+      pressAt("Shelf 10", SHUT, 68, 20);
+      fireEvent.pointerMove(window, { clientX: 100, clientY: 20 }); // dragged up to the top
+      view.rerender(<Page folding entries={SHUT} grow />);
+      // The fold reached the pointer: 630 − 0.
+      expect(scrolledTo()).toBe(150 + 10 * SHELF_HEADING_HEIGHT);
+
+      scrollTo.mockClear();
+      fireEvent.keyDown(window, { key: "Escape" });
+      view.rerender(<Page folding={false} entries={SHUT} grow />);
+
+      // No room on the real page, whose end is the 988px row: as close as it gets.
+      expect(most()).toBe(150 + ROW + 24 - 600);
+      expect(scrolledTo()).toBe(most());
+    } finally {
+      done();
+    }
+  });
 });
