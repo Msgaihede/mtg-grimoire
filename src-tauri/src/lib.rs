@@ -66,6 +66,10 @@ pub mod combos;
 pub mod db;
 pub mod deck;
 pub mod deck_audit;
+/// **The home page's Deck completion read** — how much of each deck the reader holds and what the
+/// rest costs, by the deck editor's own rules and through its own two pool functions. No table of
+/// its own, no clock and no network, so it sits on the every-target half with the deck modules.
+pub mod deck_completion;
 pub mod deck_meta;
 pub mod deck_missing;
 /// **A deck's notebook** — user schema v43, issue #447. Two tables, eight commands and no

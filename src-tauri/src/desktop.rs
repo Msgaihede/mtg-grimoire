@@ -20,10 +20,10 @@
 use crate::sync::AppState;
 use crate::{
     activity, camera, card, collection, collection_alloc, collection_folders, combos, db, deck,
-    deck_audit, deck_meta, deck_missing, deck_notes, deck_pull, deck_quick_add, deck_theory,
-    deck_tokens, deck_undo, deckpane, decksort, errors, export, flatten, home, images, import,
-    index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, new_printings, paths,
-    price_history, recent_cards, reset, scanner, schema, scryfall, search, searchopen,
+    deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_quick_add,
+    deck_theory, deck_tokens, deck_undo, deckpane, decksort, errors, export, flatten, home, images,
+    import, index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, new_printings,
+    paths, price_history, recent_cards, reset, scanner, schema, scryfall, search, searchopen,
     set_completion, share, startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags,
     update, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
@@ -625,6 +625,9 @@ pub fn run() {
             // both halves compile for the browser too.
             new_printings::new_printings,
             new_printings::mark_new_printings_seen,
+            // The Deck completion widget: every deck's missing count and cost, on the read-only
+            // connection, by the deck editor's own rules.
+            deck_completion::deck_completion,
             startview::start_view,
             startview::set_start_view,
             marketplace_feed::marketplace_feed_refresh,

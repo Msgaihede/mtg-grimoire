@@ -299,6 +299,10 @@ pub const COMMANDS: &[&str] = &[
     // three targets.
     "new_printings",
     "mark_new_printings_seen",
+    // **The Deck completion widget's read.** Connection-only and clockless — one statement over
+    // the decks and their piles plus the editor's own pool read per deck — so it is not a
+    // download wearing a command's name.
+    "deck_completion",
     "start_view",
     "set_start_view",
     // **The three docked search columns' shared row**, and both halves for `deck_sort`'s reason.
@@ -2474,6 +2478,19 @@ pub fn call(
             )
         }
 
+        // `deck_values`' arm, argument for argument: `marketplace` is `optional` and goes through
+        // `Marketplace::from_opt`, so an absent or unknown one quotes TCGplayer.
+        "deck_completion" => {
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_completion::deck_completion_for(&conn, marketplace)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
         "start_view" => {
             let conn = crate::sync::lock_db_read(state);
             encode(command, crate::startview::stored(&conn))
@@ -3722,6 +3739,33 @@ mod tests {
         assert_eq!(out["seenAt"], json!(1_700_000_000));
     }
 
+    // route.rs:2876-2888 (`make_deck`) is this module's deck, a commander deck with a group.
+    /// **The Deck completion read, routed.** Before any deck it answers `[]`; a deck of two
+    /// unpriced copies it does not hold answers one row under the camel-cased names `ipc.ts`
+    /// reads, and an absent `marketplace` quotes TCGplayer rather than refusing the widget.
+    #[test]
+    fn the_deck_completion_read_is_routed() {
+        assert!(COMMANDS.contains(&"deck_completion"));
+        let s = state("web-route-deck-completion");
+        assert_eq!(call(&s, "deck_completion", &json!({})).unwrap(), json!([]));
+
+        let id = make_deck(&s, "Web Deck");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            let main = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            crate::deck::add_card(&conn, id, "1", Some(main), None, "live", None, 2).unwrap();
+        }
+        let out = call(&s, "deck_completion", &json!({ "marketplace": "manapool" })).unwrap();
+        assert_eq!(
+            out,
+            json!([{
+                "deckId": id, "list": "live", "wanted": 2, "owned": 0, "missing": 2,
+                "missingCost": null, "unpricedMissing": 2
+            }])
+        );
+        assert_eq!(call(&s, "deck_completion", &json!({})).unwrap(), out);
+    }
+
     /// **The folder tree's width and collapse, round-tripped through the route** — the pair beside
     /// the one above, and written separately because the thing to pin here is the *shape* rather
     /// than only the survival: the read answers an object with both fields, `width` is `null`
@@ -4130,9 +4174,12 @@ mod tests {
         // **181 since a mover's detail routed `price_history`**, counted with that `awk` over the
         // array as it stands here — which answered 180 before it, not the 179 above, so the
         // literal had already moved once without this paragraph.
+        //
+        // **182 since the home widgets' second round routed `deck_completion`**, counted with the
+        // same `awk`. If a later merge turns this red, take the number from `left`.
         assert_eq!(
             COMMANDS.len(),
-            181,
+            182,
             "update this number when a command is added"
         );
     }
