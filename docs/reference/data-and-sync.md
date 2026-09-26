@@ -969,7 +969,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   [issue #479](https://github.com/Msgaihede/mtg-grimoire/issues/479)) — one table and one index,
   `idx_sticky_notes_uid`, and the **thirtieth** user table: `(id, title, body, color, pinned,
   sort_order, created_at, updated_at, sync_uid)`, drawn by the home page's tenth widget kind,
-  `stickyNotes`. The head shape is now thirty tables and forty-seven indexes — both re-counted off
+  `stickyNotes`. The head shape at this rung was thirty tables and forty-seven indexes — a figure
+  for v46 alone, which v48's `idx_wishlist_folders_managed` has since moved — both re-counted off
   the `USER_SCHEMA_SQL` literal in the commit that moved them, never reached by adding one, and the
   `want.len()` beside them is 80 rather than 81 because an `INTEGER PRIMARY KEY` brings no
   `sqlite_autoindex` row.
@@ -999,6 +1000,27 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   capture spec; on no history row and no `deck_undo::DECK_FIELDS`; **carried by `duplicate_deck`**,
   unlike the `*_open` disclosures beside it, because it is a setting.
   [decks-storage.md](decks-storage.md) has the rest.
+  (**v48 and v49 have no paragraph on this page** — the managed wishlist's two rungs, recorded in
+  `schema.rs`'s `USER_SCHEMA_VERSION` doc and in
+  [wishlist-folders.md](wishlist-folders.md). Named for v40–v42's reason above: so nobody reads
+  the absence as a claim.)
+  **v50 adds `price_snapshots.copies`, for the home page's collection value graph** (2026-09-26) —
+  the copies of each printing and finish held on the day its price was recorded. One nullable
+  `INTEGER` column and one `ALTER TABLE … ADD COLUMN`, v47's shape, so it owes its
+  `USER_SCHEMA_SQL` line and an `UNDO_V50` and changes no table or index count. The snapshot writes
+  it in the statement that writes the price: `snapshot_sql`'s `owned(card_id, finish, copies)` was
+  already computing it to decide what is owned, so the column records a number that statement was
+  holding anyway. **Why it had to exist**: v45 kept prices and not holdings, so `Σ copies × price`
+  for a past day had nothing to multiply by. ⚠️ **A row written before the upgrade carries NULL and
+  is never read** — the read filters on `copies IS NOT NULL` — and there is **no backfill**, because
+  the only number to hand is today's quantity and written into last month's rows it would draw
+  cards bought last week as owned all along. So the graph starts on the upgrade day. The read,
+  `collection_value_history`, applies the table's own seven-day bucket again at read time, keeping
+  each printing's latest row per bucket, so a printing sold mid-week cannot make a point of its own
+  and a band the prune has not reached yet reads like one it has; and it ends on a live point for
+  today computed the way `collection_summary` computes the collection's value, so the graph's last
+  figure is the Collection value widget's to the cent. **Not synced**, the table's own rule.
+  [home-page.md](home-page.md) §14 has the rest.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

@@ -186,8 +186,19 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **45** since the home page's price movers got a
-  memory — `price_snapshots`, the twenty-ninth user table, one owned printing's price per
+  numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v50** gave
+  `price_snapshots` a `copies` column, the copies of each printing and finish held on the day its
+  price was recorded, so the home page's collection value graph can rebuild a past total — and ⚠️
+  **a row written before the upgrade carries NULL there and is never read**: no backfill, because
+  the only number to hand is today's quantity and it would draw cards bought last week as owned all
+  along, so the graph starts on the upgrade day
+  ([home-page.md](../docs/reference/home-page.md) §14). That is one above a theory deck's managed
+  wishlist becoming a choice of Compare view (v49, `decks.managed_wishlist_mode`, `off` by
+  default), one above that wishlist arriving as a switch (v48), one above decks learning to stack
+  their tokens (v47, `decks.token_stack`), one above sticky notes (v46, `sticky_notes`, synced
+  where the two rungs below it are not), which is one above the home page's price movers getting a
+  memory — `price_snapshots` at v45, the twenty-ninth user table, one owned printing's price per
   marketplace per day, thinned past 35 days and **not** synced, for `activity`'s reason; which is
   one above the collection and the wishlist getting a
   history — `activity`, the twenty-eighth user table and the first with a pruner, **not** synced
@@ -368,7 +379,11 @@ both plus the frontend.
   line at all and only the rungs underneath it collided. `grep USER_SCHEMA_VERSION
   src-tauri/src/schema.rs` settles it in one command and nothing else does. It is the strongest
   form of the rule above: **take the next free number at the moment you land, never at the moment
-  you start**, and never assume the number you wrote is the one you ship.)
+  you start**, and never assume the number you wrote is the one you ship.
+  **And this bullet's user head read 45 through v46, v47, v48 and v49** — four rungs, each a
+  shape change with its own `USER_SCHEMA_SQL` line, none of which went red here. So since v50 it
+  names rungs and no head: a line that states the head goes stale at the next rung and says
+  nothing when it does.)
 - **v35 is the user ladder's third table rebuild, and a CHECK is why.** SQLite cannot alter one,
   so widening the grade list means building `collection_entries_v35`, copying every column
   **including `id`**, dropping, renaming and replaying all five indexes as frozen literals — the
