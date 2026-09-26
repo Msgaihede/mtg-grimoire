@@ -6449,9 +6449,19 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // ⚠️ **The three `decks` capture triggers come off first, which is v33's move verbatim.**
     // They are persistent — [`crate::sync_engine::capture::install`] writes real
     // `CREATE TRIGGER`s, not temp ones — so on an upgraded file they are already in the schema
-    // when this runs, and `sync_upd_decks` names `notes` in its `AFTER UPDATE OF` list. SQLite
-    // refuses `DROP COLUMN` on a column a trigger references, so without these three lines the
-    // rung dies on every paired database and on none of the fresh ones a worktree can build.
+    // when this runs, and both `sync_ins_decks` and `sync_upd_decks` *read* `NEW.notes` — the
+    // update trigger in its `WHEN` guard and both in the op they build. SQLite refuses
+    // `DROP COLUMN` on a column a trigger reads, so without these three lines the rung dies on
+    // every paired database and on none of the fresh ones a worktree can build.
+    // **What is refused is the read, not the name in `AFTER UPDATE OF notes`**, which this
+    // comment blamed until 2026-09-26. Measured that day against the SQLite this crate bundles
+    // (3.53.2, `libsqlite3-sys` 0.38.1) and against `node:sqlite` 3.53.0, with a throwaway test
+    // over four one-trigger tables: a column named only in the `OF` list drops cleanly (the
+    // trigger keeps the stale name and goes on firing), while `NEW.<col>` in the `WHEN` or the
+    // body fails `error in trigger … after drop column: no such column: NEW.<col>`, the `OF`
+    // name present or not. The conclusion here never depended on the distinction — the real
+    // triggers do both — but a rung that dropped only the triggers whose `OF` list named the
+    // column would miss `sync_ins_decks`, which has no `OF` list at all.
     // Dropping them is free for v33's reason: `prepare_database` calls `install` immediately
     // after this function, on every target, so the gap is closed before anything can write.
     //
@@ -6475,8 +6485,8 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     if v < 43 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(
-            "-- Off before the drop: `sync_upd_decks` names `notes` in its `OF` list, and
-             -- SQLite refuses DROP COLUMN on a column a trigger references. `capture::install`
+            "-- Off before the drop: `sync_ins_decks` and `sync_upd_decks` read `NEW.notes`,
+             -- and SQLite refuses DROP COLUMN on a column a trigger reads. `capture::install`
              -- puts the current set back, right after this function. v33's move.
              DROP TRIGGER IF EXISTS sync_ins_decks;
              DROP TRIGGER IF EXISTS sync_upd_decks;
@@ -6756,9 +6766,10 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // so none is kept. `managed_wishlist::settle_all` at this same launch removes the folders.
     //
     // ⚠️ **The three `decks` capture triggers come off first**, v43's move verbatim:
-    // `sync_upd_decks` names `managed_wishlist` in its `OF` list, and SQLite refuses `DROP COLUMN`
-    // on a column a trigger references. `capture::install` puts the current set back right after
-    // this function.
+    // `sync_ins_decks` and `sync_upd_decks` read `NEW.managed_wishlist`, and SQLite refuses
+    // `DROP COLUMN` on a column a trigger reads — the read and not the name in the `OF` list,
+    // which v43's comment records the measurement of. `capture::install` puts the current set
+    // back right after this function.
     if v < 49 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(
@@ -6901,13 +6912,42 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // same way and nothing has to be sent. A random one would leave every device holding the
     // entry under a name no other device has heard, and the first edit to it would reach a peer
     // as a sparse update for a row it cannot find — deferred, and the sender's whole stream
-    // stalled behind it. The random arm is for an override that somehow has no uid itself.
+    // stalled behind it. The random arm is for an override with no uid of its own — one written
+    // behind `capture::suppressed`, where the insert trigger's mint is guarded off.
+    //
+    // ⚠️ **"Alike" holds only between devices that climb over the same override, and there is a
+    // window in which they do not.** A peer still on v51 goes on writing `deck_tokens.card_id`.
+    // An art it picks after this device climbed reaches this device as an update to a column
+    // nothing reads any more, and when that peer climbs it derives `<uid>-live` over its *newer*
+    // art. From then the one name carries two contents — this device's older art, the peer's
+    // newer one — and it stays that way until the next write that rewrites the entry's printing
+    // on either side (an art swap sends `card_id`; a count step sends only `quantity` and
+    // settles nothing). Nothing stalls in that window, because each device holds a row under the
+    // name and every op finds it; what it costs is a reader who picked an art on the laggard
+    // seeing the older one here. Closing it would mean sending the rung's writes, which is the
+    // captured-derived-write trap the trigger drop below exists to avoid.
+    //
+    // **The move is total over every override a v51 file can hold**, not only the ones a command
+    // writes, because a rung that fails rolls back and fails again at every launch after. Two
+    // shapes would have failed it. `deck_tokens.quantity` has no `CHECK` — it is a synced field,
+    // so a peer or an old build can have put any integer there — and the entry table refuses a
+    // count below zero, so the count is floored at 0 (the entry's own "stepped to nothing").
+    // And `deck_tokens`' grain is `(deck_id, oracle_id)`, so two tokens of one deck can have
+    // picked **one printing** — a double-faced token carries two tokens on one card — which is a
+    // single entry on the grain here. `INSERT OR IGNORE` keeps the first and skips the second,
+    // and **"first" is `oracle_id` order, never rowid**: every device sorts one synced row set
+    // alike, so each keeps the same override and derives the same uid, where rowid order is local
+    // and would give two devices two names for one entry. The skipped override keeps its
+    // **count** — the `UPDATE` clears a `quantity` only where an entry now holds it — so its
+    // token loses only the art, and draws an implicit entry at the number the reader set. Nothing
+    // else can reach the `IGNORE`: every other constraint on the table is met by construction.
     //
     // ⚠️ **Six capture triggers come off first, for two different reasons.** The three on `decks`
     // are v43's move verbatim: `sync_upd_decks` reads `NEW.token_stack` in its `WHEN` and its
     // body, SQLite refuses `DROP COLUMN` on a column a trigger reads (`error in trigger … after
-    // drop column: no such column: NEW.token_stack`, measured against 3.53.0 — naming it in the
-    // `OF` list alone is not refused), and without them the rung dies on every paired database
+    // drop column: no such column: NEW.token_stack` — naming it in the `OF` list alone is not
+    // refused, which v43's comment records the measurement of), and without them the rung dies on
+    // every paired database
     // and on none a worktree can build. The three on `deck_tokens` are this rung's own: clearing
     // the override is a write every device derives for itself, which `src-tauri/CLAUDE.md` says
     // must not be captured — and here it would do harm, travelling to a peer still on v51 and
@@ -6966,20 +7006,31 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 
              -- One entry per list for every picked art, named after the override it came
              -- from so that every device names it alike. `nonfoil` is a guess the launch
-             -- repair corrects; see the comment above this rung.
-             INSERT INTO deck_token_printings
+             -- repair corrects; see the comment above this rung. `OR IGNORE`, the floor and
+             -- the `ORDER BY` make it total and alike on every device; see the same comment.
+             INSERT OR IGNORE INTO deck_token_printings
                  (deck_id, variant, oracle_id, card_id, finish, quantity, created_at,
                   updated_at, sync_uid)
              SELECT t.deck_id, v.variant, t.oracle_id, t.card_id, 'nonfoil',
-                    coalesce(t.quantity, 1), t.created_at, unixepoch(),
+                    max(coalesce(t.quantity, 1), 0), t.created_at, unixepoch(),
                     coalesce(t.sync_uid || '-' || v.variant, lower(hex(randomblob(16))))
                FROM deck_tokens t,
                     (SELECT 'live' AS variant UNION ALL SELECT 'theory') v
-              WHERE t.card_id IS NOT NULL;
+              WHERE t.card_id IS NOT NULL
+              ORDER BY t.deck_id, t.oracle_id, v.variant;
 
              -- The override is legacy from here: the art lives in the entries above, and a
-             -- row that held only a quantity keeps it as the implicit entry's count.
-             UPDATE deck_tokens SET card_id = NULL, quantity = NULL WHERE card_id IS NOT NULL;
+             -- row that held only a quantity keeps it as the implicit entry's count — as does
+             -- one whose printing another token of its deck took, since no entry holds its
+             -- count. The table was born empty in this rung, so an entry on the override's
+             -- deck and oracle can only have come from the override itself.
+             UPDATE deck_tokens
+                SET quantity = CASE WHEN EXISTS (SELECT 1 FROM deck_token_printings e
+                                                  WHERE e.deck_id = deck_tokens.deck_id
+                                                    AND e.oracle_id = deck_tokens.oracle_id)
+                                    THEN NULL ELSE quantity END,
+                    card_id = NULL
+              WHERE card_id IS NOT NULL;
 
              ALTER TABLE decks DROP COLUMN token_stack;",
         )?;
@@ -13284,6 +13335,176 @@ pub(crate) mod tests {
             })
             .unwrap();
         assert_eq!(left, 0, "an entry leaves with the deck that holds it");
+    }
+
+    /// **The v52 rung is total over every override a v51 file can hold, not only the ones a
+    /// command would write.** `deck_tokens.quantity` has no `CHECK` — a synced field, so a peer
+    /// or an old build can have put any integer there — while the entry table refuses a count
+    /// below zero; and `deck_tokens`' grain is `(deck_id, oracle_id)`, so two tokens of one deck
+    /// can have picked **one printing** (a double-faced token carries two tokens on one card),
+    /// which is a single entry on [`DECK_TOKEN_PRINTING_GRAIN`]. Either would fail the `INSERT`,
+    /// roll the rung back, and stop every launch of that reader's database for good.
+    ///
+    /// So the negative count lands at 0, and the second pick of one printing is skipped rather
+    /// than refused: the override first in `oracle_id` order keeps the entry — every device
+    /// orders one synced row set alike, so each names the same winner and derives the same uid —
+    /// and the other keeps its **count** as its token's implicit one, losing only the art.
+    #[test]
+    fn the_v52_rung_is_total_over_a_negative_count_and_two_picks_of_one_printing() {
+        let conn = user_file_at_51();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'A', 'modern', 0, 0);
+             INSERT INTO deck_tokens
+                 (deck_id, oracle_id, card_id, quantity, created_at, updated_at, sync_uid)
+                 VALUES (1, 'o-treasure', 'dfc', 4, 0, 0, 'u-treasure'),
+                        (1, 'o-food', 'dfc', 2, 0, 0, 'u-food'),
+                        (1, 'o-negative', 'p3', -2, 0, 0, 'u-negative');",
+        )
+        .unwrap();
+
+        migrate_user(&conn).expect("no override a v51 file can hold may stop the climb");
+
+        let entries: Vec<(String, String, String, i64, String)> = conn
+            .prepare(
+                "SELECT card_id, variant, oracle_id, quantity, sync_uid FROM deck_token_printings
+                  ORDER BY card_id, variant",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let entry = |card: &str, variant: &str, oracle: &str, quantity: i64, uid: &str| {
+            (
+                card.to_owned(),
+                variant.to_owned(),
+                oracle.to_owned(),
+                quantity,
+                uid.to_owned(),
+            )
+        };
+        assert_eq!(
+            entries,
+            [
+                entry("dfc", "live", "o-food", 2, "u-food-live"),
+                entry("dfc", "theory", "o-food", 2, "u-food-theory"),
+                entry("p3", "live", "o-negative", 0, "u-negative-live"),
+                entry("p3", "theory", "o-negative", 0, "u-negative-theory"),
+            ],
+            "the shared printing is one entry per list, owned by the first oracle; the negative \
+             count is floored at zero"
+        );
+
+        let overrides: Vec<(String, Option<String>, Option<i64>)> = conn
+            .prepare("SELECT oracle_id, card_id, quantity FROM deck_tokens ORDER BY oracle_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            overrides,
+            [
+                ("o-food".to_owned(), None, None),
+                ("o-negative".to_owned(), None, None),
+                ("o-treasure".to_owned(), None, Some(4)),
+            ],
+            "every art is legacy afterwards; the override that lost the printing keeps its count"
+        );
+    }
+
+    /// **An override with no `sync_uid` still gives its two entries a name each, and two
+    /// different ones.** The derived `<uid>-live` / `-theory` needs a uid to derive from, and a
+    /// row written behind `capture::suppressed` has none — the insert trigger that mints one is
+    /// guarded off there — while `NULL || '-live'` is NULL: the nameless row the derivation exists
+    /// to prevent, since the first edit to it on a paired device emits an op with no uid. The
+    /// random arm is the insert trigger's own mint (32 lowercase hex), evaluated once per row, so
+    /// the entry in each list is a row of its own on the wire.
+    #[test]
+    fn the_v52_rung_names_an_override_with_no_uid_at_random() {
+        let conn = user_file_at_51();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'A', 'modern', 0, 0);
+             INSERT INTO deck_tokens
+                 (deck_id, oracle_id, card_id, quantity, created_at, updated_at, sync_uid)
+                 VALUES (1, 'o1', 'p1', 3, 0, 0, NULL);",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let uids: Vec<Option<String>> = conn
+            .prepare("SELECT sync_uid FROM deck_token_printings ORDER BY variant")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(uids.len(), 2, "one entry per list");
+        let uids: Vec<String> = uids
+            .into_iter()
+            .map(|uid| uid.expect("an entry with no uid fails its first edit on a paired device"))
+            .collect();
+        for uid in &uids {
+            assert!(
+                uid.len() == 32
+                    && uid
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+                "{uid:?} is not the mint's 32 lowercase hex"
+            );
+        }
+        assert_ne!(
+            uids[0], uids[1],
+            "the two lists' entries are two rows on the wire"
+        );
+    }
+
+    /// **`decks.token_mode` refuses a fourth word in SQL, on a climbed file and a fresh one.**
+    /// `deck::valid_token_mode` is the fence a command meets and names the three words;
+    /// this `CHECK` is what holds the column against everything that does not go through a
+    /// command — an applied sync op above all, which is why the rung may carry it at all (see its
+    /// comment). `ADD COLUMN` does enforce a column `CHECK` (v19's `finish` is the precedent), and
+    /// the climbed file is here to prove the rung's copy, where [`memory_pair`] proves
+    /// [`USER_SCHEMA_SQL`]'s.
+    #[test]
+    fn the_token_mode_column_refuses_a_fourth_word() {
+        let climbed = user_file_at_51();
+        migrate_user(&climbed).unwrap();
+        for (label, conn) in [("climbed", climbed), ("fresh", memory_pair())] {
+            let insert = |id: i64, mode: &str| {
+                conn.execute(
+                    "INSERT INTO decks (id, name, format_key, token_mode, created_at, updated_at)
+                     VALUES (?1, 'A', 'modern', ?2, 0, 0)",
+                    params![id, mode],
+                )
+            };
+            for (id, mode) in [(1, "managed"), (2, "collection"), (3, "hidden")] {
+                insert(id, mode).unwrap_or_else(|e| panic!("{label}: {mode} refused: {e}"));
+            }
+            assert!(
+                insert(4, "shown").is_err(),
+                "{label}: an INSERT of a fourth word must be refused"
+            );
+            assert!(
+                conn.execute("UPDATE decks SET token_mode = 'shown' WHERE id = 1", [])
+                    .is_err(),
+                "{label}: so must an UPDATE to one"
+            );
+            let kept: String = conn
+                .query_row("SELECT token_mode FROM decks WHERE id = 1", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(
+                kept, "managed",
+                "{label}: and the refused write changed nothing"
+            );
+        }
     }
 
     /// A v28 file walks up keeping every row it had, and twice is the same as once.

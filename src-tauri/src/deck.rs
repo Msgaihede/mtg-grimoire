@@ -2399,8 +2399,20 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // made, and an undo carrying "put back what the reconcile removed" would restore a theory row
     // that never existed before the press, while a redo checking that row against the
     // pre-press deck would refuse for ever (`deck_undo`'s `holds` reads a side's `restore`).
+    //
+    // **And the before-image is read only after both lists have been reconciled once**, which is
+    // the same trap one step earlier. The plan can hold entries its (empty) card list makes no
+    // token for — the v52 rung copied every old pick into both lists — and rule 7 owes their
+    // removal whatever this press does. Read into the before-image, the undo would put such an
+    // entry back, `sync::with_write`'s backstop would delete it again the moment the undo
+    // committed, and the redo's `holds` would find it missing and refuse: an undo that could never
+    // be redone. Reconciled first, the undo restores exactly what the backstop keeps. The
+    // deletions ride no step, like every backstop deletion (`deck_tokens::reconcile_dirty`).
     let tokens_before = match will_move {
-        true => Some(token_entries_of(&tx, id)?),
+        true => {
+            crate::deck_tokens::reconcile_in(&tx, id, &[LIVE, THEORY])?;
+            Some(token_entries_of(&tx, id)?)
+        }
         false => None,
     };
     if will_move {
@@ -2409,7 +2421,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         crate::deck_tokens::reconcile_in(&tx, id, &[LIVE, THEORY])?;
     }
     let tokens_moved = match tokens_before {
-        Some(before) => Some((before, token_entries_of(&tx, id)?)),
+        Some(tokens_was) => Some((tokens_was, token_entries_of(&tx, id)?)),
         None => None,
     };
     // **Becoming Virtual puts the deck's cardboard back on the reader's desk, in this
@@ -2506,8 +2518,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         // Beside the cards' `Op::Variant` pair, in both directions: an undo puts the live list
         // back and then the entries it wore, and a redo moves both again — rows restored, never
         // the move or the reconcile run backwards, which is `deck_undo`'s own rule.
-        if let Some((before, after)) = tokens_moved {
-            if let Some((undo_tokens, redo_tokens)) = token_step(&before, &after) {
+        if let Some((tokens_was, tokens_now)) = tokens_moved {
+            if let Some((undo_tokens, redo_tokens)) = token_step(&tokens_was, &tokens_now) {
                 undo.push(undo_tokens);
                 redo.push(redo_tokens);
             }
@@ -2534,8 +2546,16 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
 /// printing and finish would be refused by `idx_deck_token_printings_grain`. **Replacing them
 /// rather than folding into them is the switch's own meaning**: the deck the reader built *is* the
 /// plan, so its Treasure arts are the plan's, and a stale theory art kept beside them would draw a
-/// mix nobody chose. Nothing is lost for good — the caller's step records both lists before this
-/// runs, and one Ctrl+Z puts them back.
+/// mix nobody chose.
+///
+/// **What one Ctrl+Z puts back is narrower than "everything this deletes"**, and the difference
+/// is deliberate. By the time this runs the caller has reconciled both lists, so a plan entry of
+/// a token the plan's cards do not make is already gone and is in no step — rule 7 owed that
+/// deletion whatever the switch did, and restoring it would only hand the backstop a row to delete
+/// and the redo a reason to refuse. What *this* deletes is a plan entry that survived that
+/// reconcile, and those are in the caller's before-image, so an undo does restore them. (With the
+/// plan's card list empty, as `will_move` requires, that set is only the `manual` tokens' entries,
+/// which the reconcile never touches.)
 ///
 /// Ordinary captured writes, both of them: a switch is a press, and the far device takes the
 /// tombstones and the moves as the ops they are, the tombstones stamped first.
@@ -11544,9 +11564,19 @@ mod tests {
     /// hit `idx_deck_token_printings_grain` and fail the whole press. The stale plan here holds a
     /// third art, `TREASURE` at 5, which collides with a live entry on the grain.
     ///
-    /// The switch leaves exactly the live arts in the plan, the stale art gone. Undo puts back
-    /// **both** lists — the stale art too, which the reader never asked to lose — and redo
-    /// replaces them again.
+    /// The switch leaves exactly the live arts in the plan, the stale art gone. **The stale art
+    /// does not come back on an undo**: a plan with no cards makes no Treasure, so rule 7 owes its
+    /// removal whatever the switch does, and the switch reconciles both lists *before* it reads
+    /// the step's before-image. Undo therefore restores the live arts alone, and redo replaces
+    /// them again.
+    ///
+    /// **The reconcile between the undo and the redo is the point of the test.** In the app every
+    /// undo goes through `sync::with_write`, whose backstop reconciles both lists the moment the
+    /// undo commits. When the step's before-image still held the stale art, the undo put it back,
+    /// the backstop deleted it again (the plan it sits in is empty), and the redo — which first
+    /// checks that the deck still holds what the undo restored — was refused for ever, with
+    /// nothing on screen saying why. The direct `apply_reversal` calls here bypass `with_write`,
+    /// so the test runs that reconcile by hand.
     #[test]
     fn the_theory_switch_replaces_the_plans_stale_token_entries_and_undo_puts_them_back() {
         let conn = seeded();
@@ -11558,8 +11588,11 @@ mod tests {
             params![deck, TREASURE_ORACLE, TREASURE],
         )
         .unwrap();
-        let before = token_entries(&conn, deck);
-        assert_eq!(before.len(), 3, "two live arts and the plan's stale copy");
+        assert_eq!(
+            token_entries(&conn, deck).len(),
+            3,
+            "two live arts and the plan's stale copy"
+        );
 
         switch_theory_on(&conn, deck);
         assert_eq!(
@@ -11570,15 +11603,22 @@ mod tests {
 
         let cursor = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
         crate::deck_undo::apply_reversal(&conn, deck, cursor, true).unwrap();
+        // What `sync::with_write`'s backstop runs the moment an undo commits.
+        let swept = crate::deck_tokens::reconcile_in(&conn, deck, &[LIVE, THEORY]).unwrap();
         assert_eq!(
             token_entries(&conn, deck),
-            before,
-            "undo puts back both lists, the plan's stale art included"
+            two_treasure_arts(LIVE),
+            "undo puts the live arts back beside the card, and the stale art stays gone"
         );
 
         let cursor = crate::deck_undo::next_redo(&conn, deck).unwrap().unwrap();
-        crate::deck_undo::apply_reversal(&conn, deck, cursor, false).unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, cursor, false)
+            .expect("a redo after the backstop's reconcile must not be refused");
         assert_eq!(token_entries(&conn, deck), two_treasure_arts(THEORY));
+        assert!(
+            swept.is_empty(),
+            "the undo lands on a deck the backstop agrees with — it had nothing to take, {swept:?}"
+        );
     }
 
     /// Where the token pile sits in the rail, end to end (user schema v51): last on a new deck,

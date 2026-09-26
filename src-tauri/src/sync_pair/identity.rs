@@ -1120,12 +1120,11 @@ pub fn commit_rotation(
 /// relay accepted while the commit never happened.
 ///
 /// **The manifest is the roster, so every row it omits is deleted** — spec §2.3. It is
-/// deliberately not a synced table at all, and would be the fourteenth if it were (it read
-/// "thirteenth" until `deck_tokens` took that number at user schema v37): a manifest that *is*
-/// the key distribution cannot
-/// disagree with it, where a synced `device_removals` table could arrive late, arrive out of
-/// order, or arrive at a device that cannot decrypt it — which is precisely the state a rotation
-/// puts every peer in.
+/// deliberately not a synced table at all, where it could have been one more on
+/// `schema::SYNCED_TABLES` (this counted which one it would be, and went stale at every table the
+/// census gained): a manifest that *is* the key distribution cannot disagree with it, where a
+/// synced `device_removals` table could arrive late, arrive out of order, or arrive at a device
+/// that cannot decrypt it — which is precisely the state a rotation puts every peer in.
 ///
 /// **This device's own row is never swept, whatever the manifest says.** A blob that unwrapped is
 /// one the remover sealed to *this* device at *this* epoch, so this device is in the group by
