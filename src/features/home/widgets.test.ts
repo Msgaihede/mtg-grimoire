@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import type { ValueSplit } from "@/lib/ipc";
+
 import { normalise, overlaps, sameGeometry, spanFor, toStored } from "./layout";
+import type { ValueMeasure, ValueWindow } from "./valueHistory/model";
 import { pickDefault } from "./widgetSettings";
 import {
   boundsOf,
@@ -28,6 +31,7 @@ const EVERY_KIND: Record<WidgetKind, true> = {
   decks: true,
   folders: true,
   collectionValue: true,
+  valueHistory: true,
   wishlistValue: true,
   activity: true,
   recentCards: true,
@@ -47,6 +51,16 @@ const EVERY_DIMENSION: Record<BreakdownDimension, true> = {
   set: true,
   finish: true,
 };
+
+/**
+ * The value graph's three vocabularies, as the types that read them — {@link EVERY_KIND}'s trick
+ * three more times, so widening one of those types without touching this file does not compile.
+ * `ValueSplit` crosses into Rust, which refuses a split it has no bucket expression for; the other
+ * two are the model's own, where a word with no branch reads as the default.
+ */
+const EVERY_SPLIT: Record<ValueSplit, true> = { total: true, type: true, color: true, set: true };
+const EVERY_WINDOW: Record<ValueWindow, true> = { "30d": true, "90d": true, "1y": true, all: true };
+const EVERY_MEASURE: Record<ValueMeasure, true> = { value: true, change: true };
 
 /** The keys the settings panel draws for every kind itself. A pick or a toggle stored under one
  *  of these would be two controls writing one field. */
@@ -169,6 +183,17 @@ describe("WIDGETS", () => {
         picks: { dimension, chart },
         toggles: { figures: true },
         chip: "dimension",
+      },
+      // Card type, ninety days and change are the defaults the design opens on; both switches
+      // start on, stated as absence.
+      valueHistory: {
+        picks: {
+          split: { ids: ["total", "type", "color", "set"], dflt: "type" },
+          window: { ids: ["30d", "90d", "1y", "all"], dflt: "90d" },
+          measure: { ids: ["value", "change"], dflt: "change" },
+        },
+        toggles: { figures: true, markers: true },
+        chip: "split",
       },
       wishlistValue: { picks: { dimension, chart }, toggles: { figures: true }, chip: "dimension" },
       decks: {
@@ -316,7 +341,7 @@ describe("WIDGETS", () => {
       ).toBe(false);
     }
     expect(DEFAULT_LAYOUT.widgets).toHaveLength(8);
-    // The record's insertion order is the catalogue's, and these four are its newest.
+    // The record's insertion order is the catalogue's, and these four close it.
     expect(WIDGETS.slice(-4).map((widget) => widget.kind)).toEqual([...kinds]);
   });
 
@@ -335,6 +360,38 @@ describe("WIDGETS", () => {
     expect(completion.label).toBe(decks.label);
     expect(labelOf(completion, "pinned")).toBe(labelOf(decks, "pinned"));
     expect(labelOf(completion, "recent")).toBe(labelOf(decks, "recent"));
+  });
+
+  /**
+   * The value graph, off the catalogue and not the seed — the new-printings case, for a later
+   * kind.
+   *
+   * Two things the vocabulary pin cannot say. **Each pick offers exactly the words its reader
+   * handles**: `split` is sent to Rust, so an option the command does not know is a card that
+   * draws a refusal, and `window` and `measure` are the model's, so an option it has no branch for
+   * silently reads as the default. And **its catalogue place is beside the widget it draws over
+   * time**, because insertion order is the order a reader browses.
+   */
+  it("carries the value graph beside the collection value, and not in the default layout", () => {
+    expect(isWidgetKind("valueHistory")).toBe(true);
+    expect(DEFAULT_LAYOUT.widgets.some((widget) => widget.kind === "valueHistory")).toBe(false);
+    const order = WIDGETS.map((widget) => widget.kind);
+    expect(order.indexOf("valueHistory")).toBe(order.indexOf("collectionValue") + 1);
+
+    const meta = widgetMeta("valueHistory");
+    expect({ def: meta.def, min: meta.min, max: meta.max }).toEqual({
+      def: [6, 3],
+      min: [2, 2],
+      max: [8, 6],
+    });
+    const offered = (key: string) =>
+      meta.picks
+        .find((pick) => pick.key === key)
+        ?.options.map((option) => option.id)
+        .sort();
+    expect(offered("split")).toEqual(Object.keys(EVERY_SPLIT).sort());
+    expect(offered("window")).toEqual(Object.keys(EVERY_WINDOW).sort());
+    expect(offered("measure")).toEqual(Object.keys(EVERY_MEASURE).sort());
   });
 });
 

@@ -61,6 +61,7 @@ vi.mock("./widgets/FoldersWidget", () => ({
 }));
 vi.mock("./widgets/ActivityWidget", () => ({ ActivityWidget: stubs.body }));
 vi.mock("./widgets/CollectionValueWidget", () => ({ CollectionValueWidget: stubs.body }));
+vi.mock("./widgets/ValueHistoryWidget", () => ({ ValueHistoryWidget: stubs.body }));
 vi.mock("./widgets/WishlistValueWidget", () => ({ WishlistValueWidget: stubs.body }));
 vi.mock("./widgets/RecentCardsWidget", () => ({ RecentCardsWidget: stubs.body }));
 vi.mock("./widgets/SetCompletionWidget", () => ({ SetCompletionWidget: stubs.body }));

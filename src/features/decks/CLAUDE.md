@@ -1854,6 +1854,16 @@ layer.
     group is offered only under a confirmation that names that deck, because the press takes the
     card off that deck's list too. Full rules:
     [collection-folders.md](../../../docs/reference/collection-folders.md).
+  - **A drag from the Collection tab is the `All cards` tab's drag, not its own Add button**
+    (2026-09-26). Its tiles carry the same `"search-card"` payload, so a drop onto a pile is
+    `deck_add_card` — one copy on the list, no copy moved — and a tile the Add button greys is
+    still draggable, because #358's fence is about cardboard in a deck folder and this write puts
+    none there. **Do not "fix" it into `collection_to_deck`**: a drop cannot stop to ask the
+    confirmation that names the deck a spoken-for copy would leave. The wall registered no drag at
+    all until then, while a comment and #358's closing note both described one — so a reader
+    dragging out of the tab the panel opens on got nothing. Driven in the shipped window that day
+    (debug build, 1920×1080): a Collection tile dropped on an empty deck's Sideboard landed as
+    `1 ×` in `Sideboard`, owned `0`.
   - **The `All cards` tab counts owned copies for the open deck too** (2026-09-03,
     [#349](https://github.com/Msgaihede/mtg-grimoire/issues/349)) — `useCardSearch`'s
     `availableForDeck`, the open deck's id, straight through to `SearchRequest.availableForDeck`.

@@ -116,6 +116,11 @@ import {
 import { MAX_ZOOM, MIN_ZOOM } from "@/lib/cardZoom";
 import { isSearchView } from "@/lib/store";
 import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
+// The deck builder's own type precedence, borrowed for `collection_value_history`'s `type` split
+// rather than re-spelled: the crate pins its SQL to this very function with a table of type
+// lines, and a third spelling here would be a workbench whose Artifact Land is an artifact while
+// the window's is something else.
+import { typeBucket } from "@/features/decks/deckBuckets";
 import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
 import { SPECS } from "@/features/decks/validation/fixtures";
 import { DEFAULT_SCANNER_PREFS, STATUS, VERDICTS } from "@/features/scanner/fixtures";
@@ -263,6 +268,9 @@ import type {
   UpdateStatus,
   UpcomingSet,
   UpcomingSets,
+  ValueBucket,
+  ValueHistory,
+  ValuePoint,
   WishInput,
   WishOptimizeApplyItem,
   WishOptimizeMove,
@@ -2082,16 +2090,39 @@ export interface FakeRecentCard {
 }
 
 /**
- * One row of `price_history`: what a printing's finish cost at one marketplace when a refresh
- * looked at it. `takenAt` is Unix seconds, and **one row per day** is the table's grain — a second
- * refresh on the same day replaces the first rather than adding a snapshot.
+ * One row of `price_history`: a printing's finish the collection **held** when a refresh looked
+ * at one marketplace, and what it cost there. `takenAt` is Unix seconds, and **one row per day**
+ * is the table's grain — a second refresh on the same day replaces the first rather than adding a
+ * snapshot.
  */
 export interface FakePriceSnapshot {
   marketplace: MarketplaceId;
   cardId: string;
   finish: "nonfoil" | "foil" | "etched";
-  price: number;
+  /**
+   * **`null` is held but unpriced** — the marketplace quoted no price for this finish that day.
+   * A row means *held*, so the row is written anyway: without it the value graph could not tell
+   * a card whose price appeared from one the reader bought, and would call a new quote a
+   * purchase. Every reader that wants a *price* — {@link readHandlers.price_movers},
+   * {@link readHandlers.price_history}, and the totals of
+   * {@link readHandlers.collection_value_history} — skips such a row exactly as it would skip no
+   * row at all; only the value graph's `moved` reads it, as present at a price of nothing.
+   */
+  price: number | null;
   takenAt: number;
+  /**
+   * `price_snapshots.copies` (user schema v50) — how many copies of this printing, in this
+   * finish, the collection held when the price was taken: the sum the snapshot already computes
+   * to decide what is owned, written in the same statement as the price.
+   *
+   * **`null` is a row written before the upgrade**, and it is a real stored value rather than a
+   * gap in a fixture: the rung added the column with no backfill, because a backfill at today's
+   * quantities would show a card added last week as owned all along. So every row an upgraded
+   * database already held carries a price and no holding. The movers and the popup never read
+   * this field; {@link readHandlers.collection_value_history} reads **only** the rows where it is
+   * not `null`, which is how a world stands in *the line starts tomorrow* on a full collection.
+   */
+  copies: number | null;
 }
 
 /**
@@ -2779,6 +2810,48 @@ const PRICE_MOVER_WINDOWS: Readonly<Record<string, number | null>> = {
   all: null,
 };
 
+/**
+ * `price_history::DAILY_DAYS` — the band inside which every day's snapshot is kept. Past it the
+ * crate thins to one row per printing per seven-day bucket, and
+ * {@link readHandlers.collection_value_history} applies that same rule again at read time.
+ */
+const DAILY_DAYS = 35;
+
+/**
+ * `price_history::KEEP_DAYS` — nothing older survives the prune, and the value graph's read
+ * bounds itself by the same horizon so an un-pruned table cannot reach further back than a
+ * pruned one would.
+ */
+const KEEP_DAYS = 400;
+
+/**
+ * `CAST(julianday('1970-01-01') AS INTEGER)` — what turns a Unix day into the crate's week
+ * bucket, `CAST(julianday(day) AS INTEGER) / 7`.
+ *
+ * `julianday` of a bare date is that day's **midnight**, which in Julian days is a half
+ * (2440587.5 for the Unix epoch), and the cast truncates it. So a Unix day `d` is Julian day
+ * `2440587 + d` to the crate and its bucket is that over seven, floored — spelled here rather than
+ * as `d / 7`, because the two put the bucket boundaries on different weekdays and a bucket this
+ * side draws on a Thursday while the crate's ends on a Sunday is one point here and two there.
+ */
+const UNIX_EPOCH_JULIAN_DAY = 2_440_587;
+
+/** `price_history::week_bucket` over a day's UTC midnight in Unix seconds. */
+function weekOf(day: number): number {
+  return Math.floor((UNIX_EPOCH_JULIAN_DAY + Math.floor(day / 86_400)) / 7);
+}
+
+/** `value_history::NOT_A_SPLIT`, verbatim — {@link NOT_A_COLLECTION_DIMENSION}'s sibling. */
+const NOT_A_SPLIT = "That is not a way to split collection value.";
+
+/** How many named `type` or `set` lines one read answers; every one past it is summed into
+ *  `other`. The widget folds further — this is the crate's ceiling, not the drawing's. */
+const MAX_NAMED_VALUE_BUCKETS = 8;
+
+/** The colour split's fixed order — WUBRG, then colourless, then multicolour — in
+ *  {@link colorBucket}'s own keys. */
+const VALUE_COLOR_ORDER: readonly string[] = ["W", "U", "B", "R", "G", "c", "multi"];
+
 /** `new_printings::MAX_DAYS` — the longest window the feed will answer, in days. A hand-edited
  *  `config` cannot ask for the whole corpus. */
 const MAX_NEW_PRINTING_DAYS = 365;
@@ -3272,20 +3345,36 @@ function priceDrift(cardId: string, finish: string, mp: string): number {
 
 /**
  * `price_history` for a world with a collection: one snapshot per {@link HISTORY_DAYS} day for
- * every owned printing's finish at every marketplace that prices it **today** — today's price is
- * {@link finishPriceAt}, the collection's own, and each older one walks back along
+ * every held printing's finish the corpus knows, at every marketplace this app can quote — today's
+ * price is {@link finishPriceAt}, the collection's own, and each older one walks back along
  * {@link priceDrift} in proportion to its age, rounded to the cent.
  *
- * So a printing up 30 % over ninety days is up about 2 % over the week, a cheap card can round to
- * no move at all (and is then not a mover, which is `price_movers`' rule), and a finish a
- * marketplace does not quote has **no rows** — `marketplace_prices`' rule for an unpriced finish,
- * one table over.
+ * So a printing up 30 % over ninety days is up about 2 % over the week, and a cheap card can round
+ * to no move at all (and is then not a mover, which is `price_movers`' rule). **A finish a
+ * marketplace does not quote is still a row, with a `null` price** — a snapshot row means *held*
+ * ({@link FakePriceSnapshot.price}), so the value graph can tell a quote appearing from a
+ * purchase — and it is `null` on every day, since the drift walks back from a price there is not.
+ * A printing the corpus has lost is no row at all: the snapshot joins `cards`.
+ *
+ * **`copies` is the count held today, on every day** — `collection_source`'s sum over every row of
+ * that printing and finish, whichever folder it is filed in, which is what the snapshot writes
+ * beside the price (user schema v50). That makes the derived world one in which the reader has
+ * held the same cards for ninety days and only the prices moved: every step of the value graph is
+ * price, `moved` is the whole of it, and nothing is marked as added or removed. A story that wants
+ * the reader's own changes on the line passes a `priceHistory` whose counts differ by day — the
+ * derivation invents no purchases the collection does not record.
  */
 export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
   const byId = new Map(db.cards.map((c) => [c.id, c]));
-  const owned = new Map<string, FakeEntry>();
+  // One entry per printing and finish, summed: two rows of one printing in two binders are one
+  // snapshot row holding both, because the table's grain has no folder in it.
+  const owned = new Map<string, { cardId: string; finish: FakeEntry["finish"]; copies: number }>();
   for (const e of db.collectionEntries) {
-    if (e.quantity > 0) owned.set(`${e.cardId}:${e.finish}`, e);
+    if (e.quantity <= 0) continue;
+    const key = `${e.cardId}:${e.finish}`;
+    const held = owned.get(key);
+    if (held) held.copies += e.quantity;
+    else owned.set(key, { cardId: e.cardId, finish: e.finish, copies: e.quantity });
   }
   const out: FakePriceSnapshot[] = [];
   // Only a marketplace this app can quote: an unpriced one resolves to TCGplayer at the read, so
@@ -3293,16 +3382,18 @@ export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
   const priced = Object.values(MARKETPLACES).filter((m) => m.priced);
   for (const { id: mp } of priced) {
     for (const e of owned.values()) {
-      const now = finishPriceAt(db, byId.get(e.cardId) ?? null, e.finish, mp);
-      if (now === null) continue;
+      const card = byId.get(e.cardId);
+      if (card === undefined) continue;
+      const now = finishPriceAt(db, card, e.finish, mp);
       const drift = priceDrift(e.cardId, e.finish, mp);
       for (const days of HISTORY_DAYS) {
         out.push({
           marketplace: mp,
           cardId: e.cardId,
           finish: e.finish,
-          price: Math.round(now * (1 - (drift * days) / 90) * 100) / 100,
+          price: now === null ? null : Math.round(now * (1 - (drift * days) / 90) * 100) / 100,
           takenAt: CLOCK_BASE - days * 86_400,
+          copies: e.copies,
         });
       }
     }
@@ -8584,6 +8675,39 @@ function colorBucket(card: FakeCard | null): string {
 }
 
 /**
+ * Which line of the Collection value graph a printing is on under one `split` — the three bucket
+ * expressions of `value_history.rs` — as a key and the name that travels with it, or `null` for
+ * `total`, which draws no lines at all.
+ *
+ * **Resolved before a single row is read**, {@link readHandlers.collection_breakdown}'s rule for
+ * its dimension: an unknown split is refused over `empty` in exactly the words it is refused over
+ * `starter`.
+ *
+ * * `type` is {@link typeBucket} — the front face's first type in the deck builder's precedence —
+ *   lowercased into the crate's keys, and a printing that has left `cards` is `other`, which is
+ *   what that function already answers for no type line.
+ * * `color` is {@link colorBucket}, the breakdown's own three arms, orphan-to-`c` included.
+ * * `set` is `coalesce(c.set_code, 'other')` with the set's name beside it. **Not the breakdown's
+ *   `coalesce(c.set_code, e.set_code)`**: a snapshot row names a printing and no collection row,
+ *   so there is no denormalised code to fall back through, and the live point takes the same arm
+ *   so that one orphan is not two lines depending on which day it was read.
+ */
+function valueBucketer(split: string): ((card: FakeCard | null) => [string, string | null]) | null {
+  switch (split) {
+    case "total":
+      return null;
+    case "type":
+      return (card) => [typeBucket(card?.typeLine ?? null).toLowerCase(), null];
+    case "color":
+      return (card) => [colorBucket(card), null];
+    case "set":
+      return (card) => (card === null ? ["other", null] : [card.setCode, card.setName]);
+    default:
+      throw refuse(NOT_A_SPLIT);
+  }
+}
+
+/**
  * Every read command, bound to one store.
  *
  * The return type is **inferred**, not `Record<string, CommandHandler>`, and that is
@@ -11192,7 +11316,12 @@ export function readHandlers(db: FakeDb) {
       const direction = ["both", "up", "down"].includes(args.direction) ? args.direction : "both";
       const mp = marketplaceOf(args.marketplace);
       const limit = Math.min(100, Math.max(1, Math.trunc(args.limit)));
-      const history = db.priceHistory.filter((s) => s.marketplace === mp);
+      // A held-but-unpriced row is no price to measure from, and reads exactly as no row: it
+      // neither counts a day nor makes a baseline.
+      const history = db.priceHistory.filter(
+        (s): s is FakePriceSnapshot & { price: number } =>
+          s.marketplace === mp && s.price !== null,
+      );
       const days = new Set(history.map((s) => Math.floor(s.takenAt / 86_400))).size;
       const times = [...new Set(history.map((s) => s.takenAt))].sort((a, b) => a - b);
       const since =
@@ -11279,11 +11408,199 @@ export function readHandlers(db: FakeDb) {
         const kept = latest.get(day);
         if (kept === undefined || s.takenAt > kept.takenAt) latest.set(day, s);
       }
+      // A day whose row is held-but-unpriced has no point, exactly as a day with no row: folded
+      // first, because the crate's table holds one row a day and a later unpriced snapshot
+      // replaced an earlier priced one rather than sitting beside it.
       const points: PricePoint[] = [...latest]
         .sort(([a], [b]) => a - b)
-        .map(([day, s]) => ({ day, price: s.price }));
+        .flatMap(([day, s]) => (s.price === null ? [] : [{ day, price: s.price }]));
       const now = finishPriceAt(db, cardById(db, args.cardId), finish, mp);
       return { points, now, today };
+    },
+
+    /**
+     * `value_history::history` — the collection's value over time at one marketplace, cut by
+     * `split`: the Collection value graph's read, and the second reader of the snapshots above.
+     *
+     * **The periods are the table's own thinning, applied again at read time.** A snapshot
+     * younger than {@link DAILY_DAYS} is its own day's period; an older one belongs to its
+     * seven-day bucket ({@link UNIX_EPOCH_JULIAN_DAY} says which), and inside a bucket each
+     * printing's finish keeps **its latest row** — the prune's rule, so a table that has not been
+     * thinned yet reads exactly as one that has, and a printing sold mid-week, whose last row is on
+     * a different day from the rest of its bucket, is still counted in the bucket's one point
+     * rather than making a low point of its own. A period is dated by the latest day it holds.
+     * **The week the daily horizon falls in is read only from the horizon on** — before it the
+     * prune has left nothing but the printings that were sold during it — and nothing older than
+     * {@link KEEP_DAYS} is read at all, so an un-pruned table reaches no further than a pruned one.
+     * **Only rows with a `copies` count are read** ({@link FakePriceSnapshot.copies}): a row from
+     * before the upgrade has a price and no holding, and a line drawn from it would be a guess.
+     *
+     * **Today is a live point, never a snapshot**, and it is priced by {@link finishPriceAt} over
+     * the entries in the order {@link readHandlers.collection_summary} sums them — so the graph's
+     * last point is the Collection value widget's figure to the cent, which is the one thing the
+     * two widgets on one page must never disagree about. Today's own snapshot is left out for
+     * that reason, and an empty collection answers no points at all.
+     *
+     * **A row means held, and its price may be `null`** ({@link FakePriceSnapshot.price}): a
+     * held-but-unpriced printing adds nothing to a total or a line, exactly as no row would —
+     * but it is *present*, which is what `moved` needs.
+     *
+     * **`moved` is the price-only part of each step**: for every printing present at both points,
+     * the earlier copies times the change in price, a missing price counting as nothing. A
+     * snapshot period's printings are its rows, priced or not; at the live point a printing is
+     * present when the reader still holds a copy, whether or not the marketplace quotes it. So a
+     * held card whose price appears is a price move — the whole of its new value is `moved` and
+     * none of it reads as a card the reader added — and one whose quote vanishes is a price move
+     * down. `null` on the first point.
+     *
+     * **A line is kept only where it is worth something somewhere**, and every copy is on exactly
+     * one: `type` is {@link typeBucket}, `color` is {@link colorBucket}, and `set` is the card's own
+     * set code with `other` for a printing that has left `cards` — never the breakdown's fallback
+     * through the entry's denormalised code, because a snapshot row has no entry behind it. Colour
+     * is in its fixed WUBRG order; `type` and `set` rank by today's value (ties by key), keep
+     * {@link MAX_NAMED_VALUE_BUCKETS} named lines, and sum the rest into `other`, which is always
+     * last. An unknown split is refused in the crate's words before a row is read.
+     *
+     * The marketplace resolves as `Marketplace::from_opt` does, {@link readHandlers.price_history}'s
+     * rule: `cardtrader` quotes TCGplayer and stores no snapshots of its own. A read, so it answers
+     * through every second of a sync.
+     */
+    collection_value_history: (args: { split: string; marketplace?: string }): ValueHistory => {
+      const bucketOf = valueBucketer(args.split);
+      const asked = marketplaceOf(args.marketplace);
+      const mp = MARKETPLACES[asked].priced ? asked : DEFAULT_MARKETPLACE;
+      const today = Math.floor(CLOCK_BASE / 86_400) * 86_400;
+      const held = db.collectionEntries.filter((e) => e.quantity > 0);
+      if (held.length === 0) return { buckets: [], points: [], today };
+
+      /** One point's arithmetic before it is aligned to the answer's lines. `present` is every
+       *  printing held at the point and its price, an unpriced one at `0` — what this step's
+       *  `moved` reads as *after*. `holding` is each printing's copies and price at a snapshot
+       *  period, priced the same way — what the *next* step's `moved` reads as *before* — and
+       *  `null` at the live point, which is always last and so is nobody's "before". */
+      interface Tally {
+        day: number;
+        total: number;
+        byBucket: Map<string, number>;
+        present: Map<string, number>;
+        holding: Map<string, { copies: number; price: number }> | null;
+      }
+      // `max()` over a bucket's non-null names, the breakdown's own aggregate: an orphan's `null`
+      // cannot blank a set the rest of whose printings know what it is called.
+      const names = new Map<string, string | null>();
+      const add = (t: Tally, card: FakeCard | null, amount: number) => {
+        t.total += amount;
+        if (bucketOf === null) return;
+        const [key, name] = bucketOf(card);
+        t.byBucket.set(key, (t.byBucket.get(key) ?? 0) + amount);
+        const had = names.get(key) ?? null;
+        names.set(key, name !== null && (had === null || cmp(name, had) > 0) ? name : had);
+      };
+
+      const horizon = today - DAILY_DAYS * 86_400;
+      const oldest = today - KEEP_DAYS * 86_400;
+      const periods = new Map<string, { day: number; rows: Map<string, FakePriceSnapshot> }>();
+      for (const s of db.priceHistory) {
+        if (s.marketplace !== mp || s.copies === null) continue;
+        const day = Math.floor(s.takenAt / 86_400) * 86_400;
+        if (day >= today || day < oldest) continue;
+        // **The week the daily horizon falls in is read from the horizon on and not before it.**
+        // The prune thins that week's older days against the newer rows in the daily band, so
+        // what survives there is only the printings that *left* during it — read as a period, it
+        // would be a stray low point on six days out of seven.
+        if (day < horizon && weekOf(day) >= weekOf(horizon)) continue;
+        const key = day >= horizon ? `day ${day}` : `week ${weekOf(day)}`;
+        const period = periods.get(key) ?? { day, rows: new Map<string, FakePriceSnapshot>() };
+        period.day = Math.max(period.day, day);
+        // The latest row per printing and finish: by day, and inside a day by the instant — the
+        // crate's `INSERT OR REPLACE`, where a second snapshot on one afternoon replaced the first.
+        const printing = `${s.cardId}:${s.finish}`;
+        const kept = period.rows.get(printing);
+        if (kept === undefined || s.takenAt > kept.takenAt) period.rows.set(printing, s);
+        periods.set(key, period);
+      }
+
+      const tallies: Tally[] = [...periods.values()]
+        .sort((a, b) => a.day - b.day)
+        .map((period) => {
+          const t: Tally = {
+            day: period.day,
+            total: 0,
+            byBucket: new Map(),
+            present: new Map(),
+            holding: new Map(),
+          };
+          for (const [printing, s] of period.rows) {
+            const copies = s.copies ?? 0;
+            // Held but unpriced: worth nothing to the total, and present all the same.
+            if (s.price !== null) add(t, cardById(db, s.cardId), copies * s.price);
+            const price = s.price ?? 0;
+            t.present.set(printing, price);
+            t.holding?.set(printing, { copies, price });
+          }
+          return t;
+        });
+      const live: Tally = {
+        day: today,
+        total: 0,
+        byBucket: new Map(),
+        present: new Map(),
+        holding: null,
+      };
+      for (const e of held) {
+        const card = cardById(db, e.cardId);
+        const unit = finishPriceAt(db, card, e.finish, mp);
+        add(live, card, e.quantity * (unit ?? 0));
+        live.present.set(`${e.cardId}:${e.finish}`, unit ?? 0);
+      }
+      tallies.push(live);
+
+      // The lines, and which of the tally's own buckets each one sums.
+      const lines: { bucket: ValueBucket; sums: string[] }[] = [];
+      if (bucketOf !== null) {
+        const keys = [...names.keys()].filter((key) =>
+          tallies.some((t) => (t.byBucket.get(key) ?? 0) !== 0),
+        );
+        if (args.split === "color") {
+          for (const key of VALUE_COLOR_ORDER) {
+            if (keys.includes(key)) lines.push({ bucket: { key, name: null }, sums: [key] });
+          }
+        } else {
+          const worth = (key: string) => live.byBucket.get(key) ?? 0;
+          const named = keys
+            .filter((key) => key !== "other")
+            .sort((a, b) => worth(b) - worth(a) || cmp(a, b));
+          for (const key of named.slice(0, MAX_NAMED_VALUE_BUCKETS)) {
+            lines.push({ bucket: { key, name: names.get(key) ?? null }, sums: [key] });
+          }
+          const folded = named.slice(MAX_NAMED_VALUE_BUCKETS);
+          if (keys.includes("other") || folded.length > 0) {
+            lines.push({ bucket: { key: "other", name: null }, sums: ["other", ...folded] });
+          }
+        }
+      }
+
+      const points: ValuePoint[] = tallies.map((t, i) => {
+        const before = i === 0 ? null : tallies[i - 1].holding;
+        let moved: number | null = null;
+        if (before !== null) {
+          moved = 0;
+          for (const [printing, then] of before) {
+            const now = t.present.get(printing);
+            if (now !== undefined) moved += then.copies * (now - then.price);
+          }
+        }
+        return {
+          day: t.day,
+          total: t.total,
+          values: lines.map((line) =>
+            line.sums.reduce((n, key) => n + (t.byBucket.get(key) ?? 0), 0),
+          ),
+          moved,
+          live: t === live,
+        };
+      });
+      return { buckets: lines.map((line) => line.bucket), points, today };
     },
 
     /**

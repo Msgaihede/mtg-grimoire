@@ -32,18 +32,19 @@
 import type { HomeLayout } from "@/lib/ipc";
 
 /**
- * The kinds this build can draw.
+ * The kinds this build can draw — the union is the census, so no sentence here counts them.
  *
- * Adding one means a member here, a row in {@link WIDGET_META} (which will not compile without
- * one) and a component — and it means nothing at all to Rust, which stores whatever string it is
- * handed. **How many there are is `WIDGET_META`'s to answer and is not written down here**: this
- * comment said *eleven* while it was true and would have been wrong the day round two landed.
+ * Adding another means a member here, a row in {@link WIDGET_META} (which will not compile
+ * without one) and a component — and it means nothing at all to Rust, which stores whatever
+ * string it is handed. This comment said *eleven* while it was true, and two branches adding
+ * kinds on the same day — round two's four and the value graph — made it wrong from both sides.
  */
 export type WidgetKind =
   | "summary"
   | "decks"
   | "folders"
   | "collectionValue"
+  | "valueHistory"
   | "wishlistValue"
   | "activity"
   | "recentCards"
@@ -59,10 +60,12 @@ export type WidgetKind =
 /**
  * Which column the two value widgets group their bars over.
  *
- * **The one word in this file that also exists in Rust**, as four `match` arms on a `&str` in
- * each breakdown command, refusing anything else. That is a fact about which SQL columns can be
+ * **A word in this file that also exists in Rust**, as four `match` arms on a `&str` in each
+ * breakdown command, refusing anything else. That is a fact about which SQL columns can be
  * grouped, not a vocabulary about widgets, so the duplication is not the kind {@link WidgetKind}
- * exists to avoid.
+ * exists to avoid. `valueHistory`'s `split` pick is the other such word, for the same reason —
+ * `collection_value_history` refuses a split it has no bucket expression for — and it is typed
+ * where it crosses the boundary, as `ValueSplit` in `@/lib/ipc`, rather than here.
  */
 export type BreakdownDimension = "rarity" | "color" | "set" | "finish";
 
@@ -180,6 +183,66 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     picks: VALUE_PICKS,
     toggles: [{ key: "figures", label: "Show totals" }],
     chip: "dimension",
+  },
+  /**
+   * The collection's value over time. **Directly after `collectionValue` rather than at the end**,
+   * because insertion order is the catalogue's order and this is that widget's number drawn as a
+   * line — a reader looking for one finds the other beside it.
+   *
+   * Its own `split` rather than `VALUE_PICKS`' `dimension`, and the difference is not cosmetic:
+   * the question is a different command (`collection_value_history`) that answers a different set
+   * of words — `total` and `type` exist here and nowhere in a breakdown, `rarity` and `finish` the
+   * other way round. `Range` and `Measure` never reach Rust at all: the command answers every kept
+   * point and the body windows and scales them, so neither is in `valueHistoryKey`.
+   *
+   * Not in {@link DEFAULT_LAYOUT} (in either copy) — catalogue only, `newPrintings`' reason: a new
+   * kind that displaced a shipped one would rearrange the page of every reader who never asked.
+   */
+  valueHistory: {
+    label: "Collection value graph",
+    description:
+      "What your collection has been worth over time — in total, or split by card type, colour or set.",
+    def: [6, 3],
+    min: [2, 2],
+    max: [8, 6],
+    picks: [
+      {
+        key: "split",
+        label: "Split by",
+        dflt: "type",
+        options: [
+          { id: "total", label: "Total" },
+          { id: "type", label: "Card type" },
+          { id: "color", label: "Colour" },
+          { id: "set", label: "Set" },
+        ],
+      },
+      {
+        key: "window",
+        label: "Range",
+        dflt: "90d",
+        options: [
+          { id: "30d", label: "30 days" },
+          { id: "90d", label: "90 days" },
+          { id: "1y", label: "1 year" },
+          { id: "all", label: "All" },
+        ],
+      },
+      {
+        key: "measure",
+        label: "Measure",
+        dflt: "change",
+        options: [
+          { id: "value", label: "Value" },
+          { id: "change", label: "Change" },
+        ],
+      },
+    ],
+    toggles: [
+      { key: "figures", label: "Show totals" },
+      { key: "markers", label: "Mark collection changes" },
+    ],
+    chip: "split",
   },
   wishlistValue: {
     label: "Wishlist value",
@@ -322,8 +385,9 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   /**
    * The reader's own prose. Insertion order is the catalogue's order, and this and
-   * `newPrintings` directly below are its newest pair — that one landed on `main` while this was
-   * being written, so which of the two is last is an accident of merge order and nothing reads it.
+   * `newPrintings` directly below were appended as a pair — that one landed on `main` while this
+   * was being written, so which of the two is last is an accident of merge order and nothing reads
+   * it.
    *
    * `min` is `[3, 2]` where every other kind's is `[2, 2]` or smaller, and that is the one figure
    * here doing real work rather than copying a neighbour: at a two-cell width the Board's tiles are
@@ -413,7 +477,8 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     chip: "window",
   },
   /**
-   * **Round two (2026-09-26), the catalogue's newest four** — the spec is
+   * **Round two (2026-09-26), the catalogue's last four rows** — `valueHistory` landed the same
+   * day and sits beside `collectionValue` instead. The spec is
    * `docs/superpowers/specs/2026-09-26-home-widgets-round-two-design.md` §2.1 and the footprints
    * are the design canvas's. `DEFAULT_LAYOUT` moves for none of them: it fills an eight-by-seven
    * rectangle exactly, and a new kind in it would break the rectangle.

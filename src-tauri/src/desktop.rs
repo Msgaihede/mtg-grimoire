@@ -25,7 +25,7 @@ use crate::{
     import, index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, new_printings,
     paths, price_history, recent_cards, reset, scanner, schema, scryfall, search, searchopen,
     set_completion, share, startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags,
-    upcoming_sets, update, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    upcoming_sets, update, value_history, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -619,6 +619,10 @@ pub fn run() {
             set_completion::set_completion,
             price_history::price_movers,
             price_history::price_history,
+            // The Collection value graph: one read on the read-only connection, over the same
+            // snapshots and the live collection — the day's `copies` are written beside the
+            // price by that same snapshot, never by a command.
+            value_history::collection_value_history,
             // The New printings widget: the feed, and the cursor that puts its gold dots out.
             // The read is two `SELECT`s on the read-only connection; the write takes its clock
             // from the caller, never `SystemTime::now()` — `recent_cards`' rule, and the reason
