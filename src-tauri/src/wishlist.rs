@@ -1304,7 +1304,7 @@ pub(crate) fn wishlist_scope(
     // collection's, over this table's column, so `0` is the root here exactly as it is there.
     if let Some(shelves) = &q.shelves {
         p.push(
-            crate::collection::shelf_member("w.folder_id"),
+            crate::collection::shelf_term("w.folder_id", shelves),
             Box::new(crate::collection::shelf_list(shelves)),
         );
     } else if !q.flatten {
@@ -1314,7 +1314,9 @@ pub(crate) fn wishlist_scope(
     (from, where_sql, p.params)
 }
 
-pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage, String> {
+/// The count and the page [`list_wishes`] steps — `collection::list_statements` one table over,
+/// split out for its reason: a test explains the very text the page runs.
+fn list_statements(q: &WishlistQuery) -> crate::collection::ListStatements {
     let limit = if q.limit == 0 {
         DEFAULT_LIMIT
     } else {
@@ -1326,14 +1328,8 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
     // different rules.
     let price = crate::sorting::row_price_expr(q.marketplace, WISH_PREFERRED_FINISH);
     let (from, where_sql, mut params) = wishlist_scope(q, &price);
-
-    let total: i64 = conn
-        .query_row(
-            &format!("SELECT count(*) FROM {from} WHERE {where_sql}"),
-            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let scope_params = params.len();
+    let count = format!("SELECT count(*) FROM {from} WHERE {where_sql}");
 
     let sorted = crate::sorting::order_by(
         q.sort.as_deref(),
@@ -1341,11 +1337,12 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         "w.name ASC",
         "w.id ASC",
     );
-    // Shelves first, `collection::list_entries`' rule and its parameter order: the position binds
-    // the list a second time, after the count above and before `LIMIT ? OFFSET ?`.
+    // Shelves first, `collection::list_statements`' rule and its parameter order: the position
+    // binds the list a second time, after the scope's parameters the count binds and before
+    // `LIMIT ? OFFSET ?`.
     let order = match &q.shelves {
         Some(shelves) => {
-            params.push(Box::new(crate::collection::shelf_list(shelves)));
+            params.push(Box::new(crate::collection::shelf_order(shelves)));
             let position = crate::collection::shelf_position("w.folder_id");
             format!("{position} ASC, {sorted}")
         }
@@ -1355,7 +1352,7 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
     // names — so the art and the id under it are one answer rather than two. `c` is the alias
     // `from` above gave that printing.
     let image_uris = crate::image_uri::front_face_selects("c").join(", ");
-    let sql = format!(
+    let page = format!(
         "SELECT w.id, w.oracle_id, w.card_id, w.name, w.set_code, w.collector_number, w.lang,
                 c.rarity, c.mana_cost, w.quantity, w.preferred_finish,
                 {price} AS {UNIT_PRICE_ALIAS},
@@ -1391,16 +1388,33 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
     );
     params.push(Box::new(limit));
     params.push(Box::new(q.offset));
+    crate::collection::ListStatements {
+        count,
+        page,
+        params,
+        scope_params,
+    }
+}
+
+pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage, String> {
+    let s = list_statements(q);
+    let total: i64 = conn
+        .query_row(
+            &s.count,
+            rusqlite::params_from_iter(s.count_params().iter().map(|p| p.as_ref())),
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
 
     // Where the image pair begins — the count of every column before it, which is what makes
     // it last. Written down rather than spelled inside the closure, for the reason the four
     // appended `r.get(N)`s above carry: this mapping is positional.
     const IMAGE_COL: usize = 20;
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&s.page).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(
-            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            rusqlite::params_from_iter(s.params.iter().map(|p| p.as_ref())),
             |r| {
                 Ok(WishRow {
                     id: r.get(0)?,
@@ -4030,6 +4044,106 @@ mod tests {
                 .total,
             0
         );
+    }
+
+    /// A list naming one shelf twice answers its **first** place, one table over from
+    /// `collection::tests::a_list_naming_one_shelf_twice_answers_its_first_place`.
+    #[test]
+    fn wishlist_a_list_naming_one_shelf_twice_answers_its_first_place() {
+        let s = shelved_wishes();
+        let page = list_wishes(&s.conn, &on_wish_shelves(vec![1, 0, 1])).unwrap();
+        assert_eq!(
+            wish_ids(&page),
+            vec![s.ordered_bolt, s.ordered_test, s.root],
+            "Ordered at its first place, not its last"
+        );
+        assert_eq!(page.total, 3, "named twice, counted once");
+    }
+
+    /// **A shelf whose id is written inside another's keeps its own place.** The position is an
+    /// offset into `,12,0,1,2,`, so it is the commas either side of each id that stop `1` being
+    /// found inside `12` (no trailing comma) and `2` inside `12` (no leading one) — and either
+    /// mistake would file a shelf's rows at somebody else's place with every total still right.
+    #[test]
+    fn a_shelf_whose_id_is_inside_another_s_keeps_its_own_place() {
+        let s = shelved_wishes();
+        folder(&s.conn, 12, None, "Twelve");
+        let twelve = add_wish(
+            &s.conn,
+            &WishInput {
+                oracle_id: Some("o1".to_owned()),
+                folder_id: Some(12),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let page = list_wishes(&s.conn, &on_wish_shelves(vec![12, 0, 1, 2])).unwrap();
+        assert_eq!(
+            wish_ids(&page),
+            vec![
+                twelve,
+                s.root,
+                s.ordered_bolt,
+                s.ordered_test,
+                s.someday_bolt,
+                s.someday_unpriced
+            ]
+        );
+    }
+
+    /// What SQLite says it will do with a statement, one `detail` line per step.
+    fn plan_of(conn: &Connection, sql: &str, params: &[Box<dyn rusqlite::ToSql>]) -> Vec<String> {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        stmt.query_map(
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |r| r.get::<_, String>(3),
+        )
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+    }
+
+    /// `collection::tests::a_list_without_the_unfiled_shelf_is_searched_through_the_folder_index`
+    /// one table over: a list that leaves out the root reaches `idx_wishlist_folder`, the index
+    /// the root and a named folder have always used, and a list naming the root scans.
+    #[test]
+    fn a_wishlist_list_without_the_root_is_searched_through_the_folder_index() {
+        let s = shelved_wishes();
+
+        let filed = list_statements(&on_wish_shelves(vec![1, 2]));
+        for (what, plan) in [
+            (
+                "count",
+                plan_of(&s.conn, &filed.count, filed.count_params()),
+            ),
+            ("page", plan_of(&s.conn, &filed.page, &filed.params)),
+        ] {
+            assert!(
+                plan.iter().any(|d| d.starts_with("SEARCH w ")
+                    && d.contains("INDEX idx_wishlist_folder (folder_id=?)")),
+                "the {what} statement reaches the folder index: {plan:?}"
+            );
+        }
+
+        let rooted = list_statements(&on_wish_shelves(vec![0, 1]));
+        for (what, plan) in [
+            (
+                "count",
+                plan_of(&s.conn, &rooted.count, rooted.count_params()),
+            ),
+            ("page", plan_of(&s.conn, &rooted.page, &rooted.params)),
+        ] {
+            assert!(
+                plan.iter().any(|d| d.starts_with("SCAN w")),
+                "the {what} statement scans for a list naming the root: {plan:?}"
+            );
+            assert!(
+                !plan.iter().any(|d| d.contains("MULTI-INDEX OR")),
+                "the {what} statement takes no OR over the index: {plan:?}"
+            );
+        }
     }
 
     /// **Absent is today's answer.** The other fences are `list_wishes_at_the_root_leaves_out_what_is_filed`,

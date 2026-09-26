@@ -1941,7 +1941,8 @@ fn from_sql() -> String {
     "collection_entries e LEFT JOIN cards c ON c.id = e.card_id".to_owned()
 }
 
-/// The bound value behind every shelf term — the list as a JSON array, `[3,0,12]`.
+/// The bound value behind every shelf **membership** term — the list as a JSON array,
+/// `[3,0,12]`. (The position binds [`shelf_order`] instead.)
 ///
 /// **One bound string rather than a `?` per id**, so a statement's text is the same whatever the
 /// list's length, and nothing a caller sent is ever interpolated. Built by hand because every
@@ -1951,21 +1952,57 @@ pub(crate) fn shelf_list(ids: &[i64]) -> String {
     format!("[{joined}]")
 }
 
+/// The bound value behind a shelf's **position** — the list in order between commas,
+/// `,3,0,12,`. [`shelf_position`] reads an offset into it. Built by hand for [`shelf_list`]'s
+/// reason, and the comma on **both** ends of every id is the whole of what keeps `,1,` from
+/// being found inside `,12,` and `,2,` inside `,12,`.
+pub(crate) fn shelf_order(ids: &[i64]) -> String {
+    let joined = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    format!(",{joined},")
+}
+
 /// `column`'s shelf is one the list names — `coalesce(…, 0)`, so a NULL is the unfiled shelf.
-/// Binds [`shelf_list`] once. Shared with `wishlist::wishlist_scope`, which passes `w.folder_id`.
+/// Binds [`shelf_list`] once.
 ///
-/// An id nothing answers to is simply a value no row has: no error, no row.
+/// **The form a list naming `0` takes, and the peek statements' form**; [`shelf_term`] picks it.
+/// It scans: no index can answer `coalesce(folder_id, 0)`. That is the measured choice for the
+/// lists that need it — Task 9 timed every index plan for a list naming Not sorted (an `OR
+/// folder_id IS NULL` over `idx_collection_folder`, an expression index) and each lost to this
+/// scan at the root. An id nothing answers to is simply a value no row has: no error, no row.
 pub(crate) fn shelf_member(column: &str) -> String {
     format!("coalesce({column}, 0) IN (SELECT j.value FROM json_each(?) AS j)")
 }
 
-/// Where `column`'s shelf stands in the list, `0` for the first. Binds [`shelf_list`] once more.
+/// The membership term a list's scope takes — shared with `wishlist::wishlist_scope`, which
+/// passes `w.folder_id`. Binds [`shelf_list`] once, either way.
 ///
-/// `min` is what makes a list naming one shelf twice answer its **first** place rather than
-/// either. It is an `ORDER BY` term, and a computed position defeats any index the sort could
-/// have used — the cost spec §4.4 asks to be measured before merge (Task 9).
+/// **A list that leaves out Not sorted asks `column IN (…)`, which the folder index can
+/// search** (`idx_collection_folder`, `idx_wishlist_folder`). Written as [`shelf_member`] it
+/// scanned the whole table, and Task 9 measured the cost: one 120-row folder four levels down
+/// took 25× (debug) and 33× (release) what `folderId` takes for the same rows, where this form
+/// takes 1.06× and 0.98×. **A list naming `0` keeps [`shelf_member`]**, because only the
+/// `coalesce` finds a NULL and every index plan for that list measured slower than its scan.
+/// Two statement shapes, decided here in Rust from the list itself — the SQL spelling of the
+/// same split (`… OR folder_id IS NULL AND 0 IN (…)`) kept a 3.5–7 ms floor walking every
+/// unfiled row to evaluate a constant.
+pub(crate) fn shelf_term(column: &str, shelves: &[i64]) -> String {
+    if shelves.contains(&0) {
+        shelf_member(column)
+    } else {
+        format!("{column} IN (SELECT j.value FROM json_each(?) AS j)")
+    }
+}
+
+/// Where `column`'s shelf stands in the list — an offset into [`shelf_order`]'s string, which
+/// sorts exactly as the list does. Binds [`shelf_order`] once.
+///
+/// **`instr` answers the first occurrence**, so a list naming one shelf twice answers its
+/// **first** place. It replaced a correlated `json_each` lookup per row, which Task 9 measured as
+/// most of the like-for-like cost at the root: 1263 → 902 ms (release) over the same 100,277
+/// rows. It is an `ORDER BY` term and defeats any index the sort could have used; nothing here
+/// could use one anyway, since no index orders by a list only the caller knows.
 pub(crate) fn shelf_position(column: &str) -> String {
-    format!("(SELECT min(j.key) FROM json_each(?) AS j WHERE j.value = coalesce({column}, 0))")
+    format!("instr(?, ',' || coalesce({column}, 0) || ',')")
 }
 
 /// The `WHERE` shared by the page, the count and the summary — because a summary taken
@@ -2047,7 +2084,10 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
     // [`CollectionQuery::shelves`].
     match (&q.shelves, q.folder_id, q.root_only) {
         (Some(shelves), _, _) => {
-            p.push(shelf_member("e.folder_id"), Box::new(shelf_list(shelves)));
+            p.push(
+                shelf_term("e.folder_id", shelves),
+                Box::new(shelf_list(shelves)),
+            );
         }
         (None, Some(folder), _) => p.push("e.folder_id = ?".to_owned(), Box::new(folder)),
         (None, None, true) => p.wheres.push("e.folder_id IS NULL".to_owned()),
@@ -2250,7 +2290,33 @@ const UNIT_PRICE_ALIAS: &str = "unit_price";
 const COLLECTION_DEFAULT_ORDER: &str =
     "coalesce(c.name, e.card_id) ASC, e.set_code ASC, CAST(e.collector_number AS INTEGER) ASC";
 
-pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<CollectionPage, String> {
+/// The two statements a list reads, with every value they bind — [`list_entries`]' pair, and
+/// `wishlist::list_wishes`' one table over.
+///
+/// **Split out of the functions that step them so a test can ask SQLite how each is planned**
+/// against the very text the page runs, never a copy of it: whether a shelves list reaches the
+/// folder index is a property of that text, and nothing about a list's *answer* shows it.
+pub(crate) struct ListStatements {
+    /// `SELECT count(*)` over the scope — the pager's total, counted in full.
+    pub(crate) count: String,
+    /// The page itself.
+    pub(crate) page: String,
+    /// The page's values in hole order: the scope's, then the shelf order when a list was
+    /// sent, then `LIMIT` and `OFFSET`.
+    pub(crate) params: Vec<Box<dyn rusqlite::ToSql>>,
+    /// How many of [`Self::params`] the count binds — the scope's, which lead the list.
+    pub(crate) scope_params: usize,
+}
+
+impl ListStatements {
+    /// The values [`Self::count`] binds.
+    pub(crate) fn count_params(&self) -> &[Box<dyn rusqlite::ToSql>] {
+        &self.params[..self.scope_params]
+    }
+}
+
+/// The count and the page [`list_entries`] steps, built once and stepped there.
+fn list_statements(q: &CollectionQuery) -> ListStatements {
     let limit = if q.limit == 0 {
         DEFAULT_LIMIT
     } else {
@@ -2259,18 +2325,13 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
     let p = scope(q);
     let where_sql = p.where_sql();
     let mut params = p.params;
+    let scope_params = params.len();
     let from = from_sql();
 
-    // The count first, while `params` holds exactly the filter parameters. Counted in
-    // full — this is a collection, not a 116 k-row table, and a pager that says "1 240
-    // cards" should mean it.
-    let total: i64 = conn
-        .query_row(
-            &format!("SELECT count(*) FROM {from} WHERE {where_sql}"),
-            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    // The count binds exactly the filter parameters, which is why they lead the list. Counted in
+    // full — this is a collection, not a 116 k-row table, and a pager that says "1 240 cards"
+    // should mean it.
+    let count = format!("SELECT count(*) FROM {from} WHERE {where_sql}");
 
     // The front face's picture, as two `json_extract`s off the `cards` row this statement
     // already holds — no join and no second query. `c` is [`from_sql`]'s alias for it.
@@ -2282,18 +2343,19 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
         "e.id ASC",
     );
     // **Shelves order the page before the reader's sort does**, and the sort only ever reorders
-    // inside a shelf. The position term binds the list a second time, and its `?` sits after every
-    // `WHERE` hole and before `LIMIT ? OFFSET ?` — so it is pushed here, after the count above has
-    // run over the scope's own parameters and before the two paging values below.
+    // inside a shelf. The position term binds the list a second time, as [`shelf_order`]'s comma
+    // string, and its `?` sits after every `WHERE` hole and before `LIMIT ? OFFSET ?` — so it is
+    // pushed here, after the scope's own parameters the count binds and before the two paging
+    // values below.
     let order = match &q.shelves {
         Some(shelves) => {
-            params.push(Box::new(shelf_list(shelves)));
+            params.push(Box::new(shelf_order(shelves)));
             let position = shelf_position("e.folder_id");
             format!("{position} ASC, {sorted}")
         }
         None => sorted,
     };
-    let sql = format!(
+    let page = format!(
         "SELECT e.id, e.card_id, c.name, e.set_code, c.set_name, e.collector_number, e.lang,
                 c.rarity, c.mana_cost, c.type_line, c.layout,
                 e.finish, e.condition, e.quantity, e.tradelist_quantity,
@@ -2315,6 +2377,23 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
     );
     params.push(Box::new(limit));
     params.push(Box::new(q.offset));
+    ListStatements {
+        count,
+        page,
+        params,
+        scope_params,
+    }
+}
+
+pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<CollectionPage, String> {
+    let s = list_statements(q);
+    let total: i64 = conn
+        .query_row(
+            &s.count,
+            rusqlite::params_from_iter(s.count_params().iter().map(|p| p.as_ref())),
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
 
     // Where the image pair begins — the count of every column before it, which is what makes
     // it last. Written down rather than spelled inside the closure below, for the reason the
@@ -2322,10 +2401,10 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
     // nothing errors.
     const IMAGE_COL: usize = 35;
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&s.page).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(
-            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            rusqlite::params_from_iter(s.params.iter().map(|p| p.as_ref())),
             |r| {
                 Ok(CollectionRow {
                     id: r.get(0)?,
@@ -3986,6 +4065,85 @@ mod tests {
             (3, 4),
             "the sleeve is below the binder, and only the list says so"
         );
+    }
+
+    /// **A list naming one shelf twice answers its first place** — `shelf_position`'s promise, and
+    /// the one nothing else pins: every other list here names each shelf once, so a position that
+    /// took the *last* occurrence would pass them all. The binder is first and third; its rows
+    /// come before Not sorted's, and a shelf named twice is still one shelf's rows.
+    #[test]
+    fn a_list_naming_one_shelf_twice_answers_its_first_place() {
+        let s = shelved_collection();
+        let page = list_entries(&s.conn, &on_shelves(vec![s.binder, 0, s.binder])).unwrap();
+        assert_eq!(
+            row_ids(&page),
+            vec![
+                s.binder_nm,
+                s.binder_lp,
+                s.binder_foil,
+                s.root_foil,
+                s.root_card
+            ],
+            "the binder at its first place, not its last"
+        );
+        assert_eq!(page.total, 5, "named twice, counted once");
+    }
+
+    /// What SQLite says it will do with a statement, one `detail` line per step.
+    fn plan_of(conn: &Connection, sql: &str, params: &[Box<dyn rusqlite::ToSql>]) -> Vec<String> {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        stmt.query_map(
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |r| r.get::<_, String>(3),
+        )
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+    }
+
+    /// **A shelves list that leaves out Not sorted is searched through `idx_collection_folder`**,
+    /// the index `folderId` has always used — Task 9's measurement: planned as a scan, one small
+    /// folder cost 25× (debug) and 33× (release) what `folderId` costs for the same 120 rows.
+    /// **A list naming Not sorted scans, on purpose**: `coalesce(folder_id, 0)` is what finds the
+    /// unfiled rows, and every index plan measured for such a list (a `MULTI-INDEX OR`, an
+    /// expression index) lost to the scan at the root. Both of [`list_entries`]' statements are
+    /// explained from the text it runs, so neither half can regress without this going red.
+    #[test]
+    fn a_list_without_the_unfiled_shelf_is_searched_through_the_folder_index() {
+        let s = shelved_collection();
+
+        let filed = list_statements(&on_shelves(vec![s.binder, s.sleeve]));
+        for (what, plan) in [
+            (
+                "count",
+                plan_of(&s.conn, &filed.count, filed.count_params()),
+            ),
+            ("page", plan_of(&s.conn, &filed.page, &filed.params)),
+        ] {
+            assert!(
+                plan.iter().any(|d| d.starts_with("SEARCH e ")
+                    && d.contains("INDEX idx_collection_folder (folder_id=?)")),
+                "the {what} statement reaches the folder index: {plan:?}"
+            );
+        }
+
+        let unfiled = list_statements(&on_shelves(vec![0, s.binder]));
+        for (what, plan) in [
+            (
+                "count",
+                plan_of(&s.conn, &unfiled.count, unfiled.count_params()),
+            ),
+            ("page", plan_of(&s.conn, &unfiled.page, &unfiled.params)),
+        ] {
+            assert!(
+                plan.iter().any(|d| d.starts_with("SCAN e")),
+                "the {what} statement scans for a list naming Not sorted: {plan:?}"
+            );
+            assert!(
+                !plan.iter().any(|d| d.contains("MULTI-INDEX OR")),
+                "the {what} statement takes no OR over the index, the plan that lost: {plan:?}"
+            );
+        }
     }
 
     /// A [`ShelfCount`] in one line — the four figures, then the peek's card ids in order.
