@@ -25,6 +25,15 @@ export interface TooltipOptions {
   whenClipped?: boolean;
   /** Wire `aria-describedby` while open. Default `true`. */
   describes?: boolean;
+  /**
+   * Open at once, skipping `TOOLTIP_OPEN_MS`.
+   *
+   * For a readout that follows a scrubbing pointer or the arrow keys (the home page's value graph):
+   * the reader has already asked by moving across the plot, and a panel that waited 400ms at every
+   * day would trail the crosshair rather than read it. Never for a hint on a control — the delay is
+   * what keeps a pointer passing over a toolbar from lighting every button it crosses.
+   */
+  immediate?: boolean;
 }
 
 /** What a bound element gets. Every field optional, so "no tooltip" is `{}`. */
