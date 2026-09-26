@@ -30,13 +30,21 @@
  * rather than drawing `Could save $0.00`. The figure is gold and everything else body ink —
  * `WidgetParts.tsx`'s rule.
  *
- * ## Three empty sentences
+ * ## Four empty sentences, and `skipped` is never *cheapest*
  *
  * `considered` is **every** wish the plan scanned — an any-printing wish is counted in
  * `alreadyCheapest` (`wishlist_optimize.rs:276-288`) — so `considered === 0` is an empty wishlist,
  * not a list with nothing pinned. No move at all is *every pinned wish is already cheapest*, which is
- * also the true answer for a list of any-printing wishes. And moves none of which is priced is the
- * third.
+ * also the true answer for a list of any-printing wishes — **but only when `skipped` is zero**.
+ *
+ * `skipped` is a pinned wish the plan could not compare at all (`wishlist_optimize.rs:290-316`): no
+ * oracle id to find siblings by, a printing `cards` no longer has, or — the one a reader meets — **no
+ * printing of the card priced at this marketplace and finish**: Card Kingdom or Mana Pool picked
+ * before its feed has landed, a foil wish where nobody quotes foil. With no move and some skipped,
+ * *already cheapest* would be false, so {@link skippedOnly} says that no price was there to compare,
+ * naming the marketplace, since switching one is what changes the answer. With moves as well, the
+ * face is unchanged and {@link skippedFooter} is one more line — counted, never summed. And moves
+ * none of which is priced is the fourth sentence.
  *
  * ## A press opens the dialog
  *
@@ -110,16 +118,38 @@ export function moveCaption(move: WishOptimizeMove, currency: Currency): string 
   return move.quantity > 1 ? `${base} · ${count(move.quantity)} copies` : base;
 }
 
-/** The moves that did not fit: `4 more wishes save $11.45`. */
+/**
+ * The moves that did not fit: `4 more wishes save $11.45`.
+ *
+ * **Only the priced moves count, in the number as in the sum.** The body only ever cuts from the
+ * priced list, so this is a fence for the next caller rather than a branch the card takes: an
+ * unpriced move handed in is neither counted as a wish that saves nor added as zero, and a cut with
+ * nothing priced in it answers `""` rather than `0 more wishes save $0.00`.
+ */
 export function cutFooter(cut: readonly WishOptimizeMove[], currency: Currency): string {
-  const sum = cut.reduce((total, move) => total + (move.saved ?? 0), 0);
-  const n = cut.length;
+  const priced = cut.filter((move) => move.saved !== null);
+  if (priced.length === 0) return "";
+  const sum = priced.reduce((total, move) => total + (move.saved ?? 0), 0);
+  const n = priced.length;
   return `${count(n)} more ${n === 1 ? "wish saves" : "wishes save"} ${formatPrice(sum, currency)}`;
 }
 
 /** The moves with no current price, on their own line: `2 more have no current price`. */
 export function unpricedFooter(n: number): string {
   return `${count(n)} more ${n === 1 ? "has" : "have"} no current price`;
+}
+
+/** The pinned wishes the plan could not compare, beside moves it could:
+ *  `2 more have no price at Card Kingdom to compare against`. */
+export function skippedFooter(n: number, marketplace: Marketplace): string {
+  return `${count(n)} more ${n === 1 ? "has" : "have"} no price at ${marketplace.label} to compare against`;
+}
+
+/** No move, and pinned wishes the plan could not compare — a sentence, never *already cheapest*. */
+export function skippedOnly(n: number, marketplace: Marketplace): string {
+  return `${plural(n, "pinned wish", "pinned wishes")} ${
+    n === 1 ? "has" : "have"
+  } no price at ${marketplace.label} to compare against — so there is no saving to count.`;
 }
 
 /** Moves exist and none of them can be priced — a sentence, never `Could save $0.00`. */
@@ -153,23 +183,38 @@ export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactEle
   if (query.isPending) return <WidgetMessage>{PENDING}</WidgetMessage>;
 
   const plan = query.data;
+  const { skipped } = plan;
   if (plan.considered === 0) return <WidgetMessage>{NO_WISHES}</WidgetMessage>;
-  if (plan.moves.length === 0) return <WidgetMessage>{ALL_CHEAPEST}</WidgetMessage>;
+  if (plan.moves.length === 0) {
+    return (
+      <WidgetMessage>{skipped === 0 ? ALL_CHEAPEST : skippedOnly(skipped, marketplace)}</WidgetMessage>
+    );
+  }
+  const skippedLine =
+    skipped > 0 ? <WidgetFooter>{skippedFooter(skipped, marketplace)}</WidgetFooter> : null;
   const { priced, unpriced, total } = splitSavings(plan.moves);
   if (priced.length === 0) {
-    return <WidgetMessage>{unpricedOnly(unpriced, marketplace)}</WidgetMessage>;
+    return (
+      <>
+        <WidgetMessage>{unpricedOnly(unpriced, marketplace)}</WidgetMessage>
+        {skippedLine}
+      </>
+    );
   }
 
   /**
-   * The furniture is reserved before the rows are laid in — the figure line, the unpriced line when
-   * there is one, and the cut line **only when rows are cut**, which is known only once the rows
-   * without it are counted. The second count can only shrink, so the cut line is never drawn into
-   * space nothing reserved.
+   * The furniture is reserved before the rows are laid in — the figure line, the unpriced and the
+   * skipped line when there is one of each, and the cut line **only when rows are cut**, which is
+   * known only once the rows without it are counted. The second count can only shrink, so the cut
+   * line is never drawn into space nothing reserved.
    */
   const tile = fit.tier === 0;
   const captioned = tile || !fit.compact;
   const rowH = captioned ? ROW_CAPTIONED : ROW_BARE;
-  const base = (fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX) + (unpriced > 0 ? FOOTER_PX : 0);
+  const base =
+    (fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX) +
+    (unpriced > 0 ? FOOTER_PX : 0) +
+    (skipped > 0 ? FOOTER_PX : 0);
   const all = fit.rowsFit(rowH, base);
   const room = priced.length > all ? fit.rowsFit(rowH, base + FOOTER_PX) : all;
   const shown = priced.slice(0, room);
@@ -235,6 +280,7 @@ export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactEle
       </WidgetRowList>
       {cut.length > 0 && <WidgetFooter>{cutFooter(cut, currency)}</WidgetFooter>}
       {unpriced > 0 && <WidgetFooter>{unpricedFooter(unpriced)}</WidgetFooter>}
+      {skippedLine}
     </>
   );
 }

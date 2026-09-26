@@ -37,6 +37,8 @@ import {
   cutFooter,
   moveCaption,
   NO_WISHES,
+  skippedFooter,
+  skippedOnly,
   splitSavings,
   unpricedFooter,
   unpricedOnly,
@@ -170,9 +172,31 @@ describe("the words", () => {
     expect(cutFooter([BOLT, RING], "eur")).toBe("2 more wishes save €24.92");
   });
 
+  /** The number and the sum are both over what is priced, and a cut with nothing priced in it
+   *  says nothing rather than `$0.00`. */
+  it("never counts or sums an unpriced move in the cut line", () => {
+    expect(cutFooter([BOLT, FROG], "usd")).toBe("1 more wish saves $18.40");
+    expect(cutFooter([FROG], "usd")).toBe("");
+  });
+
   it("says the unpriced moves in their own line", () => {
     expect(unpricedFooter(1)).toBe("1 more has no current price");
     expect(unpricedFooter(2)).toBe("2 more have no current price");
+  });
+
+  it("says the wishes the plan could not compare, naming the marketplace", () => {
+    expect(skippedFooter(1, MARKETPLACES.tcgplayer)).toBe(
+      "1 more has no price at TCGplayer to compare against",
+    );
+    expect(skippedFooter(2, MARKETPLACES.cardkingdom)).toBe(
+      "2 more have no price at Card Kingdom to compare against",
+    );
+    expect(skippedOnly(1, MARKETPLACES.tcgplayer)).toBe(
+      "1 pinned wish has no price at TCGplayer to compare against — so there is no saving to count.",
+    );
+    expect(skippedOnly(3, MARKETPLACES.manapool)).toBe(
+      "3 pinned wishes have no price at Mana Pool to compare against — so there is no saving to count.",
+    );
   });
 
   it("says why there is no saving when no move is priced", () => {
@@ -253,6 +277,32 @@ describe("WishlistSavingsWidget", () => {
       expect(screen.getByText("1 more has no current price")).toBeInTheDocument();
     });
 
+    /**
+     * Moves and wishes the plan could not compare, together: the face is unchanged, the skipped
+     * count is a line of its own — reserved like the other two, which the guard makes observable
+     * at this cell — and it is never folded into the figure.
+     */
+    it("says the wishes it could not compare in a line of their own, beside the moves", () => {
+      const eight = Array.from({ length: 8 }, (_, i) =>
+        move({ wishId: 10 + i, name: `Wish ${i}`, saved: 1, savedPerCopy: 1 }),
+      );
+      seed(plan(eight, { considered: 10, alreadyCheapest: 1, skipped: 1 }));
+      const fit = fitFor(3, 3, 100);
+
+      draw({ fit });
+
+      expect(
+        screen.getByRole("button", { name: "Could save $8.00 on 8 wishes · Optimise prices" }),
+      ).toBeInTheDocument();
+      const shown = fit.rowsFit(51, 74 + 22 + 22);
+      expect(fit.rowsFit(51, 74 + 22)).toBeGreaterThan(shown);
+      expect(screen.getAllByRole("listitem")).toHaveLength(shown);
+      expect(
+        screen.getByText("1 more has no price at TCGplayer to compare against"),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(ALL_CHEAPEST)).toBeNull();
+    });
+
     it("moves the saving under the name on a two-cell tile", () => {
       seed(plan([BOLT]));
 
@@ -327,6 +377,20 @@ describe("WishlistSavingsWidget", () => {
       expect(screen.getByText(ALL_CHEAPEST)).toBeInTheDocument();
     });
 
+    /**
+     * `skipped` is a wish the plan could not compare at all — no printing of its card priced at
+     * this marketplace and finish (a feed not downloaded yet, a foil wish where nobody quotes
+     * foil), a vanished printing, no oracle id. **Not** already cheapest, so never that sentence.
+     */
+    it("says the pinned wishes have no price to compare against, never that they are cheapest", () => {
+      seed(plan([], { considered: 3, alreadyCheapest: 0, skipped: 3 }));
+
+      draw();
+
+      expect(screen.getByText(skippedOnly(3, MARKETPLACES.tcgplayer))).toBeInTheDocument();
+      expect(screen.queryByText(ALL_CHEAPEST)).toBeNull();
+    });
+
     it("never reads $0.00 saved when no move can be priced", () => {
       seed(plan([FROG], { considered: 1, alreadyCheapest: 0 }));
 
@@ -335,6 +399,17 @@ describe("WishlistSavingsWidget", () => {
       expect(screen.getByText(unpricedOnly(1, MARKETPLACES.tcgplayer))).toBeInTheDocument();
       expect(screen.queryByText(/\$0\.00/)).toBeNull();
       expect(screen.queryByText("Could save")).toBeNull();
+    });
+
+    it("still says the skipped wishes under the sentence for moves none of which is priced", () => {
+      seed(plan([FROG], { considered: 3, alreadyCheapest: 0, skipped: 2 }));
+
+      draw();
+
+      expect(screen.getByText(unpricedOnly(1, MARKETPLACES.tcgplayer))).toBeInTheDocument();
+      expect(
+        screen.getByText("2 more have no price at TCGplayer to compare against"),
+      ).toBeInTheDocument();
     });
   });
 

@@ -2,11 +2,17 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { expect, fn, within } from "storybook/test";
-import { ipc, type HomeWidget } from "@/lib/ipc";
+import { ipc, type HomeWidget, type WishInput } from "@/lib/ipc";
+import { MARKETPLACES } from "@/lib/marketplace";
 import { makeFit, spanPx } from "../fit";
 import { WidgetCard } from "../WidgetCard";
 import { widgetDensity } from "../widgetSettings";
-import { ALL_CHEAPEST, NO_WISHES, WishlistSavingsWidget } from "./WishlistSavingsWidget";
+import {
+  ALL_CHEAPEST,
+  NO_WISHES,
+  skippedOnly,
+  WishlistSavingsWidget,
+} from "./WishlistSavingsWidget";
 
 /** The grid's target cell. Not exported, for CSF. */
 const CELL = 104;
@@ -23,6 +29,18 @@ const LANDED = { timeout: 5_000 };
 const LEA_BOLT = "d573ef03-4730-45aa-93dd-e45ac1dbaf4a";
 const SLD_BOLT = "4f43c378-9e6a-4ece-9c24-5dc08c977746";
 const SLD_SOL_RING = "16a2c470-b2b8-4633-89b1-7b936bcaff8d";
+/** Commander 2021's Sol Ring — and **no Sol Ring in the corpus carries a foil price at any
+ *  printing**, so a foil wish pinned here is one the plan cannot compare at all. Not exported, for
+ *  CSF. */
+const C21_SOL_RING = "4cbc6901-6a4a-4d0a-83ea-7eefa3b35021";
+
+/** The three pinned wishes `Default` stages: two priced moves and one the marketplace cannot
+ *  price. Not exported, for CSF. */
+const SAVINGS: readonly WishInput[] = [
+  { cardId: LEA_BOLT, quantity: 1 },
+  { cardId: SLD_BOLT, quantity: 2 },
+  { cardId: SLD_SOL_RING, quantity: 1 },
+];
 
 function savings(w: number, h: number, config: unknown = null): HomeWidget {
   return { id: "wishlistSavings", kind: "wishlistSavings", x: 0, y: 0, w, h, config };
@@ -59,17 +77,24 @@ function Framed({ widget, still = false }: { widget: HomeWidget; still?: boolean
 
 /**
  * `starter`'s pinned wishes are each already on their cheapest printing — every one has a single
- * printing in the corpus, or none cheaper — so the savings are **written through the command** a
- * reader's `+` makes: three pinned wishes at the root, `DecksPage.stories.tsx`'s `OrphanedCover`
- * idiom. `useQuery` so it runs once per story client, and the card is held back until they land.
+ * printing in the corpus, or none cheaper — so a story's wishes are **written through the command**
+ * a reader's `+` makes, at the root: `DecksPage.stories.tsx`'s `OrphanedCover` idiom. `useQuery` so
+ * it runs once per story client (the `name` keeps two stagings apart), and the card is held back
+ * until they land.
  */
-function WithSavings({ children }: { children: ReactNode }) {
+function WithWishes({
+  name,
+  wishes,
+  children,
+}: {
+  name: string;
+  wishes: readonly WishInput[];
+  children: ReactNode;
+}) {
   const staged = useQuery({
-    queryKey: ["story", "wishlist-savings"],
+    queryKey: ["story", "wishlist-savings", name],
     queryFn: async () => {
-      await ipc.wishlistAdd({ cardId: LEA_BOLT, quantity: 1 });
-      await ipc.wishlistAdd({ cardId: SLD_BOLT, quantity: 2 });
-      await ipc.wishlistAdd({ cardId: SLD_SOL_RING, quantity: 1 });
+      for (const wish of wishes) await ipc.wishlistAdd(wish);
       return true;
     },
     staleTime: Infinity,
@@ -83,9 +108,9 @@ const meta = {
   tags: ["autodocs"],
   args: { widget: savings(3, 3) },
   render: (args) => (
-    <WithSavings>
+    <WithWishes name="savings" wishes={SAVINGS}>
       <Framed {...args} />
-    </WithSavings>
+    </WithWishes>
   ),
   parameters: {
     docs: {
@@ -149,6 +174,30 @@ export const EveryWishCheapest: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText(ALL_CHEAPEST, {}, LANDED)).toBeInTheDocument();
+  },
+};
+
+/**
+ * A pinned wish the plan could not compare: a foil Sol Ring, where no printing of the card is
+ * quoted foil at TCGplayer. The plan answers no move and `skipped: 1` beside `starter`'s eight
+ * already-cheapest wishes — so the card says there was no price to compare, and **not** that every
+ * pinned wish is already cheapest, which is what it said before `skipped` was read.
+ */
+export const NothingToCompare: Story = {
+  render: (args) => (
+    <WithWishes
+      name="nothing-to-compare"
+      wishes={[{ cardId: C21_SOL_RING, quantity: 1, preferredFinish: "foil" }]}
+    >
+      <Framed {...args} />
+    </WithWishes>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText(skippedOnly(1, MARKETPLACES.tcgplayer), {}, LANDED),
+    ).toBeInTheDocument();
+    await expect(canvas.queryByText(ALL_CHEAPEST)).not.toBeInTheDocument();
   },
 };
 
