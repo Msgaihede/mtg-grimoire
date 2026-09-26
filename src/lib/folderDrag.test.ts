@@ -314,6 +314,7 @@ interface TargetProps {
   axis: "vertical" | "horizontal";
   canDrop: (drag: FolderDrag, edge: FolderEdge) => boolean;
   onDrop: (drag: FolderDrag, edge: FolderEdge) => void;
+  armOnMount?: boolean;
 }
 
 function mountTarget({ top = TARGET_TOP, ...props }: Partial<TargetProps> & { top?: number } = {}) {
@@ -599,5 +600,47 @@ describe("registering with the manager", () => {
 
     await settled();
     expect(mine(element, "draggables")).toHaveLength(1);
+  });
+});
+
+/**
+ * **A folder target that mounts mid-drag** — a shelf heading scrolling into view while a heading is
+ * being carried (spec §3.9 folds the wall, which remounts every heading at once). The landing has to
+ * follow the pointer and the drop has to land, exactly as on a target that was there all along.
+ */
+describe("useFolderDropTarget with armOnMount", () => {
+  const SHELF: FolderDrag = { folderId: 12, name: "Foils", parentId: null, scope: "collection" };
+
+  it("arms a folder target that mounts in the middle of a drag, and only when asked to", async () => {
+    const held = await startPointerDrag(mountSource(() => SHELF));
+    const asked = mountTarget({ scope: "collection", armOnMount: true });
+    const plain = mountTarget({ scope: "collection", top: OTHER_TOP });
+
+    expect(asked.state.armed).toBe(true);
+    expect(plain.state.armed).toBe(false);
+
+    await held.cancel();
+    expect(asked.state.armed).toBe(false);
+  });
+
+  it("reports the landing and files the folder on a target that mounted mid-drag", async () => {
+    const onDrop = vi.fn();
+    const held = await startPointerDrag(mountSource(() => SHELF));
+    const target = mountTarget({ scope: "collection", armOnMount: true, onDrop });
+
+    await held.over(target.element, BEFORE);
+    expect(target.state.edge).toBe("before");
+    await held.over(target.element, INSIDE);
+    expect(target.state.edge).toBe("inside");
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith(SHELF, "inside");
+  });
+
+  it("stays dark mid-drag for a folder from another cabinet", async () => {
+    const held = await startPointerDrag(mountSource(() => SHELF));
+    const target = mountTarget({ scope: "wishlist", armOnMount: true });
+
+    expect(target.state.armed).toBe(false);
+    await held.cancel();
   });
 });

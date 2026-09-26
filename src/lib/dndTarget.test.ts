@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { Draggable } from "@dnd-kit/dom";
 import { dndId, dndManager, registerNow } from "@/lib/dndManager";
-import { useDndDragging, useDndDropTarget } from "@/lib/dndTarget";
+import { useDndDragging, useDndDropTarget, useDragRecord } from "@/lib/dndTarget";
 import { startPointerDrag } from "@/test-drag";
 
 /** A payload of this file's own, under a key nothing else in the app writes — so a reader that
@@ -58,6 +58,8 @@ function mountSource(id: number): HTMLElement {
 interface Props {
   canDrop: (thing: Thing) => boolean;
   onDrop: (thing: Thing) => void;
+  /** The shelves' opt-in: arm on a payload that was already in the air at mount. */
+  armOnMount?: boolean;
 }
 
 function mountTarget({
@@ -244,6 +246,82 @@ describe("useDndDragging", () => {
 
     const held = await startPointerDrag(element);
     expect(view.result.current).toBeNull();
+    await held.cancel();
+  });
+});
+
+/**
+ * **A target that mounts in the middle of a drag.** Every target above is registered before the
+ * press, which is the case the `dragstart` listener was written for. A virtualised wall mounts its
+ * rows as they scroll in — and a reader carrying a card is exactly a reader who scrolls — so the
+ * shelves' headings ask for `armOnMount` (spec §6). The plain target beside it is the fence that
+ * the old rule is unchanged for everybody who did not ask.
+ */
+describe("useDndDropTarget with armOnMount", () => {
+  it("arms a target that mounts in the middle of a drag, and only when asked to", async () => {
+    const held = await startPointerDrag(mountSource(7));
+    const asked = mountTarget({ armOnMount: true });
+    const plain = mountTarget({ top: 400 });
+
+    expect(asked.state.armed).toBe(true);
+    expect(plain.state.armed).toBe(false);
+
+    await held.cancel();
+    expect(asked.state.armed).toBe(false);
+  });
+
+  it("does not arm a late target for a payload it would refuse", async () => {
+    const held = await startPointerDrag(mountSource(7));
+    const target = mountTarget({ armOnMount: true, canDrop: (thing) => thing.id !== 7 });
+
+    expect(target.state.armed).toBe(false);
+    await held.cancel();
+  });
+
+  it("takes the drop on a target that mounted mid-drag", async () => {
+    const onDrop = vi.fn();
+    const held = await startPointerDrag(mountSource(9));
+    const target = mountTarget({ armOnMount: true, onDrop });
+
+    await held.over(target.element);
+    expect(target.state.over).toBe(true);
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith({ id: 9 });
+  });
+
+  /** An `armOnMount` target reads the page's answer on every render rather than once at
+   *  `dragstart` — the counts a page gates on can land while the reader is still holding. */
+  it("follows the page's answer live while the drag is in the air", async () => {
+    const target = mountTarget({ armOnMount: true });
+    const held = await startPointerDrag(mountSource(9));
+    expect(target.state.armed).toBe(true);
+
+    target.rerender({ canDrop: () => false });
+    expect(target.state.armed).toBe(false);
+    await held.cancel();
+  });
+});
+
+describe("useDragRecord", () => {
+  it("answers the record in the air — before, during, after, and on a mount mid-drag", async () => {
+    const early = renderHook(() => useDragRecord());
+    expect(early.result.current).toBeNull();
+
+    const held = await startPointerDrag(mountSource(5));
+    expect(read(early.result.current!)).toEqual({ id: 5 });
+    const late = renderHook(() => useDragRecord());
+    expect(read(late.result.current!)).toEqual({ id: 5 });
+
+    await held.cancel();
+    expect(early.result.current).toBeNull();
+    expect(late.result.current).toBeNull();
+  });
+
+  it("answers null when disabled, whatever is in the air", async () => {
+    const off = renderHook(() => useDragRecord(false));
+    const held = await startPointerDrag(mountSource(5));
+
+    expect(off.result.current).toBeNull();
     await held.cancel();
   });
 });

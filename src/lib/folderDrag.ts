@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Draggable, Droppable, type DragEndEvent } from "@dnd-kit/dom";
 import { dndId, dndManager, registerNow } from "@/lib/dndManager";
+import { useDragRecord } from "@/lib/dndTarget";
 
 /**
  * The gesture that rearranges a filing cabinet: a folder dropped on another folder's **middle**
@@ -288,6 +289,7 @@ export function useFolderDropTarget({
   axis,
   canDrop,
   onDrop,
+  armOnMount = false,
 }: {
   ref: RefObject<HTMLElement | null>;
   scope: FolderScope;
@@ -296,9 +298,16 @@ export function useFolderDropTarget({
   axis: "vertical" | "horizontal";
   canDrop: (drag: FolderDrag, edge: FolderEdge) => boolean;
   onDrop: (drag: FolderDrag, edge: FolderEdge) => void;
+  /**
+   * `useDndDropTarget`'s opt-in, for the same reason: arm on a folder that was already in the air
+   * when this target mounted, and follow `canDrop` live. A shelf heading asks for it; every other
+   * folder target leaves it off and keeps the `dragstart` rule above.
+   */
+  armOnMount?: boolean;
 }): { armed: boolean; edge: FolderEdge | null } {
   const [armed, setArmed] = useState(false);
   const [edge, setEdge] = useState<FolderEdge | null>(null);
+  const inFlight = useDragRecord(armOnMount);
   const latest = useRef({ canDrop, onDrop });
   useEffect(() => {
     latest.current = { canDrop, onDrop };
@@ -370,5 +379,7 @@ export function useFolderDropTarget({
     };
   }, [ref, scope, axis]);
 
-  return { armed, edge };
+  if (!armOnMount) return { armed, edge };
+  const drag = inFlight === null ? null : readFolderDrag(inFlight, scope);
+  return { armed: drag !== null && FOLDER_EDGES.some((at) => canDrop(drag, at)), edge };
 }

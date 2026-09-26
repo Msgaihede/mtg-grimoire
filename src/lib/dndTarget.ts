@@ -1,8 +1,78 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from "react";
 import { CollisionPriority } from "@dnd-kit/abstract";
 import { pointerIntersection } from "@dnd-kit/collision";
 import { Draggable, Droppable } from "@dnd-kit/dom";
 import { carryAtDragStart, dndId, dndManager, registerNow } from "@/lib/dndManager";
+
+/**
+ * The record a drag is carrying **at this moment**, or `null` when nothing is in the air.
+ *
+ * **For a target that can mount in the middle of a drag, which every other reader in this file
+ * cannot see.** {@link useDndDropTarget} and `useFolderDropTarget` raise `armed` from a `dragstart`
+ * listener, so a target registered after that event never hears it — and a virtualised wall mounts
+ * its rows as they scroll in, which is exactly when a reader carrying a card is scrolling. The
+ * shelves' headings are that case (spec §6), so this reads the operation itself instead of waiting
+ * to be told.
+ *
+ * **"In the air" is `dragging` with a live controller, and the controller is the load-bearing
+ * half.** dnd-kit dispatches `dragend` while the status still reads `dragging` — it sets `dropped`
+ * after the renderer settles — but it aborts the operation's controller *before* dispatching, so the
+ * abort is the one fact already true when a `dragend` listener asks. A reader keyed on the status
+ * alone would answer "still dragging" to the very event that ended the drag.
+ *
+ * The record is the source's own `data` object, set once per drag (`carryAtDragStart` at
+ * `beforedragstart`, `folderDraggable` at the press), so it is one object for the whole gesture —
+ * which is what lets {@link useDragRecord} hand it to `useSyncExternalStore` as a snapshot.
+ */
+export function recordInFlight(): Record<string, unknown> | null {
+  const { status, source, controller } = dndManager.dragOperation;
+  if (!status.dragging || source === null) return null;
+  if (controller === undefined || controller.signal.aborted) return null;
+  return source.data;
+}
+
+/** Wake a subscriber on the two events that change {@link recordInFlight}'s answer. */
+function subscribeToDrags(notify: () => void): () => void {
+  const off = [
+    dndManager.monitor.addEventListener("dragstart", notify),
+    dndManager.monitor.addEventListener("dragend", notify),
+  ];
+  return () => {
+    for (const stop of off) stop();
+  };
+}
+
+/** What a disabled {@link useDragRecord} subscribes with: no listener, and never a record. */
+const subscribeToNothing = (): (() => void) => () => {};
+const nothingInFlight = (): null => null;
+
+/**
+ * {@link recordInFlight} as a render reads it — on the frame a component mounts, and again on every
+ * `dragstart` and `dragend` after that.
+ *
+ * **`useSyncExternalStore` rather than a listener feeding a `useState`, and that difference is the
+ * whole point**: a listener hears only events that happen after it is registered, while a store's
+ * snapshot is read on the first render too. No effect sets state, so the lint that refuses a
+ * synchronous `setState` in an effect has nothing to refuse.
+ *
+ * `enabled: false` subscribes to nothing and answers `null`, so a hook that must call this
+ * unconditionally pays nothing when its caller did not ask for the mid-drag answer.
+ */
+export function useDragRecord(enabled = true): Record<string, unknown> | null {
+  return useSyncExternalStore(
+    enabled ? subscribeToDrags : subscribeToNothing,
+    enabled ? recordInFlight : nothingInFlight,
+    nothingInFlight,
+  );
+}
 
 /**
  * The drop-target effect this app writes eight times, written once.
@@ -40,6 +110,7 @@ export function useDndDropTarget<T>({
   canDrop,
   onDrop,
   overlay,
+  armOnMount = false,
 }: {
   ref: RefObject<HTMLElement | null>;
   /** This feature's payload out of the library's untyped store, or `null` for everything else. */
@@ -72,9 +143,20 @@ export function useDndDropTarget<T>({
    * and wins outright when it is. Nothing else in the app passes this, so nothing else changes.
    */
   overlay?: boolean;
+  /**
+   * Raise `armed` for a payload that was **already in the air when this target mounted**, and
+   * follow the page's `canDrop` on every render rather than asking it once at `dragstart`.
+   *
+   * Off by default: every target that existed before the shelves is mounted before any drag begins
+   * and was written against "armed is computed at `dragstart` and not recomputed", above. A
+   * virtualised wall breaks that premise — its rows mount as they scroll in. See
+   * {@link useDragRecord}.
+   */
+  armOnMount?: boolean;
 }): { armed: boolean; over: boolean } {
   const [armed, setArmed] = useState(false);
   const [over, setOver] = useState(false);
+  const inFlight = useDragRecord(armOnMount);
   const latest = useRef({ read, canDrop, onDrop });
   useEffect(() => {
     latest.current = { read, canDrop, onDrop };
@@ -137,7 +219,9 @@ export function useDndDropTarget<T>({
     };
   }, [ref, overlay]);
 
-  return { armed, over };
+  if (!armOnMount) return { armed, over };
+  const drop = inFlight === null ? null : read(inFlight);
+  return { armed: drop !== null && canDrop(drop), over };
 }
 
 /**
