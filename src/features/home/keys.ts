@@ -336,9 +336,12 @@ export const wishlistSavingsKey = (marketplace: MarketplaceId): QueryKey =>
  *
  * **Never `["scanner", "tray"]`**, which *is* the tray in the window that owns the scanner, written
  * with `setQueryData` (`useTray.ts`); the stored copy can lag that entry by the tray's debounce, and
- * a second reader able to refetch it would race the scanner's own write. **Nothing invalidates this
- * key**, because the scanner and the home page are never on screen together in one window: its
- * reader must re-read on every mount (`staleTime: 0`) rather than trusting the app's 30-second
- * default across a trip to the Scanner and back.
+ * a second reader able to refetch it would race the scanner's own write. **With one window open
+ * nothing invalidates this key**, because in one window the scanner and the home page are never on
+ * screen together: its reader re-reads on every mount (`staleTime: 0`) rather than trusting the
+ * app's 30-second default across a trip to the Scanner and back. **A second window is the case
+ * where they are**, and there every tray write is an `app_meta` commit that `lib/crossWindow.ts`
+ * answers by refreshing this key in each window — it follows `app_meta` live, beside the tray it
+ * must never touch.
  */
 export const scannerTrayCountKey: QueryKey = ["scanner", "trayCount"];
