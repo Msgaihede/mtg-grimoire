@@ -30,6 +30,63 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.31.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.30.1...v0.31.0) (2026-09-26)
+
+
+### Features
+
+* answer every deck's completion the way its editor counts it ([1af657e](https://github.com/Msgaihede/mtg-grimoire/commit/1af657e7b627728d22a85985236c37c8b4b415de))
+* collection value graph widget ([9f82c0d](https://github.com/Msgaihede/mtg-grimoire/commit/9f82c0dcb8c68d99b21a45a1a778b9f4f03f67e9))
+* Coming soon widget — the sets not out yet, soonest first ([64e5d53](https://github.com/Msgaihede/mtg-grimoire/commit/64e5d53e1a1220ec23236bb58d528019ac80fb78))
+* count the deck rows a card-data update flagged for review ([6ed6665](https://github.com/Msgaihede/mtg-grimoire/commit/6ed66651630f7df783a59d17256c121692744628))
+* Deck completion widget — each deck's owned against wanted, and what the rest costs ([b4d9743](https://github.com/Msgaihede/mtg-grimoire/commit/b4d9743fbf825e5fbae1c3be847bed1a0cf4364a))
+* draw the four new widgets on the home page, and refresh the tray count across windows ([c3c683c](https://github.com/Msgaihede/mtg-grimoire/commit/c3c683c06e7f7b9ba15ae254d53898a5642574fd))
+* four new home widgets — deck completion, to review, wishlist savings, coming soon ([0289851](https://github.com/Msgaihede/mtg-grimoire/commit/028985147d362c1651336c8df9ba5ee6929e432c))
+* hand a press from home into a filtered binder, a Settings group or the whole-list price sweep ([6e9cfd0](https://github.com/Msgaihede/mtg-grimoire/commit/6e9cfd0692ea4a9c95981cfba87371cf114687ce))
+* list the sets nobody can buy yet, and how much of each is previewed ([cf4ea95](https://github.com/Msgaihede/mtg-grimoire/commit/cf4ea953ad46124d3f34b2fcc197c542fe253b01))
+* mirror collection_value_history and fake it in Storybook ([9e6cfed](https://github.com/Msgaihede/mtg-grimoire/commit/9e6cfed5fac756cb5c7f17bc3050275c975e8431))
+* mirror the three new reads, key them under their roots, and answer them in the workbench's fake ([93b8f05](https://github.com/Msgaihede/mtg-grimoire/commit/93b8f057264e8795af576f9d8e0cabb6b76abeac))
+* mirror the token chin facts, price and rail index in TypeScript ([586d981](https://github.com/Msgaihede/mtg-grimoire/commit/586d981bb1753d8582eb76b2fb992cae6b08f818))
+* one-row pile headings with a count pill, and icon markers ([6e93795](https://github.com/Msgaihede/mtg-grimoire/commit/6e93795581efb81ef948134f57482e6b724eb1c8))
+* record copies beside each daily price (user schema v50) and read the collection's value history ([bc8bd97](https://github.com/Msgaihede/mtg-grimoire/commit/bc8bd978fe84dc4f6a0c6ed8b23b047933e69244))
+* register the four new home widget kinds and refresh the lists Needs review clears ([79e6763](https://github.com/Msgaihede/mtg-grimoire/commit/79e6763811bd382490c7acd54a4ab7f5d385cb9a))
+* register the valueHistory widget kind and its query key ([2ccccb5](https://github.com/Msgaihede/mtg-grimoire/commit/2ccccb5e158b3069b9e87db545b978fde1478dcd))
+* the collection value graph widget, its chart and its readout ([bd8cb1e](https://github.com/Msgaihede/mtg-grimoire/commit/bd8cb1e292dd701a210afbadf1f6e71b04148f88))
+* the token stack looks and moves like the deck's own piles ([43f7746](https://github.com/Msgaihede/mtg-grimoire/commit/43f77465076f1fd58daec0c45e545a4847586c9c))
+* the value graph's model — fold, range, measure, scale, readout, layout ([07021d6](https://github.com/Msgaihede/mtg-grimoire/commit/07021d699015178ad58762c255011b6fb6e2c062))
+* To review widget — what is waiting, each row opening the list it counts ([b5749cb](https://github.com/Msgaihede/mtg-grimoire/commit/b5749cb6895479bfeef9175638a25c9a4ef73f07))
+* token rows carry chin facts and a price; decks.token_rail_index (v50) ([a985620](https://github.com/Msgaihede/mtg-grimoire/commit/a985620e9b73a3d00e4b456b4cab61e1c2f82097))
+* token stacks look and move like the deck's own piles ([390b0c5](https://github.com/Msgaihede/mtg-grimoire/commit/390b0c5e93a424968819bae2b1b134080bc02b4d))
+* Wishlist savings widget — pinned wishes with a cheaper printing, biggest saving first ([9cd8e8b](https://github.com/Msgaihede/mtg-grimoire/commit/9cd8e8bd0074fe9d7f1b826f167f2d74f422932b))
+
+
+### Bug Fixes
+
+* check a deck undo or redo against the deck before writing ([c5e6f0b](https://github.com/Msgaihede/mtg-grimoire/commit/c5e6f0b89bcdb93eac47238fb5b1665dd56bcfa4))
+* check a deck undo or redo against the deck before writing ([e4da2a5](https://github.com/Msgaihede/mtg-grimoire/commit/e4da2a57aa80bd27e137dbb0976679d5a15e9b24))
+* **ci:** route cross-boundary test inputs to both frontend and rust ([036b81f](https://github.com/Msgaihede/mtg-grimoire/commit/036b81fe6302f0532bd7802924864ec0207679c9))
+* **ci:** route cross-boundary test inputs to both frontend and rust ([8667620](https://github.com/Msgaihede/mtg-grimoire/commit/866762055278f514e2904fd55cda1961987b7ed3))
+* Coming soon reserves the second figure line a two-cell tile wraps to ([83c7443](https://github.com/Msgaihede/mtg-grimoire/commit/83c744325c96934c6f030bb914c707d2a3b2a761))
+* Deck completion says Plan at every density, coalesces a burst of binder writes, and names unmeasurable pins ([d054f57](https://github.com/Msgaihede/mtg-grimoire/commit/d054f57ee9e4240d6363875697b154858f32f43c))
+* **decks:** make the Collection tab's tiles draggable into the deck ([7f777b8](https://github.com/Msgaihede/mtg-grimoire/commit/7f777b8f5213de91d6281ce3fe3fd086dd01bfc3))
+* **decks:** make the Collection tab's tiles draggable into the deck ([992606e](https://github.com/Msgaihede/mtg-grimoire/commit/992606e022da71cfd28d345b6076dd864095bb4a))
+* final-review fixes for token stacks PR 1 ([2ebaf0c](https://github.com/Msgaihede/mtg-grimoire/commit/2ebaf0cb21f483078bec12a140897d96224a4ee6))
+* give the Deck completion test's deck row the tokenRailIndex main added ([fbbba7c](https://github.com/Msgaihede/mtg-grimoire/commit/fbbba7cecfb303e3ebb3fef12b2f9afe43787a23))
+* grow the deck cover art grid to the height of the settings beside it ([ac5fb34](https://github.com/Msgaihede/mtg-grimoire/commit/ac5fb341230d4392ed03b9bae81faf9569a94f34))
+* grow the deck cover art grid to the height of the settings beside it ([15a771e](https://github.com/Msgaihede/mtg-grimoire/commit/15a771ea3fa0712845d5d94c73921d41422ac24a))
+* keep mirror files through a case-only rename, guard locked subfolders, read prices with one parser ([486a5bd](https://github.com/Msgaihede/mtg-grimoire/commit/486a5bda04fd14f5db1f11044d47d9ac84c764f4))
+* keep mirror files through a case-only rename, guard locked subfolders, read prices with one parser ([705b54f](https://github.com/Msgaihede/mtg-grimoire/commit/705b54fe05c183cf8cd5b765d7231f72fbb6d17a))
+* keep Needs review in view while Settings loads above it, and never draw a wish row a small card cannot hold ([4623f75](https://github.com/Msgaihede/mtg-grimoire/commit/4623f75c8d101769ef2ee41220ba65cd9522a206))
+* keep the value graph's readout on a press, PageUp raises, reset hover on a settings change, and fake unpriced holdings ([ced4077](https://github.com/Msgaihede/mtg-grimoire/commit/ced4077b11fcd02a5a31feb5a0cbfe1be421e7dd))
+* offer Any card on the deck search's Collection tab ([9ba0c4b](https://github.com/Msgaihede/mtg-grimoire/commit/9ba0c4b29b555f7d44134325203d9dc802c95010))
+* one-line footers sized from the real line, no row without room, names that match the tile, and counts that agree with the pages they open ([e2b1775](https://github.com/Msgaihede/mtg-grimoire/commit/e2b1775e8730241f3f897b7fc0e04cd21fda73f5))
+* price snapshots record every held printing, so a price appearing is a price move ([0277fa5](https://github.com/Msgaihede/mtg-grimoire/commit/0277fa55eac232a2dd36e79fd760b21def4f39c2))
+* **relay:** retire refresh secrets with their device, close /rotate to them, pin /rotate and /claim to the group's epoch ([57a65ec](https://github.com/Msgaihede/mtg-grimoire/commit/57a65ec87f0106aa6b1431ba6f48273bf4a0a462))
+* **relay:** retire refresh secrets with their device, close /rotate to them, pin /rotate and /claim to the group's epoch ([fe28417](https://github.com/Msgaihede/mtg-grimoire/commit/fe28417acc24e3f025b80f2a87d696d1bf9f49df))
+* **sync:** open the backlog behind a join, adopt departures and lost self-rotations, clear a stale apply guard at launch ([bbfd37d](https://github.com/Msgaihede/mtg-grimoire/commit/bbfd37d00a35425f3e568f01f2155dc09fafc96c))
+* **sync:** open the backlog behind a join, adopt departures and lost self-rotations, clear a stale apply guard at launch ([2c781e4](https://github.com/Msgaihede/mtg-grimoire/commit/2c781e4ca61fa0447bccd2c944d8ce28421d0074))
+* Wishlist savings never calls a wish cheapest when its marketplace cannot price it ([9ec78e7](https://github.com/Msgaihede/mtg-grimoire/commit/9ec78e702a453cd5d1ad8fa368a3e6af04b312f0))
+
 ## [0.30.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.30.0...v0.30.1) (2026-09-24)
 
 
