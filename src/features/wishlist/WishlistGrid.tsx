@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useMemo,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -41,6 +42,10 @@ interface WishTile extends GridCard {
  * The shelves the page hands the wall — `CardGrid`'s {@link GridSections}, with the tiles still
  * this component's to build: `rowsOf` gives a shelf's wishes, and each becomes a {@link WishTile}
  * here, where the managed fence and the art mapping already live.
+ *
+ * **Hold `sections` and `rowsOf` still** (memos at the call site) — they are what the tiles and
+ * the wall's layout are keyed on. The object itself and the four render props may be fresh every
+ * render: they are read at draw time.
  */
 export interface WishShelves {
   sections: readonly ShelfSection[];
@@ -363,21 +368,32 @@ export function WishlistGrid({
   const tip = useTooltip();
 
   /**
-   * The tiles, per shelf when there are shelves — built once per render of the rows, so
-   * `tilesOf` hands `CardGrid` the same array for the same shelf, and the flat `rows` it still
-   * takes is those arrays end to end in shelf order (the order its selection and arrow walk run).
+   * The tiles, per shelf when there are shelves — built once per change of **the shelves or their
+   * rows**, so `tilesOf` hands `CardGrid` the same array for the same shelf, and the flat `rows` it
+   * still takes is those arrays end to end in shelf order (the order its selection and arrow walk
+   * run).
+   *
+   * **Keyed on `shelves.sections` and `shelves.rowsOf`, never on the `shelves` object.** The page
+   * builds that object every render, because its four render props close over the page's writes —
+   * and a `useMutation` result is a fresh object on every render, so they cannot be held still.
+   * Memoised on the whole object, every render of the page re-tiled every shelf and handed
+   * `CardGrid` a new `tilesOf`, which re-lays the wall out and re-measures the virtualiser
+   * (`GridSections`' "hold `sections` and `tilesOf` still"). The two keys are the page's own memos
+   * and move only when the shelves or the rows do.
    */
+  const sectionList = shelves?.sections;
+  const rowsOfShelf = shelves?.rowsOf;
   const byShelf = useMemo(() => {
-    if (shelves === undefined) return null;
+    if (sectionList === undefined || rowsOfShelf === undefined) return null;
     const out = new Map<number, WishTile[]>();
-    for (const { shelf } of shelves.sections) {
+    for (const { shelf } of sectionList) {
       out.set(
         shelf.id,
-        shelves.rowsOf(shelf.id).map((row) => toTile(row, readOnly?.(row) ?? false)),
+        rowsOfShelf(shelf.id).map((row) => toTile(row, readOnly?.(row) ?? false)),
       );
     }
     return out;
-  }, [shelves, readOnly]);
+  }, [sectionList, rowsOfShelf, readOnly]);
   const tiles = useMemo(
     () =>
       byShelf === null
@@ -385,21 +401,25 @@ export function WishlistGrid({
         : [...byShelf.values()].flat(),
     [byShelf, rows, readOnly],
   );
-  const sections = useMemo<GridSections<WishTile> | undefined>(
-    () =>
-      shelves === undefined || byShelf === null
-        ? undefined
-        : {
-            sections: shelves.sections,
-            tilesOf: (shelfId) => byShelf.get(shelfId) ?? NO_TILES,
-            renderHeading: shelves.renderHeading,
-            renderEmpty: shelves.renderEmpty,
-            renderLabel: shelves.renderLabel,
-            renderSticky: shelves.renderSticky,
-            revealShelfId: shelves.revealShelfId ?? null,
-          },
-    [shelves, byShelf],
+  const tilesOf = useCallback(
+    (shelfId: number) => byShelf?.get(shelfId) ?? NO_TILES,
+    [byShelf],
   );
+  // **Not memoised, on purpose**: `CardGrid` keys its layout on `sections.sections` and `tilesOf`,
+  // both held still above, and reads the four render props at draw time — so they go through as
+  // the page built them, and a heading that redraws on the page's state is never stale.
+  const sections: GridSections<WishTile> | undefined =
+    shelves === undefined
+      ? undefined
+      : {
+          sections: shelves.sections,
+          tilesOf,
+          renderHeading: shelves.renderHeading,
+          renderEmpty: shelves.renderEmpty,
+          renderLabel: shelves.renderLabel,
+          renderSticky: shelves.renderSticky,
+          revealShelfId: shelves.revealShelfId ?? null,
+        };
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return (

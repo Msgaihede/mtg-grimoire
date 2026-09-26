@@ -996,4 +996,56 @@ describe("on shelves", () => {
     expect(follows(screen.getByAltText("Lightning Bolt"), expensive)).toBe(true);
     expect(follows(expensive, screen.getByAltText("Ancestral Recall"))).toBe(true);
   });
+
+  /**
+   * **The tiles are keyed on the shelves and their rows, never on the object that carries them.**
+   * The page builds that object every render — its render props close over `useMutation` results,
+   * which are fresh objects each time — so a memo on the object re-tiled every shelf, and handed
+   * `CardGrid` a new `tilesOf` that re-lays the wall out, on every keystroke anywhere on the page.
+   *
+   * Pinned by what re-tiling costs, not by how it is written: `rowsOf` is asked once per shelf per
+   * tiling, so a render that hands the same `sections` and `rowsOf` in a new object with new render
+   * props must ask it nothing — and must still draw the new heading, because the render props are
+   * read at draw time. Keyed on the object (the defect), `rowsOf` is asked twice more here.
+   */
+  it("re-tiles nothing when only the render props change, and draws the new ones", () => {
+    const filed = { ...ANY, folderId: EXPENSIVE.id };
+    const sections = [
+      { shelf: shelf(0, "Not sorted"), tileCount: 1 },
+      { shelf: shelf(EXPENSIVE.id, "Expensive"), tileCount: 1 },
+    ];
+    const rowsOf = vi.fn((id: number) => (id === 0 ? [BOLT] : id === EXPENSIVE.id ? [filed] : []));
+    const shelved = (word: string) => (
+      <WishlistGrid
+        rows={[BOLT, filed]}
+        shelves={{
+          sections,
+          rowsOf,
+          renderHeading: (s) => <h3>{`${s.name} ${word}`}</h3>,
+          renderEmpty: () => null,
+          renderLabel: () => null,
+          renderSticky: () => null,
+        }}
+        listKey="k"
+        folders={[EXPENSIVE]}
+        nodes={NODES}
+        onNeedNextPage={noop}
+        onSetQuantity={noop}
+        onRemove={noop}
+        onSetFolder={noop}
+        onChangePrinting={noop}
+        onAnyPrinting={noop}
+        marketplace={MARKETPLACES.tcgplayer}
+      />
+    );
+
+    const { rerender } = render(shelved("first"));
+    expect(screen.getByRole("heading", { name: "Expensive first" })).toBeInTheDocument();
+    const asked = rowsOf.mock.calls.length;
+    expect(asked).toBe(2);
+
+    rerender(shelved("second"));
+    expect(screen.getByRole("heading", { name: "Expensive second" })).toBeInTheDocument();
+    expect(rowsOf).toHaveBeenCalledTimes(asked);
+  });
 });

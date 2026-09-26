@@ -1,6 +1,7 @@
 import {
+  createContext,
+  useContext,
   useEffect,
-  useMemo,
   useRef,
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -28,7 +29,7 @@ import { EditWishButton } from "./EditWish";
 import { printingOf, wishLabel } from "./wish";
 import { wishDraggable } from "./wishDrag";
 import { ElsewhereMark } from "./wishMarks";
-import { isBand, type WishTableRow } from "./wishShelfPlan";
+import { isBand, type ShelfBandRow, type WishTableRow } from "./wishShelfPlan";
 
 /** The band a flagged row grows by, to say what the reconciler found. */
 const REVIEW_HEIGHT = 20;
@@ -406,6 +407,50 @@ export interface WishTableBands {
   indentOf: (row: WishRow) => number;
 }
 
+/**
+ * The bands of the table being drawn, handed to {@link ShelfBand} past `VirtualTable`.
+ *
+ * **A context rather than a closure, because `VirtualTable`'s `band` has to hold still and these
+ * cannot.** The table asks `band` of every loaded row whenever the callback's *identity* changes
+ * (its rule on `band`). A callback closed over `bands` changes identity with them — and the page's
+ * render props are fresh on every page render, because `renderHeading` depends on a `useMutation`
+ * result, which is a new object each render. So a memo on `bands` was a memo on nothing: every page
+ * render re-asked every loaded row, and built every heading in the list — its figures and its
+ * sentence, not only the ones in the window — to answer whether the row was a band at all. The
+ * callback is {@link bandOf}, one module-scope function for the life of the app, and the render
+ * props travel down here instead, where a new value re-renders the bands that read it and nothing
+ * else.
+ */
+const BandsContext = createContext<WishTableBands | null>(null);
+
+/** `VirtualTable`'s `band`: a shelf's band for a band row, `null` for a wish. Module scope, so its
+ *  identity never changes — see {@link BandsContext}. Whether a row is a band depends on the row
+ *  alone, which is the table's other condition on this callback. */
+function bandOf(row: WishTableRow): ReactNode {
+  return isBand(row) ? <ShelfBand row={row} /> : null;
+}
+
+/** One band, drawn from the bands of the table it sits in. */
+function ShelfBand({ row }: { row: ShelfBandRow }) {
+  const bands = useContext(BandsContext);
+  if (bands === null) return null;
+  if (row.band === "label") return bands.label(row.group);
+  // Spec §3.3's indent, 32px a level and capped by `Shelf.indent`. `CardGrid` draws it on the wall;
+  // `VirtualTable` draws a band as one full-width cell and knows nothing of levels, so the table
+  // draws it here. An inline style, because the value is computed — a Tailwind class built from it
+  // would emit no rule. `flex-1`, because the band's cell is a flex row and the heading's hairline
+  // runs to the right edge only if this does.
+  return (
+    <>
+      <ShelfRails count={row.shelf.indent} />
+      <div className="min-w-0 flex-1" style={{ paddingLeft: row.shelf.indent * SHELF_INDENT_PX }}>
+        {bands.heading(row.shelf)}
+        {row.empty && bands.empty(row.shelf)}
+      </div>
+    </>
+  );
+}
+
 /** The default `readOnly` — module scope so a caller passing none does not hand the column
  *  builder a fresh function every render. */
 const NOTHING_READ_ONLY = (): boolean => false;
@@ -559,37 +604,7 @@ export function WishlistTable({
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   const tip = useTooltip();
 
-  /**
-   * A shelf's band, or `null` for a wish. Held still on `bands`, because `VirtualTable` asks it of
-   * every loaded row whenever its identity changes.
-   */
-  const band = useMemo(
-    () =>
-      bands &&
-      ((row: WishTableRow): ReactNode =>
-        !isBand(row) ? null : row.band === "label" ? (
-          bands.label(row.group)
-        ) : (
-          // Spec §3.3's indent, 32px a level and capped by `Shelf.indent`. `CardGrid` draws it on
-          // the wall; `VirtualTable` draws a band as one full-width cell and knows nothing of
-          // levels, so the table draws it here. An inline style, because the value is computed —
-          // a Tailwind class built from it would emit no rule. `flex-1`, because the band's cell
-          // is a flex row and the heading's hairline runs to the right edge only if this does.
-          <>
-            <ShelfRails count={row.shelf.indent} />
-            <div
-              className="min-w-0 flex-1"
-              style={{ paddingLeft: row.shelf.indent * SHELF_INDENT_PX }}
-            >
-              {bands.heading(row.shelf)}
-              {row.empty && bands.empty(row.shelf)}
-            </div>
-          </>
-        )),
-    [bands],
-  );
-
-  return (
+  const table = (
     <VirtualTable
       rows={rows}
       columns={overBands(
@@ -628,7 +643,8 @@ export function WishlistTable({
             : 0
       }
       isSelected={(row) => !isBand(row) && row.cardId !== null && row.cardId === selectedCardId}
-      band={band}
+      // One module-scope callback for the life of the table — see {@link bandOf}.
+      band={bands === undefined ? undefined : bandOf}
       stickyBand={bands?.sticky}
       // **No `rowClassName` here, and the absence is the change rather than an omission.** A wish
       // the collection already covered used to recede to `text-dim` — a record rather than a
@@ -692,4 +708,7 @@ export function WishlistTable({
       }
     />
   );
+  // Always the provider, even with no bands to hand down: one root shape, so a table that gains or
+  // loses its shelves is re-rendered rather than remounted — a remount drops the caret to `<body>`.
+  return <BandsContext.Provider value={bands ?? null}>{table}</BandsContext.Provider>;
 }

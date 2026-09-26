@@ -1601,18 +1601,23 @@ export function WishlistPage() {
    * below the fold — one of the live pass's checks.
    */
   const revealShelfId = addingIn === undefined ? null : NEW_FOLDER_SHELF;
-  const gridShelves = useMemo<WishShelves>(
-    () => ({
-      sections,
-      rowsOf,
-      renderHeading,
-      renderEmpty,
-      renderLabel,
-      renderSticky,
-      revealShelfId,
-    }),
-    [sections, rowsOf, renderHeading, renderEmpty, renderLabel, renderSticky, revealShelfId],
-  );
+  /**
+   * The wall's shelves, and below them the table's bands — **both plain objects, on purpose.**
+   * `renderHeading` depends on a `useMutation` result, which is a new object on every render, so a
+   * memo over either would recompute on every render and read as a promise it cannot keep. What
+   * the two views hold still on is narrower and already stable: the wall keys its tiles on
+   * `sections` and `rowsOf` (memos above), and the table hands `VirtualTable` a `band` of its own
+   * that never changes. The render props are read at draw time by both.
+   */
+  const gridShelves: WishShelves = {
+    sections,
+    rowsOf,
+    renderHeading,
+    renderEmpty,
+    renderLabel,
+    renderSticky,
+    revealShelfId,
+  };
   /** Each drawn shelf's indent — the table's rails for a wish row are its shelf's (spec §3.3). */
   const indentByShelf = useMemo(
     () => new Map(sections.map(({ shelf }) => [shelf.id, shelf.indent])),
@@ -1642,24 +1647,21 @@ export function WishlistPage() {
     const scroller = banded ? grid.parentElement : grid;
     if (scroller) scroller.scrollTop = 0;
   }, []);
-  const tableBands = useMemo<WishTableBands>(
-    () => ({
-      heading: renderHeading,
-      empty: renderEmpty,
-      label: renderLabel,
-      // `VirtualTable`'s caller rule (4): nothing over a band, which would cover its own controls.
-      // Always a function, returning `null` where there is nothing to pin: toggling the prop
-      // between a function and `undefined` switches `VirtualTable` between two root shapes, which
-      // remounts the table and drops the caret to `<body>`.
-      sticky: (index: number) => {
-        const row = table.rows[index];
-        if (row === undefined || isBand(row)) return null;
-        return renderSticky(table.owners[index] ?? null, scrollTableTop);
-      },
-      indentOf,
-    }),
-    [renderHeading, renderEmpty, renderLabel, renderSticky, table, scrollTableTop, indentOf],
-  );
+  const tableBands: WishTableBands = {
+    heading: renderHeading,
+    empty: renderEmpty,
+    label: renderLabel,
+    // `VirtualTable`'s caller rule (4): nothing over a band, which would cover its own controls.
+    // Always a function, returning `null` where there is nothing to pin: toggling the prop
+    // between a function and `undefined` switches `VirtualTable` between two root shapes, which
+    // remounts the table and drops the caret to `<body>`.
+    sticky: (index: number) => {
+      const row = table.rows[index];
+      if (row === undefined || isBand(row)) return null;
+      return renderSticky(table.owners[index] ?? null, scrollTableTop);
+    },
+    indentOf,
+  };
 
   const failure = query.isError
     ? ipcError(query.error)
