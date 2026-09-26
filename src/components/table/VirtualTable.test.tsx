@@ -1,7 +1,12 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { compile } from "tailwindcss";
+import twEntry from "tailwindcss/index.css?raw";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import appCss from "@/index.css?raw";
+import { FOCUS_INSET } from "@/lib/focus";
+import { KEYBOARD_MODALITY_ATTR } from "@/lib/keyboardModality";
 import { LAYER } from "@/lib/layers";
 import type { SortSpec } from "@/lib/sort";
 import {
@@ -554,6 +559,8 @@ describe("VirtualTable's sticky band", () => {
     expect(table.children[0]).toBe(screen.getAllByRole("row")[0]);
     expect(table.children[1]).toBe(screen.getByRole("rowgroup"));
     expect(scroller).toHaveClass("min-h-0", "flex-1", "overflow-auto", "border");
+    // The table carries neither, and no focus mark either: it is not the stop, the scroller is
+    // (see "VirtualTable's own focus mark").
     expect(table).not.toHaveAttribute("class");
     // Rows still count from the header's bottom edge, because the anchor is zero tall.
     expect(rowOf("S0 heading").style.transform).toBe("translateY(0px)");
@@ -571,10 +578,13 @@ describe("VirtualTable's sticky band", () => {
     expect(button.closest('[role="table"]')).toBeNull();
 
     // The table itself still carries everything that made it a table: its name, its count
-    // (90 cards + 10 bands + the header), its tab stop, its header row and its rows.
+    // (90 cards + 10 bands + the header), its header row and its rows. The tab stop is not one
+    // of them. It belongs to what scrolls, and that is the scroller around the table here (see
+    // "puts the tab stop on the element that scrolls…").
     const table = screen.getByRole("table", { name: "Test rows" });
     expect(table).toHaveAttribute("aria-rowcount", "101");
-    expect(table).toHaveAttribute("tabindex", "0");
+    expect(table).not.toHaveAttribute("tabindex");
+    expect(table.parentElement).toHaveAttribute("tabindex", "0");
     expect(within(table).queryByRole("button", { name: "Top" })).toBeNull();
     const [header] = within(table).getAllByRole("row");
     expect(header).toHaveAttribute("aria-rowindex", "1");
@@ -665,5 +675,546 @@ describe("VirtualTable's sticky band", () => {
     );
     expect(stickyBand).not.toHaveBeenCalled();
     expect(container.querySelector("[data-sticky-band]")).toBeNull();
+  });
+});
+
+/**
+ * The shipped `@custom-variant` lines and `@theme inline` block, lifted out of `src/index.css`
+ * rather than copied here. That way a green result is a statement about the stylesheet that
+ * ships, which is `keyboardModality.test.ts`'s rule and the reason it is written this way there.
+ */
+const APP_VARIANTS = appCss
+  .split("\n")
+  .filter((l) => l.startsWith("@custom-variant"))
+  .join("\n");
+const APP_THEME = /@theme inline \{[\s\S]*?\n\}/.exec(appCss)?.[0] ?? "";
+
+interface CompiledRule {
+  selector: string;
+  declarations: [string, string][];
+}
+
+/**
+ * Every rule the real Tailwind emits for the classes this element **actually carries**, read
+ * off `classList` and not off a constant. A class `cn`'s merge dropped, or a variant Tailwind
+ * could not parse, therefore shows up here as a missing rule. A variant Tailwind cannot parse
+ * emits nothing, silently.
+ */
+async function compiledRulesOf(el: Element): Promise<CompiledRule[]> {
+  const compiler = await compile(`@import "tailwindcss";\n${APP_THEME}\n${APP_VARIANTS}\n`, {
+    base: "/",
+    loadStylesheet: (id: string) => {
+      if (id !== "tailwindcss") throw new Error(`unexpected stylesheet import: ${id}`);
+      return Promise.resolve({
+        path: "/tailwindcss/index.css",
+        base: "/tailwindcss",
+        content: twEntry,
+      });
+    },
+    loadModule: () => Promise.reject(new Error("no JS modules expected")),
+  });
+  const css = compiler.build(Array.from(el.classList));
+  const utilities = css.slice(css.indexOf("@layer utilities"), css.indexOf("@property"));
+  return Array.from(utilities.matchAll(/([^{}\n][^{}]*?)\s*\{([^{}]*)\}/g), ([, sel, body]) => ({
+    selector: sel.trim(),
+    declarations: body
+      .split(";")
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => {
+        const at = d.indexOf(":");
+        return [d.slice(0, at).trim(), d.slice(at + 1).trim()] as [string, string];
+      }),
+  }));
+}
+
+/**
+ * The `outline-*` declarations this element's own compiled rules apply to it **right now**:
+ * the selectors are matched against the live DOM, focus and `data-kbd` included. jsdom paints
+ * nothing, so this is as near to "what is drawn" as the suite gets. It is the cascade as the
+ * shipped rules would run it, one element at a time.
+ *
+ * **`:focus-visible` is read as `:focus` here, and on purpose.** jsdom's `:focus-visible` is a
+ * heuristic over the last event it saw, and that state outlives a test, so an earlier test's
+ * click decides it. A `:focus-visible` assertion made here would be about test order.
+ * The app does not trust the browser's heuristic either: `data-kbd` is its gate, and
+ * every case below drives that attribute explicitly. Only the unescaped pseudo-class is
+ * rewritten; `\:focus-visible` inside an escaped class name is part of the name.
+ */
+function outlineNow(el: Element, rules: CompiledRule[]): Record<string, string> {
+  const drawn: Record<string, string> = {};
+  for (const { selector, declarations } of rules) {
+    if (!el.matches(selector.replace(/(?<!\\):focus-visible/g, ":focus"))) continue;
+    for (const [property, value] of declarations) {
+      if (property.startsWith("outline")) drawn[property] = value;
+    }
+  }
+  return drawn;
+}
+
+/** What the frame draws when the table has the keyboard's focus: 2px of gold over the border. */
+const FRAME_RING = {
+  "outline-style": "var(--tw-outline-style)",
+  "outline-width": "2px",
+  "outline-offset": "calc(1px * -1)",
+  "outline-color": "var(--accent)",
+};
+
+/**
+ * **The table's own focus mark is drawn on its frame**: the bordered box a reader sees as the
+ * table (live pass 2026-09-26, §11).
+ *
+ * The `role="table"` element is a tab stop, and until then it drew only the browser's
+ * `outline: auto`, around whatever box held the stop. With a sticky band live, that is the list-tall
+ * table inside the scroller. Its top edge sat under the sticky header, its bottom was thousands
+ * of pixels down, and the ring read as two faint vertical lines. That is no focus indicator
+ * (WCAG 2.4.7).
+ *
+ * jsdom paints nothing, so these cases compile the classes each element really carries with the
+ * real Tailwind and ask which rules match the live DOM. Every case also checks the two ways the
+ * mark must stay quiet: a keystroke that moved no focus (no `data-kbd`), and a focus that
+ * belongs to a row or a control rather than to the table.
+ */
+describe("VirtualTable's own focus mark", () => {
+  const kbd = (on: boolean) =>
+    on
+      ? document.documentElement.setAttribute(KEYBOARD_MODALITY_ATTR, "")
+      : document.documentElement.removeAttribute(KEYBOARD_MODALITY_ATTR);
+  afterEach(() => kbd(false));
+
+  const focus = (el: HTMLElement) => act(() => el.focus());
+
+  it("rings the table's own frame while it is its own scroller, and only for the keyboard", async () => {
+    const user = userEvent.setup();
+    render(<VirtualTable {...BASE} rows={ROWS} total={2} onActivate={() => {}} />);
+    const table = screen.getByRole("table");
+    const rules = await compiledRulesOf(table);
+
+    // Reached the way a reader reaches it: the first Tab lands on the table, the scroller.
+    await user.tab();
+    kbd(true);
+    expect(document.activeElement).toBe(table);
+    expect(outlineNow(table, rules)).toEqual(FRAME_RING);
+
+    // A keystroke that moved no focus arms nothing, the same gate as every focus mark here.
+    kbd(false);
+    expect(outlineNow(table, rules)).toEqual({});
+
+    // A row taking focus is the row's to show, and the frame stays as it was.
+    kbd(true);
+    const row = rowOf("Black Lotus");
+    focus(row);
+    expect(outlineNow(table, rules)).toEqual({});
+  });
+
+  /** `grow` has no scroller, but the table is still its own frame, so the mark is still its own. */
+  it("rings the table's own frame under grow too", async () => {
+    const user = userEvent.setup();
+    render(<VirtualTable {...BASE} rows={ROWS} total={2} grow />);
+    const table = screen.getByRole("table");
+    const rules = await compiledRulesOf(table);
+    await user.tab();
+    kbd(true);
+    expect(document.activeElement).toBe(table);
+    expect(outlineNow(table, rules)).toEqual(FRAME_RING);
+  });
+
+  it("rings the scroller, never the list-tall table, while a sticky band is live", async () => {
+    const user = userEvent.setup();
+    render(
+      <VirtualTable
+        {...BASE}
+        rows={[shelf("Binder"), card(1), card(2)]}
+        total={2}
+        band={bandOf}
+        onActivate={() => {}}
+        stickyBand={() => <button type="button">Top</button>}
+      />,
+    );
+    const table = screen.getByRole("table");
+    const scroller = table.parentElement as HTMLElement;
+    const scrollerRules = await compiledRulesOf(scroller);
+
+    // The scroller is the stop, so the first Tab lands on it, ahead of the bar's button.
+    await user.tab();
+    kbd(true);
+    expect(document.activeElement).toBe(scroller);
+    // The frame the reader sees takes the ring, exactly as the unbanded table's own frame does:
+    // the same classes, on the element that holds the focus.
+    expect(outlineNow(scroller, scrollerRules)).toEqual(FRAME_RING);
+    // The table draws nothing, and nothing can reach it: its edges are the list's, under the
+    // header and far below, and it is not a stop.
+    expect(table).not.toHaveAttribute("class");
+    expect(table).not.toHaveAttribute("tabindex");
+
+    // Not for a keystroke that moved no focus.
+    kbd(false);
+    expect(outlineNow(scroller, scrollerRules)).toEqual({});
+
+    // Not for a descendant's focus: a row, or the bar's own button, is not the table.
+    kbd(true);
+    focus(rowOf("Card 1"));
+    expect(outlineNow(scroller, scrollerRules)).toEqual({});
+    focus(screen.getByRole("button", { name: "Top" }));
+    expect(outlineNow(scroller, scrollerRules)).toEqual({});
+  });
+
+  /**
+   * The brief's other half: this change is the table's and not a row's. A focused row keeps
+   * its inset outline, whether or not a band is live.
+   */
+  it("leaves a focused row's own mark as it was", () => {
+    render(
+      <VirtualTable
+        {...BASE}
+        rows={[shelf("Binder"), card(1)]}
+        total={1}
+        band={bandOf}
+        onActivate={() => {}}
+        stickyBand={() => null}
+      />,
+    );
+    expect(rowOf("Card 1")).toHaveClass(...FOCUS_INSET.split(" "));
+  });
+
+  /**
+   * **The element that holds the table's tab stop is the element that scrolls, in both shapes**
+   * (live pass 2026-09-26, §11's finding outside the checklist).
+   *
+   * With a sticky band live, the stop used to be the `role="table"` element *inside* the scroller.
+   * Focusing an element scrolls every scroller around it to reveal it, so a Tab onto that
+   * list-tall box moved the list from 855 to 191, and a keyboard reader lost their place. Without
+   * a band the table is its own scroller, and focusing a scroller never scrolls it; band mode now
+   * has the same shape.
+   *
+   * jsdom scrolls nothing on focus, so the jump itself cannot go red here. What goes red is its
+   * cause: which element a real Tab lands on, and whether the table is still a stop at all.
+   */
+  it("puts the tab stop on the element that scrolls, so a Tab onto the table scrolls nothing", async () => {
+    const user = userEvent.setup();
+
+    // The shape band mode is being brought to: the table scrolls, and the table is the stop.
+    const plain = render(<VirtualTable {...BASE} rows={ROWS} total={2} />);
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("table"));
+    expect(screen.getByRole("table")).toHaveClass("overflow-auto");
+    plain.unmount();
+
+    render(
+      <VirtualTable
+        {...BASE}
+        rows={[shelf("Binder"), card(1), card(2)]}
+        total={2}
+        band={bandOf}
+        onActivate={() => {}}
+        stickyBand={() => <button type="button">Top</button>}
+      />,
+    );
+    const table = screen.getByRole("table");
+    const scroller = table.parentElement as HTMLElement;
+    expect(scroller).toHaveClass("overflow-auto");
+
+    // The first Tab lands on the scroller itself, ahead of everything inside it: the bar's
+    // button, the sort buttons, the rows.
+    await user.tab();
+    expect(document.activeElement).toBe(scroller);
+    // A stop has to say what it is, so the scroller is a group carrying the table's name. That
+    // is the grid wall's shape too: its scroller is a `group` named by the same label.
+    expect(scroller).toHaveAttribute("role", "group");
+    expect(scroller).toHaveAccessibleName("Test rows");
+
+    // And the table is no longer a stop at all. Walking every stop in turn never lands on it.
+    expect(table).not.toHaveAttribute("tabindex");
+    const stops: (Element | null)[] = [];
+    for (let i = 0; i < 12; i++) {
+      await user.tab();
+      stops.push(document.activeElement);
+    }
+    expect(stops).not.toContain(table);
+    expect(stops).toContain(screen.getByRole("button", { name: "Top" }));
+  });
+});
+
+/**
+ * **`revealIndex` scrolls a row the virtualiser may not have mounted into view**. The pages need
+ * it for a heading that has no element to focus yet: one moved by Move up or down, or Add
+ * folder's draft. The line it scrolls to is the one a focused row is held to: clear of the
+ * sticky header, and of the sticky band while one is live.
+ *
+ * Every figure comes from the table's own row arithmetic, and none from the DOM: header 36, band
+ * 40, row 44. `LONG` has a band at every tenth index, so row `i` starts at
+ * `36 + 40·b + 44·(i − b)`, where `b` counts the bands above it. The viewport is the stubbed
+ * 600px.
+ */
+describe("VirtualTable's revealIndex", () => {
+  const LONG: Row[] = Array.from({ length: 100 }, (_, i) =>
+    i % 10 === 0 ? shelf(`S${i / 10}`) : card(i),
+  );
+  const bandsAbove = (i: number) => (i === 0 ? 0 : Math.floor((i - 1) / 10) + 1);
+  const startOf = (i: number) => 36 + 40 * bandsAbove(i) + 44 * (i - bandsAbove(i));
+  const barLive = () => <span>Bar</span>;
+
+  /**
+   * What jsdom withholds from a real scroll. The virtualiser clamps every target to
+   * `scrollHeight − clientHeight`, which jsdom reports as 0. And jsdom's `scrollTo` moves
+   * nothing. So this gives the scroller a height, and a `scrollTo` that sets `scrollTop` the way
+   * a browser's does. The browser's `scroll` event arrives a moment later, so a test fires it
+   * itself (`settle`) rather than having it land inside the effect that scrolled.
+   */
+  const scrollable = (scroller: HTMLElement) => {
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 20_000 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 600 });
+    const scrollTo = vi.fn((options: ScrollToOptions) => {
+      if (options.top !== undefined) scroller.scrollTop = options.top;
+    });
+    Object.defineProperty(scroller, "scrollTo", { configurable: true, value: scrollTo });
+    return scrollTo;
+  };
+  const scrollTo = (scroller: HTMLElement, top: number) => {
+    scroller.scrollTop = top;
+    fireEvent.scroll(scroller);
+  };
+  const settle = (scroller: HTMLElement) => fireEvent.scroll(scroller);
+
+  /** The row's top and bottom inside the scrollport, from the virtualiser's own transform. */
+  const placeOf = (text: string, scroller: HTMLElement) => {
+    const row = rowOf(text);
+    const y = Number(/translateY\((-?\d+(?:\.\d+)?)px\)/.exec(row.style.transform)?.[1]);
+    const top = y + TABLE_HEADER_HEIGHT - scroller.scrollTop;
+    return { top, bottom: top + parseFloat(row.style.height) };
+  };
+
+  const drawBanded = (revealIndex: number | null, extra: Partial<Props> = {}) =>
+    render(
+      <VirtualTable
+        {...BASE}
+        rows={LONG}
+        total={90}
+        band={bandOf}
+        stickyBand={barLive}
+        revealIndex={revealIndex}
+        {...extra}
+      />,
+    );
+
+  it("scrolls a row below the window up until its bottom edge is in view", () => {
+    const { rerender } = drawBanded(null);
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
+    const spy = scrollable(scroller);
+
+    rerender(
+      <VirtualTable
+        {...BASE}
+        rows={LONG}
+        total={90}
+        band={bandOf}
+        stickyBand={barLive}
+        revealIndex={55}
+      />,
+    );
+    // Row 55 ends at 2476; the window is 600 tall, so the least scroll that shows it is 1876.
+    expect(startOf(55) + 44).toBe(2476);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenLastCalledWith({ top: 1876, behavior: "auto" });
+    settle(scroller);
+    const { top, bottom } = placeOf("Card 55", scroller);
+    expect(top).toBeGreaterThanOrEqual(TABLE_HEADER_HEIGHT + TABLE_BAND_HEIGHT);
+    expect(bottom).toBeLessThanOrEqual(600);
+  });
+
+  /**
+   * The case a browser's own `scrollIntoView` would get wrong, and the reason the reveal runs
+   * through the virtualiser: a row under the header and the bar counts as already on screen to
+   * the browser.
+   */
+  it("brings a row hidden under the header and the bar down to just below the bar", () => {
+    const { rerender } = drawBanded(null);
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
+    const spy = scrollable(scroller);
+    scrollTo(scroller, 2000);
+
+    // Row 45 starts at 1996, above the bar's lower edge at 2000 + 76.
+    expect(startOf(45)).toBe(1996);
+    rerender(
+      <VirtualTable
+        {...BASE}
+        rows={LONG}
+        total={90}
+        band={bandOf}
+        stickyBand={barLive}
+        revealIndex={45}
+      />,
+    );
+    expect(spy).toHaveBeenLastCalledWith({ top: 1996 - 76, behavior: "auto" });
+    settle(scroller);
+    expect(placeOf("Card 45", scroller).top).toBe(TABLE_HEADER_HEIGHT + TABLE_BAND_HEIGHT);
+  });
+
+  /** Without a band there is only the header to clear: the same row lands 40px higher. */
+  it("clears only the header when no sticky band is live", () => {
+    const { rerender } = render(
+      <VirtualTable {...BASE} rows={LONG} total={90} band={bandOf} revealIndex={null} />,
+    );
+    const scroller = screen.getByRole("table");
+    const spy = scrollable(scroller);
+    scrollTo(scroller, 2000);
+
+    rerender(<VirtualTable {...BASE} rows={LONG} total={90} band={bandOf} revealIndex={45} />);
+    expect(spy).toHaveBeenLastCalledWith({ top: 1996 - 36, behavior: "auto" });
+    settle(scroller);
+    expect(placeOf("Card 45", scroller).top).toBe(TABLE_HEADER_HEIGHT);
+  });
+
+  it("does nothing when the row is already fully in view", () => {
+    const { rerender } = drawBanded(null);
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
+    const spy = scrollable(scroller);
+
+    // Row 5 spans 252–296, well inside 76–600 at the top of the list.
+    rerender(
+      <VirtualTable
+        {...BASE}
+        rows={LONG}
+        total={90}
+        band={bandOf}
+        stickyBand={barLive}
+        revealIndex={5}
+      />,
+    );
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A reveal is a request, answered once. A re-render carrying the same index must not drag
+   * the reader back after they have scrolled away. The re-render that tests this is a new page
+   * of rows arriving: the pages page constantly, and the length is what the table re-reads.
+   * Asking again takes a change: `null`, then the index.
+   */
+  it("answers a value once, and again only after it changes", () => {
+    const { rerender } = drawBanded(null);
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
+    const spy = scrollable(scroller);
+    const PAGED: Row[] = [...LONG, ...Array.from({ length: 20 }, (_, i) => card(100 + i))];
+    const draw = (revealIndex: number | null, rows = LONG, label = "Test rows") =>
+      rerender(
+        <VirtualTable
+          {...BASE}
+          label={label}
+          rows={rows}
+          total={110}
+          band={bandOf}
+          stickyBand={barLive}
+          revealIndex={revealIndex}
+        />,
+      );
+
+    draw(55);
+    expect(spy).toHaveBeenCalledTimes(1);
+    settle(scroller);
+
+    // The reader scrolls back to the top, and the page re-renders: for its own reasons, and
+    // because the next page of rows arrived.
+    scrollTo(scroller, 0);
+    draw(55, LONG, "Test rows, renamed");
+    draw(55, PAGED);
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    draw(null);
+    draw(55);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenLastCalledWith({ top: 1876, behavior: "auto" });
+  });
+
+  /** The pages move the caret themselves, after the row has mounted. The table never does. */
+  it("moves no focus", () => {
+    const view = (revealIndex: number | null) => (
+      <>
+        <button type="button">Elsewhere</button>
+        <VirtualTable
+          {...BASE}
+          rows={LONG}
+          total={90}
+          band={bandOf}
+          stickyBand={barLive}
+          revealIndex={revealIndex}
+        />
+      </>
+    );
+    const { rerender } = render(view(null));
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
+    const spy = scrollable(scroller);
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+    act(() => elsewhere.focus());
+
+    rerender(view(55));
+    settle(scroller);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  /**
+   * Move up and Move down reorder the list without changing its length. The virtualiser
+   * recomputes positions only when the length does, so in the commit that moved the heading its
+   * positions are the old ones until the table's `measure()` invalidates them. This case is
+   * built so the two answers part. With bands every tenth row, row 12 ends at 600, flush with
+   * the window, so nothing is needed. With the same hundred rows and no bands, it ends at 608
+   * and needs 8px. Judged on the stale positions, the moved row stays cut off.
+   */
+  it("judges a row at its new place after a reorder that keeps the row count", () => {
+    const FLAT: Row[] = Array.from({ length: 100 }, (_, i) => card(i));
+    expect(startOf(12) + 44).toBe(600);
+    const { rerender } = drawBanded(null);
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
+    const spy = scrollable(scroller);
+
+    rerender(
+      <VirtualTable
+        {...BASE}
+        rows={FLAT}
+        total={100}
+        band={bandOf}
+        stickyBand={barLive}
+        revealIndex={12}
+      />,
+    );
+    expect(spy).toHaveBeenLastCalledWith({ top: 36 + 13 * 44 - 600, behavior: "auto" });
+  });
+
+  /** A page may name a row before its page of rows has arrived; the reveal waits for it. */
+  it("waits for an index past the loaded rows, and reveals it when they arrive", () => {
+    const MORE: Row[] = Array.from({ length: 160 }, (_, i) =>
+      i % 10 === 0 ? shelf(`S${i / 10}`) : card(i),
+    );
+    const draw = (rows: Row[]) => (
+      <VirtualTable
+        {...BASE}
+        rows={rows}
+        total={144}
+        band={bandOf}
+        stickyBand={barLive}
+        revealIndex={151}
+      />
+    );
+    const { rerender } = render(draw(LONG));
+    const scroller = screen.getByRole("table").parentElement as HTMLElement;
+    const spy = scrollable(scroller);
+    rerender(draw(LONG));
+    expect(spy).not.toHaveBeenCalled();
+
+    rerender(draw(MORE));
+    // Row 151 starts at 36 + 40·16 + 44·135 and is 44 tall; its bottom edge meets the window's.
+    expect(spy).toHaveBeenLastCalledWith({ top: startOf(151) + 44 - 600, behavior: "auto" });
+  });
+
+  /** Under `grow` the page scrolls, and no offset of this table names a row. */
+  it("does nothing under grow", () => {
+    const { rerender } = render(
+      <VirtualTable {...BASE} rows={LONG} total={90} band={bandOf} grow revealIndex={null} />,
+    );
+    const spy = scrollable(screen.getByRole("table"));
+    rerender(
+      <VirtualTable {...BASE} rows={LONG} total={90} band={bandOf} grow revealIndex={55} />,
+    );
+    expect(spy).not.toHaveBeenCalled();
   });
 });

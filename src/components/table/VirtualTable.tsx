@@ -35,6 +35,36 @@ export const TABLE_BAND_HEIGHT = 40;
  *  for the paging effect that reads its last item. */
 const NO_VIRTUAL_ROWS: VirtualItem[] = [];
 
+/**
+ * **The table's own keyboard focus, drawn on the table's frame**: the box with the border and
+ * the radius, which is the box a reader sees as "the table". **The frame, the scroller and the
+ * tab stop are one element in every shape.** That element is the `role="table"` element when the
+ * table is its own scroller (and under `grow`, where it is still the bordered box). While a sticky
+ * band is live it is the `role="group"` scroller around the table. So this mark is an ordinary
+ * `focus-visible:` rule on the element that has the focus, gated on `data-kbd` like every other
+ * mark in the app.
+ *
+ * Until the 2026-09-26 live pass the table drew nothing of its own. What a Tab onto it showed
+ * was the browser's `outline: auto` in the base layer's `outline-ring/50`, around whatever box
+ * held the tab stop. With a sticky band live, that box was then the `role="table"` element inside
+ * the scroller, as tall as the whole list. Its top edge sat under the sticky header and its bottom
+ * was thousands of pixels down the scroll, so the ring was two faint 1px vertical lines. That was
+ * **no focus indicator**, which fails WCAG 2.4.7. Focusing that box also scrolled the list
+ * (855 → 191), because focus reveals an element inside its scroller. Both went when the stop moved
+ * onto the scroller, and that move is what the band-mode `return` at the foot of the component
+ * does.
+ *
+ * **2px straddling the border, rather than `@/lib/focus`'s `FOCUS` (2px standing off it) or
+ * {@link FOCUS_INSET} (2px inside it).** Offset −1 puts the outline over the 1px border and 1px
+ * past it. Scrolled content is clipped at the padding box, so nothing in the table can paint over
+ * the border. A table fills its column, flush against the page edge or the docked search panel,
+ * so an outline standing 4px off it would be the first thing an ancestor clips. An inset outline
+ * would lose its inner pixel under the sticky header, a `LAYER.header` box that paints after the
+ * scroller's own outline. It is gold and 2px, like every other focus mark here.
+ */
+const FRAME_FOCUS =
+  "focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent";
+
 export interface TableColumn<Row> {
   /** Stable id. Also the sort key sent to the backend when `sortable`. */
   key: string;
@@ -138,6 +168,7 @@ export function VirtualTable<Row>({
   band,
   bandHeight,
   stickyBand,
+  revealIndex,
 }: {
   rows: Row[];
   columns: TableColumn<Row>[];
@@ -245,13 +276,31 @@ export function VirtualTable<Row>({
    * **Passing it moves the scroller off the `role="table"` element**, and that is the one
    * structural change any prop here makes. The bar holds buttons (a path, Top) and a drop
    * target, and a table may own only rows and row groups — so the bar cannot be inside it. The
-   * scroller becomes a plain `div` holding two siblings, the bar's anchor and the table, and the
-   * table keeps its name, its count and its tab stop. A caller that scrolls the table in a test
-   * scrolls `table.parentElement`. The scroller also takes a `scroll-padding-top` of the header
-   * plus {@link bandHeight}, so a row that takes focus scrolls clear of both rather than coming
-   * to rest underneath them.
+   * scroller becomes a `div` holding two siblings, the bar's anchor and the table. The table
+   * keeps its name and its count. **The tab stop moves with the scroll**: the scroller is a
+   * `role="group"` named by {@link label}, with `tabIndex={0}` and the frame's focus mark, and
+   * the table is no longer a stop. The element that takes focus is the element that scrolls,
+   * exactly as in the unbanded shape, so a Tab onto the table never scrolls the list. A caller
+   * that scrolls the table in a test scrolls `table.parentElement`. The scroller also takes a
+   * `scroll-padding-top` of the header plus {@link bandHeight}, so a row that takes focus
+   * scrolls clear of both rather than coming to rest underneath them.
    */
   stickyBand?: (firstVisibleRowIndex: number) => ReactNode;
+  /**
+   * Scroll this row into view when the value changes to a row index. It lands clear of the
+   * sticky header, and of the sticky band while one is live, which is the line
+   * `scroll-padding-top` holds a focused row to. It goes through the virtualiser, and nothing
+   * moves if the row is already fully in view. **It never moves focus.**
+   *
+   * The pages need it for a heading the virtualiser has not mounted — one moved by Move up or
+   * down, or Add folder's draft — which has no element to focus until it is scrolled to. The row
+   * mounts once the scroll lands, so focus it after that.
+   *
+   * Answered once per value: the same index again does nothing, and `null` in between asks
+   * afresh. An index past the loaded rows waits for them. It is inert under `grow`, where the
+   * page scrolls.
+   */
+  revealIndex?: number | null;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const tip = useTooltip();
@@ -264,6 +313,17 @@ export function VirtualTable<Row>({
   const bandAt = useMemo(() => (band ? rows.map((row) => band(row) != null) : null), [rows, band]);
   const bandCount = useMemo(() => (bandAt ? bandAt.filter(Boolean).length : 0), [bandAt]);
   const bandSize = bandHeight ?? TABLE_BAND_HEIGHT;
+
+  // Whether the sticky band is drawn: `stickyBand` passed, and a scroller of this table's own to
+  // pin it in (never under `grow`). The shape of the whole render turns on this; see `stickyBand`.
+  const stickyLive = stickyBand !== undefined && !grow;
+
+  // How much of the scrollport's top the sticky chrome covers: the header always, plus the bar
+  // while it is drawn. One number for both lines that must agree about it. It is the scroller's
+  // CSS `scroll-padding-top`, the line the browser holds a *focused* row to. It is also the
+  // virtualiser's `scrollPaddingStart`, the line `revealIndex` holds a *revealed* row to. Written
+  // twice, the two would part the first time either moved.
+  const topCover = TABLE_HEADER_HEIGHT + (stickyLive && rows.length > 0 ? bandSize : 0);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -280,6 +340,9 @@ export function VirtualTable<Row>({
     // The sticky header shares the scroll container with the rows, so the list does not
     // start at the container's origin.
     scrollMargin: TABLE_HEADER_HEIGHT,
+    // Read only by `scrollToIndex`, which only `revealIndex` calls. A revealed row stops below
+    // the header and the bar rather than underneath them.
+    scrollPaddingStart: topCover,
   });
 
   // Row heights are cached from the first `estimateSize` call, so a page that lands with a
@@ -325,6 +388,34 @@ export function VirtualTable<Row>({
     virtualizer.scrollToOffset(0);
   }, [grow, listKey, virtualizer]);
 
+  // `revealIndex`. It is declared after the two effects above, and the order is load-bearing:
+  // effects run in declaration order, so in one commit the list reset lands first and the reveal
+  // is not undone by it. `measure()` has also already invalidated the virtualiser's positions
+  // for a reorder, which keeps `count` and moves the bands.
+  //
+  // `revealed` is the one value this has answered. It is what stops a re-render carrying the
+  // same index from dragging the list back after the reader has scrolled away. It is set only
+  // once the row exists, so an index past the loaded rows is still asked about when they arrive.
+  const revealed = useRef<number | null>(null);
+  useEffect(() => {
+    if (revealIndex == null) {
+      revealed.current = null;
+      return;
+    }
+    if (grow || revealed.current === revealIndex) return;
+    if (revealIndex < 0 || revealIndex >= rows.length) return;
+    revealed.current = revealIndex;
+    // Rebuilds the positions `measure()` threw away, so a moved heading is judged at its new
+    // place and not its old one. `getTotalSize` is the public call that recomputes them.
+    virtualizer.getTotalSize();
+    // `"auto"` comes back unchanged only when the row is already clear of both edges. An offset
+    // equal to where the list stands means the row is flush against one. Either way, nothing
+    // moves.
+    const target = virtualizer.getOffsetForIndex(revealIndex, "auto");
+    if (!target || target[1] === "auto" || target[0] === virtualizer.scrollOffset) return;
+    virtualizer.scrollToIndex(revealIndex, { align: "auto" });
+  }, [revealIndex, rows.length, grow, virtualizer]);
+
   // Paging is driven by the virtualiser's window rather than a scroll handler: it already
   // knows which row is at the bottom, and it recomputes on resize too, which a scroll event
   // never fires for. The guards live with the query, in the page above.
@@ -345,8 +436,7 @@ export function VirtualTable<Row>({
   //
   // So it is a subscription to the scroller's own `scroll` event with a number for a snapshot:
   // React re-renders when the index moves and never per pixel, and no effect sets state. Dormant
-  // — no listener, a constant 0 — without `stickyBand` or under `grow`.
-  const stickyLive = stickyBand !== undefined && !grow;
+  // — no listener, a constant 0 — without `stickyBand` or under `grow` (`stickyLive`, above).
   const subscribeToScroll = useCallback(
     (notify: () => void) => {
       const el = scrollRef.current;
@@ -369,10 +459,11 @@ export function VirtualTable<Row>({
     ? rows.map((_row, index) => ({ index, key: index, item: null }))
     : virtualRows.map((v) => ({ index: v.index, key: v.key, item: v }));
 
-  // The table. **It is the scroller too, except while a sticky band is live** — then a plain
-  // `div` around it scrolls instead (below), because the bar is not something a table may own.
-  // Everything that makes it a *table* (the role, the name, the count, the tab stop) stays here
-  // in both shapes; only the scroll container's own ref and classes move out.
+  // The table. **It is the scroller too, except while a sticky band is live**. Then a `div`
+  // around it scrolls instead (below), because the bar is not something a table may own.
+  // What makes it a *table* (the role, the name, the count) stays here in both shapes. What
+  // belongs to the thing that *scrolls* moves out with the scroll: the ref, the classes and the
+  // tab stop.
   const table = (
     <div
       ref={stickyLive ? undefined : scrollRef}
@@ -387,18 +478,29 @@ export function VirtualTable<Row>({
       // stays `-1`: unknown plus anything is unknown. Bands are counted as loaded, so a caller
       // that lists every heading up front gets an exact figure.
       aria-rowcount={total === null ? -1 : total + 1 + bandCount}
-      tabIndex={0}
+      // **Not a stop while a sticky band is live.** The stop is then the scroller around this
+      // element, because focusing an element scrolls every scroller around it to reveal it, and
+      // this one is list-tall. As a stop it moved the list from 855 to 191 on a Tab (live pass
+      // 2026-09-26), and its focus ring's edges lay under the header and thousands of pixels
+      // down. Focusing a scroller never scrolls that scroller, which is why the unbanded shape
+      // never did either.
+      tabIndex={stickyLive ? undefined : 0}
       // Under `grow` this element stops being a scroll container: no height of its own, no
       // `overflow`, and the page scrolls it instead. The border and the radius stay — they are
       // what makes the table a table — and `role`, `aria-label`, `aria-rowcount` and the
       // `tabIndex` are untouched, because none of them is a statement about scrolling.
       //
       // While a sticky band is live the classes belong to the scroller around this element, so
-      // it carries none: the frame and the scrollport are one box's, and that box is the parent.
+      // it carries none: the frame, the scrollport and the stop are one box's, and that box is
+      // the parent. The focus mark (`FRAME_FOCUS`) goes with them.
       className={
         stickyLive
           ? undefined
-          : cn("rounded-md border border-border", !grow && "min-h-0 flex-1 overflow-auto")
+          : cn(
+              "rounded-md border border-border",
+              !grow && "min-h-0 flex-1 overflow-auto",
+              FRAME_FOCUS,
+            )
       }
     >
       {/* Sticky inside the scroll container rather than sitting above it: a header outside
@@ -622,11 +724,21 @@ export function VirtualTable<Row>({
   // Without a live sticky band the table is its own scroller, exactly as it always was.
   if (!stickyLive) return table;
 
-  // With one, a plain `div` scrolls and the table is the second of its two children. **The bar
-  // may not be inside the table**: it holds buttons and a drop target, and a `role="table"` may
-  // own rows and row groups only. A generic `div` in between passes ownership straight through
+  // With one, a `div` scrolls and the table is the second of its two children. **The bar may
+  // not be inside the table**: it holds buttons and a drop target, and a `role="table"` may own
+  // rows and row groups only. A generic `div` in between passes ownership straight through
   // (axe `aria-required-children`, WCAG 1.3.1). So the bar's anchor is the table's sibling, and
   // nothing in it has a table for an ancestor.
+  //
+  // **This box is the tab stop, because this box is what scrolls.** The unbanded table is its
+  // own scroller and its own stop, and focusing a scroller never scrolls it. The same shape here
+  // is what keeps a Tab onto the table from moving the list; the `role="table"` child's own
+  // `tabIndex` comment has the measurement. A stop has to say what it is, so the box is a
+  // `group` named by `label`. That is the grid wall's shape as well (`CardGrid`'s scroller is a
+  // `group` carrying the page's same label), and the two are never mounted together. It is
+  // never a landmark: a `region` per table would be one more stop on the landmark list for a box
+  // whose content is already a named table. The browser's own scroll keys (arrows, Page Up/Down,
+  // Home, End) act on the focused scroller, and nothing else was ever bound to the table's stop.
   //
   // `scrollPaddingTop` is the header and the bar together, and it is here because of what they
   // cover. They take the top 76px of the scrollport between them and a row is 44px, so a row the
@@ -635,12 +747,18 @@ export function VirtualTable<Row>({
   // lower edge. It is used for scroll-into-view and never for `scrollTo`, so the virtualiser's
   // own offsets and the scroll reset are untouched. It is set only while rows exist, since the
   // bar is drawn only then.
+  //
+  // The table's focus mark is this box's too (`FRAME_FOCUS`). This box is the frame the reader
+  // sees, its edges are the table's visible edges, and it is the element that holds the focus.
   return (
     <div
       ref={scrollRef}
-      className="min-h-0 flex-1 overflow-auto rounded-md border border-border"
+      role="group"
+      aria-label={label}
+      tabIndex={0}
+      className={cn("min-h-0 flex-1 overflow-auto rounded-md border border-border", FRAME_FOCUS)}
       style={
-        rows.length > 0 ? { scrollPaddingTop: TABLE_HEADER_HEIGHT + bandSize } : undefined
+        rows.length > 0 ? { scrollPaddingTop: topCover } : undefined
       }
     >
       {/* The sticky band: an overlay pinned directly under the column header, showing whatever
