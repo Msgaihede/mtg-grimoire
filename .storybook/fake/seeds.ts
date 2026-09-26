@@ -91,6 +91,7 @@ import type {
   FakeDeckNote,
   FakeDeckNoteCard,
   FakeDeckToken,
+  FakeDeckTokenPrinting,
   FakeEntry,
   FakeRelayShare,
   FakeWish,
@@ -1349,8 +1350,10 @@ function starterLabels(): FakeDeckLabel[] {
 }
 
 /**
- * The `deck_tokens` overrides — **four rows against a list nothing seeds**, and that asymmetry
- * is the feature rather than a gap in this seed.
+ * The `deck_tokens` rows — **three against a list nothing seeds**, and that asymmetry is the
+ * feature rather than a gap in this seed. Shaped **as user schema v52 leaves a database**, so the
+ * workbench shows what an upgraded reader sees: every row that named a printing became entries
+ * in both lists ({@link starterDeckTokenPrintings}) and kept only its state.
  *
  * The tokens a deck needs are derived from its cards on every read (`db.ts`'s `TOKEN_PARTS`), so
  * the populated panel comes for free: **deck 1 makes five** — a Treasure from Ragavan and from
@@ -1360,49 +1363,32 @@ function starterLabels(): FakeDeckLabel[] {
  * deck rather than from an empty world. Deck 1's Maybeboard names a Treasure too and must
  * contribute nothing, because an inactive category counts toward nothing.
  *
- * What this table can therefore be is only what the reader *changed*, and the four rows are one
- * of each thing they can change:
- *
- * * **An art and a count on one row** (deck 1's Treasure). The reader kept the older `tafr`
- *   printing over the one the resolver names and asked for four of them — so the tile draws a
- *   deviation in both of its controls at once, and the reset affordance has something to undo.
+ * * **A legacy count of zero** (deck 1's Construct). A pre-v52 row that stored a count and no
+ *   printing, which the rung leaves alone: the count keeps meaning "the implicit entry's
+ *   quantity", so the Construct draws one implicit tile at **0** — the state `stored || 1` reads
+ *   as untouched and silently draws as 1.
  * * **A dismissal** (deck 1's lifelink Wurm). `hidden` is still derived and still a row; it is
  *   simply not drawn until a reader asks to see what they put away, which is the whole of the
  *   "show dismissed" control. Its twin is left untouched **on purpose**: two tiles that differ
  *   only in their rules text, one of them dismissed, is the disambiguation case and the
  *   dismissal case in one screen.
- * * **A count of zero** (deck 1's Construct). `0` is a value and not an absence — a token the
- *   reader has decided they need none of while keeping it on the list — and it is the exact
- *   state `stored || 1` reads as untouched and silently draws as 1.
  * * **A hand-added token nothing derives** (deck 2's emblem). Deck 2 runs no Jace, so this row
- *   comes back `derived: false` with an empty `sources` — which is also what a derived token
- *   becomes when the reader keeps it after cutting the card that made it, and the only state
- *   `deck_token_add` can produce.
+ *   comes back `derived: false` with an empty `sources` — which is also what
+ *   `deck_token_add_printing` makes of a token nothing derives. Its printing is an entry now, in
+ *   both lists.
  *
- * Two things are deliberately *not* here. **Deck 1's other three rows carry no override at all**,
- * because a panel where every tile had been touched would never draw the untouched one. And
- * **nothing is seeded on deck 3**, whose empty panel is the point.
+ * **Deck 1's Treasure has no row here any more**: before v52 it carried an art and a count, and
+ * the rung moved both into its entries and cleared them, which left a row saying `auto` and
+ * nothing else — the empty row, which is not representable. **Nothing is seeded on deck 3**,
+ * whose empty panel is the point.
  */
 function starterDeckTokens(): FakeDeckToken[] {
   const at = CLOCK_BASE - HOUR;
   return [
     {
-      id: 1,
-      deckId: 1,
-      oracleId: TOKEN_ORACLE.treasure,
-      cardId: TOKEN_PRINTING.treasureTafr,
-      quantity: 4,
-      state: "auto",
-      createdAt: at,
-      updatedAt: at,
-    },
-    {
       id: 2,
       deckId: 1,
       oracleId: TOKEN_ORACLE.construct,
-      // No art picked — only the count moved, which is what keeps the two halves of an override
-      // separable on a tile.
-      cardId: null,
       quantity: 0,
       state: "auto",
       createdAt: at,
@@ -1412,7 +1398,6 @@ function starterDeckTokens(): FakeDeckToken[] {
       id: 3,
       deckId: 1,
       oracleId: TOKEN_ORACLE.wurmLifelink,
-      cardId: null,
       quantity: null,
       state: "hidden",
       createdAt: at,
@@ -1422,13 +1407,53 @@ function starterDeckTokens(): FakeDeckToken[] {
       id: 4,
       deckId: 2,
       oracleId: TOKEN_ORACLE.okoEmblem,
-      // `deck_token_add` names a printing, so a hand-added row always carries one.
-      cardId: TOKEN_PRINTING.okoEmblem,
       quantity: null,
       state: "manual",
       createdAt: at,
       updatedAt: at,
     },
+  ];
+}
+
+/**
+ * The `deck_token_printings` entries — **what v52's conversion
+ * (`deck_tokens::convert_legacy_picks`, a launch pass, not the rung) files from the two pre-v52
+ * rows that named a printing**, one entry per list at `coalesce(quantity, 1)` in the printing's
+ * default finish — `nonfoil` for both, each sold plain as well as foil:
+ *
+ * * **Deck 1's Treasure**, the older `tafr` printing at four — the reader kept it over the one
+ *   the resolver names (`thob`), so the tile draws an art and a count that are both the
+ *   reader's, and `overridden` gives the reset affordance something to undo.
+ * * **Deck 2's hand-added emblem** at one — a count nobody set, taken at the conversion's `?? 1`.
+ *
+ * Both lists get both, because the pre-v52 override was shared by both lists and copying it is
+ * what keeps each list drawing what it drew. Every other token here draws its implicit entry.
+ */
+function starterDeckTokenPrintings(): FakeDeckTokenPrinting[] {
+  const at = CLOCK_BASE - HOUR;
+  const entry = (
+    id: number,
+    deckId: number,
+    variant: DeckVariant,
+    oracleId: string,
+    cardId: string,
+    quantity: number,
+  ): FakeDeckTokenPrinting => ({
+    id,
+    deckId,
+    variant,
+    oracleId,
+    cardId,
+    finish: "nonfoil",
+    quantity,
+    createdAt: at,
+    updatedAt: at,
+  });
+  return [
+    entry(1, 1, "live", TOKEN_ORACLE.treasure, TOKEN_PRINTING.treasureTafr, 4),
+    entry(2, 1, "theory", TOKEN_ORACLE.treasure, TOKEN_PRINTING.treasureTafr, 4),
+    entry(3, 2, "live", TOKEN_ORACLE.okoEmblem, TOKEN_PRINTING.okoEmblem, 1),
+    entry(4, 2, "theory", TOKEN_ORACLE.okoEmblem, TOKEN_PRINTING.okoEmblem, 1),
   ];
 }
 
@@ -1987,6 +2012,7 @@ function starterSeed(): FakeDb {
       ...testbedDeckCards(deckCategories, deckLabels, migrated.length + 1),
     ],
     deckTokens: starterDeckTokens(),
+    deckTokenPrintings: starterDeckTokenPrintings(),
     deckNotes: starterDeckNotes(),
     deckNoteCards: starterDeckNoteCards(),
     deckAudit: starterAudit(),

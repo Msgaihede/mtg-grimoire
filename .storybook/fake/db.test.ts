@@ -8221,22 +8221,52 @@ describe("the deck row itself", () => {
   });
 
   /**
-   * `decks.token_stack` (user schema v47): off by default, moved by the ordinary patch with no
-   * history row, and **carried by a duplicate** — the crate's `duplicate_deck` names it in its
-   * INSERT, because it is a setting about how the deck is read rather than a band left open.
+   * `decks.token_mode` (user schema v52), which replaced v47's `token_stack` switch: **`managed`
+   * by default** — a seed that never says and a deck made here alike, because every deck starts
+   * there, the ones whose stack was off included — moved by the ordinary patch, **audited** under
+   * `deck.rs`'s word `tokenMode` with the two words, refused in words outside its three, and
+   * **carried by a duplicate**. The retired field is gone from the row.
    */
-  it("draws no token pile by default, patches it, and carries it to a copy", () => {
+  it("keeps a deck's tokens managed by default, audits a mode change and carries it", () => {
     const db = makeDeckDb({ decks: [deck({ id: 1 })] });
-    expect(readHandlers(db).deck_list()[0]).toMatchObject({ tokenStack: false });
-    const born = writeHandlers(db).deck_create({ deck: { name: "Burn", formatKey: "modern" } });
-    expect(born).toMatchObject({ tokenStack: false });
+    const w = writeHandlers(db);
+    expect(readHandlers(db).deck_list()[0]).toMatchObject({ tokenMode: "managed" });
+    expect(readHandlers(db).deck_list()[0]).not.toHaveProperty("tokenStack");
+    const born = w.deck_create({ deck: { name: "Burn", formatKey: "modern" } });
+    expect(born).toMatchObject({ tokenMode: "managed" });
 
-    const on = writeHandlers(db).deck_update({ id: 1, patch: { tokenStack: true } });
-    expect(on).toMatchObject({ tokenStack: true });
-    expect(writeHandlers(db).deck_update({ id: 1, patch: {} })).toMatchObject({
-      tokenStack: true,
+    expect(w.deck_update({ id: 1, patch: { tokenMode: "hidden" } })).toMatchObject({
+      tokenMode: "hidden",
     });
-    expect(writeHandlers(db).deck_duplicate({ id: 1 })).toMatchObject({ tokenStack: true });
+    expect(
+      db.deckAudit
+        .filter((a) => a.deckId === 1 && a.kind === "deck")
+        .map((a) => JSON.parse(a.payload) as Record<string, unknown>),
+    ).toContainEqual({ field: "tokenMode", from: "managed", to: "hidden" });
+    // An absent key leaves it, and a patch naming the mode it already has writes no row.
+    const rows = db.deckAudit.length;
+    expect(w.deck_update({ id: 1, patch: {} })).toMatchObject({ tokenMode: "hidden" });
+    expect(w.deck_update({ id: 1, patch: { tokenMode: "hidden" } })).toMatchObject({
+      tokenMode: "hidden",
+    });
+    expect(db.deckAudit).toHaveLength(rows);
+    expect(w.deck_duplicate({ id: 1 })).toMatchObject({ tokenMode: "hidden" });
+    expect(() => w.deck_update({ id: 1, patch: { tokenMode: "stacked" as never } })).toThrow(
+      "A deck's tokens are Managed, Collection or Hidden.",
+    );
+  });
+
+  /** **Ctrl+Z puts a mode back** — the audit row is what the undo step is keyed on, so the switch
+   *  that replaced an unaudited one is the first token setting a press can take back. */
+  it("puts a deck's token mode back on undo", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { tokenMode: "hidden" } });
+
+    const state = h.deck_undo_state({ deckId: 1, redoId: null });
+    expect(state.undo).not.toBeNull();
+    h.deck_undo_apply({ deckId: 1, auditId: state.undo!.id });
+    expect(h.deck_list().find((d) => d.id === 1)).toMatchObject({ tokenMode: "managed" });
   });
 
   /**
@@ -8246,8 +8276,9 @@ describe("the deck row itself", () => {
    *
    * Three things the crate does that a patch-shaped guess would not. **It is audited**, under
    * `deck.rs`'s word `tokenRail`, because moving the pile is an arrangement the reader made and
-   * Ctrl+Z puts back — `token_stack` beside it is a view setting and writes no row. **`0` is a
-   * value**, the top of the rail, so a `||` coalesce would read the move to the top as no change.
+   * Ctrl+Z puts back — the retired `token_stack` beside it was a view setting and wrote no row.
+   * **`0` is a value**, the top of the rail, so a `||` coalesce would read the move to the top as
+   * no change.
    * And **a duplicate carries it**, because an arrangement is part of the deck being copied.
    */
   it("keeps the token pile last by default, moves it, audits the move and copies it", () => {
@@ -8294,7 +8325,8 @@ describe("the deck row itself", () => {
 
   /** **Ctrl+Z moves it back**, which is the audit row earning its keep: the undo step is keyed on
    *  the history row a write produced, so a move that recorded nothing would be a move no press
-   *  could take back — `token_stack`'s arrangement, and the wrong one for an arrangement. */
+   *  could take back — the retired `token_stack`'s arrangement, and the wrong one for an
+   *  arrangement. */
   it("puts a moved token pile back on undo", () => {
     const db = makeDeckDb({ decks: [deck({ id: 1 })] });
     const h = allHandlers(db);
@@ -10043,20 +10075,25 @@ describe("the busy fault", () => {
       // its items before taking the lock would fail this loop by answering an outcome instead of
       // BUSY.
       items: [{ wishId: 1, fromCardId: BOLT.id, toCardId: BOLT_B.id }],
-      // The token writes' two keys that no write before them had. Neither is read on this path
-      // — `refuseIfBusy` is the first statement in all three — but both are named because
-      // `invoke` matches by name, which is this record's whole rule. `tokenState` and not
-      // `state`: the crate cannot call a parameter `state`, since that is the managed
-      // `tauri::State` every command takes, so `ipc.ts` folds `{ state }` onto this key.
+      // The token writes' keys that no write before them had (user schema v52's five). None is
+      // read on this path — `refuseIfBusy` is the first statement in all five — but each is named
+      // because `invoke` matches by name, which is this record's whole rule. **`state` and not
+      // `tokenState`** since v52: the crate names its managed `AppState` `app` on
+      // `deck_token_state` so the word is free, where the retired `deck_token_set` took
+      // `token_state`.
       //
-      // Valid values for `root`'s reason. `deck_token_set` would *refuse* a state word outside
-      // the column's CHECK, so `"auto"` is what keeps a handler that validated before taking the
-      // lock failing this loop by answering `Ok`-shaped nonsense instead of BUSY — and
-      // `oracleId` reaches a token in the fixture, so `deck_token_add`'s "not in the card
-      // database" cannot stand in for a refusal about a sync either. The `cardId` and `quantity`
-      // those three also take are already on this record, from the deck card writes.
+      // Valid values for `root`'s reason. `deck_token_state` would *refuse* a word outside the
+      // column's CHECK, so `"auto"` is what keeps a handler that validated before taking the lock
+      // failing this loop by answering a refusal about the word instead of BUSY; `oracleId`
+      // reaches a token in the fixture; and `from` is `null`, the implicit entry. `to` names a
+      // real Treasure printing in a finish it is sold in. The `cardId`, `variant`, `finish` and
+      // `quantity` those five also take are already on this record — and so is `entry`,
+      // `collection_add`'s, which `deck_token_set_quantity` reads under the same name and never
+      // reaches here.
       oracleId: TOKEN_ORACLE.treasure,
-      tokenState: "auto",
+      state: "auto",
+      from: null,
+      to: { cardId: TOKEN_PRINTING.treasureTafr, finish: "foil" },
       // The six note writes' own keys. `deckId`, `id`, `ids` and `oracleId` are already on this
       // record; these four are what user schema v43 added, and none of them is read on this path
       // — `refuseIfBusy` is the first statement in all six — but every one is named because
@@ -10597,7 +10634,11 @@ describe("the busy fault", () => {
     // number survived and the figure below is the parse above re-run on the merged tree. That is
     // the case the paragraph above was written for, arriving before the ink was dry.
     // 120 → 121 on 2026-09-24 with `collection_removed_clear` (issue #506).
-    expect(names).toHaveLength(121);
+    // 121 → 123 on 2026-09-26 with user schema v52's token writes: the three retired
+    // (`deck_token_set`, `_clear`, `_add`) and five in their place (`deck_token_set_quantity`,
+    // `_swap`, `_add_printing`, `_state`, `_reset`), all plain `sync::with_write`. Arithmetic
+    // against one tree — re-run the sweep after the next merge.
+    expect(names).toHaveLength(123);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -14341,16 +14382,34 @@ describe("the combos one card is in", () => {
 });
 
 /**
- * Tokens and emblems — **the one read here that derives its whole answer**, so these are about
- * the walk rather than about the four rows the table holds.
+ * Tokens and emblems — **the one read here that derives its whole answer**, and since user schema
+ * v52 the five writes that file a token's printings, one entry per printing and finish per list.
  *
- * `deck_tokens` stores deviations only, and the list a deck needs is resolved from its cards on
- * every call. That is the app's design and it is what makes any of this assertable: a fake that
- * stored the list would agree with itself whatever the walk did.
+ * `deck_tokens` stores a token's state and `deck_token_printings` each list's entries; the list a
+ * deck needs is resolved from its cards on every call. That is the app's design and it is what
+ * makes any of this assertable: a fake that stored the list would agree with itself whatever the
+ * walk did. The writes are held to `deck_tokens.rs`' spec §4.2 rules, one case each, and to the
+ * undo and history every deck write owes.
  */
 describe("deck tokens", () => {
-  const tokensOf = (db: FakeDb, deckId: number, marketplace: MarketplaceId = "tcgplayer") =>
-    readHandlers(db).deck_tokens({ deckId, variant: "live", marketplace });
+  const tokensOf = (
+    db: FakeDb,
+    deckId: number,
+    marketplace: MarketplaceId = "tcgplayer",
+    variant: DeckVariant = "live",
+  ) => readHandlers(db).deck_tokens({ deckId, variant, marketplace });
+  /** One token's rows, in the answer's own order. */
+  const rowsOf = (db: FakeDb, deckId: number, oracleId: string, variant: DeckVariant = "live") =>
+    tokensOf(db, deckId, "tcgplayer", variant).filter((r) => r.oracleId === oracleId);
+  /** One token's `deck_tokens` row, as a list — empty for a token with no row. */
+  const storedTokenRows = (db: FakeDb, deckId: number, oracleId: string) =>
+    db.deckTokens.filter((t) => t.deckId === deckId && t.oracleId === oracleId);
+  /** The payloads of a deck's token history, oldest first. */
+  const tokenHistory = (db: FakeDb, deckId: number) =>
+    db.deckAudit
+      .filter((a) => a.deckId === deckId)
+      .map((a) => ({ kind: a.kind, payload: JSON.parse(a.payload) as Record<string, unknown> }))
+      .filter((a) => a.payload.field === "token");
 
   /**
    * **The fence under `TOKEN_ORACLE`/`TOKEN_PRINTING`, and the reason those ids stopped being
@@ -14397,9 +14456,9 @@ describe("deck tokens", () => {
       "Wurm",
       "Wurm",
     ]);
-    // Five rows out, and only the three the reader deviated on are in the table — which is the
-    // whole claim: nothing seeds the list.
-    expect(db.deckTokens.filter((t) => t.deckId === 1)).toHaveLength(3);
+    // Five rows out, and only the two tokens with a state the reader set are in the table —
+    // the zeroed Construct and the dismissed Wurm. Nothing seeds the list.
+    expect(db.deckTokens.filter((t) => t.deckId === 1)).toHaveLength(2);
     expect(rows.every((r) => r.derived)).toBe(true);
   });
 
@@ -14454,40 +14513,45 @@ describe("deck tokens", () => {
   });
 
   /**
-   * The override joins on, and **`0` is a value**. `starter` zeroes the Construct while leaving
-   * its art alone, which is the state `stored || 1` reads as untouched and draws as 1.
+   * **Rule 1: a token with entries draws exactly those, and a token with none draws one implicit
+   * entry** — the resolver's printing, in its default finish, at `deck_tokens.quantity ?? 1`.
+   * `starter` is shaped as v52 leaves a database: deck 1's Treasure is a stored entry (the older
+   * `tafr` printing at four, in both lists), its Construct a legacy count of **zero** on an
+   * implicit entry — `0` is a value, the state `stored || 1` reads as untouched — and its emblem
+   * nothing at all.
    */
-  it("joins the stored override on, zero included", () => {
+  it("draws a token's stored entries, or one implicit entry at the legacy count", () => {
     const rows = tokensOf(seed("starter"), 1);
 
-    expect(rows.find((r) => r.name === "Construct")).toMatchObject({
-      quantity: 0,
-      cardId: null,
-      state: "auto",
-    });
-    // The Treasure moved both halves; the emblem moved neither.
     expect(rows.find((r) => r.name === "Treasure")).toMatchObject({
       cardId: TOKEN_PRINTING.treasureTafr,
+      finish: "nonfoil",
       quantity: 4,
+      implicit: false,
+      state: "auto",
     });
+    const construct = rows.find((r) => r.name === "Construct")!;
+    expect(construct).toMatchObject({ quantity: 0, implicit: true, state: "auto" });
+    expect(construct.cardId).toBe(construct.defaultCardId);
     expect(rows.find((r) => r.layout === "emblem")).toMatchObject({
-      cardId: null,
-      quantity: null,
-      state: null,
+      quantity: 1,
+      implicit: true,
+      state: "auto",
+      finish: "nonfoil",
     });
   });
 
   /**
-   * **The picture is the printing the *tile* addresses, `cardId ?? defaultCardId`**, and the
-   * starter world is the fixture that can tell those two apart: deck 1 has picked the older
-   * Treasure while the resolver names the newer one, so a row taking the resolver's would draw
-   * the art the reader chose against. That failure reaches the web target and the phone alone —
-   * on the desktop `mtgimg://` corrects it off `printingId` — so nothing else here can see it.
+   * **The picture is the entry's printing**, and the starter world is the fixture that can tell
+   * the entry from the resolver apart: deck 1's Treasure entry is the older art while the resolver
+   * names the newer, so a row taking the resolver's would draw the art the reader chose against.
+   * That failure reaches the web target and the phone alone — on the desktop `mtgimg://` corrects
+   * it off `printingId` — so nothing else here can see it.
    *
    * The URLs are read back off `CARDS` rather than written out: they are the fixture's own real
    * Scryfall ones, and an assertion quoting them would pin a generated file's contents.
    */
-  it("carries the picture of the printing the tile addresses", () => {
+  it("carries the picture of the entry's printing", () => {
     const byId = new Map(CARDS.map((c) => [c.id, c]));
     const picture = (id: string) => ({
       display: byId.get(id)!.normalUrl,
@@ -14498,25 +14562,17 @@ describe("deck tokens", () => {
     const treasure = rows.find((r) => r.name === "Treasure")!;
     // Not vacuous: the two have to name different printings for the precedence to be visible.
     expect(treasure.cardId).not.toBe(treasure.defaultCardId);
-    expect(treasure.imageUris).toEqual(picture(treasure.cardId!));
+    expect(treasure.imageUris).toEqual(picture(treasure.cardId));
 
-    // And a token nobody picked art for is the resolver's printing.
+    // And an implicit entry is the resolver's printing.
     const construct = rows.find((r) => r.name === "Construct")!;
-    expect(construct.cardId).toBeNull();
     expect(construct.imageUris).toEqual(picture(construct.defaultCardId));
   });
 
-  /**
-   * **The chin's facts are the effective printing's** — `cardId ?? defaultCardId`, the same
-   * printing the picture above is — which is `drawn_for` in `deck_tokens.rs` reading the
-   * picture and the chin off that one printing. The Treasure is the fixture that can tell the
-   * two printings apart: deck 1 picked `tafr` while the resolver names `thob`, so a row reading
-   * the resolver's would print the wrong set code under the art the reader chose.
-   *
-   * Read back off `CARDS` rather than written out, for the picture test's reason: they are a
-   * generated file's contents.
-   */
-  it("carries the chin facts of the printing the tile addresses", () => {
+  /** **The chin's facts are the entry's printing's** — `drawn_for` in `deck_tokens.rs` reads the
+   *  picture and the chin off that one printing. Read back off `CARDS` for the picture test's
+   *  reason. */
+  it("carries the chin facts of the entry's printing", () => {
     const byId = new Map(CARDS.map((c) => [c.id, c]));
     const chin = (id: string) => {
       const card = byId.get(id)!;
@@ -14531,26 +14587,21 @@ describe("deck tokens", () => {
     const rows = tokensOf(seed("starter"), 1);
 
     const treasure = rows.find((r) => r.name === "Treasure")!;
-    expect(treasure.cardId).not.toBe(treasure.defaultCardId);
-    expect(treasure).toMatchObject(chin(treasure.cardId!));
+    expect(treasure).toMatchObject(chin(treasure.cardId));
     // Not vacuous: the two printings really do differ in the fields asserted.
-    expect(chin(treasure.cardId!).setCode).not.toBe(chin(treasure.defaultCardId).setCode);
+    expect(chin(treasure.cardId).setCode).not.toBe(chin(treasure.defaultCardId).setCode);
 
     const construct = rows.find((r) => r.name === "Construct")!;
     expect(construct).toMatchObject(chin(construct.defaultCardId));
   });
 
   /**
-   * **One price per row, drawn from `card_printings`' own figures for that printing at that
-   * marketplace** — the art picker's grid and the pile's chin quote one piece of cardboard, or
-   * the reader would watch a Treasure change price between the tile and the dialog it opens. The
-   * row is priced the way a deck card naming no finish is: the grid's `nonfoil → foil → etched`,
-   * first quoted wins — `printing_price_by_finish_expr` in the crate.
-   *
-   * All four marketplaces, because the argument is the point: a handler that ignored it would
-   * quote dollars under every heading and pass any single-marketplace assertion.
+   * **One price per entry, at the entry's own finish** — `card_printings`' own per-finish figure
+   * for that printing at that marketplace, so the art picker's grid and the pile's chin quote one
+   * piece of cardboard. All four marketplaces, because the argument is the point: a handler that
+   * ignored it would quote dollars under every heading and pass any single-marketplace assertion.
    */
-  it("prices the effective printing the way card_printings does, at the marketplace asked", () => {
+  it("prices an entry at its own finish the way card_printings does, at the marketplace asked", () => {
     const db = seed("starter");
     const prices = new Map<MarketplaceId, number | null>();
     for (const marketplace of ["tcgplayer", "cardmarket", "cardkingdom", "manapool"] as const) {
@@ -14558,9 +14609,7 @@ describe("deck tokens", () => {
       const { finishPrices } = readHandlers(db)
         .card_printings({ oracleId: treasure.oracleId, marketplace })
         .items.find((p) => p.id === treasure.cardId)!;
-      expect(treasure.unitPrice, marketplace).toBe(
-        finishPrices.nonfoil ?? finishPrices.foil ?? finishPrices.etched,
-      );
+      expect(treasure.unitPrice, marketplace).toBe(finishPrices[treasure.finish]);
       prices.set(marketplace, treasure.unitPrice);
     }
     // The Treasure is priced in dollars, and a feed quotes it at a different figure — which is
@@ -14578,18 +14627,18 @@ describe("deck tokens", () => {
   });
 
   /**
-   * **A printing sold only in foil is priced at its foil price** — the deck card's unsaid arm,
-   * `printing_price_by_finish_expr`'s `nonfoil → foil → etched`, which `deck_tokens.rs` prices a
-   * token with. Without the chain a foil-only token reads unpriced on every marketplace, the
-   * exact defect that chain was written to close for deck cards.
+   * **An implicit entry of a foil-only printing is foil, and priced at its foil price** — the
+   * default finish is the printing's sole one, which is what keeps the case the v51 fallback chain
+   * existed for (13 515 foil-only printings with no nonfoil price anywhere) reading a price. The
+   * Treasure's stored entries are reset first, so the tile is the resolver's `thob`.
    *
    * The world's `cards` is **replaced** rather than edited in place, because `seeds.ts` shares the
    * array between worlds by reference and a column changed on it would change for every story.
    */
-  it("prices a foil-only printing at its foil price", () => {
+  it("draws a foil-only printing's implicit entry in foil, at its foil price", () => {
     const db = seed("starter");
     db.cards = db.cards.map((c) =>
-      c.id === TOKEN_PRINTING.treasureTafr
+      c.id === TOKEN_PRINTING.treasureThob
         ? {
             ...c,
             finishes: '["foil"]',
@@ -14597,23 +14646,30 @@ describe("deck tokens", () => {
           }
         : c,
     );
+    writeHandlers(db).deck_token_reset({
+      deckId: 1,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.treasure,
+    });
 
-    const treasure = tokensOf(db, 1).find((r) => r.name === "Treasure")!;
-
-    expect(treasure.cardId).toBe(TOKEN_PRINTING.treasureTafr);
-    expect(treasure.finishes).toBe('["foil"]');
-    expect(treasure.unitPrice).toBe(3.1);
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)).toEqual([
+      expect.objectContaining({
+        cardId: TOKEN_PRINTING.treasureThob,
+        finish: "foil",
+        implicit: true,
+        unitPrice: 3.1,
+      }),
+    ]);
   });
 
   /**
-   * **The case a sole-finish rule gets wrong, and the reason the chain replaced it.** A printing
-   * sold in both finishes whose nonfoil nobody quotes has no *sole* finish to fall back to, so a
-   * rule reading `soleFinish(finishes) ?? "nonfoil"` prices it at a key with no value and draws an
-   * em dash — while the art picker beside it quotes the foil, and a deck card of the same printing
-   * naming no finish is priced at the foil too. The chain falls through to the first finish this
-   * marketplace quotes, whatever the printing is sold in.
+   * **No fallback across finishes**, which is the case the v51 chain answered the other way: a
+   * printing sold in both finishes whose nonfoil nobody quotes. A nonfoil entry of it is unpriced
+   * — the em dash, because this marketplace does not quote that object — and a foil entry of the
+   * same printing beside it quotes the foil. Quoting the nonfoil at the foil rate would be a price
+   * nobody published.
    */
-  it("prices a printing sold in both finishes at its foil price when only the foil is quoted", () => {
+  it("prices each finish of one printing on its own, with no fallback", () => {
     const db = seed("starter");
     db.cards = db.cards.map((c) =>
       c.id === TOKEN_PRINTING.treasureTafr
@@ -14624,24 +14680,27 @@ describe("deck tokens", () => {
           }
         : c,
     );
+    writeHandlers(db).deck_token_add_printing({
+      deckId: 1,
+      variant: "live",
+      cardId: TOKEN_PRINTING.treasureTafr,
+      finish: "foil",
+    });
 
-    const treasure = tokensOf(db, 1).find((r) => r.name === "Treasure")!;
-
-    expect(treasure.cardId).toBe(TOKEN_PRINTING.treasureTafr);
-    expect(treasure.finishes).toBe('["nonfoil","foil"]');
-    expect(treasure.unitPrice).toBe(1.75);
+    const rows = rowsOf(db, 1, TOKEN_ORACLE.treasure);
+    expect(rows.find((r) => r.finish === "nonfoil")?.unitPrice).toBeNull();
+    expect(rows.find((r) => r.finish === "foil")?.unitPrice).toBe(1.75);
   });
 
-  /** **An effective printing gone from the corpus answers `null` for all six**, which is the
-   *  crate's `row_of` over a `Printing` it could not load: a stored override outlives the
-   *  printing it names, and a chin with a stale set code would be worse than an empty one. */
-  it("answers no chin and no price for a picked printing the corpus no longer has", () => {
+  /** **An entry's printing gone from the corpus answers `null` for all six**, which is the
+   *  crate's `drawn_for` over a printing it could not load: a stored entry outlives the printing
+   *  it names, and a chin with a stale set code would be worse than an empty one. */
+  it("answers no chin and no price for an entry's printing the corpus no longer has", () => {
     const db = seed("starter");
-    const treasureOracle = tokensOf(db, 1).find((r) => r.name === "Treasure")!.oracleId;
-    db.deckTokens = db.deckTokens.map((t) =>
-      t.deckId === 1 && t.oracleId === treasureOracle
-        ? { ...t, cardId: "00000000-0000-0000-0000-000000000000" }
-        : t,
+    db.deckTokenPrintings = db.deckTokenPrintings.map((e) =>
+      e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure
+        ? { ...e, cardId: "00000000-0000-0000-0000-000000000000" }
+        : e,
     );
 
     expect(tokensOf(db, 1).find((r) => r.name === "Treasure")).toMatchObject({
@@ -14664,17 +14723,18 @@ describe("deck tokens", () => {
   });
 
   /** A dismissal is still a derived row: whether `hidden` is *drawn* is `deckTokenViews`'
-   *  conclusion, not the backend's, so both Wurms come back and one of them says so. */
+   *  conclusion, not the backend's, so both Wurms come back and one of them says so — and the
+   *  other says `auto`, the effective state, where the wire used to carry a `null`. */
   it("answers a dismissed token rather than dropping it", () => {
     const wurms = tokensOf(seed("starter"), 1).filter((r) => r.name === "Wurm");
 
     expect(wurms.filter((w) => w.state === "hidden")).toHaveLength(1);
-    expect(wurms.filter((w) => w.state === null)).toHaveLength(1);
+    expect(wurms.filter((w) => w.state === "auto")).toHaveLength(1);
   });
 
-  /** A `manual` row the deck derives nothing for — deck 2 runs no Jace — comes back last, with
-   *  `derived: false` and no sources. */
-  it("appends a manual row nothing derives", () => {
+  /** A `manual` token the deck derives nothing for — deck 2 runs no Jace — comes back last, with
+   *  `derived: false`, no sources, and its stored entry. */
+  it("appends a manual token nothing derives, with its entry", () => {
     const rows = tokensOf(seed("starter"), 2);
 
     expect(rows.map((r) => r.name)).toEqual([
@@ -14682,7 +14742,13 @@ describe("deck tokens", () => {
       "Treasure",
       "Oko, Shadowmoor Scion Emblem",
     ]);
-    expect(rows[2]).toMatchObject({ derived: false, sources: [], state: "manual" });
+    expect(rows[2]).toMatchObject({
+      derived: false,
+      sources: [],
+      state: "manual",
+      cardId: TOKEN_PRINTING.okoEmblem,
+      implicit: false,
+    });
   });
 
   /** A deck whose cards make nothing is an empty list and never an error — deck 3 runs four
@@ -14693,75 +14759,236 @@ describe("deck tokens", () => {
     expect(tokensOf(seed("starter"), 999)).toEqual([]);
   });
 
-  it("writes an override on the grain and reads it back", () => {
+  /**
+   * **One row per entry**: a second printing added to a token draws beside the first, never in
+   * its place — and only in the list it was added to (rule 6), so the plan's Treasure is
+   * untouched.
+   */
+  it("draws two printings of one token side by side, in one list only", () => {
     const db = seed("starter");
-    writeHandlers(db).deck_token_set({
+    writeHandlers(db).deck_token_add_printing({
       deckId: 1,
-      oracleId: TOKEN_ORACLE.wurmDeathtouch,
-      cardId: null,
-      quantity: 2,
-      tokenState: null,
+      variant: "live",
+      cardId: TOKEN_PRINTING.treasureThob,
+      finish: "foil",
     });
 
-    expect(tokensOf(db, 1).find((r) => r.oracleId === TOKEN_ORACLE.wurmDeathtouch)).toMatchObject({
-      quantity: 2,
-      state: "auto",
-    });
-    // One row per token per deck: a second write is an update, never a second row.
-    writeHandlers(db).deck_token_set({
-      deckId: 1,
-      oracleId: TOKEN_ORACLE.wurmDeathtouch,
-      cardId: null,
-      quantity: 3,
-      tokenState: null,
-    });
-    expect(db.deckTokens.filter((t) => t.oracleId === TOKEN_ORACLE.wurmDeathtouch)).toHaveLength(1);
+    expect(
+      rowsOf(db, 1, TOKEN_ORACLE.treasure).map((r) => [r.cardId, r.finish, r.quantity]),
+    ).toEqual([
+      [TOKEN_PRINTING.treasureTafr, "nonfoil", 4],
+      [TOKEN_PRINTING.treasureThob, "foil", 1],
+    ]);
+    // The plan's entries are exactly what v52's conversion filed there. (Read off the table
+    // rather than the theory read: deck 1 keeps no plan, so that list derives nothing and draws
+    // none of them — the resolver's rule for an entry of a token neither derived nor kept by
+    // hand.)
+    expect(
+      db.deckTokenPrintings
+        .filter((e) => e.deckId === 1 && e.variant === "theory")
+        .map((e) => [e.cardId, e.finish, e.quantity]),
+    ).toEqual([[TOKEN_PRINTING.treasureTafr, "nonfoil", 4]]);
   });
 
   /**
-   * **The empty override is not representable.** `auto` with no printing and no quantity is *no
-   * deviation*, and storing it would be a second spelling of a state the table already has —
-   * which a panel reading the wrong one would draw a reset control over.
+   * **Rule 2**: the first write to an implicit entry materialises it — the resolver's printing,
+   * in its default finish — in that list only, so the other list goes on drawing its own.
    */
-  it("deletes the row rather than storing an override that carries nothing", () => {
+  it("materialises an implicit entry on its first step, in that list only", () => {
     const db = seed("starter");
-    expect(db.deckTokens.filter((t) => t.deckId === 1)).toHaveLength(3);
-
-    writeHandlers(db).deck_token_set({
+    writeHandlers(db).deck_token_set_quantity({
       deckId: 1,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.wurmDeathtouch,
+      entry: null,
+      quantity: 3,
+    });
+
+    expect(rowsOf(db, 1, TOKEN_ORACLE.wurmDeathtouch)).toEqual([
+      expect.objectContaining({
+        cardId: TOKEN_PRINTING.wurmDeathtouch,
+        finish: "nonfoil",
+        quantity: 3,
+        implicit: false,
+      }),
+    ]);
+    expect(
+      db.deckTokenPrintings.filter((e) => e.oracleId === TOKEN_ORACLE.wurmDeathtouch),
+    ).toEqual([expect.objectContaining({ variant: "live", quantity: 3 })]);
+  });
+
+  /**
+   * **Rule 3**: stepping an entry to zero deletes it — unless it is the token's last entry in
+   * that list, which stays at zero, so the implicit default never reappears under a reader who
+   * zeroed the only printing they had.
+   */
+  it("deletes a zeroed entry, and keeps the last one at zero", () => {
+    const db = seed("starter");
+    const w = writeHandlers(db);
+    w.deck_token_add_printing({
+      deckId: 1,
+      variant: "live",
+      cardId: TOKEN_PRINTING.treasureThob,
+      finish: "nonfoil",
+    });
+    const zero = (cardId: string) =>
+      w.deck_token_set_quantity({
+        deckId: 1,
+        variant: "live",
+        oracleId: TOKEN_ORACLE.treasure,
+        entry: { cardId, finish: "nonfoil" },
+        quantity: 0,
+      });
+
+    zero(TOKEN_PRINTING.treasureThob);
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure).map((r) => r.cardId)).toEqual([
+      TOKEN_PRINTING.treasureTafr,
+    ]);
+    zero(TOKEN_PRINTING.treasureTafr);
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)).toEqual([
+      expect.objectContaining({
+        cardId: TOKEN_PRINTING.treasureTafr,
+        quantity: 0,
+        implicit: false,
+      }),
+    ]);
+  });
+
+  /**
+   * **An add clears the token's zero entries in that list**, and one Undo brings them back — the
+   * crate's `add_printing_in`. Rule 3 held the entry at zero because it was the last; beside a
+   * second printing it is not, and left alone it is a `0` tile no stepper can send to zero again.
+   * The plan's zero entry is the other list's, and stays.
+   */
+  it("clears the token's zero entries in that list on an add, and undoes it in one step", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    db.deckTokenPrintings = db.deckTokenPrintings.map((e) =>
+      e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure && e.variant === "theory"
+        ? { ...e, quantity: 0 }
+        : e,
+    );
+    const entries = () =>
+      db.deckTokenPrintings
+        .filter((e) => e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure)
+        .map((e) => [e.variant, e.cardId, e.finish, e.quantity])
+        .sort((a, b) => String(a).localeCompare(String(b)));
+    h.deck_token_set_quantity({
+      deckId: 1,
+      variant: "live",
       oracleId: TOKEN_ORACLE.treasure,
-      cardId: null,
-      quantity: null,
-      tokenState: "auto",
+      entry: { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil" },
+      quantity: 0,
     });
+    const zeroed = [
+      ["live", TOKEN_PRINTING.treasureTafr, "nonfoil", 0],
+      ["theory", TOKEN_PRINTING.treasureTafr, "nonfoil", 0],
+    ];
+    expect(entries()).toEqual(zeroed);
 
-    expect(db.deckTokens.filter((t) => t.deckId === 1)).toHaveLength(2);
-    expect(tokensOf(db, 1).find((r) => r.name === "Treasure")).toMatchObject({
-      cardId: null,
-      quantity: null,
-      state: null,
-      // Back to the resolver's answer, which is the point of there being no row.
-      defaultCardId: TOKEN_PRINTING.treasureThob,
+    h.deck_token_add_printing({
+      deckId: 1,
+      variant: "live",
+      cardId: TOKEN_PRINTING.treasureThob,
+      finish: "foil",
     });
+    const added = [
+      ["live", TOKEN_PRINTING.treasureThob, "foil", 1],
+      ["theory", TOKEN_PRINTING.treasureTafr, "nonfoil", 0],
+    ];
+    expect(entries()).toEqual(added);
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(entries()).toEqual(zeroed);
+    h.deck_redo_apply({ deckId: 1, auditId: undo.id });
+    expect(entries()).toEqual(added);
   });
 
-  /** `clear` is the same delete with a name on it, and a grain resolving to no row is a
-   *  **success**: the caller wanted no override and there is none. */
-  it("clears an override, and clearing one that is not there is not an error", () => {
+  /**
+   * **Rule 4**: a swap moves one entry, and swapping onto a printing and finish the list already
+   * holds folds the two — quantities summed, one row. The picker's own guards are the crate's: a
+   * printing of another token and a finish the printing is not sold in are both refused in words,
+   * and a swap onto the entry's own grain writes nothing at all.
+   */
+  it("swaps an entry, folds onto one the list holds, and refuses what the picker never offers", () => {
     const db = seed("starter");
-    writeHandlers(db).deck_token_clear({ deckId: 1, oracleId: TOKEN_ORACLE.construct });
+    const w = writeHandlers(db);
+    w.deck_token_add_printing({
+      deckId: 1,
+      variant: "live",
+      cardId: TOKEN_PRINTING.treasureThob,
+      finish: "foil",
+    });
+    w.deck_token_swap({
+      deckId: 1,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.treasure,
+      from: { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil" },
+      to: { cardId: TOKEN_PRINTING.treasureThob, finish: "foil" },
+    });
 
-    expect(tokensOf(db, 1).find((r) => r.name === "Construct")?.quantity).toBeNull();
-    expect(() =>
-      writeHandlers(db).deck_token_clear({ deckId: 1, oracleId: TOKEN_ORACLE.construct }),
-    ).not.toThrow();
+    expect(
+      rowsOf(db, 1, TOKEN_ORACLE.treasure).map((r) => [r.cardId, r.finish, r.quantity]),
+    ).toEqual([[TOKEN_PRINTING.treasureThob, "foil", 5]]);
+
+    const swap = (to: { cardId: string; finish: Finish }) => () =>
+      w.deck_token_swap({
+        deckId: 1,
+        variant: "live",
+        oracleId: TOKEN_ORACLE.treasure,
+        from: { cardId: TOKEN_PRINTING.treasureThob, finish: "foil" },
+        to,
+      });
+    expect(swap({ cardId: TOKEN_PRINTING.construct, finish: "nonfoil" })).toThrow(
+      "That printing is not one of this token's.",
+    );
+    expect(swap({ cardId: TOKEN_PRINTING.treasureTafr, finish: "etched" })).toThrow(
+      "That printing is not sold in that finish.",
+    );
+    const rows = db.deckAudit.length;
+    swap({ cardId: TOKEN_PRINTING.treasureThob, finish: "foil" })();
+    expect(db.deckAudit).toHaveLength(rows);
   });
 
-  /** `add` names a **printing** and the oracle id is resolved from it — the one of the four that
-   *  does, because the reader picks out of a printings grid. */
-  it("adds a token by hand from a printing", () => {
+  /**
+   * **Rule 5**: adding a printing inserts it at one, or steps an entry of it up by one — and a
+   * token that was implicit is materialised first, which is what makes adding art B keep art A.
+   */
+  it("adds a printing at one, steps it on a second add, and keeps the implicit art", () => {
     const db = seed("starter");
-    writeHandlers(db).deck_token_add({ deckId: 3, cardId: TOKEN_PRINTING.wurmLifelink });
+    const add = (finish: Finish) =>
+      writeHandlers(db).deck_token_add_printing({
+        deckId: 1,
+        variant: "live",
+        cardId: TOKEN_PRINTING.wurmDeathtouch,
+        finish,
+      });
+
+    add("foil");
+    // The implicit nonfoil Wurm was materialised before the foil one landed beside it.
+    expect(
+      rowsOf(db, 1, TOKEN_ORACLE.wurmDeathtouch).map((r) => [r.finish, r.quantity, r.implicit]),
+    ).toEqual([
+      ["foil", 1, false],
+      ["nonfoil", 1, false],
+    ]);
+    add("foil");
+    expect(
+      rowsOf(db, 1, TOKEN_ORACLE.wurmDeathtouch).find((r) => r.finish === "foil")?.quantity,
+    ).toBe(2);
+  });
+
+  /** A token nothing in the deck makes becomes **`manual`** when a printing of it is added — the
+   *  reader's own, which no cut can reconcile away — and is drawn in the list it was added to. */
+  it("makes a hand-added token nothing derives manual", () => {
+    const db = seed("starter");
+    writeHandlers(db).deck_token_add_printing({
+      deckId: 3,
+      variant: "live",
+      cardId: TOKEN_PRINTING.wurmLifelink,
+      finish: "nonfoil",
+    });
 
     const rows = tokensOf(db, 3);
     expect(rows).toHaveLength(1);
@@ -14772,40 +14999,679 @@ describe("deck tokens", () => {
       sources: [],
       state: "manual",
       cardId: TOKEN_PRINTING.wurmLifelink,
-      // Left absent rather than stored as 1: the default is TypeScript's conclusion.
-      quantity: null,
+      quantity: 1,
+      implicit: false,
     });
   });
 
-  it("refuses an add naming a printing the card database does not have", () => {
-    expect(() =>
-      writeHandlers(seed("starter")).deck_token_add({ deckId: 1, cardId: BOLT.id }),
-    ).toThrow(/not in the card database/);
-  });
-
-  /** The state word is closed by a CHECK on the column, so a word outside it is refused here
-   *  rather than stored and drawn. */
-  it("refuses a state word the column's CHECK would", () => {
-    expect(() =>
-      writeHandlers(seed("starter")).deck_token_set({
+  /**
+   * An add names a **token** printing the corpus has, and the two ways it can fail to are two
+   * sentences — `deck_tokens::add_printing_in`'s order: a printing the corpus has not got is
+   * `NO_SUCH_PRINTING`, and Lightning Bolt, which it has, is `NOT_A_TOKEN`. A token entry of Bolt
+   * would be an ordinary card on the wall of tokens.
+   */
+  it("refuses an add naming a printing that is not a token in the card database", () => {
+    const db = seed("starter");
+    const add = (cardId: string) => () =>
+      writeHandlers(db).deck_token_add_printing({
         deckId: 1,
-        oracleId: TOKEN_ORACLE.treasure,
-        cardId: null,
-        quantity: null,
-        tokenState: "nonsense" as never,
-      }),
-    ).toThrow(/is not a token state/);
+        variant: "live",
+        cardId,
+        finish: "nonfoil",
+      });
+    const before = JSON.stringify([db.deckTokenPrintings, db.deckTokens, db.deckAudit.length]);
+    expect(add(BOLT.id)).toThrow("That card is not a token or an emblem.");
+    expect(add("00000000-0000-0000-0000-000000000000")).toThrow(
+      "That printing is not in the card database any more.",
+    );
+    expect(JSON.stringify([db.deckTokenPrintings, db.deckTokens, db.deckAudit.length])).toBe(
+      before,
+    );
   });
 
-  /** `deck_tokens.deck_id` is `ON DELETE CASCADE` — and the list itself needed no deleting,
-   *  because it was never stored. */
-  it("takes a deck's overrides with the deck", () => {
+  /**
+   * **A two-sided token is a token and a two-sided card is not** — `is_token_printing`'s second
+   * half, which reads the type line of a `flip` or `reversible_card` printing because the layout
+   * alone answers `false` for the six real ones. The corpus here carries none, so the test stands
+   * up the crate's own pair: `Mechtitan`, the corpus's one `reversible_card` token, and a
+   * reversible legendary creature. The first becomes a hand-added token entry, the second is
+   * `NOT_A_TOKEN` with nothing written — and `deck_add_card` routes the same way.
+   * (`a_reversible_token_is_added_and_a_reversible_card_is_refused` is the crate's half.)
+   */
+  it("files a two-sided token as a token and refuses a two-sided card", () => {
+    const db = seed("starter");
+    const base = db.cards.find((c) => c.id === TOKEN_PRINTING.construct)!;
+    const mechtitan: FakeCard = {
+      ...base,
+      id: "c-mechtitan",
+      oracleId: "o-mechtitan",
+      name: "Mechtitan // Mechtitan",
+      typeLine: "Token Legendary Artifact Creature — Construct",
+      layout: "reversible_card",
+      finishes: JSON.stringify(["nonfoil"]),
+    };
+    const legend: FakeCard = {
+      ...base,
+      id: "c-reversible-legend",
+      oracleId: "o-reversible-legend",
+      name: "A Reversible Legend",
+      typeLine: "Legendary Creature — Elf Druid",
+      layout: "reversible_card",
+      finishes: JSON.stringify(["nonfoil"]),
+    };
+    // A new array rather than a push: `seeds.ts` shares `cards` by reference between worlds.
+    db.cards = [...db.cards, mechtitan, legend];
+    const w = writeHandlers(db);
+
+    expect(() =>
+      w.deck_token_add_printing({ deckId: 1, variant: "live", cardId: legend.id, finish: null }),
+    ).toThrow("That card is not a token or an emblem.");
+    expect(db.deckTokenPrintings.filter((e) => e.oracleId === legend.oracleId)).toEqual([]);
+    expect(storedTokenRows(db, 1, legend.oracleId)).toEqual([]);
+
+    w.deck_token_add_printing({ deckId: 1, variant: "live", cardId: mechtitan.id, finish: null });
+    expect(db.deckTokenPrintings.filter((e) => e.oracleId === mechtitan.oracleId)).toEqual([
+      expect.objectContaining({ variant: "live", cardId: mechtitan.id, quantity: 1 }),
+    ]);
+    expect(storedTokenRows(db, 1, mechtitan.oracleId)).toEqual([
+      expect.objectContaining({ state: "manual" }),
+    ]);
+
+    // The card add reroutes it the same way: a token entry stepped up, never a deck card.
+    const landed = w.deck_add_card({
+      deckId: 1,
+      variant: "live",
+      cardId: mechtitan.id,
+      categoryId: categoryId(1, "main"),
+      categoryName: null,
+      quantity: 2,
+    });
+    expect(landed).toEqual({ id: 0, quantity: 3, removed: false });
+    expect(db.deckCards.some((c) => c.cardId === mechtitan.id)).toBe(false);
+    expect(db.deckTokenPrintings.filter((e) => e.oracleId === mechtitan.oracleId)).toEqual([
+      expect.objectContaining({ variant: "live", cardId: mechtitan.id, quantity: 3 }),
+    ]);
+  });
+
+  /** A reset deletes that list's entries and nothing else — not the other list's (rule 6), not
+   *  the token's state — and a token with none is a success that records nothing. */
+  it("resets one list's entries only", () => {
+    const db = seed("starter");
+    const reset = (variant: DeckVariant) =>
+      writeHandlers(db).deck_token_reset({ deckId: 1, variant, oracleId: TOKEN_ORACLE.treasure });
+
+    reset("live");
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)).toEqual([
+      expect.objectContaining({ cardId: TOKEN_PRINTING.treasureThob, implicit: true }),
+    ]);
+    expect(
+      db.deckTokenPrintings.filter((e) => e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure),
+    ).toEqual([expect.objectContaining({ variant: "theory", quantity: 4 })]);
+    const rows = db.deckAudit.length;
+    reset("live");
+    expect(db.deckAudit).toHaveLength(rows);
+  });
+
+  /**
+   * **A token's state is one row shared by both lists**: `hidden` dismisses it in both, `manual`
+   * keeps it whatever derives it, and `auto` on a row carrying no legacy count **deletes** the row
+   * rather than storing one that says nothing. A word outside the column's CHECK is refused.
+   */
+  it("dismisses, keeps and restores a token in both lists at once", () => {
+    const db = seed("starter");
+    const w = writeHandlers(db);
+    const state = (s: string) =>
+      w.deck_token_state({ deckId: 1, oracleId: TOKEN_ORACLE.treasure, state: s });
+
+    state("hidden");
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)[0].state).toBe("hidden");
+    // One row, and no list on it: the dismissal is the token's in both lists.
+    expect(storedTokenRows(db, 1, TOKEN_ORACLE.treasure)).toEqual([
+      expect.objectContaining({ state: "hidden" }),
+    ]);
+    expect(storedTokenRows(db, 1, TOKEN_ORACLE.treasure)[0]).not.toHaveProperty("variant");
+    // Kept by hand: the same one row, and both lists read it.
+    state("manual");
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)[0].state).toBe("manual");
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure, "theory")[0].state).toBe("manual");
+    expect(storedTokenRows(db, 1, TOKEN_ORACLE.treasure)).toEqual([
+      expect.objectContaining({ state: "manual" }),
+    ]);
+    state("auto");
+    expect(storedTokenRows(db, 1, TOKEN_ORACLE.treasure)).toEqual([]);
+    // The zeroed Construct keeps its row: a legacy count is something to carry.
+    w.deck_token_state({ deckId: 1, oracleId: TOKEN_ORACLE.construct, state: "auto" });
+    expect(storedTokenRows(db, 1, TOKEN_ORACLE.construct)).toHaveLength(1);
+    expect(() => state("nonsense")).toThrow("That is not something a token can be.");
+  });
+
+  /**
+   * **Every token write is a deck write**: one history row, kind **`deck`** with `field: "token"`
+   * and the action's word — never a tenth kind, because `deck_audit` is synced and a word its CHECK
+   * does not know stalls an older peer — and one undo step, so Ctrl+Z puts the list back and
+   * Ctrl+Shift+Z puts the write back. Driven through `allHandlers`, because {@link journalled} is
+   * what files the step.
+   */
+  it("records one deck row per token write and undoes and redoes each", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    const snapshot = () =>
+      JSON.stringify([
+        db.deckTokenPrintings.filter((e) => e.deckId === 1),
+        db.deckTokens.filter((t) => t.deckId === 1),
+      ]);
+    const writes: [string, () => void][] = [
+      [
+        "quantity",
+        () =>
+          h.deck_token_set_quantity({
+            deckId: 1,
+            variant: "live",
+            oracleId: TOKEN_ORACLE.treasure,
+            entry: { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil" },
+            quantity: 6,
+          }),
+      ],
+      [
+        "swap",
+        () =>
+          h.deck_token_swap({
+            deckId: 1,
+            variant: "live",
+            oracleId: TOKEN_ORACLE.treasure,
+            from: { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil" },
+            to: { cardId: TOKEN_PRINTING.treasureThob, finish: "foil" },
+          }),
+      ],
+      [
+        "add",
+        () =>
+          h.deck_token_add_printing({
+            deckId: 1,
+            variant: "live",
+            cardId: TOKEN_PRINTING.construct,
+            finish: "foil",
+          }),
+      ],
+      [
+        "state",
+        () => h.deck_token_state({ deckId: 1, oracleId: TOKEN_ORACLE.treasure, state: "hidden" }),
+      ],
+      [
+        "reset",
+        () => h.deck_token_reset({ deckId: 1, variant: "live", oracleId: TOKEN_ORACLE.treasure }),
+      ],
+    ];
+
+    for (const [action, write] of writes) {
+      const before = snapshot();
+      const rows = db.deckAudit.length;
+      write();
+      const after = snapshot();
+      expect(after, action).not.toBe(before);
+      const written = db.deckAudit.slice(rows);
+      expect(written, action).toHaveLength(1);
+      expect(written[0].kind, action).toBe("deck");
+      expect(JSON.parse(written[0].payload), action).toMatchObject({ field: "token", action });
+
+      const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+      expect(undo.id, action).toBe(written[0].id);
+      h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+      expect(snapshot(), `${action} undone`).toBe(before);
+      h.deck_redo_apply({ deckId: 1, auditId: undo.id });
+      expect(snapshot(), `${action} redone`).toBe(after);
+    }
+  });
+
+  /** The history row names the token as the wall does — its name and subtitle, the list, the
+   *  entry and the two counts — which is what `auditText.ts` words and the Undo button reads. */
+  it("names the token, its list and its counts in the history row", () => {
+    const db = seed("starter");
+    writeHandlers(db).deck_token_set_quantity({
+      deckId: 1,
+      variant: "theory",
+      oracleId: TOKEN_ORACLE.treasure,
+      entry: { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil" },
+      quantity: 3,
+    });
+
+    const history = tokenHistory(db, 1);
+    expect(history[history.length - 1]).toEqual({
+      kind: "deck",
+      payload: {
+        field: "token",
+        action: "quantity",
+        name: "Treasure",
+        subtitle: expect.stringContaining("Colorless"),
+        card_id: TOKEN_PRINTING.treasureTafr,
+        finish: "nonfoil",
+        list: "theory",
+        from: 4,
+        to: 3,
+      },
+    });
+  });
+
+  /**
+   * **Every action's payload, field by field, in `deck_tokens::journal_in`'s shape** — snake_case
+   * keys, the nine common ones, then the action's own extra. `auditText.ts` words exactly these,
+   * and its own tests carry the same shapes copied from the crate, so a key renamed on either
+   * side goes red on that side rather than reading as "Changed Treasure" in the drawer.
+   *
+   * * `add` — `from`/`to` are the entry's count before and after, and **`quantity` is the copies
+   *   added**, which is what the sentence's number is.
+   * * `swap` — `from`/`to` are **objects** (`entry_facts`: the entry and the set and number it was
+   *   read as), the common `card_id`/`finish` are the entry it landed on, and `folded` says it
+   *   merged into one the list already held.
+   * * `state` — no entry and no list: a dismissal is shared by both lists.
+   * * `reset` — no entry and no counts, and `entries` is how many went.
+   */
+  it("writes each token action's payload in the crate's shape", () => {
+    const db = seed("starter");
+    const w = writeHandlers(db);
+    const last = () => {
+      const history = tokenHistory(db, 1);
+      return history[history.length - 1].payload;
+    };
+    const common = { field: "token", name: "Treasure", subtitle: expect.stringContaining("Colorless") };
+
+    w.deck_token_add_printing({
+      deckId: 1,
+      variant: "live",
+      cardId: TOKEN_PRINTING.treasureThob,
+      finish: "foil",
+    });
+    expect(last()).toEqual({
+      ...common,
+      action: "add",
+      card_id: TOKEN_PRINTING.treasureThob,
+      finish: "foil",
+      list: "live",
+      from: 0,
+      to: 1,
+      quantity: 1,
+    });
+
+    w.deck_token_swap({
+      deckId: 1,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.treasure,
+      from: { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil" },
+      to: { cardId: TOKEN_PRINTING.treasureThob, finish: "foil" },
+    });
+    expect(last()).toEqual({
+      ...common,
+      action: "swap",
+      card_id: TOKEN_PRINTING.treasureThob,
+      finish: "foil",
+      list: "live",
+      from: {
+        card_id: TOKEN_PRINTING.treasureTafr,
+        finish: "nonfoil",
+        set_code: "tafr",
+        collector_number: "15",
+      },
+      to: {
+        card_id: TOKEN_PRINTING.treasureThob,
+        finish: "foil",
+        set_code: "thob",
+        collector_number: "13",
+      },
+      folded: true,
+    });
+
+    w.deck_token_state({ deckId: 1, oracleId: TOKEN_ORACLE.treasure, state: "hidden" });
+    expect(last()).toEqual({
+      ...common,
+      action: "state",
+      card_id: null,
+      finish: null,
+      list: null,
+      from: "auto",
+      to: "hidden",
+    });
+
+    w.deck_token_reset({ deckId: 1, variant: "live", oracleId: TOKEN_ORACLE.treasure });
+    expect(last()).toEqual({
+      ...common,
+      action: "reset",
+      card_id: null,
+      finish: null,
+      list: "live",
+      from: null,
+      to: null,
+      entries: 1,
+    });
+  });
+
+  /** A write that changes nothing records nothing — a stepper landing on the count it was at is
+   *  not a change the drawer should have to explain, and no Ctrl+Z may be spent on it. */
+  it("records nothing for a step that lands where it was", () => {
+    const db = seed("starter");
+    const rows = db.deckAudit.length;
+    allHandlers(db).deck_token_set_quantity({
+      deckId: 1,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.treasure,
+      entry: { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil" },
+      quantity: 4,
+    });
+    expect(db.deckAudit).toHaveLength(rows);
+  });
+
+  /** **A stale page is refused rather than guessed at**: an entry the list no longer holds, and
+   *  an implicit entry of a token that is not on the wall at all. */
+  it("refuses a write to an entry or a token the list no longer has", () => {
+    const w = writeHandlers(seed("starter"));
+    expect(() =>
+      w.deck_token_set_quantity({
+        deckId: 1,
+        variant: "live",
+        oracleId: TOKEN_ORACLE.treasure,
+        entry: { cardId: TOKEN_PRINTING.treasureThob, finish: "foil" },
+        quantity: 2,
+      }),
+    ).toThrow("That printing of the token is not in this list any more.");
+    expect(() =>
+      w.deck_token_set_quantity({
+        deckId: 3,
+        variant: "live",
+        oracleId: TOKEN_ORACLE.treasure,
+        entry: null,
+        quantity: 2,
+      }),
+    ).toThrow("That token is not in this list any more.");
+  });
+
+  /**
+   * **A token dropped on a pile is a token entry, never a deck card** — `deck::add_card`'s
+   * reroute. The add answers `id: 0` (no deck card was made, so nothing is marked as landed), the
+   * deck's cards and its card count are untouched, and the entry is in the list the add named, at
+   * the add's quantity, filed with a history row and an undo step of its own.
+   */
+  it("files a token added to a pile as a token entry, answering id 0", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    const main = db.deckCategories.find((c) => c.deckId === 3 && c.kind === "main")!;
+    const cards = db.deckCards.length;
+    const count = h.deck_list().find((d) => d.id === 3)!.cardCount;
+
+    const change = h.deck_add_card({
+      deckId: 3,
+      cardId: TOKEN_PRINTING.construct,
+      categoryId: main.id,
+      categoryName: null,
+      variant: "live",
+      quantity: 2,
+    });
+
+    expect(change).toEqual({ id: 0, quantity: 2, removed: false });
+    expect(db.deckCards).toHaveLength(cards);
+    expect(h.deck_list().find((d) => d.id === 3)!.cardCount).toBe(count);
+    expect(tokensOf(db, 3)).toEqual([
+      expect.objectContaining({
+        oracleId: TOKEN_ORACLE.construct,
+        quantity: 2,
+        implicit: false,
+        state: "manual",
+      }),
+    ]);
+    expect(h.deck_undo_state({ deckId: 3, redoId: null }).undo).not.toBeNull();
+  });
+
+  /**
+   * **A token filed from the Collection tab is a token entry, and no copy moves** —
+   * `collection_to_deck`'s reroute, ahead of its `NOT_IN_DECK` fence (a deck never "plays" a
+   * token). The outcome says nothing moved, the collection row stays where it was, and the entry
+   * carries the row's own finish — with an undo step of its own, though the command files none
+   * for the copies it moves.
+   */
+  it("files a token from the collection as a token entry and moves no copy", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    const added = h.collection_add({
+      entry: { cardId: TOKEN_PRINTING.treasureThob, finish: "foil", quantity: 3 },
+    });
+    const entry = () => db.collectionEntries.find((e) => e.id === added.id)!;
+    const folder = entry().folderId;
+
+    const outcome = h.collection_to_deck({
+      entryId: added.id,
+      deckId: 3,
+      categoryName: "Main deck",
+      quantity: 2,
+    });
+
+    expect(outcome).toEqual({ entryId: null, fromDeck: null, deckCardId: null, quantity: 0 });
+    expect(entry()).toMatchObject({ quantity: 3, folderId: folder });
+    expect(tokensOf(db, 3)).toEqual([
+      expect.objectContaining({
+        oracleId: TOKEN_ORACLE.treasure,
+        cardId: TOKEN_PRINTING.treasureThob,
+        finish: "foil",
+        quantity: 2,
+        state: "manual",
+      }),
+    ]);
+    expect(h.deck_undo_state({ deckId: 3, redoId: null }).undo).not.toBeNull();
+  });
+
+  /**
+   * **Rule 7, and Review Focus 2**: switching off the pile that holds a token's makers takes the
+   * token's entries away — and **Ctrl+Z on that press puts back the pile and the reader's
+   * printings together**, because the reconcile's deletions ride the write's own step.
+   */
+  it("removes a token nothing makes any more, and brings its printings back on undo", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    h.deck_token_add_printing({
+      deckId: 1,
+      variant: "live",
+      cardId: TOKEN_PRINTING.treasureThob,
+      finish: "foil",
+    });
+    const main = db.deckCategories.find((c) => c.deckId === 1 && c.kind === "main")!;
+
+    h.deck_category_set_active({ id: main.id, isActive: false });
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)).toEqual([]);
+    expect(
+      db.deckTokenPrintings.filter(
+        (e) => e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure && e.variant === "live",
+      ),
+    ).toEqual([]);
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(
+      rowsOf(db, 1, TOKEN_ORACLE.treasure).map((r) => [r.cardId, r.finish, r.quantity]),
+    ).toEqual([
+      [TOKEN_PRINTING.treasureTafr, "nonfoil", 4],
+      [TOKEN_PRINTING.treasureThob, "foil", 1],
+    ]);
+  });
+
+  /**
+   * **The backstop**: a card write that files no step still reconciles — cutting both of deck 1's
+   * Treasure makers takes the Treasure's entries with the second cut. A `manual` token is never
+   * touched, because no card made it and no cut can unmake it.
+   */
+  it("reconciles after a write that files no step, and leaves a manual token alone", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    // The lifelink Wurm kept by hand, with one entry of its own: kept first, then stepped, which
+    // materialises its implicit entry at one.
+    h.deck_token_state({ deckId: 1, oracleId: TOKEN_ORACLE.wurmLifelink, state: "manual" });
+    h.deck_token_set_quantity({
+      deckId: 1,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.wurmLifelink,
+      entry: null,
+      quantity: 1,
+    });
+    const cut = (name: string) => {
+      const row = db.deckCards.find((c) => c.deckId === 1 && c.name === name)!;
+      h.deck_set_card_quantity({
+        deckId: 1,
+        cardId: row.cardId,
+        categoryId: row.categoryId,
+        variant: "live",
+        quantity: 0,
+      });
+    };
+
+    cut("Ragavan, Nimble Pilferer");
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)).toHaveLength(1);
+    cut("Smuggler's Copter");
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)).toEqual([]);
+    expect(
+      db.deckTokenPrintings.filter((e) => e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure),
+    ).toEqual([]);
+    // Cut Elesh Norn, which makes both Wurms: the manual one keeps its entry.
+    for (const row of db.deckCards.filter(
+      (c) => c.deckId === 1 && c.name === "Elesh Norn, Grand Cenobite",
+    )) {
+      h.deck_set_card_quantity({
+        deckId: 1,
+        cardId: row.cardId,
+        categoryId: row.categoryId,
+        variant: "live",
+        quantity: 0,
+      });
+    }
+    expect(rowsOf(db, 1, TOKEN_ORACLE.wurmLifelink)).toEqual([
+      expect.objectContaining({ state: "manual", implicit: false, quantity: 1 }),
+    ]);
+    expect(rowsOf(db, 1, TOKEN_ORACLE.wurmDeathtouch)).toEqual([]);
+  });
+
+  /**
+   * **The theory switch carries the live list's token entries into the plan with the cards**
+   * (`deck::update_deck` and `move_live_tokens_into_theory`, spec §4.2): the Treasure art and count
+   * the reader chose are part of the deck that becomes the plan, and one Ctrl+Z puts them back on
+   * the live list. On a new deck, because the starter's two lists hold the same cards and could not
+   * tell a move from a coincidence.
+   *
+   * The stale plan entry is the v52 conversion pass's copy of an old pick: the plan makes no
+   * Treasure, so rule 7 owes its deletion whatever the switch does, and the crate reconciles both
+   * lists **before** it reads the step's before-image — an undo that restored it would hand the
+   * backstop a row to delete and the crate's redo a reason to refuse.
+   */
+  it("moves the live token entries into the plan when the theory switch turns on", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    const deckId = h.deck_create({ deck: { name: "Pirates", formatKey: "modern" } }).id;
+    const ragavan = db.deckCards.find(
+      (c) => c.deckId === 1 && c.name === "Ragavan, Nimble Pilferer",
+    )!;
+    h.deck_add_card({
+      deckId,
+      cardId: ragavan.cardId,
+      categoryId: null,
+      categoryName: "Main deck",
+      variant: "live",
+      quantity: 1,
+    });
+    h.deck_token_set_quantity({
+      deckId,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.treasure,
+      entry: null,
+      quantity: 3,
+    });
+    // Onto the printing Ragavan does not name, so the plan's own default cannot pass for the move.
+    h.deck_token_swap({
+      deckId,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.treasure,
+      from: { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil" },
+      to: { cardId: TOKEN_PRINTING.treasureThob, finish: "foil" },
+    });
+    db.deckTokenPrintings.push({
+      id: Math.max(0, ...db.deckTokenPrintings.map((e) => e.id)) + 1,
+      deckId,
+      variant: "theory",
+      oracleId: TOKEN_ORACLE.treasure,
+      cardId: TOKEN_PRINTING.treasureTafr,
+      finish: "nonfoil",
+      quantity: 7,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    const stepped = expect.objectContaining({
+      cardId: TOKEN_PRINTING.treasureThob,
+      finish: "foil",
+      quantity: 3,
+      implicit: false,
+    });
+
+    h.deck_update({ id: deckId, patch: { theoryEnabled: true } });
+
+    expect(rowsOf(db, deckId, TOKEN_ORACLE.treasure, "theory")).toEqual([stepped]);
+    expect(rowsOf(db, deckId, TOKEN_ORACLE.treasure, "live")).toEqual([]);
+    expect(db.deckTokenPrintings.filter((e) => e.deckId === deckId)).toEqual([
+      expect.objectContaining({ variant: "theory", cardId: TOKEN_PRINTING.treasureThob }),
+    ]);
+    const undo = h.deck_undo_state({ deckId, redoId: null }).undo!;
+    const step = db.deckUndo.find((s) => s.auditId === undo.id)!;
+    expect(step.before.tokenPrintings.filter((e) => e.variant === "theory")).toEqual([]);
+
+    h.deck_undo_apply({ deckId, auditId: undo.id });
+    expect(rowsOf(db, deckId, TOKEN_ORACLE.treasure, "live")).toEqual([stepped]);
+    expect(db.deckTokenPrintings.filter((e) => e.deckId === deckId)).toEqual([
+      expect.objectContaining({ variant: "live", cardId: TOKEN_PRINTING.treasureThob }),
+    ]);
+
+    h.deck_redo_apply({ deckId, auditId: undo.id });
+    expect(rowsOf(db, deckId, TOKEN_ORACLE.treasure, "theory")).toEqual([stepped]);
+  });
+
+  /**
+   * **A state write that lands on the state the token already has records nothing** — no history
+   * row, no undo step, and the deck not touched. `journal_in` compares `state_of`'s
+   * `(card_id, quantity, state)` and never `updated_at`, which the crate's upsert moves on every
+   * press; a comparison that read the whole row would file a second *Dismissed Treasure* for a
+   * press that dismissed nothing.
+   */
+  it("records nothing for a state write that changes no state", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    const dismiss = () =>
+      h.deck_token_state({ deckId: 1, oracleId: TOKEN_ORACLE.treasure, state: "hidden" });
+    dismiss();
+    const rows = db.deckAudit.length;
+    const steps = db.deckUndo.length;
+    const touched = db.decks.find((d) => d.id === 1)!.updatedAt;
+
+    dismiss();
+
+    expect(db.deckAudit).toHaveLength(rows);
+    expect(db.deckUndo).toHaveLength(steps);
+    expect(db.decks.find((d) => d.id === 1)!.updatedAt).toBe(touched);
+    expect(storedTokenRows(db, 1, TOKEN_ORACLE.treasure)).toEqual([
+      expect.objectContaining({ state: "hidden" }),
+    ]);
+  });
+
+  /** `deck_tokens.deck_id` and `deck_token_printings.deck_id` are `ON DELETE CASCADE` — and the
+   *  list itself needed no deleting, because it was never stored. */
+  it("takes a deck's token rows and entries with the deck", () => {
     const db = seed("starter");
     writeHandlers(db).deck_delete({ id: 1 });
 
     expect(db.deckTokens.filter((t) => t.deckId === 1)).toEqual([]);
+    expect(db.deckTokenPrintings.filter((e) => e.deckId === 1)).toEqual([]);
     // Deck 2's are untouched, which is what makes the sweep a filter and not a truncate.
     expect(db.deckTokens.filter((t) => t.deckId === 2)).toHaveLength(1);
+    expect(db.deckTokenPrintings.filter((e) => e.deckId === 2)).toHaveLength(2);
+  });
+
+  /** The three commands v52 retired are gone from the fake as they are from the crate: a story
+   *  still calling one would be answered `No fake handler registered`, which is the truth. */
+  it("answers none of the retired token commands", () => {
+    const handlers = allHandlers(seed("starter")) as Record<string, unknown>;
+    for (const retired of ["deck_token_set", "deck_token_clear", "deck_token_add"]) {
+      expect(handlers[retired], retired).toBeUndefined();
+    }
   });
 });
 

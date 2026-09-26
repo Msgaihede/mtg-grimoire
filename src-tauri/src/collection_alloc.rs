@@ -180,7 +180,8 @@ const THEORY: &str = crate::schema::DECK_VARIANTS[1];
 pub struct MoveOutcome {
     /// The collection row the copies ended up in — **the destination's id**, which is not the
     /// id the caller handed in whenever the write merged. `None` when nothing moved, which is
-    /// a deck card nobody owned going away.
+    /// a deck card nobody owned going away — or a token [`collection_to_deck`] filed as a token
+    /// entry, which moves no copy at all.
     pub entry_id: Option<i64>,
     /// Set when the copies came out of another deck, so the UI can say which one it took them
     /// from **after** the fact as well as before it. Never set by [`deck_to_collection`],
@@ -195,10 +196,12 @@ pub struct MoveOutcome {
     /// add reads as a press that did nothing.
     ///
     /// **`None` from [`deck_to_collection`]**, where the caller handed the id in and still holds
-    /// it — and where the row may not exist any more, a whole cut being a delete.
+    /// it — and where the row may not exist any more, a whole cut being a delete. **`None` for a
+    /// token** too: a token is never a `deck_cards` row, so there is nothing for a glow to land on.
     pub deck_card_id: Option<i64>,
     /// How many copies actually moved. Never more than was asked; less only where the deck
-    /// list wanted more than the group held.
+    /// list wanted more than the group held — and **0 for a token**, which [`collection_to_deck`]
+    /// files as a token entry and whose copies stay where they are.
     pub quantity: i64,
 }
 
@@ -492,6 +495,15 @@ fn take_from_deck_list(
 /// and not an oversight — nothing is missing that a reader cannot reach in a single gesture.
 /// `filing_a_card_into_a_deck_files_no_undo_step` is what holds it: adding the half-step moves
 /// the cursor, and that case goes red.
+///
+/// # A token row is the exception, and files one
+///
+/// **A printing whose layout is a token's or an emblem's is filed as a token entry and moves no
+/// copy** (token-stacks spec §4.6) — a token is never a `deck_cards` row, so there is no list to
+/// file its copies behind. What that writes is one table the journal *can* express, so it records
+/// what every token add records, through [`crate::deck_tokens::add_printing_in`]: a `deck` history
+/// row with `field: "token"` and an [`crate::deck_undo::Op::Tokens`] step. Neither argument above
+/// reaches it — there is no second table, and no copy to have been folded away.
 pub fn collection_to_deck(
     conn: &Connection,
     entry_id: i64,
@@ -528,6 +540,36 @@ pub fn collection_to_deck(
     // entry id **and** a dead category id now hears about the entry first. That is the right
     // order anyway: the entry is what the reader pointed at, the category is where it was going.
     let source = source_of(&tx, entry_id)?;
+    // **A token is never a deck card, so a token row is filed as a token entry and moves no
+    // copy** (token-stacks spec §4.6). Asked before the folder rule, because that rule is about
+    // `deck_cards` — a deck never "plays" a token, so [`NOT_IN_DECK`] would refuse every one —
+    // and after the deck's own two fences, which are about the deck rather than the card. The
+    // entry is the row's printing in the row's finish, one per copy asked for, and
+    // [`crate::deck_tokens::add_printing_in`] writes the history row and the undo step a token
+    // add owes, inside this transaction.
+    //
+    // **The copies stay where they are, and the outcome says so**: `quantity: 0` (none moved),
+    // no `entry_id` (no collection row received anything) and no `deck_card_id` (there is no deck
+    // row for a landed glow to find). In PR 2 a token entry is the deck's own — Managed mode,
+    // which touches the collection never; PR 3's Collection mode is what pulls a token's copies,
+    // from the pool rather than from wherever this row sits.
+    if crate::deck_tokens::printing_is_token(&tx, &source.card_id)? {
+        crate::deck_tokens::add_printing_in(
+            &tx,
+            deck_id,
+            LIVE,
+            &source.card_id,
+            Some(&source.finish),
+            quantity,
+        )?;
+        tx.commit().map_err(|e| e.to_string())?;
+        return Ok(MoveOutcome {
+            entry_id: None,
+            from_deck: None,
+            deck_card_id: None,
+            quantity: 0,
+        });
+    }
     if !crate::deck::plays_card(&tx, deck_id, &source.card_id)? {
         return Err(NOT_IN_DECK.to_owned());
     }
@@ -1149,6 +1191,103 @@ mod tests {
             |r| r.get(0),
         )
         .unwrap()
+    }
+
+    /// **A token row is filed as a token entry, and no copy moves** (token-stacks spec §4.6). A
+    /// token is never a `deck_cards` row, so the folder rule is not asked — the deck plays no
+    /// Treasure and is not refused for it — and the outcome says nothing moved: no collection row
+    /// received anything, no deck card was written, zero copies. What it does write is the token
+    /// add every other entrance writes — one entry, one `deck` history row, one undo step.
+    #[test]
+    fn filing_a_token_adds_a_token_entry_and_moves_no_copy() {
+        let (conn, deck, cat) = fixture();
+        conn.execute(
+            r#"INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
+                                  finishes, raw)
+               VALUES ('treasure', 'o-treasure', 'Treasure', 'tcmm', '48', 'en', 'token',
+                       '["nonfoil"]', '{}')"#,
+            [],
+        )
+        .unwrap();
+        let entry = seed_entry(&conn, "treasure", 3, None);
+
+        let out = collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap();
+        assert_eq!(
+            (out.entry_id, out.deck_card_id, out.quantity, out.from_deck),
+            (None, None, 0, None),
+            "nothing moved, and the outcome says so"
+        );
+        assert_eq!(
+            root_copies(&conn, "treasure"),
+            3,
+            "the copies stay where they were"
+        );
+        assert_eq!(group_copies(&conn, deck, "treasure"), 0);
+        assert_eq!(
+            deck_copies(&conn, deck, "treasure"),
+            0,
+            "and no deck card was written"
+        );
+
+        let entries: Vec<(String, String, String, i64)> = conn
+            .prepare(
+                "SELECT variant, card_id, finish, quantity FROM deck_token_printings
+                  WHERE deck_id = ?1",
+            )
+            .unwrap()
+            .query_map(params![deck], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            entries,
+            vec![(
+                "live".to_owned(),
+                "treasure".to_owned(),
+                "nonfoil".to_owned(),
+                2
+            )],
+            "one live entry at the row's printing and finish, one per copy asked for"
+        );
+        let rows = history(&conn, deck);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, crate::deck_audit::DECK);
+        assert_eq!(rows[0].2["field"], "token");
+        assert_eq!(rows[0].2["action"], "add");
+        assert_eq!(steps(&conn, deck), 1, "a token add files its step");
+    }
+
+    /// **A two-sided token routes too** — the `reversible_card` `Mechtitan`, which a layout-only
+    /// test would have taken for a card and refused with [`NOT_IN_DECK`]. The routing question is
+    /// [`crate::deck_tokens::is_token_printing`]'s, which reads the type line for these layouts.
+    #[test]
+    fn filing_a_reversible_token_is_rerouted_too() {
+        let (conn, deck, cat) = fixture();
+        conn.execute(
+            r#"INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
+                                  type_line, finishes, raw)
+               VALUES ('mechtitan', 'o-mechtitan', 'Mechtitan // Mechtitan', 'tneo', '20', 'en',
+                       'reversible_card', 'Token Legendary Artifact Creature — Construct',
+                       '["nonfoil"]', '{}')"#,
+            [],
+        )
+        .unwrap();
+        let entry = seed_entry(&conn, "mechtitan", 1, None);
+
+        let out = collection_to_deck(&conn, entry, deck, Pile::Id(cat), 1).unwrap();
+        assert_eq!(out.quantity, 0, "no copy moved");
+        assert_eq!(root_copies(&conn, "mechtitan"), 1);
+        assert_eq!(deck_copies(&conn, deck, "mechtitan"), 0, "and no deck card");
+        let entries: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_token_printings WHERE deck_id = ?1",
+                params![deck],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(entries, 1);
     }
 
     #[test]

@@ -3299,6 +3299,18 @@ export interface DeckInput {
  */
 export type ManagedWishlistMode = "off" | "all" | "missing" | "other";
 
+/**
+ * How a deck keeps its tokens — `decks.token_mode`, user schema v52, `NOT NULL DEFAULT
+ * 'managed'` and closed by a `CHECK` on exactly these three words.
+ *
+ * `managed` and `collection` draw the Tokens & Emblems pile in the four deck views; `hidden`
+ * takes it out of all four (the band stays, so the mode can be changed back). **PR 2's control
+ * draws `managed` and `hidden` only** — `collection` is in the `CHECK` from the start so PR 3
+ * adds a button and a behaviour and no rung, and a Collection button that behaved exactly like
+ * Managed would be a control that lies about what it does.
+ */
+export type TokenMode = "managed" | "collection" | "hidden";
+
 export interface DeckPatch {
   name?: string;
   formatKey?: string;
@@ -3437,14 +3449,17 @@ export interface DeckPatch {
    */
   notesOpen?: boolean;
   /**
-   * Whether the deck views draw the deck's tokens and emblems as a trailing **Tokens & Emblems**
-   * pile. See {@link DeckRow.tokenStack} — a setting chosen in Deck settings, so switching it
-   * writes one column and touches no `deck_cards` or `deck_tokens` row.
+   * How the deck keeps its tokens. See {@link DeckRow.tokenMode} — `decks.token_mode`, user
+   * schema v52, which replaced v47's `token_stack` switch. Writing it touches no `deck_cards`,
+   * `deck_tokens` or `deck_token_printings` row, and in PR 2 no collection row either.
    *
-   * **On this patch, with no history row and no undo step**, the three disclosures' terms above
-   * it — but unlike them it is carried by a duplicate, because it says how the deck is read.
+   * **It writes a history row and an undo step, which `tokenStack` never did** — Rust records
+   * `field: "tokenMode"` with the two words, and `deck_undo::DECK_FIELDS` names the column so
+   * Ctrl+Z puts the mode back. A mode is an arrangement the reader chose, the footing
+   * {@link tokenRailIndex} below stands on, rather than a disclosure. A word outside
+   * {@link TokenMode} is refused in words.
    */
-  tokenStack?: boolean;
+  tokenMode?: TokenMode;
   /**
    * Where the **Tokens & Emblems** pile sits in the rail. See {@link DeckRow.tokenRailIndex} —
    * `decks.token_rail_index`, user schema v51.
@@ -3454,7 +3469,7 @@ export interface DeckPatch {
    * *leave it* (`coalesce(?n, column)`), so a nullable "last" could never be written back once
    * the reader had moved the pile. Moving it to the last slot sends `-1`; the top is `0`.
    *
-   * **Unlike {@link tokenStack} one field up, it writes a history row and an undo step** — Rust
+   * **Like {@link tokenMode} one field up, it writes a history row and an undo step** — Rust
    * records `field: "tokenRail"` when the index moves — because a pile dragged to a new slot is
    * an arrangement the reader made, like a category's `sortOrder`, and Ctrl+Z puts it back.
    */
@@ -3873,19 +3888,22 @@ export interface DeckRow {
    */
   managedWishlist: ManagedWishlistMode;
   /**
-   * Whether the deck views (Stacks, Grid, Text and Table) draw the deck's tokens and emblems as
-   * a trailing **Tokens & Emblems** pile — `decks.token_stack INTEGER NOT NULL DEFAULT 0`, user
-   * schema v47, and `false` on every deck that predates it, so the upgrade changes nothing on
-   * screen.
+   * How this deck keeps its tokens — `decks.token_mode TEXT NOT NULL DEFAULT 'managed'`, user
+   * schema v52, closed by a `CHECK` on the three words of {@link TokenMode}. It replaced v47's
+   * `token_stack` boolean in the same rung.
    *
-   * **A setting, not a disclosure**, though it sits beside three of them: it is chosen in Deck
-   * settings, it is carried by `deck_duplicate` the way {@link separateXGroup} is, and it syncs
-   * with the rest of the row. Like the disclosures it writes no history row and is not undoable.
+   * **`hidden` takes the Tokens & Emblems pile out of all four views** (Stacks, Grid, Text and
+   * Table); `managed` and `collection` draw it. The band is drawn in every mode, so a reader can
+   * always switch back. **Every deck starts on `managed`** — the ones whose stack was off before
+   * the upgrade included, which was the reader's own answer — so after v52 every deck that makes
+   * tokens shows a token pile in its rail.
    *
-   * The pile it switches on is drawn in the view layer from the same answer the band draws and
-   * never enters `deck.cards`, so it counts toward nothing — size, piles, stats or validation.
+   * The pile is drawn in the view layer from the same answer the band draws and never enters
+   * `deck.cards`, so it counts toward nothing — size, piles, stats or validation. Carried by
+   * `deck_duplicate`, synced with the rest of the row, audited as `tokenMode` and undoable — see
+   * {@link DeckPatch.tokenMode}.
    */
-  tokenStack: boolean;
+  tokenMode: TokenMode;
   /**
    * Where the **Tokens & Emblems** pile sits in the rail — `decks.token_rail_index INTEGER NOT
    * NULL DEFAULT -1`, user schema v51 — as **the number of rail piles drawn above it**.
@@ -4443,13 +4461,14 @@ export interface DeckDetail {
 }
 
 /**
- * Whether a stored token row is a plain override, a dismissal, or a hand-added extra.
+ * A token's own state — `deck_tokens.state`, **shared by both lists** since user schema v52
+ * split the printings out into `deck_token_printings`: a dismissal is "not in this deck" and a
+ * hand-added token is the deck's, whichever list the reader is looking at.
  *
  * The vocabulary is closed by a `CHECK` on the column rather than by convention, so this union
- * is the whole of it: `auto` carries an art or a quantity for a token the deck derives anyway,
- * `hidden` is one the reader dismissed and is still derived, and `manual` is drawn whether
- * anything derives it or not — a token added by hand, and what a derived one becomes when the
- * reader wants it kept after cutting the card that made it.
+ * is the whole of it: `auto` is a token the deck derives and the reader has not dismissed,
+ * `hidden` is one the reader dismissed, and `manual` is drawn whether anything derives it or
+ * not — a token added by hand, which a cut can never take away because no card made it.
  */
 export type DeckTokenState = "auto" | "hidden" | "manual";
 
@@ -4465,33 +4484,54 @@ export interface TokenSource {
 }
 
 /**
- * One token or emblem a deck needs, with the reader's stored override joined on.
+ * One entry of a token list, addressed by the two facts that are its grain beside the deck,
+ * the list and the token — `(card_id, finish)`. What {@link ipc.deckTokenSetQuantity} and
+ * {@link ipc.deckTokenSwap} name, with `null` standing for the token's **implicit** entry.
+ */
+export interface TokenEntryKey {
+  cardId: string;
+  finish: Finish;
+}
+
+/**
+ * An entry as it travels — **the grain's two fields and nothing else**, `null` kept as `null`.
  *
- * **The list is derived on every deck open and stored nowhere** — Rust inflates the `raw` blob
- * of each distinct card in the deck's *active* categories and reads `all_parts`. So every
- * field is a fact about the corpus and the deck except three, which are the only thing
- * `deck_tokens` holds: `cardId`, `quantity` and `state` are all `null` together when the reader
- * has never deviated, because the table stores deviations and nothing else.
+ * Rebuilt rather than forwarded because the natural thing to hand a token write is the view's
+ * own `TokenEntryRef`, which also carries `oracleId` and `implicit`: serde would ignore the
+ * extras, but a payload that says more than the command reads is a payload a later reader
+ * trusts for the wrong fields.
+ */
+function tokenEntryArg(entry: TokenEntryKey | null): TokenEntryKey | null {
+  return entry === null ? null : { cardId: entry.cardId, finish: entry.finish };
+}
+
+/**
+ * One **entry** of a token or emblem a deck needs — one printing, in one finish, of one token,
+ * in the list the read named (user schema v52, token stacks spec §4.2).
  *
- * **The effective values are TypeScript's conclusion, not this row's**: `deckTokenViews` in
- * `@/features/decks/deckTokens` resolves the printing (`cardId ?? defaultCardId`) and the
- * quantity (`quantity ?? 1`), and this is the fact it draws them from. Read `quantity` with
- * `??` and never `||` — a stored `0` is a token the reader deliberately zeroed while keeping
- * the art they picked, which is information, and `||` reads it as absent. **The one place Rust
- * applies the printing rule itself is to describe that printing** —
- * {@link DeckTokenRow.imageUris} and the six chin fields below are the effective printing's,
- * because a second round trip per token to ask about the printing TypeScript chose would buy
- * nothing but a flash of the wrong one.
+ * **The token list is derived on every deck open and stored nowhere** — Rust inflates the `raw`
+ * blob of each distinct card in the deck's *active* categories and reads `all_parts`. What the
+ * reader stores is two tables: `deck_tokens` holds the token-level {@link state}, shared by both
+ * lists, and `deck_token_printings` holds each list's entries.
+ *
+ * **A token with entries in the list answers one row per entry; a token with none answers one
+ * _implicit_ row** — {@link implicit} `true`, {@link cardId} the resolver's default printing in
+ * its default finish, {@link quantity} the legacy `deck_tokens.quantity ?? 1`. So every row is
+ * already the effective answer, and Rust resolves it: a view that fell back from one field to
+ * another here would be a second, stale copy of spec §4.2's rule 1.
+ *
+ * **The rows of one token carry the same token facts** (name, type line, subtitle facts,
+ * sources, state) and differ in the entry's own: the printing, the finish, the quantity, the
+ * picture, the chin and the price. `deckTokenViews` sorts them together.
  *
  * `defaultCardId` is never null for a derived row and is **deterministic**: the printing the
  * most deck cards point at, ties broken by the same `released_at DESC, set_code ASC,
  * collector_number ASC, id ASC` tail `card_printings` orders by. Without that, one deck draws
- * different art on two opens.
+ * different art on two opens — and an implicit entry is exactly that printing.
  */
 export interface DeckTokenRow {
-  /** The grain, with `deckId`. **The oracle card and not a printing**, so the row survives the
-   *  reader changing their mind about the art — the art choice *is* one of the things it
-   *  stores. */
+  /** The token — **the oracle card and not a printing**, which is what `deck_tokens` is grained
+   *  on and what groups a token's entries. An entry's printing is {@link cardId}. */
   oracleId: string;
   name: string;
   typeLine: string | null;
@@ -4530,12 +4570,42 @@ export interface DeckTokenRow {
   sources: TokenSource[];
   /** `false` for a `manual` row this deck's cards produce nothing for. */
   derived: boolean;
-  /** The printing the reader picked; `null` means "whichever one the resolver names". */
-  cardId: string | null;
-  /** How many copies the reader wants; `null` means "the default", which is 1. Stored absent
-   *  rather than as a 1 so that changing the default later moves every untouched token. */
-  quantity: number | null;
-  state: DeckTokenState | null;
+  /**
+   * The token's **effective** state, shared by both lists — `deck_tokens.state`, or `auto` where
+   * the reader has stored none. Never `null` since v52: Rust resolves the absence, because an
+   * entry row with no state would be a second spelling of the untouched token.
+   */
+  state: DeckTokenState;
+  /**
+   * **This entry's printing.** For an {@link implicit} entry it is {@link defaultCardId} — the
+   * printing the resolver names — and for a stored one it is the printing the reader put in the
+   * list. Every fact below the picture (the chin, the price) is this printing's.
+   */
+  cardId: string;
+  /**
+   * **This entry's finish** — `deck_token_printings.finish`, the collection's own three words and
+   * never `null`: the column is `NOT NULL` on purpose, because SQLite's unique index treats every
+   * `NULL` as distinct and a nullable finish would let one list hold one regular printing twice.
+   * An implicit entry's is its printing's default, `deck_tokens::default_finish`: the **first**
+   * finish the printing is sold in, in `FINISHES` order — `nonfoil` wherever it is sold that way,
+   * `foil` for one sold only in foil and etched — and `nonfoil` where the corpus lists none. It is
+   * what the chin names, what the sheen is drawn for and what {@link unitPrice} is read at.
+   */
+  finish: Finish;
+  /**
+   * How many copies of this entry the list wants — **effective**, resolved by Rust: a stored
+   * entry's own `quantity`, or for an implicit entry the legacy `deck_tokens.quantity ?? 1`.
+   * **`0` is a value** — rule 3 keeps a token's last entry at 0 rather than deleting it, so the
+   * implicit default does not reappear under a reader who zeroed the only printing they had.
+   */
+  quantity: number;
+  /**
+   * `true` when this list holds **no entry** of the token and this row is the one Rust drew for
+   * it — spec §4.2's rule 1. A write aimed at an implicit entry names it as `null`
+   * ({@link ipc.deckTokenSetQuantity}, {@link ipc.deckTokenSwap}), and Rust materialises it in
+   * this list only (rule 2).
+   */
+  implicit: boolean;
   /**
    * Where the **resolved printing's** picture is, per variant.
    *
@@ -4546,24 +4616,24 @@ export interface DeckTokenRow {
    * means "no art"** — never a reason to build a URL of your own, because the backend has
    * already refused a URI it cannot version or one from a host that does not serve card art.
    *
-   * **The printing is `cardId ?? defaultCardId`'s**, resolved in Rust, so a reader who has
-   * picked art gets that art's picture and everybody else gets the resolver's — which is why
-   * `deckTokenViews` can fold it to one URL without going back for a second row.
+   * **The printing is this entry's** ({@link cardId}), resolved in Rust, so two entries of one
+   * token draw their own two pictures — which is why `deckTokenViews` can fold it to one URL
+   * without going back for a second row.
    *
    * Mirrors `DeckTokenRow::image_uris` in `src-tauri/src/deck_tokens.rs`; `ipc.test.ts`'s
    * field-name pin is the only fence.
    */
   imageUris?: Partial<Record<ImageVariant, string>> | null;
   /**
-   * The **effective printing's** chin — `cardId ?? defaultCardId`, the same printing
+   * **This entry's printing's** chin — {@link cardId}, the same printing
    * {@link DeckTokenRow.imageUris} is the picture of — so the token pile can draw the deck
    * card's own foot: set · `#number` · finish · price (user schema v51's token pile,
    * `deck_tokens.rs`).
    *
-   * **All six are `null` together for a printing gone from the corpus**, which a stored override
+   * **All six are `null` together for a printing gone from the corpus**, which a stored entry
    * can outlive: the row still names its oracle card, and a chin with nothing to say is the
-   * honest drawing of that. Facts only — which finish the token is *drawn* at is
-   * `playedFinish(null, finishes)`'s conclusion at the surface, never this row's.
+   * honest drawing of that. The finish the entry is held in is {@link finish}, a fact of the
+   * entry rather than of the printing; `finishes` is what the printing is *sold* in.
    */
   setCode: string | null;
   collectorNumber: string | null;
@@ -4574,18 +4644,17 @@ export interface DeckTokenRow {
    *  holds, and `parseFinishes` in `@/lib/finish` is the one reader of it on this side. */
   finishes: string | null;
   /**
-   * What one copy of the effective printing costs at the marketplace {@link ipc.deckTokens} was
-   * asked for, **priced the way a deck card that names no finish is**:
-   * `sorting::printing_price_by_finish_expr`'s chain, `nonfoil → foil → etched`, the first finish
-   * that marketplace quotes. A token row stores no finish (`deck_tokens` holds an art, a count
-   * and a state), so it is always the unsaid arm of {@link DeckCard.unitPrice}'s rule — and a
-   * foil-only token, or one sold in both whose nonfoil is simply unlisted, is priced at its foil
-   * price rather than read as unpriced. That chain is what closed the same defect for deck cards,
-   * where 13 515 foil-only printings have no nonfoil price at any marketplace.
+   * What one copy of this entry costs at the marketplace {@link ipc.deckTokens} was asked for,
+   * **at the entry's own {@link finish}** (user schema v52) — `sorting::price_expr` at that
+   * finish, the set arm of {@link DeckCard.unitPrice}'s rule, with **no fallback across
+   * finishes**: a foil Treasure quoted at the nonfoil rate is a price nobody published. That
+   * reverses v51, when a token row stored no finish and was priced by the unsaid arm's
+   * `nonfoil → foil → etched` chain; an implicit entry of a foil-only printing is `foil` by its
+   * default finish, so the case that chain existed for still reads its foil price.
    *
-   * `null` is **the em dash** — this marketplace does not quote this printing — and never `0`.
-   * **Token prices never reach the deck's own totals**: a token is not a `deck_cards` row, so the
-   * only sum this enters is the token pile's own heading.
+   * `null` is **the em dash** — this marketplace does not quote this printing in this finish —
+   * and never `0`. **Token prices never reach the deck's own totals**: a token is not a
+   * `deck_cards` row, so the only sum this enters is the token pile's own heading.
    */
   unitPrice: number | null;
 }
@@ -8058,17 +8127,20 @@ export const ipc = {
   deckGet: (id: number, variant: DeckVariant, marketplace: MarketplaceId) =>
     invoke<DeckDetail | null>("deck_get", { id, variant, marketplace }),
   /**
-   * Every token and emblem the deck's cards make, with the reader's overrides joined on.
+   * Every token and emblem the deck's cards make — **one row per entry** since user schema v52,
+   * and one implicit row for a token this list holds no entry of. See {@link DeckTokenRow}.
    *
-   * **Derived on every call and stored nowhere** — the backend inflates the `raw` blob of each
-   * distinct card in the deck's *active* categories and reads `all_parts`, which is ~5 ms for a
-   * 100-card deck. A stored list would need reconciling on every deck edit *and* would go stale
-   * when a Scryfall sync changed a card's `all_parts`, with nothing to notice.
+   * **The token list is derived on every call and stored nowhere** — the backend inflates the
+   * `raw` blob of each distinct card in the deck's *active* categories and reads `all_parts`,
+   * which is ~5 ms for a 100-card deck. A stored list would need reconciling on every deck edit
+   * *and* would go stale when a Scryfall sync changed a card's `all_parts`, with nothing to
+   * notice.
    *
-   * `variant` scopes it the way it scopes every other deck read: the derived list is a fact
-   * about the cards in one of the deck's two lists. **The stored override is not scoped by it**
-   * — `deck_tokens` is grained on `(deckId, oracleId)` alone, so an art picked for a deck is
-   * the art in both lists, which is what a reader who picked it means.
+   * `variant` scopes it the way it scopes every other deck read, and **since v52 it scopes the
+   * entries too**: each list has its own printings and counts (`deck_token_printings` is grained
+   * on `(deckId, variant, cardId, finish)`), so a plan asking for a foil Treasure and a live list
+   * holding a nonfoil one answer differently. The token's **state** is not scoped by it — a
+   * dismissal is "not in this deck", whichever list the reader is looking at.
    *
    * **`[]` is an answer three times over** and never a failure: a deck whose cards make
    * nothing, a deck with no cards, and every failure shape behind the blob — an unknown id, a
@@ -8083,51 +8155,91 @@ export const ipc = {
   deckTokens: (deckId: number, variant: DeckVariant, marketplace: MarketplaceId) =>
     invoke<DeckTokenRow[]>("deck_tokens", { deckId, variant, marketplace }),
   /**
-   * Write one token's override — the art, the count, or the dismissal.
+   * **How many copies of one entry this list wants** — the stepper (spec §4.2 rules 2 and 3).
    *
-   * **The state word is renamed on the wire and this is the only place that knows it.** Rust
-   * cannot call the parameter `state`, because `state` is already the managed `tauri::State`
-   * every command takes, so it declares `token_state` and the payload key is `tokenState`.
-   * Callers on this side pass `{ state }`, which is what the column is called.
+   * `entry` is the entry's `(cardId, finish)`, or **`null` for the token's implicit entry**,
+   * which Rust materialises in this list only — the resolver's default printing, inserted at
+   * `quantity` — so a step on an untouched Treasure in the plan never touches the live list.
+   * **`0` deletes the entry, unless it is the token's last one in this list**, which stays at 0:
+   * the implicit default must not reappear under a reader who zeroed the only printing they had.
    *
-   * **All three keys travel on every call, `null` included.** Tauri fills parameters by name
-   * and an absent one is a refusal rather than a default, so `undefined` is folded to `null`
-   * here — with `??` and never `||`, because a quantity of **0** is a token the reader
-   * deliberately zeroed while keeping the art they picked, and `||` would send it as "leave it
-   * alone".
+   * Like every token write since v52 it files **one history row** (`deck` kind, `field: "token"`,
+   * `action: "quantity"`) and **one undo step**, and touches no collection row.
    *
-   * A write whose result would carry nothing — `state` back at `auto` with no `cardId` and no
-   * `quantity` — **deletes** the row rather than storing it. The empty override is not
-   * representable, which keeps "no deviation" one state rather than two that have to be kept
-   * in agreement.
+   * `entry` travels as an explicit key, `null` included — Tauri fills parameters by name and an
+   * absent one is a refusal — and it is rebuilt from its two fields rather than forwarded, so a
+   * caller handing in a wider object (a view's `TokenEntryRef`) sends only the grain.
    */
-  deckTokenSet: (
+  deckTokenSetQuantity: (
     deckId: number,
+    variant: DeckVariant,
     oracleId: string,
-    over: { cardId?: string | null; quantity?: number | null; state?: DeckTokenState | null },
+    entry: TokenEntryKey | null,
+    quantity: number,
   ) =>
-    invoke<void>("deck_token_set", {
+    invoke<void>("deck_token_set_quantity", {
       deckId,
+      variant,
       oracleId,
-      cardId: over.cardId ?? null,
-      quantity: over.quantity ?? null,
-      tokenState: over.state ?? null,
+      entry: tokenEntryArg(entry),
+      quantity,
     }),
-  /** Back to the derived defaults: it **deletes** the override row. Not a `deckTokenSet` of
-   *  three nulls — that spelling is the same write, and this one says what the reader pressed.
-   *  A grain that resolves to no row is a success: the caller wanted no override. */
-  deckTokenClear: (deckId: number, oracleId: string) =>
-    invoke<void>("deck_token_clear", { deckId, oracleId }),
   /**
-   * Add a token by hand — the one of the four that names a **printing** rather than the grain.
+   * **Swap one entry to another printing and/or finish** — the art picker's press (rule 4).
    *
-   * The reader picks out of a printings grid, so a printing is what there is to send; Rust
-   * resolves its `oracleId` and writes `state: "manual"` with that printing as the `cardId`.
-   * A `manual` row is drawn whether or not the deck derives it, which is also what a derived
-   * token becomes when the reader keeps it after cutting the card that made it.
+   * `from` is the entry being changed, or `null` for the implicit entry — which is never stored,
+   * so the swap *is* its materialisation, **at the destination** and at its effective quantity,
+   * rather than a stored default then moved; `to` is where it lands. Swapping an entry onto its
+   * own printing and finish writes nothing. **Swapping onto a printing and finish this
+   * list already holds folds the two**, quantities summed, on the grain — one tile, never two
+   * rows that draw identically. The token's other entries are untouched: adding art B keeps
+   * art A, and swapping A never reaches B.
    */
-  deckTokenAdd: (deckId: number, cardId: string) =>
-    invoke<void>("deck_token_add", { deckId, cardId }),
+  deckTokenSwap: (
+    deckId: number,
+    variant: DeckVariant,
+    oracleId: string,
+    from: TokenEntryKey | null,
+    to: TokenEntryKey,
+  ) =>
+    invoke<void>("deck_token_swap", {
+      deckId,
+      variant,
+      oracleId,
+      from: tokenEntryArg(from),
+      to: tokenEntryArg(to),
+    }),
+  /**
+   * **Add one copy of a printing, in a finish, to this list** — the band's *Add printing* picker
+   * (rule 5), and the one token write that names a printing rather than a token: Rust resolves
+   * the oracle id from it.
+   *
+   * A new printing-and-finish lands at quantity 1; one the list already holds steps up by 1. A
+   * token whose entries were implicit is **materialised first** (rule 2), which is what makes
+   * adding art B keep art A. **A token nothing in the deck makes becomes `manual`**, so it stays
+   * on the wall whether or not a card ever derives it.
+   */
+  deckTokenAddPrinting: (deckId: number, variant: DeckVariant, cardId: string, finish: Finish) =>
+    invoke<void>("deck_token_add_printing", { deckId, variant, cardId, finish }),
+  /**
+   * **Dismiss or restore a token** — its `deck_tokens.state`, shared by both lists, which is why
+   * this is the one token write that names no `variant`: a dismissal is "not in this deck",
+   * whichever list the reader is looking at.
+   *
+   * `auto` is a derived token following the deck again; `manual` is one kept whether or not
+   * anything makes it; `hidden` is dismissed. Which of the first two a restore sends is the
+   * caller's conclusion — `useDeckTokens`' `restore` reads `derived` — because `hidden` costs a
+   * `manual` token its manual-ness and only the caller knows which it was.
+   */
+  deckTokenState: (deckId: number, oracleId: string, state: DeckTokenState) =>
+    invoke<void>("deck_token_state", { deckId, oracleId, state }),
+  /**
+   * **Reset one token's printings in this list** — deletes that list's entries, so the token is
+   * back to its implicit entry. The other list and the token's state are untouched. A token
+   * with no entries here is a success that writes nothing.
+   */
+  deckTokenReset: (deckId: number, variant: DeckVariant, oracleId: string) =>
+    invoke<void>("deck_token_reset", { deckId, variant, oracleId }),
   /**
    * Every note on the deck, in the reader's own order, each with the cards it names.
    *
@@ -8162,10 +8274,10 @@ export const ipc = {
    * Edit a note's heading, its prose, or both — and **absent means "leave it"**, which is
    * {@link DeckPatch}'s rule one table over.
    *
-   * **Both keys travel on every call, `null` included**, for {@link ipc.deckTokenSet}'s reason:
-   * Tauri fills parameters by name, so `undefined` is folded to `null` here — with `??` and
-   * never `||`, because `""` is a **title the reader deliberately cleared** and `||` would send
-   * it as "leave it alone". That is this command's `quantity: 0`.
+   * **Both keys travel on every call, `null` included** — the rule the retired `deck_token_set`
+   * was written to: Tauri fills parameters by name, so `undefined` is folded to `null` here —
+   * with `??` and never `||`, because `""` is a **title the reader deliberately cleared** and
+   * `||` would send it as "leave it alone". That is this command's `quantity: 0`.
    *
    * It does not touch the note's cards. Attaching and detaching are the two commands below,
    * because a set has no patch shape and a caller changing one card would otherwise have to

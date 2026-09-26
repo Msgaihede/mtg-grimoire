@@ -82,10 +82,13 @@ pub mod deck_notes;
 pub mod deck_pull;
 pub mod deck_quick_add;
 pub mod deck_theory;
-/// **The tokens and emblems a deck needs, derived rather than stored** — schema v37. It reads
-/// `all_parts` out of each deck card's gzip `raw` blob, which is [`card::meld_parts`]' one
-/// trick applied to a different `component`, so it is a sibling of that function and not of
-/// the eleven modules around it. Nothing here reaches a filesystem or a network.
+/// **The tokens and emblems a deck needs, derived — and which printings of them the reader keeps,
+/// stored.** Which tokens a deck makes is derived (schema v37): it reads `all_parts` out of each
+/// deck card's gzip `raw` blob, which is [`card::meld_parts`]' one trick applied to a different
+/// `component`, so it is a sibling of that function and not of the eleven modules around it.
+/// Which printings the reader keeps, in which finish and how many, is stored — the entries of
+/// `deck_token_printings` since user schema v52, which nothing can derive. Nothing here reaches a
+/// filesystem or a network.
 pub mod deck_tokens;
 pub mod deck_undo;
 /// **[`decksort`]'s neighbour and its argument, one page over.** It is [`listview`]'s shape with a

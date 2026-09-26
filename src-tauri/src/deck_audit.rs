@@ -498,6 +498,42 @@ mod tests {
         /// how to drive it.
         type Case<'a> = (&'a str, i64, Box<dyn Fn() + 'a>);
 
+        // A token maker and two printings of its Treasure, for the five token writes (user
+        // schema v52) — `Smothering Tithe`'s `all_parts` shape, in plain-text `raw`.
+        conn.execute(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,type_line,prices,raw)
+               VALUES ('tithe','o-tithe','Smothering Tithe','cmm','693','en','normal','rare',
+                       'Enchantment','{}',?1)"#,
+            params![json!({
+                "id": "tithe",
+                "name": "Smothering Tithe",
+                "all_parts": [{ "object": "related_card", "id": "treasure-a",
+                                "component": "token", "name": "Treasure" }],
+            })
+            .to_string()],
+        )
+        .unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,type_line,released_at,prices,finishes,raw)
+               VALUES
+                 ('treasure-a','o-treasure','Treasure','tcmm','48','en','token','common',
+                  'Token Artifact — Treasure','2023-08-04','{}','["nonfoil"]','{}'),
+                 ('treasure-b','o-treasure','Treasure','tvow','17','en','token','common',
+                  'Token Artifact — Treasure','2021-11-19','{}','["nonfoil","foil"]','{}');"#,
+        )
+        .unwrap();
+
+        /// A deck whose live main pile plays the Tithe, so its list makes a Treasure — and its
+        /// id and that pile's. Written before `clear`, like every fixture here.
+        fn token_deck(conn: &Connection, name: &str) -> (i64, i64) {
+            let deck = deck(conn, name);
+            let main = category(conn, deck, "Main deck");
+            crate::deck::add_card(conn, deck, "tithe", Some(main), None, "live", None, 1).unwrap();
+            (deck, main)
+        }
+
         /// One line of an imported decklist.
         fn imported(card_id: &str, quantity: i64, category: &str) -> crate::import::ImportItem {
             crate::import::ImportItem {
@@ -950,6 +986,95 @@ mod tests {
                     crate::collection_alloc::deck_to_collection(&conn, landed, 2).unwrap();
                 }),
             ),
+            // **The five token writes** (user schema v52). Each is a deck write and owes one
+            // row — kind `deck`, `field: "token"`, never a tenth kind (see below) — which is the
+            // rule `deck_tokens` broke until then, when token writes recorded nothing.
+            (
+                "deck_token_set_quantity",
+                1,
+                Box::new(|| {
+                    let (tokens, _) = token_deck(&conn, "Tokens (quantity)");
+                    clear(&conn);
+                    crate::deck_tokens::set_quantity(&conn, tokens, "live", "o-treasure", None, 3)
+                        .unwrap();
+                }),
+            ),
+            (
+                "deck_token_swap",
+                1,
+                Box::new(|| {
+                    let (tokens, _) = token_deck(&conn, "Tokens (swap)");
+                    clear(&conn);
+                    crate::deck_tokens::swap(
+                        &conn,
+                        tokens,
+                        "live",
+                        "o-treasure",
+                        None,
+                        &crate::deck_tokens::TokenEntryKey {
+                            card_id: "treasure-b".to_owned(),
+                            finish: "foil".to_owned(),
+                        },
+                    )
+                    .unwrap();
+                }),
+            ),
+            (
+                "deck_token_add_printing",
+                1,
+                Box::new(|| {
+                    let (tokens, _) = token_deck(&conn, "Tokens (add)");
+                    clear(&conn);
+                    crate::deck_tokens::add_printing(
+                        &conn,
+                        tokens,
+                        "live",
+                        "treasure-b",
+                        Some("foil"),
+                    )
+                    .unwrap();
+                }),
+            ),
+            (
+                "deck_token_state",
+                1,
+                Box::new(|| {
+                    let (tokens, _) = token_deck(&conn, "Tokens (state)");
+                    clear(&conn);
+                    crate::deck_tokens::set_state(&conn, tokens, "o-treasure", "hidden").unwrap();
+                }),
+            ),
+            (
+                "deck_token_reset",
+                1,
+                Box::new(|| {
+                    let (tokens, _) = token_deck(&conn, "Tokens (reset)");
+                    crate::deck_tokens::set_quantity(&conn, tokens, "live", "o-treasure", None, 3)
+                        .unwrap();
+                    clear(&conn);
+                    crate::deck_tokens::reset(&conn, tokens, "live", "o-treasure").unwrap();
+                }),
+            ),
+            (
+                // **A token filed from the Collection tab is a token add**, and owes that row
+                // rather than the `add` of a card: `collection_to_deck` reroutes a token row to
+                // `deck_tokens::add_printing_in`, which moves no copy and records one `deck` row.
+                "collection_to_deck (a token)",
+                1,
+                Box::new(|| {
+                    let (tokens, main) = token_deck(&conn, "Tokens (filing)");
+                    let entry = seed_entry(&conn, "treasure-a", 2, None);
+                    clear(&conn);
+                    crate::collection_alloc::collection_to_deck(
+                        &conn,
+                        entry,
+                        tokens,
+                        crate::collection_alloc::Pile::Id(main),
+                        2,
+                    )
+                    .unwrap();
+                }),
+            ),
         ];
 
         /// Empty every deck's history, so the next case counts only its own row.
@@ -968,6 +1093,23 @@ mod tests {
                 "`{name}` must record exactly {owed} audit row(s)"
             );
         }
+
+        // **And the token rows are `deck` rows: the kinds stay nine.** `deck_audit` syncs, so a
+        // tenth word in its CHECK would be refused by a paired device on an older build, and its
+        // applier would defer the op — which the client today drops, with the rest of that
+        // device's page (`sync.md`, *Deferred ops are dropped, not held*).
+        let token_kinds: Vec<String> = conn
+            .prepare(
+                "SELECT DISTINCT kind FROM deck_audit
+                  WHERE json_extract(payload, '$.field') = 'token'",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(token_kinds, vec![DECK.to_owned()]);
+        assert_eq!(crate::schema::AUDIT_KINDS.len(), 9);
     }
 
     #[test]

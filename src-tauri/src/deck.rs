@@ -209,6 +209,38 @@ fn valid_bracket(bracket: i64) -> Result<i64, String> {
         .ok_or_else(|| BAD_BRACKET.to_owned())
 }
 
+/// How a deck may treat its tokens — `decks.token_mode`, user schema v52 — in the order the
+/// Tokens & Emblems control draws them: **Managed** (the app keeps the pile, and every stepper
+/// writes entries), **Collection** (the pile is held in custody from the collection's Tokens
+/// folder — the token-stacks spec's PR 3) and **Hidden** (no pile in any of the four views).
+///
+/// **All three are accepted although PR 2 draws two buttons.** The column's `CHECK` carries all
+/// three from v52 so that PR 3 adds a behaviour and no rung; a fence here narrower than the
+/// column would be a second place that PR has to remember, and a `collection` arriving over sync
+/// from a newer device is a word this build has to read, not refuse.
+pub const TOKEN_MODES: [&str; 3] = ["managed", "collection", "hidden"];
+
+/// What [`update_deck`] says when a patch names a mode outside [`TOKEN_MODES`].
+///
+/// A sentence rather than the `CHECK constraint failed` the column would otherwise answer with,
+/// [`BAD_BRACKET`]'s discipline: the constraint names itself, and this names the three answers.
+pub const BAD_TOKEN_MODE: &str = "A deck's tokens are Managed, Collection or Hidden.";
+
+/// A mode [`decks.token_mode`](DeckRow::token_mode) may hold, refused in words otherwise.
+///
+/// **Checked in Rust although the column has a `CHECK` of its own**, which is the one place this
+/// differs from [`valid_bracket`]: the constraint is there because the column syncs and a peer's
+/// op must meet the same fence, and this is there because a caller deserves a sentence. Checked
+/// *before* the transaction opens, like every fence in [`update_deck`], so a refusal takes no
+/// write lock.
+fn valid_token_mode(mode: &str) -> Result<&'static str, String> {
+    TOKEN_MODES
+        .iter()
+        .copied()
+        .find(|m| *m == mode)
+        .ok_or_else(|| BAD_TOKEN_MODE.to_owned())
+}
+
 /// `decks.cover_kind` when the deck shows a card's art crop — the DDL's own default, and what
 /// [`update_deck`] puts back the moment a `coverCardId` arrives.
 const COVER_CARD_ART: &str = "card_art";
@@ -478,15 +510,20 @@ pub struct DeckPatch {
     /// default takes nothing from anybody. A patch says nothing about defaults either way:
     /// absent still means "leave it".
     pub notes_open: Option<bool>,
-    /// Whether the deck views draw the deck's tokens and emblems as a trailing **Tokens &
-    /// Emblems** pile — user schema v47.
+    /// How this deck treats its tokens — one of [`TOKEN_MODES`], user schema v52, replacing
+    /// v47's `token_stack` switch. `hidden` takes the Tokens & Emblems pile out of all four
+    /// views; `managed` draws it, and so will `collection` once PR 3 gives it custody.
     ///
-    /// **Storage only, on this side**, [`Self::tokens_open`]'s rule: which tokens a deck needs is
-    /// [`crate::deck_tokens`]' answer and where to draw them is TypeScript's. **No arm in
-    /// [`record_deck_edit`]** and not a [`crate::deck_undo`] op, for the same reason — but unlike
-    /// the three disclosures above it this is a *setting*, chosen in Deck settings, so
-    /// [`duplicate_deck`] carries it the way it carries [`Self::separate_x_group`].
-    pub token_stack: Option<bool>,
+    /// **Refused by name outside the three words** ([`BAD_TOKEN_MODE`]),
+    /// [`Self::managed_wishlist`]'s rule: a patch naming one is this build's own mistake.
+    ///
+    /// **Where it parts company with the switch it replaced**: `token_stack` was a view setting
+    /// with no history row and no undo op. A mode decides whether the deck's tokens are part of
+    /// it at all — and from PR 3 whether the reader's cardboard moves — so it has an arm in
+    /// [`record_deck_edit`] (`tokenMode`) and a place on `deck_undo::DECK_FIELDS`, like
+    /// [`Self::token_rail_index`]. [`duplicate_deck`] carries it, as it carried the switch.
+    /// **Storage only, on this side**: what a mode draws is TypeScript's.
+    pub token_mode: Option<String>,
     /// Where the **Tokens & Emblems** pile sits in the rail — user schema v51, as the number of
     /// rail piles drawn above it, and `-1` (or any value the rail no longer reaches) for *last*.
     ///
@@ -494,7 +531,7 @@ pub struct DeckPatch {
     /// the `coalesce(?n, column)` every field here is written with reads a bound NULL as
     /// unchanged, so a nullable column could never be written back to "last" once moved.
     ///
-    /// **Where it parts company with [`Self::token_stack`]**: that is a view setting, and this is
+    /// **Where it parted company with v47's `token_stack`**: that was a view setting, and this is
     /// an arrangement the reader dragged — a category's `sort_order`'s kind of answer. So it has
     /// an arm in [`record_deck_edit`] (`tokenRail`) and a place on `deck_undo::DECK_FIELDS`, and
     /// [`duplicate_deck`] carries it. **Storage only, on this side**: what the index *means*
@@ -769,22 +806,24 @@ pub struct DeckRow {
     /// **[`duplicate_deck`] deliberately does not carry it**, both neighbours' note — so a copy
     /// takes the column default, which here is *shut*.
     pub notes_open: bool,
-    /// Whether the deck views draw a trailing **Tokens & Emblems** pile — user schema v47,
-    /// `DEFAULT 0`, so every existing deck reads off and nothing changes on upgrade.
+    /// How this deck treats its tokens — `managed`, `collection` or `hidden` (user schema v52,
+    /// `DEFAULT 'managed'`, replacing v47's `token_stack`). **Every deck on every disk reads
+    /// `managed` after the upgrade, the ones whose switch was off included** — the reader's
+    /// answer, so every deck that makes tokens draws its pile.
     ///
     /// Read here as well as written through [`DeckPatch`], for [`Self::theory_enabled`]'s
-    /// reason. **Where it parts company with the three disclosures above it**: it is a setting
-    /// chosen in Deck settings rather than a band the reader opened, so [`duplicate_deck`]
-    /// carries it, [`Self::separate_x_group`]'s rule. Still no history row and no undo op, the
-    /// disclosures' rule — see [`DeckPatch::token_stack`].
-    pub token_stack: bool,
+    /// reason. Read as the stored word with no fallback, unlike [`Self::managed_wishlist`]
+    /// beside it: that column has no `CHECK` and a newer peer's word can land in it, while this
+    /// one refuses a fourth word at the write, so there is nothing here to be lenient about. See
+    /// [`DeckPatch::token_mode`] for why it has a history row and an undo op.
+    pub token_mode: String,
     /// Where the Tokens & Emblems pile sits in the rail — user schema v51, `DEFAULT -1` for
     /// *last*, so every existing deck draws it where it always has.
     ///
     /// **A fact, not a slot**: the rail's piles come and go with the reader's switches, so an
     /// index the rail no longer reaches also draws last, and that conclusion is `tokenRail.tsx`'.
-    /// See [`DeckPatch::token_rail_index`] for why it has a history row where `token_stack` has
-    /// none.
+    /// See [`DeckPatch::token_rail_index`] for why it has a history row where v47's
+    /// `token_stack` had none.
     pub token_rail_index: i64,
     /// Which of the Compare dialog's three views this deck's **managed wishlist** follows —
     /// `all`, `missing` or `other` (Different printing) — or `off` for no folder at all
@@ -1113,7 +1152,7 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
-            d.virtual_only, d.stats_open, d.notes_open, d.token_stack, d.managed_wishlist_mode,
+            d.virtual_only, d.stats_open, d.notes_open, d.token_mode, d.managed_wishlist_mode,
             d.token_rail_index,
             {images}
        FROM decks d
@@ -1150,6 +1189,11 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
     /// User schema v48 moved it to 29, appending the managed-wishlist column.
     ///
     /// User schema v51 moved it to 30, appending `token_rail_index`.
+    ///
+    /// User schema v52 left it at 30, and unlike v43 — which also left it where it was, while
+    /// fourteen reads under it moved — nothing else moved either: `token_mode` took
+    /// `token_stack`'s slot at 27 rather than being appended. See the read at 27 for what that
+    /// swap costs instead.
     const IMAGE_COL: usize = 30;
     Ok(DeckRow {
         id: r.get(0)?,
@@ -1266,11 +1310,14 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // types out perfectly, because the shifted pairs are TEXT-onto-TEXT and INTEGER-onto-
         // INTEGER all the way up.
         notes_open: r.get(26)?,
-        // 27, at the end of the list, for the reason written eleven comments up — and the
-        // twelfth proof of it. User schema v47's setting is a fourth `bool` over an `INTEGER`
-        // column beside three disclosures at 20, 25 and 26; an index landing on any of them
-        // would swap a view setting for whether a band was open, every field still a `0` or `1`.
-        token_stack: r.get(27)?,
+        // 27 — `token_stack`'s slot, which user schema v52 handed to `token_mode` rather than
+        // appending it, so that not one index on this row had to move. **The type changed under
+        // the position**: v47's switch was a `bool` over an `INTEGER`, and this is a `TEXT`
+        // word — so the trap is now the TEXT neighbour one along, `managed_wishlist_mode` at 28,
+        // where a crossed read would swap a deck's token mode for its wishlist mode and both
+        // would still read as words. The two vocabularies do not overlap, which is what the
+        // camelCase test's fixture leans on to tell them apart.
+        token_mode: r.get(27)?,
         // 28, at the end of the named list, same rule — the managed-wishlist mode (schema v49
         // re-added it as TEXT at the same position v48's switch held), read leniently.
         managed_wishlist: crate::managed_wishlist::read_mode(r.get::<_, String>(28)?),
@@ -1946,6 +1993,8 @@ struct DeckBefore {
     managed_wishlist: String,
     /// User schema v51's rail index, for the history row.
     token_rail_index: i64,
+    /// User schema v52's token mode, for the history row.
+    token_mode: String,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id, and the word
@@ -2048,6 +2097,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         .as_deref()
         .map(crate::managed_wishlist::valid_mode)
         .transpose()?;
+    let token_mode = patch
+        .token_mode
+        .as_deref()
+        .map(valid_token_mode)
+        .transpose()?;
     // **One transaction, because a rename is two writes.** `decks.name` and the name on the
     // `collection_folders` row standing for the deck are one fact stored twice — nothing in the
     // schema keeps them in step — so a rename that committed one and lost the other would leave
@@ -2063,7 +2117,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     archived, folder_id, theory_enabled, separate_x_group,
                     default_category_id, game_key, bracket,
                     theory_mark_exact, theory_mark_name, theory_mark_unplanned,
-                    virtual_only, managed_wishlist_mode, token_rail_index
+                    virtual_only, managed_wishlist_mode, token_rail_index, token_mode
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -2122,6 +2176,9 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     // `default_category_id` at 9, so a crossed index records a move that never
                     // happened.
                     token_rail_index: r.get(17)?,
+                    // 18, at the end, same rule — TEXT like `managed_wishlist` at 16, so a
+                    // crossed index records one mode moving where the other did.
+                    token_mode: r.get(18)?,
                 })
             },
         )
@@ -2223,10 +2280,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- `Option<bool>`, and a crossed number among them is an UPDATE that succeeds
                 -- and opens a band the reader did not press.
                 notes_open = coalesce(?20, notes_open),
-                -- `?21`, the next number at the **end**, same rule one rung later. User schema
-                -- v47's view setting sits beside three disclosures of the same `Option<bool>`
-                -- shape, so a crossed number here draws a pile the reader did not ask for.
-                token_stack = coalesce(?21, token_stack),
+                -- `?21`, which was v47's `token_stack` and is user schema v52's `token_mode` in
+                -- its place, so that no hole after it renumbers. The **validated** binding,
+                -- `bracket`'s note: `valid_token_mode` ran above, and binding the raw field
+                -- would leave the column's `CHECK` to answer a caller with its own name.
+                token_mode = coalesce(?21, token_mode),
                 -- `?22`, the next number at the **end**, same rule one rung later.
                 managed_wishlist_mode = coalesce(?22, managed_wishlist_mode),
                 -- `?23`, the next number at the **end**, same rule one rung later. User schema
@@ -2258,7 +2316,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 virtual_only,
                 patch.stats_open,
                 patch.notes_open,
-                patch.token_stack,
+                token_mode,
                 managed_wishlist,
                 patch.token_rail_index,
             ],
@@ -2326,9 +2384,46 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     };
     // How many rows moved is no longer worth binding: it used to decide whether the deck owed a
     // reallocation, and since schema v25 nothing here does.
+    //
+    // **The reader's token printings move with the cards** (the token-stacks spec §4.2): the
+    // deck they built is the plan, and the Treasure art they chose for it is part of what they
+    // built. See [`move_live_tokens_into_theory`] for the move and for why the plan's old entries
+    // go first. **Then both lists owe a token reconcile, in this transaction** (rule 7): this is
+    // one of the three steps built without `deck_undo::record_cells` / `record_variant` — the
+    // choke points that reconcile for every other card write — so it is done by hand here. The
+    // entries were moved *before* it, which is what makes the reconcile keep them: the theory
+    // list now makes what the live one did, and the live list, emptied, has nothing left to lose.
+    //
+    // **What the step carries is the net change, read before the move and after the reconcile**
+    // — never the three writes one by one. A reconcile can take away a row the move has only just
+    // made, and an undo carrying "put back what the reconcile removed" would restore a theory row
+    // that never existed before the press, while a redo checking that row against the
+    // pre-press deck would refuse for ever (`deck_undo`'s `holds` reads a side's `restore`).
+    //
+    // **And the before-image is read only after both lists have been reconciled once**, which is
+    // the same trap one step earlier. The plan can hold entries its (empty) card list makes no
+    // token for — v52's launch conversion copied every old pick into both lists — and rule 7
+    // owes their removal whatever this press does. Read into the before-image, the undo would put
+    // such an entry back, `sync::with_write`'s backstop would delete it again the moment the undo
+    // committed, and the redo's `holds` would find it missing and refuse: an undo that could never
+    // be redone. Reconciled first, the undo restores exactly what the backstop keeps. The
+    // deletions ride no step, like every backstop deletion (`deck_tokens::reconcile_dirty`).
+    let tokens_before = match will_move {
+        true => {
+            crate::deck_tokens::reconcile_in(&tx, id, &[LIVE, THEORY])?;
+            Some(token_entries_of(&tx, id)?)
+        }
+        false => None,
+    };
     if will_move {
         crate::deck_theory::move_live_into_theory(&tx, id)?;
+        move_live_tokens_into_theory(&tx, id)?;
+        crate::deck_tokens::reconcile_in(&tx, id, &[LIVE, THEORY])?;
     }
+    let tokens_moved = match tokens_before {
+        Some(tokens_was) => Some((tokens_was, token_entries_of(&tx, id)?)),
+        None => None,
+    };
     // **Becoming Virtual puts the deck's cardboard back on the reader's desk, in this
     // transaction** (schema v40). A virtual deck tracks a list the reader does not own copies
     // of, so the drawer standing for it cannot go on holding any: the copies are filed into
@@ -2420,6 +2515,15 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 rows: crate::deck_undo::read_variant(&tx, id, THEORY)?,
             });
         }
+        // Beside the cards' `Op::Variant` pair, in both directions: an undo puts the live list
+        // back and then the entries it wore, and a redo moves both again — rows restored, never
+        // the move or the reconcile run backwards, which is `deck_undo`'s own rule.
+        if let Some((tokens_was, tokens_now)) = tokens_moved {
+            if let Some((undo_tokens, redo_tokens)) = token_step(&tokens_was, &tokens_now) {
+                undo.push(undo_tokens);
+                redo.push(redo_tokens);
+            }
+        }
         crate::deck_undo::record_step(&tx, audit_id, id, &crate::deck_undo::Step::new(undo, redo))?;
     }
     // **Nothing is reallocated here, and there is no longer anything to reallocate.** Until
@@ -2430,6 +2534,121 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // cards, which is the truth about a deck somebody is re-planning.
     tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
+}
+
+/// Move the live list's token entries into the plan, as the theory switch moves its cards (user
+/// schema v52, the token-stacks spec §4.2).
+///
+/// **The plan's own entries go first, because `deck_theory::theory_is_empty` asks about
+/// `deck_cards` alone** and a plan with no cards can still hold entries. Every deck that has never
+/// had a plan carries some: v52's launch conversion (`deck_tokens::convert_legacy_picks`) made one
+/// entry *per list* out of every picked art, so the theory list holds a copy of each live pick.
+/// Moving a live entry onto a theory one at the same printing and finish would be refused by
+/// `idx_deck_token_printings_grain`. **Replacing them
+/// rather than folding into them is the switch's own meaning**: the deck the reader built *is* the
+/// plan, so its Treasure arts are the plan's, and a stale theory art kept beside them would draw a
+/// mix nobody chose.
+///
+/// **What one Ctrl+Z puts back is narrower than "everything this deletes"**, and the difference
+/// is deliberate. By the time this runs the caller has reconciled both lists, so a plan entry of
+/// a token the plan's cards do not make is already gone and is in no step — rule 7 owed that
+/// deletion whatever the switch did, and restoring it would only hand the backstop a row to delete
+/// and the redo a reason to refuse. What *this* deletes is a plan entry that survived that
+/// reconcile, and those are in the caller's before-image, so an undo does restore them. (With the
+/// plan's card list empty, as `will_move` requires, that set is only the `manual` tokens' entries,
+/// which the reconcile never touches.)
+///
+/// Ordinary captured writes, both of them: a switch is a press, and the far device takes the
+/// tombstones and the moves as the ops they are, the tombstones stamped first.
+fn move_live_tokens_into_theory(tx: &Connection, deck_id: i64) -> Result<(), String> {
+    tx.execute(
+        "DELETE FROM deck_token_printings WHERE deck_id = ?1 AND variant = ?2",
+        params![deck_id, THEORY],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE deck_token_printings SET variant = ?2, updated_at = unixepoch()
+          WHERE deck_id = ?1 AND variant = ?3",
+        params![deck_id, THEORY, LIVE],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Every token entry of one deck, both lists, in a stable order — the before and after the theory
+/// switch's step is built from.
+fn token_entries_of(
+    tx: &Connection,
+    deck_id: i64,
+) -> Result<Vec<crate::deck_undo::TokenEntryRow>, String> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT variant, oracle_id, card_id, finish, quantity FROM deck_token_printings
+              WHERE deck_id = ?1 ORDER BY variant, card_id, finish",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![deck_id], |r| {
+            Ok(crate::deck_undo::TokenEntryRow {
+                variant: r.get(0)?,
+                oracle_id: r.get(1)?,
+                card_id: r.get(2)?,
+                finish: r.get(3)?,
+                quantity: r.get(4)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// The theory switch's token ops, `(undo, redo)`, from the deck's entries before the move and
+/// after the reconcile — or `None` when the press changed none.
+///
+/// **A net difference in both directions, never the whole lists.** `Op::Tokens` deletes by grain
+/// and then upserts, so a row present on both sides would be deleted and inserted again: a new
+/// row with a new sync uid, and a tombstone and a put on the wire, for an entry the press never
+/// touched. So each side deletes only the grains the other side lacks, and restores only the rows
+/// the other side does not already hold exactly. A grain that survives with a different quantity
+/// needs no delete, because the upsert rewrites its count in place.
+fn token_step(
+    before: &[crate::deck_undo::TokenEntryRow],
+    after: &[crate::deck_undo::TokenEntryRow],
+) -> Option<(crate::deck_undo::Op, crate::deck_undo::Op)> {
+    use crate::deck_undo::{Op, TokenEntryRow};
+    let same_grain = |a: &TokenEntryRow, b: &TokenEntryRow| {
+        a.variant == b.variant && a.card_id == b.card_id && a.finish == b.finish
+    };
+    let leaving = |from: &[TokenEntryRow], to: &[TokenEntryRow]| -> Vec<TokenEntryRow> {
+        from.iter()
+            .filter(|row| !to.iter().any(|kept| same_grain(row, kept)))
+            .cloned()
+            .collect()
+    };
+    let arriving = |from: &[TokenEntryRow], to: &[TokenEntryRow]| -> Vec<TokenEntryRow> {
+        to.iter()
+            .filter(|row| !from.contains(row))
+            .cloned()
+            .collect()
+    };
+    let undo_delete = leaving(after, before);
+    let undo_restore = arriving(after, before);
+    if undo_delete.is_empty() && undo_restore.is_empty() {
+        return None;
+    }
+    Some((
+        Op::Tokens {
+            restore: undo_restore,
+            delete: undo_delete,
+            states: Vec::new(),
+        },
+        Op::Tokens {
+            restore: arriving(before, after),
+            delete: leaving(before, after),
+            states: Vec::new(),
+        },
+    ))
 }
 
 /// The three values [`update_deck`] validated out of a [`DeckPatch`], the one it looked up and
@@ -2679,12 +2898,25 @@ fn record_deck_edit(
     // `tokenRail`, camelCase — `xGroup`'s rule — and the **numbers** on both sides, `-1` for
     // last: which pile that slot fell beside is a fact about the rail at the moment of the drag,
     // and `auditText.ts` words the move without it. An arrangement the reader dragged earns its
-    // row where `token_stack`, a view setting, has none.
+    // row where v47's `token_stack`, a view setting, had none.
     if let Some(to) = patch
         .token_rail_index
         .filter(|i| *i != before.token_rail_index)
     {
         field("tokenRail", json!(before.token_rail_index), json!(to))?;
+    }
+    // `tokenMode`, camelCase — `xGroup`'s rule — and the **words** on both sides, `format`'s
+    // reason: `auditText.ts` is the only thing that words a history row, and it is the only
+    // place that knows `hidden` from "Hide tokens". User schema v52's mode earns the row v47's
+    // switch never had: it decides whether a deck's tokens are part of it at all. Read off
+    // `patch` rather than the validated binding, `bracket`'s reason — `valid_token_mode` hands
+    // back the word it was given, so what was typed is what was written.
+    if let Some(to) = patch
+        .token_mode
+        .as_deref()
+        .filter(|m| *m != before.token_mode)
+    {
+        field("tokenMode", json!(before.token_mode), json!(to))?;
     }
     if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
         last = Some(record_filed(tx, id, Some(to))?);
@@ -3045,8 +3277,10 @@ struct CopiedCard {
 ///
 /// Everything that describes the deck rather than its state — format, description, cover,
 /// which folder it is filed in, whether it keeps a theory list, whether it groups its X cards,
-/// which bracket it is, whether its views draw a Tokens & Emblems pile — comes across, so the
-/// copy looks like what was copied.
+/// which bracket it is, how it treats its tokens and where their pile sits — comes across, so
+/// the copy looks like what was copied. **The token entries themselves do not**, any more than
+/// the `deck_tokens` rows before them did: a copy's cards are copied and its tokens are derived
+/// from them afresh, so it starts on each token's implicit entry.
 ///
 /// **`notes` was on that list until user schema v43 and its replacement is not**, which is a
 /// change of substance rather than of spelling. A single paragraph was a property of the deck
@@ -3127,21 +3361,22 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // keeps the pair the two of them spell intact across the copy: the source's kind is
             // the copy's kind, whichever of the three it is.
             //
-            // **`token_stack` (user schema v47) is copied too**, where the three disclosures
-            // beside it in the table are not: whether the views draw a Tokens & Emblems pile is
-            // a setting chosen in Deck settings, `separate_x_group`'s kind of answer, not a band
-            // the reader happened to have open. **`token_rail_index` (user schema v51) comes
-            // with it**: where the pile sits is an arrangement of the deck, like its categories'
-            // order, and a copy whose pile jumped back to last would not be a copy.
+            // **`token_mode` (user schema v52, v47's `token_stack` before it) is copied too**,
+            // where the three disclosures beside it in the table are not: how a deck treats its
+            // tokens is an answer about the deck, `separate_x_group`'s kind, not a band the reader
+            // happened to have open — and its `DEFAULT 'managed'` would bring a hidden pile back
+            // on the copy. **`token_rail_index` (user schema v51) comes with it**: where the pile
+            // sits is an arrangement of the deck, like its categories' order, and a copy whose
+            // pile jumped back to last would not be a copy.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
-                                theory_mark_unplanned, virtual_only, token_stack, token_rail_index,
+                                theory_mark_unplanned, virtual_only, token_mode, token_rail_index,
                                 managed_wishlist_mode, archived, created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
                     folder_id, theory_enabled, separate_x_group,
                     bracket, theory_mark_exact, theory_mark_name, theory_mark_unplanned,
-                    virtual_only, token_stack, token_rail_index, managed_wishlist_mode,
+                    virtual_only, token_mode, token_rail_index, managed_wishlist_mode,
                     0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
              RETURNING id, name, virtual_only",
@@ -3598,6 +3833,31 @@ pub fn bracket_reads(conn: &Connection, deck_ids: &[i64]) -> Result<Vec<DeckBrac
 /// **`finish` is part of the address, not a column to overwrite.** It joins the grain at schema
 /// v18, so an add of the foil copy folds into the pile's foil row and leaves its regular row
 /// alone. `None` is the regular copy; [`normalise_finish`] is the fence.
+///
+/// # A token is never a deck card, and this is where that is made true
+///
+/// **A printing that is a token or an emblem ([`crate::deck_tokens::is_token_printing`]) — a
+/// `token`, `double_faced_token` or `emblem` layout, or a `flip` or `reversible_card` printing
+/// whose type line says `Token` or `Emblem` on a face — is filed as a token *entry* instead**,
+/// whichever
+/// pile it was dropped on (the token-stacks spec §4.6): [`crate::deck_tokens::add_printing_in`]
+/// adds one of it to the named list, or steps an entry already holding it up by the quantity,
+/// and a token nothing in the deck makes becomes a hand-added one. The finish is the add's own
+/// where it names one and the printing's default where it does not. No `deck_cards` row is
+/// written, so the deck's size, its validation, its stats and every pile total stay what they
+/// were.
+///
+/// **The routing is here rather than in TypeScript because this is where the card's row is at
+/// hand.** Measured 2026-09-26: no drag payload and no add call carries a card's `layout`, so a
+/// router in the page would have to thread it through six call sites and would miss the next —
+/// while every add path (the Add button, a drop on any pile, quick add, the card menu's `Add
+/// to`, a drop on the sidebar's deck entry) ends in this one function.
+///
+/// ⚠️ **A rerouted add answers [`EntryChange`] with `id: 0`**, and that is a contract rather
+/// than a placeholder: no deck card was made, so there is no row for the page to mark as landed
+/// or scroll to, and `0` is an id SQLite never assigns. `quantity` is the entry's count after
+/// the add and `removed` is `false`. A caller that needs to tell the two answers apart asks
+/// `id == 0`.
 // Eight, and every one of them is a column of `DECK_CARD_GRAIN` or a value written at it. The
 // obvious cure — a struct — would be a shape nothing else in this module has, for a function
 // whose whole job is to name one row of one table.
@@ -3624,8 +3884,33 @@ pub fn add_card(
         return Err(NO_CATEGORY.to_owned());
     }
     let (set_code, collector_number, lang, name) = printing_of(conn, card_id)?;
+    // Asked beside the lookup above rather than folded into it: `printing_of` is shared with
+    // `collection_to_deck` and the import, and neither needs the answer — and the question is
+    // `deck_tokens`' to own, since it reads the type line as well as the layout.
+    let is_token = crate::deck_tokens::printing_is_token(conn, card_id)?;
 
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // **The token reroute** — see this function's doc. Before `touch_deck` and the category
+    // resolution, because neither belongs to a token: `add_printing_in` touches the deck itself,
+    // and a category the name arm would create for a token is a pile nothing will ever fill.
+    // Its audit row (kind `deck`, `field: "token"`) and its undo step are both inside that call,
+    // in this transaction, so the reroute is as much one press as the card write below.
+    if is_token {
+        let landed = crate::deck_tokens::add_printing_in(
+            &tx,
+            deck_id,
+            variant,
+            card_id,
+            finish.as_deref(),
+            quantity,
+        )?;
+        tx.commit().map_err(|e| e.to_string())?;
+        return Ok(EntryChange {
+            id: 0,
+            quantity: landed,
+            removed: false,
+        });
+    }
     touch_deck(&tx, deck_id)?;
     // Read before the resolution below, because that resolution is what can *create* a pile:
     // the diff against this is how an undo knows to take an invented `Ramp` column away again
@@ -10166,9 +10451,11 @@ mod tests {
             // which share a value because three booleans cannot be pairwise distinct — the
             // theory marks' own note, one set of fields along.
             notes_open: true,
-            // `true` rather than the column's `DEFAULT 0`, the same rule again: `false` is what
-            // every deck carries and would read correct on a field that never left Rust.
-            token_stack: true,
+            // `hidden` rather than the column's `DEFAULT 'managed'`, the same rule again:
+            // `managed` is what every deck carries and would read correct on a field that never
+            // left Rust. And a word no other TEXT field here can hold — `managedWishlist` beside
+            // it reads `missing` — so a crossed pair of positional reads changes the object.
+            token_mode: "hidden".to_owned(),
             // A real slot rather than the column's `DEFAULT -1`, the same rule: `-1` is what
             // every deck carries and would read correct on a field that never left Rust. `2`
             // and not `3`, so it cannot be mistaken for `bracket` beside it.
@@ -10251,9 +10538,11 @@ mod tests {
                 // crossed index among them succeeds silently, and only the values (`true`,
                 // `false`, `true`) and these three keys tell them apart.
                 "notesOpen": true,
-                // User schema v47, and `tokenStack` rather than `token_stack`: the four views
-                // read this key to decide whether to draw the token pile at all.
-                "tokenStack": true,
+                // User schema v52, and `tokenMode` rather than `token_mode`: the four views read
+                // this key to decide whether to draw the token pile at all, and a snake-cased one
+                // would be `undefined` — which no mode is, so the page would fall back on
+                // whatever it defaults to with no type error anywhere. (`tokenStack` until v52.)
+                "tokenMode": "hidden",
                 // User schema v51, and `tokenRailIndex` rather than `token_rail_index`: the four
                 // views read this key to know where to draw the pile, and a snake-cased one would
                 // be `undefined` — which `tokenRail.tsx` reads as *last*, so the pile would snap
@@ -10316,7 +10605,7 @@ mod tests {
 
         let patch: DeckPatch = serde_json::from_str(
             r#"{"coverCardId":"bolt-lea","archived":true,"separateXGroup":true,"gameKey":"mtgo",
-                "virtualOnly":true,"tokenStack":true,"tokenRailIndex":-1}"#,
+                "virtualOnly":true,"tokenMode":"hidden","tokenRailIndex":-1}"#,
         )
         .expect("the patch payload");
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
@@ -10324,9 +10613,10 @@ mod tests {
         assert_eq!(patch.separate_x_group, Some(true));
         assert_eq!(patch.game_key.as_deref(), Some("mtgo"));
         assert_eq!(patch.virtual_only, Some(true));
-        // User schema v47. The Deck settings switch sends this, and a misspelled key would be
-        // read by `#[serde(default)]` as an omitted one — a press that changes nothing.
-        assert_eq!(patch.token_stack, Some(true));
+        // User schema v52. The mode control sends this, in the band and in Deck settings, and a
+        // misspelled key would be read by `#[serde(default)]` as an omitted one — a press that
+        // changes nothing.
+        assert_eq!(patch.token_mode.as_deref(), Some("hidden"));
         // User schema v51. `-1` because it is the one value a drag back to last sends, and the
         // one a misspelled key would lose: `#[serde(default)]` would read it as `None`, *leave
         // it*, and the pile would stay wherever the reader had just dragged it from.
@@ -10881,126 +11171,466 @@ mod tests {
         assert!(!copy.archived, "what state it is in does not");
     }
 
-    /// The token pile setting, end to end (user schema v47): off on a new deck, a patch moves
-    /// it, an absent field leaves it, and **no history row** — the disclosures' rule.
+    /// How a deck treats its tokens, end to end (user schema v52, in place of v47's
+    /// `token_stack`): `managed` on a new deck, a patch moves it, an absent field leaves it,
+    /// **the move is a history row and one Ctrl+Z puts it back**, a fourth word is refused in
+    /// words, and a copy keeps the mode.
     ///
-    /// **Moved against the three disclosures, no two of the four agreeing on every write**:
-    /// `token_stack` is read at 27 by `deck_row`, one past `notes_open`, and bound to `?21`, one
-    /// past `?20` — the two places a crossed index opens a band where it should draw a pile.
+    /// **The part the switch it replaced asserted the opposite of**: `token_stack` was a view
+    /// setting and recorded nothing, where a mode decides whether the deck's tokens are part of
+    /// it at all. Moved beside a disclosure in the same patch, because `token_mode` is read at 27
+    /// — the slot the switch held — and bound to `?21`, one past `notes_open`'s `?20`: a crossed
+    /// index there opens a band where it should hide a pile.
     #[test]
-    fn the_token_pile_setting_round_trips_and_is_not_recorded() {
+    fn token_mode_round_trips_audits_and_undoes() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        assert!(
-            !deck.token_stack,
-            "a new deck draws no token pile — the column's own DEFAULT 0"
+        assert_eq!(
+            deck.token_mode, "managed",
+            "a new deck manages its tokens — the column's own DEFAULT"
         );
 
-        let patched = update_deck(
+        let hidden = update_deck(
             &conn,
             deck.id,
             &DeckPatch {
-                token_stack: Some(true),
-                notes_open: Some(false),
-                stats_open: Some(false),
-                tokens_open: Some(false),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert!(patched.token_stack, "the readback is the write");
-        assert!(!patched.notes_open && !patched.stats_open && !patched.tokens_open);
-
-        let read = read_deck(&conn, deck.id).unwrap().unwrap();
-        assert!(
-            read.token_stack && !read.notes_open,
-            "…including through `DECK_SELECT`'s positional reads"
-        );
-        assert!(
-            read.image_uris.is_none(),
-            "and `IMAGE_COL` moved with it — a deck with no cover reads no picture"
-        );
-
-        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
-        assert!(after.token_stack, "an absent field means leave it");
-
-        let off = update_deck(
-            &conn,
-            deck.id,
-            &DeckPatch {
-                token_stack: Some(false),
+                token_mode: Some("hidden".to_owned()),
                 notes_open: Some(true),
                 ..Default::default()
             },
         )
         .unwrap();
-        assert!(!off.token_stack && off.notes_open);
+        assert_eq!(hidden.token_mode, "hidden", "the readback is the write");
+        let read = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert_eq!(
+            (
+                read.token_mode.as_str(),
+                read.managed_wishlist.as_str(),
+                read.notes_open
+            ),
+            ("hidden", "off", true),
+            "…including through `DECK_SELECT`'s positional reads, the neighbours untouched"
+        );
+        assert!(
+            read.image_uris.is_none(),
+            "and `IMAGE_COL` did not move — a deck with no cover reads no picture"
+        );
 
-        // A real edit first, so the absence below is an absence and not an empty list.
-        update_deck(
-            &conn,
-            deck.id,
-            &DeckPatch {
-                name: Some("Burn II".to_owned()),
-                token_stack: Some(true),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let words: Vec<String> = crate::deck_audit::list(&conn, deck.id, 20)
+        let payloads: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 20)
             .unwrap()
             .iter()
             .filter(|r| r.kind == crate::deck_audit::DECK)
-            .map(|r| r.payload.clone())
+            .map(|r| serde_json::from_str(&r.payload).unwrap())
             .collect();
-        assert!(
-            words.iter().any(|p| p.contains("name")),
-            "the drawer has to be reachable for the next assertion to mean anything: {words:?}"
+        assert_eq!(
+            payloads.first(),
+            Some(&json!({ "field": "tokenMode", "from": "managed", "to": "hidden" })),
+            "the mode is named in the drawer, from and to, as words: {payloads:?}"
         );
-        assert!(
-            !words
-                .iter()
-                .any(|p| p.contains("tokenStack") || p.contains("token_stack")),
-            "a view setting is not an edit the drawer records: {words:?}"
-        );
-    }
 
-    /// **A copy keeps the token pile setting**, which is where it parts company with the three
-    /// disclosures beside it: it is a setting chosen in Deck settings, `separate_x_group`'s kind
-    /// of answer, so [`duplicate_deck`] carries it. The disclosure patched open alongside it is
-    /// the control — it must *not* come across.
-    #[test]
-    fn a_duplicate_keeps_the_token_pile_setting() {
-        let conn = seeded();
-        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert_eq!(after.token_mode, "hidden", "an absent field means leave it");
+
+        // The same word again is no change, and a no-change is no row.
         update_deck(
             &conn,
             deck.id,
             &DeckPatch {
-                token_stack: Some(true),
-                tokens_open: Some(true),
+                token_mode: Some("hidden".to_owned()),
                 ..Default::default()
             },
         )
         .unwrap();
+        assert_eq!(
+            crate::deck_audit::list(&conn, deck.id, 20)
+                .unwrap()
+                .iter()
+                .filter(|r| r.payload.contains("tokenMode"))
+                .count(),
+            1,
+            "re-sending the mode the deck already holds records nothing"
+        );
+
+        // A fourth word is refused in words — the sentence, not the column's `CHECK` naming
+        // itself — before anything is written.
+        let err = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                token_mode: Some("shown".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, BAD_TOKEN_MODE);
+        assert_eq!(
+            read_deck(&conn, deck.id).unwrap().unwrap().token_mode,
+            "hidden",
+            "and the deck kept its mode"
+        );
 
         let copy = duplicate_deck(&conn, deck.id).unwrap();
-        assert!(copy.token_stack, "the setting comes across");
-        assert!(!copy.tokens_open, "the disclosure beside it does not");
+        assert_eq!(
+            copy.token_mode, "hidden",
+            "a copy treats its tokens the way its original does"
+        );
+        assert!(
+            !copy.notes_open,
+            "the disclosure patched beside it is a band the reader opened, and does not come across"
+        );
 
-        // And a copy of a deck with it off is off — not a column defaulting the right way by
-        // accident.
-        let plain = create_deck(&conn, &input("Storm", "modern")).unwrap();
-        assert!(!duplicate_deck(&conn, plain.id).unwrap().token_stack);
+        // `apply_reversal` itself, `token_rail_index_round_trips_audits_and_undoes`' route: the
+        // path Ctrl+Z takes. It reads the columns to put back off `deck_undo::DECK_FIELDS`, which
+        // is where `token_mode` has to be for this to pass.
+        let cursor = crate::deck_undo::next_undo(&conn, deck.id)
+            .unwrap()
+            .unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck.id, cursor, true).unwrap();
+        assert_eq!(
+            read_deck(&conn, deck.id).unwrap().unwrap().token_mode,
+            "managed",
+            "one Ctrl+Z puts the mode back"
+        );
+    }
+
+    /// `Smothering Tithe`, which makes a Treasure — the real ids, off the debug corpus.
+    const TITHE: &str = "2309fb66-3aa0-4ec5-9a8e-5a0caa19c270";
+    /// The Treasure the Tithe's `all_parts` names.
+    const TREASURE: &str = "cb7b5024-3a0b-4f14-977e-ba6c4c2567c9";
+    /// A second printing of that Treasure, so one token can hold two entries.
+    const TREASURE_ALT: &str = "treasure-alt";
+    const TREASURE_ORACLE: &str = "3c549374-6c37-42e0-8d88-a8555d46732d";
+
+    /// The Tithe and two printings of its Treasure, beside [`seeded`]'s five.
+    ///
+    /// **The Tithe's `raw` carries `all_parts`**, gzip as schema v3 on stores it, because that is
+    /// the only thing the token resolver derives a deck's tokens from: a fixture without it
+    /// would be a deck that makes nothing, and a reconcile over it would delete every entry for
+    /// the wrong reason.
+    fn seed_treasure_maker(conn: &Connection) {
+        let tithe_raw = crate::card_row::gzip_raw(
+            &json!({
+                "id": TITHE,
+                "name": "Smothering Tithe",
+                "all_parts": [{
+                    "object": "related_card",
+                    "id": TREASURE,
+                    "component": "token",
+                    "name": "Treasure",
+                    "uri": format!("https://api.scryfall.com/cards/{TREASURE}"),
+                }],
+            })
+            .to_string(),
+        );
+        conn.execute(
+            "INSERT INTO cards
+                 (id, oracle_id, name, type_line, layout, colors, oracle_text, set_code,
+                  collector_number, lang, released_at, raw, set_name, rarity, finishes, prices)
+             VALUES (?1, '153376c9-dffd-458c-8ce3-a4c8269bc4e9', 'Smothering Tithe',
+                     'Enchantment', 'normal', 'W', '', 'cmm', '693', 'en', '2023-08-04', ?2,
+                     'Commander Masters', 'rare', '[\"nonfoil\"]', '{}')",
+            params![TITHE, tithe_raw],
+        )
+        .unwrap();
+        for (id, number) in [(TREASURE, "48"), (TREASURE_ALT, "49")] {
+            let raw =
+                crate::card_row::gzip_raw(&json!({ "id": id, "name": "Treasure" }).to_string());
+            conn.execute(
+                "INSERT INTO cards
+                     (id, oracle_id, name, type_line, layout, colors, oracle_text, set_code,
+                      collector_number, lang, released_at, raw, set_name, rarity, finishes,
+                      prices)
+                 VALUES (?1, ?2, 'Treasure', 'Token Artifact — Treasure', 'token', '',
+                         '{T}, Sacrifice this token: Add one mana of any color.', 'tcmm', ?3,
+                         'en', '2023-08-04', ?4, 'Commander Masters Tokens', 'common',
+                         '[\"nonfoil\"]', '{}')",
+                params![id, TREASURE_ORACLE, number, raw],
+            )
+            .unwrap();
+        }
+    }
+
+    /// A deck's token entries, as `(variant, card_id, finish, quantity)`, in a stable order.
+    fn token_entries(conn: &Connection, deck_id: i64) -> Vec<(String, String, String, i64)> {
+        conn.prepare(
+            "SELECT variant, card_id, finish, quantity FROM deck_token_printings
+              WHERE deck_id = ?1 ORDER BY variant, card_id, finish",
+        )
+        .unwrap()
+        .query_map(params![deck_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    /// **A token dropped on a pile becomes a token entry, never a deck card** (the token-stacks
+    /// spec §4.6, and review focus 4 of its PR 2 plan). [`add_card`] is where every add path
+    /// ends, so this is the one place the rule can be structural: the answer is `id: 0`, no
+    /// `deck_cards` row is written, the deck's size does not move, and the entry holds the
+    /// printing at 1 in the list the add named. A second add steps that entry — rule 5 — and a
+    /// real card beside it is still a card.
+    ///
+    /// **And a token whose layout does not say so is a token all the same**: a `reversible_card`
+    /// Role, whose type line says `Token` on both faces, is one of the six printings a layout-only
+    /// test would have filed as a deck card. `deck_tokens::printing_is_token` reads the line for
+    /// the two-sided layouts, and this is the add path that has to ask it.
+    #[test]
+    fn a_token_card_added_to_a_pile_becomes_a_token_entry() {
+        let conn = seeded();
+        seed_treasure_maker(&conn);
+        let deck = create_deck(&conn, &input("Tithe", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+
+        let change = add(&conn, deck.id, TREASURE, main, 1);
+        assert_eq!(
+            (change.id, change.quantity, change.removed),
+            (0, 1, false),
+            "`id: 0` is the contract — no deck card was made, so there is none to mark as landed"
+        );
+        assert_eq!(
+            count(&conn, "deck_cards"),
+            0,
+            "a token is never a deck card"
+        );
+        assert_eq!(
+            token_entries(&conn, deck.id),
+            [(
+                LIVE.to_owned(),
+                TREASURE.to_owned(),
+                "nonfoil".to_owned(),
+                1
+            )],
+            "the printing is an entry of the list the add named, in its default finish"
+        );
+        assert_eq!(
+            read_deck(&conn, deck.id).unwrap().unwrap().card_count,
+            0,
+            "and the deck's size did not move"
+        );
+
+        let again = add(&conn, deck.id, TREASURE, main, 1);
+        assert_eq!(
+            (again.id, again.quantity),
+            (0, 2),
+            "a second add steps the entry it already has"
+        );
+        assert_eq!(count(&conn, "deck_cards"), 0);
+
+        let bolt = add(&conn, deck.id, "bolt-m10", main, 1);
+        assert!(bolt.id > 0, "a real card beside it is still a card");
+
+        // A Role: `reversible_card`, not `token`, so only its type line says what it is.
+        conn.execute(
+            "INSERT INTO cards
+                 (id, oracle_id, name, type_line, layout, colors, oracle_text, set_code,
+                  collector_number, lang, released_at, raw, set_name, rarity, finishes, prices)
+             VALUES ('role-wicked', 'o-role-wicked', 'Wicked Role // Wicked Role',
+                     'Token Creature — Role // Token Creature — Role', 'reversible_card', '', '',
+                     'twoe', '15', 'en', '2023-09-08', ?1, 'Wilds of Eldraine Tokens', 'common',
+                     '[\"nonfoil\"]', '{}')",
+            params![crate::card_row::gzip_raw(
+                &json!({ "id": "role-wicked", "name": "Wicked Role // Wicked Role" }).to_string()
+            )],
+        )
+        .unwrap();
+        let role = add(&conn, deck.id, "role-wicked", main, 1);
+        assert_eq!(
+            (role.id, role.quantity, role.removed),
+            (0, 1, false),
+            "a reversible Role is rerouted like any token"
+        );
+        let role_rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_cards WHERE card_id = 'role-wicked'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(role_rows, 0, "and no deck card is written for it");
+        assert!(
+            token_entries(&conn, deck.id).contains(&(
+                LIVE.to_owned(),
+                "role-wicked".to_owned(),
+                "nonfoil".to_owned(),
+                1
+            )),
+            "the Role is a live token entry at 1"
+        );
+    }
+
+    /// A deck holding the Tithe in its live list and **two** Treasure arts beside it — the
+    /// fixture both theory-switch tests start from. The entries are written straight into the
+    /// table rather than through a command, so that each test is about the switch rather than
+    /// about how an entry is added.
+    fn tithe_deck_with_two_treasure_arts(conn: &Connection) -> i64 {
+        seed_treasure_maker(conn);
+        let deck = create_deck(conn, &input("Tithe", "commander")).unwrap();
+        let main = main_of(conn, deck.id);
+        add(conn, deck.id, TITHE, main, 1);
+        conn.execute_batch(&format!(
+            "INSERT INTO deck_token_printings
+                 (deck_id, variant, oracle_id, card_id, finish, quantity, created_at, updated_at)
+             VALUES ({id}, 'live', '{TREASURE_ORACLE}', '{TREASURE}', 'nonfoil', 2, 0, 0),
+                    ({id}, 'live', '{TREASURE_ORACLE}', '{TREASURE_ALT}', 'nonfoil', 1, 0, 0);",
+            id = deck.id
+        ))
+        .unwrap();
+        deck.id
+    }
+
+    /// Switch the deck's plan on — the press that moves the live list into theory.
+    fn switch_theory_on(conn: &Connection, deck_id: i64) {
+        update_deck(
+            conn,
+            deck_id,
+            &DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
+    /// The two Treasure entries at their counts, in the one list `variant` names.
+    fn two_treasure_arts(variant: &str) -> Vec<(String, String, String, i64)> {
+        vec![
+            (
+                variant.to_owned(),
+                TREASURE.to_owned(),
+                "nonfoil".to_owned(),
+                2,
+            ),
+            (
+                variant.to_owned(),
+                TREASURE_ALT.to_owned(),
+                "nonfoil".to_owned(),
+                1,
+            ),
+        ]
+    }
+
+    /// **The theory switch moves the reader's token printings into the plan with the cards, and
+    /// one Ctrl+Z moves them back** (the token-stacks spec §4.2, and review focus 2 of its PR 2
+    /// plan, read through the one step that is built by hand).
+    ///
+    /// Before this, the switch moved the Tithe and left its Treasure entries in the live list,
+    /// which then derived nothing — so the reconcile deleted the arts the reader had chosen, and
+    /// the plan drew the resolver's default. Both entries have to arrive in theory at their
+    /// counts with none left behind in live; undoing has to put them back in live along with the
+    /// card; and a redo moves them again.
+    #[test]
+    fn the_theory_switch_moves_token_entries_into_the_plan_and_undo_moves_them_back() {
+        let conn = seeded();
+        let deck = tithe_deck_with_two_treasure_arts(&conn);
+
+        switch_theory_on(&conn, deck);
+        let theory_cards: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_cards WHERE deck_id = ?1 AND variant = ?2",
+                params![deck, THEORY],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(theory_cards, 1, "the switch moved the Tithe into the plan");
+        assert_eq!(
+            token_entries(&conn, deck),
+            two_treasure_arts(THEORY),
+            "both arts arrive in the plan at their counts, and none is left in live"
+        );
+
+        let cursor = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, cursor, true).unwrap();
+        assert!(!read_deck(&conn, deck).unwrap().unwrap().theory_enabled);
+        assert_eq!(
+            token_entries(&conn, deck),
+            two_treasure_arts(LIVE),
+            "one Ctrl+Z puts both arts back in live beside the card"
+        );
+
+        let cursor = crate::deck_undo::next_redo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, cursor, false).unwrap();
+        assert_eq!(
+            token_entries(&conn, deck),
+            two_treasure_arts(THEORY),
+            "and a redo moves them into the plan again"
+        );
+    }
+
+    /// **A plan with no cards can still hold token entries, and the switch replaces them** —
+    /// `deck_theory::theory_is_empty` asks about `deck_cards` alone. v52's launch conversion made
+    /// one entry per list out of every picked art, so every deck that has never had a plan carries
+    /// theory copies like this one; moving a live entry onto one at the same printing and finish
+    /// would hit `idx_deck_token_printings_grain` and fail the whole press. The stale plan here
+    /// holds a third art, `TREASURE` at 5, which collides with a live entry on the grain.
+    ///
+    /// The switch leaves exactly the live arts in the plan, the stale art gone. **The stale art
+    /// does not come back on an undo**: a plan with no cards makes no Treasure, so rule 7 owes its
+    /// removal whatever the switch does, and the switch reconciles both lists *before* it reads
+    /// the step's before-image. Undo therefore restores the live arts alone, and redo replaces
+    /// them again.
+    ///
+    /// **The reconcile between the undo and the redo is the point of the test.** In the app every
+    /// undo goes through `sync::with_write`, whose backstop reconciles both lists the moment the
+    /// undo commits. When the step's before-image still held the stale art, the undo put it back,
+    /// the backstop deleted it again (the plan it sits in is empty), and the redo — which first
+    /// checks that the deck still holds what the undo restored — was refused for ever, with
+    /// nothing on screen saying why. The direct `apply_reversal` calls here bypass `with_write`,
+    /// so the test runs that reconcile by hand.
+    #[test]
+    fn the_theory_switch_replaces_the_plans_stale_token_entries_and_undo_puts_them_back() {
+        let conn = seeded();
+        let deck = tithe_deck_with_two_treasure_arts(&conn);
+        conn.execute(
+            "INSERT INTO deck_token_printings
+                 (deck_id, variant, oracle_id, card_id, finish, quantity, created_at, updated_at)
+             VALUES (?1, 'theory', ?2, ?3, 'nonfoil', 5, 0, 0)",
+            params![deck, TREASURE_ORACLE, TREASURE],
+        )
+        .unwrap();
+        assert_eq!(
+            token_entries(&conn, deck).len(),
+            3,
+            "two live arts and the plan's stale copy"
+        );
+
+        switch_theory_on(&conn, deck);
+        assert_eq!(
+            token_entries(&conn, deck),
+            two_treasure_arts(THEORY),
+            "the plan holds exactly the live arts — the stale count is replaced, not summed"
+        );
+
+        let cursor = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, cursor, true).unwrap();
+        // What `sync::with_write`'s backstop runs the moment an undo commits.
+        let swept = crate::deck_tokens::reconcile_in(&conn, deck, &[LIVE, THEORY]).unwrap();
+        assert_eq!(
+            token_entries(&conn, deck),
+            two_treasure_arts(LIVE),
+            "undo puts the live arts back beside the card, and the stale art stays gone"
+        );
+
+        let cursor = crate::deck_undo::next_redo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, cursor, false)
+            .expect("a redo after the backstop's reconcile must not be refused");
+        assert_eq!(token_entries(&conn, deck), two_treasure_arts(THEORY));
+        assert!(
+            swept.is_empty(),
+            "the undo lands on a deck the backstop agrees with — it had nothing to take, {swept:?}"
+        );
     }
 
     /// Where the token pile sits in the rail, end to end (user schema v51): last on a new deck,
     /// a patch moves it, **the move is a history row and one Ctrl+Z puts it back**, and a copy
     /// keeps the arrangement.
     ///
-    /// The part `token_stack`'s test above asserts the opposite of: that one is a view setting
-    /// and records nothing, and this is an arrangement the reader dragged — a category's
+    /// The part v47's `token_stack` test asserted the opposite of: that was a view setting and
+    /// recorded nothing, and this is an arrangement the reader dragged — a category's
     /// `sort_order`'s kind of answer, so the drawer names it and the journal can reverse it.
+    /// (`token_mode_round_trips_audits_and_undoes`, which replaced that test, is this one's
+    /// twin one column along.)
     #[test]
     fn token_rail_index_round_trips_audits_and_undoes() {
         let conn = seeded();

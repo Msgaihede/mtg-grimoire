@@ -1,13 +1,15 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState, type JSX } from "react";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import type { DeckVariant } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { STACK_CARD_WIDTH, stackCardWidth } from "./CardStack";
 import { tokenCountWords } from "./CountPill";
 import { DeckTokensPanel, TOKENS_HEADING } from "./DeckTokensPanel";
-import { TokenArtPicker } from "./TokenArtPicker";
+import { entryRef } from "./deckTokens";
+import { TokenArtPicker, type TokenPickerMode } from "./TokenArtPicker";
+import { useDeck } from "./useDeck";
 import { useDeckTokens } from "./useDeckTokens";
 
 interface TokensBandProps {
@@ -18,28 +20,57 @@ interface TokensBandProps {
 }
 
 /**
- * The band as `DeckEditor` hosts it: **one `useDeckTokens` call and one art picker**, handed to
- * the band as props.
+ * Which job the one picker is open for — `DeckEditor`'s own shape: an entry held **by its key**
+ * and looked up on every render, never a frozen view, because the wall is re-derived after every
+ * write.
+ */
+type Picking = { kind: "swap"; entryKey: string } | { kind: "add" } | null;
+
+/**
+ * The band as `DeckEditor` hosts it: **one `useDeckTokens` call and one picker**, handed to the
+ * band as props — and the deck's own row for the mode, written through `deck.update` exactly as
+ * the editor writes it.
  *
- * The band stopped calling the hook itself on 2026-09-24 (issue #507), because a deck with
- * `tokenStack` on draws the same tokens a second time as a pile in the deck views, and the two
- * drawings — and the one picker both open — have to share one answer. So a story is the host's
- * half as well as the band's, which is what keeps every story below driven end to end by the
- * fake rather than by a hand-built `DeckTokens`.
+ * The band stopped calling the hook itself on 2026-09-24 (issue #507), because a deck whose mode
+ * draws a pile draws the same tokens a second time in the deck views, and the two drawings — and
+ * the one picker both open — have to share one answer. So a story is the host's half as well as
+ * the band's, which is what keeps every story below driven end to end by the fake rather than by
+ * a hand-built `DeckTokens`.
  */
 function TokensBand({ deckId, variant, open, onToggle }: TokensBandProps): JSX.Element {
   const tokens = useDeckTokens(deckId, variant);
-  const [picking, setPicking] = useState<string | null>(null);
-  const picked = tokens.tokens.find((view) => view.oracleId === picking) ?? null;
+  const deck = useDeck(deckId);
+  const [picking, setPicking] = useState<Picking>(null);
   const zoom = useAppStore((s) => s.cardZoom.deck);
+
+  const swapping =
+    picking?.kind === "swap"
+      ? (tokens.tokens.find((view) => view.entryKey === picking.entryKey) ?? null)
+      : null;
+  const mode: TokenPickerMode | null =
+    swapping !== null
+      ? { kind: "swap", entry: swapping }
+      : picking?.kind === "add"
+        ? { kind: "add", tokens: tokens.tokens }
+        : null;
+
   return (
     <>
-      <DeckTokensPanel tokens={tokens} open={open} onToggle={onToggle} onPick={setPicking} />
+      <DeckTokensPanel
+        tokens={tokens}
+        open={open}
+        onToggle={onToggle}
+        onPick={(view) => setPicking({ kind: "swap", entryKey: view.entryKey })}
+        onAddPrinting={() => setPicking({ kind: "add" })}
+        mode={deck.deck?.tokenMode ?? "managed"}
+        onMode={(tokenMode) => deck.update.mutate({ tokenMode })}
+      />
       <TokenArtPicker
-        token={picked}
+        mode={mode}
         zoom={zoom}
-        onPick={(cardId) => {
-          if (picked !== null) tokens.setPrinting(picked.oracleId, cardId);
+        onPick={(to) => {
+          if (mode?.kind === "swap") tokens.swap(entryRef(mode.entry), to);
+          if (mode?.kind === "add") tokens.addPrinting(to.cardId, to.finish);
           setPicking(null);
         }}
         onDismiss={() => setPicking(null)}
@@ -62,12 +93,29 @@ function tileNames(region: HTMLElement): (string | null)[] {
     .map((tile) => tile.getAttribute("aria-label"));
 }
 
-/** What each seeded token's subtitle comes out as, spelled once so four stories agree. */
+/** What each seeded token's subtitle comes out as, spelled once so every story agrees. */
 const SUBTITLE = {
   treasure: "Colorless · {T}, Sacrifice this token: Add one mana of any color.",
   construct: "Colorless 4/4 · Flying, haste",
   wurmDeathtouch: "Colorless 3/3 · Deathtouch",
   wurmLifelink: "Colorless 3/3 · Lifelink",
+} as const;
+
+/**
+ * Each seeded entry as every control on its tile names it — the token, its subtitle, **and its
+ * printing and finish**, which since user schema v52 is what tells two tiles of one token apart.
+ *
+ * The Treasure is the entry the seed's art-and-count override became (the `tafr` printing at
+ * four, plain — the conversion files the printing's default finish, and `tafr` is sold plain as
+ * well as foil); the other four are implicit entries, drawn at the resolver's default printing in
+ * its default finish, which for a printing sold in both is the plain one.
+ */
+const ENTRY = {
+  treasure: `Treasure, ${SUBTITLE.treasure}, TAFR · 15, Nonfoil`,
+  construct: `Construct, ${SUBTITLE.construct}, TMSC · 14, Nonfoil`,
+  wurmDeathtouch: `Wurm, ${SUBTITLE.wurmDeathtouch}, T2XM · 29, Nonfoil`,
+  wurmLifelink: `Wurm, ${SUBTITLE.wurmLifelink}, T2XM · 30, Nonfoil`,
+  oko: "Oko, Shadowmoor Scion Emblem, TECL · 12, Nonfoil",
 } as const;
 
 /**
@@ -141,11 +189,14 @@ const meta = {
           "size of the cards that make them, at every stop of the ladder. The art picker behind " +
           "a tile follows it, because a reader who presses a picture has to meet the same " +
           "picture at the same size.\n\n" +
-          "**The list is derived on every open and never stored.** Each of the deck's distinct " +
-          "cards in an *active* category is read for the tokens it makes; what the table holds " +
-          "is only what the reader changed — which art, how many, and whether it is on the wall " +
-          "at all. So a deck nobody has touched still has a full wall, and a token that stops " +
-          "being made simply stops being drawn.\n\n" +
+          "**The list is derived on every open.** Each of the deck's distinct cards in an " +
+          "*active* category is read for the tokens it makes; what is stored is only what the " +
+          "reader chose — which printings, in which finish, how many of each, and whether the " +
+          "token is on the wall at all. So a deck nobody has touched still has a full wall, one " +
+          "tile per token, and a token that stops being made leaves it.\n\n" +
+          "**A tile is an entry — one printing in one finish** (user schema v52). A Treasure kept " +
+          "as a plain and a foil copy is two tiles, and **Add printing** in the header adds " +
+          "another. The header also carries the deck's token mode, on every deck.\n\n" +
           "**The heading is “Tokens & Emblems” and never bare “Tokens”**, which the deck " +
           "editor already uses for an auto-category of cards that *make* tokens — the opposite " +
           "meaning of the same word.\n\n" +
@@ -170,9 +221,13 @@ type Story = StoryObj<typeof meta>;
  * has.
  *
  * **Six, and the number is copies** (token stacks spec §3.1) — the stepper's figure summed over
- * the tokens the deck brings: four Treasures, no Constructs (zeroed on purpose), one Wurm and
- * Oko's emblem. The second Wurm is not in it, because it is dismissed and the number is what the
- * deck brings. It counted *distinct* tokens until then, and read 4 here.
+ * every entry of the tokens the deck brings: four Treasures, no Constructs (zeroed on purpose),
+ * one Wurm and Oko's emblem. The second Wurm is not in it, because it is dismissed and the number
+ * is what the deck brings. It counted *distinct* tokens until then, and read 4 here.
+ *
+ * **The header's two controls are drawn while it is shut** — **Add printing**, which opens the
+ * band as it is pressed, and the deck's token mode, which is a question about the deck rather
+ * than about the wall.
  */
 export const Collapsed: Story = {
   args: { open: false },
@@ -190,6 +245,9 @@ export const Collapsed: Story = {
     await expect(canvas.queryByRole("button", { name: /^Change the art for / })).toBeNull();
     // …and neither is the dismissed switch, which is a control over a wall that is not there.
     await expect(canvas.queryByRole("button", { name: /^Show dismissed/ })).toBeNull();
+    // The header's own two are.
+    await expect(canvas.getByRole("button", { name: "Add printing" })).toBeInTheDocument();
+    await expect(canvas.getByRole("group", { name: "Tokens" })).toBeInTheDocument();
 
     // The press writes `decks.tokens_open`; the editor owns the write, so this is the whole of
     // what the panel does with it.
@@ -203,12 +261,13 @@ export const Collapsed: Story = {
  *
  * Four tiles, and each one is a different thing the reader can have done:
  *
- * * **Treasure** — an art *and* a count changed, so both controls are off their defaults and the
- *   reset affordance has something to undo. Two of the deck's cards name it, from two different
- *   printings, which is the ordinary case rather than a corner: across 40 Treasure makers in the
- *   corpus, 12 distinct Treasure printings are referenced.
- * * **Construct** — a stored quantity of **0**. Zero is a value and not an absence: a token the
- *   reader has decided they need none of while keeping it on the list, and it is the exact state
+ * * **Treasure** — a printing picked and a count changed: the entry the seed's override became
+ *   at user schema v52, so the reset affordance has something to undo. Two of the deck's cards
+ *   name it, from two different printings, which is the ordinary case rather than a corner:
+ *   across 40 Treasure makers in the corpus, 12 distinct Treasure printings are referenced.
+ * * **Construct** — a count of **0** on a token with no printing picked: its implicit entry, at
+ *   the legacy quantity the reader stored. Zero is a value and not an absence — a token the
+ *   reader has decided they need none of while keeping it on the list — and it is the exact state
  *   `stored || 1` reads as untouched and silently draws as 1.
  * * **Wurm** — untouched, and drawn with the subtitle that is the whole of what tells it from
  *   its twin. Its twin is dismissed and is one story down.
@@ -216,44 +275,44 @@ export const Collapsed: Story = {
  *   own name already says whose emblem it is, so a second line would repeat what it is drawing.
  *   The tile knows it is an emblem from its `layout` and never from its type line, which on this
  *   row is the bare word `Emblem`.
+ *
+ * **Every control names the printing and the finish as well as the token** — `TAFR · 15,
+ * Nonfoil` — because one token can be several tiles; the foot under each picture draws the same
+ * two facts for the eye. **Add printing** shows the next story what that looks like.
  */
 export const Expanded: Story = {
   play: async ({ canvas }) => {
     const region = await canvas.findByRole("region", { name: TOKENS_HEADING });
-    await within(region).findByRole("button", { name: `Change the art for Treasure, ${SUBTITLE.treasure}` });
+    await within(region).findByRole("button", { name: `Change the art for ${ENTRY.treasure}` });
 
     // Emblems last, the rest by name — and the two Wurms are not both here, because one of them
     // is dismissed.
     await expect(tileNames(region)).toEqual([
-      `Change the art for Construct, ${SUBTITLE.construct}`,
-      `Change the art for Treasure, ${SUBTITLE.treasure}`,
-      `Change the art for Wurm, ${SUBTITLE.wurmDeathtouch}`,
-      "Change the art for Oko, Shadowmoor Scion Emblem",
+      `Change the art for ${ENTRY.construct}`,
+      `Change the art for ${ENTRY.treasure}`,
+      `Change the art for ${ENTRY.wurmDeathtouch}`,
+      `Change the art for ${ENTRY.oko}`,
     ]);
 
     // The three effective quantities, each arrived at a different way: stored, stored as zero,
     // and the floor a token nobody touched falls back to.
     await expect(
-      within(region).getByRole("spinbutton", { name: `Quantity of Treasure, ${SUBTITLE.treasure}` }),
+      within(region).getByRole("spinbutton", { name: `Quantity of ${ENTRY.treasure}` }),
     ).toHaveValue(4);
     await expect(
-      within(region).getByRole("spinbutton", {
-        name: `Quantity of Construct, ${SUBTITLE.construct}`,
-      }),
+      within(region).getByRole("spinbutton", { name: `Quantity of ${ENTRY.construct}` }),
     ).toHaveValue(0);
     await expect(
-      within(region).getByRole("spinbutton", {
-        name: `Quantity of Wurm, ${SUBTITLE.wurmDeathtouch}`,
-      }),
+      within(region).getByRole("spinbutton", { name: `Quantity of ${ENTRY.wurmDeathtouch}` }),
     ).toHaveValue(1);
 
-    // Reset is drawn only where there is a deviation to undo — which is what keeps it from being
-    // a control that spends most of a wall refusing.
+    // Reset is drawn only where there is something to undo — the list holds the token's own
+    // entries — which is what keeps it from being a control that spends most of a wall refusing.
     await expect(
-      within(region).getByRole("button", { name: `Reset Treasure, ${SUBTITLE.treasure}` }),
+      within(region).getByRole("button", { name: `Reset ${ENTRY.treasure}` }),
     ).toBeInTheDocument();
     await expect(
-      within(region).queryByRole("button", { name: `Reset Wurm, ${SUBTITLE.wurmDeathtouch}` }),
+      within(region).queryByRole("button", { name: `Reset ${ENTRY.wurmDeathtouch}` }),
     ).toBeNull();
 
     // The subtitle is drawn as well as spoken, in an element of its own — two flex children with
@@ -280,6 +339,10 @@ export const Expanded: Story = {
  * no rows either, and captioning that *makes nothing* would be the app asserting a fact it does
  * not have.
  *
+ * **The mode control is still here**, and that is the point of the header drawing on every deck:
+ * how a deck keeps its tokens is a question about the deck, answerable before it makes its first
+ * one. **Add printing is not** — there is no token to add a printing of.
+ *
  * Nothing here depends on the Tagger datasets, the price feeds or the relay: this feature reads
  * the corpus and nothing else.
  */
@@ -295,6 +358,10 @@ export const NothingToMake: Story = {
     await expect(canvas.queryByRole("button", { name: TOKENS_HEADING })).toBeNull();
     // No count either: a `0` pill beside a sentence saying so is the same fact twice.
     await expect(canvas.queryByText(tokenCountWords(0))).toBeNull();
+
+    // The mode is answerable on a deck that makes nothing; adding a printing is not.
+    await expect(canvas.getByRole("group", { name: "Tokens" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Add printing" })).toBeNull();
   },
 };
 
@@ -323,28 +390,26 @@ export const DismissedRevealed: Story = {
     // **The wait is the assertion.** Reading the wall in the same tick as the press asks about
     // the frame before the reveal, which answers with four tiles and reads exactly like a switch
     // that does nothing.
-    await within(region).findByRole("button", {
-      name: `Restore Wurm, ${SUBTITLE.wurmLifelink}`,
-    });
+    await within(region).findByRole("button", { name: `Restore ${ENTRY.wurmLifelink}` });
     await expect(chip).toHaveAttribute("aria-pressed", "true");
 
     // Five tiles now, and the two same-named ones are adjacent — which is exactly the layout in
     // which one accessible name for both would be unusable.
     await expect(tileNames(region)).toEqual([
-      `Change the art for Construct, ${SUBTITLE.construct}`,
-      `Change the art for Treasure, ${SUBTITLE.treasure}`,
-      `Change the art for Wurm, ${SUBTITLE.wurmDeathtouch}`,
-      `Change the art for Wurm, ${SUBTITLE.wurmLifelink}`,
-      "Change the art for Oko, Shadowmoor Scion Emblem",
+      `Change the art for ${ENTRY.construct}`,
+      `Change the art for ${ENTRY.treasure}`,
+      `Change the art for ${ENTRY.wurmDeathtouch}`,
+      `Change the art for ${ENTRY.wurmLifelink}`,
+      `Change the art for ${ENTRY.oko}`,
     ]);
 
     // The revealed one is the only tile offering to be restored; its twin still offers to be
     // dismissed, and the two are told apart by the same line.
     await expect(
-      within(region).getByRole("button", { name: `Restore Wurm, ${SUBTITLE.wurmLifelink}` }),
+      within(region).getByRole("button", { name: `Restore ${ENTRY.wurmLifelink}` }),
     ).toBeInTheDocument();
     await expect(
-      within(region).getByRole("button", { name: `Dismiss Wurm, ${SUBTITLE.wurmDeathtouch}` }),
+      within(region).getByRole("button", { name: `Dismiss ${ENTRY.wurmDeathtouch}` }),
     ).toBeInTheDocument();
 
     // Unmoved, and deliberately: a dismissal is not one of the tokens this deck brings — the
@@ -390,7 +455,7 @@ export const Zoomed: Story = {
     const canvas = within(canvasElement);
     const region = await canvas.findByRole("region", { name: TOKENS_HEADING });
     const tile = await within(region).findByRole("button", {
-      name: `Change the art for Treasure, ${SUBTITLE.treasure}`,
+      name: `Change the art for ${ENTRY.treasure}`,
     });
 
     // The `<li>` carries the width, so the assertion climbs to it rather than reading the button
@@ -404,5 +469,151 @@ export const Zoomed: Story = {
     // story with it instead of failing it. What is pinned is that the wall reads the zoom at
     // all, which is the property that can regress.
     await expect(stackCardWidth(1.5)).toBeGreaterThan(STACK_CARD_WIDTH);
+  },
+};
+
+/**
+ * **Add printing — a second Treasure, in foil, beside the first** (token stacks spec §4.6).
+ *
+ * The header's button opens the picker on every token the deck has, grouped by token behind a
+ * search box that reads a token's name or a set code. Its grain is the printing **and** the
+ * finish, so the Treasure the deck already keeps — `tafr` 15, plain — is offered again as a foil
+ * tile with the sheen on its picture and the word in its foot.
+ *
+ * A pick is rule 5: that printing in that finish at one copy. The wall then holds **two tiles of
+ * one token**, which is the case every accessible name on a tile now spells its printing and
+ * finish for — the two share a name, a subtitle and a picture, and `Nonfoil` against `Foil` is the
+ * whole of the difference. The count moves by the one copy added.
+ */
+export const AddPrinting: Story = {
+  play: async ({ canvas, canvasElement }) => {
+    const region = await canvas.findByRole("region", { name: TOKENS_HEADING });
+    await within(region).findByRole("button", { name: `Change the art for ${ENTRY.treasure}` });
+
+    await userEvent.click(canvas.getByRole("button", { name: "Add printing" }));
+
+    // The dialog, wherever the shell mounts it — addressed from the document rather than the
+    // canvas, so a portal would not make this story lie.
+    const dialog = await within(canvasElement.ownerDocument.body).findByRole("dialog", {
+      name: "Add a printing",
+    });
+    await userEvent.type(
+      within(dialog).getByRole("searchbox", { name: /find a printing/i }),
+      "tafr",
+    );
+    const foil = await within(dialog).findByRole("button", {
+      name: "Treasure — TAFR · 15 · 2021, Foil, art by Dan Murayama Scott",
+    });
+    // The set code narrowed the wall to one printing, in both of its finishes.
+    await expect(
+      within(dialog)
+        .getAllByRole("button", { name: / — / })
+        .map((tile) => tile.getAttribute("aria-label")),
+    ).toEqual([
+      "Treasure — TAFR · 15 · 2021, Nonfoil, art by Dan Murayama Scott",
+      "Treasure — TAFR · 15 · 2021, Foil, art by Dan Murayama Scott",
+    ]);
+    await expect(foil.querySelector("[data-foil-sheen]")).not.toBeNull();
+
+    await userEvent.click(foil);
+
+    const treasureFoil = `Treasure, ${SUBTITLE.treasure}, TAFR · 15, Foil`;
+    await within(region).findByRole("button", { name: `Change the art for ${treasureFoil}` });
+    // One token, two tiles, together — and every other tile where it was.
+    await expect(tileNames(region)).toEqual([
+      `Change the art for ${ENTRY.construct}`,
+      `Change the art for ${ENTRY.treasure}`,
+      `Change the art for ${treasureFoil}`,
+      `Change the art for ${ENTRY.wurmDeathtouch}`,
+      `Change the art for ${ENTRY.oko}`,
+    ]);
+    await expect(
+      within(region).getByRole("spinbutton", { name: `Quantity of ${ENTRY.treasure}` }),
+    ).toHaveValue(4);
+    await expect(
+      within(region).getByRole("spinbutton", { name: `Quantity of ${treasureFoil}` }),
+    ).toHaveValue(1);
+    await waitFor(async () => {
+      await expect(within(region).getByText(tokenCountWords(7))).toBeInTheDocument();
+    });
+  },
+};
+
+/**
+ * **A press on a picture swaps that entry** (rule 4) — and the picker marks the entry's own tile
+ * current **by printing and finish**, so the plain `tafr` Treasure the deck keeps is pressed and
+ * the foil tile over the same picture is not.
+ *
+ * The pick is the other printing in foil. The entry keeps its count — a swap changes which
+ * cardboard, not how much of it — and the tile's every name says the new printing and finish.
+ */
+export const SwapOneEntry: Story = {
+  play: async ({ canvas, canvasElement }) => {
+    const region = await canvas.findByRole("region", { name: TOKENS_HEADING });
+    await userEvent.click(
+      await within(region).findByRole("button", { name: `Change the art for ${ENTRY.treasure}` }),
+    );
+
+    const dialog = await within(canvasElement.ownerDocument.body).findByRole("dialog", {
+      name: "Art for Treasure",
+    });
+    const current = await within(dialog).findByRole("button", {
+      name: "Treasure — TAFR · 15 · 2021, Nonfoil, art by Dan Murayama Scott",
+    });
+    await expect(current).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      within(dialog).getByRole("button", {
+        name: "Treasure — TAFR · 15 · 2021, Foil, art by Dan Murayama Scott",
+      }),
+    ).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(
+      within(dialog).getByRole("button", {
+        name: "Treasure — THOB · 13 · 2026, Foil, art by Kamila Szutenberg",
+      }),
+    );
+
+    const swapped = `Treasure, ${SUBTITLE.treasure}, THOB · 13, Foil`;
+    await expect(
+      await within(region).findByRole("spinbutton", { name: `Quantity of ${swapped}` }),
+    ).toHaveValue(4);
+    await expect(
+      within(region).queryByRole("button", { name: `Change the art for ${ENTRY.treasure}` }),
+    ).toBeNull();
+  },
+};
+
+/**
+ * **The mode, in the band's own header** — `Managed` or `Hide`, the same control Deck settings
+ * draws, writing the same `decks.token_mode` through `deck.update`.
+ *
+ * `Hide` takes the token pile out of the deck's four views and **nothing out of this band**: the
+ * wall and every stepper on it stay, because the mode decides the pile and never whether a token
+ * can be kept. The third word, `Collection`, arrives with the custody it means in PR 3.
+ */
+export const ModeInTheHeader: Story = {
+  play: async ({ canvas }) => {
+    const region = await canvas.findByRole("region", { name: TOKENS_HEADING });
+    const group = within(region).getByRole("group", { name: "Tokens" });
+    await waitFor(async () => {
+      await expect(within(group).getByRole("button", { name: "Managed" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+    await expect(within(group).queryByRole("button", { name: /collection/i })).toBeNull();
+
+    await userEvent.click(within(group).getByRole("button", { name: "Hide" }));
+
+    await waitFor(async () => {
+      await expect(within(group).getByRole("button", { name: "Hide" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+    // The band keeps every token and every stepper in every mode.
+    await expect(
+      within(region).getByRole("spinbutton", { name: `Quantity of ${ENTRY.treasure}` }),
+    ).toHaveValue(4);
   },
 };

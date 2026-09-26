@@ -483,10 +483,11 @@ else holds — confusion rather than injection: the blob is this device's own an
 the roster at that epoch**. A device that adopts *N+1* deletes every `sync_devices` row the
 manifest does not name.
 
-**That is deliberately not a synced table** — it would be the **seventeenth** now, and this line
-read *thirteenth* until `deck_tokens` took that number at user schema v37 and *fourteenth* until
-v43's two note tables and v46's `sticky_notes` moved it twice more, which is the argument
-against writing a count into prose at all. A manifest that *is* the key distribution
+**That is deliberately not a synced table** — it would be the **eighteenth** now, and this line
+read *thirteenth* until `deck_tokens` took that number at user schema v37, *fourteenth* until
+v43's two note tables and v46's `sticky_notes` moved it twice more, and *seventeenth* until v52's
+`deck_token_printings` moved it again, which is the argument against writing a count into prose
+at all. A manifest that *is* the key distribution
 cannot disagree with it, where a synced `device_removals` table could arrive late, arrive out of
 order, or arrive at a device that cannot decrypt it — which is precisely the state a rotation puts
 every peer in.
@@ -875,15 +876,16 @@ Spec §7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees
 
 ---
 
-## What syncs: sixteen tables, and the spec's twelfth still does not exist
+## What syncs: seventeen tables, and the spec's twelfth still does not exist
 
 `schema::SYNCED_TABLES`:
 
 `collection_entries` · `collection_folders` · `deck_audit` · `deck_cards` · `deck_categories` ·
-`deck_folders` · `deck_labels` · `deck_note_cards` · `deck_notes` · `deck_tokens` · `decks` ·
-`device_names` · `muted_tags` · `sticky_notes` · `wishlist_entries` · `wishlist_folders`
+`deck_folders` · `deck_labels` · `deck_note_cards` · `deck_notes` · `deck_token_printings` ·
+`deck_tokens` · `decks` · `device_names` · `muted_tags` · `sticky_notes` · `wishlist_entries` ·
+`wishlist_folders`
 
-**Sixteen, and not for the reason the spec's own count would suggest.** The spec's list names
+**Seventeen, and not for the reason the spec's own count would suggest.** The spec's list names
 `deck_allocations`, which **schema v25 dropped** — which deck holds a card is now which folder
 its row sits in, so the work that table did is inside `collection_folders`, which is on the
 list. A table that does not exist cannot be synced, and that argument has not changed: it is
@@ -894,7 +896,9 @@ twelfth" at different times, and they are not the same table: the spec's was dro
 gone for good, this tree's is real and the spec never spoke of it. The count moved twice; the
 intent behind the first move did not. **The thirteenth is `deck_tokens`, at user schema v37** —
 one row per token a deck's reader has deviated on, holding the art they picked, how many copies
-they want and whether the row is dismissed or hand-added.
+they want and whether the row is dismissed or hand-added. (Since v52 it holds only the last of
+those three; the art and the count moved to the seventeenth, below, and its `card_id` and
+`quantity` still travel as fields a v52 device writes no more.)
 
 **The fourteenth and fifteenth are `deck_notes` and `deck_note_cards`, at user schema v43**
 (2026-09-10, issue #447) — many notes to a deck where there used to be one `decks.notes` column,
@@ -947,12 +951,16 @@ back. What is new is only that a parentless table on this census now holds the r
 beside the field it describes, and the spec is the one that was written against the array.
 
 ⚠️ **`color` carries no CHECK, and the rule is not "a synced column may not have one".** Seven
-tables on this census carry an enumerated one between them: `collection_entries.finish` and
-`condition`, `decks.cover_kind`, `deck_categories.kind`, `deck_cards.variant`,
-`deck_audit.variant`, `collection_folders.kind` and `deck_tokens.state`. Those vocabularies are Magic's or this app's
+tables on this census carried an enumerated one between them when this was written:
+`collection_entries.finish` and `condition`, `decks.cover_kind`, `deck_categories.kind`,
+`deck_cards.variant`, `deck_audit.variant`, `collection_folders.kind` and `deck_tokens.state` — and
+user schema v52 made it eight, with `deck_token_printings.variant` and `.finish`, plus
+`decks.token_mode` on a table already counted. Those vocabularies are Magic's or this app's
 own model, and a build does not get to add to them unilaterally — a rung would, and a rung moves
-every device. **A note's colour is a palette the page owns and expects to grow**, which is what
-turns a constraint into a forward-compatibility hazard: a build that added a sixth colour would
+every device. (`token_mode`'s `CHECK` carries PR 3's `collection` from the start for exactly that
+reason: the word is in the constraint before any build writes it, so no rung is owed later.)
+**A note's colour is a palette the page owns and expects to grow**, which is what turns a
+constraint into a forward-compatibility hazard: a build that added a sixth colour would
 emit rows an older build refuses **at apply**, and a failed apply rolls the group's savepoint back
 rather than showing a note that looks wrong. So Rust stores the string it is handed and the page
 maps a word it has never heard of to `slate`. It is *A table's NAME is on the wire* below, one
@@ -982,6 +990,155 @@ so it goes red on any new synced table that has a grain. It is easy to miss beca
 `UNDO_V<N>`, `schema::TABLES`, `mirror::watch::surface_of`, the `sync_uid` column and index,
 `SYNCED_TABLES`, a `capture::Spec` and an `apply::Meta` — and because nothing at a registration
 site points at it.
+
+**The seventeenth is `deck_token_printings`, at user schema v52** (2026-09-26, the token-stacks
+spec §4) — a token's printings as **entries**, one printing in one finish in one list with a
+quantity, split out of `deck_tokens`, which keeps the token-level state (`auto`, `hidden`,
+`manual`) and whose `card_id` and `quantity` are legacy from that rung on. Its `quantity` is a
+**field**, on `deck_tokens.quantity`'s second argument alone this time: the column is `NOT NULL`
+and could carry a delta, and a count of Treasures is still a setting. Its grain is
+`(deck_uid, variant, card_id, finish)`, restating `schema::DECK_TOKEN_PRINTING_GRAIN`; `finish` is
+`NOT NULL`, so the predicate needs no `coalesce`, and `oracle_id` travels as a field because the
+far device may not hold the printing to derive it from. `decks.token_mode` replaced
+`decks.token_stack` on the `decks` spec under a **new name**, v49's precedent: a v51 peer skips a
+field it does not know, where a word landing in its INTEGER column would fail its deck read.
+
+**v51's art picks become entries in a captured launch pass, and until 2026-09-26 the rung did it
+uncaptured.** The rung copied each picked override into one entry per list, named
+`<override uid>-live` and `-theory`, on the argument that every device climbs over the same synced
+override and so derives the same row under the same name with nothing sent — and it dropped
+`deck_tokens`' three capture triggers so that its clear of the override stayed off the wire too.
+**A group with a device still on v51 broke that argument in both directions**, each break a stream
+stalled for good:
+
+- **A pick made on the v51 device after the other device climbed** was converted by the picker
+  alone, when *it* climbed, under a name the first device had never derived. The picker's next count
+  step reached the first device as a sparse `{quantity}` update: `apply::find_row` could not match
+  it (the uid was unknown, and a sparse op carries no grain term), the insert fallback failed
+  `NOT NULL`, and the op deferred — the picker's whole stream held behind it. A throwaway two-device
+  test against the rung-time design measured it: the one op, a `{quantity}` update for
+  `u-pick-live`, `deferred = 1`.
+- **A pick the v51 device reset** left the converter the only holder of `<uid>-live`, so the
+  converter's own later steps stalled its stream to that device the same way.
+
+This page said "one name, two contents — nothing stalls" about the first case until the same day.
+That held only for a *re*-pick of a pick both devices had converted, and the rung's own comment
+repeated it.
+
+`deck_tokens::convert_legacy_picks` now runs outside the ladder, **not suppressed**, behind a gate
+of two halves: `convert_legacy_picks_at_launch`, from `prepare_database` at every launch after
+`capture::install`, and `convert_legacy_picks_after_pull`, from `client::pull` behind every pull
+that read everything. A device in no group converts at launch; a device in one converts behind its
+pulls, and at launch only once one has landed (the next paragraph is why). Every entry it derives
+is a captured insert, so a peer that derived the same row merges on the uid and a peer that did not
+builds it from the put; a pick arriving after the climb is converted on the pull that brings it
+and announced; a re-pick moves the named entry to the new art in place, captured, so the "two
+contents" window closes behind the next pull rather than at the next swap. The clears are captured
+as well, and recorded
+**after** the entries, so a v51 peer — deferring the first op for a table it does not know, and
+the sender's later ops in the page with it — never applies a clear ahead of its entry, and keeps
+drawing its art. This read "until it upgrades": ⚠️ **it keeps drawing it after, too**, because the
+client drops a deferred op rather than holding it, and the entries and clears are not offered
+again (*Deferred ops are dropped, not held*, below). Two losses were accepted, both confined to a
+v51 device's last days: a reset made there in that window, and a count stepped there on a pick
+another device has already cleared, which lands on a legacy column a converted token no longer
+reads. The first was argued as "the other device's entry reaches it after the upgrade, with
+nothing left to clear" — and, while deferrals are dropped, the entry does not reach it at all.
+`a_pick_made_on_a_v51_device_after_the_climb_converges_with_nothing_deferred` and
+`an_art_reset_on_a_v51_device_after_the_conversion_leaves_nothing_deferred` drive both through
+`apply` with nothing deferred; the second went red, `deferred = 1`, against the rung-time
+conversion. (The first cannot go red against a stub that converts at every launch, which is why
+the stall was measured by the throwaway test instead.) Both now drive their devices through the
+two gated halves rather than the bare conversion.
+
+**A paired device converts behind a pull and never before one** (the fifth review round, the same
+day). While it converted at launch, **a laggard's conversion silently reverted edits**: A converts
+a pick at 3 and steps the live entry to 5; B, still on v51, pulls A's batch and defers it —
+`deck_token_printings` is a table it does not know, and A's clear is held behind the entries, so B
+still holds the pick — but `apply`'s `observe` counts deferred ops, so B's clock is past every
+stamp A wrote. B climbs and converts at launch: `<uid>-live` inserted at the legacy 3 under a later
+stamp than A's step, and last-writer-wins took **both** devices to 3. A finish change or a
+theory-switch move made on A went the same way, and an entry A had deleted came back. Behind a
+pull, B applies A's entries and A's clear first: last-writer-wins takes B's `card_id` to NULL, so
+there is nothing to convert — unless B re-picked after A's clear, and then B's conversion is case
+3's sparse move of A's `<uid>-live` by uid, never an insert over it. The key is the `sync_state`
+row `token_picks_ready` (`deck_tokens::PICKS_READY`), set by the pull half and never cleared; a
+pull held behind a key rotation neither sets it nor converts, because its unreadable envelopes may
+be exactly the entries and clears the gate waits for.
+`a_laggards_conversion_never_reverts_an_edit_made_since` stands in for B's observed clock by
+copying A's into it — a v52 fixture cannot defer a table it knows — and went red, 3 on both devices
+instead of 5, with the gate switched off; `client`'s
+`a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_does_not` drives the pull half
+through a mock relay. **What it costs**: a paired device draws each unconverted token at the
+resolver's printing until its first pull at v52 lands, and a paired device that never completes
+one — a group with no membership, a relay it cannot reach — goes on doing so. ⚠️ **The argument
+above rests on the re-delivery the client does not do yet**: "B defers A's batch" and "behind a
+pull, B applies A's entries and A's clear first" assume the page B deferred at v51 is offered
+again once B climbs. It is not — B dropped it — so a B that **pulled at v51 during the window**
+still holds the pick after it climbs, and the conversion behind its first pull at v52 is the late
+insert that reverts A's edits. The gate closes the reversion for a laggard that did not pull
+during the window, and for every laggard once the sync-delivery fix holds the cursor
+(*Deferred ops are dropped, not held*, below).
+
+**What a mixed group does across v52**, then: a v51 peer **drops** a v52 device's page from its
+first `deck_token_printings` op on — that device's later ops in the page with it, the clears
+among them — and upgrading does not bring them back. This read "defer on a v51 peer until it
+upgrades, which is the ordinary cost of a new table"; it is the ordinary cost, and it is a loss
+rather than a stall until the delivery fix lands, which is why every device in a group has to be
+updated before it syncs across v52. A v51 peer's `deck_tokens.card_id` / `quantity` ops land in
+the legacy columns on a v52 device, where the pull that brings a picked art converts it and
+otherwise only an untouched token's implicit count is read. **"Two names, one entry"** — a pick still in flight between two devices
+under two uids when each converts it — now converges through the grain rule rather than stalling,
+because the announcement is an insert and carries every grain term: `apply` finds the other
+device's entry on `(deck, variant, card, finish)` and both adopt the lower uid.
+**The corner that grain match used to leave is closed for conversions.** The grain includes the
+finish, and each device's finish repair (below) is uncaptured. While the conversion announced every
+art as `nonfoil` and left the repair to correct it, an in-flight pick of a **foil-only** printing
+broke the match: a device that had already repaired its entry to `foil` received the other's
+`nonfoil` announcement, found no grain match, inserted a second row, and its next repair folded the
+two (doubling the count) and deleted the other device's name uncaptured, after which an edit to that
+name from the other device deferred. Since the same day the conversion files the printing's own
+`default_finish`, read from the corpus it runs after, so two devices converting one pick announce
+the same finish and the grain matches
+(`a_foil_only_pick_converts_straight_to_foil_and_the_repair_then_changes_nothing` pins the
+announced `finish: "foil"`). ⚠️ **What remains is the repair's own
+population, read off the code and unmeasured**: an entry filed at the `nonfoil` fallback on a
+device whose corpus did not hold the printing when it converted, and a printing that loses its
+nonfoil after its entry was filed. Either one, meeting a pick in flight under two uids, can still
+reach the fold above. It needs two v51 devices to have picked the same token's art independently,
+offline, and then one of those two — **or one v51 pick and a reader's own add**, which this page
+understated until the fifth review round: a device whose corpus lacks the printing announces
+`<uid>-live` at the `nonfoil` fallback, and a device where the reader had already added that
+printing at its right finish — so case 1 declined to convert over it — receives the announcement,
+finds no grain match, inserts it beside the reader's entry, and its next repair folds the two and
+deletes the announced name uncaptured, after which the announcer's edits to that name defer there.
+**The gate does not close either route.** It orders a conversion after a pull, and neither route
+is a conversion racing a peer's: each is an announced fallback finish meeting a different row in a
+repair that runs uncaptured, and a pull that lands first changes nothing about that.
+
+**Two generic gaps the conversion can widen, and neither is its own** (named in the same round
+and left for a follow-up). **A deck deleted during the window costs a stream its page**:
+`apply::resolve_parent` defers any child whose parent row is gone, with no tombstone check, so a
+peer's entry announcement for a deck this device deleted is deferred — and, since deferrals are
+dropped, lost together with that peer's later ops in the page — as every child op of a deleted
+parent already is. **`apply::find_row`'s uid rename is unchecked**: it renames the local
+row to the lower uid without asking whether another local row already holds it, and derived names
+make that reachable — a v51 device re-picks art Y2 while the other device holds Y2 as a separate
+entry, which case 1 declined to move — at which point the `UNIQUE(sync_uid)` error escapes the
+group's savepoint and fails the whole `apply` on every pull, about half the time by uid order. The
+conversion adds rows and names to both windows; it creates neither rule. **And one cosmetic loss
+in a group of three or more**: a conversion finding every list already holding the pick (a third
+device's announced entries) records its clear with no entry op ahead of it, so a v51 peer applies
+the clear and draws its default art — and, having dropped the third device's entries, goes on
+drawing it after it upgrades, until the delivery fix.
+
+**And the registrations number twelve, not ten**, counted while landing it: the ten above, plus
+`src/lib/userTables.json` — which `changes.rs`' `the_json_both_suites_read_is_the_user_side_of_
+the_registry` holds to `schema::TABLES` — and `src/lib/crossWindow.ts`' `TABLE_KEYS`, which
+`crossWindow.test.ts` holds to that same file. Both are owed by any new *user* table, synced or
+not. The three length fences (`capture::TABLES`, `apply::META`, `SYNCED_TABLES.len()`) and the
+mirror's census in `every_table_in_the_schema_has_been_decided_about` are what go red first, and
+are counted inside the sites they fence rather than beside them.
 
 Two further corrections, both found by reading `schema.rs` rather than the spec:
 
@@ -1042,23 +1199,26 @@ the reason to be sure the next one is worth what it costs.
 What it costs is more than the labels. `apply::write_group` answers `Deferred` for a table this
 build does not sync — deliberately, because a *newer* device's op is not an error and must not be
 dropped — and a deferred op holds that device's watermark, which is the section on it below. So
-the first label op an older peer writes **stops that peer's whole stream**, not just its label
-rows: everything it wrote after that op is left for the next pull, page after page, for as long
-as the two builds disagree.
+the first label op the other build writes **stops that sender's stream in the page that carries
+it**, not just its label rows: everything it wrote after that op in the page is left unapplied.
 
-Three things make that the right shape rather than a bug:
+⚠️ **This section said the block was the right shape because "nothing is lost", and that was
+false** (corrected at token stacks PR 2's final review, 2026-09-26). It argued that the ops are
+never acked and so are re-delivered, and that the moment the older device updates its stream
+drains from the block. Neither happens: `client::pull` advances and acks `PULL_CURSOR` past the
+page whatever `apply` deferred, so the held ops are **dropped** — the sender's later ops in that
+page with them — and updating does not bring them back. *Deferred ops are dropped, not held*,
+below, is the mechanism and the planned fix. What still stands:
 
-- **Nothing is lost.** The ops are never acked, so they are re-delivered; the moment the older
-  device updates, its stream drains from the block and every row lands in order. This is exactly
-  the missing-parent stall self-healing, one cause over.
-- **Only the peers that disagree stall.** The block is per-device, so a group of four where three
-  have updated keeps syncing normally between those three.
-- **A device that has never worn a label never blocks at all**, since the stall needs an op on
+- **Only the peers that disagree lose anything.** The block is per-device, so a group of four
+  where three have updated keeps syncing normally between those three.
+- **A device that has never worn a label never blocks at all**, since the block needs an op on
   that table to exist.
 
-The remedy is the ordinary one and there is no other: **update every device in the group.** There
-is no alias table and no version negotiation on the wire, by design — a wire that accepted two
-names for one table would have to keep accepting them for good.
+The remedy is the ordinary one and there is no other: **update every device in the group — and,
+until the delivery fix lands, before any of them syncs across the change.** There is no alias
+table and no version negotiation on the wire, by design — a wire that accepted two names for one
+table would have to keep accepting them for good.
 
 ---
 
@@ -1090,10 +1250,14 @@ applier resolves by grain first, uid second, with a `min(uid)` tiebreak.**
 | `deck_categories` | `deck_uid, name` |
 | `deck_labels` | `name_key` |
 | `deck_note_cards` | `note_uid, oracle_id` (the parent is the **note**, not the deck) |
+| `deck_tokens` | `deck_uid, oracle_id` (deliberately **not** per variant) |
+| `deck_token_printings` | `deck_uid, variant, card_id, finish` (v52 — per variant, and `finish` NOT NULL so no `coalesce`) |
 | `muted_tags` | `namespace, tag_id` |
+| `device_names` | `device_id` (its `WITHOUT ROWID` primary key) |
 
-`decks`, `deck_folders`, `wishlist_folders`, `deck_audit` and `deck_notes` have no grain and are
-uid-only.
+`decks`, `deck_folders`, `wishlist_folders`, `deck_audit`, `deck_notes` and `sticky_notes` have no
+grain and are uid-only. (`deck_tokens`, `device_names` and `sticky_notes` were missing from this
+table and this sentence until v52's row was added beside them; `apply::META` is the list.)
 
 **A table can have more than one grain, and three of them are PARTIAL indexes** — which the
 plan's table misses entirely, and one of them matters from the first minute a group exists:
@@ -1117,18 +1281,21 @@ while every count still reads one.
 **A sparse update op cannot describe a grain and does not need to** — the row it edits is found
 by uid. An *insert* op carries every field, which is what makes the grain rule work at all.
 
-**The row handle in `apply` is the uid and never the rowid.** Fourteen of the sixteen tables have
-an `INTEGER PRIMARY KEY`; two have none at all — `muted_tags` is `WITHOUT ROWID` on
+**The row handle in `apply` is the uid and never the rowid.** Every synced table but two has an
+`INTEGER PRIMARY KEY`; those two have none at all — `muted_tags` is `WITHOUT ROWID` on
 `(namespace, tag_id)` and `device_names` on `device_id` alone. Addressing by `sync_uid` is one
-spelling for all sixteen.
+spelling for all of them.
 
-**Minting takes three sites, not one**, and only one of them is the ladder:
+**Minting takes four sites, not one**, and one of them is the ladder (it read "three" until v52;
+the fourth row was the v52 rung itself until the pick conversion moved to a launch pass the same
+day, which took it off the ladder):
 
 | Path | Who mints |
 | --- | --- |
 | an *upgraded* file | the v29 rung's `UPDATE … SET sync_uid = lower(hex(randomblob(16)))` |
 | a *converted* file | `schema::mint_missing_uids` inside `split::extract_user_file` |
 | a *fresh* file | `USER_SEED_SQL`, plus the capture trigger for every row written afterwards |
+| a row **the pick conversion derives from a synced row** | the conversion itself — `deck_tokens::convert_legacy_picks` names each entry `<pick uid>-<list>`, so two devices converting one pick announce one name; a pick with no uid is first given the insert trigger's own mint (no op — `sync_uid` is on no capture spec), and its uncaptured clear is the one write of the pass no peer hears; see the seventeenth table above |
 
 A converted file is the one that was missed first: a legacy `mtg.db` has no such column to
 copy, and `split::convert` stamps *head*, so the ladder never reaches it. A NULL uid is not
@@ -1142,10 +1309,10 @@ would fail **the reader's own write**.
 `sync_engine::capture` installs its triggers from one census, and the shape is the number rather
 than the other way round: **an insert trigger for every table, an update and a delete for every
 table but `deck_audit`** — the one `Spec` with `append_only: true`, since a log that is only ever
-appended to needs no other arm — **plus one that advances the clock.** At sixteen tables that is
-16 + 15 + 15 + 1 = **47**, re-derived off `capture::TABLES` on 2026-09-20; this line said 31 and
-named ten non-append-only tables, which had been wrong since before `deck_tokens`. Count the
-array, never add to the figure above.
+appended to needs no other arm — **plus one that advances the clock.** At seventeen tables that
+is 17 + 16 + 16 + 1 = **50**, re-derived off `capture::TABLES` when v52 landed; it read 47 at
+sixteen, and before that said 31 and named ten non-append-only tables, which had been wrong since
+before `deck_tokens`. Count the array, never add to the figure above.
 They are `DROP` + `CREATE` at every open and never `CREATE … IF NOT EXISTS`: a trigger is stored
 SQL, and a build that changed the generator would otherwise leave every existing database
 running last year's rules forever.
@@ -1232,6 +1399,47 @@ triggers go in. Until it did, the only thing that cleared one at launch was
 `managed_wishlist::settle_all` opening a window per deck — so a database with no deck kept the row,
 and captured nothing, across any number of relaunches (measured 2026-09-26, debug).
 
+**`reconcile.rs` is no longer the only such module, and user schema v52 is where it shows most.**
+(`managed_wishlist`'s folder is the earlier one: derived per device from the deck's plan and
+written inside `capture::suppressed`.) v52 adds three writes, and they land on both sides of the
+rule on purpose:
+
+- **`deck_tokens::convert_legacy_picks` is captured, deliberately, although every device derives
+  it too** — the rule's one exception that is not a delete. It turns v51's art picks into entries at
+  launch on a device in no group, and behind each pull on a device in one (*The seventeenth*,
+  above, has the reversion a launch conversion caused there), and an entry derived on one device
+  has to reach the peers
+  that never derived it, or their edits to it stall a stream; the rung that did this uncaptured
+  stalled one in each direction. What makes capturing a derived *insert* safe here is the name:
+  every device converting one pick announces the same `<pick uid>-<list>`, so the second copy of a
+  put merges on the uid instead of adding a row — and there is no counter on the table to double.
+  **And the same content**: the finish is the printing's own `default_finish`, read from the
+  corpus, so two devices whose corpora hold the printing announce identical rows.
+- **`deck_tokens::repair_entry_finishes` runs behind `capture::suppressed`**, at every launch, after
+  the conversion, as its net: it moves an entry the conversion could only file at the `nonfoil`
+  fallback (this device's corpus lacked the printing), or one whose printing has since stopped
+  being sold that way, onto its printing's sole finish — and whether a printing is foil-only is a
+  fact of *this* device's corpus. A captured fold
+  would arrive on the other device as a second sum — the `card_migrations` failure one table over.
+  ⚠️ **And it rewrites in place, never deleting and re-inserting**: `suppressed` also switches off
+  the insert trigger's uid mint, so a re-inserted entry would come back nameless and its next
+  captured stepper press would put a NULL into `sync_ops.uid NOT NULL` — a write that fails on every
+  press from then on. `the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured` holds
+  it on a paired fixture. ⚠️ **And it walks in `sync_uid` order**, so where one list holds two wrong
+  finishes of one printing the fold keeps the lower uid on every device — `apply`'s `min` rule;
+  walked in local row order, two devices could keep the entry under two names.
+  `the_finish_repair_folds_two_wrong_finishes_into_the_lower_uid` went red (`u-b` kept) without it.
+- **Rule 7's token reconcile is captured, deliberately, although every device derives it too.**
+  `deck_tokens::reconcile_in` deletes the entries of a token nothing makes any more, after card
+  writes and as a `sync::with_write` backstop — including after a sync apply. It is captured
+  because a **delete** is not a counter: a second copy of it finds nothing and is a no-op, so
+  convergence costs one redundant tombstone rather than a doubled sum; and because the deletions
+  ride the card write's undo step, and a *captured* restore on this device is only meaningful on
+  the other one if the delete it reverses was captured too. The guard that makes capturing it safe
+  is `Derivation::unreadable`: a list whose makers cannot all be read deletes nothing, because a
+  device synced before its corpus downloads would otherwise derive nothing, delete every entry and
+  **push** those deletes to the whole group.
+
 ---
 
 ## §7.3's rules, and the test that proves each
@@ -1295,7 +1503,8 @@ the row: the op log is also this device's memory of what it did.
 What it does *not* cover is a third device: B has no local ops for a row C edited, so A's
 tombstone and C's edit only meet if they arrive in one batch. The relay hands them over in
 hybrid-logical-clock order, so the common case orders itself; the residual is a sparse edit
-arriving after a tombstone, which is **deferred** rather than lost.
+arriving after a tombstone, which is **deferred** — written here as "rather than lost", and lost
+after all while the client drops a deferral (*Deferred ops are dropped, not held*, below).
 
 ### ...and a resurrected row is rebuilt from it
 
@@ -1353,18 +1562,81 @@ silent.
 
 **The whole of that device's stream stops at the block**, and that is stronger than it first
 looks: the ops after it in the same page are not applied either, even when nothing about them is
-unresolvable. It has to be. Applying them while holding the watermark below means the next pull
-re-delivers them and applies them again — measured before the fix, one `+1` behind a blocked
-op became a quantity of 2 on the second delivery of the same page.
+unresolvable. It has to be. Applying them while holding the watermark below means a re-delivery
+applies them again — measured before the fix, one `+1` behind a blocked op became a quantity of 2
+on the second delivery of the same page.
 
 So a batch that defers anything is applied **twice**: once to find out which devices stall, then
 rolled back and applied again with the stalls known. The loop runs until no new device is found
 blocked, which is at most once per device and in practice once.
 
-A stall is visible in `ApplyReport::deferred` and self-heals when the missing parent arrives. A
-block that *never* becomes appliable — a parent lost to compaction — stalls that device's stream
-permanently, and that is the deliberate choice: it is the only one of the three that neither
-loses an op nor doubles a counter, and it is the only one a reader can be told about.
+**That was designed as a stall** — visible in `ApplyReport::deferred`, self-healing when the
+missing parent arrived, and permanent only for a block that never becomes appliable, on the
+argument that holding is the one choice of three that neither loses an op nor doubles a counter.
+⚠️ **The watermark is only half of a hold, and the client does not supply the other half**, so
+what a deferral does today is lose the op. The next section is the record.
+
+### ⚠️ Deferred ops are dropped, not held (open)
+
+Verified by reading at token stacks PR 2's final review, 2026-09-26, and **older than that PR**.
+
+**The mechanism.** A hold needs the relay to offer the held op again, and three facts together
+mean it never does:
+
+- `client::pull` sets `PULL_CURSOR` to the page's `cursor` after `apply` returns, **whatever
+  `apply` deferred**, and `ack` hands that cursor to the relay. The one case that holds the cursor
+  is `behind` — an envelope at an epoch this device has not adopted yet — for the reason under
+  *One correction to the plan*, below.
+- The relay's `since` (`relay/src/log.ts`) answers only rows with `seq > cursor`, with no page
+  limit, so a page is everything above the cursor.
+- `apply` keeps no copy of a deferred op.
+
+So a deferred op, **and every later op from the same device in that page**, is dropped: never
+applied on this device and never offered to it again. The watermark still does its job — it makes
+a re-delivery safe, applying each counter delta once — but nothing re-delivers. The sender's ops in
+later pages apply normally, since they sit above the watermark, until the next page that carries
+another op this device defers. **What survives** is a deferral the same page resolves: the second
+attempt in `run_groups`, a parent from another device's stream further down the page. "Self-heals
+when the missing parent arrives" is true only for a parent in the same page.
+
+**The consequence for any new synced table.** A peer on the older schema defers the first op for
+a table it does not know and **drops the sender's page from there on** — ops on tables it does know
+included — and upgrading does not bring any of them back. v33's `deck_labels` rename, `deck_notes`
+and `deck_note_cards` at v43, `sticky_notes` at v46 and `deck_token_printings` at v52 have all
+paid it. Every sentence in this record that says such a peer "stalls until it upgrades", or that a
+deferred op is "held" or "left for the next pull", described the hold the watermark was designed
+for rather than what the client does; where this page, `apply`'s docs or the token stacks spec and
+plan say an op or a stream "stalls" or "defers for good", read *dropped, with the sender's later
+ops in that page*.
+
+**What it costs v52 in particular** (token stacks PR 2):
+
+- **A v51 peer drops a v52 device's page from its first `deck_token_printings` op on** — the
+  entries, the conversion's clears (recorded after them), a step made since, and the device's
+  unrelated later ops in that page alike — and after it upgrades it goes on holding the pick and
+  drawing its art, because the clears never arrive.
+- **The pull gate on `convert_legacy_picks` rests on the re-delivery.** *A paired device converts
+  behind a pull*, above, argues that the laggard's first pull at v52 brings the converter's entries
+  and clears, so there is nothing left to convert. A laggard that **pulled at v51 during the
+  window** dropped them instead: after it climbs it still holds the pick, its first pull at v52
+  does not bring them, and the conversion behind that pull is the late insert that reverts the
+  converter's edits. The gate holds for a laggard that did not pull during the window, and for
+  every laggard once the fix below lands.
+- **An entry a v51 peer never received** — announced during the window, or kept by one side after
+  a reset made there — turns every later edit to it into a sparse update that peer cannot place,
+  which defers and drops the sender's page from there on, with both devices at v52.
+
+**The fix is its own PR**, ruled at the same review: a sync-delivery change that must land
+**before any release that carries v52** — hold the cursor on a deferral a newer schema caused (the
+`behind` precedent, one cause over), resolve the child of a deleted parent rather than deferring it
+(`apply::resolve_parent` has no tombstone check), and check `apply::find_row`'s uid rename. It is
+not a line in PR 2 because no v52 code can save a v51 peer, and a cursor held on a block that never
+clears stops the relay compacting — metered storage — which needs a design of its own. Token stacks
+PR 3, a v53 kind change, depends on it.
+
+**Until it lands: update every device in a group before it syncs across a schema change.** The
+loss needs an older device to *pull* a newer device's page; an older device updated before its
+next pull asks from a cursor below that page and applies all of it.
 
 ### The two `CHECK`s differ and the applier knows it
 
@@ -2022,7 +2294,7 @@ of the two ways it happens:
 
 | Object | What it is |
 | --- | --- |
-| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v37, **fifteen** at v43 and **sixteen** at v46 |
+| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v37, **fifteen** at v43, **sixteen** at v46 and **seventeen** at v52 |
 | `device_names` (v31) | `device_id` → `name`, and nothing else. **The twelfth synced table**, so a rename reaches the group and a joiner stops reading "Paired device". `sync_devices` stays unsynced beside it, because it holds keys |
 | `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
 | `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |
@@ -2281,7 +2553,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 - **The debug APK is `com.mtggrimoire.app.debug`**, not the identifier in `tauri.conf.json` —
   `applicationIdSuffix = ".debug"`. `monkey` answers "No activities found to run" for the
   unsuffixed name, which reads like a broken build.
-- **Two clangs, and each leg needs the other one.** `wasm32` needs `C:\Program Files\LLVMin`;
+- **Two clangs, and each leg needs the other one.** `wasm32` needs `C:\Program Files\LLVM\bin`;
   `aarch64-linux-android` needs the **NDK's** toolchain first on PATH, or `ring` fails with
   `fatal error: 'assert.h' file not found` — an error that names a missing C header when the
   cause is a clang with no Android sysroot. Neither is on PATH by default.
@@ -2318,6 +2590,12 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   client — a change to the pull contract on both sides, with its own tests — and it is the next
   PR after this one; a live two-device pass must not import 50 000 rows against an offline peer
   until it lands.
+- **A deferred op is dropped, not held** — `client::pull` advances `PULL_CURSOR` past whatever
+  `apply` deferred, so the op and its sender's later ops in that page are never applied and never
+  offered again. Found at token stacks PR 2's final review (2026-09-26), older than it; ruled a
+  sync-delivery PR of its own that must land **before any release carrying user schema v52**.
+  *Deferred ops are dropped, not held* above is the mechanism, what it costs and the fix; until
+  it lands, every device in a group is updated before it syncs across a schema change.
 - **A third device's tombstone against a third device's edit.** Add-wins reads this device's own
   history and the incoming batch; two *other* devices' ops only meet if they arrive together. A
   tombstone table would close it and is not built.

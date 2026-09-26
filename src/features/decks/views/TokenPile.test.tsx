@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { DEFAULT_ZOOM } from "@/lib/cardZoom";
+import { tileKeyOf } from "@/lib/tileKey";
 
 // `useMarketplace` is the real hook — the pile reads it for the heading's total and every chin's
 // price — so its two queries need answers or they sit rejected for the life of the file.
@@ -19,11 +20,10 @@ import { STACK_OPEN_ATTR, stackHeight } from "../CardStack";
 import { CARD_BODY_ATTR, DECK_GROUP_ATTR } from "../cardControl";
 import { tokenCountWords } from "../CountPill";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
-import type { DeckTokenView } from "../deckTokens";
+import { tokenEntryName, type DeckTokenView } from "../deckTokens";
 import { DECK_CARD_ATTR } from "../dnd";
 import {
   TOKEN_PILE_ATTR,
-  tokenControlName,
   tokenFaceFacts,
   tokenMadeBy,
   TokenGridPile,
@@ -41,13 +41,21 @@ beforeEach(() => {
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
 });
 
+/**
+ * One **entry** — a printing in one finish of one token (token stacks, spec §4). The `entryKey`
+ * follows the printing and the finish unless a case names one, exactly as `deckTokens.ts` derives
+ * it, so two entries of one token built here are two keys by construction.
+ */
 function token(over: Partial<DeckTokenView> = {}): DeckTokenView {
-  return {
+  const base: DeckTokenView = {
     oracleId: "o-treasure",
     name: "Treasure",
     typeLine: "Token Artifact — Treasure",
     layout: "token",
     printingId: "p-treasure",
+    finish: "nonfoil",
+    implicit: false,
+    entryKey: "",
     quantity: 1,
     sources: [{ cardId: "c-smothering-tithe", name: "Smothering Tithe" }],
     derived: true,
@@ -64,22 +72,37 @@ function token(over: Partial<DeckTokenView> = {}): DeckTokenView {
     unitPrice: 0.25,
     ...over,
   };
+  return { ...base, entryKey: over.entryKey ?? tileKeyOf(base.printingId, base.finish) };
 }
 
-/** `Wurmcoil Engine`'s pair — one name, one size, one colour, told apart only by the text. */
+/** `Wurmcoil Engine`'s pair — one name, one size, one colour, told apart only by the text. Each
+ *  has a printing of its own, as two tokens always do. */
 const WURMS: DeckTokenView[] = [
   token({
     oracleId: "o-wurm-deathtouch",
     name: "Wurm",
+    printingId: "p-wurm-deathtouch",
     subtitle: "Colorless 3/3 · Deathtouch",
     sources: [{ cardId: "c-wurmcoil", name: "Wurmcoil Engine" }],
   }),
   token({
     oracleId: "o-wurm-lifelink",
     name: "Wurm",
+    printingId: "p-wurm-lifelink",
     subtitle: "Colorless 3/3 · Lifelink",
     sources: [{ cardId: "c-wurmcoil", name: "Wurmcoil Engine" }],
   }),
+];
+
+/**
+ * **One token, two entries** — the regular copy of a printing sold in both finishes and the foil
+ * one (spec §4.1: *a foil and a nonfoil copy of one printing are two entries*). One oracle id, one
+ * name, one subtitle and one printing: the finish is all that tells them apart, so it is all that
+ * can keep their keys and their names apart.
+ */
+const TWO_ENTRIES: DeckTokenView[] = [
+  token({ finishes: '["nonfoil","foil"]', quantity: 2 }),
+  token({ finishes: '["nonfoil","foil"]', finish: "foil", quantity: 1 }),
 ];
 
 function pileOf(tokens: readonly DeckTokenView[]): TokenPile {
@@ -131,21 +154,68 @@ const DRAWINGS = [
   { name: "table", draw: (pile: TokenPile) => <TokenTablePile pile={pile} /> },
 ] as const;
 
-describe("tokenControlName", () => {
+describe("tokenEntryName", () => {
   it("folds the subtitle in, so two same-named tokens are two names", () => {
     const [a, b] = WURMS;
-    expect(tokenControlName("Change the art for", a)).toBe(
-      "Change the art for Wurm, Colorless 3/3 · Deathtouch",
+    expect(tokenEntryName("Change the art for", a)).toBe(
+      "Change the art for Wurm, Colorless 3/3 · Deathtouch, TCLB · 5, Nonfoil",
     );
-    expect(tokenControlName("Change the art for", a)).not.toBe(
-      tokenControlName("Change the art for", b),
+    expect(tokenEntryName("Change the art for", a)).not.toBe(
+      tokenEntryName("Change the art for", b),
     );
   });
 
-  it("says the bare name where there is no subtitle, an emblem's case", () => {
-    expect(tokenControlName("Quantity of", token({ name: "Emblem", subtitle: null }))).toBe(
-      "Quantity of Emblem",
+  /**
+   * **And the entry, so two entries of one token are two names** (spec §4) — the printing and the
+   * finish. Everything else about the pair is one token's, so without these two terms both
+   * steppers would announce one name: the collection wall's shipped duplicate-name bug, reached
+   * through a token.
+   *
+   * **One spelling for the band and the pile** — `<verb> <name>, <subtitle>, <SET · number>,
+   * <Finish>`, `deckTokens.ts`' `tokenEntryName`, which both surfaces call — because one entry is
+   * drawn on the band and in the pile at once and must not answer to two names on one screen. The
+   * whole string is written out here rather than compared against the helper, so a change to the
+   * shape is a change a test has to be told about.
+   */
+  it("names each entry by its printing and finish, exactly as the band's tile does", () => {
+    const subtitle = "Colorless · {T}, Sacrifice this token: Add one mana of any color.";
+    const secretLair = token({
+      printingId: "p-sld",
+      setCode: "sld",
+      collectorNumber: "2820",
+      finish: "foil",
+      finishes: '["foil"]',
+    });
+    const commanderLegends = token({ printingId: "p-tclb", finish: "nonfoil" });
+    const names = [secretLair, commanderLegends].map((view) =>
+      tokenEntryName("Quantity of", view),
     );
+    expect(names).toEqual([
+      `Quantity of Treasure, ${subtitle}, SLD · 2820, Foil`,
+      `Quantity of Treasure, ${subtitle}, TCLB · 5, Nonfoil`,
+    ]);
+    // And one printing in its two finishes — the pair `TWO_ENTRIES` draws — is two names too.
+    const [regular, foil] = TWO_ENTRIES;
+    expect(tokenEntryName("Quantity of", regular)).toBe(
+      `Quantity of Treasure, ${subtitle}, TCLB · 5, Nonfoil`,
+    );
+    expect(tokenEntryName("Quantity of", foil)).toBe(
+      `Quantity of Treasure, ${subtitle}, TCLB · 5, Foil`,
+    );
+  });
+
+  it("leaves out the subtitle an emblem does not have, and a printing gone from the corpus", () => {
+    expect(tokenEntryName("Quantity of", token({ name: "Emblem", subtitle: null }))).toBe(
+      "Quantity of Emblem, TCLB · 5, Nonfoil",
+    );
+    // All six chin facts are `null` together for a printing the corpus no longer holds; the
+    // finish is the entry's own and is still said.
+    expect(
+      tokenEntryName(
+        "Quantity of",
+        token({ name: "Emblem", subtitle: null, setCode: null, collectorNumber: null }),
+      ),
+    ).toBe("Quantity of Emblem, Nonfoil");
   });
 });
 
@@ -173,6 +243,17 @@ describe("tokenFaceFacts", () => {
       labelColor: null,
       gameChanger: false,
     });
+  });
+
+  /** The entry's own finish, as a deck row spells one — so the foil entry sheens and the regular
+   *  copy of the same printing does not, however many finishes the printing is sold in. */
+  it("is the entry's finish, the regular copy spelt null as a deck row's is", () => {
+    const [regular, foil] = TWO_ENTRIES;
+    expect(tokenFaceFacts(regular).finish).toBeNull();
+    expect(tokenFaceFacts(foil).finish).toBe("foil");
+    expect(tokenFaceFacts(token({ finish: "etched", finishes: '["etched"]' })).finish).toBe(
+      "etched",
+    );
   });
 });
 
@@ -219,21 +300,64 @@ describe.each(DRAWINGS)("the $name drawing", ({ draw }) => {
     expect(within(root).getByText("$0.75")).toBeInTheDocument();
   });
 
-  it("opens the art picker on the token that was pressed", () => {
+  it("opens the printing picker on the entry that was pressed", () => {
     const { pile } = setup();
     fireEvent.click(
-      screen.getByRole("button", { name: tokenControlName("Change the art for", WURMS[1]) }),
+      screen.getByRole("button", { name: tokenEntryName("Change the art for", WURMS[1]) }),
     );
-    expect(pile.pickArt).toHaveBeenCalledWith("o-wurm-lifelink");
+    // The whole view, so the editor can hold its `entryKey` — never a frozen copy of it.
+    expect(pile.pickArt).toHaveBeenCalledWith(WURMS[1]);
   });
 
-  it("steps a token's copies, down to zero", () => {
+  it("steps an entry's copies, down to zero, addressed by the entry", () => {
     const { pile } = setup([token({ quantity: 1 })]);
-    const name = tokenControlName("Quantity of", token());
+    const name = tokenEntryName("Quantity of", token());
+    // Spelled out rather than built with `entryRef`, so the address is checked against the
+    // entry's facts rather than against the helper the pile calls.
+    const entry = { oracleId: "o-treasure", cardId: "p-treasure", finish: "nonfoil", implicit: false };
     fireEvent.click(screen.getByRole("button", { name: `Increase ${name}` }));
-    expect(pile.setQuantity).toHaveBeenLastCalledWith("o-treasure", 2);
+    expect(pile.setQuantity).toHaveBeenLastCalledWith(entry, 2);
     fireEvent.click(screen.getByRole("button", { name: `Decrease ${name}` }));
-    expect(pile.setQuantity).toHaveBeenLastCalledWith("o-treasure", 0);
+    expect(pile.setQuantity).toHaveBeenLastCalledWith(entry, 0);
+  });
+
+  /**
+   * **Two entries of one token are two cards** — keyed apart (a key on the oracle id would be one
+   * key twice, which React reports and then draws the second card's updates onto the first) and
+   * named apart, and each control addresses its own entry.
+   */
+  it("draws two entries of one token as two cards, keyed apart and named apart", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { pile } = setup(TWO_ENTRIES);
+      expect(error.mock.calls.some(([message]) => /same key/.test(String(message)))).toBe(false);
+
+      const names = screen
+        .getAllByRole("button", { name: /^Change the art for Treasure/ })
+        .map((button) => button.getAttribute("aria-label"));
+      expect(names).toEqual(TWO_ENTRIES.map((view) => tokenEntryName("Change the art for", view)));
+      expect(new Set(names).size).toBe(2);
+
+      const foil = TWO_ENTRIES[1];
+      fireEvent.click(
+        screen.getByRole("button", { name: `Increase ${tokenEntryName("Quantity of", foil)}` }),
+      );
+      expect(pile.setQuantity).toHaveBeenLastCalledWith(
+        { oracleId: "o-treasure", cardId: "p-treasure", finish: "foil", implicit: false },
+        2,
+      );
+      fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Change the art for", foil) }));
+      expect(pile.pickArt).toHaveBeenLastCalledWith(foil);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  /** Every drawing says which entry is the foil one where a reader can see it — the chin on the
+   *  two card drawings, the finish mark a deck line and a deck row draw on the two compact ones. */
+  it("marks the foil entry's finish, and only that entry's", () => {
+    const { view } = setup(TWO_ENTRIES);
+    expect(view.container.querySelectorAll('[aria-label="Foil"]')).toHaveLength(1);
   });
 
   it("gives two same-named tokens two different names", () => {
@@ -287,6 +411,24 @@ describe("TokenStackPile", () => {
     expect(tag).toHaveAttribute("aria-hidden", "true");
   });
 
+  /**
+   * **The chin says the entry's finish** — the foil entry's foot carries the foil mark and the
+   * regular copy's carries none, although both are one printing sold in both finishes. Before PR 2
+   * a token stated no finish, so both chins fell to the printing's sole finish, which a printing
+   * sold in two does not have.
+   */
+  it("names each entry's own finish in its chin", () => {
+    renderStack(pileOf(TWO_ENTRIES));
+    const [regular, foil] = TWO_ENTRIES.map(
+      (view) =>
+        screen
+          .getByRole("button", { name: tokenEntryName("Change the art for", view) })
+          .closest("li")!,
+    );
+    expect(within(foil).getByRole("img", { name: "Foil" })).toBeInTheDocument();
+    expect(within(regular).queryByRole("img", { name: "Foil" })).toBeNull();
+  });
+
   it("wears the plan's mark when the pile is given one", () => {
     renderStack({ ...pileOf([token()]), theoryMark: () => ({ tier: "exact", delta: 0 }) });
     expect(document.querySelector(`[${THEORY_MATCH_ATTR}]`)).not.toBeNull();
@@ -296,7 +438,7 @@ describe("TokenStackPile", () => {
     renderStack({ ...pileOf([token()]), theoryMark: () => ({ tier: "exact", delta: 0 }) });
     const press = screen.getByRole("button", { name: /^Change the art for Treasure/ });
     expect(press).toHaveAccessibleName(
-      `${tokenControlName("Change the art for", token())}, ${theoryMatchLabel("exact", 0).toLowerCase()}`,
+      `${tokenEntryName("Change the art for", token())}, ${theoryMatchLabel("exact", 0).toLowerCase()}`,
     );
   });
 
@@ -315,7 +457,7 @@ describe("TokenStackPile", () => {
     const { container } = renderStack(pileOf([token(), ...WURMS]));
     expect(container.querySelectorAll(`[${STACK_OPEN_ATTR}]`)).toHaveLength(0);
     fireEvent.focus(
-      screen.getByRole("button", { name: tokenControlName("Change the art for", WURMS[0]) }),
+      screen.getByRole("button", { name: tokenEntryName("Change the art for", WURMS[0]) }),
     );
     const open = container.querySelectorAll(`[${STACK_OPEN_ATTR}]`);
     expect(open).toHaveLength(1);

@@ -499,7 +499,8 @@ fn step_attachments(
 /// **`DECK_NOTE_CARD_GRAIN` interpolated and never retyped**: an `ON CONFLICT` target that does
 /// not match `idx_deck_note_cards_grain` verbatim is a runtime error at the first write rather
 /// than a compile error, so the index and this statement read one constant —
-/// [`crate::deck_tokens::set_token_override`]'s rule.
+/// [`crate::deck_tokens`]' rule, whose state writes interpolate `DECK_TOKEN_GRAIN` and whose entry
+/// writes interpolate `DECK_TOKEN_PRINTING_GRAIN` the same way.
 ///
 /// **`DO NOTHING` and not `INSERT OR IGNORE`.** The second swallows *every* constraint failure,
 /// including a `note_id` whose note has gone; this one names the collision it means to forgive.

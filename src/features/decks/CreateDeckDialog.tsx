@@ -70,9 +70,10 @@ const BLANK: DeckSettingsValue = {
   // is passed no `categories`, so no "Add cards to" row is drawn, and the create sends nothing
   // for it: `decks.default_category_id` has `DEFAULT 0`, which is this same value.
   defaultCategoryId: AUTO_CATEGORY,
-  // The Tokens & Emblems pile, off — and never sent: `DeckInput` has no field for it and
-  // `decks.token_stack` is `DEFAULT 0`. No `canSetTokenStack` is passed, so no switch is drawn.
-  tokenStack: false,
+  // The token mode, `managed` — and never sent: `DeckInput` has no field for it and
+  // `decks.token_mode` is `DEFAULT 'managed'` (user schema v52). No `canSetTokenMode` is passed,
+  // so no control is drawn; the reader sets it in Deck settings or the band's own header.
+  tokenMode: "managed",
 };
 
 /**

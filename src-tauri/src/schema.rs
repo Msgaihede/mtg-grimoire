@@ -552,7 +552,18 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// `ADD COLUMN`; unlike v47's setting it is an arrangement the reader drags, so it has a history
 /// row and a place on `deck_undo::DECK_FIELDS`. **Written as 50 and renumbered before merging**:
 /// the price-holdings rung above shipped on `main` first, and a shipped number is spent.
-pub const USER_SCHEMA_VERSION: i64 = 51;
+///
+/// **52 (2026-09-26, the token-stacks spec §4) is `deck_token_printings`, the seventeenth synced
+/// table, and `decks.token_mode` in place of v47's `token_stack`.** A token's printings become
+/// *entries* — one printing, in one finish, in one list, with a quantity — so a deck can bring a
+/// Treasure in two arts, or a foil one, where `deck_tokens` held one pick shared by both lists.
+/// That table keeps what is about the *token* (`auto`, `hidden`, `manual`) and its `card_id` and
+/// `quantity` become legacy. The mode is `managed`, `collection` or `hidden`, and every deck
+/// starts on `managed`. **The rung converts no pick**: the v51 art picks become entries in
+/// [`crate::deck_tokens::convert_legacy_picks`], a captured launch pass, because an entry derived
+/// on one device has to be announced to the peers that did not derive it — the rung's own
+/// comment has the two sync stalls that taught that, from when the rung did the converting.
+pub const USER_SCHEMA_VERSION: i64 = 52;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -718,8 +729,14 @@ pub const TABLES: &[(&str, Side)] = &[
     // `decks.notes` column. Emphatically theirs and rebuildable by nothing — this was the one
     // table on the list whose whole content is typing until v46's `sticky_notes` joined it.
     ("deck_notes", Side::User),
+    // One printing, in one finish, of one token, in one list, with a quantity (user schema
+    // v52) — which arts of a Treasure the reader brings and how many. Nothing rebuilds it: the
+    // resolver can name a default printing, and what is here is exactly the part that is not
+    // a default.
+    ("deck_token_printings", Side::User),
     // Only the reader's *deviations* from the tokens a deck derives (user schema v37) — a
-    // picked printing, a stepped quantity, a dismissal. Nothing rebuilds one: the derived list
+    // dismissal or a hand-added token, and before v52 a picked printing and a stepped quantity
+    // too, which moved to `deck_token_printings` above. Nothing rebuilds one: the derived list
     // is the corpus's and comes back on its own, and what is here is exactly the part that
     // does not.
     ("deck_tokens", Side::User),
@@ -811,7 +828,7 @@ pub fn side_of(table: &str) -> Option<Side> {
 
 /// The tables a pairing group keeps in step — spec §7.2, corrected against this file.
 ///
-/// **Sixteen, and the spec named none of the six moves that got it there.** The spec's list
+/// **Seventeen, and the spec named none of the seven moves that got it there.** The spec's list
 /// names `deck_allocations`, which schema v25 dropped: which deck holds a card is now which
 /// folder its row sits in, so the work that table did is inside `collection_folders`, which is
 /// on this list. `device_names` is user schema v31's, which the spec predates — the names
@@ -819,8 +836,10 @@ pub fn side_of(table: &str) -> Option<Side> {
 /// stays off this list for ever. `deck_tokens` is v37's, which the spec predates by
 /// further still. And `deck_notes` and `deck_note_cards` are v43's, the pair that replaced the
 /// single `decks.notes` column. And `sticky_notes` is v46's, the sixth move — the fourth entry
-/// here to hang off nothing at all, after `deck_labels`, `device_names` and `muted_tags`. A table
-/// that does not exist cannot be synced, and the count moved rather than the intent.
+/// here to hang off nothing at all, after `deck_labels`, `device_names` and `muted_tags`. And
+/// `deck_token_printings` is v52's, the seventh — a token's printings split out of
+/// `deck_tokens` into one row per printing, finish and list. A table that does not exist cannot
+/// be synced, and the count moved rather than the intent.
 ///
 /// **Sorted, and `sync_engine::capture::every_synced_table_is_on_the_census` holds it to the
 /// capture specs.** A new user table that nobody decides about is a table whose writes never
@@ -834,7 +853,7 @@ pub fn side_of(table: &str) -> Option<Side> {
 /// hypothetical** — v31 is the rung that made it real, and the v29 rung needed no edit for it
 /// precisely because it was written this way. It is the same rule [`CARDS_COLUMNS`] states and
 /// every rung from v4 on repeats.
-pub const SYNCED_TABLES: [&str; 16] = [
+pub const SYNCED_TABLES: [&str; 17] = [
     "collection_entries",
     "collection_folders",
     "deck_audit",
@@ -852,6 +871,13 @@ pub const SYNCED_TABLES: [&str; 16] = [
     // unambiguously theirs as a deck's name is, so it travels with the deck for
     // `decks.last_group_by`'s reason.
     "deck_notes",
+    // The seventeenth (user schema v52), and `deck_tokens`' reason one line down read at the
+    // grain of a printing: which arts of a Treasure a reader brings, in which finish and how
+    // many, is a decision about the deck. `quantity` travels as a *field* here too — NOT NULL
+    // this time, so a counter would be possible, and still wrong: two devices each setting a
+    // count of 4 mean 4, not 8. Grained on `DECK_TOKEN_PRINTING_GRAIN`, so two devices adding
+    // the same printing to the same list converge on one row.
+    "deck_token_printings",
     // The thirteenth (user schema v37). It syncs for `decks.last_group_by`'s reason and not
     // `deck_cards`': what art a reader chose for their Treasures, and how many they want to
     // bring, is a decision about the deck rather than a fact about cardboard — so it travels
@@ -1103,9 +1129,11 @@ pub fn label_name_key(name: &str) -> String {
 /// The grain of [`crate::deck_tokens`]' overrides: one row per token per deck.
 ///
 /// **`oracle_id` and not `card_id`**, because the row survives the reader changing which
-/// printing they want — the art choice *is* one of the things it stores. Every token, emblem
-/// and double-faced-token row in the corpus carries an `oracle_id` (0 missing of 3 245,
-/// measured 2026-09-07 on the debug corpus), so the column is safe as a grain in a way
+/// printing they want — the art choice *was* one of the things it stored. Since user schema v52
+/// that is [`DECK_TOKEN_PRINTING_GRAIN`]'s table, and this row keeps the token-level state
+/// (`auto`, `hidden`, `manual`) and a legacy quantity an untouched token still reads. Every
+/// token, emblem and double-faced-token row in the corpus carries an `oracle_id` (0 missing of
+/// 3 245, measured 2026-09-07 on the debug corpus), so the column is safe as a grain in a way
 /// `card_id` would not be.
 ///
 /// **Deliberately not grained on `variant`.** The derived list is per-variant because deck
@@ -1118,6 +1146,31 @@ pub fn label_name_key(name: &str) -> String {
 /// `ON CONFLICT ({DECK_TOKEN_GRAIN})` in [`crate::deck_tokens`], which is a runtime error at
 /// the first write if it drifts.
 pub const DECK_TOKEN_GRAIN: &str = "deck_id, oracle_id";
+
+/// The grain of a token's **entries** (user schema v52): one printing, in one finish, in one
+/// list of one deck.
+///
+/// **`card_id` and not `oracle_id`** — [`DECK_TOKEN_GRAIN`] read the other way round, and for the
+/// reason this table exists at all: an entry *is* a printing, so two arts of one Treasure are two
+/// rows. A printing belongs to exactly one oracle, so `oracle_id` is stored beside it as a fact
+/// for grouping and for an orphaned printing, and adding it here would say nothing the index
+/// does not already say.
+///
+/// **`variant` is in it, where [`DECK_TOKEN_GRAIN`] deliberately left it out.** Theory and live
+/// never share an entry (the token-stacks spec §4.2, rule 6): a plan asking for a foil Treasure
+/// is a different row from the live list holding a nonfoil one, exactly as it is for a deck card.
+///
+/// **`finish` is in it and NOT NULL**, in the collection's own three words. A nullable finish
+/// would let one list hold the same regular printing twice, because a UNIQUE index treats every
+/// NULL as distinct — which is what [`DECK_CARD_GRAIN`]'s `coalesce` pays for on `deck_cards`, and
+/// what this grain does not need.
+///
+/// Held to `idx_deck_token_printings_grain` two ways, [`DECK_TOKEN_GRAIN`]'s arrangement: by
+/// `every_plain_grain_constant_names_the_index_the_head_schema_carries`, which can read it through
+/// `PRAGMA index_info` because it carries no `coalesce`, **and** by every
+/// `ON CONFLICT ({DECK_TOKEN_PRINTING_GRAIN})` in [`crate::deck_tokens`] and [`crate::deck_undo`],
+/// which is a runtime error at the first write if it drifts.
+pub const DECK_TOKEN_PRINTING_GRAIN: &str = "deck_id, variant, card_id, finish";
 
 /// What makes two attachment rows the same row: one card per note (user schema v43).
 ///
@@ -3760,8 +3813,9 @@ const COMBO_INDEXES_SQL: &str = "
 /// Public because `VACUUM` needs it. Anything that renumbers `cards`' rowids leaves this
 /// index pointing at the wrong rows, and the failure is silent — see
 /// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
-/// The thirty user tables and their forty-seven indexes, at [`USER_SCHEMA_VERSION`]'s
-/// shape, with `{schema}` where the file goes.
+/// Every user table and its indexes, at [`USER_SCHEMA_VERSION`]'s shape, with `{schema}` where
+/// the file goes. (This line counted them, and said forty-seven indexes while the literal held
+/// forty-eight; `the_user_schema_is_byte_identical_to_what_the_ladder_builds` holds the counts.)
 ///
 /// **Copied verbatim out of a migrated database's own `sqlite_master`, not retyped from the
 /// rungs**, which is why it reads oddly in places: `decks` carries its later columns as one
@@ -3928,7 +3982,7 @@ CREATE TABLE {schema}.decks (
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              , folder_id INTEGER
-                REFERENCES deck_folders(id) ON DELETE SET NULL, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1, virtual_only INTEGER NOT NULL DEFAULT 0, stats_open INTEGER NOT NULL DEFAULT 1, notes_open INTEGER NOT NULL DEFAULT 0, token_stack INTEGER NOT NULL DEFAULT 0, managed_wishlist_mode TEXT NOT NULL DEFAULT 'off', token_rail_index INTEGER NOT NULL DEFAULT -1);
+                REFERENCES deck_folders(id) ON DELETE SET NULL, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1, virtual_only INTEGER NOT NULL DEFAULT 0, stats_open INTEGER NOT NULL DEFAULT 1, notes_open INTEGER NOT NULL DEFAULT 0, managed_wishlist_mode TEXT NOT NULL DEFAULT 'off', token_rail_index INTEGER NOT NULL DEFAULT -1, token_mode TEXT NOT NULL DEFAULT 'managed' CHECK (token_mode IN ('managed','collection','hidden')));
 
 CREATE TABLE {schema}.app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -4449,10 +4503,36 @@ CREATE TABLE {schema}."price_snapshots" (
 
 CREATE INDEX {schema}.idx_price_snapshots_printing
                  ON price_snapshots (marketplace, card_id, finish, day);
+
+CREATE TABLE {schema}.deck_token_printings (
+                 id INTEGER PRIMARY KEY,
+                 deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                 -- Which list the entry is in. Theory and live never share one.
+                 variant TEXT NOT NULL CHECK (variant IN ('live','theory')),
+                 -- The token this printing is of. A stored fact for grouping and for an
+                 -- orphaned printing, not a term of the grain: a printing has one oracle.
+                 oracle_id TEXT NOT NULL,
+                 -- Always a concrete printing. Soft, like every other card reference in a
+                 -- user table. A token with no entry in a list draws an implicit one, and
+                 -- that is the absence of a row rather than a NULL here.
+                 card_id TEXT NOT NULL,
+                 -- NOT NULL on purpose: a UNIQUE index treats every NULL as distinct, so a
+                 -- nullable finish would let one list hold the same printing twice.
+                 finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                 -- Zero is a real state: a token's last entry stepped down stays at 0, so
+                 -- the implicit default does not reappear under the reader.
+                 quantity INTEGER NOT NULL CHECK (quantity >= 0),
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+              , sync_uid TEXT);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_token_printings_grain
+                 ON deck_token_printings (deck_id, variant, card_id, finish);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_token_printings_uid ON deck_token_printings (sync_uid);
 "#;
 
-/// Create the thirty user tables and their indexes in `schema`, at
-/// [`USER_SCHEMA_VERSION`]'s shape.
+/// Create every user table and its indexes in `schema`, at [`USER_SCHEMA_VERSION`]'s shape.
 ///
 /// **One function, two callers, and that is deliberate**: [`crate::split::extract_user_file`]
 /// builds them in an attached scratch file, and `memory_pair` builds them for a test — a
@@ -5024,6 +5104,36 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
         eprintln!(
             "the managed wishlists could not be brought up to date at launch: {e}\nEach one \
              catches up at the next change to its deck."
+        );
+    }
+    // Logged and left owing, the same reason again: a v51 art pick not yet converted draws as
+    // the token's implicit entry — the resolver's printing — until a later pass converts it,
+    // and nothing a reader could act on is gained by refusing to start over one. **After
+    // `capture::install` and never inside a rung**, because this is the one launch step whose
+    // writes must be captured: every entry it derives has to reach the peers that never derived
+    // it, or their edits to it stall a sync stream (the v52 rung's comment and the function's own
+    // say how). **Gated**: a device in no sync group converts here, and a device in one only once
+    // a pull at v52 has landed — until then `sync_engine::client::pull` converts behind its first
+    // pull instead, because a conversion before the device has heard its group can revert what a
+    // peer did since (`convert_legacy_picks_at_launch`'s doc). Idempotent, so every later launch
+    // costs one read that finds nothing.
+    if let Err(e) = crate::deck_tokens::convert_legacy_picks_at_launch(conn) {
+        eprintln!(
+            "the decks' pre-v52 token art picks could not be converted at launch: {e}\nThey \
+             are tried again at the next launch; until then each draws its default printing."
+        );
+    }
+    // Logged and left owing, the same reason once more: a token entry in a finish its printing
+    // is not sold in draws the wrong chin until the next launch, and nothing a reader could act
+    // on is gained by refusing to start over one. **After the conversion**, as its net: the
+    // conversion files each pick in the printing's own default finish, read from the corpus it
+    // runs after, and falls back to `nonfoil` only where this device's corpus cannot say — those
+    // entries, and a printing whose sold finishes changed after its entry was filed, are what
+    // this moves. Idempotent, so every later launch costs one read that finds nothing.
+    if let Err(e) = crate::deck_tokens::repair_entry_finishes(conn) {
+        eprintln!(
+            "the finishes of the decks' token printings could not be checked at launch: \
+             {e}\nThey are checked again at the next launch."
         );
     }
     Ok(())
@@ -6360,9 +6470,19 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // ⚠️ **The three `decks` capture triggers come off first, which is v33's move verbatim.**
     // They are persistent — [`crate::sync_engine::capture::install`] writes real
     // `CREATE TRIGGER`s, not temp ones — so on an upgraded file they are already in the schema
-    // when this runs, and `sync_upd_decks` names `notes` in its `AFTER UPDATE OF` list. SQLite
-    // refuses `DROP COLUMN` on a column a trigger references, so without these three lines the
-    // rung dies on every paired database and on none of the fresh ones a worktree can build.
+    // when this runs, and both `sync_ins_decks` and `sync_upd_decks` *read* `NEW.notes` — the
+    // update trigger in its `WHEN` guard and both in the op they build. SQLite refuses
+    // `DROP COLUMN` on a column a trigger reads, so without these three lines the rung dies on
+    // every paired database and on none of the fresh ones a worktree can build.
+    // **What is refused is the read, not the name in `AFTER UPDATE OF notes`**, which this
+    // comment blamed until 2026-09-26. Measured that day against the SQLite this crate bundles
+    // (3.53.2, `libsqlite3-sys` 0.38.1) and against `node:sqlite` 3.53.0, with a throwaway test
+    // over four one-trigger tables: a column named only in the `OF` list drops cleanly (the
+    // trigger keeps the stale name and goes on firing), while `NEW.<col>` in the `WHEN` or the
+    // body fails `error in trigger … after drop column: no such column: NEW.<col>`, the `OF`
+    // name present or not. The conclusion here never depended on the distinction — the real
+    // triggers do both — but a rung that dropped only the triggers whose `OF` list named the
+    // column would miss `sync_ins_decks`, which has no `OF` list at all.
     // Dropping them is free for v33's reason: `prepare_database` calls `install` immediately
     // after this function, on every target, so the gap is closed before anything can write.
     //
@@ -6386,8 +6506,8 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     if v < 43 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(
-            "-- Off before the drop: `sync_upd_decks` names `notes` in its `OF` list, and
-             -- SQLite refuses DROP COLUMN on a column a trigger references. `capture::install`
+            "-- Off before the drop: `sync_ins_decks` and `sync_upd_decks` read `NEW.notes`,
+             -- and SQLite refuses DROP COLUMN on a column a trigger reads. `capture::install`
              -- puts the current set back, right after this function. v33's move.
              DROP TRIGGER IF EXISTS sync_ins_decks;
              DROP TRIGGER IF EXISTS sync_upd_decks;
@@ -6667,9 +6787,10 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // so none is kept. `managed_wishlist::settle_all` at this same launch removes the folders.
     //
     // ⚠️ **The three `decks` capture triggers come off first**, v43's move verbatim:
-    // `sync_upd_decks` names `managed_wishlist` in its `OF` list, and SQLite refuses `DROP COLUMN`
-    // on a column a trigger references. `capture::install` puts the current set back right after
-    // this function.
+    // `sync_ins_decks` and `sync_upd_decks` read `NEW.managed_wishlist`, and SQLite refuses
+    // `DROP COLUMN` on a column a trigger reads — the read and not the name in the `OF` list,
+    // which v43's comment records the measurement of. `capture::install` puts the current set
+    // back right after this function.
     if v < 49 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(
@@ -6773,6 +6894,102 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         // Literal `51`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA main.user_version = 51;")?;
+        tx.commit()?;
+    }
+
+    // v52 (2026-09-26, the token-stacks spec §4): a token's printings become **entries** in
+    // `deck_token_printings`, the seventeenth synced table, and `decks.token_mode` replaces v47's
+    // `token_stack`.
+    //
+    // **An entry is one printing, in one finish, in one list, with a quantity**, so a deck can
+    // bring a Treasure in two arts, or a foil one, where `deck_tokens` held one pick shared by
+    // both lists. `deck_tokens` keeps what is about the *token* — `auto`, `hidden` or `manual`,
+    // one answer for both lists — and its `card_id` and `quantity` become legacy: written again
+    // only by the launch conversion below, which clears them, and the quantity read only as an
+    // untouched token's implicit count.
+    // [`DECK_TOKEN_PRINTING_GRAIN`] says why `variant` and a NOT NULL `finish` are in the grain
+    // and `oracle_id` is not.
+    //
+    // ⚠️ **The rung creates the table and converts nothing.** Every v51 art pick — a
+    // `deck_tokens` row whose `card_id` is set — becomes one entry per list in
+    // [`crate::deck_tokens::convert_legacy_picks`], **captured**, after `capture::install` —
+    // at launch from [`prepare_database`] on a device in no sync group, and on a device in one
+    // behind its pulls (`convert_legacy_picks_at_launch` has the gate and the reversion it
+    // closes); its comment has the four cases it takes and the two losses it accepts. **Until
+    // 2026-09-26 this rung did the converting**, uncaptured,
+    // naming each entry `<pick uid>-<list>` on the argument that every device climbs over the
+    // same synced picks and so derives the same rows under the same names. A group with a device
+    // still on v51 broke that argument in both directions, and each break stalled a sync stream
+    // for good. A pick made on the v51 device after this one climbed was converted by the picker
+    // alone, so the picker's next count step reached this device as a sparse update for a row it
+    // had never heard of — deferred, and the picker's whole stream held behind it. And a pick the
+    // v51 device reset left this device the only holder of an entry, whose own later steps
+    // stalled the other way. An entry announced by a captured insert cannot be unknown to a
+    // peer, and a rung can announce nothing: it runs before `capture::install`. So the rung
+    // leaves every pick where it is, and a pick that arrives after the climb is converted by the
+    // next pass like any other.
+    //
+    // ⚠️ **Only the three `decks` capture triggers come off first**, v43's move verbatim:
+    // `sync_upd_decks` reads `NEW.token_stack` in its `WHEN` and its body, SQLite refuses
+    // `DROP COLUMN` on a column a trigger reads (`error in trigger … after drop column: no such
+    // column: NEW.token_stack` — naming it in the `OF` list alone is not refused, which v43's
+    // comment records the measurement of), and without them the rung dies on every paired
+    // database and on none a worktree can build. `capture::install` puts them back right after
+    // this function, as it did for v43 and v49. **`deck_tokens`' three stay**: the rung dropped
+    // them too while it cleared the picks itself, uncaptured, and it writes nothing to that
+    // table now.
+    //
+    // **`token_mode` carries a `CHECK` of three words, and PR 2 draws two of them.** `collection`
+    // is PR 3's, in the constraint now so that PR 3 adds a behaviour and a button and no rung. A
+    // `CHECK` on a synced column is the hazard `sticky_notes.color` refuses one for, but these
+    // three words are this app's model rather than a palette that grows — `deck_tokens.state`
+    // has carried one since v37 — and a fourth would be a rung, which moves every device together.
+    // **Every deck starts on `managed`, the ones whose stack was off included** (the reader's
+    // answer), so every deck that makes tokens shows its pile after the upgrade: `token_stack` is
+    // dropped rather than read, because neither of its values names a mode to keep.
+    //
+    // It owes [`tests::UNDO_V52`] for [`tests::UNDO_V37`]'s loud reason — a bare `CREATE TABLE`
+    // and a non-idempotent `ADD COLUMN` — and, like [`tests::UNDO_V43`], a column to put back.
+    if v < 52 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "-- Off before the drop, v43's move: `capture::install` puts all three back right
+             -- after this function.
+             DROP TRIGGER IF EXISTS sync_ins_decks;
+             DROP TRIGGER IF EXISTS sync_upd_decks;
+             DROP TRIGGER IF EXISTS sync_del_decks;
+
+             CREATE TABLE deck_token_printings (
+                 id INTEGER PRIMARY KEY,
+                 deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                 -- Which list the entry is in. Theory and live never share one.
+                 variant TEXT NOT NULL CHECK (variant IN ('live','theory')),
+                 -- The token this printing is of. A stored fact for grouping and for an
+                 -- orphaned printing, not a term of the grain: a printing has one oracle.
+                 oracle_id TEXT NOT NULL,
+                 -- Always a concrete printing. Soft, like every other card reference in a
+                 -- user table. A token with no entry in a list draws an implicit one, and
+                 -- that is the absence of a row rather than a NULL here.
+                 card_id TEXT NOT NULL,
+                 -- NOT NULL on purpose: a UNIQUE index treats every NULL as distinct, so a
+                 -- nullable finish would let one list hold the same printing twice.
+                 finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                 -- Zero is a real state: a token's last entry stepped down stays at 0, so
+                 -- the implicit default does not reappear under the reader.
+                 quantity INTEGER NOT NULL CHECK (quantity >= 0),
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+              , sync_uid TEXT);
+             CREATE UNIQUE INDEX idx_deck_token_printings_grain
+                 ON deck_token_printings (deck_id, variant, card_id, finish);
+             CREATE UNIQUE INDEX idx_deck_token_printings_uid ON deck_token_printings (sync_uid);
+
+             ALTER TABLE decks ADD COLUMN token_mode TEXT NOT NULL DEFAULT 'managed' CHECK (token_mode IN ('managed','collection','hidden'));
+
+             ALTER TABLE decks DROP COLUMN token_stack;",
+        )?;
+        // Literal `52`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA main.user_version = 52;")?;
         tx.commit()?;
     }
 
@@ -8113,7 +8330,15 @@ pub(crate) mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(stray, 30, "the user file holds the thirty and nothing else");
+        // The registry's own count rather than a literal: this read `30` until v52 added a
+        // table, and a number the registry already answers is one more line every rung has to
+        // find. Every entry is checked on its side above, so equal counts mean nothing else.
+        let registered = TABLES.iter().filter(|(_, s)| *s == Side::User).count();
+        assert_eq!(
+            usize::try_from(stray).unwrap(),
+            registered,
+            "the user file holds the registry's user tables and nothing else"
+        );
     }
 
     /// FTS5 resolves `content='cards'` in **its own schema**, so an index built in the wrong
@@ -8292,8 +8517,8 @@ pub(crate) mod tests {
 
         assert_eq!(
             want.len(),
-            81,
-            "thirty tables, forty-eight indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three was eighty, and v48's `idx_wishlist_folders_managed` makes it forty-eight and eighty-one. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
+            84,
+            "thirty-one tables, fifty indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three was eighty, and v48's `idx_wishlist_folders_managed` makes it forty-eight and eighty-one. v52's `deck_token_printings` is a table and two indexes, and no autoindex for the `INTEGER PRIMARY KEY` reason — thirty-one, fifty and eighty-four, counted off the literal rather than added. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -8366,8 +8591,11 @@ pub(crate) mod tests {
 
     /// The user side, spelled out. A table moving between the two files is a data migration,
     /// never a diff nobody noticed.
+    ///
+    /// (Named `the_user_side_is_the_thirty_tables_no_feed_can_rebuild` until v52 made it
+    /// thirty-one. The list below is the count; the name no longer carries a second copy of it.)
     #[test]
-    fn the_user_side_is_the_thirty_tables_no_feed_can_rebuild() {
+    fn the_user_side_is_every_table_no_feed_can_rebuild() {
         let mut user: Vec<&str> = TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
@@ -8390,6 +8618,7 @@ pub(crate) mod tests {
                 "deck_labels",
                 "deck_note_cards",
                 "deck_notes",
+                "deck_token_printings",
                 "deck_tokens",
                 "deck_undo",
                 "decks",
@@ -8518,7 +8747,34 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v51's token rail index — the newest rewind on the user ladder, directly above
+    /// v52's token entries and mode — the newest rewind on the user ladder, directly above
+    /// [`UNDO_V51`], and the third after [`UNDO_V43`] and [`UNDO_V49`] that has to *put a column
+    /// back*: v47's `token_stack`, so that [`UNDO_V47`] beneath it finds the column it drops.
+    ///
+    /// Owed three times over, [`UNDO_V43`]'s count. The rung's `CREATE TABLE` is bare, so a
+    /// fixture that kept `deck_token_printings` dies at `table already exists` ([`UNDO_V13`]'s
+    /// loud reason); its `ADD COLUMN token_mode` is not idempotent, so one that kept the column
+    /// dies at `duplicate column name`; and its `DROP COLUMN token_stack` dies at `no such
+    /// column` on a fixture that did not get the column back. None of the three is a failure a
+    /// real upgrade can produce, and each takes every unrelated test in its chain with it.
+    ///
+    /// **`INTEGER NOT NULL DEFAULT 0`, exactly v47's words**, so the rewind lands on v51's shape
+    /// rather than near it. The column comes back at the *end* of `decks`, where a real v51 file
+    /// carries it before `managed_wishlist_mode`; the climb drops it again, so the stored text a
+    /// fixture climbs to is still byte-for-byte [`USER_SCHEMA_SQL`] — [`user_file_at_42`]'s note
+    /// about `notes`, one column along. Nothing here may assert a `decks` column *order*.
+    ///
+    /// **The entries are dropped rather than folded back into `deck_tokens`**: no fixture seeds a
+    /// token before it rewinds, and one that did would be asserting about a v51 file no upgrade
+    /// could have produced. The two indexes are named for [`UNDO_V46`]'s reason, although
+    /// `DROP TABLE` takes them.
+    const UNDO_V52: &str = "DROP INDEX IF EXISTS idx_deck_token_printings_uid;
+         DROP INDEX IF EXISTS idx_deck_token_printings_grain;
+         DROP TABLE IF EXISTS deck_token_printings;
+         ALTER TABLE decks DROP COLUMN token_mode;
+         ALTER TABLE decks ADD COLUMN token_stack INTEGER NOT NULL DEFAULT 0;";
+
+    /// v51's token rail index — the rewind directly under [`UNDO_V52`] and directly above
     /// [`UNDO_V50`]. It was written as `UNDO_V50` and renumbered with its rung, because `main`
     /// shipped the price-holdings v50 first.
     ///
@@ -8997,7 +9253,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -9029,7 +9285,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -9056,7 +9312,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -9083,7 +9339,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -9107,7 +9363,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -9128,7 +9384,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -9149,7 +9405,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
         ))
         .unwrap();
         conn
@@ -9170,7 +9426,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
         ))
         .unwrap();
         conn
@@ -9201,7 +9457,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
         ))
         .unwrap();
         conn
@@ -9222,7 +9478,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
         ))
         .unwrap();
         conn
@@ -9237,7 +9493,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
         ))
         .unwrap();
         conn
@@ -9249,7 +9505,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
         ))
         .unwrap();
         conn
@@ -9258,14 +9514,17 @@ pub(crate) mod tests {
     /// A user file at 49 — the shape every machine carries the day before a price snapshot
     /// recorded how many copies it was of, and the only population the v50 rung is *for*.
     ///
-    /// Head rewound past **both** rungs above it, newest first — [`UNDO_V51`] and then
-    /// [`UNDO_V50`]. Without the first, the file would keep `decks.token_rail_index` and the v51
-    /// rung would die at `duplicate column name` on the climb this fixture exists for.
+    /// Head rewound past **all three** rungs above it, newest first — [`UNDO_V52`], [`UNDO_V51`]
+    /// and then [`UNDO_V50`]. It read "both" until v52 landed, which is the prediction every
+    /// fixture doc on this ladder makes coming true once more. Without [`UNDO_V51`] the file
+    /// would keep `decks.token_rail_index` and the v51 rung would die at `duplicate column name`
+    /// on the climb this fixture exists for; without [`UNDO_V52`], v52's at `table
+    /// deck_token_printings already exists`.
     fn user_file_at_49() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
         ))
         .unwrap();
         conn
@@ -9274,13 +9533,30 @@ pub(crate) mod tests {
     /// A user file at 50 — the shape every machine carries the day before the token pile could
     /// be moved in the rail, and the only population the v51 rung is *for*.
     ///
-    /// Head rewound past v51 alone, so it carries v50's holdings table exactly as a real v50 file
-    /// does. (Written as `user_file_at_49`, before the rung was renumbered to v51; renamed with
-    /// it, which also keeps it clear of the v50 rung's own `user_file_at_49` above.)
+    /// Head rewound past v52 and v51, newest first, so it carries v50's holdings table exactly as
+    /// a real v50 file does. (Written as `user_file_at_49`, before the rung was renumbered to v51;
+    /// renamed with it, which also keeps it clear of the v50 rung's own `user_file_at_49` above.)
     fn user_file_at_50() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V51} PRAGMA main.user_version = 50;"))
+        conn.execute_batch(&format!(
+            "{UNDO_V52} {UNDO_V51} PRAGMA main.user_version = 50;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// A user file at 51 — the shape every machine carries the day before a token's printings
+    /// became entries, and the only population the v52 rung is *for*.
+    ///
+    /// Head rewound past v52 alone. What makes a test built on it a real upgrade rather than a
+    /// fresh install is what the test seeds afterwards: a `deck_tokens` row carrying a picked
+    /// `card_id`, which nothing at head writes any more, and a `decks.token_stack` that head
+    /// does not have.
+    fn user_file_at_51() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V52} PRAGMA main.user_version = 51;"))
             .unwrap();
         conn
     }
@@ -9329,7 +9605,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -9486,7 +9762,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -9543,7 +9819,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -9921,7 +10197,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 51);
+        assert_eq!(USER_SCHEMA_VERSION, 52);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -9932,7 +10208,7 @@ pub(crate) mod tests {
         assert!(!SYNCED_TABLES.contains(&"sync_devices"));
         assert!(!SYNCED_TABLES.contains(&"sync_identity"));
         assert!(!SYNCED_TABLES.contains(&"sync_group"));
-        assert_eq!(SYNCED_TABLES.len(), 16);
+        assert_eq!(SYNCED_TABLES.len(), 17);
     }
 
     /// The table carries no key material. A column added here later that did would be a key
@@ -10901,7 +11177,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -10988,7 +11264,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 51);
+        assert_eq!(version, 52);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -11299,7 +11575,7 @@ pub(crate) mod tests {
         // edited only the four this comment then named and left v43's red. **Do not trust this
         // list.** Bump what you can find, run `cargo test --lib schema::tests`, and every one
         // you missed names itself in a `left: <head>, right: <old>` panic.
-        assert_eq!(version, 51);
+        assert_eq!(version, 52);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -11321,7 +11597,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 51);
+        assert_eq!(version, 52);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -11762,7 +12038,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v41 — `migrate_user` climbs the whole ladder. One of the five the v36
         // block's ⚠️ warns about; this one is why that warning exists.
-        assert_eq!(v, 51);
+        assert_eq!(v, 52);
         conn.execute(
             "INSERT INTO collection_shares
                  (id, folder_uid, title, owner_name, url, fields, state, updated_at)
@@ -11998,7 +12274,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v43 — `migrate_user` climbs the whole ladder. The fifth of the five the
         // v36 block's ⚠️ warns about, and the one v46 missed.
-        assert_eq!(v, 51);
+        assert_eq!(v, 52);
 
         assert_eq!(
             has_column(&conn, "decks", "notes"),
@@ -12433,12 +12709,19 @@ pub(crate) mod tests {
         );
     }
 
-    /// **v47's column, and the deck that already existed when the rung ran.** Seeded before the
-    /// climb, v42's argument: a row inserted at head takes its default from the frozen
-    /// [`USER_SCHEMA_SQL`] and would pass whatever the rung wrote. `DEFAULT 0` is the rung —
-    /// the pile is new, so an existing deck must not start drawing one on the upgrade.
+    /// **v47's column, and the deck that already existed when the rung ran — climbed now past
+    /// the rung that took the column away.** Seeded before the climb, v42's argument: a row
+    /// inserted at head takes its default from the frozen [`USER_SCHEMA_SQL`] and would pass
+    /// whatever the rungs wrote.
+    ///
+    /// It asserted v47's `DEFAULT 0` until v52 dropped `token_stack` for `token_mode`, and a
+    /// climb from 46 now runs both rungs in one pass, so the column this read is gone at head. What
+    /// it still proves is the part that could break: v47's `ADD COLUMN` and v52's `DROP COLUMN`
+    /// both succeed over a deck that predates them, and the deck lands on `managed` — v52's answer
+    /// for every deck, the ones v47 left without a pile included. (Named
+    /// `v47_leaves_every_existing_deck_without_a_token_pile` until then.)
     #[test]
-    fn v47_leaves_every_existing_deck_without_a_token_pile() {
+    fn a_deck_from_before_v47_climbs_past_the_token_pile_to_the_managed_mode() {
         let conn = user_file_at_46();
         conn.execute(
             "INSERT INTO decks (id, name, format_key, stats_open, created_at, updated_at)
@@ -12452,21 +12735,21 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 51);
-        assert_eq!(has_column(&conn, "decks", "token_stack"), 1);
-        let (stack, stats): (i64, i64) = conn
+        assert_eq!(version, 52);
+        assert_eq!(has_column(&conn, "decks", "token_stack"), 0, "v52 took it");
+        let (mode, stats): (String, i64) = conn
             .query_row(
-                "SELECT token_stack, stats_open FROM decks WHERE id = 1",
+                "SELECT token_mode, stats_open FROM decks WHERE id = 1",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
         assert_eq!(
-            stack, 0,
-            "an existing deck draws no token pile after the rung"
+            mode, "managed",
+            "an existing deck starts on the managed mode"
         );
         // `stats_open` is the neighbour defaulting `1`, so an ALTER that landed on the wrong
-        // column moves exactly one of these two numbers.
+        // column moves exactly one of these two values.
         assert_eq!(stats, 1, "the column beside it is untouched");
 
         // Twice is the same as once: the stamp is the only thing that makes a second launch
@@ -12528,8 +12811,9 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        // Head, not v50 — `migrate_user` climbs the whole ladder, and v51 sits above this rung.
-        assert_eq!(version, 51);
+        // Head, not v50 — `migrate_user` climbs the whole ladder, and v51 and v52 sit above this
+        // rung.
+        assert_eq!(version, 52);
         assert_eq!(has_column(&conn, "price_snapshots", "copies"), 1);
         assert_eq!(price_is_required(&conn), 0, "an unpriced holding is a row");
         let (rows, null_copies, price_sum): (i64, i64, f64) = conn
@@ -12681,7 +12965,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 51);
+        assert_eq!(version, 52);
         assert_eq!(has_column(&conn, "decks", "token_rail_index"), 1);
         let (index, stats): (i64, i64) = conn
             .query_row(
@@ -12721,6 +13005,506 @@ pub(crate) mod tests {
             1,
             "and v49's"
         );
+    }
+
+    /// **v52 over a real v51 file holding the three kinds of override a reader can have, and the
+    /// launch conversion after it.** Seeded before the climb, v47's argument: a row inserted at
+    /// head could not hold a `token_stack` at all, so a test that started there would be
+    /// asserting about rows the rung never met.
+    ///
+    /// Deck A draws its pile (`token_stack = 1`) and picked an art for `o1` at 3 copies; deck B
+    /// draws none and stepped `o2` to 2 without picking an art. **The rung converts nothing**:
+    /// after the climb every override is as it was and the entry table is empty, because an entry
+    /// derived from a pick has to be announced to peers that never derived it, and no rung runs
+    /// with capture live. Both decks are on `managed`, B included — the reader's answer — and
+    /// `token_stack` is gone.
+    ///
+    /// Then [`crate::deck_tokens::convert_legacy_picks`], a later step of `prepare_database`,
+    /// makes A's pick one entry **per list** — both lists drew the shared pick, so both keep
+    /// drawing it — named after the override it came from, and the override is legacy. B's row is
+    /// untouched, because a quantity alone is the implicit entry's count and no printing may be
+    /// invented for it.
+    #[test]
+    fn v52_swaps_the_stack_for_a_mode_and_leaves_the_picks_to_the_launch_conversion() {
+        let conn = user_file_at_51();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, token_stack, created_at, updated_at)
+                 VALUES (1, 'A', 'modern', 1, 0, 0), (2, 'B', 'modern', 0, 0, 0);
+             INSERT INTO deck_tokens
+                 (deck_id, oracle_id, card_id, quantity, state, created_at, updated_at, sync_uid)
+                 VALUES (1, 'o1', 'p1', 3, 'auto', 5, 5, 'u-a'),
+                        (2, 'o2', NULL, 2, 'auto', 6, 6, 'u-b');",
+        )
+        .unwrap();
+        type Override = (i64, Option<String>, Option<i64>, String);
+        let overrides = |conn: &Connection| -> Vec<Override> {
+            conn.prepare(
+                "SELECT deck_id, card_id, quantity, state FROM deck_tokens ORDER BY deck_id",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+        };
+        let count_entries = |conn: &Connection| -> i64 {
+            conn.query_row("SELECT count(*) FROM deck_token_printings", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        let before = overrides(&conn);
+
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 52);
+        assert_eq!(
+            overrides(&conn),
+            before,
+            "the rung touches no override: converting a pick is the launch's, where it is captured"
+        );
+        assert_eq!(count_entries(&conn), 0, "and the entry table is born empty");
+        let modes: Vec<String> = conn
+            .prepare("SELECT token_mode FROM decks ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            modes,
+            ["managed", "managed"],
+            "every deck starts on managed, the one whose pile was off included"
+        );
+        assert_eq!(has_column(&conn, "decks", "token_stack"), 0);
+
+        crate::deck_tokens::convert_legacy_picks(&conn).unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT deck_id, variant, oracle_id, card_id, finish, quantity, sync_uid
+                   FROM deck_token_printings ORDER BY deck_id, variant",
+            )
+            .unwrap();
+        type Entry = (i64, String, String, String, String, i64, Option<String>);
+        let entries: Vec<Entry> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let entry = |variant: &str, uid: &str| -> Entry {
+            (
+                1,
+                variant.to_owned(),
+                "o1".to_owned(),
+                "p1".to_owned(),
+                "nonfoil".to_owned(),
+                3,
+                Some(uid.to_owned()),
+            )
+        };
+        assert_eq!(
+            entries,
+            [entry("live", "u-a-live"), entry("theory", "u-a-theory")],
+            "one entry per list for the picked art, at its quantity, `nonfoil` until the launch \
+             repair, and named after the override so every device names it alike — and nothing \
+             for the quantity-only override"
+        );
+        assert_eq!(
+            overrides(&conn),
+            [
+                (1, None, None, "auto".to_owned()),
+                (2, None, Some(2), "auto".to_owned()),
+            ],
+            "the moved override is legacy and keeps its state; the quantity-only one is untouched"
+        );
+
+        // Twice is the same as once: a second launch finds the version stamped and the picks
+        // cleared, so it moves nothing a second time — which the `DROP COLUMN` would otherwise
+        // refuse loudly and the conversion's `INSERT` would otherwise do quietly.
+        migrate_user(&conn).unwrap();
+        crate::deck_tokens::convert_legacy_picks(&conn).unwrap();
+        assert_eq!(count_entries(&conn), 2, "the second launch moved nothing");
+    }
+
+    /// The fixture is a real v51 file and not head wearing a v51 label: no entry table, the
+    /// stack and not the mode on `decks`, and v51's own `token_rail_index` still there — so a
+    /// chain that also ran [`UNDO_V51`] is caught too.
+    #[test]
+    fn the_v51_fixture_carries_none_of_v52() {
+        let conn = user_file_at_51();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 51);
+        let table: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                  WHERE type = 'table' AND name = 'deck_token_printings'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(table, 0);
+        assert_eq!(has_column(&conn, "decks", "token_mode"), 0);
+        assert_eq!(
+            has_column(&conn, "decks", "token_stack"),
+            1,
+            "the rewind put v47's column back"
+        );
+        assert_eq!(
+            has_column(&conn, "decks", "token_rail_index"),
+            1,
+            "a v51 file still has v51's own column"
+        );
+    }
+
+    /// **The rung on a paired database: it survives the capture triggers already in the file,
+    /// and it writes nothing a trigger could send.** A fixture built from [`USER_SCHEMA_SQL`]
+    /// carries no trigger at all — `capture::install` runs after `migrate_user`, in
+    /// `prepare_database` — so every other test here climbs a file no paired device has. This one
+    /// plants two under the names `capture::install` gives them.
+    ///
+    /// `sync_upd_decks` reads `NEW.token_stack` the way the real one does, and SQLite refuses
+    /// `DROP COLUMN` on a column a trigger reads: without the rung's trigger drop the climb
+    /// fails. `sync_upd_deck_tokens` records whether it fired. **The rung writes no `deck_tokens`
+    /// row since the conversion moved to the launch**, so it no longer drops that table's
+    /// triggers: the stand-in survives the climb and never fires, and the pick is still on the row
+    /// for `deck_tokens::convert_legacy_picks` to convert — captured — later in the same launch.
+    #[test]
+    fn the_v52_rung_survives_a_paired_database_and_writes_nothing_a_trigger_could_send() {
+        let conn = user_file_at_51();
+        conn.execute_batch(
+            "CREATE TABLE fired (tbl TEXT);
+             CREATE TRIGGER sync_upd_decks AFTER UPDATE OF token_stack ON decks
+             WHEN NEW.token_stack IS NOT OLD.token_stack
+             BEGIN INSERT INTO fired VALUES ('decks'); END;
+             CREATE TRIGGER sync_upd_deck_tokens AFTER UPDATE ON deck_tokens
+             BEGIN INSERT INTO fired VALUES ('deck_tokens'); END;
+             INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'A', 'modern', 0, 0);
+             INSERT INTO deck_tokens
+                 (deck_id, oracle_id, card_id, quantity, created_at, updated_at, sync_uid)
+                 VALUES (1, 'o1', 'p1', 3, 0, 0, 'u-a');",
+        )
+        .unwrap();
+
+        migrate_user(&conn).expect("the rung must survive the triggers a paired file carries");
+
+        let fired: i64 = conn
+            .query_row("SELECT count(*) FROM fired", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fired, 0, "the rung's own writes reached a capture trigger");
+        let pick: Option<String> = conn
+            .query_row("SELECT card_id FROM deck_tokens", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            pick.as_deref(),
+            Some("p1"),
+            "the pick is left for the launch conversion"
+        );
+        let trigger = |name: &str| -> i64 {
+            conn.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            trigger("sync_upd_decks"),
+            0,
+            "`decks`' comes off for the drop, and `capture::install` puts the current set back"
+        );
+        assert_eq!(
+            trigger("sync_upd_deck_tokens"),
+            1,
+            "`deck_tokens`' stays: the rung writes nothing there any more"
+        );
+    }
+
+    /// **v52 adds no word to `deck_audit.kind`, and the `CHECK` at head is what says so.** A
+    /// token write is a `deck` row with `field: "token"` in its payload — the deck notes'
+    /// precedent — because `deck_audit` syncs: a tenth word would be refused by the `CHECK` on
+    /// every paired device still on v51, which defers the op — and, while the client advances its
+    /// cursor past a deferral, drops it and the sender's later ops in that page for good
+    /// (`sync_engine::apply`'s module doc). [`AUDIT_KINDS`] is spelled out here rather than
+    /// counted, so a rung that widened it would have to edit this line to pass.
+    #[test]
+    fn v52_files_token_history_under_deck_and_adds_no_audit_kind() {
+        assert_eq!(
+            AUDIT_KINDS,
+            ["add", "remove", "quantity", "move", "swap", "label", "category", "folder", "deck"]
+        );
+        let conn = memory_pair();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'A', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let audit = |kind: &str| {
+            conn.execute(
+                "INSERT INTO deck_audit (deck_id, at, kind, payload) VALUES (1, 0, ?1, ?2)",
+                params![kind, r#"{"field":"token","action":"add"}"#],
+            )
+        };
+        audit("deck").expect("a token write is a `deck` row with `field: \"token\"`");
+        assert!(
+            audit("token").is_err(),
+            "`token` is no kind: a v51 peer's CHECK would refuse it and stall the stream"
+        );
+    }
+
+    /// **The entry table's own fences, at head.** The grain folds one printing in one finish in
+    /// one list to one row; a second finish, or the other list, is a row of its own; the finish
+    /// is one of the collection's three words and never NULL — a NULL would slip past the UNIQUE
+    /// index as a value distinct from every other — and a quantity may be zero but not below it.
+    /// And an entry leaves with its deck, which is the `CASCADE` the table declares.
+    #[test]
+    fn the_entry_table_holds_its_grain_its_words_and_its_deck() {
+        let conn = memory_pair();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'A', 'modern', 0, 0);",
+        )
+        .unwrap();
+        let put = |variant: &str, finish: Option<&str>, quantity: i64| {
+            conn.execute(
+                "INSERT INTO deck_token_printings
+                     (deck_id, variant, oracle_id, card_id, finish, quantity, created_at,
+                      updated_at)
+                 VALUES (1, ?1, 'o1', 'p1', ?2, ?3, 0, 0)",
+                params![variant, finish, quantity],
+            )
+        };
+        put("live", Some("nonfoil"), 1).unwrap();
+        assert!(
+            put("live", Some("nonfoil"), 2).is_err(),
+            "the grain must refuse a second row for one printing, finish and list"
+        );
+        put("live", Some("foil"), 1).expect("another finish is another entry");
+        put("theory", Some("nonfoil"), 1).expect("the other list is another entry");
+        put("live", Some("etched"), 0).expect("zero is a real state");
+        assert!(put("live", None, 1).is_err(), "a finish is never NULL");
+        // Each refusal below is on a grain nothing holds yet, so the constraint it names is the
+        // only one that can be refusing it.
+        assert!(put("live", Some("gilded"), 1).is_err(), "nor a fourth word");
+        assert!(
+            put("theory", Some("foil"), -1).is_err(),
+            "nor a count below zero"
+        );
+        assert!(
+            put("sideboard", Some("foil"), 1).is_err(),
+            "two lists and no third"
+        );
+
+        conn.execute("DELETE FROM decks WHERE id = 1", []).unwrap();
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM deck_token_printings", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(left, 0, "an entry leaves with the deck that holds it");
+    }
+
+    /// **The climb and the launch conversion are total over every override a v51 file can hold,
+    /// not only the ones a command would write.** `deck_tokens.quantity` has no `CHECK` — a
+    /// synced field, so a peer or an old build can have put any integer there — while the entry
+    /// table refuses a count below zero; and `deck_tokens`' grain is `(deck_id, oracle_id)`, so
+    /// two tokens of one deck can have picked **one printing** (a double-faced token carries two
+    /// tokens on one card), which is a single entry on [`DECK_TOKEN_PRINTING_GRAIN`]. Either
+    /// would fail an unguarded `INSERT`: in the rung, where the conversion used to run, that
+    /// stopped every launch of the reader's database for good; in the launch pass it would be a
+    /// conversion that never happens, logged at every launch.
+    ///
+    /// The rung leaves all three overrides as they were. The conversion floors the negative count
+    /// at 0, and skips the second pick of one printing rather than refusing it: the override
+    /// first in `oracle_id` order keeps the entry — every device orders one synced row set
+    /// alike, so each names the same winner and derives the same uid — and the other keeps its
+    /// **count** as its token's implicit one, losing only the art.
+    #[test]
+    fn the_climb_and_the_conversion_are_total_over_a_negative_count_and_a_shared_printing() {
+        let conn = user_file_at_51();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'A', 'modern', 0, 0);
+             INSERT INTO deck_tokens
+                 (deck_id, oracle_id, card_id, quantity, created_at, updated_at, sync_uid)
+                 VALUES (1, 'o-treasure', 'dfc', 4, 0, 0, 'u-treasure'),
+                        (1, 'o-food', 'dfc', 2, 0, 0, 'u-food'),
+                        (1, 'o-negative', 'p3', -2, 0, 0, 'u-negative');",
+        )
+        .unwrap();
+
+        migrate_user(&conn).expect("no override a v51 file can hold may stop the climb");
+        let untouched: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_tokens WHERE card_id IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(untouched, 3, "the climb leaves every pick where it was");
+        crate::deck_tokens::convert_legacy_picks(&conn)
+            .expect("no override a v51 file can hold may stop the conversion");
+
+        let entries: Vec<(String, String, String, i64, String)> = conn
+            .prepare(
+                "SELECT card_id, variant, oracle_id, quantity, sync_uid FROM deck_token_printings
+                  ORDER BY card_id, variant",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let entry = |card: &str, variant: &str, oracle: &str, quantity: i64, uid: &str| {
+            (
+                card.to_owned(),
+                variant.to_owned(),
+                oracle.to_owned(),
+                quantity,
+                uid.to_owned(),
+            )
+        };
+        assert_eq!(
+            entries,
+            [
+                entry("dfc", "live", "o-food", 2, "u-food-live"),
+                entry("dfc", "theory", "o-food", 2, "u-food-theory"),
+                entry("p3", "live", "o-negative", 0, "u-negative-live"),
+                entry("p3", "theory", "o-negative", 0, "u-negative-theory"),
+            ],
+            "the shared printing is one entry per list, owned by the first oracle; the negative \
+             count is floored at zero"
+        );
+
+        let overrides: Vec<(String, Option<String>, Option<i64>)> = conn
+            .prepare("SELECT oracle_id, card_id, quantity FROM deck_tokens ORDER BY oracle_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            overrides,
+            [
+                ("o-food".to_owned(), None, None),
+                ("o-negative".to_owned(), None, None),
+                ("o-treasure".to_owned(), None, Some(4)),
+            ],
+            "every art is legacy afterwards; the override that lost the printing keeps its count"
+        );
+    }
+
+    /// **An override with no `sync_uid` is named before its entries derive from it.** The
+    /// derived `<uid>-live` / `-theory` needs a uid to derive from, and a row written behind
+    /// `capture::suppressed` has none — the insert trigger that mints one is guarded off there —
+    /// while `NULL || '-live'` is NULL: the nameless row the derivation exists to prevent, since
+    /// the first edit to it on a paired device emits an op with no uid. So the pick takes the
+    /// insert trigger's own mint (32 lowercase hex) first, and its two entries are named after it
+    /// like any other pick's — two rows on the wire, one name to derive them from. (Until the fifth
+    /// review round each entry took a random uid of its own and the pick stayed nameless, which on
+    /// a paired device failed the whole pass at the pick's clear;
+    /// `deck_tokens::tests::a_nameless_pick_on_a_paired_device_is_named_and_stalls_no_peer` is that
+    /// half, on the paired fixture this unpaired file cannot be.)
+    #[test]
+    fn the_launch_conversion_names_a_pick_with_no_uid_before_deriving_from_it() {
+        let conn = user_file_at_51();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'A', 'modern', 0, 0);
+             INSERT INTO deck_tokens
+                 (deck_id, oracle_id, card_id, quantity, created_at, updated_at, sync_uid)
+                 VALUES (1, 'o1', 'p1', 3, 0, 0, NULL);",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+        crate::deck_tokens::convert_legacy_picks(&conn).unwrap();
+
+        let pick: String = conn
+            .query_row("SELECT sync_uid FROM deck_tokens", [], |r| r.get(0))
+            .expect("the pick is named before anything derives from it");
+        assert!(
+            pick.len() == 32
+                && pick
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "{pick:?} is not the mint's 32 lowercase hex"
+        );
+        let uids: Vec<Option<String>> = conn
+            .prepare("SELECT sync_uid FROM deck_token_printings ORDER BY variant")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            uids,
+            [Some(format!("{pick}-live")), Some(format!("{pick}-theory"))],
+            "one entry per list, each derived from the minted name — two rows on the wire"
+        );
+    }
+
+    /// **`decks.token_mode` refuses a fourth word in SQL, on a climbed file and a fresh one.**
+    /// `deck::valid_token_mode` is the fence a command meets and names the three words;
+    /// this `CHECK` is what holds the column against everything that does not go through a
+    /// command — an applied sync op above all, which is why the rung may carry it at all (see its
+    /// comment). `ADD COLUMN` does enforce a column `CHECK` (v19's `finish` is the precedent), and
+    /// the climbed file is here to prove the rung's copy, where [`memory_pair`] proves
+    /// [`USER_SCHEMA_SQL`]'s.
+    #[test]
+    fn the_token_mode_column_refuses_a_fourth_word() {
+        let climbed = user_file_at_51();
+        migrate_user(&climbed).unwrap();
+        for (label, conn) in [("climbed", climbed), ("fresh", memory_pair())] {
+            let insert = |id: i64, mode: &str| {
+                conn.execute(
+                    "INSERT INTO decks (id, name, format_key, token_mode, created_at, updated_at)
+                     VALUES (?1, 'A', 'modern', ?2, 0, 0)",
+                    params![id, mode],
+                )
+            };
+            for (id, mode) in [(1, "managed"), (2, "collection"), (3, "hidden")] {
+                insert(id, mode).unwrap_or_else(|e| panic!("{label}: {mode} refused: {e}"));
+            }
+            assert!(
+                insert(4, "shown").is_err(),
+                "{label}: an INSERT of a fourth word must be refused"
+            );
+            assert!(
+                conn.execute("UPDATE decks SET token_mode = 'shown' WHERE id = 1", [])
+                    .is_err(),
+                "{label}: so must an UPDATE to one"
+            );
+            let kept: String = conn
+                .query_row("SELECT token_mode FROM decks WHERE id = 1", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(
+                kept, "managed",
+                "{label}: and the refused write changed nothing"
+            );
+        }
     }
 
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
@@ -12813,7 +13597,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -13010,7 +13794,9 @@ pub(crate) mod tests {
     /// upsert); the three above are held here, and [`DECK_TOKEN_GRAIN`] — v37's — is the one
     /// held both ways. **The seventh is v43's**, and it is on the first list rather than the
     /// second because [`crate::deck_notes`] attaches with `INSERT OR IGNORE`: the grain is what
-    /// makes the second attach a no-op, and a no-op names no conflict target.
+    /// makes the second attach a no-op, and a no-op names no conflict target. **The eighth is
+    /// v52's [`DECK_TOKEN_PRINTING_GRAIN`]**, held both ways for [`DECK_TOKEN_GRAIN`]'s reason —
+    /// so that sentence's "the one" is two now.
     ///
     /// Read through `PRAGMA index_info` rather than by comparing DDL text, which is the whole
     /// point: it answers the *parsed* column list, so the literal in the migration is free to
@@ -13041,6 +13827,11 @@ pub(crate) mod tests {
             // `PRAGMA index_info` answers its columns by name and this check is available. A
             // constant that can be fenced both ways is fenced both ways.
             ("idx_deck_tokens_grain", DECK_TOKEN_GRAIN),
+            // **[`DECK_TOKEN_PRINTING_GRAIN`] is fenced both ways too** (user schema v52), for
+            // the line above's reason: a NOT NULL `finish` means no `coalesce`, so the index
+            // answers its four columns by name here, and the upserts in `deck_tokens` and
+            // `deck_undo` name it as their conflict target.
+            ("idx_deck_token_printings_grain", DECK_TOKEN_PRINTING_GRAIN),
             // **[`DECK_NOTE_CARD_GRAIN`] is here and can be nowhere else**, which is the
             // opposite of the line above: it carries no `coalesce`, so this check is available
             // — and [`crate::deck_notes`] attaches with `INSERT OR IGNORE` rather than an

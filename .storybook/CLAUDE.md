@@ -69,8 +69,10 @@ deliberately**: no screenshots are stored.
   impossible row up on top of `starter` rather than asking the seed to carry it — with the same row
   at one copy asserted beside it, so a fixture the reach never saw cannot pass as a fence working.
   **`deck_tokens`' `quantity: 0` is a different table and a real stored value** — a reader stepping
-  a derived token to none — and is left alone. **The rule it is an instance of: a shared seed
-  states what the app can produce, and nothing else.**
+  a derived token to none before user schema v52, kept as the legacy count an untouched token's
+  implicit entry still reads; since v52 the same press leaves a token's last
+  `deck_token_printings` entry at 0 — and both are left alone. **The rule it is an instance of: a
+  shared seed states what the app can produce, and nothing else.**
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
   The seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`/

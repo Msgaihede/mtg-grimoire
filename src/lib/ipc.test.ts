@@ -883,10 +883,11 @@ describe("ipc argument names match the Rust command signatures", () => {
     // column, and its absence is fenced by this literal and nothing else.
     await ipc.deckUpdate(4, { notesOpen: true });
     expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { notesOpen: true } });
-    // User schema v47's view setting rides the same patch, and a misspelt key is the same quiet
-    // failure: a Deck settings switch that never draws the token pile.
-    await ipc.deckUpdate(4, { tokenStack: true });
-    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { tokenStack: true } });
+    // User schema v52's token mode rides the same patch — it replaced v47's `tokenStack` switch
+    // in the same rung — and a misspelt key is the same quiet failure: a mode control that never
+    // takes the pile away. The word travels as the word; `deck.rs` refuses one it does not know.
+    await ipc.deckUpdate(4, { tokenMode: "hidden" });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { tokenMode: "hidden" } });
     // User schema v51's rail slot, and the one number on this patch whose sentinel is **not**
     // an absence: `-1` is *last*, a value the reader writes by dragging the pile to the end, so
     // it has to travel as `-1` rather than be dropped the way an absent key reads as "leave it".
@@ -1808,27 +1809,30 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The four token commands, and the one argument in this whole file that is **renamed on the
-   * wire**.
+   * **The six token commands of user schema v52** — the read, one row per entry, and the five
+   * writes that replaced `deck_token_set`, `deck_token_clear` and `deck_token_add`.
    *
-   * `deck_token_set`'s state word cannot be spelled `state` in Rust: `state` is already the
-   * managed `tauri::State` every command takes, so the parameter is `token_state` and the key
-   * the payload carries is `tokenState`. That rename lives in exactly one place — this
-   * wrapper — and nothing type-checks it: callers on this side pass `{ state }` because that
-   * is what the column is called, and a mirror that forwarded the word unchanged would hand
-   * `deck_token_set` a field it declares no parameter for. Tauri drops it, the command reads
-   * `None`, and a dismissal silently becomes "no change" with no error anywhere.
+   * Three separations carry this case, and none of them is visible to the compiler:
    *
-   * The other three are pinned for the ordinary reason. `deck_tokens` is a read scoped by
-   * `variant`, like every deck read beside it — and, since user schema v51's token pile, priced
-   * by `marketplace`, the name `card_printings` and `deck_get` already take it under. That one
-   * fails quietly: `card_printings` reads an absent marketplace as TCGplayer, so a wrapper that
-   * dropped or misspelt the key would quote dollars under a Card Kingdom heading and nothing
-   * would go red. `deck_token_clear` addresses the override by
-   * the grain (`deckId`, `oracleId`); `deck_token_add` addresses a **printing** (`deckId`,
-   * `cardId`) because a hand-added token is picked out of a printings grid and Rust resolves
-   * the oracle id from it. Those two ids are one word apart and interchangeable to a
-   * type checker, so the swap is a runtime no-op the suite would otherwise never see.
+   * - **`variant` on every write that names a list**, and on none that does not. A step, a swap,
+   *   an added printing and a reset write *this list's* entries — each list has its own since
+   *   v52 — while `deck_token_state` is the token's in both. A wrapper that dropped `variant`
+   *   is a refusal; one that sent it to `deck_token_state` would hand Tauri a field it drops.
+   * - **`oracleId` against `cardId`.** Four writes address the token; `deck_token_add_printing`
+   *   addresses a **printing** because the reader picks out of a printings grid and Rust resolves
+   *   the oracle id from it. One word apart and interchangeable to a type checker.
+   * - **`null` is a value.** An implicit entry travels as `entry: null` / `from: null`, and a
+   *   step to `0` as `quantity: 0` — both are the reader saying something, and both have to
+   *   travel as explicit keys, because Tauri fills parameters by name.
+   *
+   * `deck_tokens` is still priced by `marketplace` (user schema v51's token pile) and scoped by
+   * `variant`, and that one fails quietly: an absent marketplace reads as TCGplayer, so a
+   * misspelt key would quote dollars under a Card Kingdom heading with nothing red.
+   *
+   * **And the crate declares every key sent**, read out of `deck_tokens.rs` with the deck notes'
+   * `commandParams` — so the one place a spelling could part (`state`, which Rust's own managed
+   * `tauri::State` parameter already wears) goes red here rather than dropping a dismissal on
+   * the floor at runtime.
    */
   it("names the deck token command arguments the way Rust spells them", async () => {
     const row: DeckTokenRow = {
@@ -1847,12 +1851,18 @@ describe("ipc argument names match the Rust command signatures", () => {
       defaultCardId: "c-default",
       sources: [{ cardId: "d-1", name: "Smothering Tithe" }],
       derived: true,
-      cardId: null,
-      quantity: null,
-      state: null,
-      // The effective printing's chin and its price (user schema v51's token pile). Typed here
-      // for the four fields' reason above: `unitPrice` misspelt is an em dash on every token
-      // tile, which reads as "this marketplace does not quote it" rather than as a bug.
+      // The entry's own five (user schema v52): the token's effective state, and this entry's
+      // printing, finish, count and implicitness. A foil entry at 0 is two values a mirror is
+      // likeliest to lose — `finish` misspelt draws every foil tile plain, and `0` read through
+      // `||` would draw a zeroed entry at 1.
+      state: "auto",
+      cardId: "c-9",
+      finish: "foil",
+      quantity: 0,
+      implicit: false,
+      // The entry's chin and its price (user schema v51's token pile). Typed here for the four
+      // fields' reason above: `unitPrice` misspelt is an em dash on every token tile, which
+      // reads as "this marketplace does not quote it" rather than as a bug.
       setCode: "tafr",
       collectorNumber: "15",
       setName: "Adventures in the Forgotten Realms Tokens",
@@ -1875,44 +1885,109 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
 
     invoke.mockResolvedValue(undefined);
-    await ipc.deckTokenSet(7, "o-1", { cardId: "c-9", quantity: 4, state: "auto" });
-    expect(invoke).toHaveBeenLastCalledWith("deck_token_set", {
-      deckId: 7,
-      oracleId: "o-1",
-      cardId: "c-9",
-      quantity: 4,
-      tokenState: "auto",
-    });
 
-    // All five keys travel on every call, the `null`s included — Tauri fills parameters by
-    // name and an absent one is a refusal rather than a default, which is the same rule
-    // `deck_add_card`'s two category keys are written to.
-    await ipc.deckTokenSet(7, "o-1", { quantity: 2 });
-    expect(invoke).toHaveBeenLastCalledWith("deck_token_set", {
+    // The implicit entry is `null`, sent as a key — and the step to zero is `0`, not absent.
+    await ipc.deckTokenSetQuantity(7, "theory", "o-1", null, 0);
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_set_quantity", {
       deckId: 7,
+      variant: "theory",
       oracleId: "o-1",
-      cardId: null,
-      quantity: 2,
-      tokenState: null,
-    });
-
-    // A quantity of **zero** is a number the reader chose, not an absent one: `?? null` and
-    // never `|| null`, or stepping a token down to nothing would travel as "leave it alone"
-    // and the tile would spring back to what it was.
-    await ipc.deckTokenSet(7, "o-1", { quantity: 0, state: "hidden" });
-    expect(invoke).toHaveBeenLastCalledWith("deck_token_set", {
-      deckId: 7,
-      oracleId: "o-1",
-      cardId: null,
+      entry: null,
       quantity: 0,
-      tokenState: "hidden",
+    });
+    // A stored entry travels as its grain **and nothing else**: a wider object handed in (a
+    // view's `TokenEntryRef` carries `oracleId` and `implicit` too) is cut down to the two
+    // fields the command reads.
+    const wide = { cardId: "c-9", finish: "foil" as const, oracleId: "o-1", implicit: false };
+    await ipc.deckTokenSetQuantity(7, "live", "o-1", wide, 3);
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_set_quantity", {
+      deckId: 7,
+      variant: "live",
+      oracleId: "o-1",
+      entry: { cardId: "c-9", finish: "foil" },
+      quantity: 3,
     });
 
-    await ipc.deckTokenClear(7, "o-1");
-    expect(invoke).toHaveBeenLastCalledWith("deck_token_clear", { deckId: 7, oracleId: "o-1" });
+    await ipc.deckTokenSwap(7, "live", "o-1", null, { cardId: "c-2", finish: "nonfoil" });
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_swap", {
+      deckId: 7,
+      variant: "live",
+      oracleId: "o-1",
+      from: null,
+      to: { cardId: "c-2", finish: "nonfoil" },
+    });
+    await ipc.deckTokenSwap(7, "live", "o-1", wide, { cardId: "c-2", finish: "etched" });
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_swap", {
+      deckId: 7,
+      variant: "live",
+      oracleId: "o-1",
+      from: { cardId: "c-9", finish: "foil" },
+      to: { cardId: "c-2", finish: "etched" },
+    });
 
-    await ipc.deckTokenAdd(7, "c-9");
-    expect(invoke).toHaveBeenLastCalledWith("deck_token_add", { deckId: 7, cardId: "c-9" });
+    // A **printing**, not a token: the one write here with no `oracleId`.
+    await ipc.deckTokenAddPrinting(7, "theory", "c-9", "foil");
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_add_printing", {
+      deckId: 7,
+      variant: "theory",
+      cardId: "c-9",
+      finish: "foil",
+    });
+
+    // The token's own state, shared by both lists — the one write with no `variant`.
+    await ipc.deckTokenState(7, "o-1", "hidden");
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_state", {
+      deckId: 7,
+      oracleId: "o-1",
+      state: "hidden",
+    });
+
+    await ipc.deckTokenReset(7, "theory", "o-1");
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_reset", {
+      deckId: 7,
+      variant: "theory",
+      oracleId: "o-1",
+    });
+
+    // **And the crate declares every key sent** — the deck notes' fence, applied to this family.
+    // The expected list is read out of `ipc.ts` rather than written down here, so this cannot
+    // pass by agreeing with itself; containment rather than equality, because every command also
+    // declares the managed state it is never sent. Both length guards stop a parser that found
+    // nothing from reading as a pass.
+    expect(deckTokensRs.length).toBeGreaterThan(1_000);
+    for (const command of [
+      "deck_tokens",
+      "deck_token_set_quantity",
+      "deck_token_swap",
+      "deck_token_add_printing",
+      "deck_token_state",
+      "deck_token_reset",
+    ]) {
+      const sent = payloadKeys(ipcSource, command).map(snake);
+      const declared = commandParams(deckTokensRs, command);
+      expect(sent, `nothing parsed out of ipc.ts for \`${command}\``).not.toHaveLength(0);
+      expect(
+        declared,
+        `\`${command}\` is not declared \`pub async fn\` in deck_tokens.rs`,
+      ).not.toHaveLength(0);
+      for (const key of sent) {
+        expect(declared, `\`${command}\` is sent \`${key}\` and does not declare it`).toContain(
+          key,
+        );
+      }
+      // Registered, or the wrapper invokes a command nothing answers.
+      expect(desktopRs).toContain(`deck_tokens::${command},`);
+    }
+
+    // **The three it replaced are gone from both ends.** A wrapper left behind would compile and
+    // be answered by nothing; a command left registered would be a write no caller can reach,
+    // which is the shape `deck_token_add` had for its whole life (no caller, measured
+    // 2026-09-26).
+    for (const retired of ["deck_token_set", "deck_token_clear", "deck_token_add"]) {
+      expect(ipcSource).not.toContain(`"${retired}"`);
+      expect(deckTokensRs).not.toContain(`pub async fn ${retired}(`);
+      expect(desktopRs).not.toContain(`deck_tokens::${retired},`);
+    }
   });
 
   /**
@@ -1936,10 +2011,10 @@ describe("ipc argument names match the Rust command signatures", () => {
    *
    * **`title` and `body` against "leave it".** `deck_note_update` is the one patch-shaped write
    * in the family, so both keys travel on every call with `undefined` folded to `null` —
-   * `deck_token_set`'s rule three cases up, and with `??` rather than `||` for exactly its
-   * reason: `""` is a **title the reader deliberately cleared** and `||` would send it as "leave
-   * it alone". That is this command's `quantity: 0`, and it is the arm a reader hits every time
-   * they take a heading off a note.
+   * the rule the retired `deck_token_set` was written to, and with `??` rather than `||` for
+   * exactly its reason: `""` is a **title the reader deliberately cleared** and `||` would send
+   * it as "leave it alone". That is this command's `quantity: 0`, and it is the arm a reader hits
+   * every time they take a heading off a note.
    *
    * The two DTOs are annotated rather than left inferred, which is half the assertion: a field
    * this side spells differently is a compile error here and `undefined` everywhere else.
@@ -5055,6 +5130,12 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // not. `tokenRailIndex` is the case that added the row: a pile dragged to a new slot that
     // snapped back on the next read would look like a drop target that refused.
     ["DeckPatch", deckRs, "DeckPatch"],
+    // **A token entry's address** (user schema v52) — the one struct four token writes send
+    // nested inside their payload, as `entry`, `from` and `to`. The command-argument fence above
+    // checks the *outer* keys and cannot see inside one, and serde refuses a missing `cardId` or
+    // `finish` only at the moment a reader presses a stepper. Two fields, so the smallest row on
+    // this table, and the only one whose drift would refuse every token write at once.
+    ["TokenEntryKey", deckTokensRs, "TokenEntryKey"],
   ];
 
   it.each(plainMirrors)(

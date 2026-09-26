@@ -261,6 +261,8 @@ import type {
   TcgplayerIds,
   GlobalLabel,
   TheoryDiffRow,
+  TokenEntryKey,
+  TokenMode,
   TokenSource,
   TheorySlot,
   TransferImportMode,
@@ -288,8 +290,19 @@ import type {
 // The app's own `{X}` test, borrowed rather than re-spelled: the fake answers what Rust
 // answers, and a second reading of "does this cost name X" would let the workbench and the
 // window disagree about which cards are X while both looked right.
-import { parseFinishes } from "@/lib/finish";
+import { parseFinishes, type Finish } from "@/lib/finish";
 import { hasVariableCost } from "@/lib/mana";
+// The token view's own rules, borrowed rather than re-spelled: `DEFAULT_TOKEN_QUANTITY` is the
+// `1` in the resolver's `deck_tokens.quantity ?? 1`, `isTokenPrinting` is
+// `deck_tokens::is_token_printing`'s TypeScript twin — the layout, or a two-sided layout whose
+// type line says `Token`, which `deck_add_card`'s reroute, the add's refusal and the resolver
+// all ask — and `tokenSubtitle` is the line a token's history row names it by, which the crate
+// ports term for term (`deck_tokens::subtitle_of`).
+import {
+  DEFAULT_TOKEN_QUANTITY,
+  isTokenPrinting,
+  tokenSubtitle,
+} from "@/features/decks/deckTokens";
 import {
   DEFAULT_MARKETPLACE,
   FEED_MARKETPLACES,
@@ -680,25 +693,25 @@ export interface FakeDeck {
    */
   notesOpen?: boolean;
   /**
-   * `decks.token_stack` (user schema v47): whether the deck views draw the deck's tokens and
-   * emblems as a trailing **Tokens & Emblems** pile. `NOT NULL DEFAULT 0`, so {@link toDeckRow}
-   * resolves the absence to `false`.
+   * `decks.token_mode` (user schema v52): how the deck keeps its tokens — `managed`,
+   * `collection` or `hidden` — which replaced v47's `token_stack` switch in the same rung.
+   * `NOT NULL DEFAULT 'managed'`, so {@link toDeckRow} resolves the absence to `managed`: **every
+   * deck starts there**, including the ones whose stack was off before the upgrade.
    *
-   * **A setting rather than a disclosure**, though it rides the same `deck_update` with no
-   * history row: `duplicate_deck` carries it, {@link separateXGroup}'s footing, which the
-   * `deck_duplicate` spread already does.
+   * **An arrangement the reader chose, with a history row and an undo step** — `deck_update`
+   * records it as `tokenMode` and `deck_undo::DECK_FIELDS` names the column, where the switch it
+   * replaced wrote neither. `duplicate_deck` carries it, through the spread.
    */
-  tokenStack?: boolean;
+  tokenMode?: TokenMode;
   /**
    * `decks.token_rail_index` (user schema v51): where the Tokens & Emblems pile sits in the rail,
    * as the number of rail piles drawn above it. `NOT NULL DEFAULT -1`, and **`-1` is last** — so
    * {@link toDeckRow} resolves the absence to `-1`, never to `0`, which would put every seed's
    * pile at the top of the rail.
    *
-   * **An arrangement rather than a setting, and that is the one way it is not
-   * {@link tokenStack}**: `deck_update` records it as `tokenRail` when it moves, so it takes an
-   * undo step, where the switch above writes no history at all. `duplicate_deck` carries it like
-   * the switch, through the spread.
+   * **An arrangement, like {@link tokenMode} beside it**: `deck_update` records it as
+   * `tokenRail` when it moves, so it takes an undo step. `duplicate_deck` carries it through the
+   * spread.
    */
   tokenRailIndex?: number;
   /**
@@ -971,16 +984,26 @@ export interface FakeDeckState {
    * The deck's notes, and the cards they name — **both, because an attachment cascades away
    * with its note**: an undo that put the note back without them would restore half a row.
    *
-   * They are here where `deck_tokens` is not, and the split is the crate's own rather than this
-   * fake's taste. `deck_undo::Op` grew a fifth arm for notes and has none for tokens, so a note
-   * write really is reversible in the app and a token write really is not — which is why the
-   * three token writes are on {@link NO_UNDO_STEP} and the note writes are not. A snapshot that
-   * skipped these two lists would file a step for every note write that restored nothing: a
-   * Ctrl+Z that appears to do nothing while spending the reader's one press, which is a state
-   * the backend cannot produce.
+   * A snapshot that skipped these two lists would file a step for every note write that restored
+   * nothing: a Ctrl+Z that appears to do nothing while spending the reader's one press, which is
+   * a state the backend cannot produce.
    */
   notes: FakeDeckNote[];
   noteCards: FakeDeckNoteCard[];
+  /**
+   * The deck's token state rows and **both lists' entries** (user schema v52) — which is what
+   * `deck_undo::Op::Tokens` restores and deletes. **They joined the snapshot the day token writes
+   * became undoable**: until then `deck_undo::Op` had no arm for tokens, the three token writes
+   * were on {@link NO_UNDO_STEP}, and these two lists were deliberately absent. Now a token write
+   * files a step like every other deck write, and a snapshot without them would file one that
+   * restored nothing — the note case above, one table over.
+   *
+   * **They also carry a cut's token half back**: a card write whose reconcile removed a token's
+   * entries ({@link reconcileTokens}) is restored whole by the same snapshot, which is spec
+   * §4.2's "Ctrl+Z on the cut puts back the card and the reader's Treasure printings".
+   */
+  tokens: FakeDeckToken[];
+  tokenPrintings: FakeDeckTokenPrinting[];
 }
 
 /**
@@ -1067,39 +1090,66 @@ export interface FakeDeckCard {
 
 /**
  * One row of `deck_tokens` (user schema v37). Grain `(deckId, oracleId)`
- * (`schema::DECK_TOKEN_GRAIN`), and the reader's **deviation** — never the list itself.
+ * (`schema::DECK_TOKEN_GRAIN`) — **the token's own state since user schema v52**, shared by
+ * both lists: a dismissal is "not in this deck" and a hand-added token is the deck's, whichever
+ * list the reader is looking at. The printings and counts moved to {@link FakeDeckTokenPrinting}.
  *
  * **The list of tokens a deck needs is derived and stored nowhere**: Rust reads `all_parts` off
- * each distinct card in the deck's *active* categories on every open. So this table holds only
- * what the reader changed about one of them — which art, how many, or that they do not want to
- * see it — and a token nobody has touched has no row at all. That is why all three of
- * {@link cardId}, {@link quantity} and {@link state} can be absent together, and why
- * {@link writeHandlers.deck_token_set} *deletes* a row rather than writing one whose three
- * fields say nothing.
+ * each distinct card in the deck's *active* categories on every open. So a token nobody has
+ * dismissed or added by hand has no row here at all, and `state = 'auto'` with no legacy
+ * quantity is deleted rather than stored, because it would carry nothing.
  *
- * **`oracleId` and not a card id**, because the row has to survive the reader changing their
- * mind about the art — the art choice is one of the things it stores.
- *
- * **Not grained on `variant`**, unlike {@link FakeDeckCard}. The derived list is per-variant
- * because deck cards are; the override is not, so a Treasure art chosen for the live list is
- * the art the theory list draws too.
+ * **The crate's `card_id` column is not modelled.** v52 moved every stored printing into both
+ * lists' entries and cleared the column, and nothing reads or writes it since — so a fake
+ * carrying it would be carrying a value the app can no longer see.
  */
 export interface FakeDeckToken {
   id: number;
   deckId: number;
   oracleId: string;
-  /** The printing the reader picked. `null` is "whichever one the resolver names". */
-  cardId: string | null;
   /**
-   * How many copies the reader wants. `null` is "the default", which is 1 — stored **absent**
-   * rather than as a 1, so that changing the default later moves every untouched token.
+   * **Legacy**: the count a reader set before v52, read only for an **implicit** entry — the
+   * `quantity` in the resolver's `deck_tokens.quantity ?? 1` — and never written again. v52's
+   * rung cleared it wherever the row also named a printing (that pair became entries), so what
+   * survives is a count stored without a printing, which keeps meaning "the implicit entry's
+   * quantity".
    *
-   * **`0` is a value and not an absence**: a reader who zeroed a token while keeping the art
-   * they picked has said something, which is why every reader of this column uses `??`.
+   * **`0` is a value and not an absence**: a reader who zeroed a token has said something,
+   * which is why the resolver reads it with `??`.
    */
   quantity: number | null;
   /** `auto` | `hidden` | `manual`, closed by a CHECK on the column rather than by convention. */
   state: DeckTokenState;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * One row of `deck_token_printings` (user schema v52) — one **entry**: one printing, in one
+ * finish, of one token, in one list, with a quantity. Grain `(deckId, variant, cardId, finish)`
+ * (`schema::DECK_TOKEN_PRINTING_GRAIN`).
+ *
+ * **The oracle is a stored fact, not a grain term** — a printing belongs to one oracle card, so
+ * `oracleId` is what groups a token's entries (and what keeps one whose printing has left the
+ * corpus attached to its token). **`finish` is never `null`**: SQLite's unique index treats
+ * every `NULL` as distinct, so a nullable finish would let one list hold the same regular
+ * printing twice — which is why this spells the regular copy `nonfoil` where a deck card spells
+ * it `null`.
+ *
+ * **A token with no entries in a list draws one implicit entry** (spec §4.2 rule 1); the first
+ * write to it materialises it here (rule 2), and **a token's last entry in a list is kept at 0**
+ * rather than deleted (rule 3), so the implicit default never reappears under a reader who
+ * zeroed the only printing they had.
+ */
+export interface FakeDeckTokenPrinting {
+  id: number;
+  deckId: number;
+  variant: DeckVariant;
+  oracleId: string;
+  cardId: string;
+  finish: Finish;
+  /** `>= 0` by CHECK. `0` is the kept-at-zero last entry and nothing else. */
+  quantity: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -1562,13 +1612,20 @@ export interface FakeDb {
   deckLabels: FakeDeckLabel[];
   deckCards: FakeDeckCard[];
   /**
-   * `deck_tokens` — the **deviations only**, never the list of tokens a deck needs.
+   * `deck_tokens` — each token's **state** (and its legacy implicit count), never the list of
+   * tokens a deck needs.
    *
    * That list is derived from {@link FakeDb.cards} and {@link TOKEN_PARTS} on every read, which
    * is what the app does with `all_parts`, so a world with an empty table here still draws a
-   * full panel. See {@link FakeDeckToken} for why an empty override is not representable.
+   * full panel. See {@link FakeDeckToken} for why an empty row is not representable.
    */
   deckTokens: FakeDeckToken[];
+  /**
+   * `deck_token_printings` (user schema v52) — each list's **entries**, one row per printing and
+   * finish of a token in a list. Empty is the ordinary state: every token then draws its implicit
+   * entry. See {@link FakeDeckTokenPrinting}.
+   */
+  deckTokenPrintings: FakeDeckTokenPrinting[];
   /**
    * `deck_notes` — the reader's notes, one row each, and **the complete list of them**.
    *
@@ -3122,6 +3179,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // touched the panel has no rows at all and still sees every token their deck makes. The
     // derived side comes off {@link TOKEN_PARTS} and needs nothing here.
     deckTokens: [],
+    // And no entries, for the same reason: every token draws its implicit entry until a write
+    // materialises one (spec §4.2 rule 2).
+    deckTokenPrintings: [],
     // Empty, and here the emptiness is the ordinary state rather than a shortcut: a note is
     // something a reader wrote, so a world with none is every deck nobody has written about.
     // The seeds that want one say so — `starter`'s deck 4 carries two.
@@ -5510,8 +5570,15 @@ export const TOKEN_PRINTING = {
 } as const;
 
 /**
- * The three `cards.layout` words that make a row a token — `deck_tokens`' own filter, and
- * **the layout is what says an emblem is an emblem** rather than the type line, which is prose.
+ * Whether a `cards` row is a token or an emblem — `deck_tokens::is_token_printing`, through its
+ * TypeScript twin `isTokenPrinting` in `deckTokens.ts` rather than a list of words here (this was
+ * a `TOKEN_LAYOUTS` set until user schema v52, and two lists is one list waiting to drift).
+ *
+ * **Two halves, and the second is why this reads the type line at all**: the three token layouts
+ * on their own, or a `flip` / `reversible_card` printing whose line — or any ` // ` face of it —
+ * begins `Token` or `Emblem`. A layout-only test answered `false` for the six real two-sided
+ * tokens (five `flip` Role tokens and the `reversible_card` Mechtitan), so `deck_add_card` would
+ * have filed them as deck cards; the corpus here carries none, and `db.test.ts` stands one up.
  *
  * A filter over {@link FakeDb.cards} and not a second table, which is the whole of what changed
  * on 2026-09-07: in the app a token *is* a `cards` row — `set_type = 'token'` joins 2 950 of
@@ -5519,7 +5586,9 @@ export const TOKEN_PRINTING = {
  * cache all reach one table. A fake keeping its own token rows beside `cards` was storing a DTO,
  * and could answer the same question two ways.
  */
-const TOKEN_LAYOUTS = new Set(["token", "double_faced_token", "emblem"]);
+function isTokenCard(card: FakeCard): boolean {
+  return isTokenPrinting(card.layout, card.typeLine);
+}
 
 /**
  * One `all_parts` edge: a card in the corpus, and a token printing it names.
@@ -5593,12 +5662,14 @@ const TOKEN_PARTS: readonly TokenPart[] = [
 ];
 
 /**
- * A token printing by id — **a row of {@link FakeDb.cards} whose layout is one of
- * {@link TOKEN_LAYOUTS}**, and the layout test is load-bearing rather than tidy: it is what
- * makes `deck_token_add` refuse an ordinary card, which is the feature's one refusal about a row.
+ * A token printing by id — **a row of {@link FakeDb.cards} that {@link isTokenCard} says is a
+ * token**, and the test is load-bearing rather than tidy: it is what tells `collection_to_deck`
+ * to file a copy as a token entry rather than a deck card, and what keeps an `all_parts` edge
+ * naming an ordinary card off the wall. `deck_token_add_printing` does not come through here: it
+ * looks the card up first and refuses a non-token in its own sentence (`NOT_A_TOKEN`).
  */
 function tokenById(db: FakeDb, id: string): FakeCard | undefined {
-  return db.cards.find((c) => c.id === id && TOKEN_LAYOUTS.has(c.layout));
+  return db.cards.find((c) => c.id === id && isTokenCard(c));
 }
 
 /**
@@ -5632,7 +5703,7 @@ function byPrintingRank(a: FakeCard, b: FakeCard): number {
  */
 function tokenPrintings(db: FakeDb, oracleId: string): FakeCard[] {
   return db.cards
-    .filter((c) => c.oracleId === oracleId && c.isPaper && TOKEN_LAYOUTS.has(c.layout))
+    .filter((c) => c.oracleId === oracleId && c.isPaper && isTokenCard(c))
     .sort(byPrintingRank);
 }
 
@@ -5657,7 +5728,7 @@ interface DerivedToken {
  * 3. Grouped by the target's **`oracle_id`, never by its name** — see {@link TOKEN_PRINTING} for
  *    the two Wurms that is about.
  *
- * **The filter rule is a union in the crate and is {@link TOKEN_LAYOUTS} here**: every edge in
+ * **The filter rule is a union in the crate and is {@link isTokenCard} here**: every edge in
  * {@link TOKEN_PARTS} names a row that passes it, so the workbench cannot show the rule
  * *failing*. That is `deck_tokens.rs`' tests' job rather than a story's.
  */
@@ -5706,10 +5777,45 @@ function defaultTokenPrinting(db: FakeDb, derived: DerivedToken): string {
   return (ranked[0] ?? derived.token).id;
 }
 
-/** The override this deck stores for one token, or `undefined` for the reader never having
- *  deviated — which is what most rows are. */
+/** The state row this deck stores for one token, or `undefined` for a token nobody has dismissed
+ *  or added by hand — which is what most tokens are. */
 function storedToken(db: FakeDb, deckId: number, oracleId: string): FakeDeckToken | undefined {
   return db.deckTokens.find((t) => t.deckId === deckId && t.oracleId === oracleId);
+}
+
+/**
+ * One list's stored entries of one token, in `(card_id, finish)` order — `deck_tokens::entries_of`'s
+ * order, so a before and an after compare as lists and the answer is the same on every read.
+ */
+function tokenEntries(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  oracleId: string,
+): FakeDeckTokenPrinting[] {
+  return db.deckTokenPrintings
+    .filter((e) => e.deckId === deckId && e.variant === variant && e.oracleId === oracleId)
+    .sort((a, b) => cmp(a.cardId, b.cardId) || cmp(a.finish, b.finish));
+}
+
+/**
+ * `deck_tokens::default_finish` — what a printing is held in when nothing names a finish: the
+ * first of `nonfoil`, `foil`, `etched` it is sold in (its **sole** finish, for a foil-only or an
+ * etched-only printing), and `nonfoil` where `finishes` says nothing. What an implicit entry is
+ * drawn in, what rule 2 materialises and what an add naming no finish files.
+ */
+function defaultTokenFinish(card: FakeCard | null): Finish {
+  const sold = parseFinishes(card?.finishes ?? null);
+  return FINISHES.find((f) => sold.includes(f)) ?? "nonfoil";
+}
+
+/**
+ * The implicit entry's quantity — `deck_tokens::implicit_quantity`: the legacy
+ * `deck_tokens.quantity`, or {@link DEFAULT_TOKEN_QUANTITY}. `??` and never `||`: a legacy `0` is
+ * a token the reader zeroed before v52, and it stays zeroed.
+ */
+function implicitTokenQuantity(db: FakeDb, deckId: number, oracleId: string): number {
+  return storedToken(db, deckId, oracleId)?.quantity ?? DEFAULT_TOKEN_QUANTITY;
 }
 
 /**
@@ -5754,7 +5860,55 @@ function frontFaceImageUris(db: FakeDb, cardId: string | null): DeckTokenRow["im
   return Object.keys(uris).length === 0 ? null : uris;
 }
 
-/** One wire row: the derived facts, with the stored override joined on. */
+/** One entry of a token, as {@link toDeckTokenRow} draws it — stored or implicit. */
+interface TokenEntryDraw {
+  cardId: string;
+  finish: Finish;
+  quantity: number;
+  implicit: boolean;
+}
+
+/**
+ * One token's rows in one list — `deck_tokens::push_rows`: **one per stored entry, or its one
+ * implicit entry** (spec §4.2 rule 1) at the resolver's printing, in that printing's default
+ * finish, at {@link implicitTokenQuantity}.
+ */
+function tokenRowsOf(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  token: FakeCard,
+  defaultCardId: string,
+  sources: TokenSource[],
+  derived: boolean,
+  mp: MarketplaceId,
+): DeckTokenRow[] {
+  const entries = tokenEntries(db, deckId, variant, token.oracleId);
+  const draws: TokenEntryDraw[] =
+    entries.length > 0
+      ? entries.map((e) => ({
+          cardId: e.cardId,
+          finish: e.finish,
+          quantity: e.quantity,
+          implicit: false,
+        }))
+      : [
+          {
+            cardId: defaultCardId,
+            finish: defaultTokenFinish(cardById(db, defaultCardId)),
+            quantity: implicitTokenQuantity(db, deckId, token.oracleId),
+            implicit: true,
+          },
+        ];
+  return draws.map((draw) =>
+    toDeckTokenRow(db, deckId, token, defaultCardId, sources, derived, mp, draw),
+  );
+}
+
+/**
+ * One wire row — `deck_tokens::row_of`: the token's own facts off the printing the resolver
+ * named, and the entry's printing, finish, quantity and drawing beside them.
+ */
 function toDeckTokenRow(
   db: FakeDb,
   deckId: number,
@@ -5763,12 +5917,13 @@ function toDeckTokenRow(
   sources: TokenSource[],
   derived: boolean,
   mp: MarketplaceId,
+  draw: TokenEntryDraw,
 ): DeckTokenRow {
-  const over = storedToken(db, deckId, token.oracleId);
-  // **The printing the tile addresses** — `cardId ?? defaultCardId`, the precedence the picture
-  // below takes — and `null` for a picked printing the corpus no longer has, which answers
-  // `null` for every chin fact and the price rather than borrowing another printing's.
-  const effective = cardById(db, over?.cardId ?? defaultCardId);
+  // **The printing the entry addresses** — and `null` for one the corpus no longer has, which
+  // answers `null` for every chin fact and the price rather than borrowing another printing's
+  // (`drawn_for`'s rule: art, a chin or a price from a different printing would be the resolver
+  // inventing a card).
+  const drawn = cardById(db, draw.cardId);
   return {
     oracleId: token.oracleId,
     name: token.name,
@@ -5781,33 +5936,30 @@ function toDeckTokenRow(
     defaultCardId,
     sources,
     derived,
-    // The three the table actually holds. All `null` together for a token nobody has touched,
-    // which is why they are read with `??` and never with `||`.
-    cardId: over?.cardId ?? null,
-    quantity: over?.quantity ?? null,
-    state: over?.state ?? null,
-    // **The printing the tile addresses**, which is `cardId ?? defaultCardId` and deliberately
-    // not the row the resolver named: those two differ for exactly the tokens somebody has
-    // picked art for, and taking the resolver's would draw the deck's default Treasure on the
-    // tile the reader chose the other Treasure for. `drawn_for` in `deck_tokens.rs` is the
-    // same precedence, and `over` is already in hand here so it costs no second lookup.
-    imageUris: frontFaceImageUris(db, over?.cardId ?? defaultCardId),
-    // User schema v51's token pile: the chin of that same printing, so the set code under the
-    // art is the art's — the Treasure in `starter` is the case, picked `tafr` over the
-    // resolver's `thob`.
-    setCode: effective?.setCode ?? null,
-    collectorNumber: effective?.collectorNumber ?? null,
-    setName: effective?.setName ?? null,
-    rarity: effective?.rarity ?? null,
-    finishes: effective?.finishes ?? null,
-    // **A deck card that names no finish, priced the same way** — {@link deckPriceAt}, which is
-    // `printing_price_by_finish_expr(marketplace)`: `nonfoil → foil → etched`, the first finish
-    // this marketplace quotes. A token row stores no finish, so it is always the unsaid arm of
-    // `deck_card_price_expr`, and `deck_tokens.rs` prices it with that one expression rather than
-    // a rule of its own. Each link is {@link finishPriceAt}, the per-finish figure the art
-    // picker's grid shows, so a feed's holes and Cardmarket's missing `eur_etched` travel with
-    // it; `null` is the em dash and never `0`.
-    unitPrice: deckPriceAt(db, effective, mp),
+    // The token's effective state — `auto` where nothing is stored — shared by both lists.
+    state: storedToken(db, deckId, token.oracleId)?.state ?? "auto",
+    cardId: draw.cardId,
+    finish: draw.finish,
+    quantity: draw.quantity,
+    implicit: draw.implicit,
+    // **The entry's picture**, and deliberately not the resolver's: the two differ for exactly the
+    // entries somebody picked, and taking the resolver's would draw the deck's default Treasure
+    // on the tile the reader chose the other Treasure for.
+    imageUris: frontFaceImageUris(db, draw.cardId),
+    // The chin of that same printing, so the set code under the art is the art's — the Treasure
+    // in `starter` is the case, an entry at `tafr` against the resolver's `thob`.
+    setCode: drawn?.setCode ?? null,
+    collectorNumber: drawn?.collectorNumber ?? null,
+    setName: drawn?.setName ?? null,
+    rarity: drawn?.rarity ?? null,
+    finishes: drawn?.finishes ?? null,
+    // **At the entry's own finish, with no fallback** — `deck_tokens::printing_price`, which is
+    // `price_expr(market, finish)`: a foil Treasure quoted at the nonfoil rate is a price nobody
+    // published. It was {@link deckPriceAt}'s `nonfoil → foil → etched` chain until v52, while a
+    // token stored no finish; an implicit entry of a foil-only printing is `foil` by its default
+    // finish, so the case that chain existed for still reads its foil price. `null` is the em
+    // dash and never `0`.
+    unitPrice: finishPriceAt(db, drawn, draw.finish, mp),
   };
 }
 
@@ -7291,9 +7443,9 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // `1` was protecting a band already on every screen. `tokensOpen` two lines up is the
     // precedent character for character.
     notesOpen: d.notesOpen ?? false,
-    // v47's, `?? false` for `token_stack INTEGER NOT NULL DEFAULT 0` — the pile is new, so a
-    // deck nobody has asked draws none.
-    tokenStack: d.tokenStack ?? false,
+    // v52's, `?? "managed"` for `token_mode TEXT NOT NULL DEFAULT 'managed'` — every deck starts
+    // there, the ones whose v47 stack was off included, so a seed that never says draws its pile.
+    tokenMode: d.tokenMode ?? "managed",
     // v51's, `?? -1` for `token_rail_index INTEGER NOT NULL DEFAULT -1` — **and never `?? 0`**,
     // which is the neighbour's shape read one column over and the bug: `0` is the *top* of the
     // rail, a place the reader has to drag the pile to, while `-1` is last, where it has always
@@ -10045,13 +10197,14 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_tokens::deck_tokens` — every token and emblem this deck needs, with the reader's
-     * stored override joined on.
+     * `deck_tokens::deck_tokens` — every token and emblem this deck needs, **one row per entry**
+     * of the list asked for (user schema v52): a token's stored entries, or its one implicit
+     * entry where the list holds none ({@link tokenRowsOf}).
      *
      * **Derived on every call and stored nowhere** — {@link derivedTokens} does the walk, and
-     * `deck_tokens` holds only deviations. So a world whose {@link FakeDb.deckTokens} is empty
-     * still answers a full list, which is the state every install is in until somebody presses
-     * something.
+     * `deck_tokens` holds only states. So a world whose {@link FakeDb.deckTokens} and
+     * {@link FakeDb.deckTokenPrintings} are empty still answers a full list, which is the state
+     * every install is in until somebody presses something.
      *
      * **`[]` is an answer three times over and never a failure**: a deck whose cards make
      * nothing, a deck with no cards, and a deck that is not there. A deck must not fail to open
@@ -10078,48 +10231,39 @@ export function readHandlers(db: FakeDb) {
     }): DeckTokenRow[] => {
       const variant = validVariant(args.variant);
       const mp = marketplaceOf(args.marketplace);
-      const derived = derivedTokens(db, args.deckId, variant);
-      const rows = derived
-        .map((d) =>
-          toDeckTokenRow(
-            db,
-            args.deckId,
-            d.token,
-            defaultTokenPrinting(db, d),
-            d.sources,
-            true,
-            mp,
-          ),
-        )
-        .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+      const derived = [...derivedTokens(db, args.deckId, variant)].sort(
+        (a, b) => cmp(a.token.name, b.token.name) || cmp(a.token.oracleId, b.token.oracleId),
+      );
+      const rows = derived.flatMap((d) =>
+        tokenRowsOf(
+          db,
+          args.deckId,
+          variant,
+          d.token,
+          defaultTokenPrinting(db, d),
+          d.sources,
+          true,
+          mp,
+        ),
+      );
       const derivedIds = new Set(derived.map((d) => d.token.oracleId));
       const manual = db.deckTokens
         .filter(
           (t) => t.deckId === args.deckId && t.state === "manual" && !derivedIds.has(t.oracleId),
         )
         // A stored row whose oracle id names no token in the corpus is dropped rather than drawn
-        // as a hole — `flatMap` is what drops one, and it is the same call the resolver makes
-        // about an `all_parts` id `cards` has no row for.
+        // as a hole — the empty `flatMap` arm is what drops one, and it is the same call the
+        // resolver makes about an `all_parts` id `cards` has no row for.
         .flatMap((t) => {
-          const printings = tokenPrintings(db, t.oracleId);
-          const token = printings.find((p) => p.id === t.cardId) ?? printings[0];
-          return token === undefined
-            ? []
-            : [
-                toDeckTokenRow(
-                  db,
-                  args.deckId,
-                  token,
-                  // Nothing derives it, so there is no reference count to rank by: the reader's
-                  // own pick is the default, and the tie-break decides when they have none.
-                  t.cardId ?? printings[0].id,
-                  [],
-                  false,
-                  mp,
-                ),
-              ];
+          // Nothing derives it, so there is no reference count to rank by: the tie-break's
+          // first printing is both the token's facts and its implicit entry — `newest_printing`.
+          const token = tokenPrintings(db, t.oracleId)[0];
+          return token === undefined ? [] : [token];
         })
-        .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+        .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId))
+        .flatMap((token) =>
+          tokenRowsOf(db, args.deckId, variant, token, token.id, [], false, mp),
+        );
       return [...rows, ...manual];
     },
 
@@ -12368,10 +12512,25 @@ const STICKY_NOTE_GONE = "That note is not there any more.";
  * refuse in the same words and leave a different database behind.
  */
 const NO_ORACLE_ID = "A note attaches to a card, so it needs one.";
-/** `deck_tokens`' one refusal about a row: an `add` naming a printing `cards` has no token row
- *  for. Every *other* way this feature fails is an empty list rather than an error — a deck must
- *  not fail to open over an area most decks use lightly. */
-const TOKEN_PRINTING_GONE = "That token printing is not in the card database.";
+/**
+ * `deck_tokens`' refusals, verbatim — the **writes'**, since user schema v52. The read has none:
+ * every way it fails is an empty list rather than an error, because a deck must not fail to open
+ * over an area most decks use lightly.
+ *
+ * `NO_SUCH_PRINTING` is `printing_by_id`'s, for an add or a swap naming a printing the corpus has
+ * not got; `NOT_A_TOKEN` is an add naming a printing the corpus **has** that is not a token or an
+ * emblem (`is_token_printing` answers `false` — Lightning Bolt handed to *Add printing*);
+ * `NOT_THIS_TOKEN` is a swap onto another token's printing; `ENTRY_GONE` is a write naming an
+ * entry this list no longer holds (a stale page); `TOKEN_GONE` is a write aimed at an implicit
+ * entry of a token that is not on the wall at all, which has none to materialise; `BAD_STATE` is
+ * a state word the column's CHECK would refuse.
+ */
+const TOKEN_NO_SUCH_PRINTING = "That printing is not in the card database any more.";
+const TOKEN_NOT_A_TOKEN = "That card is not a token or an emblem.";
+const TOKEN_NOT_THIS_TOKEN = "That printing is not one of this token's.";
+const TOKEN_ENTRY_GONE = "That printing of the token is not in this list any more.";
+const TOKEN_GONE = "That token is not in this list any more.";
+const TOKEN_BAD_STATE = "That is not something a token can be.";
 /** `deck_meta::FOLDER_GONE` and `FOLDER_CYCLE`. The second is not cosmetic:
  *  `deck_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so a cycle is a graph
  *  SQLite's recursive cascade would walk forever the day one of them is deleted. */
@@ -12986,20 +13145,409 @@ function validVariant(variant: string): DeckVariant {
 const TOKEN_STATES = ["auto", "hidden", "manual"] as const;
 
 /**
- * The state word, with **absent meaning `auto`**.
- *
- * `null` is what `ipc.ts` sends for a caller who passed no `state`, and the column's DDL default
- * is `'auto'` — so folding the two together here is the DDL rather than a convenience. The
- * fold matters: `deck_token_set` deletes the row when the result would carry nothing, and that
- * test reads this word.
+ * The state word `deck_token_state` is handed — one of {@link TOKEN_STATES}, or
+ * `deck_tokens::BAD_STATE`. **No absent arm** since user schema v52: the command that took a
+ * nullable state (`deck_token_set`, where `null` folded to `auto`) is retired, and the one that
+ * replaced it always names the state it writes.
  */
-function validTokenState(state: DeckTokenState | null): DeckTokenState {
-  if (state === null) return "auto";
+function validTokenState(state: string): DeckTokenState {
   const found = TOKEN_STATES.find((s) => s === state);
   if (found) return found;
-  throw refuse(
-    `\`${state}\` is not a token state. Use one of: ${TOKEN_STATES.join(", ")}.`,
+  throw refuse(TOKEN_BAD_STATE);
+}
+
+/** `deck::TOKEN_MODES` and `deck::BAD_TOKEN_MODE` — `decks.token_mode`'s three words (user schema
+ *  v52), closed by a CHECK and refused in words before it would fire. */
+const TOKEN_MODES = ["managed", "collection", "hidden"] as const;
+const BAD_TOKEN_MODE = "A deck's tokens are Managed, Collection or Hidden.";
+
+/** `deck::valid_token_mode` — one of {@link TOKEN_MODES}, or the sentence. */
+function validTokenMode(mode: string): TokenMode {
+  const found = TOKEN_MODES.find((m) => m === mode);
+  if (found) return found;
+  throw refuse(BAD_TOKEN_MODE);
+}
+
+/* ------------------------------------------------------------- token writes (v52) ---- */
+
+/** One entry as a write carries it — `deck_undo::TokenEntryRow`, less nothing. */
+interface TokenEntryRow {
+  variant: DeckVariant;
+  oracleId: string;
+  cardId: string;
+  finish: Finish;
+  quantity: number;
+}
+
+/** A stored entry as a write carries it. */
+function entryRowOf(e: FakeDeckTokenPrinting): TokenEntryRow {
+  return {
+    variant: e.variant,
+    oracleId: e.oracleId,
+    cardId: e.cardId,
+    finish: e.finish,
+    quantity: e.quantity,
+  };
+}
+
+/** `deck_tokens::put_entry` — one entry at an absolute quantity, upserted on the grain. */
+function putTokenEntry(db: FakeDb, deckId: number, row: TokenEntryRow): void {
+  const at = stamp(db);
+  const held = db.deckTokenPrintings.find(
+    (e) =>
+      e.deckId === deckId &&
+      e.variant === row.variant &&
+      e.cardId === row.cardId &&
+      e.finish === row.finish,
   );
+  if (held) {
+    held.quantity = row.quantity;
+    held.updatedAt = at;
+    return;
+  }
+  db.deckTokenPrintings.push({
+    id: nextId(db.deckTokenPrintings),
+    deckId,
+    ...row,
+    createdAt: at,
+    updatedAt: at,
+  });
+}
+
+/** `deck_tokens::drop_entry` — delete one entry by grain; nothing there is a no-op. */
+function dropTokenEntry(db: FakeDb, deckId: number, row: TokenEntryRow): void {
+  db.deckTokenPrintings = db.deckTokenPrintings.filter(
+    (e) =>
+      !(
+        e.deckId === deckId &&
+        e.variant === row.variant &&
+        e.cardId === row.cardId &&
+        e.finish === row.finish
+      ),
+  );
+}
+
+/**
+ * `deck_tokens::write_state` — a token's state, keeping the legacy count its row carries, or
+ * **the row deleted** where `auto` would leave it carrying nothing: *the reader has not deviated*
+ * is one state, never two.
+ */
+function writeTokenState(
+  db: FakeDb,
+  deckId: number,
+  oracleId: string,
+  state: DeckTokenState,
+): void {
+  const held = storedToken(db, deckId, oracleId);
+  if (state === "auto") {
+    if (held === undefined) return;
+    if (held.quantity === null) {
+      db.deckTokens = db.deckTokens.filter((t) => t !== held);
+      return;
+    }
+    if (held.state !== state) {
+      held.state = state;
+      held.updatedAt = stamp(db);
+    }
+    return;
+  }
+  const at = stamp(db);
+  if (held) {
+    held.state = state;
+    held.updatedAt = at;
+    return;
+  }
+  db.deckTokens.push({
+    id: nextId(db.deckTokens),
+    deckId,
+    oracleId,
+    quantity: null,
+    state,
+    createdAt: at,
+    updatedAt: at,
+  });
+}
+
+/** The printing a list's derivation names for one token, or `undefined` where the list does not
+ *  make it — `deck_tokens::derived_printing`. */
+function derivedPrintingOf(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  oracleId: string,
+): string | undefined {
+  const derived = derivedTokens(db, deckId, variant).find((d) => d.token.oracleId === oracleId);
+  return derived === undefined ? undefined : defaultTokenPrinting(db, derived);
+}
+
+/**
+ * `deck_tokens::implicit_of` — the entry a token draws when this list holds none of it (rule 1),
+ * computed as the resolver computes it so a write materialises the entry the reader was looking
+ * at: the derived printing where the list makes the token, the newest printing where it is a
+ * `manual` token nothing makes, in its {@link defaultTokenFinish}, at
+ * {@link implicitTokenQuantity}. `null` for a token that is not on the wall at all.
+ */
+function implicitTokenEntry(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  oracleId: string,
+  best: string | undefined = derivedPrintingOf(db, deckId, variant, oracleId),
+): TokenEntryRow | null {
+  const cardId =
+    best ??
+    (storedToken(db, deckId, oracleId)?.state === "manual"
+      ? tokenPrintings(db, oracleId)[0]?.id
+      : undefined);
+  if (cardId === undefined) return null;
+  return {
+    variant,
+    oracleId,
+    cardId,
+    finish: defaultTokenFinish(cardById(db, cardId)),
+    quantity: implicitTokenQuantity(db, deckId, oracleId),
+  };
+}
+
+/**
+ * `deck_tokens::named_entry` — the entry a write names, and whether it is the implicit one (not
+ * yet stored). `null` against a list that already holds entries is a stale page: it is answered
+ * by the stored entry at the implicit entry's grain where there is one, and refused where there
+ * is not — a write to a printing the reader was not looking at would be worse than a sentence.
+ */
+function namedTokenEntry(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  oracleId: string,
+  key: TokenEntryKey | null,
+): { target: TokenEntryRow; implicit: boolean } {
+  const stored = tokenEntries(db, deckId, variant, oracleId);
+  const find = (cardId: string, finish: string) =>
+    stored.find((e) => e.cardId === cardId && e.finish === finish);
+  if (key !== null) {
+    const found = find(key.cardId, key.finish);
+    if (found === undefined) throw refuse(TOKEN_ENTRY_GONE);
+    return { target: entryRowOf(found), implicit: false };
+  }
+  const implicit = implicitTokenEntry(db, deckId, variant, oracleId);
+  if (implicit === null) throw refuse(TOKEN_GONE);
+  if (stored.length === 0) return { target: implicit, implicit: true };
+  const found = find(implicit.cardId, implicit.finish);
+  if (found === undefined) throw refuse(TOKEN_ENTRY_GONE);
+  return { target: entryRowOf(found), implicit: false };
+}
+
+/**
+ * `deck_tokens::entry_finish` — the finish a write files: the one asked for, fenced by the
+ * collection's word list and by what the printing is sold in (`deck::FINISH_NOT_SOLD`), or the
+ * printing's default where none is asked. The picker only offers what is sold, so anything else
+ * is a caller with a bug, and quietly filing a different finish would hide it.
+ */
+function tokenEntryFinish(card: FakeCard, asked: string | null): Finish {
+  if (asked === null) return defaultTokenFinish(card);
+  const finish = validFinish(asked);
+  const sold = parseFinishes(card.finishes);
+  if (sold.length > 0 && !sold.includes(finish)) throw refuse(FINISH_NOT_SOLD);
+  return finish;
+}
+
+/** A swap's `from` and `to` — `deck_tokens::entry_facts`: the entry, and the set and number it
+ *  was read as, so the history can say which art without the corpus. */
+function tokenEntryFacts(db: FakeDb, row: TokenEntryRow): Record<string, unknown> {
+  const card = cardById(db, row.cardId);
+  return {
+    card_id: row.cardId,
+    finish: row.finish,
+    set_code: card?.setCode ?? null,
+    collector_number: card?.collectorNumber ?? null,
+  };
+}
+
+/** What one token write did — `deck_tokens::Change`, the variable half of its history row. */
+interface TokenChange {
+  action: "quantity" | "swap" | "add" | "state" | "reset";
+  cardId: string | null;
+  finish: string | null;
+  from: unknown;
+  to: unknown;
+  extra: Record<string, unknown>;
+}
+
+function tokenChange(
+  action: TokenChange["action"],
+  from: unknown,
+  to: unknown,
+  about: { cardId: string; finish: string } | null = null,
+  extra: Record<string, unknown> = {},
+): TokenChange {
+  return {
+    action,
+    cardId: about?.cardId ?? null,
+    finish: about?.finish ?? null,
+    from,
+    to,
+    extra,
+  };
+}
+
+/**
+ * `deck_tokens::journal_in` — **the one place a token write records**, so the five cannot differ
+ * in how they journal.
+ *
+ * In order: the deck fence (`deck::GONE` for a stale id); a read of every entry of the token in
+ * `list` and of its state; the write; the same read again; then **one** `deck_audit` row — kind
+ * **`deck`** with `field: "token"`, never a tenth kind, because `deck_audit` is synced and a word
+ * its CHECK does not know would stall a paired device on an older build. The undo step is
+ * {@link journalled}'s, keyed on that row, so it is filed exactly when the row is.
+ *
+ * **A write that changed nothing records nothing and touches nothing** — a stepper landing on the
+ * count it was at, a reset of a token with no entries, a dismissal of a token already dismissed:
+ * no history row, no undo step, and the deck's stamp left where it was, because the crate returns
+ * before `touch_deck`. "Nothing" is read as the crate reads it — the entries by
+ * {@link entryRowOf}, the state as `state_of`'s `(quantity, state)` — and **never `updatedAt`**,
+ * which {@link writeTokenState} moves on every non-`auto` press exactly as the crate's upsert
+ * does; a whole-row comparison would file a second *Dismissed Treasure* for a press that
+ * dismissed nothing. `list` is `null` for a state write, which is shared by both lists.
+ *
+ * A refusal thrown by `write` leaves the stamp unmoved, which is the crate's rollback: every
+ * refusal a write can raise is raised before it changes a row.
+ */
+function journalTokens(
+  db: FakeDb,
+  deckId: number,
+  list: DeckVariant | null,
+  oracleId: string,
+  write: () => TokenChange,
+): void {
+  const deck = requireDeck(db, deckId);
+  const read = () => {
+    const held = storedToken(db, deckId, oracleId);
+    return JSON.stringify([
+      list === null ? [] : tokenEntries(db, deckId, list, oracleId).map(entryRowOf),
+      held === undefined ? null : { quantity: held.quantity, state: held.state },
+    ]);
+  };
+  const before = read();
+  const change = write();
+  if (read() === before) return;
+  deck.updatedAt = stamp(db);
+  const token = tokenPrintings(db, oracleId)[0];
+  record(
+    db,
+    deckId,
+    DECK_LEVEL,
+    "deck",
+    null,
+    {
+      field: "token",
+      action: change.action,
+      name: token?.name ?? null,
+      subtitle: token === undefined ? null : tokenSubtitle(token),
+      card_id: change.cardId,
+      finish: change.finish,
+      list,
+      from: change.from,
+      to: change.to,
+      ...change.extra,
+    },
+    0,
+  );
+}
+
+/**
+ * A token write's undo step, filed by hand — for the one caller that sits on {@link NO_UNDO_STEP}
+ * and still owes one: `collection_to_deck`'s token reroute, which in the crate is
+ * `add_printing_in` inside that command's transaction and records `Op::Tokens` there. It is
+ * {@link journalled}'s own step, keyed on the last history row `write` produced and filed only
+ * if there is one.
+ */
+function withTokenStep(db: FakeDb, deckId: number, write: () => void): void {
+  const before = deckState(db, deckId);
+  const written = db.deckAudit.length;
+  write();
+  const rows = db.deckAudit.slice(written);
+  if (before === null || rows.length === 0) return;
+  db.deckUndo.push({
+    auditId: rows[rows.length - 1].id,
+    deckId,
+    before,
+    after: deckState(db, deckId) as FakeDeckState,
+    undoneAt: null,
+  });
+}
+
+/**
+ * `deck_tokens::add_printing_in` — **rule 5, the whole write**: file `quantity` copies of one
+ * printing in one finish as an entry of its token in `variant`, and answer the quantity the entry
+ * landed on. Shared by `deck_token_add_printing` (one copy, the band's picker) and the two writes
+ * every add of a card ends in — {@link writeHandlers.deck_add_card} and
+ * {@link writeHandlers.collection_to_deck} — which reroute a token printing here rather than
+ * filing a deck card, which is why it takes a quantity.
+ *
+ * 1. **An implicit entry is materialised first** (rule 2), so adding art B to a token drawn at art
+ *    A keeps A — the whole point of the rule.
+ * 2. The entry is inserted at `quantity`, or an existing one of that printing and finish steps up
+ *    — and **the token's zero-quantity entries in this list are deleted**, never the one just
+ *    added to: rule 3 held one at zero because it was the last, and beside the new entry it is
+ *    not. The deletes are the write's own, so one Undo restores them.
+ * 3. **A token the list derives nothing for becomes `manual`**; a derived one the reader had
+ *    dismissed comes back to `auto` — an add is *put this on the wall*.
+ *
+ * **Two refusals before anything is written, in the crate's order**: a printing the corpus has
+ * not got is `printing_by_id`'s `NO_SUCH_PRINTING`, and one it has that is not a token or an
+ * emblem ({@link isTokenCard}, `is_token_printing`) is `NOT_A_TOKEN` — Lightning Bolt handed to
+ * *Add printing*. The reroutes in `deck_add_card` and `collection_to_deck` ask the same predicate
+ * first, so no real add of a card reaches the second.
+ */
+function addTokenPrinting(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  cardId: string,
+  finish: string | null,
+  quantity: number,
+): number {
+  if (quantity <= 0) throw refuse(ZERO_ADD);
+  const printing = cardById(db, cardId);
+  if (printing === null) throw refuse(TOKEN_NO_SUCH_PRINTING);
+  if (!isTokenCard(printing)) throw refuse(TOKEN_NOT_A_TOKEN);
+  const filed = tokenEntryFinish(printing, finish);
+  const oracleId = printing.oracleId;
+  let landed = 0;
+  journalTokens(db, deckId, variant, oracleId, () => {
+    const best = derivedPrintingOf(db, deckId, variant, oracleId);
+    if (tokenEntries(db, deckId, variant, oracleId).length === 0) {
+      const implicit = implicitTokenEntry(db, deckId, variant, oracleId, best);
+      if (implicit !== null) putTokenEntry(db, deckId, implicit);
+    }
+    const held =
+      tokenEntries(db, deckId, variant, oracleId).find(
+        (e) => e.cardId === printing.id && e.finish === filed,
+      )?.quantity ?? 0;
+    landed = held + quantity;
+    putTokenEntry(db, deckId, {
+      variant,
+      oracleId,
+      cardId: printing.id,
+      finish: filed,
+      quantity: landed,
+    });
+    // Rule 3's zero is the last entry held at none; beside the entry just filed it is not the
+    // last, and a `0` tile no stepper can zero again would be stuck on the band. Inside the
+    // journalled write, so one Undo restores it.
+    for (const zero of tokenEntries(db, deckId, variant, oracleId)) {
+      if (zero.quantity === 0 && !(zero.cardId === printing.id && zero.finish === filed)) {
+        dropTokenEntry(db, deckId, entryRowOf(zero));
+      }
+    }
+    if (best === undefined) writeTokenState(db, deckId, oracleId, "manual");
+    else if (storedToken(db, deckId, oracleId)?.state === "hidden") {
+      writeTokenState(db, deckId, oracleId, "auto");
+    }
+    return tokenChange("add", held, landed, { cardId: printing.id, finish: filed }, { quantity });
+  });
+  return landed;
 }
 
 /**
@@ -14196,6 +14744,29 @@ function moveLiveToTheory(db: FakeDb, deckId: number): number {
   const live = db.deckCards.filter((dc) => dc.deckId === deckId && dc.variant === LIVE);
   for (const row of live) row.variant = "theory";
   return live.length;
+}
+
+/**
+ * `deck::move_live_tokens_into_theory` — the live list's token entries become the plan's, as its
+ * cards just did (user schema v52, token stacks spec §4.2): the Treasure art the reader chose is
+ * part of the deck that becomes the plan.
+ *
+ * **The plan's own entries go first**, because {@link theoryCopies} asks about `deck_cards` alone
+ * and a plan with no cards can still hold entries — a live entry moved onto a theory one at the
+ * same printing and finish would break the grain. Replacing rather than folding is the switch's
+ * own meaning: the deck the reader built *is* the plan, so a stale plan art kept beside its arts
+ * would draw a mix nobody chose. Row ids travel with the row, as the cards' do.
+ */
+function moveLiveTokensToTheory(db: FakeDb, deckId: number): void {
+  db.deckTokenPrintings = db.deckTokenPrintings.filter(
+    (e) => !(e.deckId === deckId && e.variant === "theory"),
+  );
+  const at = stamp(db);
+  for (const entry of db.deckTokenPrintings) {
+    if (entry.deckId !== deckId || entry.variant !== LIVE) continue;
+    entry.variant = "theory";
+    entry.updatedAt = at;
+  }
 }
 
 /** `deck_theory::theory_copies` — copies, not rows. Two printings at 2 and 3 is 5 cards. */
@@ -15401,6 +15972,22 @@ export function writeHandlers(db: FakeDb) {
       // entry is what the reader pointed at, the category is only where it was going.
       const source = db.collectionEntries.find((e) => e.id === args.entryId);
       if (!source) throw refuse(ENTRY_GONE);
+      // **The token reroute** (user schema v52) — `collection_alloc::collection_to_deck`'s, ahead
+      // of the fence below because a deck never "plays" a token (a token is never a `deck_cards`
+      // row), so `NOT_IN_DECK` would refuse every one. The row's printing in the row's finish is
+      // filed as a token entry of the live list, one per copy asked for, with the history row and
+      // the undo step a token add owes — and **the copies stay where they are**: in PR 2 a token
+      // entry is the deck's own and touches the collection never. So the outcome says nothing
+      // moved: no entry received anything, no deck row was written, `quantity: 0`.
+      // **And it files a step where the rest of this command files none**: the argument that
+      // keeps `collection_to_deck` on {@link NO_UNDO_STEP} is a second table a step cannot put
+      // back, and a token entry is one table the journal can.
+      if (tokenById(db, source.cardId) !== undefined) {
+        withTokenStep(db, args.deckId, () =>
+          addTokenPrinting(db, args.deckId, LIVE, source.cardId, source.finish, args.quantity),
+        );
+        return { entryId: null, fromDeck: null, deckCardId: null, quantity: 0 };
+      }
       // **Issue #358's fence** (`deck::plays_card`), and it sits ahead of the pile for the reason
       // the rollback below exists: the name arm *writes* — a pile nobody has made yet is made
       // here — and a refusal that lands after that create leaves an empty column standing after
@@ -16686,9 +17273,9 @@ export function writeHandlers(db: FakeDb) {
         // shut. It holds no notes to draw — `DeckInput` carries no prose at all any more, and a
         // note is written *after* the deck exists, one at a time, through `deck_note_create`.
         notesOpen: false,
-        // `token_stack INTEGER NOT NULL DEFAULT 0`: a deck being born draws no token pile, and
-        // `DeckInput` does not ask.
-        tokenStack: false,
+        // `token_mode TEXT NOT NULL DEFAULT 'managed'` (user schema v52): every deck starts on
+        // Managed, and `DeckInput` does not ask.
+        tokenMode: "managed",
         // `token_rail_index INTEGER NOT NULL DEFAULT -1`: where that pile would go is *last*,
         // and `DeckInput` does not ask this either.
         tokenRailIndex: -1,
@@ -16770,6 +17357,8 @@ export function writeHandlers(db: FakeDb) {
       const name = patch.name === undefined ? undefined : validName(patch.name);
       const formatKey = patch.formatKey === undefined ? undefined : validFormat(patch.formatKey);
       const bracket = patch.bracket === undefined ? undefined : validBracket(patch.bracket);
+      const tokenMode =
+        patch.tokenMode === undefined ? undefined : validTokenMode(patch.tokenMode);
       // The deck's **kind**, resolved once and read by everything below that touches either
       // flag: the two history arms, the live-list move and the group transition. Neither
       // `patch.theoryEnabled` nor `patch.virtualOnly` is read again after this line, which is
@@ -16845,7 +17434,8 @@ export function writeHandlers(db: FakeDb) {
       // **`tokensOpen` and `statsOpen` have no arm here, deliberately, and that absence is the
       // mirror rather than a gap in it.** Both columns ride this patch and both are written
       // above — the two disclosures are the only fields `deck_update` moves without recording
-      // anything. (`notesOpen` and v47's `tokenStack` have none either, on the same terms.)
+      // anything. (`notesOpen` has none either, on the same terms — and so did v47's
+      // `tokenStack`, until v52 replaced it with `tokenMode`, which is an arrangement and has one.)
       //
       // This used to carry a `field("tokensOpen", …)` arm under a comment saying the word was a
       // guess because `deck.rs` did "not carry `tokens_open` in `record_deck_edit` **yet**".
@@ -16898,11 +17488,11 @@ export function writeHandlers(db: FakeDb) {
       if (patch.managedWishlist !== undefined && patch.managedWishlist !== managedWas) {
         field("managedWishlist", managedWas, patch.managedWishlist);
       }
-      // v51's, and **the one column on this patch beside `tokenStack` that does get an arm** —
-      // the paragraph above rules out a reading preference, and this is not one: the reader
-      // dragged the Tokens & Emblems pile to a new slot, which is an arrangement like a
-      // category's `sortOrder`, and `deck_undo`'s `DECK_FIELDS` names the column so Ctrl+Z puts
-      // it back. The row is what gives {@link journalled} a step to key on.
+      // v51's, and **a token column on this patch that does get an arm** (v52's `tokenMode` below
+      // is the other) — the paragraph above rules out a reading preference, and this is not one:
+      // the reader dragged the Tokens & Emblems pile to a new slot, which is an arrangement like
+      // a category's `sortOrder`, and `deck_undo`'s `DECK_FIELDS` names the column so Ctrl+Z
+      // puts it back. The row is what gives {@link journalled} a step to key on.
       //
       // The word is `deck.rs`'s, `"tokenRail"`, and not the column's `tokenRailIndex` — `xGroup`'s
       // trap once more, with the same silent `Changed the deck` waiting behind a misspelling.
@@ -16912,6 +17502,15 @@ export function writeHandlers(db: FakeDb) {
       const tokenRailWas = before.tokenRailIndex ?? -1;
       if (patch.tokenRailIndex !== undefined && patch.tokenRailIndex !== tokenRailWas) {
         field("tokenRail", tokenRailWas, patch.tokenRailIndex);
+      }
+      // v52's, and it gets an arm for `tokenRail`'s reason rather than the disclosures': a mode
+      // is an arrangement the reader chose, `deck_undo::DECK_FIELDS` names the column, and the
+      // row is what gives {@link journalled} a step to key on. The word is `deck.rs`'s,
+      // `"tokenMode"`, carrying the two mode words. `?? "managed"` on the `from` side for
+      // {@link FakeDeck.tokenMode}'s reason: an absent column is the DDL's default.
+      const tokenModeWas = before.tokenMode ?? "managed";
+      if (tokenMode !== undefined && tokenMode !== tokenModeWas) {
+        field("tokenMode", tokenModeWas, tokenMode);
       }
       // v16's, and the second multi-word field name in that switch — `deck.rs` writes
       // `"defaultCategory"`, and the paragraph above applies word for word.
@@ -16978,7 +17577,20 @@ export function writeHandlers(db: FakeDb) {
         const turnedOn = theoryEnabled && !before.theoryEnabled;
         deck.theoryEnabled = theoryEnabled;
         if (turnedOn && theoryCopies(db, deck.id) === 0) {
+          // `deck::update_deck`'s order, and the first line is the half that is easy to lose:
+          // **both lists are reconciled before anything moves**, and what that deletes is kept out
+          // of the step's before-image ({@link omitFromStep}). The plan can hold entries its
+          // empty card list makes no token for — the crate's v52 conversion pass copied every pick
+          // into both lists — and rule 7 owes their deletion whatever this press does, so an undo
+          // that put one back would restore a row the backstop deletes again at once. Then the
+          // cards, then
+          // the reader's token entries ({@link moveLiveTokensToTheory}), then rule 7 again on the
+          // lists the move just changed. The step is the **net** change, which a snapshot-based
+          // step gets by construction.
+          omitFromStep(db, reconcileTokens(db, deck.id, VARIANTS));
           moveLiveToTheory(db, deck.id);
+          moveLiveTokensToTheory(db, deck.id);
+          reconcileTokens(db, deck.id, VARIANTS);
           // The tab the reader is put on, because it is now the tab their deck is in. Written
           // here rather than left to `deck_set_view_state` for the reason the move itself is
           // not two commands: a reader who pressed one switch made one decision.
@@ -17058,9 +17670,10 @@ export function writeHandlers(db: FakeDb) {
       // was never written reads, which is a different question from what a patch that says
       // nothing does to a row that was.
       deck.notesOpen = patch.notesOpen ?? deck.notesOpen;
-      // `coalesce(?21, token_stack)`, and **nothing else happens**: the pile is drawn in the
-      // view layer from the tokens answer on every read, so the switch writes one column.
-      deck.tokenStack = patch.tokenStack ?? deck.tokenStack;
+      // `coalesce(?n, token_mode)`, and in PR 2 **nothing else happens**: the pile is drawn — or,
+      // under `hidden`, not drawn — in the view layer from the tokens answer on every read, and
+      // no mode touches the collection until PR 3's Collection mode gives one custody.
+      deck.tokenMode = tokenMode ?? deck.tokenMode;
       // `coalesce(?23, token_rail_index)` — and **`0` and `-1` are both values**, the top of the
       // rail and the end of it, which is why this is `??`: a truthiness test would read a pile
       // dragged to the top as no change at all. The number is stored as sent; where it lands
@@ -17186,6 +17799,8 @@ export function writeHandlers(db: FakeDb) {
       // nothing else has to happen, because the *list* was never stored: it was derived from
       // cards that have just gone.
       db.deckTokens = db.deckTokens.filter((t) => t.deckId !== args.id);
+      // `deck_token_printings.deck_id` too (user schema v52) — both lists' entries.
+      db.deckTokenPrintings = db.deckTokenPrintings.filter((e) => e.deckId !== args.id);
       // `deck_notes.deck_id` is `ON DELETE CASCADE` and `deck_note_cards.note_id` cascades after
       // it, so the notes go with the deck and the attachments go with the notes — **two hops,
       // and the order is what makes the second one possible**: an attachment names a note and
@@ -17332,6 +17947,25 @@ export function writeHandlers(db: FakeDb) {
       if (args.quantity <= 0) throw refuse(ZERO_ADD);
       if (args.categoryId === null && args.categoryName === null) throw refuse(NO_CATEGORY);
       const card = requireCard(db, args.cardId);
+      // **The token reroute** (user schema v52) — `deck::add_card`'s, and in its place: after the
+      // card lookup and before the deck is touched or a pile resolved, because neither belongs to
+      // a token — a pile the name arm would invent for one is a pile nothing will ever fill. A
+      // token is never a `deck_cards` row, whichever pile it was dropped on: it is filed as an
+      // entry of its token in this list (rule 5), and **`id: 0` says no deck card was made**, so
+      // nothing is marked as landed. The finish is the add's own where it names one (`null` is
+      // the regular copy, which reads as the printing's default), and the history row and the
+      // undo step are the entry's.
+      if (isTokenCard(card)) {
+        const quantity = addTokenPrinting(
+          db,
+          args.deckId,
+          variant,
+          args.cardId,
+          normaliseFinish(args.finish),
+          args.quantity,
+        );
+        return { id: 0, quantity, removed: false };
+      }
       const deck = requireDeck(db, args.deckId);
       let category: FakeDeckCategory;
       if (args.categoryId !== null) {
@@ -18381,118 +19015,154 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_tokens::deck_token_set` — one token's override: the art, the count, or the
-     * dismissal.
+     * `deck_tokens::set_quantity` — **rules 2 and 3**: one entry of a token, or its implicit
+     * entry, to an absolute quantity, in one list.
      *
-     * **All five keys travel on every call, `null` included**, because Tauri fills parameters by
-     * name and an absent one is a refusal rather than a default. The state word arrives as
-     * **`tokenState`** and not `state`: the crate cannot call a parameter `state`, since that is
-     * already the managed `tauri::State` every command takes, so it declares `token_state` and
-     * `ipc.ts` folds `{ state }` onto that key at the call site. This handler matches `invoke`'s
-     * object exactly, the way every handler here does — a typo is a runtime rejection in the
-     * workbench for the same reason it is one in the window.
+     * `entry: null` is the implicit entry, which this **materialises** at the list's default
+     * printing before stepping it — in this list only, so the other list goes on drawing its own.
+     * **Zero deletes the entry, unless it is the token's last one in this list**, which stays at
+     * zero: the implicit default must not reappear under a reader who zeroed the only printing
+     * they had. A negative number is refused in the collection's one sentence for it.
      *
-     * **A write whose result would carry nothing deletes the row.** `state` back at `auto` with
-     * no printing and no quantity is *no deviation*, and the empty override is deliberately not
-     * representable: two spellings of "the reader has not touched this" would be two states to
-     * keep in agreement, and a panel reading the wrong one would draw a reset control over
-     * nothing.
-     *
-     * **`quantity` is not validated and `0` is a value.** The column is nullable with no CHECK
-     * — unlike `deck_cards.quantity`, which is NOT NULL and `> 0` — because a reader who zeroed
-     * a token while keeping the art they picked has said something. `validQuantity` is
-     * deliberately not called: a fake that refused what the DDL accepts would be a fake with a
-     * rule the app does not have.
+     * One history row and — through {@link journalled} — one undo step, and a step that lands on
+     * the count it was at records neither.
      */
-    deck_token_set: (args: {
+    deck_token_set_quantity: (args: {
       deckId: number;
+      variant: DeckVariant;
       oracleId: string;
-      cardId: string | null;
-      quantity: number | null;
-      tokenState: DeckTokenState | null;
+      entry: TokenEntryKey | null;
+      quantity: number;
     }): void => {
       refuseIfBusy(db);
-      requireDeck(db, args.deckId);
-      const state = validTokenState(args.tokenState);
-      const existing = storedToken(db, args.deckId, args.oracleId);
-      if (state === "auto" && args.cardId === null && args.quantity === null) {
-        if (existing) db.deckTokens = db.deckTokens.filter((t) => t !== existing);
-        return;
-      }
-      if (existing) {
-        existing.cardId = args.cardId;
-        existing.quantity = args.quantity;
-        existing.state = state;
-        existing.updatedAt = stamp(db);
-        return;
-      }
-      // The upsert's other arm — `ON CONFLICT(deck_id, oracle_id)`, which is why the lookup
-      // above is on the grain and never on the row id: the reader names a token, not a row.
-      const now = stamp(db);
-      db.deckTokens.push({
-        id: nextId(db.deckTokens),
-        deckId: args.deckId,
-        oracleId: args.oracleId,
-        cardId: args.cardId,
-        quantity: args.quantity,
-        state,
-        createdAt: now,
-        updatedAt: now,
+      const variant = validVariant(args.variant);
+      const quantity = validQuantity(args.quantity, "token quantity");
+      journalTokens(db, args.deckId, variant, args.oracleId, () => {
+        const { target, implicit } = namedTokenEntry(
+          db,
+          args.deckId,
+          variant,
+          args.oracleId,
+          args.entry,
+        );
+        if (implicit) putTokenEntry(db, args.deckId, target);
+        const others = tokenEntries(db, args.deckId, variant, args.oracleId).length - 1;
+        if (quantity === 0 && others > 0) dropTokenEntry(db, args.deckId, target);
+        else putTokenEntry(db, args.deckId, { ...target, quantity });
+        return tokenChange("quantity", target.quantity, quantity, target);
       });
     },
 
     /**
-     * `deck_tokens::deck_token_clear` — back to the derived defaults, by **deleting** the
-     * override row.
+     * `deck_tokens::swap` — **rule 4**: one entry, or the implicit one, onto another printing
+     * and/or finish of the same token, **folding** onto an entry the list already holds
+     * (quantities summed, one row, on the grain).
      *
-     * Not a `deck_token_set` of three nulls even though that spelling is the same write: this
-     * one says what the reader pressed, and a grain resolving to no row is a **success** — the
-     * caller wanted no override and there is none.
+     * `to` must be a printing **of this token** in a finish it is sold in, checked before anything
+     * is written. Swapping an entry onto itself is a success that writes nothing — the implicit
+     * entry onto its own printing included, so opening the picker and closing it on the tile's own
+     * art materialises nothing. **The token's other entries are untouched**: they are neither the
+     * source nor the destination.
      */
-    deck_token_clear: (args: { deckId: number; oracleId: string }): void => {
+    deck_token_swap: (args: {
+      deckId: number;
+      variant: DeckVariant;
+      oracleId: string;
+      from: TokenEntryKey | null;
+      to: TokenEntryKey;
+    }): void => {
       refuseIfBusy(db);
-      requireDeck(db, args.deckId);
-      db.deckTokens = db.deckTokens.filter(
-        (t) => !(t.deckId === args.deckId && t.oracleId === args.oracleId),
-      );
+      const variant = validVariant(args.variant);
+      const printing = cardById(db, args.to.cardId);
+      if (printing === null) throw refuse(TOKEN_NO_SUCH_PRINTING);
+      if (printing.oracleId !== args.oracleId) throw refuse(TOKEN_NOT_THIS_TOKEN);
+      const finish = tokenEntryFinish(printing, args.to.finish);
+      journalTokens(db, args.deckId, variant, args.oracleId, () => {
+        const { target: source } = namedTokenEntry(
+          db,
+          args.deckId,
+          variant,
+          args.oracleId,
+          args.from,
+        );
+        if (source.cardId === printing.id && source.finish === finish) {
+          return tokenChange("swap", null, null);
+        }
+        // The implicit entry is never stored, so dropping its grain is a no-op and the swap *is*
+        // its materialisation — at the destination.
+        dropTokenEntry(db, args.deckId, source);
+        const held = tokenEntries(db, args.deckId, variant, args.oracleId).find(
+          (e) => e.cardId === printing.id && e.finish === finish,
+        );
+        const landed: TokenEntryRow = {
+          ...source,
+          cardId: printing.id,
+          finish,
+          quantity: (held?.quantity ?? 0) + source.quantity,
+        };
+        putTokenEntry(db, args.deckId, landed);
+        return tokenChange(
+          "swap",
+          tokenEntryFacts(db, source),
+          tokenEntryFacts(db, landed),
+          landed,
+          { folded: held !== undefined },
+        );
+      });
     },
 
     /**
-     * `deck_tokens::deck_token_add` — a token added by hand, and the one of the four that names
-     * a **printing** rather than the grain.
+     * `deck_tokens::add_printing` — **rule 5**, one copy of a printing in a finish, from the
+     * band's *Add printing* picker. See {@link addTokenPrinting}, which
+     * {@link writeHandlers.deck_add_card}'s reroute shares.
      *
-     * The reader picks out of a printings grid, so a printing is what there is to send; the
-     * oracle id is resolved from it and the row is written `manual` with that printing as its
-     * `cardId`. A `manual` row is drawn whether or not the deck derives it, which is also what a
-     * derived token becomes when the reader keeps it after cutting the card that made it.
-     *
-     * **Adding one the deck already derives is a `set`, not a second row**: the grain is
-     * `(deckId, oracleId)` and there is only ever one row per token per deck.
+     * `finish` is optional on the wire the way the crate's `Option<String>` is — absent or `null`
+     * is the printing's default finish — though `ipc.ts` always sends one, because the picker's
+     * grain is the printing *and* the finish.
      */
-    deck_token_add: (args: { deckId: number; cardId: string }): void => {
+    deck_token_add_printing: (args: {
+      deckId: number;
+      variant: DeckVariant;
+      cardId: string;
+      finish?: string | null;
+    }): void => {
       refuseIfBusy(db);
-      requireDeck(db, args.deckId);
-      const token = tokenById(db, args.cardId);
-      if (token === undefined) throw refuse(TOKEN_PRINTING_GONE);
-      const existing = storedToken(db, args.deckId, token.oracleId);
-      if (existing) {
-        existing.cardId = token.id;
-        existing.state = "manual";
-        existing.updatedAt = stamp(db);
-        return;
-      }
-      const now = stamp(db);
-      db.deckTokens.push({
-        id: nextId(db.deckTokens),
-        deckId: args.deckId,
-        oracleId: token.oracleId,
-        cardId: token.id,
-        // Left alone rather than set to 1: the default is `deckTokens.ts`' conclusion, and
-        // storing it here would freeze a token added today at whatever the default was today.
-        quantity: null,
-        state: "manual",
-        createdAt: now,
-        updatedAt: now,
+      const variant = validVariant(args.variant);
+      addTokenPrinting(db, args.deckId, variant, args.cardId, args.finish ?? null, 1);
+    },
+
+    /**
+     * `deck_tokens::set_state` — dismiss, restore or keep a token, **shared by both lists**,
+     * which is why it names no `variant`: a dismissal is "not in this deck" whichever list the
+     * reader is looking at.
+     *
+     * The wire key is **`state`** — the crate names its managed `AppState` `app` on this one
+     * command so the word is free, where the retired `deck_token_set` took `tokenState`. Which of
+     * `auto` and `manual` a restore sends is TypeScript's conclusion; this writes the word it is
+     * handed, deleting a row `auto` would leave empty.
+     */
+    deck_token_state: (args: { deckId: number; oracleId: string; state: string }): void => {
+      refuseIfBusy(db);
+      const state = validTokenState(args.state);
+      journalTokens(db, args.deckId, null, args.oracleId, () => {
+        const before = storedToken(db, args.deckId, args.oracleId)?.state ?? "auto";
+        writeTokenState(db, args.deckId, args.oracleId, state);
+        return tokenChange("state", before, state);
+      });
+    },
+
+    /**
+     * `deck_tokens::reset` — back to the implicit entry: every entry of this token **in this
+     * list** goes, and nothing else does — not the other list's, and not the token's state. A
+     * token with no entries is a success that records nothing.
+     */
+    deck_token_reset: (args: { deckId: number; variant: DeckVariant; oracleId: string }): void => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      journalTokens(db, args.deckId, variant, args.oracleId, () => {
+        const entries = tokenEntries(db, args.deckId, variant, args.oracleId);
+        for (const entry of entries) dropTokenEntry(db, args.deckId, entryRowOf(entry));
+        return tokenChange("reset", null, null, null, { entries: entries.length });
       });
     },
 
@@ -19104,6 +19774,7 @@ export function writeHandlers(db: FakeDb) {
       db.deckCategories = [];
       db.deckLabels = [];
       db.deckTokens = [];
+      db.deckTokenPrintings = [];
       // Both note tables, and they are one line each here because there is no deck left for
       // either to hang off: `deck_notes.deck_id` CASCADEs from the rows above and
       // `deck_note_cards.note_id` CASCADEs from those. The two-hop dance
@@ -20770,6 +21441,7 @@ export function writeHandlers(db: FakeDb) {
             db.deckLabels.length +
             db.deckCards.length +
             db.deckTokens.length +
+            db.deckTokenPrintings.length +
             db.deckAudit.length +
             db.mutedTags.length
           : 0,
@@ -21908,16 +22580,13 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   // here for the same reason, and files no `deck_undo` row at all, which is why that write is
   // all-or-nothing inside one transaction.
   "deck_missing_to_collection",
-  // The three token writes, and they are here for the **snapshot's** shape rather than the
-  // copies': {@link deckState} records a deck's row, its cards, its categories and the label
-  // table, and `deck_tokens` is in none of those. So a step could only ever put half the deck
-  // back — and the half it would restore is the half these writes do not touch. They record no
-  // history row either, which means the wrapper below would file nothing for them anyway;
-  // naming them is what stops that being the *reason*, the way `deck_to_collection` is named
-  // rather than left to {@link deckOf} answering `undefined`.
-  "deck_token_set",
-  "deck_token_clear",
-  "deck_token_add",
+  // **No token write is here any more** (user schema v52). The three that were —
+  // `deck_token_set`, `deck_token_clear` and `deck_token_add` — are retired, and they were on this
+  // list because `deck_undo::Op` had no arm for tokens and {@link deckState} recorded no token
+  // table, so a step could only have put back the half of the deck they did not touch. Both
+  // halves changed together: the crate grew `Op::Tokens`, the snapshot grew the two token lists,
+  // and the five writes that replaced them record a history row and are journalled like every
+  // other deck write — which is what spec §4.7's "every token write is undoable" means here.
 ]);
 
 /**
@@ -21960,30 +22629,179 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
 function journalled<T extends Record<string, (args: never) => unknown>>(db: FakeDb, writes: T): T {
   const wrapped: Record<string, (args: never) => unknown> = {};
   for (const [name, handler] of Object.entries(writes)) {
+    // Every write reconciles the tokens of the decks whose cards it moved — spec §4.2's rule 7,
+    // in the crate's two layers ({@link reconcileInStep} and {@link reconcileBackstop}). A write
+    // that refused last time may have left rows for {@link omitFromStep}; they are not this one's.
+    const step = (args: Record<string, unknown>) => {
+      takeStepOmissions(db);
+      return reconcileInStep(db, () => handler(args as never));
+    };
+    const stepless = (args: Record<string, unknown>) => {
+      const { result, dirty } = step(args);
+      takeStepOmissions(db);
+      reconcileBackstop(db, dirty);
+      return result;
+    };
     if (NO_UNDO_STEP.has(name)) {
-      wrapped[name] = handler;
+      wrapped[name] = stepless as (args: never) => unknown;
       continue;
     }
     wrapped[name] = ((args: Record<string, unknown>) => {
       const deckId = deckOf(db, name, args);
-      if (typeof deckId !== "number") return handler(args as never);
+      if (typeof deckId !== "number") return stepless(args);
       const before = deckState(db, deckId);
       const written = db.deckAudit.length;
-      const result = handler(args as never);
+      // The in-step reconcile runs before the `after` snapshot, so a cut's token half rides the
+      // cut's own Ctrl+Z (spec §4.2): undo puts the card **and** its Treasure printings back. The
+      // backstop runs after it, so what it deletes sits in no step — the crate's arrangement.
+      const { result, dirty } = step(args);
+      const omitted = takeStepOmissions(db);
       const rows = db.deckAudit.slice(written);
       if (before !== null && rows.length > 0) {
         db.deckUndo.push({
           auditId: rows[rows.length - 1].id,
           deckId,
-          before,
+          before: {
+            ...before,
+            tokenPrintings: before.tokenPrintings.filter((e) => !omitted.has(e.id)),
+          },
           after: deckState(db, deckId) as FakeDeckState,
           undoneAt: null,
         });
       }
+      reconcileBackstop(db, dirty);
       return result;
     }) as (args: never) => unknown;
   }
   return wrapped as T;
+}
+
+/**
+ * The token entries a write deleted **ahead of** its own step, keyed by the database — what
+ * {@link journalled} leaves out of that step's before-image.
+ *
+ * The crate reads a step's before-image inside the transaction, so a write can delete first and
+ * read second; the fake's snapshot is taken by the wrapper before the handler runs, so a handler
+ * that owes the crate's order says which rows to leave out instead. One caller: the theory
+ * switch's first reconcile (`deck::update_deck`), whose deletions ride no step for the reason
+ * given there. Deletions only, by row id — a snapshot row is a copy carrying its row's id.
+ */
+const stepOmissions = new WeakMap<FakeDb, Set<number>>();
+
+/** Mark `removed` as deleted ahead of the running write's step. */
+function omitFromStep(db: FakeDb, removed: readonly FakeDeckTokenPrinting[]): void {
+  const ids = stepOmissions.get(db) ?? new Set<number>();
+  for (const entry of removed) ids.add(entry.id);
+  stepOmissions.set(db, ids);
+}
+
+/** The running write's omissions, cleared as they are read. */
+function takeStepOmissions(db: FakeDb): Set<number> {
+  const ids = stepOmissions.get(db) ?? new Set<number>();
+  stepOmissions.delete(db);
+  return ids;
+}
+
+/**
+ * What each list's token derivation reads, keyed `deckId|variant` — the distinct printings the
+ * list holds in an **active** pile, which is the whole input to {@link derivedTokens}. Two equal
+ * answers derive the same tokens, so a write that leaves one unchanged has nothing for a
+ * reconcile to do in that list.
+ */
+function derivationInputs(db: FakeDb): Map<string, string> {
+  const active = new Set(db.deckCategories.filter((c) => c.isActive).map((c) => c.id));
+  const byList = new Map<string, Set<string>>();
+  for (const dc of db.deckCards) {
+    if (!active.has(dc.categoryId)) continue;
+    const list = `${dc.deckId}|${dc.variant}`;
+    const keys = byList.get(list) ?? new Set<string>();
+    keys.add(dc.cardId);
+    byList.set(list, keys);
+  }
+  const out = new Map<string, string>();
+  for (const [list, keys] of byList) out.set(list, [...keys].sort().join(","));
+  return out;
+}
+
+/**
+ * **Rule 7's first layer** — run a write, then `deck_tokens::reconcile_in` over each list whose
+ * derivation it moved, and answer the decks it touched for {@link reconcileBackstop}.
+ *
+ * The crate runs this inside the write's own transaction, at `deck_undo::record_cells` and
+ * `record_variant` and the three steps built without them, so its deletions ride the write's undo
+ * step. {@link journalled} gets the same effect by running it before a step's `after` snapshot is
+ * taken. A throw leaves the tables as the write left them and reconciles nothing.
+ */
+function reconcileInStep<R>(db: FakeDb, write: () => R): { result: R; dirty: number[] } {
+  const before = derivationInputs(db);
+  const result = write();
+  const after = derivationInputs(db);
+  const dirty = new Set<number>();
+  for (const list of new Set([...before.keys(), ...after.keys()])) {
+    if (before.get(list) === after.get(list)) continue;
+    const [deckId, variant] = list.split("|");
+    reconcileTokens(db, Number(deckId), [variant as DeckVariant]);
+    dirty.add(Number(deckId));
+  }
+  return { result, dirty: [...dirty] };
+}
+
+/**
+ * **Rule 7's second layer** — `deck_tokens::reconcile_dirty`, the backstop `sync::with_write`
+ * runs after every write: both lists of every deck the write touched, **after** any step it filed
+ * was taken, so what it deletes sits in no step. The crate needs it for the writes that file none
+ * (the collection's filing and cut, a sync pull, undo and redo); here it also catches the list the
+ * first layer did not look at, which is the crate's order exactly.
+ */
+function reconcileBackstop(db: FakeDb, dirty: readonly number[]): void {
+  for (const deckId of dirty) reconcileTokens(db, deckId, VARIANTS);
+}
+
+/**
+ * `deck_tokens::reconcile_in` — delete every entry, in each of `variants`, of a token that list
+ * no longer derives and that is not `manual`, and answer what went.
+ *
+ * **A `manual` token is never touched** — no card made it, so no cut can unmake it — and a
+ * `hidden` one is: a dismissal is still a token the deck makes, and once it does not it has
+ * nothing left to be dismissed from. Cutting the maker and adding it back brings the token back
+ * as its implicit entry. A deck that is gone has nothing to reconcile.
+ */
+function reconcileTokens(
+  db: FakeDb,
+  deckId: number,
+  variants: readonly DeckVariant[],
+): FakeDeckTokenPrinting[] {
+  if (!db.decks.some((d) => d.id === deckId)) return [];
+  const removed = new Set<FakeDeckTokenPrinting>();
+  for (const variant of variants) {
+    const derived = new Set(derivedTokens(db, deckId, variant).map((d) => d.token.oracleId));
+    for (const entry of db.deckTokenPrintings) {
+      if (entry.deckId !== deckId || entry.variant !== variant) continue;
+      if (derived.has(entry.oracleId)) continue;
+      if (storedToken(db, deckId, entry.oracleId)?.state === "manual") continue;
+      removed.add(entry);
+    }
+  }
+  if (removed.size > 0) {
+    db.deckTokenPrintings = db.deckTokenPrintings.filter((e) => !removed.has(e));
+  }
+  return [...removed];
+}
+
+/**
+ * A step-less write behind the backstop alone — an undo or a redo, which the crate runs through
+ * `with_write` like every other write and files no step of its own: a restore that moved a deck's
+ * cards reconciles both of its lists, and those deletions sit in no step.
+ */
+function backstopping(db: FakeDb, write: () => void): void {
+  const before = derivationInputs(db);
+  write();
+  const after = derivationInputs(db);
+  const dirty = new Set<number>();
+  for (const list of new Set([...before.keys(), ...after.keys()])) {
+    if (before.get(list) !== after.get(list)) dirty.add(Number(list.split("|")[0]));
+  }
+  reconcileBackstop(db, [...dirty]);
 }
 
 /**
@@ -22037,6 +22855,10 @@ function deckState(db: FakeDb, deckId: number): FakeDeckState | null {
     labels: db.deckLabels.map((l) => ({ ...l })),
     notes: db.deckNotes.filter((n) => n.deckId === deckId).map((n) => ({ ...n })),
     noteCards: db.deckNoteCards.filter((c) => noteIds.has(c.noteId)).map((c) => ({ ...c })),
+    tokens: db.deckTokens.filter((t) => t.deckId === deckId).map((t) => ({ ...t })),
+    tokenPrintings: db.deckTokenPrintings
+      .filter((e) => e.deckId === deckId)
+      .map((e) => ({ ...e })),
   };
 }
 
@@ -22066,6 +22888,17 @@ function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
   db.deckNoteCards = [
     ...db.deckNoteCards.filter((c) => !held.has(c.noteId)),
     ...state.noteCards.map((c) => ({ ...c })),
+  ];
+  // The token state rows and both lists' entries — `Op::Tokens`' `states`, `restore` and
+  // `delete` in one move, because a snapshot is "make the deck look like this again" rather than
+  // three primitives.
+  db.deckTokens = [
+    ...db.deckTokens.filter((t) => t.deckId !== deckId),
+    ...state.tokens.map((t) => ({ ...t })),
+  ];
+  db.deckTokenPrintings = [
+    ...db.deckTokenPrintings.filter((e) => e.deckId !== deckId),
+    ...state.tokenPrintings.map((e) => ({ ...e })),
   ];
 }
 
@@ -22103,7 +22936,9 @@ function undoHandlers(db: FakeDb) {
             "Open the history to see what happened.",
         );
       }
-      restoreDeck(db, args.deckId, cursor.before);
+      // Behind the backstop, as the crate's reversal runs behind `with_write`'s: a restore that
+      // moved the deck's cards reconciles its tokens, and those deletions sit in no step.
+      backstopping(db, () => restoreDeck(db, args.deckId, cursor.before));
       // Strictly increasing within the deck, `deck_undo::apply_reversal`'s rule: `nextRedo` reads
       // it as an ordinal, and two undos inside one tick of `stamp` would otherwise tie.
       const newest = Math.max(
@@ -22130,7 +22965,7 @@ function undoHandlers(db: FakeDb) {
             "Open the history to see what happened.",
         );
       }
-      restoreDeck(db, args.deckId, step.after);
+      backstopping(db, () => restoreDeck(db, args.deckId, step.after));
       step.undoneAt = null;
       recordReversal(db, args.deckId, "redo", step.auditId);
     },

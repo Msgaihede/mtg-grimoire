@@ -24,6 +24,7 @@ import {
   type DeckKind,
 } from "./deckKind";
 import { CAPTION, FIELD } from "./formFields";
+import { TOKEN_MODE_HINT, TokenModeControl, type TokenMode } from "./TokenModeControl";
 // The **vocabulary**, not the control. `FormatSelect.tsx`'s `GameSelect` draws these same four
 // rows for the import dialog and is deliberately not reused here, exactly as its `FormatSelect`
 // is not: that file's labels are `text-xs text-dim` and this form's are `CAPTION`, so one
@@ -107,18 +108,20 @@ export interface DeckSettingsValue {
    */
   defaultCategoryId: number;
   /**
-   * Whether the deck's four views draw the **Tokens & Emblems** pile — the same tokens the band
-   * under the desk lists, laid out as one more pile at the end of Stacks, Grid, Text and Table
-   * ([issue #507](https://github.com/Msgaihede/mtg-grimoire/issues/507)). Off by default.
+   * How the deck keeps its tokens — `decks.token_mode`, user schema v52 (token stacks spec §4.5).
+   * `managed` draws the **Tokens & Emblems** pile in Stacks, Grid, Text and Table; `hidden` takes
+   * it out of all four. It replaced v47's `tokenStack` switch, and every deck starts `managed`.
    *
-   * A *reading* preference and nothing more: the pile is appended in the view layer and never
-   * enters the deck's cards, so no size, total, ledger figure or validation rule can see it.
+   * A *reading* preference as far as the deck's cards go: the pile is appended in the view layer
+   * and never enters them, so no size, total, ledger figure or validation rule can see it — and
+   * the band under the desk keeps every token in every mode.
    *
    * **Required on the value although only the edit host draws a control for it** —
    * {@link DeckSettingsValue.defaultCategoryId}'s rule again. `DeckInput` carries no such field,
-   * so the create draft holds `false`, sends nothing, and the column's `DEFAULT 0` agrees.
+   * so the create draft holds `managed`, sends nothing, and the column's `DEFAULT 'managed'`
+   * agrees.
    */
-  tokenStack: boolean;
+  tokenMode: TokenMode;
 }
 
 export interface DeckSettingsFormProps {
@@ -227,16 +230,16 @@ export interface DeckSettingsFormProps {
    */
   canSetTheoryMarks?: boolean;
   /**
-   * Whether the **Tokens & Emblems** switch has anywhere to be written — absent (or `false`) for
-   * a host asking about a deck that does not exist yet, and then the row is not drawn.
+   * Whether the deck's **token mode** has anywhere to be written — absent (or `false`) for a host
+   * asking about a deck that does not exist yet, and then the control is not drawn.
    *
    * {@link DeckSettingsFormProps.canSetTheoryMarks}' argument word for word, and a prop of its own
-   * for that prop's own reason: `DeckInput` has no `tokenStack`, so a press at create would reach
-   * nothing and the deck would be born with the pile off whatever the switch said. The two hosts
-   * answer this and the marks the same way today, and they are still two questions — the day
+   * for that prop's own reason: `DeckInput` has no `tokenMode`, so a press at create would reach
+   * nothing and the deck would be born `managed` whatever the control said. The two hosts answer
+   * this and the marks the same way today, and they are still two questions — the day
    * `deck_create` learns one and not the other, one prop standing for both would be wrong.
    */
-  canSetTokenStack?: boolean;
+  canSetTokenMode?: boolean;
   cover: DeckCoverPickerProps;
   idPrefix: string;
 }
@@ -261,7 +264,7 @@ export interface DeckSettingsFormProps {
  * | Control | `onChange` | `onCommit` |
  * | --- | --- | --- |
  * | Name, Description | every keystroke | on blur — and Enter blurs the name field, unless a host took Enter for {@link DeckSettingsFormProps.onSubmit} |
- * | Game, Format, Deck kind, the switches, Folder, the cover | on the one act that settles them | never |
+ * | Game, Format, Deck kind, the switches, the token mode, Folder, the cover | on the one act that settles them | never |
  *
  * A select, a switch and a tile all finish in a single act, so there is nothing for a second
  * callback to add. A text field does not, which is the whole reason the pair exists.
@@ -294,7 +297,7 @@ export function DeckSettingsForm({
   // Absent is a host that cannot write the answer, which is the create dialog — see the prop.
   canSetTheoryMarks = false,
   // Absent is the create dialog again — see the prop.
-  canSetTokenStack = false,
+  canSetTokenMode = false,
   cover,
   idPrefix,
 }: DeckSettingsFormProps): JSX.Element {
@@ -372,15 +375,25 @@ export function DeckSettingsForm({
           )}
           {/* One gate, the host's: whether the deck has a row to write to. Deliberately not the
               kind — a Regular, a Theory + Actual and a Virtual deck all make tokens, and the
-              pile is a reading preference over whichever list is on screen. */}
-          {canSetTokenStack && (
-            <SettingSwitch
-              id={`${idPrefix}-token-stack`}
-              heading="Show Tokens & Emblems in the deck"
-              caption="Adds a Tokens & Emblems pile to Stacks, Grid, Text and Table. Tokens never count toward the deck's card total."
-              on={value.tokenStack}
-              onChange={(tokenStack) => onChange({ tokenStack })}
-            />
+              mode decides the pile over whichever list is on screen.
+
+              **The `Show Tokens & Emblems in the deck` switch stood here until user schema v52**,
+              and the mode replaced it rather than joining it: `token_stack` is dropped in the rung
+              that adds `token_mode`, so the two could never be two answers. The control is the
+              band header's own; the sentence under it is this panel's, as `DeckKindGroup` draws
+              its kind's — the band's one-row header has no room for it and gets the same words as
+              each button's tooltip instead. */}
+          {canSetTokenMode && (
+            <div>
+              <TokenModeControl
+                value={value.tokenMode}
+                onChange={(tokenMode) => onChange({ tokenMode })}
+                idPrefix={idPrefix}
+              />
+              <p className="mt-1 text-[0.6875rem] leading-snug text-dim">
+                {TOKEN_MODE_HINT[value.tokenMode]}
+              </p>
+            </div>
           )}
           <FolderRow
             folderId={value.folderId}
@@ -911,50 +924,21 @@ function MarkSwitch({
 }
 
 /**
- * A deck-level yes-or-no that is not a theory mark: its name, what it means, and the switch.
+ * The switch this panel draws for every yes-or-no on it — the live list's three theory marks.
  *
- * {@link MarkSwitch}'s row character for character less the swatch, because the swatch is what
- * makes a mark's row a statement about a *colour* and this one is not about any. The heading is
- * the switch's name, so the two stay one grammar: `<heading> <Enabled|Disabled>`.
- */
-function SettingSwitch({
-  id,
-  heading,
-  caption,
-  on,
-  onChange,
-}: {
-  id: string;
-  heading: string;
-  caption: string;
-  on: boolean;
-  onChange: (on: boolean) => void;
-}) {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="min-w-0 flex-1">
-        <p id={id} className="text-sm">
-          {heading}
-        </p>
-        <p className="mt-0.5 text-[0.6875rem] leading-snug text-dim">{caption}</p>
-      </div>
-      <SwitchButton on={on} headingId={id} onChange={onChange} />
-    </div>
-  );
-}
-
-/**
- * The switch this panel draws for every yes-or-no on it — the live list's three theory marks and
- * the Tokens & Emblems pile.
- *
- * One definition rather than four copies, because three controls that look alike today are
+ * One definition rather than three copies, because three controls that look alike today are
  * three independent decisions that agree today: the deck editor has already paid for that with
  * two scrim darknesses and three panel heights.
  *
- * **It drew the theory list's own switch as a fourth until 2026-09-08**, when that question
- * stopped being a yes-or-no one and became {@link DeckKindGroup}. Nothing about this component
- * moved with it — a mark really is on or off — which is the whole of why the two shapes can sit
- * in one panel: a group answers *which of three*, a switch answers *whether*.
+ * **It drew the Tokens & Emblems pile's switch too, through a `SettingSwitch` row, until user
+ * schema v52**, when `decks.token_stack` became `decks.token_mode` and the question stopped being
+ * a yes-or-no one — the same move the theory list's own switch made on 2026-09-08, below. That
+ * row had no other caller and went with it.
+ *
+ * **It drew the theory list's own switch too, until 2026-09-08**, when that question stopped
+ * being a yes-or-no one and became {@link DeckKindGroup}. Nothing about this component moved with
+ * either — a mark really is on or off — which is the whole of why the shapes can sit in one
+ * panel: a group answers *which of several*, a switch answers *whether*.
  *
  * **`aria-labelledby` naming the heading beside it *and* its own state word, in that order.**
  * Never `aria-label`, which would replace the visible "Enabled" with something that does not

@@ -79,7 +79,7 @@ const MADE: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   tokensOpen: false,
-  tokenStack: false,
+  tokenMode: "managed",
   tokenRailIndex: -1,
   statsOpen: true,
   defaultCategoryId: 0,
@@ -435,6 +435,28 @@ describe("the create deck dialog", () => {
     expect(screen.queryByRole("switch", { name: /matching printing/i })).toBeNull();
     expect(screen.queryByRole("switch", { name: /different printing/i })).toBeNull();
     expect(screen.queryByRole("switch", { name: /not in the theory list/i })).toBeNull();
+  });
+
+  /**
+   * **No token mode here either, and none is sent** (token stacks spec §4.5). `DeckInput` has no
+   * `tokenMode` and `decks.token_mode` is `DEFAULT 'managed'`, so a control in this dialog would
+   * be a press that reaches nothing — `canSetTheoryMarks`' arrangement, through the form's own
+   * `canSetTokenMode`, which this dialog does not pass. The draft still holds the column's default,
+   * because the value shape is the form's and one shape serves both hosts.
+   */
+  it("offers no token mode control and sends no tokenMode", async () => {
+    wrap(<Harness />);
+
+    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
+    expect(screen.queryByRole("group", { name: "Tokens" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /tokens & emblems/i })).toBeNull();
+
+    await userEvent.click(submitButton());
+
+    await waitFor(() => expect(deckCreate).toHaveBeenCalled());
+    const sent = deckCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect("tokenMode" in sent).toBe(false);
+    expect("tokenStack" in sent).toBe(false);
   });
 
   /**

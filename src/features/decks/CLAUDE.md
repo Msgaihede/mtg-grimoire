@@ -563,6 +563,21 @@ layer.
   started it has closed by the time an answer arrives**. `useDeckMeta`'s observer here is a
   _different_ one from the dialog's — TanStack shares a query's cache between observers and a
   mutation's state with nobody — so this banner speaks only for presses made out here.
+  **The five token writes are half in this family since user schema v52** (token stacks spec
+  §4.7): `useDeckTokens` hands them out as `writes` and `DeckEditor` spreads them into
+  `lastOfAny` — the wider `newestWrite` that re-reads the deck on a refusal and clears the redo
+  stack on a success — and into `writes`, the banner's list, **only while the band is shut**.
+  Each is a journalled deck write now, so a success must throw redo away and a refusal (`GONE`, for
+  a deck deleted under the reader) must re-read the deck like any other. The band draws a token
+  write's refusal itself (`useDeckTokens`' `failure`, once, above the wall) — but only while it is
+  open, since the wall is unmounted when it is shut, and since v52 every deck draws the pile, whose
+  steppers write with the band shut. So `bannerWrites` is `writes` with the band open and
+  `writes` plus `deckTokens.writes` with it shut: one sentence for one refusal either way, which is
+  the reason `writes` gives for leaving out the docked panel's add, and never none.
+  **`const deckTokens = useDeckTokens(…)` is declared above `lastOfAny` for it**, far from the rest
+  of the token wiring: a `const` read above its own declaration is a `ReferenceError` on the first
+  render, `useDeckNotes`' trap one hook over. `planTokens`' writes are never pressed and are in
+  neither list.
 - **Taking a card off the _Live_ list is a write to the collection, and it is not
   `deck_set_card_quantity`.** Since schema v25 a deck holds a card because a collection row sits
   in that deck's group, so a decrease has to put the copies somewhere: `ipc.deckToCollection`
@@ -1272,8 +1287,12 @@ layer.
   hook**, the reader's position in a session, thrown away with the window and cleared by any other
   deck write. That last part is the ordinary undo contract: once you have edited past a branch,
   the branch is gone. It is cleared off `newestWrite`'s newest **successful** write rather than
-  from a dozen `onSuccess` callbacks in two hooks, so a write added to that array is covered for
-  free — which is also why `Write` grew an `isSuccess`.
+  from a dozen `onSuccess` callbacks in three hooks, so a write added to that array is covered for
+  free — which is also why `Write` grew an `isSuccess`. **The third hook is `useDeckTokens`**,
+  whose five writes joined `lastOfAny` at user schema v52 when every token write became a
+  journalled deck write: before that fix a reader could undo a card write, step a token, and
+  Ctrl+Shift+Z the card write back over the newer token change (`DeckEditor.test.tsx`'s *throws
+  the redo stack away after a token write*, red against the editor without the spread).
 - **`Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y`, and the handler yields inside a text field.** That
   carve-out is the whole of what keeps the quick-add box, the deck name and a note body usable:
   those get the browser's own undo, which this cannot replace and must not swallow. The predicate
@@ -4092,22 +4111,29 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
 ## Tokens & Emblems
 
 `DeckTokensPanel.tsx` (the band), `TokenArtPicker.tsx` (the printings dialog),
-`useDeckTokens.ts` (the query and the four writes) and `deckTokens.ts` (every conclusion), landed
+`useDeckTokens.ts` (the query and the five writes) and `deckTokens.ts` (every conclusion), landed
 2026-09-07 for [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388). The pile the
 four views draw is `views/TokenPile.tsx` (issue #507, 2026-09-24), and the token-stacks work of
-2026-09-26 ([the spec](../../../docs/superpowers/specs/2026-09-26-token-stacks-design.md) §3) added
-`CountPill.tsx` (the count every pile heading wears), `views/tokenRail.tsx` (the pile's place in
-the rail and the gesture that moves it) and `tokenTheory.ts` (the plan's marks on tokens). The Rust
-half — the union keep rule, the `deck_tokens` table, the four commands, the chin facts and the
-price, and every measurement — is
+2026-09-26 ([the spec](../../../docs/superpowers/specs/2026-09-26-token-stacks-design.md)) added,
+in its first PR (§3), `CountPill.tsx` (the count every pile heading wears), `views/tokenRail.tsx`
+(the pile's place in the rail and the gesture that moves it) and `tokenTheory.ts` (the plan's marks
+on tokens), and in its second (§4, user schema **v52**) `TokenModeControl.tsx` (how a deck keeps
+its tokens) — while turning every file above from *one row per token* into **one row per entry**.
+The Rust half — the union keep rule, the `deck_tokens` and `deck_token_printings` tables, the six
+commands, the reconcile, the chin facts and the price, and every measurement — is
 [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
 
 **Rust supplies the facts and `deckTokens.ts` draws every conclusion**, which is this feature's
 copy of the boundary the rest of the builder keeps. Rust resolves each deck card's `all_parts`
-against the corpus and joins on whatever the reader stored; which printing to draw, how many
-copies the stepper starts at, whether a dismissed token is on screen and the order the wall reads
-in are all decisions, and they live in one function with one test file so that changing a rule is
-one edit and not four components disagreeing.
+against the corpus and joins on whatever the reader stored; whether a dismissed token is on screen,
+the order the wall reads in and the key each tile is drawn under are all decisions, and they live
+in one function with one test file so that changing a rule is one edit and not four components
+disagreeing. **Two decisions crossed the line at v52, and the boundary did not bend to let them**:
+*which printing an untouched token draws* and *how many copies it starts at* were `deckTokens.ts`'
+(`cardId ?? defaultCardId`, `quantity ?? 1`) and are Rust's now, because a write has to
+materialise that same entry (rule 2, below) and two halves answering "which printing is the
+implicit one" could disagree about it. A wire row arrives with its printing, finish and quantity
+already effective, and `viewOf` copies them.
 
 - **The naming rule, and it is the reason this section is not called "Tokens".** The area is
   **"Tokens & Emblems"** — `TOKENS_HEADING` in `DeckTokensPanel.tsx`, one constant because three
@@ -4119,18 +4145,153 @@ one edit and not four components disagreeing.
   it would silently regroup every existing deck — so the two strings are kept apart instead. Same
   discipline as *tag* versus *label*: this repo does not let words trade places.
   **`Emblems` is capitalised since 2026-09-24** (issue #507); the constant is the one spelling.
+- **A token holds _entries_, per list, since user schema v52** (2026-09-26, token stacks spec §4 —
+  the reader: *"the important thing is that they can add tokens with different printings, and that
+  we have collection and theory tracking working"*). An **entry** is one printing **in one
+  finish** of one token in one list (`live` or `theory`), with a quantity — a
+  `deck_token_printings` row, grained `(deck, list, card, finish)` — so a Treasure kept as a plain
+  and a foil copy of one printing is **two entries and two tiles**. `deck_tokens` keeps only what
+  is the *token's* and shared by both lists: its state, `auto` / `hidden` / `manual`. A token with
+  **no** entries in a list draws one **implicit entry** — the resolver's default printing, in that
+  printing's default finish (nonfoil, or the first finish it is sold in), at the legacy
+  `deck_tokens.quantity ?? 1` — which is what every untouched token is, and is flagged
+  `implicit: true` on the wire. The seven rules are Rust's (`deck_tokens.rs`), and the page has to
+  know them to draw what they do:
+  1. **A token with entries in a list draws exactly those**; with none, its one implicit entry.
+  2. **The first write to an implicit entry materialises it, in that list only** — a step, a swap
+     and an added printing all count, and it is what makes adding art B keep art A. The page sends
+     the implicit entry as **`null`** (`useDeckTokens`' `stored`, off `implicit` and never off the
+     `cardId` it still carries) and Rust resolves which printing that is at write time.
+  3. **Stepping an entry to 0 deletes it — unless it is the token's last entry in that list**,
+     which stays at 0. That is the old *kept at zero, art kept*, and it is what stops the implicit
+     default reappearing under a reader who zeroed the only printing they had.
+  4. **A swap moves one entry** onto another printing and/or finish of the same token, and landing
+     on one the list already holds **folds** the two (quantities summed, one tile).
+  5. **Adding a printing** inserts it at one copy (an add through `add_card` at its own count) or
+     steps the entry the list already holds up by that, materialising the implicit entry first; a
+     token the list derives nothing for becomes `manual`, and a dismissed one it does derive comes
+     back to `auto`. **The add also deletes the token's zero entries in that list** (never the one
+     it adds to), because rule 3's zero was *the last entry* and beside the new one it is not — a
+     `0` tile no stepper can zero again. One Undo brings the zero back.
+  6. **Theory and live never share an entry**; every entry write names its list. Dismiss and
+     restore name none, because the state is the token's.
+  7. **A token nothing makes any more is removed** — its entries in that list are deleted, unless
+     it is `manual`. That is a reconcile after card writes, below, never a read-time filter.
+
+  The views are one per entry and every surface keys a tile on `DeckTokenView.entryKey`
+  (`tileKeyOf(printingId, finish)`, the collection wall's own spelling, because the grain is the
+  same one) and **never on the oracle id**, which a token's entries share. A write is handed a
+  `TokenEntryRef` (`entryRef(view)` — the oracle id, the grain, `implicit`) rather than the view,
+  so a stale view cannot carry a quantity or a state into a write.
+- **Rule 7 runs in Rust, in two layers, and the second one costs redo one thing** (token stacks
+  spec §4.2, the census of 18 writers on 2026-09-26). Inside the write's own transaction for every
+  card write that files an undo step — `deck_undo::record_cells` and `record_variant`, plus by hand
+  the three steps built without them (the theory switch, a pile switched off, a pile deleted) — so
+  its deletions **ride the card write's own step**, and Ctrl+Z on a cut Smothering Tithe puts back
+  the card **and** the reader's Treasure printings. After every write, as a backstop on
+  `sync::with_write`'s hook, for the writers that file no step: the Collection tab's filing and the
+  live cut, a sync pull, and **undo and redo themselves** (Scryfall's reconcile takes the write
+  connection outside `with_write`, so the marks it leaves are reconciled at the next write that
+  does come through it). Those deletions sit in no step, so **a redo does not bring back entries a
+  post-undo reconcile removed** — the one known limitation, accepted rather than missed. **And a
+  list whose makers cannot all be read deletes nothing**: a maker gone from the corpus or a `raw`
+  that will not parse means the list
+  cannot prove a token unneeded, and a device paired before its corpus has downloaded would
+  otherwise derive nothing, delete every entry and push the deletes to the whole group. The page
+  owns none of this and sees it only as rows that are gone at the next read — which the
+  `["decks"]` invalidation every card write already fires is what fetches.
+  **The theory switch moves the live list's entries into the plan with the cards** rather than
+  letting the reconcile take them — the Treasure arts the reader chose are part of the deck that
+  becomes the plan — and replaces what the plan held, on the switch's one undoable step. **One
+  Ctrl+Z puts the live arts back, not the plan's stale ones**: v52's launch conversion pass copied
+  every old pick into *both* lists, a plan with no cards makes no token, so the switch reconciles
+  both lists
+  before it reads what its step records, and restoring an entry rule 7 owes the deletion of would
+  only hand the backstop a row to delete and the redo a reason to refuse.
+- **A token is never a deck card, and the router is Rust's** (spec §4.6). Adding or dropping a
+  token, a double-faced token or an emblem from the search column — either tab, any pile, quick
+  add, the card menu's `Add to`, a drop on the sidebar's deck entry — files it as a **token entry**
+  (rule 5) and writes no `deck_cards` row. **The routing is at the two writes every add ends in**,
+  `deck::add_card` and `collection_alloc::collection_to_deck`, through
+  `deck_tokens::printing_is_token`: measured 2026-09-26, no drag payload and no add call carries
+  the card's layout, so a TypeScript router would have to thread it through six call sites and
+  would miss the seventh. **The predicate is the layout _or_ a two-sided token line** — `token`,
+  `double_faced_token` and `emblem` by themselves, plus a `flip` or `reversible_card` printing
+  whose type line, or any ` // ` face of it, begins `Token` or `Emblem`: a layout-only test let
+  six real tokens (five `flip` Role tokens and the reversible Mechtitan) become deck cards through
+  `add_card`. `deckTokens.ts`' **`isTokenPrinting`** is its TypeScript twin, and the Storybook fake
+  is what routes on it. **The app routes nothing on it, and names with it**: routing stays Rust's,
+  but `DeckSearchPanel` reads `isTokenPrinting` to name a token tile's Add button *Add … to Tokens
+  & Emblems* — where the add lands — rather than the category a card of that type line would take.
+  `isTokenLayout` survives as the narrow first half only, and is not the routing question.
+  **A rerouted `add_card` answers `EntryChange { id: 0 }`**, and that is a contract: no deck card
+  was made, so `DeckEditor`'s `markAdded` skips `NO_DECK_CARD` rather than arm a landed glow
+  against a row id no card has, and the token appears in the pile because `useDeck`'s `["decks"]`
+  invalidation re-reads the token query too. A rerouted `collection_to_deck` moves **no copy** and
+  answers `quantity: 0` with no ids — PR 2's Managed mode touches the collection never — and,
+  unlike a card filed through that command, **files an undo step**: the reroute is
+  `add_printing_in`, which journals inside the filing's transaction like every token add, and with
+  no copy moved there is no custody half for the step to be unable to restore.
+- **Every token write is a deck write: a history row, an undo step, and the redo stack thrown
+  away** — which reverses #388's *token writes record nothing* (the reader asked for undo). Rust's
+  `journal_in` is the one place the five writes record, so they cannot differ in how:
+  - **History is a `deck_audit` row of kind `deck` with `field: "token"`, never a tenth kind** —
+    the deck notes' `{ field: "note" }` precedent, and a sync reason rather than a rebuild one:
+    `deck_audit` is synced and append-only, so a word its `CHECK` does not know would be refused
+    by a paired device on an older build and its applier would defer the op — which, while the
+    sync client advances its cursor past a deferral, loses it and the sender's later ops in that
+    page for good (sync.md *Deferred ops are dropped, not held*; this read "stalling that device's
+    whole stream until it upgraded"). `auditText.ts`' `tokenLine` words the five actions —
+    *Added 1 × Treasure (foil)*, *Treasure 1 → 3*, *Swapped Treasure's art* (with `TCMM #48 →
+    TVOW #17 (foil)` in the detail, and *folded into one row* on a fold), *Dismissed Treasure* /
+    *Restored Treasure*, *Reset Treasure's printings* — reading `journal_in`'s snake_case payload
+    key for key: `add` counts the extra `quantity` and never `to` (a second press on a held
+    printing steps it by one), the subtitle and a theory list ride in the detail, and the finish
+    is said only where it is not the regular copy. The mode's own row is `field: "tokenMode"`
+    (*Hid Tokens & Emblems*). `DeckHistoryDialog` files both under its `structure` band with no
+    change, `delta` 0, so the day header's card sum is untouched.
+  - **Undo is `deck_undo`'s sixth `Op`, `Op::Tokens { restore, delete, states }`** — rows restored
+    by grain, never a command run backwards, and the Undo button's label is the audit row's
+    sentence, so it reads *Undo — Treasure 1 → 3*. A mode change is `Op::Deck { token_mode }`.
+  - **A token write clears the redo stack like any deck write** — `useDeckTokens` hands its five
+    mutations out as `writes`, and `DeckEditor` spreads them into `lastOfAny`'s `newestWrite`, so a
+    success clears redo and a refusal re-reads the deck (see *Writes*). Before that fix a reader
+    could undo a card write, step a token, and Ctrl+Shift+Z the card write back over the newer
+    token change; `throws the redo stack away after a token write` is the pin.
+- **How a deck keeps its tokens is `decks.token_mode`, and PR 2 draws two of its three words**
+  (user schema v52, spec §4.5). `TokenModeControl` is `DeckKindGroup`'s shape — a `role="group"`
+  of `aria-pressed` buttons, never a radiogroup, named by the visible word **Tokens** beside it —
+  and it is drawn in **two places writing one column**: the band's header, on every deck including
+  one that makes nothing and one whose read was refused (the mode is a question about the deck), and
+  Deck settings, where the `Show Tokens & Emblems in the deck` switch stood until v52 — with the
+  selected mode's `TOKEN_MODE_HINT` under it there, and as each button's tooltip in the band's
+  one-row header, where the word sits *beside* the buttons rather than above them. `managed` draws
+  the pile in all four views; `hidden` takes it out of all four and leaves the band, whose steppers
+  work in every mode. **`collection` is in the column's `CHECK` from v52 and has no button until
+  PR 3** gives it custody: a Collection button that behaved exactly as Managed would be a control
+  that lies about what it does. A deck a newer build put in Collection mode reaches this one by
+  sync and presses **neither** button, and settings' caption says so. **Every deck starts
+  `managed`**, the ones whose stack was off included — so after the upgrade every deck that makes
+  tokens shows a pile. The write is the ordinary `deck.update.mutate({ tokenMode })`, audited as
+  `tokenMode` and undoable; the create dialog draws no control and sends nothing (`DeckInput` has
+  no such field), for `defaultCategoryId`'s reason.
 - **One read, one picker, two drawings** (2026-09-24, issue #507). `DeckEditor` calls
   `useDeckTokens(deckId, variant)` **once** and hands the answer to the band as a prop, and — on a
-  deck with `decks.token_stack` on — to the four views as `tokenPile` (visible tokens only, never a
-  dismissed one whatever `Show dismissed` says). It mounts the **one** `TokenArtPicker` both
-  surfaces open, holding `picking` by `oracle_id`. The band calls no hook and holds no picker; a
-  second hook call would be a second `showDismissed` and a second write observer. **There is one
-  second call since 2026-09-26, and it is a read of the _other_ list rather than a second drawing**
-  — `planTokens`, the theory list's tokens for the plan's marks (below): only its `tokens` and its
-  `isSuccess` are read, never a write or its switch, because the override is grained on
-  `(deck, oracle_id)` with no variant term and a write through that copy would land on the band's
-  row and report its refusal to nobody. **The pile never enters `groups`**, which is what keeps a
-  token out of the deck's size, every pile total, the ledger, the stats and validation.
+  deck whose `tokenMode` is not `hidden` (`tokenPileDrawn`) — to the four views as `tokenPile`
+  (`keptTokens`: every entry but a dismissed token's, whatever `Show dismissed` says). It mounts
+  the **one** `TokenArtPicker` every way in opens, holding `pickingToken` — `{ kind: "swap",
+  entryKey } | { kind: "add" } | null` — and looking the entry up in `deckTokens.tokens` on every
+  render: **a key and never a frozen view**, because the entries are re-derived after every write,
+  and an entry that has gone shuts the picker rather than answer about a row the list no longer
+  holds. The band calls no hook and holds no picker; a second hook call would be a second
+  `showDismissed` and a second write observer. **There is one second call since 2026-09-26, and it
+  is a read of the _other_ list rather than a second drawing** — `planTokens`, the theory list's
+  tokens for the plan's marks (below): only its `tokens` and its `isSuccess` are read, never a
+  write or its switch, because a write through that copy would land on the theory list — the one
+  the reader is not looking at — and report its refusal to nobody, and the dismissals it could make
+  are the token-level state both lists share, which the band already owns. **The pile never enters
+  `groups`**, which is what keeps a token out of the deck's size, every pile total, the ledger, the
+  stats and validation.
 - **The count is copies, on every pile — the band's header included** (2026-09-26, token stacks
   spec §3.1), and that reverses what shipped with issue #507. The band's figure was
   `TokenCountPill`, **the distinct kept tokens and never copies**, on the argument that a count of
@@ -4140,10 +4301,13 @@ one edit and not four components disagreeing.
   when its stepper did. `TokenCountPill` is deleted and both surfaces draw `CountPill` with
   `tokenCountWords` — `6 tokens and emblems`, no `to bring`, since the `Tokens & Emblems` heading
   beside it already says what the pile is. **One number on both, by construction rather than by
-  agreement**: the band sums the resolved views' `quantity` over the tokens that are not
-  dismissed, and the pile's `tokenPileHeading` sums the same field over the same set
-  (`keptTokens`), so revealing a dismissal on the band moves neither. The two sums are written
-  twice today and are a candidate for one function in `deckTokens.ts`.
+  agreement**: the band sums the resolved views' `quantity` over every entry of every token that
+  is not dismissed — a Treasure kept as three plain copies and one foil is four — and the pile's
+  `tokenPileHeading` sums the same field over the same set (`keptTokens`), so revealing a
+  dismissal on the band moves neither. The two sums are written twice today and are a candidate
+  for one function in `deckTokens.ts`. **`Show dismissed` counts tokens and not rows since v52**:
+  the rows are per entry, so a Treasure dismissed with two printings is two hidden rows and one
+  token the switch offers to show, and the band counts distinct oracle ids.
 - **The pile is drawn with the deck's own parts, so it cannot drift from them** (2026-09-26, token
   stacks spec §3.2 — *"it should look and function like the other stack"*). It was a parallel
   drawing: a heading of its own, a bare `CardArt` with a `CountTag` laid on it, and
@@ -4160,10 +4324,15 @@ one edit and not four components disagreeing.
     `TheoryMatchMark` top-right, the printed-frame fallback and the foil sheen, and the chin says
     rarity, set, number, finish and price (the set's name on hover, as on a deck card). **`DeckCardFace`'s `card` is narrowed to `DeckCardFaceFacts`**,
     a `Pick<DeckCard, …>` of exactly the fields the face reads, and `tokenFaceFacts` is the
-    adapter: no mana cost, no review state, no label, never a game changer, `finish: null` (*not
-    said*, so `playedFinish` falls to a sole finish and a foil-only token still sheens). The
-    `Pick` is the fence: a new field read inside the face is a red build, and the adapter is the
-    one other place that then has to answer for it.
+    adapter: no mana cost, no review state, no label, never a game changer, and **the entry's own
+    finish** spelled as a deck row's is (`tokenDeckFinish`: `nonfoil` is `null`, *the regular
+    copy*), so a foil entry sheens and its regular twin does not. It was a flat `null` (*not
+    said*) until v52, when a token had no finish of its own; a regular entry still arrives as
+    `null`, so `playedFinish` still falls to a sole finish and a foil-only printing still sheens.
+    The chin takes the same finish. **Table and Text draw the deck row's own `DeckFinishMark`**
+    beside a token line since v52, or a foil entry and its regular twin were two identical lines.
+    The `Pick` is the fence: a new field read inside the face is a red build, and the adapter is
+    the one other place that then has to answer for it.
   - **The geometry is the deck stack's** — `stackHeight`, `stackCollapsedMargin`,
     `useFlipThrough`, the stepper column revealed by `revealedWhenOpen` — and the `<li>`'s body is
     `CardStack.tsx`'s exported `STACKED_CARD_BODY` and `stackedCardShadow(open)`, which both cards
@@ -4218,9 +4387,10 @@ one edit and not four components disagreeing.
     Ctrl+Shift+Z moves it again — and `record_deck_edit` writes one `deck_audit` row, field
     `tokenRail`, which `auditText.ts` reads as **"Moved Tokens & Emblems"** with no position: the
     numbers are slots in a rail that may have changed since. A re-send of the same index writes no
-    row. That is where it parts company with v47's `token_stack`, a setting with no history row:
-    this is an arrangement the reader drags, the category reorder's footing. `duplicate_deck`
-    carries it.
+    row. That is where it parted company with v47's `token_stack`, a setting with no history row:
+    this is an arrangement the reader drags, the category reorder's footing. (v52's `token_mode`,
+    which replaced `token_stack`, has both a history row and a `DECK_FIELDS` entry — a mode is an
+    arrangement the reader chose, on the rail index's footing.) `duplicate_deck` carries it.
   - **The move is optimistic** (`localTokenRail` in `DeckEditor`), for the category grip's reason:
     a move is a round trip *and* a re-read of the deck, so drawn from the column alone the grip goes
     on saying `3 of 3` after the press, and two presses inside that beat move the pile one place.
@@ -4240,27 +4410,31 @@ one edit and not four components disagreeing.
   spec §3.5). On a deck that keeps a plan, read on **Live**, the editor reads the theory list's
   tokens (`planTokens`, above) and builds a token `TheoryPlan` with the existing
   `theoryMatchPlan` — no new arithmetic and no new tier, under the deck's own three mark switches.
-  Each side is an effective printing keyed `theorySlot({ cardId: printingId, finish: null })`: a
-  token carries no finish on the wire yet, so two `null`s are one regular copy matching another.
-  **Both sides are built in TypeScript**, where a deck card's plan side is Rust's
-  `deck_theory_slots` — there is no such command for tokens and none is wanted, because the plan's
-  tokens are the theory list's own `deck_tokens` answer, so one `theorySlot` spells both halves.
+  Each side is a list's **entries** — the implicit one where the list holds none — keyed
+  `theorySlot({ cardId: printingId, finish: tokenDeckFinish(view) })`, the finish spelled as a deck
+  card's is (`nonfoil` is `null`), so a token's slot is exactly the key a deck card of that
+  printing and finish would have. It was `finish: null` on both sides until v52, when a token
+  carried no finish on the wire. **Both sides are built in TypeScript**, where a deck card's plan
+  side is Rust's `deck_theory_slots` — there is no such command for tokens and none is wanted,
+  because the plan's tokens are the theory list's own `deck_tokens` answer, so one `theorySlot`
+  spells both halves.
   - **The name tier keys on `oracleId`, never on the name** — the spec keyed it on the name and was
     overruled while this was built. A token's name does not identify it (below: `Wurmcoil Engine`
     makes two `Wurm`s), so keyed on the name a live Deathtouch Wurm against a planned Lifelink one
     would read *the same token in another printing* about two different tokens. `theoryNameKey`'s
     fold is a no-op on Scryfall's lowercase UUIDs, so `theoryMatch.ts` needs no second path. A card
     keys that tier on its name because Scryfall omits `oracle_id` on reversible cards; a token's
-    `oracleId` is never empty — it is the grain `deck_tokens` stores.
-  - **Until PR 2 every mark carries a delta of 0 — never `±N` — and that is the data, not a limit
-    of the mark.** The override is grained on `(deck, oracle_id)` with no variant term, so a
-    token's art and quantity are one pair of values both lists share, and each list draws at most
-    one entry per `oracle_id`: at both grains `planned − live` is one quantity subtracted from
-    itself. So a token reads the tick (the plan makes it in the same printing), the blue tick
-    (another printing — the resolver's default can differ between the lists) or the X (only a
-    substitute makes it). Keyed on the name, the tier could have summed two different same-named
-    tokens and printed a number; keyed on the oracle id it cannot. PR 2 gives each list its own
-    printings and counts, and the same three functions answer it unedited.
+    `oracleId` is never empty — it is the grain `deck_tokens` stores, and every entry carries it.
+  - **The number is real since v52 (spec §4.8), and the functions did not change to get there —
+    the data did.** Until then the override was grained on `(deck, oracle_id)` with no variant
+    term, so a token's art and quantity were one pair of values both lists shared and at both
+    grains `planned − live` was one quantity subtracted from itself: every mark was a tick, a blue
+    tick or an X, never `±N`. Each list has its own entries now, so the exact tier carries a signed
+    `planned − live` at the printing-and-finish grain, the name tier sums **every** entry of the
+    token on both sides before subtracting, and **a plan asking for a foil Treasure is not
+    satisfied by the nonfoil one** — the deck card's rule. Keying the name tier on the oracle id is
+    what keeps that sum about one token: keyed on the name it would add two different `Wurm`s
+    together.
   - **Both sides are the tokens the deck brings**: the plan's list drops its dismissed tokens and
     the live side is `keptTokens`, so a press on the band's `Show dismissed` cannot move a mark.
   - **`undefined` until the theory read has succeeded**, and that gate is why a plan does not flash
@@ -4268,14 +4442,15 @@ one edit and not four components disagreeing.
     that asks for nothing. `isSuccess` rather than a length, because a plan that genuinely makes no
     tokens is an answer, and its marks are the X. The same gate means **a marketplace switch
     briefly clears the marks** while the new key loads — they vanish rather than turn red, which
-    is the safe direction. A deck with no plan, the Theory tab, or a deck whose token pile is
-    switched off (nothing would draw the marks) makes no second read at all.
+    is the safe direction. A deck with no plan, the Theory tab, or a deck whose `tokenMode` is
+    `hidden` (no pile, so nothing would draw the marks) makes no second read at all.
 - **A marked token's art button carries the plan's words in its name.** `TheoryMatchMark` is
   `aria-hidden`, so a pile drawn with the mark and without the words would be a fact that reaches
   sighted readers only; the button appends `theoryMatchLabel(tier, delta).toLowerCase()` after
-  the token's name and subtitle, exactly as `deckCardName` folds it for a deck card. An unmarked
-  token's name is unchanged, so `/^Change the art for Treasure/` still finds it — but a test that
-  asserts a marked token's **exact** name has to spell the clause.
+  the entry's own name (token, subtitle, printing, finish — below), exactly as `deckCardName`
+  folds it for a deck card. An unmarked entry's name is unchanged, so `/^Change the art for
+  Treasure/` still finds every entry of the token — but a test that asserts a marked entry's
+  **exact** name has to spell the clause.
 - **Four placement constraints, each already documented at its site and one of which has cost a
   session.** A **`<section>`, never an `<aside>`** — a second complementary landmark broke five of
   `App.test.tsx`'s pane assertions. **`shrink-0` is mandatory** — the editor's root is the only
@@ -4297,23 +4472,33 @@ one edit and not four components disagreeing.
   say how many tokens the deck brings — that number *is* the reason to open the area — and the
   resolve is ~5 ms for a 100-card deck against the corpus the app already has. Gating the query on
   `open` would trade that for a header that could only say "press to find out".
-- **`??` and never `||`, in both fallbacks.** Effective printing is `cardId ?? defaultCardId` and
-  effective quantity is `quantity ?? DEFAULT_TOKEN_QUANTITY`. The two operators agree on every
-  value the reader can produce except one — **a quantity of 0**, which is a token they zeroed on
-  purpose while keeping the art they picked — and `stored || 1` is the natural way to write this
-  and is wrong. `overridden` compares `quantity !== null` for the same reason, so the reset
-  affordance does not vanish on the most easily lost deviation.
+- **No fallback is left in `deckTokens.ts`, and the rule it carried moved into Rust with it.**
+  Until v52 the effective printing was `cardId ?? defaultCardId` and the quantity
+  `quantity ?? DEFAULT_TOKEN_QUANTITY`, and the rule here was **`??` and never `||`**: the two
+  operators agree on every value the reader can produce except **a quantity of 0**, a token zeroed
+  on purpose with its art kept, and `stored || 1` is the natural way to write it and is wrong. Rust
+  applies both now — `implicit_quantity` is `legacy.unwrap_or(1)`, the same `??` — and a wire row's
+  `quantity` arrives effective, so a `0` arrives as `0` (rule 3's last entry) and nothing here
+  re-derives it. `overridden` is `!implicit`, which is exactly *this list holds entries of the
+  token* and so exactly what `deck_token_reset` has something to delete, so the reset affordance
+  survives on a zeroed last entry, the most easily lost deviation.
 - **`DEFAULT_TOKEN_QUANTITY` is a floor and never a guess.** Reading *"create two 1/1 white
   Soldier tokens"* out of oracle text is defeated by `create X`, by *for each*, by copy-tokens and
   by repeatable makers like Krenko, and a number the reader has to correct is worse than one they
-  raise. It is typed `number` rather than left as the literal `1`, or a consumer seeding a
-  `useState` from it would get a state of type `1`.
+  raise. **Rust applies it since v52**, so the constant is the TypeScript spelling of that fact for
+  the one reader that must answer it itself: the Storybook fake, which mirrors the resolver. It is
+  typed `number` rather than left as the literal `1`, or a consumer seeding a `useState` from it
+  would get a state of type `1`.
 - **Emblems last, then by name with `localeCompare(name, "en")`.** An emblem is a one-off a deck
   may make once in a game; a pile of Treasures is what a reader reaches for, so the things they
   touch sit where they can be touched. The locale is pinned for the reason every `Intl` call in
   this app pins it — a wall that reorders itself on a different machine is one two readers cannot
   compare. `isEmblem` tests **`layout === "emblem"`**, the column and not the type line: a type
-  line is prose, and `"Emblem — Elspeth"` is one shape of it.
+  line is prose, and `"Emblem — Elspeth"` is one shape of it. Then subtitle, then oracle id — the
+  term that keeps one token's entries from interleaving with another's — and **within one token
+  (v52) by set, collector number (a numeric `Intl.Collator`, so `2` before `15`) and finish in
+  `FINISHES` order**, so a token's printings sit together and a foil copy sits right after its
+  nonfoil twin.
 - **A token's name does not identify it, so every control folds the subtitle into its own name.**
   104 token and emblem names are carried by more than one `oracle_id` (debug corpus, 2026-09-07) —
   `Elemental` by 31, `Spirit` by 22, `Soldier` by 13 — and `Wurmcoil Engine` alone puts two tokens
@@ -4335,10 +4520,25 @@ one edit and not four components disagreeing.
     together in the one case this exists for.
   - **The name and the subtitle are two elements, and every accessible name is spelled rather than
     assembled.** Two flex children with a `gap` between them compute to a name with the words run
-    together (`"Missing2"`), so every control on a tile goes through one `tileName(verb, view)` —
-    `Quantity of <name>, <subtitle>`, `Change the art for …`, `Dismiss …`, `Restore …`,
-    `Reset …` — rather than being left to the DOM to concatenate. One helper, so a control added
-    later cannot be the one that forgets the subtitle.
+    together (`"Missing2"`), so every control on a tile goes through one
+    `tokenEntryName(verb, view)` — `Quantity of …`, `Change the art for …`, `Dismiss …`,
+    `Restore …`, `Reset …` — rather than being left to the DOM to concatenate. One helper, so a
+    control added later cannot be the one that forgets a term.
+  - **Since v52 a token does not identify a tile either**, because one token is several tiles:
+    a Treasure kept as a plain and a foil copy of one printing shares its name *and* its subtitle,
+    and only `Nonfoil` against `Foil` separates the two steppers. So the name is
+    **`<verb> <name>, <subtitle>, <SET · number>, <Finish>`** — `Quantity of Treasure, Colorless ·
+    {T}, Sacrifice this token: …, TAFR · 15, Nonfoil` — the printing written as the chin under the
+    picture writes it, so what the ear hears is what the eye reads, and the finish spelled on every
+    entry, plain copies included, because on this wall it is a grain term rather than a mark. **The
+    band and the pile spell it through one helper, `deckTokens.ts`' `tokenEntryName`**
+    (2026-09-26), so one entry answers to one name on the band and in the four views by
+    construction rather than by agreement — they were two verbatim copies for a day, and
+    `deckTokens.test.ts` pins the whole string for a foil and a nonfoil entry.
+  - **Dismiss, Restore and Reset are the token's and drawn on every entry's tile**, each named for
+    the entry it sits on: a dismissal is "not in this deck" whichever printing it was pressed on,
+    so it takes every entry of the token at once, which is what the reader sees happen; Reset's
+    tooltip says it drops every printing of the token picked for this list.
   - It returns `null` for an emblem: the type line already names the planeswalker, so a second
     line would repeat what the tile is drawing.
 - **A tile is `stackCardWidth(cardZoom.deck)` — the stacked card's own width at the desk's own
@@ -4396,7 +4596,33 @@ one edit and not four components disagreeing.
   is how this picker would come back empty for every token in the game — and the symptom of
   "fixing" it later is a compile error rather than a wrong result, which is why it is written down.
   Treasure answers 97 paper printings across 70 distinct arts, so it is a grid with a scroller and
-  never a dropdown, and `token !== null` is what opens it rather than a flag beside it.
+  never a dropdown, and `mode !== null` is what opens it rather than a flag beside it.
+- **The picker's grain is the printing _and_ the finish, and it has two jobs** (user schema v52,
+  token stacks spec §4.6). `printingTiles` expands each printing into **one tile per finish it is
+  sold in**, in `FINISHES` order (nonfoil first), keyed `tileKeyOf(id, finish)` — the collection
+  wall's own grain, because a foil and a plain copy of one printing are two objects at two prices,
+  and an entry is one of them. A foil or etched tile wears `CardArt`'s sheen (`finish` passed as
+  `null` for nonfoil, the `finishMarkOf` rule), each tile has a `CardChin` foot quoting
+  `finishPrices` **at its own finish**, and every tile's accessible name spells the finish, plain
+  included — `Treasure — TMOM · 12 · 2023, Foil, art by …`. A printing that lists no finish this
+  app knows draws once, as nonfoil, rather than vanishing. A press hands the host
+  `{ cardId, finish }` and nothing else; `mode` is the job:
+  - **`{ kind: "swap", entry }`** — a press on one entry's picture, from the band or the pile. The
+    current tile is marked by the pair `(printingId, finish)`, with `aria-pressed` and a gold ring
+    around the art and its foot, and the pick swaps **that entry and no other** (rule 4) — a
+    Treasure kept in two printings changes one of them.
+  - **`{ kind: "add", tokens }`** — the band's **Add printing**: the printings of every token the
+    deck brings (`keptTokens`), deduped by oracle id and read with **one `cardPrintings` query per
+    token** through `useQueries` on the card modal's own cache key, grouped under each token's name
+    and subtitle, behind a search box that filters by token name or set code. A refused read names
+    its token and the others still draw; no tile is pressed. A pick is rule 5 at one copy.
+    **Add printing** sits in the band's header, is **absent on a deck that makes nothing** (a
+    dialog that could only refuse, the band's own no-greyed-control rule) **and on one whose every
+    token is dismissed** — gated on at least one kept row (`canAdd`), which is what the picker
+    offers, while the disclosure stays so a dismissal can still be put back — is drawn while the
+    band is shut and **opens it on press** — the Notes band's `New note` precedent. ⚠️ It lists
+    `keptTokens` and never the wall with `Show dismissed` on, so a dismissed token revealed on the
+    band is not offered — a known seam (TC, deferred), not a decision to defend.
 - **The query key is `["decks", "tokens", deckId, variant, marketplace]`, under the `["decks"]`
   root on purpose.** `useDeck`'s own `invalidate` fires that root for every write to what is *in*
   a deck, so adding a card, moving one between piles or switching a category off already refreshes
@@ -4413,19 +4639,32 @@ one edit and not four components disagreeing.
   lands, so the priced rows refresh with no new code. `useMarketplace` keys on TCGplayer until
   `get_marketplace` answers, so a reader on another marketplace pays one extra read on the first
   open, which is `deck_get`'s cost too.
-  Invalidation drops **two** segments (`["decks", "tokens", deckId]`): the override is not grained
-  on variant while the derived list is, so a dismissal made on the Actual list has to reach the
-  plan's tab too; and an art picked under one marketplace is the art under every other, so a
-  cached answer for the one the reader is not on would draw the old printing the moment they
-  switched back.
-- **Every write sends the whole triple, and `storedOverride` reads the *stored* columns rather
-  than the effective ones.** `deck_token_set` has no `coalesce` — the row it upserts is defined by
-  what it carries and is deleted outright when it would carry nothing — so a caller sending only
-  the field it changed would silently clear the other two: picking a different art for a token set
-  to 4 copies would put the count back to 1. And reading `view.printingId` back would pin a reader
-  who only changed the count to whatever art the resolver named today, so the next deck edit that
-  moved the default would find that token no longer following it. An untouched field stays
-  untouched.
+  **A token write invalidates the whole `["decks"]` root since v52 — `useDeck`'s `invalidate`,
+  matched on purpose — where it dropped two segments (`["decks", "tokens", deckId]`) before.** A
+  token write is a deck write in every sense the editor draws now: it moves the deck's
+  `updatedAt`, files a history row (`["decks", "audit", …]`) and an undo step
+  (`["decks", "undo", …]`, whose answer **is the Undo button's label**). Three narrower keys would
+  be three things to keep in step with a command that grows a fourth effect, and the root still
+  reaches what the two segments were for: both lists (a dismissal is shared state) and every
+  marketplace (a cached answer for the one the reader is not on would draw the old printing the
+  moment they switched back). **Not `["wishlist"]`**, which `useDeck` also fires for a theory
+  deck's managed wishlist: no token write touches a card. **On success only** — each command is one
+  transaction, so a refusal left the tables as the cache already describes them. The cost is a
+  `deck_get` re-read after every stepper press, the same as a card stepper's.
+- **Each write names one entry, one list, or one token — never a whole override.** The five
+  commands replaced `deck_token_set` / `deck_token_clear` / `deck_token_add` at v52 (`add` had no
+  caller at all), and with them the rule that stood here: *every write sends the whole triple,
+  and `storedOverride` reads the stored columns*, because `deck_token_set` had no `coalesce` and a
+  caller sending only the field it changed would have cleared the other two. Nothing is a triple
+  now. `setQuantity(entry, n)` and `swap(entry, to)` name an entry (`null` on the wire for the
+  implicit one) in the hook's list; `addPrinting(cardId, finish)` names a printing and Rust finds
+  the token; `dismiss` / `restore` name a token and no list; `reset(oracleId)` deletes the hook's
+  list's entries of it. Rust refuses in words (`ENTRY_GONE`, `TOKEN_GONE`, `NOT_THIS_TOKEN`,
+  `NOT_A_TOKEN`, `FINISH_NOT_SOLD`), and `useDeckTokens`' `failure` — the newest write's, through
+  `writeFailure` — is what the band draws. A write that changes nothing (a swap onto the entry's
+  own printing, a stepper landing where it was, a reset of a token with no entries) records no
+  history row and no undo step, and does not move the deck up a gallery sorted by *recently
+  touched*.
 - **`restore` chooses `auto` or `manual` by whether the deck still derives the token**, because
   `state` is one column and `hidden` therefore costs a `manual` row its manual-ness. A token the
   deck makes goes back to `auto` and follows the deck again — and if that leaves the row carrying
@@ -4448,7 +4687,7 @@ one edit and not four components disagreeing.
 - **`tokensOpen` reached `useDeck`'s `update` with no edit at all**, exactly as `separateXGroup`
   and `bracket` did: that mutation takes a whole `DeckPatch` and names no field, which is what
   makes a new column free. A per-field arm would be a second definition of what the command already
-  accepts.
+  accepts. `tokenRailIndex` (v51) and `tokenMode` (v52) arrived the same way.
 
 ## Known open bugs
 

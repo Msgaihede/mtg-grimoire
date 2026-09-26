@@ -25,9 +25,19 @@
  * are used here — not `deckCardProps`, not `deckCardBodyProps`, not `deckCardMenuProps` — because
  * each one of them is a promise to some listener that the element is a deck card, and every one
  * of those listeners would then act on a row that does not exist. What a token *can* be asked is
- * the band's two questions: how many to bring (the stepper) and which picture (a press on it
- * opens the one art picker the editor mounts). The **pile** may be moved along the rail, by the
- * grip the caller hands {@link TokenStackPile} — the cards in it never are.
+ * the band's two questions: how many to bring (the stepper) and which printing (a press on it
+ * opens the one printing picker the editor mounts, to swap **that entry**). The **pile** may be
+ * moved along the rail, by the grip the caller hands {@link TokenStackPile} — the cards in it
+ * never are.
+ *
+ * ## One card per entry, since token stacks PR 2
+ *
+ * A token has an **entry** per printing-and-finish the list holds (spec §4.2) — a foil and a
+ * regular copy of one printing are two — and the pile draws one card per entry, so one token can
+ * be two cards side by side. Everything here is addressed by the entry rather than by the token:
+ * React keys are {@link DeckTokenView.entryKey} (an oracle id would be one key twice), the stepper
+ * writes through the entry's address (`entryRef`), a press hands the editor the entry's view, and
+ * the face, the chin and the compact drawings' finish mark all read the entry's own finish.
  *
  * **It is appended in the view layer and never enters `deck.cards` or `buildGroups`**, which is
  * what makes "never counted" structural rather than remembered: no deck pile's total, no ledger
@@ -41,8 +51,10 @@
  *
  * A token's name does not identify it (`DeckTokensPanel.tsx`'s header has the corpus figures —
  * `Wurmcoil Engine` alone puts two `Wurm`s on one wall), so every control here spells its own
- * accessible name through {@link tokenControlName}, the band's `tileName` rule: the subtitle folded
- * in, never assembled from two flex children that would compute to `"Wurm3/3"`.
+ * accessible name through `deckTokens.ts`' {@link tokenEntryName} — the helper the band calls too:
+ * the subtitle folded in, never assembled from two flex children that would compute to
+ * `"Wurm3/3"`. **And nor does a token identify an entry**, so the name carries the entry's
+ * printing and finish too — one spelling, so one entry answers to one name on both surfaces.
  */
 import { useCallback, useId, type ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
@@ -59,7 +71,7 @@ import { PRESS, stackCard } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
-import { theoryMatchLabel } from "../CardMarks";
+import { DeckFinishMark, theoryMatchLabel } from "../CardMarks";
 import {
   STACK_LIFTED_MARGIN,
   STACK_OPEN_ATTR,
@@ -74,22 +86,27 @@ import { REVEALED_ON_CARD, revealedWhenOpen } from "../cardControl";
 import { tokenCountWords } from "../CountPill";
 import { DeckCardFace, type DeckCardFaceFacts } from "../DeckCardFace";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
-import type { DeckTokenView } from "../deckTokens";
+import { entryRef, tokenEntryName, type DeckTokenView, type TokenEntryRef } from "../deckTokens";
 import type { TheoryMark } from "../theoryMatch";
+import { tokenDeckFinish } from "../tokenTheory";
 import { GroupHeader, type GroupHeading } from "./GroupHeader";
 
 /** What a view is handed to draw the pile — the band's own answer, never a copy of it. */
 export interface TokenPile {
-  /** What the pile draws, in `deckTokenViews` order — never a dismissed token. */
+  /** What the pile draws, one view **per entry**, in `deckTokenViews` order — never a dismissed
+   *  token. */
   tokens: readonly DeckTokenView[];
-  setQuantity: (oracleId: string, quantity: number) => void;
-  /** Open the one art picker the editor mounts, on this token. */
-  pickArt: (oracleId: string) => void;
+  /** Step one entry — addressed by its token, printing and finish, never by the token alone, which
+   *  a token with two entries would share between them. */
+  setQuantity: (entry: TokenEntryRef, quantity: number) => void;
+  /** Open the one printing picker the editor mounts, to swap this entry. The whole view, so the
+   *  editor can hold its `entryKey` — the editor keeps the key, never the view. */
+  pickArt: (view: DeckTokenView) => void;
   /** The drawn index: the in-flight move, else the stored column (`-1` is last). */
   railIndex: number;
   /** Move the pile to rail slot `index` (`-1` = last). Absent: the pile draws no grip. */
   moveTo?: (index: number) => void;
-  /** The plan's mark for one token, or `null`. Absent: no marks (no plan, or on the plan). */
+  /** The plan's mark for one entry, or `null`. Absent: no marks (no plan, or on the plan). */
   theoryMark?: (view: DeckTokenView) => TheoryMark | null;
 }
 
@@ -103,19 +120,6 @@ export const TOKEN_PILE_ATTR = "data-token-pile";
  *  exactly as it was before the pile existed. */
 export function hasTokenPile(pile: TokenPile | undefined): pile is TokenPile {
   return pile !== undefined && pile.tokens.length > 0;
-}
-
-/**
- * One token's name folded into a verb, for a control's accessible name — the band's `tileName`,
- * spelled once for the four views.
- *
- * **The subtitle is in every one of them**, which is the whole of what keeps two `Wurm`s apart
- * for a reader who cannot see them.
- */
-export function tokenControlName(verb: string, view: DeckTokenView): string {
-  return view.subtitle === null
-    ? `${verb} ${view.name}`
-    : `${verb} ${view.name}, ${view.subtitle}`;
 }
 
 /** Why this token is in the pile — the deck cards that make it, or the reader's own press. */
@@ -133,10 +137,12 @@ export function tokenMadeBy(view: DeckTokenView): string {
  * corpus holds, so the picture is asked for), **no label** (the quantity tag is grey, which is
  * `QuantityTag`'s own unlabelled colour) and **no crown** (a token is never a game changer).
  *
- * `finish: null` is `DeckFinish`'s *not said*, which is exactly a token's state — nobody has
- * stated a finish for it — so `DeckCardFace`'s `playedFinish` falls to the printing's sole finish
- * the way it does for a deck card, and a foil-only token printing still wears the sheen.
- * `imageUris` is the resolved printing's map, passed through: the face picks its own variant
+ * **`finish` is the entry's own**, spelled as a deck row's is (`tokenDeckFinish`: the regular copy
+ * is `null`) — so a foil entry sheens and the regular copy of the same printing does not, which is
+ * exactly a deck card's arrangement. It was a flat `null` until token stacks PR 2, when a token
+ * stated no finish at all; a regular entry still arrives as `null`, so `playedFinish` still falls
+ * to the printing's sole finish and a foil-only printing still wears the sheen.
+ * `imageUris` is the entry's printing's map, passed through: the face picks its own variant
  * (`DECK_CARD_VARIANT`) off it on the web and the phone, as it does for every deck card.
  */
 export function tokenFaceFacts(view: DeckTokenView): DeckCardFaceFacts {
@@ -144,7 +150,7 @@ export function tokenFaceFacts(view: DeckTokenView): DeckCardFaceFacts {
     cardId: view.printingId,
     needsReview: null,
     imageUris: view.imageUris,
-    finish: null,
+    finish: tokenDeckFinish(view),
     finishes: view.finishes,
     name: view.name,
     manaCost: null,
@@ -154,6 +160,15 @@ export function tokenFaceFacts(view: DeckTokenView): DeckCardFaceFacts {
     labelColor: null,
     gameChanger: false,
   };
+}
+
+/**
+ * An entry as `DeckFinishMark` reads a deck row — the entry's finish, the printing's finishes and
+ * no treatment (a token row carries no promo types) — so the two compact drawings mark a foil
+ * entry with the very glyph a deck line and a deck row draw, and never a second spelling of it.
+ */
+function entryFinishFacts(view: DeckTokenView) {
+  return { finish: tokenDeckFinish(view), finishes: view.finishes, promoTypes: null };
 }
 
 /**
@@ -269,7 +284,7 @@ export function TokenStackPile({
       >
         {pile.tokens.map((view, index) => (
           <motion.li
-            key={view.oracleId}
+            key={view.entryKey}
             onPointerEnter={() => arm(index)}
             onFocus={() => openNow(index)}
             onBlur={release}
@@ -309,8 +324,8 @@ export function TokenStackPile({
                 focus="inset"
                 value={view.quantity}
                 min={0}
-                label={tokenControlName("Quantity of", view)}
-                onChange={(next) => pile.setQuantity(view.oracleId, next)}
+                label={tokenEntryName("Quantity of", view)}
+                onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
             </span>
           </motion.li>
@@ -321,8 +336,9 @@ export function TokenStackPile({
 }
 
 /**
- * A token as the deck's card: `DeckCardFace` inside the press that opens the art picker, and
- * `CardChin` under it. Shared by Stacks and Grid, whose boxes differ and whose card does not.
+ * One token entry as the deck's card: `DeckCardFace` inside the press that opens the printing
+ * picker on this entry, and `CardChin` under it. Shared by Stacks and Grid, whose boxes differ
+ * and whose card does not.
  *
  * **The face is the deck card's, marks and all** — the grey `QuantityTag` top-left (a token wears
  * no label) and, where the pile is given a plan, `TheoryMatchMark` top-right. Both are
@@ -353,9 +369,9 @@ function TokenFace({
   currency: Currency;
 }) {
   const tip = useTooltip();
-  const press = useCallback(() => pile.pickArt(view.oracleId), [pile, view.oracleId]);
+  const press = useCallback(() => pile.pickArt(view), [pile, view]);
   const mark = pile.theoryMark?.(view) ?? null;
-  const name = tokenControlName("Change the art for", view);
+  const name = tokenEntryName("Change the art for", view);
   return (
     <>
       <button
@@ -388,9 +404,10 @@ function TokenFace({
         collectorNumber={view.collectorNumber ?? ""}
         // The code is what fits; the set's name is one hover away, exactly as on a deck card.
         printingTitle={view.setName === null ? null : `${view.setName} · #${view.collectorNumber}`}
-        // `tokenFaceFacts`' own answer — nothing stated, so the printing's sole finish — so the
-        // sheen on the face and the word in the foot cannot disagree.
-        finish={playedFinish(null, view.finishes)}
+        // `tokenFaceFacts`' own answer — the entry's finish, the regular copy falling to the
+        // printing's sole finish — so the sheen on the face and the word in the foot cannot
+        // disagree, and a token's foil entry and its regular one say two different things.
+        finish={playedFinish(tokenDeckFinish(view), view.finishes)}
         money={formatPrice(view.unitPrice, currency)}
         seam="card"
       />
@@ -439,7 +456,7 @@ export function TokenGridPile({
       >
         {pile.tokens.map((view) => (
           <li
-            key={view.oracleId}
+            key={view.entryKey}
             style={{ width: tileWidth, ...cardScaleVars(zoom) }}
             // `group` is the one thing here that is not the stack's, for `GridView`'s tile's
             // reason: nothing overlaps a tile, so the pointer is the honest question and
@@ -463,8 +480,8 @@ export function TokenGridPile({
                 focus="inset"
                 value={view.quantity}
                 min={0}
-                label={tokenControlName("Quantity of", view)}
-                onChange={(next) => pile.setQuantity(view.oracleId, next)}
+                label={tokenEntryName("Quantity of", view)}
+                onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
             </span>
           </li>
@@ -479,9 +496,10 @@ export function TokenGridPile({
 /* ------------------------------------------------------------------------------------------ */
 
 /**
- * The Text view's pile — a trailing group of lines in `TextRow`'s grammar: a 22px line with the
- * quantity in the data face and the name, the subtitle dim after it. The line itself is the press
- * that opens the art picker; the stepper rides over its tail on hover, as a deck line's does.
+ * The Text view's pile — a trailing group of lines in `TextRow`'s grammar: a 22px line per entry
+ * with the quantity in the data face and the name, the subtitle dim after it and the entry's finish
+ * mark in the tail. The line itself is the press that opens the printing picker on that entry; the
+ * stepper rides over its tail on hover, as a deck line's does.
  */
 export function TokenTextPile({ pile }: { pile: TokenPile }) {
   const headingId = useId();
@@ -498,11 +516,11 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
       />
       <ul aria-label={TOKENS_HEADING}>
         {pile.tokens.map((view) => (
-          <li key={view.oracleId} className="group relative rounded">
+          <li key={view.entryKey} className="group relative rounded">
             <button
               type="button"
-              onClick={() => pile.pickArt(view.oracleId)}
-              aria-label={tokenControlName("Change the art for", view)}
+              onClick={() => pile.pickArt(view)}
+              aria-label={tokenEntryName("Change the art for", view)}
               className={cn(
                 "flex h-[22px] w-full cursor-pointer items-center gap-1.5 rounded px-1 text-xs",
                 "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
@@ -523,6 +541,10 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
                   {view.subtitle}
                 </span>
               )}
+              {/* The entry's finish, in the tail where a deck line draws its own — the one thing on
+                  this line that tells a token's foil entry from its regular twin. Decoration: the
+                  line is a button with an explicit `aria-label`, whose words already say it. */}
+              <DeckFinishMark card={entryFinishFacts(view)} />
             </button>
             <span
               className={cn(
@@ -534,8 +556,8 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
                 size="xs"
                 value={view.quantity}
                 min={0}
-                label={tokenControlName("Quantity of", view)}
-                onChange={(next) => pile.setQuantity(view.oracleId, next)}
+                label={tokenEntryName("Quantity of", view)}
+                onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
             </span>
           </li>
@@ -553,8 +575,8 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
  * The Table view's pile — a trailing section under the table's bands, as a compact list rather
  * than more `VirtualTable` rows: its columns (price, owned, rarity, printing) are facts about a
  * deck card that a token does not have, and a row with six empty cells reads as a row that failed
- * to load. Four things per token: the stepper, the name over its subtitle, what makes it, and the
- * art press.
+ * to load. Four things per entry: the stepper, the name (with the entry's finish mark) over its
+ * subtitle, what makes it, and the press that opens the printing picker on that entry.
  */
 export function TokenTablePile({ pile }: { pile: TokenPile }) {
   const headingId = useId();
@@ -573,7 +595,7 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
       <ul aria-label={TOKENS_HEADING} className="divide-y divide-border">
         {pile.tokens.map((view) => (
           <li
-            key={view.oracleId}
+            key={view.entryKey}
             className="grid min-h-9 grid-cols-[6.5rem_minmax(12rem,3fr)_minmax(0,2fr)_auto] items-center gap-x-3 px-2 py-1 text-sm"
           >
             <span className="flex justify-center">
@@ -581,13 +603,18 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
                 size="xs"
                 value={view.quantity}
                 min={0}
-                label={tokenControlName("Quantity of", view)}
-                onChange={(next) => pile.setQuantity(view.oracleId, next)}
+                label={tokenEntryName("Quantity of", view)}
+                onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
             </span>
-            {/* Two paragraphs, never one line assembled from two — the band's rule. */}
+            {/* Two paragraphs, never one line assembled from two — the band's rule. The finish
+                mark beside the name is the deck row's own, and names itself (`role="img"`), so
+                the name line is still one word and one mark rather than a phrase built of two. */}
             <span className="flex min-w-0 flex-col">
-              <span className="truncate">{view.name}</span>
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate">{view.name}</span>
+                <DeckFinishMark card={entryFinishFacts(view)} />
+              </span>
               {view.subtitle !== null && (
                 <span className="truncate text-xs text-dim">{view.subtitle}</span>
               )}
@@ -600,8 +627,8 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
             </span>
             <button
               type="button"
-              onClick={() => pile.pickArt(view.oracleId)}
-              aria-label={tokenControlName("Change the art for", view)}
+              onClick={() => pile.pickArt(view)}
+              aria-label={tokenEntryName("Change the art for", view)}
               {...tip("Change the art", { describes: false })}
               className={cn(
                 "grid size-7 place-items-center rounded-md border border-border text-dim hover:text-text",

@@ -29,6 +29,7 @@ import { LAYER } from "@/lib/layers";
 import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { tileKeyOf } from "@/lib/tileKey";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { dndManager } from "@/lib/dndManager";
 import { boxed, pointerDrag, startPointerDrag } from "@/test-drag";
@@ -64,8 +65,8 @@ import {
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
-import type { DeckTokenView } from "../deckTokens";
-import { TOKEN_PILE_ATTR, tokenControlName, type TokenPile } from "./TokenPile";
+import { tokenEntryName, type DeckTokenView } from "../deckTokens";
+import { TOKEN_PILE_ATTR, type TokenPile } from "./TokenPile";
 
 /**
  * A card carried from wherever it sits into a pile, as a real pointer gesture.
@@ -4661,16 +4662,21 @@ describe("the deck grid's art", () => {
 });
 
 /**
- * One token as the four views are handed it — a Treasure, three copies, made by the deck's Sol
- * Ring, with the chin facts and the price `deckTokens.ts` passes through from the row.
+ * One token entry as the four views are handed it — a Treasure, three regular copies of one
+ * printing, made by the deck's Sol Ring, with the chin facts and the price `deckTokens.ts` passes
+ * through from the row. The `entryKey` follows the printing and the finish unless a case names
+ * one, as `deckTokens.ts` derives it — so two tokens built here need two printings.
  */
 function tokenView(over: Partial<DeckTokenView> = {}): DeckTokenView {
-  return {
+  const base: DeckTokenView = {
     oracleId: "o-treasure",
     name: "Treasure",
     typeLine: "Token Artifact — Treasure",
     layout: "token",
     printingId: "p-treasure",
+    finish: "nonfoil",
+    implicit: false,
+    entryKey: "",
     quantity: 3,
     sources: [{ cardId: "c-Sol Ring", name: "Sol Ring" }],
     derived: true,
@@ -4687,6 +4693,7 @@ function tokenView(over: Partial<DeckTokenView> = {}): DeckTokenView {
     unitPrice: 0.25,
     ...over,
   };
+  return { ...base, entryKey: over.entryKey ?? tileKeyOf(base.printingId, base.finish) };
 }
 
 /** A pile of `tokens` at the rail's last slot, which is where every deck's pile starts — the
@@ -4730,8 +4737,18 @@ describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
   const TOKEN = tokenView;
   const TOKENS: DeckTokenView[] = [
     TOKEN({}),
-    TOKEN({ oracleId: "o-wurm-d", name: "Wurm", subtitle: "Colorless 3/3 · Deathtouch" }),
-    TOKEN({ oracleId: "o-wurm-l", name: "Wurm", subtitle: "Colorless 3/3 · Lifelink" }),
+    TOKEN({
+      oracleId: "o-wurm-d",
+      name: "Wurm",
+      printingId: "p-wurm-d",
+      subtitle: "Colorless 3/3 · Deathtouch",
+    }),
+    TOKEN({
+      oracleId: "o-wurm-l",
+      name: "Wurm",
+      printingId: "p-wurm-l",
+      subtitle: "Colorless 3/3 · Lifelink",
+    }),
   ];
 
   const setup = (tokens: readonly DeckTokenView[] | undefined, groups = GROUPS) => {
@@ -4768,15 +4785,20 @@ describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
     }
   });
 
-  it("steps a token's copies and opens the art picker on the one pressed", () => {
+  it("steps an entry's copies and opens the printing picker on the one pressed", () => {
     const { pile } = setup(TOKENS);
     const wurm = TOKENS[2];
     fireEvent.click(
-      screen.getByRole("button", { name: `Increase ${tokenControlName("Quantity of", wurm)}` }),
+      screen.getByRole("button", { name: `Increase ${tokenEntryName("Quantity of", wurm)}` }),
     );
-    expect(pile!.setQuantity).toHaveBeenCalledWith("o-wurm-l", 4);
-    fireEvent.click(screen.getByRole("button", { name: tokenControlName("Change the art for", wurm) }));
-    expect(pile!.pickArt).toHaveBeenCalledWith("o-wurm-l");
+    // The entry's address — its token, its printing and its finish — and never the oracle id
+    // alone, which a token with two printings would share between them.
+    expect(pile!.setQuantity).toHaveBeenCalledWith(
+      { oracleId: "o-wurm-l", cardId: "p-wurm-l", finish: "nonfoil", implicit: false },
+      4,
+    );
+    fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Change the art for", wurm) }));
+    expect(pile!.pickArt).toHaveBeenCalledWith(wurm);
   });
 
   it("gives the two Wurms two different names", () => {
