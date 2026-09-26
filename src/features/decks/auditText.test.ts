@@ -905,6 +905,241 @@ describe("auditSentence", () => {
   });
 
   /**
+   * **Token writes are `deck` rows with `field: "token"`** (user schema v52) — and never a new
+   * audit kind, because `deck_audit` is synced and a word its `CHECK` does not know would stall a
+   * paired device still on an older build. The deck notes' precedent: the `action` is what tells
+   * the five writes apart, so the arm switches on it the way the `note` arm does.
+   *
+   * **The name is the payload's**, not the row's `cardName` — Rust records no card on a token
+   * row (a token is never a deck card), so the entry's own name is `null` and the token's name
+   * rides in the payload. An unknown action still names the token rather than falling to
+   * "Changed the deck", which is true of every deck edit and therefore says nothing.
+   */
+  it("words each token write around the token it touched", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+    const token = (payload: Record<string, unknown>) =>
+      deck({ field: "token", name: "Treasure", subtitle: null, list: "live", ...payload });
+
+    expect(token({ action: "add", finish: "foil", to: 1 }).text).toBe("Added 1 × Treasure (foil)");
+    // A second press on a printing the list holds steps it by one: the sentence says what was
+    // added, not what the entry now holds.
+    expect(token({ action: "add", finish: "foil", from: 2, to: 3 }).text).toBe(
+      "Added 1 × Treasure (foil)",
+    );
+    // A drop onto a pile can add more than one, and the crate records how many beside the two
+    // counts — which is what the sentence reads when it is there.
+    expect(token({ action: "add", finish: "foil", from: 1, to: 4, quantity: 3 }).text).toBe(
+      "Added 3 × Treasure (foil)",
+    );
+    // The regular copy is the one finish with no word in the sentence, the deck card's rule.
+    expect(token({ action: "add", finish: "nonfoil", to: 1 }).text).toBe("Added 1 × Treasure");
+    expect(token({ action: "quantity", finish: "nonfoil", from: 1, to: 3 }).text).toBe(
+      "Treasure 1 → 3",
+    );
+    // A zero is a count and is printed, not read as absent: rule 3 keeps an entry at 0.
+    expect(token({ action: "quantity", finish: "nonfoil", from: 1, to: 0 }).text).toBe(
+      "Treasure 1 → 0",
+    );
+    // A swap's two ends are objects; a row missing both still says what happened.
+    expect(token({ action: "swap", finish: "foil", from: null, to: null }).text).toBe(
+      "Swapped Treasure's art",
+    );
+    expect(token({ action: "state", from: "auto", to: "hidden" }).text).toBe("Dismissed Treasure");
+    expect(token({ action: "state", from: "hidden", to: "auto" }).text).toBe("Restored Treasure");
+    expect(token({ action: "state", from: "hidden", to: "manual" }).text).toBe(
+      "Restored Treasure",
+    );
+    expect(token({ action: "reset" }).text).toBe("Reset Treasure's printings");
+    // An action this build has never heard of, written by a newer one: still about the token.
+    expect(token({ action: "teleport" }).text).toBe("Changed Treasure");
+  });
+
+  /**
+   * **The subtitle is the token's identity when its name is not**, so it rides in the detail:
+   * `Wurmcoil Engine` makes two `Wurm`s, and "Dismissed Wurm" twice in one drawer would be two
+   * lines about two tokens that read as one. The theory list is named too, because a token write
+   * names its list and the history row's own variant is the deck level, not the list.
+   */
+  it("carries a token's subtitle and its list in the detail", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(
+      deck({
+        field: "token",
+        action: "state",
+        name: "Wurm",
+        subtitle: "Colorless 3/3 · Deathtouch",
+        list: "live",
+        to: "hidden",
+      }),
+    ).toEqual({ text: "Dismissed Wurm", detail: "Colorless 3/3 · Deathtouch" });
+    expect(
+      deck({
+        field: "token",
+        action: "quantity",
+        name: "Treasure",
+        subtitle: null,
+        list: "theory",
+        from: 1,
+        to: 2,
+      }),
+    ).toEqual({ text: "Treasure 1 → 2", detail: "in the theory list" });
+    // A row with no name at all still says it was a token.
+    expect(deck({ field: "token", action: "reset" }).text).toBe("Reset a token's printings");
+  });
+
+  /**
+   * **One case per action, each payload copied from what `deck_tokens::journal_in` writes** —
+   * the whole object, key for key, with the crate's own fixture values: `treasure()`
+   * (`cb7b5024-…`, `tcmm` #48, sold nonfoil), `treasure_older()` (`c-treasure-older`, `tvow` #17,
+   * nonfoil and foil), and the subtitle `every_token_write_is_one_deck_row_and_one_step` pins.
+   * The partial payloads above test what this file does with a row it cannot fully read; these
+   * test that it reads the one the crate actually writes, so a key renamed on either side is a red
+   * build here rather than "Changed Treasure" in the drawer.
+   */
+  describe("a token history row as deck_tokens.rs writes it", () => {
+    const TREASURE = "cb7b5024-3a0b-4f14-977e-ba6c4c2567c9";
+    const TREASURE_OLDER = "c-treasure-older";
+    const SUBTITLE = "Colorless · {T}, Sacrifice this token: Add one mana of any color.";
+    const sentence = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+    /** The nine keys every token row carries, before the action's own. */
+    const row = (over: Record<string, unknown>) => ({
+      field: "token",
+      action: null,
+      name: "Treasure",
+      subtitle: SUBTITLE,
+      card_id: null,
+      finish: null,
+      list: "live",
+      from: null,
+      to: null,
+      ...over,
+    });
+
+    /** `set_quantity` from the implicit entry: `a_token_history_row_records_the_entry_the_list_
+     *  and_both_numbers`' first row. */
+    it("words a quantity row", () => {
+      expect(
+        sentence(
+          row({ action: "quantity", card_id: TREASURE, finish: "nonfoil", from: 1, to: 3 }),
+        ),
+      ).toEqual({ text: "Treasure 1 → 3", detail: SUBTITLE });
+    });
+
+    /** `add_printing` of `treasure_older()` in foil — `from`/`to` the entry's count, `quantity`
+     *  the copies added. The number is `quantity`'s: a row stepping an entry of 1 up by 3 reads
+     *  "Added 3", never the entry's new total of 4. */
+    it("words an add row by the copies it added", () => {
+      expect(
+        sentence(
+          row({
+            action: "add",
+            card_id: TREASURE_OLDER,
+            finish: "foil",
+            from: 0,
+            to: 1,
+            quantity: 1,
+          }),
+        ),
+      ).toEqual({ text: "Added 1 × Treasure (foil)", detail: SUBTITLE });
+      expect(
+        sentence(
+          row({
+            action: "add",
+            card_id: TREASURE_OLDER,
+            finish: "foil",
+            from: 1,
+            to: 4,
+            quantity: 3,
+          }),
+        ).text,
+      ).toBe("Added 3 × Treasure (foil)");
+    });
+
+    /** `swap` from the `tcmm` entry onto `tvow` in foil — `from`/`to` are `entry_facts`
+     *  objects, the common `card_id`/`finish` are where it landed, and `folded` is
+     *  `swapping_onto_an_entry_the_list_holds_folds_the_two`'s flag. */
+    it("words a swap row from its two entries, and says when it folded", () => {
+      const swap = (folded: boolean) =>
+        row({
+          action: "swap",
+          card_id: TREASURE_OLDER,
+          finish: "foil",
+          from: {
+            card_id: TREASURE,
+            finish: "nonfoil",
+            set_code: "tcmm",
+            collector_number: "48",
+          },
+          to: {
+            card_id: TREASURE_OLDER,
+            finish: "foil",
+            set_code: "tvow",
+            collector_number: "17",
+          },
+          folded,
+        });
+      expect(sentence(swap(false))).toEqual({
+        text: "Swapped Treasure's art",
+        detail: `${SUBTITLE} · TCMM #48 → TVOW #17 (foil)`,
+      });
+      expect(sentence(swap(true))).toEqual({
+        text: "Swapped Treasure's art",
+        detail: `${SUBTITLE} · TCMM #48 → TVOW #17 (foil) · folded into one row`,
+      });
+    });
+
+    /** `set_state` to `hidden` — no entry and no list, because a dismissal is shared by both
+     *  lists, and the state the token was in (`auto`, the column's default) as `from`. */
+    it("words a state row", () => {
+      expect(
+        sentence(row({ action: "state", list: null, from: "auto", to: "hidden" })),
+      ).toEqual({ text: "Dismissed Treasure", detail: SUBTITLE });
+      expect(
+        sentence(row({ action: "state", list: null, from: "hidden", to: "auto" })).text,
+      ).toBe("Restored Treasure");
+    });
+
+    /** `reset` — no entry, no counts, and `entries` the number of entries the list lost. */
+    it("words a reset row with how many printings went", () => {
+      expect(sentence(row({ action: "reset", entries: 1 }))).toEqual({
+        text: "Reset Treasure's printings",
+        detail: `${SUBTITLE} · 1 printing cleared`,
+      });
+      expect(sentence(row({ action: "reset", list: "theory", entries: 2 })).detail).toBe(
+        `${SUBTITLE} · in the theory list · 2 printings cleared`,
+      );
+    });
+  });
+
+  /**
+   * `decks.token_mode` (user schema v52), which replaced v47's unaudited `token_stack` switch.
+   * **The word is `deck.rs`'s**, `tokenMode`, and the sentence is the mode's, never the column's:
+   * a reader pressed *Managed* or *Hide* in the band's header.
+   */
+  it("says which way the deck keeps its tokens", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(deck({ field: "tokenMode", from: "managed", to: "hidden" })).toEqual({
+      text: "Hid Tokens & Emblems",
+      detail: null,
+    });
+    expect(deck({ field: "tokenMode", from: "hidden", to: "managed" })).toEqual({
+      text: "Set Tokens & Emblems to Managed",
+      detail: null,
+    });
+    expect(deck({ field: "tokenMode", from: "managed", to: "collection" }).text).toBe(
+      "Set Tokens & Emblems to Collection",
+    );
+    // The retired switch never wrote a row, and a column-shaped spelling is the silent default.
+    expect(deck({ field: "token_mode", to: "hidden" }).text).toBe("Changed the deck");
+  });
+
+  /**
    * **Two different rows wear `field: "theory"`.** The copy row carries `copied` and no
    * `from`/`to` at all; the toggle carries `to` and no `copied`. Reading only the toggle
    * answers a copy as `flag(undefined)` — "Turned the theory list off" — which is a sentence

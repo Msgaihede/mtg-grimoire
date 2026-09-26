@@ -1,29 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
+import { tileKeyOf } from "@/lib/tileKey";
 import {
   DEFAULT_TOKEN_QUANTITY,
   deckTokenViews,
+  entryRef,
   isEmblem,
+  isTokenLayout,
+  isTokenPrinting,
   tokenSubtitle,
   type DeckTokenRow,
 } from "./deckTokens";
 
 /**
- * The merge is the only part of this feature that can be wrong without anything going red
+ * The views are the only part of this feature that can be wrong without anything going red
  * elsewhere: Rust hands over facts that are true whatever this file does with them, and the
- * panel draws whatever it is given. So every rule from spec §5 is pinned here.
+ * panel draws whatever it is given. So every rule the view owns is pinned here.
  *
- * **The zero-quantity case is the one that matters most.** `stored || 1` is the natural way to
- * write "fall back to one copy", and it is wrong — it reads a deliberate 0 as absent and
- * silently shows 1, on the exact row where the reader said *none*, while keeping the art
- * choice that is the reason the row still exists (spec §4). Only `??` distinguishes the two,
- * and only this test can tell them apart.
+ * **Since user schema v52 a wire row is one _entry_** — one printing in one finish of one token
+ * in one list — and Rust resolves the effective printing and quantity itself (spec §4.2). What
+ * is left here is the grain the wall keys on, the order it reads in, and the dismissal.
  */
 
 /**
- * One resolved token as Rust hands it over: derived, with no override stored against it.
+ * One entry as Rust hands it over: the implicit entry of a derived token nobody has touched.
  *
- * Deliberately not a token that exists in the corpus fixtures — this file tests the merge and
+ * Deliberately not a token that exists in the corpus fixtures — this file tests the views and
  * nothing about Scryfall, so the ids are obviously synthetic and a reader is never tempted to
  * check them against real data.
  */
@@ -35,9 +37,11 @@ const row = (over: Partial<DeckTokenRow> = {}): DeckTokenRow => ({
   defaultCardId: "c-default",
   sources: [{ cardId: "d-1", name: "Smothering Tithe" }],
   derived: true,
-  cardId: null,
-  quantity: null,
-  state: null,
+  cardId: "c-default",
+  finish: "nonfoil",
+  quantity: 1,
+  implicit: true,
+  state: "auto",
   power: null,
   toughness: null,
   colors: "",
@@ -55,26 +59,111 @@ const row = (over: Partial<DeckTokenRow> = {}): DeckTokenRow => ({
 
 describe("deckTokenViews", () => {
   /**
-   * The floor, and the whole of the quantity rule. There is no heuristic behind it and there
-   * must not be one: parsing *"create two 1/1 white Soldier tokens"* out of oracle text is
-   * defeated by `create X`, by *for each*, by copy-tokens and by repeatable makers like
-   * Krenko — and a guess the reader has to correct is worse than a floor they raise.
-   *
-   * The literal `1` is asserted rather than the constant, and the constant is pinned to the
-   * literal separately: an assertion that reads the same constant the implementation reads
-   * passes against the exact defect it was written for.
+   * **One view per wire row, and never one per token.** A token with a foil and a nonfoil
+   * Treasure in the list is two entries, and the wall draws two tiles — which is what makes
+   * adding art B keep art A (spec §4.2 rule 2). A view that folded on the oracle id would draw
+   * one of them and silently drop the other.
    */
-  it("defaults an untouched token to one copy", () => {
+  it("draws one view per entry, two printings of one token included", () => {
+    const views = deckTokenViews([
+      row({ cardId: "c-a", implicit: false, quantity: 2 }),
+      row({ cardId: "c-b", finish: "foil", implicit: false, quantity: 1 }),
+    ]);
+    expect(views).toHaveLength(2);
+    expect(views.map((v) => v.oracleId)).toEqual(["o-treasure", "o-treasure"]);
+    expect(views.map((v) => v.quantity)).toEqual([2, 1]);
+  });
+
+  /**
+   * The entry's own printing is the printing drawn — Rust has already resolved it, an implicit
+   * entry's to the resolver's default — so the view passes it through rather than choosing.
+   */
+  it("draws the entry's own printing and finish", () => {
+    const [view] = deckTokenViews([row({ cardId: "c-picked", finish: "etched", implicit: false })]);
+    expect(view.printingId).toBe("c-picked");
+    expect(view.finish).toBe("etched");
+  });
+
+  /**
+   * **The key every surface keys a tile on is the collection wall's own spelling**,
+   * `tileKeyOf(printing, finish)`, so a foil and a nonfoil copy of one printing are two keys —
+   * the grain `deck_token_printings` is unique on, less the deck and the list the query named.
+   * Asserted against `tileKeyOf` rather than a literal, because that function is the one place
+   * the string is spelled.
+   */
+  it("keys an entry on its printing and its finish", () => {
+    const views = deckTokenViews([
+      row({ cardId: "c-a", finish: "nonfoil", implicit: false }),
+      row({ cardId: "c-a", finish: "foil", implicit: false }),
+    ]);
+    expect(views.map((v) => v.entryKey).sort()).toEqual(
+      [tileKeyOf("c-a", "nonfoil"), tileKeyOf("c-a", "foil")].sort(),
+    );
+    expect(new Set(views.map((v) => v.entryKey)).size).toBe(2);
+  });
+
+  /** `implicit` is a fact about the list — this token has no entry in it — and is passed through
+   *  for the writes to read: a step on an implicit entry sends `null` so Rust materialises it. */
+  it("passes implicit through", () => {
+    expect(deckTokenViews([row()])[0].implicit).toBe(true);
+    expect(deckTokenViews([row({ implicit: false })])[0].implicit).toBe(false);
+  });
+
+  /**
+   * **The quantity is Rust's effective answer and the view does no arithmetic on it** — an
+   * implicit entry arrives at `deck_tokens.quantity ?? 1` already. The constant stays pinned to
+   * the literal because it is still what that `?? 1` is, and the fake reads it.
+   */
+  it("passes the effective quantity through, zero included", () => {
     expect(deckTokenViews([row()])[0].quantity).toBe(1);
+    expect(deckTokenViews([row({ quantity: 0, implicit: false })])[0].quantity).toBe(0);
     expect(DEFAULT_TOKEN_QUANTITY).toBe(1);
   });
 
-  it("prefers the reader's printing over the resolver's", () => {
-    expect(deckTokenViews([row({ cardId: "c-picked" })])[0].printingId).toBe("c-picked");
+  /**
+   * **A token's entries sit together, by set, collector number and finish** (spec §4.2) — after
+   * the emblems-last-then-name order that places the token itself. The collector number is
+   * compared as a number (`2` before `15`), and the finish in `FINISHES` order: nonfoil, foil,
+   * etched. The rows go in scrambled, with a second token between them, so a comparator that
+   * preserved input order or grouped by printing id would fail.
+   */
+  it("sorts a token's entries together by set, collector number and finish", () => {
+    const treasure = (setCode: string, collectorNumber: string, finish: DeckTokenRow["finish"]) =>
+      row({
+        cardId: `c-${setCode}-${collectorNumber}`,
+        finish,
+        implicit: false,
+        setCode,
+        collectorNumber,
+      });
+    const views = deckTokenViews([
+      treasure("thob", "13", "nonfoil"),
+      treasure("tafr", "15", "etched"),
+      row({ oracleId: "o-goblin", name: "Goblin", cardId: "c-goblin", setCode: "tznr" }),
+      treasure("tafr", "15", "nonfoil"),
+      treasure("tafr", "2", "foil"),
+      treasure("tafr", "15", "foil"),
+    ]);
+    expect(views.map((v) => `${v.name} ${v.setCode} ${v.collectorNumber} ${v.finish}`)).toEqual([
+      "Goblin tznr null nonfoil",
+      "Treasure tafr 2 foil",
+      "Treasure tafr 15 nonfoil",
+      "Treasure tafr 15 foil",
+      "Treasure tafr 15 etched",
+      "Treasure thob 13 nonfoil",
+    ]);
   });
 
-  it("falls back to the resolver's printing when nothing was picked", () => {
-    expect(deckTokenViews([row()])[0].printingId).toBe("c-default");
+  /** A reference the writes can take — the four facts that address an entry, and nothing a
+   *  stale view could carry into a write by accident. */
+  it("addresses an entry by its oracle, printing, finish and implicitness", () => {
+    const [view] = deckTokenViews([row({ cardId: "c-a", finish: "foil", implicit: false })]);
+    expect(entryRef(view)).toEqual({
+      oracleId: "o-treasure",
+      cardId: "c-a",
+      finish: "foil",
+      implicit: false,
+    });
   });
 
   /**
@@ -163,13 +252,14 @@ describe("deckTokenViews", () => {
   });
 
   /**
-   * **The `||`-versus-`??` test.** A stored 0 is a token the reader zeroed, which is
-   * information — the row survives precisely so the art choice is not thrown away as a side
-   * effect of stepping a number down to nothing (spec §4). `stored || 1` turns that into a
-   * silent 1 and the reader's decision is gone.
+   * **A zeroed entry is still a tile.** Rule 3 keeps a token's last entry at 0 rather than
+   * deleting it, so the implicit default does not reappear under a reader who zeroed the only
+   * printing they had — and a view that filtered on the quantity would undo that on screen.
    */
-  it("keeps a stored quantity of zero rather than treating it as absent", () => {
-    expect(deckTokenViews([row({ quantity: 0, state: "auto" })])[0].quantity).toBe(0);
+  it("keeps an entry at zero on the wall", () => {
+    const views = deckTokenViews([row({ quantity: 0, implicit: false })]);
+    expect(views).toHaveLength(1);
+    expect(views[0].quantity).toBe(0);
   });
 
   it("hides a dismissed token, and shows it when asked", () => {
@@ -244,14 +334,88 @@ describe("deckTokenViews", () => {
 
   /**
    * `overridden` drives the reset affordance, so it has to mean "there is something to reset"
-   * and nothing else. An untouched row also proves the state fallback: no stored row at all
-   * still reads as `auto`, which is the word the rest of the app branches on.
+   * and nothing else — and since v52 reset deletes **this list's entries** (`deck_token_reset`),
+   * so what there is to reset is exactly an entry that is not implicit. A dismissal is not one:
+   * reset does not touch the state, and a reset control over a dismissed implicit token would be
+   * a press that changes nothing.
    */
-  it("marks a row overridden only when the reader deviated", () => {
+  it("marks an entry overridden exactly when this list holds it", () => {
     const untouched = deckTokenViews([row()])[0];
     expect(untouched.overridden).toBe(false);
     expect(untouched.state).toBe("auto");
-    expect(deckTokenViews([row({ quantity: 4, state: "auto" })])[0].overridden).toBe(true);
+    expect(deckTokenViews([row({ implicit: false })])[0].overridden).toBe(true);
+    expect(
+      deckTokenViews([row({ state: "hidden" })], { showDismissed: true })[0].overridden,
+    ).toBe(false);
+  });
+});
+
+describe("isTokenLayout", () => {
+  /**
+   * `deck_tokens::is_token_layout`'s TypeScript twin: the three `cards.layout` words that make a
+   * row a token. The layout and never the type line, `isEmblem`'s reason — and absent is not a
+   * token, because a surface that has no layout for a card has no business drawing it as one.
+   */
+  it("answers the three token layouts and nothing else", () => {
+    expect(isTokenLayout("token")).toBe(true);
+    expect(isTokenLayout("double_faced_token")).toBe(true);
+    expect(isTokenLayout("emblem")).toBe(true);
+    expect(isTokenLayout("normal")).toBe(false);
+    expect(isTokenLayout("art_series")).toBe(false);
+    // The two a token can wear without being one: the layout alone says nothing, which is
+    // `a_token_layout_is_one_of_the_three`'s half of the crate's table.
+    expect(isTokenLayout("flip")).toBe(false);
+    expect(isTokenLayout("reversible_card")).toBe(false);
+    expect(isTokenLayout("meld")).toBe(false);
+    expect(isTokenLayout("")).toBe(false);
+    expect(isTokenLayout(null)).toBe(false);
+    expect(isTokenLayout(undefined)).toBe(false);
+  });
+});
+
+describe("isTokenPrinting", () => {
+  /**
+   * `deck_tokens::is_token_printing`'s TypeScript twin, driven by the crate's own table
+   * (`a_token_printing_is_a_token_layout_or_a_two_sided_token_line`) row for row: a token layout
+   * on its own, or a `flip` / `reversible_card` printing whose type line — or any ` // ` face of
+   * it — begins `Token` or `Emblem`. Every line is one the debug corpus stores except the one
+   * marked, which is the "any face" half.
+   */
+  it("is a token layout, or a two-sided layout whose line says Token", () => {
+    const yes: [string, string | null][] = [
+      ["token", "Token Artifact — Treasure"],
+      ["double_faced_token", null],
+      ["emblem", "Emblem — Elspeth"],
+      ["flip", "Token Enchantment — Aura Role // Token Enchantment — Aura Role"],
+      ["reversible_card", "Token Legendary Artifact Creature — Construct"],
+      // Not in the corpus: a token on the second face alone.
+      ["flip", "Creature — Human // Token Creature — Spirit"],
+    ];
+    for (const [layout, line] of yes) {
+      expect(isTokenPrinting(layout, line), `${layout} ${line}`).toBe(true);
+    }
+    const no: [string, string | null][] = [
+      ["reversible_card", "Legendary Creature — Elf Druid"],
+      ["reversible_card", "Basic Land — Plains"],
+      ["flip", "Creature — Human Monk // Legendary Creature — Spirit"],
+      ["reversible_card", null],
+      // A `Token` line on a layout outside the two is never read as one.
+      ["normal", "Token Creature — Goblin"],
+      ["normal", "Instant"],
+    ];
+    for (const [layout, line] of no) {
+      expect(isTokenPrinting(layout, line), `${layout} ${line}`).toBe(false);
+    }
+  });
+
+  /** Absent answers `false` in both arguments, and the prefix is case-sensitive, as `starts_with`
+   *  is — `token` in lower case is not Scryfall's supertype. */
+  it("answers false for an absent layout, an absent line and a lower-case word", () => {
+    expect(isTokenPrinting(null, "Token Creature — Spirit")).toBe(false);
+    expect(isTokenPrinting(undefined, "Token Creature — Spirit")).toBe(false);
+    expect(isTokenPrinting("flip", undefined)).toBe(false);
+    expect(isTokenPrinting("flip", "")).toBe(false);
+    expect(isTokenPrinting("flip", "token Creature — Spirit")).toBe(false);
   });
 });
 

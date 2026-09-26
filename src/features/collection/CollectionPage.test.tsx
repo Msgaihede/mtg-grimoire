@@ -313,7 +313,7 @@ const BURN: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   tokensOpen: false,
-  tokenStack: false,
+  tokenMode: "managed",
   tokenRailIndex: -1,
   // `true` where its neighbour above is `false` — `decks.stats_open` is `NOT NULL
   // DEFAULT 1`, because every deck that exists today draws the Deck stats band and has
