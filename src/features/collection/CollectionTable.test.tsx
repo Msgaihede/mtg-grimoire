@@ -407,6 +407,7 @@ describe("CollectionTable", () => {
           1,
         ).rows,
         rowsOf: (id) => (id === 0 ? [ROW] : id === 4 ? [inBinder] : []),
+        complete: true,
         renderHeading: (s) => <span>{`${s.name} heading`}</span>,
         renderLabel: (group) => <span>{`${group} label`}</span>,
         renderEmpty: (s) => <span>{`${s.name} is empty`}</span>,
@@ -436,6 +437,137 @@ describe("CollectionTable", () => {
     ]);
   });
 
+  /**
+   * **While pages remain, the table stops after the shelf holding the last loaded row.** The list
+   * is paged in shelf order, so every later shelf's band would stand over rows that have not
+   * arrived — and `VirtualTable` counts bands as rows when it decides to ask for the next page, so
+   * two dozen empty headings after page one kept it from asking until the reader had scrolled deep
+   * into them. The wishlist's `shelfTable` rule; with nothing loaded, the edge is the first shelf
+   * the first page is filling. Once the list is complete, every shelf is drawn again.
+   */
+  it("draws no band past the last loaded row's shelf while a next page remains", () => {
+    const shelf = (over: Partial<Shelf> & Pick<Shelf, "id" | "name">): Shelf => ({
+      kind: "folder",
+      group: "own",
+      pathIds: [over.id],
+      path: [over.name],
+      depth: 0,
+      indent: 0,
+      lead: [],
+      leadIds: [],
+      headless: false,
+      collapsed: false,
+      locked: false,
+      ...over,
+    });
+    const layout = layoutShelves(
+      [
+        { shelf: shelf({ id: 0, name: "Not sorted", kind: "unfiled" }), tileCount: 2 },
+        { shelf: shelf({ id: 4, name: "Trade binder" }), tileCount: 3 },
+        { shelf: shelf({ id: 5, name: "Sealed" }), tileCount: 0 },
+        {
+          shelf: shelf({ id: 20, name: "Burn", kind: "deck", group: "decks", collapsed: true }),
+          tileCount: 0,
+        },
+      ],
+      1,
+    ).rows;
+    const drawnWith = (loaded: CollectionRow[], complete: boolean) => {
+      const { unmount } = renderTable([], {
+        shelves: {
+          layout,
+          rowsOf: (id) => (id === 0 ? loaded : []),
+          complete,
+          renderHeading: (s) => <span>{`${s.name} heading`}</span>,
+          renderLabel: (group) => <span>{`${group} label`}</span>,
+          renderEmpty: (s) => <span>{`${s.name} is empty`}</span>,
+          renderSticky: () => null,
+        },
+      });
+      const drawn = screen
+        .getAllByRole("row")
+        .filter((row) => row.getAttribute("aria-rowindex") !== "1")
+        .map((row) => (row.hasAttribute("data-band") ? row.textContent : "row"));
+      unmount();
+      return drawn;
+    };
+
+    // Page one holds Not sorted's first row; Trade binder's three have not arrived.
+    expect(drawnWith([ROW], false)).toEqual(["Not sorted heading", "row"]);
+    // Nothing loaded yet: the first shelf expecting rows is the one being filled.
+    expect(drawnWith([], false)).toEqual(["Not sorted heading"]);
+    // Every page in: the whole cabinet again, the empty box and the shut deck group included.
+    expect(drawnWith([ROW], true)).toEqual([
+      "Not sorted heading",
+      "row",
+      "Trade binder heading",
+      "Sealed heading",
+      "Sealed is empty",
+      "decks label",
+      "Burn heading",
+    ]);
+  });
+
+  /**
+   * **The rows are keyed on the layout, the lookup and the paging flag — not on the object that
+   * carries them.** The page builds that object around drawings that close over its mutations, and
+   * a `useMutation` result is new every render, so the object is new on every keystroke. A render
+   * that hands the same three inputs with new drawings must not rebuild the row list (asked here
+   * of `rowsOf`, which only the rebuild calls) — and must still draw the new drawings, which are
+   * read at draw time.
+   */
+  it("rebuilds no rows when only the drawings change, and draws the new drawings", () => {
+    const only: Shelf = {
+      id: 0,
+      kind: "unfiled",
+      group: "own",
+      name: "Not sorted",
+      pathIds: [0],
+      path: ["Not sorted"],
+      depth: 0,
+      indent: 0,
+      lead: [],
+      leadIds: [],
+      headless: false,
+      collapsed: false,
+      locked: false,
+    };
+    const rowsOf = vi.fn(() => [ROW]);
+    const first: CollectionTableShelves = {
+      layout: layoutShelves([{ shelf: only, tileCount: 1 }], 1).rows,
+      rowsOf,
+      complete: true,
+      renderHeading: (s) => <span>{`${s.name} heading`}</span>,
+      renderLabel: () => null,
+      renderEmpty: () => null,
+      renderSticky: () => null,
+    };
+    const table = (shelves: CollectionTableShelves) => (
+      <CollectionTable
+        rows={[]}
+        total={1}
+        listKey="test"
+        sort={[]}
+        onSort={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        onSetQuantity={vi.fn()}
+        onRemove={vi.fn()}
+        marketplace={MARKETPLACES.tcgplayer}
+        shelves={shelves}
+      />
+    );
+    const { rerender } = render(table(first));
+    expect(screen.getByText("Not sorted heading")).toBeInTheDocument();
+    const built = rowsOf.mock.calls.length;
+
+    // What a keystroke hands down: the same layout, lookup and flag in a new object, with new
+    // drawings because the page's callbacks were rebuilt around new mutation objects.
+    rerender(table({ ...first, renderHeading: (s) => <span>{`${s.name} redrawn`}</span> }));
+
+    expect(rowsOf.mock.calls.length).toBe(built);
+    expect(screen.getByText("Not sorted redrawn")).toBeInTheDocument();
+  });
+
   /** Nothing over a heading that is its own bar — `stickyBand`'s caller rule (Task 5). At rest the
    *  first row under the column header is the first heading, so the anchor holds nothing. */
   it("draws no sticky bar while a heading is the row under the column header", () => {
@@ -459,6 +591,7 @@ describe("CollectionTable", () => {
       shelves: {
         layout: layoutShelves([{ shelf: only, tileCount: 1 }], 1).rows,
         rowsOf: () => [ROW],
+        complete: true,
         renderHeading: () => <span>heading</span>,
         renderLabel: () => null,
         renderEmpty: () => null,
@@ -499,6 +632,7 @@ describe("CollectionTable", () => {
       shelves: {
         layout: layoutShelves([{ shelf: only, tileCount: loose.length }], 1).rows,
         rowsOf: () => loose,
+        complete: true,
         renderHeading: () => <span>heading</span>,
         renderLabel: () => null,
         renderEmpty: () => null,
@@ -553,6 +687,7 @@ describe("CollectionTable", () => {
       shelves: {
         layout: layoutShelves([{ shelf: nested, tileCount: 1 }], 1).rows,
         rowsOf: () => [inFoils],
+        complete: true,
         renderHeading: (s) => <span>{`${s.name} heading`}</span>,
         renderLabel: () => null,
         renderEmpty: () => null,
@@ -598,6 +733,7 @@ describe("CollectionTable", () => {
           1,
         ).rows,
         rowsOf: () => [ROW],
+        complete: true,
         renderHeading: (s) => <span>{`${s.name} heading`}</span>,
         renderLabel: () => null,
         renderEmpty: () => null,

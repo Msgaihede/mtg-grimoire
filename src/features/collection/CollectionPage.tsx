@@ -2885,16 +2885,24 @@ export function CollectionPage() {
     }),
     [sections, tilesOf, headingFor, renderEmpty, renderLabel, renderSticky, addingIn],
   );
+  /**
+   * The table's half. `layout`, `rowsOf` and `complete` are what its rows are built from and each
+   * holds still across a render that changes no data; the drawings change with every render
+   * (`headingFor` closes over this page's mutations, and a `useMutation` result is new each time),
+   * which is why `CollectionTable` keys its rows on those three and never on this object.
+   */
+  const complete = !query.hasNextPage;
   const tableShelves = useMemo<CollectionTableShelves>(
     () => ({
       layout: tableLayout.rows,
       rowsOf,
+      complete,
       renderHeading: headingFor,
       renderLabel,
       renderEmpty,
       renderSticky,
     }),
-    [tableLayout, rowsOf, headingFor, renderLabel, renderEmpty, renderSticky],
+    [tableLayout, rowsOf, complete, headingFor, renderLabel, renderEmpty, renderSticky],
   );
   const caption = useMemo(() => lockedCaption(lockedIds), [lockedIds]);
 

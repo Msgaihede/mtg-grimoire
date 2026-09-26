@@ -14,6 +14,13 @@ import { isWebTarget } from "@/pwa/target";
 // The build flag `cardArtSrc` branches on. `false` is what `__CORE__` already answers under
 // vitest, so this changes nothing here until a case below asks for a browser.
 vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
+// The shelf layout, **unchanged** — wrapped only so a case can count how often the wall is laid out
+// (`CardGrid` and this page both call it). Every other case reads it through the real function.
+vi.mock("@/lib/shelfLayout", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/shelfLayout")>();
+  return { ...actual, layoutShelves: vi.fn(actual.layoutShelves) };
+});
+import { layoutShelves } from "@/lib/shelfLayout";
 import { dndManager } from "@/lib/dndManager";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
@@ -3363,6 +3370,42 @@ describe("the collection's shelves", () => {
     expect(pathRowAddFolder()).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Folders" })).toBeNull();
   });
+
+  /**
+   * **A keystroke re-lays nothing.** Every render of this page builds its heading callbacks anew —
+   * they close over mutations, and a `useMutation` result is a fresh object each render — so what
+   * the wall is *laid out from* has to be keyed on data instead: `CardGrid` on `sections` and
+   * `tilesOf`, the table on its layout, lookup and paging flag. A key in the filter box re-renders
+   * the whole page before the box's debounce has asked anything, and must not reach
+   * `layoutShelves` in either view. (The table's own row list is built without `layoutShelves`,
+   * so its half — rebuilt on nothing but the three inputs — is pinned in `CollectionTable.test.tsx`.)
+   *
+   * `fireEvent.change` rather than `userEvent.type`, and nothing awaited before the count: the
+   * debounce is a real 300ms timer, and a count taken after it had fired would be counting a
+   * legitimate relayout under the new filter.
+   */
+  it.each(["grid", "table"] as const)(
+    "lays the %s view's wall out once, not again on a keystroke in the filter box",
+    async (view) => {
+      useAppStore.setState({ collectionView: view });
+      collectionFolderList.mockResolvedValue([BINDER]);
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      // The rows are in, so the wall has been laid out at its settled shape: the art on a tile,
+      // the name in a row.
+      await (view === "grid"
+        ? screen.findAllByAltText("Lightning Bolt")
+        : screen.findAllByText("Lightning Bolt"));
+      const laid = vi.mocked(layoutShelves).mock.calls.length;
+
+      fireEvent.change(screen.getByRole("searchbox", { name: "Search your collection" }), {
+        target: { value: "b" },
+      });
+
+      expect(screen.getByRole("searchbox", { name: "Search your collection" })).toHaveValue("b");
+      expect(vi.mocked(layoutShelves).mock.calls.length).toBe(laid);
+    },
+  );
 
   /**
    * **The wire, at the root and inside a folder** — `shelves`, and never `folderId` / `rootOnly`.

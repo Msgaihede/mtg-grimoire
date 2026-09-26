@@ -262,6 +262,7 @@ export const Shelved: Story = {
           1,
         ).rows,
         rowsOf: (id: number) => (id === 0 ? ROWS.slice(0, 3) : id === 4 ? ROWS.slice(3, 4) : []),
+        complete: true,
         renderHeading: (shelf: Shelf) => <strong className="text-sm">{shelf.name}</strong>,
         renderLabel: () => <span className="text-xs uppercase text-dim">Decks</span>,
         renderEmpty: () => <span className="text-xs text-dim">Empty — drag cards here</span>,

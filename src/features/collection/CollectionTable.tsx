@@ -409,6 +409,12 @@ function columnsFor(
 export interface CollectionTableShelves {
   layout: readonly LayoutRow[];
   rowsOf: (shelfId: number) => readonly CollectionRow[];
+  /**
+   * Whether every page of the list has loaded. **Required rather than defaulted**, because the
+   * answer decides where the table stops drawing (see {@link shelvedRows}) and a default of "yes"
+   * would quietly draw every heading past the loaded rows for a caller that forgot to say.
+   */
+  complete: boolean;
   renderHeading: (shelf: Shelf) => ReactNode;
   renderLabel: (group: "decks" | "managed") => ReactNode;
   renderEmpty: (shelf: Shelf) => ReactNode;
@@ -430,22 +436,46 @@ const isBand = (row: TableRow): row is { band: Band } => "band" in row;
  * heading and empty row, and a shelf's loaded rows **once**, where its first run of tiles is. The
  * layout is at one column, so a shelf has one tiles row per tile; the table draws entries rather
  * than tiles, so it reads only where the shelf's rows start and draws every loaded row there.
+ *
+ * **While pages remain, it stops after the shelf holding the last loaded row** — the wishlist's
+ * `shelfTable` rule, reached from rows rather than counts because a collection shelf's count is in
+ * *tiles* and the table draws *entries*. The list is paged in shelf order, so that shelf is the
+ * edge of what has arrived. Drawn past it, every later shelf's band would stand over rows that
+ * are not there — `42 cards` over nothing — and `VirtualTable`, which asks for the next page when
+ * the rows it has drawn run low, would count those bands as rows and not ask until the reader had
+ * scrolled deep into them, then insert a page above the viewport. With nothing loaded yet the edge
+ * is the first shelf expecting rows, which is the one the first page is filling.
  */
-function shelvedRows(shelves: CollectionTableShelves): {
+function shelvedRows(
+  layout: readonly LayoutRow[],
+  rowsOf: (shelfId: number) => readonly CollectionRow[],
+  complete: boolean,
+): {
   rows: TableRow[];
   shelfAt: (Shelf | null)[];
   /** The indent of the shelf each drawn entry is filed under — what its rails are counted from. */
   indentOf: ReadonlyMap<TableRow, number>;
 } {
+  // The shelf the drawing stops after, or `null` to draw every one.
+  let edge: number | null = null;
+  if (!complete) {
+    for (const row of layout) {
+      if (row.kind !== "tiles") continue;
+      if (edge === null) edge = row.shelf.id;
+      if (rowsOf(row.shelf.id).length > 0) edge = row.shelf.id;
+    }
+  }
   const rows: TableRow[] = [];
   const shelfAt: (Shelf | null)[] = [];
   const indentOf = new Map<TableRow, number>();
   const drawn = new Set<number>();
-  shelves.layout.forEach((row, index) => {
+  for (const [index, row] of layout.entries()) {
+    // Past the edge shelf's rows: a label, heading or empty box for a later shelf ends the drawing.
+    if (edge !== null && drawn.has(edge) && (row.kind === "label" || row.shelf.id !== edge)) break;
     if (row.kind === "label") {
       rows.push({ band: { kind: "label", group: row.group } });
       // A label belongs to the shelf it introduces — `shelfAtRow`'s rule.
-      const next = shelves.layout[index + 1];
+      const next = layout[index + 1];
       shelfAt.push(next !== undefined && next.kind !== "label" ? next.shelf : null);
     } else if (row.kind === "heading") {
       rows.push({ band: { kind: "heading", shelf: row.shelf } });
@@ -455,13 +485,13 @@ function shelvedRows(shelves: CollectionTableShelves): {
       shelfAt.push(row.shelf);
     } else if (!drawn.has(row.shelf.id)) {
       drawn.add(row.shelf.id);
-      for (const entry of shelves.rowsOf(row.shelf.id)) {
+      for (const entry of rowsOf(row.shelf.id)) {
         rows.push(entry);
         shelfAt.push(row.shelf);
         indentOf.set(entry, row.shelf.indent);
       }
     }
-  });
+  }
   return { rows, shelfAt, indentOf };
 }
 
@@ -669,7 +699,21 @@ export function CollectionTable({
     if (scroller) scroller.scrollTop = 0;
   }, []);
 
-  const shelved = useMemo(() => (shelves ? shelvedRows(shelves) : null), [shelves]);
+  /**
+   * **Keyed on the layout, the lookup and the paging flag — never on the `shelves` object.** The
+   * page builds that object around four drawing callbacks that close over its mutations, and a
+   * `useMutation` result is a fresh object every render, so the object is new on every keystroke
+   * anywhere on the page. Keyed on it, every keystroke rebuilt the row list and handed
+   * `VirtualTable` a new `rows` — `CardGrid`'s `sections` rule (`GridSections`), the table's half.
+   * The drawings are read at draw time, through {@link band} and {@link stickyBand}.
+   */
+  const layout = shelves?.layout;
+  const rowsOfShelf = shelves?.rowsOf;
+  const complete = shelves?.complete ?? true;
+  const shelved = useMemo(
+    () => (layout && rowsOfShelf ? shelvedRows(layout, rowsOfShelf, complete) : null),
+    [layout, rowsOfShelf, complete],
+  );
   const tableRows: TableRow[] = shelved ? shelved.rows : rows;
 
   // A band never reaches a column's cell (`VirtualTable` draws it itself), so the guard below is
@@ -698,8 +742,9 @@ export function CollectionTable({
     [onSetQuantity, onRemove, marketplace, tip, quantityBlocked, shelved],
   );
 
-  // Stable, because `VirtualTable` asks it of every loaded row whenever its identity changes.
-  // Indented and railed exactly as the rows under it are.
+  // Indented and railed exactly as the rows under it are. It changes with the page's drawings,
+  // which is every render — accepted: `VirtualTable` redraws the bands with it, and the row list
+  // above, which is what a relayout would cost, holds still.
   const band = useCallback(
     (row: TableRow): ReactNode => {
       if (!isBand(row) || !shelves) return null;
