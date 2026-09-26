@@ -1261,6 +1261,18 @@ would dip to a stray low point that is nothing but that card set against the abs
 else. Grouped by bucket, the Wednesday row joins its week, and the week's `day` is the latest day
 among its rows.
 
+**The week the 35-day horizon falls in is read from the horizon on and never before it**, which is
+the same stray point arriving by a second road. Rows on the daily side of the line are each their
+own day's period; the rows *before* the line in that same week have been thinned to one per
+printing, and after a prune the only ones left there are printings that were sold before the
+horizon — a week of one or two cards, plotted as a point, on six days in seven. So the read skips
+them: a printing held across the line is already counted on the daily side, and one sold before
+it is simply not on the line, which is what the line already says about it. A mutation that drops
+the fence reproduces the stray point only once a prune has run, which is why
+`value_history.rs`'s test prunes before it reads. **Rows older than `KEEP_DAYS` are ignored for the
+same reason in the other direction**: a table the prune has not reached yet reads the same as one
+it has.
+
 **Re-applying the rule rather than trusting the prune is what makes the read independent of
 whether the prune has run**, and there are two ordinary ways it has not. Thinning runs only on a
 day's first snapshot, so between UTC midnight and whatever next takes one — a launch, an ingest, a
