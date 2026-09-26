@@ -64,6 +64,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { CategoriesDialog } from "./CategoriesDialog";
 import { LabelsDialog } from "./LabelsDialog";
+import { MARKER_WORDS } from "./views/GroupHeader";
 
 /* --------------------------------------------------------------------- fixtures ------- */
 
@@ -139,6 +140,7 @@ const DECK_ROW: DeckRow = {
   separateXGroup: false,
   tokensOpen: false,
   tokenStack: false,
+  tokenRailIndex: -1,
   // `true` where its neighbour above is `false` — `decks.stats_open` is `NOT NULL
   // DEFAULT 1`, because every deck that exists today draws the Deck stats band and has
   // no control to hide it.
@@ -477,20 +479,22 @@ describe("categories", () => {
   });
 
   /**
-   * `RULE` is `GroupHeader`'s decision and this dialog renders that component rather than
-   * drawing its own line, so the marker cannot come to mean one thing in a column heading and
-   * another here. The Maybeboard is the case worth pinning: it is predefined, and it carries
-   * `INACTIVE` instead — `RULE` is *not* "predefined and undeletable".
+   * The rule mark is `GroupHeader`'s decision and this dialog renders that component rather than
+   * drawing its own line, so the mark cannot come to mean one thing in a column heading and
+   * another here. The Maybeboard is the case worth pinning: it is predefined, and it carries the
+   * switched-off mark instead — the rule mark is *not* "predefined and undeletable". The marks
+   * are glyphs since 2026-09-26, so each is found by the words a screen reader hears.
    */
   it("marks the piles the rules read by name, and the Maybeboard by its switch", async () => {
     mount();
     await screen.findByText("Ramp");
 
-    expect(within(row("Commander")).getByText("RULE")).toBeInTheDocument();
-    expect(within(row("Sideboard")).getByText("RULE")).toBeInTheDocument();
-    expect(within(row("Maybeboard")).queryByText("RULE")).not.toBeInTheDocument();
-    expect(within(row("Maybeboard")).getByText("INACTIVE")).toBeInTheDocument();
-    expect(within(row("Ramp")).queryByText("RULE")).not.toBeInTheDocument();
+    const { rule, inactive } = MARKER_WORDS;
+    expect(within(row("Commander")).getByText(rule)).toBeInTheDocument();
+    expect(within(row("Sideboard")).getByText(rule)).toBeInTheDocument();
+    expect(within(row("Maybeboard")).queryByText(rule)).not.toBeInTheDocument();
+    expect(within(row("Maybeboard")).getByText(inactive)).toBeInTheDocument();
+    expect(within(row("Ramp")).queryByText(rule)).not.toBeInTheDocument();
   });
 
   it("shows each pile's copies and its money", async () => {
