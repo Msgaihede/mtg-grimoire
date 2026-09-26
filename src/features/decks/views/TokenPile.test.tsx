@@ -97,6 +97,24 @@ function renderWith(node: ReactElement) {
   );
 }
 
+/**
+ * The heading `GroupHeader` draws over a pile — the nearest box holding both the pile's name and
+ * its count pill, which is the box the price is drawn in — and never the cards under it, so a
+ * figure asserted here cannot be a chin's.
+ *
+ * Climbed to rather than addressed by position or by class, so it survives `GroupHeader`
+ * rearranging its own rows.
+ */
+function headingOf(group: HTMLElement): HTMLElement {
+  const name = within(group).getByText(TOKENS_HEADING);
+  const pill = within(group).getByText(/^\d+ tokens? (?:or|and) emblems?$/);
+  let heading = name.parentElement;
+  while (heading !== null && !heading.contains(pill)) heading = heading.parentElement;
+  if (heading === null) throw new Error("no heading holds both the name and the pill");
+  expect(heading).not.toContainElement(within(group).getByRole("list", { name: TOKENS_HEADING }));
+  return heading;
+}
+
 function renderStack(pile: TokenPile) {
   return renderWith(<TokenStackPile pile={pile} zoom={DEFAULT_ZOOM} />);
 }
@@ -252,9 +270,11 @@ describe("TokenStackPile", () => {
 
   it("shows an em dash for a pile no printing of which is priced", () => {
     renderStack(pileOf([token({ unitPrice: null })]));
-    expect(
-      within(screen.getByRole("group", { name: TOKENS_HEADING })).getAllByText("—").length,
-    ).toBeGreaterThan(0);
+    // **In the heading, and only there.** The unpriced token's own chin draws an em dash too, so a
+    // query over the whole pile passes over a heading that says `$0.00` — which is the bug this
+    // test is named for.
+    const heading = headingOf(screen.getByRole("group", { name: TOKENS_HEADING }));
+    expect(within(heading).getByText("—")).toBeInTheDocument();
   });
 
   it("draws each token as a deck card face with the quantity tag and a chin", () => {
