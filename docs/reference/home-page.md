@@ -1218,17 +1218,44 @@ a widget this build draws.
 
 ### The table had prices and not holdings
 
-§11's `price_snapshots` keeps one owned printing's price per marketplace per day and says nothing
-about how many copies were held that day, so a past total cannot be rebuilt from it: `Σ copies ×
+§11's `price_snapshots` kept one owned printing's price per marketplace per day and said nothing
+about how many copies were held that day, so a past total could not be rebuilt from it: `Σ copies ×
 price` needs the copies *on that day*, and the only copies the database knows are today's.
-**User schema v50 adds `price_snapshots.copies INTEGER`** — one `ALTER TABLE … ADD COLUMN`,
-nullable, no default — and the snapshot writes it in the same statement as the price.
-`snapshot_sql` already builds `owned(card_id, finish, copies)` from
-`collection_source::copies_by_printing_and_finish` to decide what is owned, so the column records a
-number the statement was already holding: no second query, and no second statement of *what does
-the reader own*. It is **not synced**, because the table is not (§11).
+**User schema v50 adds `price_snapshots.copies INTEGER`**, nullable, no default, and the snapshot
+writes it in the same statement as the price. `snapshot_sql` already builds
+`owned(card_id, finish, copies)` from `collection_source::copies_by_printing_and_finish` to decide
+what is owned, so the column records a number the statement was already holding: no second query,
+and no second statement of *what does the reader own*. It is **not synced**, because the table is
+not (§11).
 
-**Rows written before the upgrade carry NULL there and are never read** — the read filters on
+**v50 also makes a row mean *held* rather than *priced*, and that half is why the rung is a table
+rebuild.** Every printing the reader holds gets its row. Where the marketplace does not quote that
+finish, `price` is **NULL**, and never 0. Before, an unquoted finish wrote no row at all. SQLite
+cannot drop a `NOT NULL`, so the rung is v35's five statements: build `price_snapshots_v50`, copy
+every row, drop, rename, and recreate `idx_price_snapshots_printing` as a frozen literal. The
+rename quotes the stored name, so `USER_SCHEMA_SQL` carries `"price_snapshots"` the way it carries
+`"collection_entries"`, and `UNDO_V50` rebuilds back to v45's `NOT NULL` shape, dropping the
+unpriced rows first. The rung was written as a bare `ADD COLUMN` and rebuilt in place on
+2026-09-26, before it shipped. A development database that ran the first version is at 50 with a
+`NOT NULL` price, so it refuses every unpriced row, and no rung will ever reach it again.
+§11's readers are unchanged by the NULLs. `price_movers` takes a baseline, `price_history` a point,
+and `days` counts a day only from a priced row, so a NULL row is skipped exactly as an absent one
+was. The prune keeps two survivors per bucket rather than one: its newest row, which this graph
+reads, and its newest *priced* row, which the movers read. Otherwise a week that ended unquoted
+would take the bucket's last price with it.
+
+**Two refinements on the writing side, each found by the review.** First, **a marketplace that
+prices none of the held printings writes nothing that day.** That is a feed the reader never
+selected. Its rows would carry no price and double the table past §11's measured size, and the
+first day its feed arrived would read as the whole collection's value appearing as one price move.
+A day with no rows is a gap in that marketplace's line and never a step, because a period is only
+ever made from rows. Second, **each snapshot replaces its marketplace's whole day**: delete, then
+insert, with the day read once and bound into both. So the day holds its *last* snapshot's
+holding. Under the old insert-or-replace, a printing sold between the launch's snapshot and an
+afternoon feed store kept the morning's row, and the graph counted it held that day. Thinning
+still runs only on a day's first snapshot, and that is decided before the delete empties the day.
+
+**Rows written before the upgrade carry NULL `copies` and are never read** — the read filters on
 `copies IS NOT NULL` rather than guessing. There is **no backfill**, and not for want of a number
 to write: the only one to hand is today's quantity, and written into last month's rows it would
 draw cards bought last week as owned all along. That is a line wrong in exactly the direction a
@@ -1236,7 +1263,7 @@ reader cannot check, because the history it contradicts is stored nowhere. So th
 the upgrade day, and what every existing reader meets first is the first-day state — today's
 figure, and *Prices are kept once a day, so the line starts tomorrow.* where the chart would be.
 The read is held to answering the live point alone over a v49-shaped history, never a line built
-from NULLs, and the widget to drawing that state over it.
+from NULL counts, and the widget to drawing that state over it.
 
 ### One read, and the thinning applied twice
 
@@ -1254,7 +1281,8 @@ the read would group a band the table keeps daily or draw daily a band it has th
 
 **Within a bucket the read keeps one row per `(card_id, finish)` — its latest — which is the
 prune's survivor rule applied a second time, and a printing sold mid-week is the reason.** The
-prune keeps each printing's newest row per bucket. For a printing still held that is the bucket's
+prune keeps each printing's newest row per bucket (and, since the rebuild above, its newest priced
+row beside it, which this read never selects). For a printing still held that is the bucket's
 last snapshot day; for one sold on a Wednesday it is that Wednesday. A read that grouped the thinned
 band by `day` would make that Wednesday a period of its own holding one printing, and the line
 would dip to a stray low point that is nothing but that card set against the absence of everything
@@ -1308,10 +1336,11 @@ emptiness off `collection_summary`'s card count, as the Collection value widget 
 ### `moved`, and the collection change it leaves behind
 
 **Each point after the first carries `moved` — the part of the step that came from prices alone.**
-Over every `(card_id, finish)` present at both ends of the step it is
-`copies_before × (price_now − price_before)`. For the step into the live point the later price is
-the live `price_expr`, and a printing counts as present there only with a live quantity *and* a live
-price. The first point's `moved` is `null`.
+Over every `(card_id, finish)` **held** at both ends of the step it is
+`copies_before × (price_now − price_before)`, a NULL price counted as 0. Held means a row in the
+period, priced or not. For the step into the live point, held means a collection entry with a
+copy, priced or not, and the later price is the live `price_expr`. A NULL still adds nothing to a
+*total*, which is `collection_summary`'s arithmetic. The first point's `moved` is `null`.
 
 **What is left is what the reader did**: `total − previous total − moved`, the cards added or
 removed. TypeScript derives it (`collectionChange` in `valueHistory/model.ts`) rather than Rust
@@ -1326,13 +1355,15 @@ what is left is `b` — the one copy added, at the price it came in at. Taken ov
 the same step would credit the market with a rise on a copy the reader did not hold while it rose,
 and read the added copy at yesterday's price.
 
-**A printing present at only one end of a step contributes wholly to the collection change**, which
-is what makes a card bought or sold read as one. ⚠️ **The same rule reads a printing the marketplace
-stops quoting as a removal.** An unpriced finish writes no snapshot row (§11) and the live point
-asks for a live price, so a printing whose price disappears is absent from the later end: its value
-leaves the total, prices did not move it, and the remainder calls it removed. The read has no third
-category for a price that vanished. That follows from the definition and was not found in use; it
-is written down so the first reader to meet it is not surprised.
+**A printing held at only one end of a step contributes wholly to the collection change**, which
+is what makes a card bought or sold read as one. **A price that appears or vanishes on a card the
+reader kept is a price move**, because the card is held at both ends: `2 × (0 − 10)` is `moved`,
+and the remainder is 0. That is the reason a row means *held*. The review found the old failure
+while the build was in flight, before any reader met it. An unquoted finish wrote no row, and the
+live point asked for a live price. So a printing whose price disappeared was absent from the later
+end, its value left the total, and the remainder called it *removed*. A card whose price first
+appeared was misread the same way as a purchase. **A card no marketplace quotes, bought or sold, is
+no change at all**: it holds no money, so nothing moves and no marker is drawn.
 
 **Markers** are a small accent diamond on the baseline at each step whose collection change is not
 zero — `|x| ≥ 0.005`, half a cent, so float residue from a subtraction of sums does not mark every
@@ -1504,7 +1535,8 @@ starts <date>* rather than stretching a week across a quarter's axis. The market
 missing registration answers `unknown command` with nothing red. `src/lib/ipc.test.ts` carries
 mirror rows for `ValueBucket`, `ValuePoint` and `ValueHistory` against the crate's source and a
 `declares` case for both argument names. The Storybook fake stores `copies` beside each fake
-snapshot and derives the answer by the same rules rather than aliasing a DTO. No route count or test
+snapshot, holds unpriced holdings as NULL prices, and derives the answer by the same rules rather
+than aliasing a DTO. No route count or test
 count is written here; the build answers both.
 
 **Out of scope, deliberately:** dragging the card is the page's, Customize gains nothing beyond the

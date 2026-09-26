@@ -187,12 +187,17 @@ both plus the frontend.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v50** gave
-  `price_snapshots` a `copies` column, the copies of each printing and finish held on the day its
-  price was recorded, so the home page's collection value graph can rebuild a past total — and ⚠️
-  **a row written before the upgrade carries NULL there and is never read**: no backfill, because
-  the only number to hand is today's quantity and it would draw cards bought last week as owned all
-  along, so the graph starts on the upgrade day
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v50**
+  rebuilt `price_snapshots` into a record of **holdings**, v35's five statements, because SQLite
+  cannot drop a `NOT NULL`. It added a `copies` column, the copies of each printing and finish held
+  on the day its price was recorded, so the home page's collection value graph can rebuild a past
+  total. It also made `price` nullable, so a held printing the marketplace does not quote is a row
+  with a NULL price rather than no row. Without that, a price appearing or vanishing read as the
+  reader buying or selling. ⚠️ **Every movers and history read skips a NULL-price row exactly as
+  it skipped an absent one, and the prune keeps a bucket's newest priced row beside its newest
+  row.** ⚠️ **A row written before the upgrade carries NULL `copies` and is never read.** There is
+  no backfill, because the only number to hand is today's quantity and it would draw cards bought
+  last week as owned all along, so the graph starts on the upgrade day
   ([home-page.md](../docs/reference/home-page.md) §14). That is one above a theory deck's managed
   wishlist becoming a choice of Compare view (v49, `decks.managed_wishlist_mode`, `off` by
   default), one above that wishlist arriving as a switch (v48), one above decks learning to stack

@@ -536,11 +536,14 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// **49 (2026-09-24) turns that switch into a choice** — `decks.managed_wishlist_mode`, one of the
 /// Compare dialog's three views or `off`, `DEFAULT 'off'`, replacing v48's `managed_wishlist`.
 ///
-/// **50 (2026-09-26) is `price_snapshots.copies`** — how many copies of the printing, at that
-/// finish, the reader held on the day the price was recorded, written by the snapshot in the same
-/// statement as the price. v45 kept prices and not holdings, so a past *total* could not be
-/// rebuilt from it; this is what the home page's Collection value graph
-/// ([`crate::value_history`]) multiplies. **Nullable, no default and no backfill**: a row
+/// **50 (2026-09-26) makes `price_snapshots` a record of holdings**: `copies`, how many copies
+/// of the printing, at that finish, the reader held on the day the price was recorded, written by
+/// the snapshot in the same statement as the price — and a `price` that may be NULL, for a
+/// printing held that day which the marketplace does not quote. v45 kept prices and not holdings,
+/// so a past *total* could not be rebuilt from it; this is what the home page's Collection value
+/// graph ([`crate::value_history`]) multiplies, and the NULL is what lets it tell a price that
+/// appeared or vanished from a card that did. **A table rebuild**, v35's shape, because SQLite
+/// cannot drop a `NOT NULL`. **`copies` is nullable, with no default and no backfill**: a row
 /// written before the upgrade carries NULL and is never read, because the only quantity there is
 /// to backfill with is today's, and that would draw a card bought last week as owned all along.
 pub const USER_SCHEMA_VERSION: i64 = 50;
@@ -4416,7 +4419,7 @@ CREATE UNIQUE INDEX {schema}.idx_sticky_notes_uid ON sticky_notes (sync_uid);
 
 CREATE INDEX {schema}.idx_activity_recent ON activity (at DESC, id DESC);
 
-CREATE TABLE {schema}.price_snapshots (
+CREATE TABLE {schema}."price_snapshots" (
                  -- **Not in `SYNCED_TABLES`, and no `sync_uid` column, on purpose**: every
                  -- device takes its own snapshot of the same public prices.
                  -- `YYYY-MM-DD`, UTC, from SQLite's own `date('now')` — never a Rust clock.
@@ -4427,8 +4430,14 @@ CREATE TABLE {schema}.price_snapshots (
                  -- Soft, like every card id in a user table: `cards` is dropped on every sync.
                  card_id TEXT NOT NULL,
                  finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
-                 -- In the marketplace's own currency. An unpriced finish has no row, never 0.
-                 price REAL NOT NULL, copies INTEGER,
+                 -- In the marketplace's own currency, and never 0 for a finish it does not
+                 -- quote. A row is a HOLDING: NULL is a printing the reader held that day which
+                 -- this marketplace quotes no price for, so a price that appears or vanishes on
+                 -- a card the reader kept is never read as the card arriving or leaving.
+                 price REAL,
+                 -- Copies of the printing at that finish held that day, every folder at once.
+                 -- NULL only on a row written before v50, which no total is ever built from.
+                 copies INTEGER,
                  PRIMARY KEY (day, marketplace, card_id, finish)
              ) WITHOUT ROWID;
 
@@ -6664,23 +6673,73 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
-    // v50 (2026-09-26): `price_snapshots.copies` — how many copies of the printing, at that
-    // finish, the reader held on the snapshot's day. v45 kept the price and not the holding, so
-    // the home page's Collection value graph could not rebuild a past total from it; the
-    // snapshot writes this beside the price in the same statement, from the same
-    // `owned(card_id, finish, copies)` it already computes to decide what is owned.
+    // v50 (2026-09-26): `price_snapshots` becomes a record of what the reader HELD each day —
+    // `copies`, how many copies of the printing at that finish, and a `price` that may be NULL.
     //
-    // **Nullable, no `DEFAULT` and no backfill.** Every row already in the table is NULL, and
-    // [`crate::value_history`] never reads one: the only quantity there is to backfill with is
-    // today's, and that would draw a card bought last week as owned all along. So the graph
-    // starts on the upgrade day, which is the truth about what was recorded.
+    // **`copies` is why the rung exists.** v45 kept the price and not the holding, so the home
+    // page's Collection value graph could not rebuild a past total from it; the snapshot writes
+    // this beside the price in the same statement, from the same `owned(card_id, finish, copies)`
+    // it already computes to decide what is owned. **Nullable, no `DEFAULT` and no backfill**:
+    // every row already in the table is NULL there, and [`crate::value_history`] never reads one —
+    // the only quantity there is to backfill with is today's, and that would draw a card bought
+    // last week as owned all along. So the graph starts on the upgrade day.
     //
-    // One `ADD COLUMN`, so it owes [`tests::UNDO_V50`] for [`tests::UNDO_V13`]'s loud reason.
-    // `ALTER TABLE` writes the column in after `price` and before the table's `PRIMARY KEY`
-    // clause, which is where [`USER_SCHEMA_SQL`] carries it. Not synced, as v45's table is not.
+    // **`price` loses its `NOT NULL`, and that is why this is a rebuild and not an `ADD
+    // COLUMN`.** A row is a *holding* now: NULL is a printing the reader held that day which this
+    // marketplace quotes no price for. While only priced rows were written, a held card whose
+    // price started or stopped being quoted entered or left the table, and the graph read that as
+    // the reader adding or removing cards; with the row there either way, only a printing
+    // entering or leaving the held set is the reader's doing. [`crate::price_history`]'s movers
+    // and history skip a NULL row exactly as they skipped an absent one.
+    //
+    // **SQLite cannot drop a `NOT NULL`**, so this is v35's five statements: build, copy every
+    // row (`copies` NULL on all of them), drop, rename, and recreate the one index as a frozen
+    // literal. `ALTER TABLE … RENAME TO` quotes the stored name, so [`USER_SCHEMA_SQL`] carries
+    // `"price_snapshots"` as it carries `"collection_entries"`. The table has no capture triggers
+    // to lose (it is not synced) and no foreign key reaches it. It owes [`tests::UNDO_V50`], which
+    // rebuilds back to v45's shape.
+    //
+    // (Written first as a bare `ADD COLUMN copies` and rebuilt in place the same day, before it
+    // shipped. A development database that ran that version is at 50 with a `NOT NULL` price,
+    // refuses every unpriced row the snapshot writes, and is the one file this rung cannot reach.)
     if v < 50 {
         let tx = conn.unchecked_transaction()?;
-        tx.execute_batch("ALTER TABLE price_snapshots ADD COLUMN copies INTEGER;")?;
+        tx.execute_batch(
+            "CREATE TABLE price_snapshots_v50 (
+                 -- **Not in `SYNCED_TABLES`, and no `sync_uid` column, on purpose**: every
+                 -- device takes its own snapshot of the same public prices.
+                 -- `YYYY-MM-DD`, UTC, from SQLite's own `date('now')` — never a Rust clock.
+                 day TEXT NOT NULL,
+                 -- The *priced* marketplace: one of the four `sorting::Marketplace` arms, so
+                 -- `cardtrader` (which quotes TCGplayer) is never a key of its own.
+                 marketplace TEXT NOT NULL,
+                 -- Soft, like every card id in a user table: `cards` is dropped on every sync.
+                 card_id TEXT NOT NULL,
+                 finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                 -- In the marketplace's own currency, and never 0 for a finish it does not
+                 -- quote. A row is a HOLDING: NULL is a printing the reader held that day which
+                 -- this marketplace quotes no price for, so a price that appears or vanishes on
+                 -- a card the reader kept is never read as the card arriving or leaving.
+                 price REAL,
+                 -- Copies of the printing at that finish held that day, every folder at once.
+                 -- NULL only on a row written before v50, which no total is ever built from.
+                 copies INTEGER,
+                 PRIMARY KEY (day, marketplace, card_id, finish)
+             ) WITHOUT ROWID;
+
+             -- Every row, and `copies` NULL on each: the rung knows the price a row recorded
+             -- and not how many copies stood behind it.
+             INSERT INTO price_snapshots_v50 (day, marketplace, card_id, finish, price, copies)
+                 SELECT day, marketplace, card_id, finish, price, NULL FROM price_snapshots;
+
+             DROP TABLE price_snapshots;
+             ALTER TABLE price_snapshots_v50 RENAME TO price_snapshots;
+
+             -- Frozen, v35's rule: `DROP TABLE` took it, and this step is history the day it
+             -- ships.
+             CREATE INDEX idx_price_snapshots_printing
+                 ON price_snapshots (marketplace, card_id, finish, day);",
+        )?;
         // Literal `50`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA main.user_version = 50;")?;
         tx.commit()?;
@@ -8428,16 +8487,34 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v50's `price_snapshots.copies` — the newest rewind on the user ladder, directly above
+    /// v50's holdings table — the newest rewind on the user ladder, directly above
     /// [`UNDO_V49`].
     ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason: `ADD COLUMN` is not idempotent, so a fixture
-    /// that kept the column dies at `duplicate column name` on the way back up. `DROP COLUMN` is
-    /// legal here because nothing names `copies` — it is in neither the primary key nor
-    /// `idx_price_snapshots_printing`, and no trigger reads this table. A chain that rewinds
-    /// below 45 drops the column and then [`UNDO_V45`] drops the table, which costs one
-    /// statement and nothing else.
-    const UNDO_V50: &str = "ALTER TABLE price_snapshots DROP COLUMN copies;";
+    /// **A rebuild back to v45's shape, because the rung was one**: `DROP COLUMN` could take
+    /// `copies` away but nothing can put `price`'s `NOT NULL` back, and a v49 fixture whose price
+    /// accepts NULL is head wearing a v49 label — it would pass a snapshot the real v49 file
+    /// refuses. So the unpriced rows go first (v45 had no way to record one), the v50 table is
+    /// renamed aside, v45's table is created under its own unquoted name, the priced rows are
+    /// copied back, and the index the rename carried off is put back. Owed for [`UNDO_V14`]'s
+    /// **quiet** reason, not [`UNDO_V13`]'s loud one: the rung's rebuild succeeds just as well
+    /// over a table that is already v50's, so a fixture that skipped this would climb green while
+    /// claiming a v49 file that never existed. A chain that rewinds below 45 rebuilds the table
+    /// and then [`UNDO_V45`] drops it, which costs a few statements and nothing else.
+    const UNDO_V50: &str = "DELETE FROM price_snapshots WHERE price IS NULL;
+         ALTER TABLE price_snapshots RENAME TO price_snapshots_v50;
+         CREATE TABLE price_snapshots (
+             day TEXT NOT NULL,
+             marketplace TEXT NOT NULL,
+             card_id TEXT NOT NULL,
+             finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+             price REAL NOT NULL,
+             PRIMARY KEY (day, marketplace, card_id, finish)
+         ) WITHOUT ROWID;
+         INSERT INTO price_snapshots (day, marketplace, card_id, finish, price)
+             SELECT day, marketplace, card_id, finish, price FROM price_snapshots_v50;
+         DROP TABLE price_snapshots_v50;
+         CREATE INDEX idx_price_snapshots_printing
+             ON price_snapshots (marketplace, card_id, finish, day);";
 
     /// v49's managed-wishlist mode — the rewind directly above [`UNDO_V48`], and the second on
     /// this ladder (after [`UNDO_V43`]) that has to *put a column back*: v48's switch, so that
@@ -12358,13 +12435,25 @@ pub(crate) mod tests {
         assert_eq!(sticky, 1, "a v46 file still has v46's own table");
     }
 
-    /// **v50's column, over the price history that was already there.** Seeded before the climb,
-    /// v47's argument: a row inserted at head would be written against the frozen
-    /// [`USER_SCHEMA_SQL`] and pass whatever the rung did. Every row survives, and every one of
-    /// them reads `copies IS NULL` — the rung backfills nothing, because the only quantity it
-    /// could backfill with is today's.
+    /// Whether `price_snapshots.price` refuses a NULL — v45's `NOT NULL`, which v50 takes away.
+    fn price_is_required(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT \"notnull\" FROM pragma_table_info('price_snapshots') WHERE name = 'price'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **v50's rebuild, over the price history that was already there.** Seeded before the
+    /// climb, v47's argument: a row inserted at head would be written against the frozen
+    /// [`USER_SCHEMA_SQL`] and pass whatever the rung did. Every row survives with its price, and
+    /// every one of them reads `copies IS NULL` — the rung backfills nothing, because the only
+    /// quantity it could backfill with is today's. And `price` takes a NULL afterwards, which is
+    /// the half an `ADD COLUMN` could never have done: a held printing no marketplace quotes is a
+    /// row now, not an absence.
     #[test]
-    fn v50_adds_copies_and_keeps_every_price_row() {
+    fn v50_rebuilds_the_price_history_as_holdings_and_keeps_every_row() {
         let conn = user_file_at_49();
         conn.execute_batch(
             "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price) VALUES
@@ -12381,6 +12470,7 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(version, 50);
         assert_eq!(has_column(&conn, "price_snapshots", "copies"), 1);
+        assert_eq!(price_is_required(&conn), 0, "an unpriced holding is a row");
         let (rows, null_copies, price_sum): (i64, i64, f64) = conn
             .query_row(
                 "SELECT count(*), sum(copies IS NULL), sum(price) FROM price_snapshots",
@@ -12392,21 +12482,61 @@ pub(crate) mod tests {
         assert_eq!(null_copies, 3, "and writes no copies it cannot know");
         assert_eq!(price_sum, 93.25, "nor touches a price");
 
-        // The column takes a count, and a row written after the rung can carry one.
+        // Still `WITHOUT ROWID`, and the one index the movers read seeks is back.
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'price_snapshots'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sql.ends_with("WITHOUT ROWID"), "{sql}");
+        let index: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master
+                  WHERE type = 'index' AND name = 'idx_price_snapshots_printing'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            index.contains("(marketplace, card_id, finish, day)"),
+            "{index}"
+        );
+
+        // A row written after the rung carries a count, and may carry no price.
         conn.execute_batch(
             "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price, copies)
-             VALUES ('2026-09-22', 'tcgplayer', 'bolt', 'nonfoil', 2.0, 3);",
+             VALUES ('2026-09-22', 'tcgplayer', 'bolt', 'nonfoil', 2.0, 3),
+                    ('2026-09-22', 'tcgplayer', 'free', 'nonfoil', NULL, 2);",
         )
         .unwrap();
+        // The key and the finish CHECK came across the rebuild.
+        assert!(conn
+            .execute_batch(
+                "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price, copies)
+                 VALUES ('2026-09-22', 'tcgplayer', 'bolt', 'nonfoil', 9.0, 1);",
+            )
+            .is_err());
+        assert!(conn
+            .execute_batch(
+                "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price, copies)
+                 VALUES ('2026-09-22', 'tcgplayer', 'bolt', 'gilded', 9.0, 1);",
+            )
+            .is_err());
 
         // Twice is the same as once: the stamp is the only thing that makes a second launch
-        // survive a non-idempotent `ADD COLUMN`.
+        // survive a rung that renames a table over the one it read.
         migrate_user(&conn).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM price_snapshots", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 5);
     }
 
-    /// The fixture is a real v49 file and not head wearing a v49 label: `copies` is gone and
-    /// `decks.managed_wishlist_mode` — v49's own column — is still there, so a chain that also
-    /// ran [`UNDO_V49`] is caught too.
+    /// The fixture is a real v49 file and not head wearing a v49 label: `copies` is gone, `price`
+    /// refuses a NULL again, and `decks.managed_wishlist_mode` — v49's own column — is still
+    /// there, so a chain that also ran [`UNDO_V49`] is caught too.
     #[test]
     fn the_v49_fixture_carries_none_of_v50() {
         let conn = user_file_at_49();
@@ -12415,11 +12545,56 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(version, 49);
         assert_eq!(has_column(&conn, "price_snapshots", "copies"), 0);
+        assert_eq!(price_is_required(&conn), 1, "v45's price is NOT NULL");
+        assert!(conn
+            .execute_batch(
+                "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price)
+                 VALUES ('2026-09-22', 'tcgplayer', 'free', 'nonfoil', NULL);",
+            )
+            .is_err());
+        let index: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                  WHERE type = 'index' AND name = 'idx_price_snapshots_printing'
+                    AND tbl_name = 'price_snapshots'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1, "the rewind put the index back on the table");
         assert_eq!(
             has_column(&conn, "decks", "managed_wishlist_mode"),
             1,
             "a v49 file still has v49's own column"
         );
+    }
+
+    /// **The rewind loses no priced row and keeps no unpriced one.** v45 had no way to record a
+    /// held printing without a price, so [`UNDO_V50`] drops exactly those and carries every
+    /// priced row back with its price — which is what lets a chain below it believe its fixture.
+    #[test]
+    fn the_v50_rewind_keeps_every_priced_row_and_drops_the_unpriced() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(
+            "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price, copies) VALUES
+                 ('2026-09-21', 'tcgplayer', 'bolt', 'nonfoil', 1.5, 2),
+                 ('2026-09-21', 'tcgplayer', 'free', 'nonfoil', NULL, 3),
+                 ('2026-09-22', 'cardmarket', 'ring', 'foil', 90.0, 1);",
+        )
+        .unwrap();
+
+        conn.execute_batch(&format!("{UNDO_V50} PRAGMA main.user_version = 49;"))
+            .unwrap();
+
+        let (rows, price_sum): (i64, f64) = conn
+            .query_row(
+                "SELECT count(*), sum(price) FROM price_snapshots",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((rows, price_sum), (2, 91.5));
     }
 
     /// A v28 file walks up keeping every row it had, and twice is the same as once.

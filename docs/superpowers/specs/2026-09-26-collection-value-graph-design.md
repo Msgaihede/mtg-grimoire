@@ -49,11 +49,16 @@ page. **A card is in exactly one bucket**, so the buckets always sum to the tota
 each owned printing's price per marketplace per day but not how many copies were held, so a past
 total cannot be rebuilt from it.
 
-**User schema v50 adds `price_snapshots.copies INTEGER`**, written by the snapshot in the same
-statement as the price (the sum of `collection_entries.quantity` for that printing and finish,
-which the snapshot already computes to decide what is owned). Rows written before the upgrade
-carry NULL and are **not** read: the graph starts on the upgrade day. No backfill — a backfill
-with today's quantities would show cards added last week as owned all along.
+**User schema v50 rebuilds `price_snapshots` with a `copies INTEGER` column and a nullable
+`price`**, and from then on a row means a **held** printing rather than a priced one: the snapshot
+writes every printing the collection holds, with the sum of `collection_entries.quantity` as its
+copies and a NULL price where the marketplace quotes none (a marketplace that prices nothing held
+that day writes nothing). Each snapshot replaces its marketplace's whole day, so a card sold between
+two same-day snapshots leaves no row. Rows written before the upgrade carry NULL copies and are
+**not** read: the graph starts on the upgrade day. No backfill — a backfill with today's quantities
+would show cards added last week as owned all along. (Revised after review, 2026-09-26: the first
+cut kept priced rows only, which made a price appearing or disappearing read as cards added or
+removed.)
 
 **One read, `collection_value_history(split, marketplace)`,** answers:
 
@@ -64,8 +69,9 @@ with today's quantities would show cards added last week as owned all along.
   `collection_summary` computes the collection's value, so the graph's last point is exactly the
   number the Collection value widget shows;
 - per point: the total, one value per bucket, and **`moved`** — the part of the change since the
-  previous point that came from prices alone (for every printing present at both points,
-  `copies_before × (price_now − price_before)`). The rest of the change is what the reader added
+  previous point that came from prices alone (for every printing **held** at both points,
+  `copies_before × (price_now − price_before)` with a missing price counted as 0, so a price that
+  starts or stops being quoted is a price move). The rest of the change is what the reader added
   or removed; TypeScript derives it as `total − previous total − moved`.
 
 Everything past that is TypeScript's: which buckets to fold into Other, what the range shows,

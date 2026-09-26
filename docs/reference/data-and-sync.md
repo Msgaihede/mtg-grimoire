@@ -1004,15 +1004,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `schema.rs`'s `USER_SCHEMA_VERSION` doc and in
   [wishlist-folders.md](wishlist-folders.md). Named for v40–v42's reason above: so nobody reads
   the absence as a claim.)
-  **v50 adds `price_snapshots.copies`, for the home page's collection value graph** (2026-09-26) —
-  the copies of each printing and finish held on the day its price was recorded. One nullable
-  `INTEGER` column and one `ALTER TABLE … ADD COLUMN`, v47's shape, so it owes its
-  `USER_SCHEMA_SQL` line and an `UNDO_V50` and changes no table or index count. The snapshot writes
-  it in the statement that writes the price: `snapshot_sql`'s `owned(card_id, finish, copies)` was
-  already computing it to decide what is owned, so the column records a number that statement was
-  holding anyway. **Why it had to exist**: v45 kept prices and not holdings, so `Σ copies × price`
-  for a past day had nothing to multiply by. ⚠️ **A row written before the upgrade carries NULL and
-  is never read** — the read filters on `copies IS NOT NULL` — and there is **no backfill**, because
+  **v50 makes `price_snapshots` a record of holdings, for the home page's collection value graph**
+  (2026-09-26). It adds `copies`, the copies of each printing and finish held on the day its price
+  was recorded, and it makes `price` nullable: a held printing the marketplace does not quote is
+  now a row with a NULL price, where it used to be no row. **A table rebuild, v35's shape**, because
+  SQLite cannot drop a `NOT NULL`: build, copy, drop, rename, and recreate the one index. The rename
+  quotes the stored name, so `USER_SCHEMA_SQL` says `"price_snapshots"`. `UNDO_V50` rebuilds back
+  to v45's shape. No table or index count moves. The snapshot writes `copies` in the statement that
+  writes the price: `snapshot_sql`'s `owned(card_id, finish, copies)` was already computing it to
+  decide what is owned, so the column records a number that statement was holding anyway. **Why
+  it had to exist**: v45 kept prices and not holdings, so `Σ copies × price` for a past day had
+  nothing to multiply by. **Why the NULL price**: without it, a card whose price started or
+  stopped being quoted entered or left the table, and the graph read a price as a purchase or a
+  sale. `price_movers`, `price_history` and `days` skip a NULL row exactly as they skipped an
+  absent one, and the prune keeps each bucket's newest priced row beside its newest row. The rung
+  was written as a bare `ADD COLUMN` and rebuilt in place before it shipped. ⚠️ **A row written
+  before the upgrade carries NULL `copies` and is never read** — the read filters on
+  `copies IS NOT NULL` — and there is **no backfill**, because
   the only number to hand is today's quantity and written into last month's rows it would draw
   cards bought last week as owned all along. So the graph starts on the upgrade day. The read,
   `collection_value_history`, applies the table's own seven-day bucket again at read time, keeping

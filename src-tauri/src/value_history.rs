@@ -2,10 +2,12 @@
 //! split by card type, colour or set — for the home page's Collection value graph.
 //!
 //! **One read, [`history`], over the table [`crate::price_history`] writes.** Since user schema
-//! v50 each `price_snapshots` row carries `copies` beside its price, so a past day's value is
-//! `Σ copies × price` over that day's rows. Rows written before the upgrade carry NULL and are
-//! **never read**: the graph starts on the upgrade day, because the only quantity a backfill
-//! could have used is today's, and that would draw a card bought last week as owned all along.
+//! v50 each `price_snapshots` row is a **holding** — a printing the reader held that day, with
+//! `copies` beside a price that is NULL where the marketplace did not quote it — so a past day's
+//! value is `Σ copies × price` over that day's priced rows, and its held set is all of them. Rows
+//! written before the upgrade carry NULL `copies` and are **never read**: the graph starts on the
+//! upgrade day, because the only quantity a backfill could have used is today's, and that would
+//! draw a card bought last week as owned all along.
 //!
 //! # The rules
 //!
@@ -28,10 +30,14 @@
 //!   value**, called rather than respelled, so the graph's last point is exactly the number the
 //!   Collection value widget prints beside it. An empty collection answers no points at all.
 //! * **`moved` is the part of a step that prices made.** For consecutive points A → B, it is the
-//!   sum over every printing present at both of `A.copies × (B.price − A.price)`; the rest of
-//!   `B.total − A.total` is what the reader added or removed, which TypeScript derives. For the
-//!   live point a printing is present when it has live copies **and** a live price — an unpriced
-//!   copy is worth nothing today, which is [`crate::collection::summarise`]'s arithmetic.
+//!   sum over every printing **held** at both of `A.copies × (B.price − A.price)`, a NULL price
+//!   counted as 0; the rest of `B.total − A.total` is what the reader added or removed, which
+//!   TypeScript derives. Held means a row in the period, priced or not, and for the live point a
+//!   collection entry holding a copy, priced or not. So a price that appears on a card the reader
+//!   kept, or vanishes from one, is a price move, and **only a printing entering or leaving the
+//!   held set is a collection change** — before v50 an unquoted finish wrote no row, and the
+//!   remainder read the price disappearing as the card being sold. An unpriced copy is still
+//!   worth nothing in a total, which is [`crate::collection::summarise`]'s arithmetic.
 //! * **A card is in exactly one bucket, so the buckets always sum to the total.** The type split
 //!   is `deckBuckets.ts`' `typeBucket` — the front face, first match of eight words — so a reader
 //!   meets one answer to "what type is this card" across the deck editor and the home page. The
@@ -98,12 +104,14 @@ pub struct ValueBucket {
 pub struct ValuePoint {
     /// unixepoch() of the period's day (UTC midnight). For a weekly period, its latest day.
     pub day: i64,
-    /// Σ copies × price that period, over priced rows.
+    /// Σ copies × price that period; an unpriced holding contributes nothing.
     pub total: f64,
     /// One value per `ValueHistory::buckets`, same order; empty for "total".
     pub values: Vec<f64>,
-    /// The price-only part of `total − previous.total`: Σ over printings present at both
-    /// points of copies_before × (price_now − price_before). None on the first point.
+    /// The price-only part of `total − previous.total`: Σ over printings held at both points of
+    /// copies_before × (price_now − price_before), a missing price counted as 0 — so a price
+    /// appearing or vanishing on a held card is here, and only a card arriving or leaving is
+    /// not. None on the first point.
     pub moved: Option<f64>,
     /// True only for the last point: today, computed live from collection_entries.
     pub live: bool,
@@ -189,14 +197,15 @@ fn type_key() -> String {
 /// keep horizon — all four read once, by [`history`]'s first statement, so a read straddling UTC
 /// midnight cannot put a row on both sides of a line.
 ///
-/// * `src` — rows with a count, before today and inside [`KEEP_DAYS`]; a daily row's period is
-///   its day, an older one's its week, and the horizon's own week is read only from the horizon
-///   on (the module doc says why).
+/// * `src` — rows with a count, before today and inside [`KEEP_DAYS`], priced or not; a daily
+///   row's period is its day, an older one's its week, and the horizon's own week is read only
+///   from the horizon on (the module doc says why).
 /// * `kept` — one row per printing per period, its latest, and the period's day as `at`.
 /// * `live` — `collection_entries` per printing and finish, at `sorting::price_expr` over the
-///   entry's own finish; a printing with no live price is not present today.
+///   entry's own finish; every printing with a copy is present today, a NULL price included.
 /// * `paired` — `lag` over each printing's own sequence of periods; the step counts toward
-///   `moved` only when that previous period is the one immediately before.
+///   `moved` only when that previous period is the one immediately before, and a NULL price on
+///   either side is 0 there, where in a total it is simply not summed.
 fn periods_sql(key: &str, name: &str, market: Marketplace) -> String {
     format!(
         "WITH src AS (
@@ -221,14 +230,12 @@ fn periods_sql(key: &str, name: &str, market: Marketplace) -> String {
               WHERE nth = 1
          ),
          live AS (
-             SELECT card_id, finish, copies, price, ?2 AS at
-               FROM (SELECT e.card_id AS card_id, e.finish AS finish,
-                            sum(e.quantity) AS copies, max({price}) AS price
-                       FROM collection_entries e
-                       LEFT JOIN cards c ON c.id = e.card_id
-                      WHERE e.quantity > 0
-                      GROUP BY e.card_id, e.finish)
-              WHERE price IS NOT NULL
+             SELECT e.card_id AS card_id, e.finish AS finish,
+                    sum(e.quantity) AS copies, max({price}) AS price, ?2 AS at
+               FROM collection_entries e
+               LEFT JOIN cards c ON c.id = e.card_id
+              WHERE e.quantity > 0
+              GROUP BY e.card_id, e.finish
          ),
          every AS (
              SELECT card_id, finish, copies, price, at FROM kept
@@ -249,7 +256,8 @@ fn periods_sql(key: &str, name: &str, market: Marketplace) -> String {
          SELECT x.at, unixepoch(x.at), x.bucket, max(x.name),
                 sum(x.copies * x.price),
                 sum(CASE WHEN x.prev_idx = x.idx - 1
-                         THEN x.prev_copies * (x.price - x.prev_price)
+                         THEN x.prev_copies
+                              * (coalesce(x.price, 0.0) - coalesce(x.prev_price, 0.0))
                          ELSE 0.0 END)
            FROM (SELECT q.*, {key} AS bucket, {name} AS name
                    FROM paired q
@@ -344,8 +352,10 @@ pub fn history(
         }
     }
 
-    // Today's period is present only when some copy is priced today; an unpriced collection is
-    // still a collection, and its point is a zero rather than a missing day.
+    // Today's period is present whenever a copy is held, priced or not — which the check above
+    // has just established — so the `None` arm is defence rather than a state: the live point
+    // below is drawn from `summary` either way, and an unpriced collection's is a zero rather
+    // than a missing day.
     let live = match periods.last() {
         Some(p) if p.at == day => periods.pop(),
         _ => None,
@@ -548,6 +558,31 @@ mod tests {
         .unwrap();
     }
 
+    /// A held printing's TCGplayer row `ago` days back with **no price** — what a snapshot writes,
+    /// since user schema v50, for a finish the marketplace does not quote.
+    fn unpriced(conn: &Connection, ago: i64, card_id: &str, finish: &str, copies: i64) {
+        conn.execute(
+            "INSERT OR REPLACE INTO price_snapshots (day, marketplace, card_id, finish, price,
+                                                     copies)
+             VALUES (date('now', '-' || ?1 || ' days'), 'tcgplayer', ?2, ?3, NULL, ?4)",
+            params![ago, card_id, finish, copies],
+        )
+        .unwrap();
+    }
+
+    /// Each step's collection change — `total − previous total − moved`, TypeScript's
+    /// `collectionChange` — which is the number a marker is drawn for.
+    fn changes(h: &ValueHistory) -> Vec<f64> {
+        h.points
+            .windows(2)
+            .map(|w| w[1].total - w[0].total - w[1].moved.expect("a step has a moved"))
+            .collect()
+    }
+
+    fn moved(h: &ValueHistory) -> Vec<Option<f64>> {
+        h.points.iter().map(|p| p.moved).collect()
+    }
+
     /// `unixepoch` of the day `ago` days back, SQLite's own clock — what a point's `day` holds.
     fn day(conn: &Connection, ago: i64) -> i64 {
         conn.query_row(
@@ -692,6 +727,105 @@ mod tests {
         assert_eq!(keys(&by_type), ["instant"]);
         let values: Vec<Vec<f64>> = by_type.points.iter().map(|p| p.values.clone()).collect();
         assert_eq!(values, [[16.0], [18.0], [27.0], [30.0]]);
+    }
+
+    /// **A price that vanishes from a card the reader kept is a price move, and so is one that
+    /// comes back** — the review finding this test exists for. Two copies at 10, then a day the
+    /// marketplace quoted nothing, then 10 again today: the line drops to 0 and climbs back, and
+    /// every cent of both steps is `moved`, so neither step is a collection change and neither
+    /// draws a marker. The second step is the live one, where the price comes from the corpus.
+    #[test]
+    fn a_price_that_vanishes_and_returns_on_a_held_card_is_a_price_move() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil", "NM", 2); // live 10.00 each
+        past(&conn, 2, "bolt", "nonfoil", 10.0, Some(2));
+        unpriced(&conn, 1, "bolt", "nonfoil", 2);
+
+        let h = tcg(&conn, "total");
+
+        assert_eq!(totals(&h), [20.0, 0.0, 20.0]);
+        assert_eq!(moved(&h), [None, Some(-20.0), Some(20.0)]);
+        assert_eq!(
+            changes(&h),
+            [0.0, 0.0],
+            "the reader sold and bought nothing"
+        );
+    }
+
+    /// **The same pair of steps the other way round, with the live step the one that loses the
+    /// price**: `free` is held throughout, quoted at 5 for one day and at nothing today, because
+    /// the corpus has no price for it. Held at both ends of each step is what `moved` asks, so
+    /// today's zero is the market's doing and not a sale.
+    #[test]
+    fn a_price_that_appears_and_vanishes_on_a_held_card_is_a_price_move() {
+        let conn = conn();
+        own(&conn, "free", "nonfoil", "NM", 2); // held, never priced live
+        unpriced(&conn, 2, "free", "nonfoil", 2);
+        past(&conn, 1, "free", "nonfoil", 5.0, Some(2));
+
+        let h = tcg(&conn, "type");
+
+        assert_eq!(totals(&h), [0.0, 10.0, 0.0]);
+        assert_eq!(moved(&h), [None, Some(10.0), Some(-10.0)]);
+        assert_eq!(changes(&h), [0.0, 0.0]);
+        assert_eq!(
+            keys(&h),
+            ["sorcery"],
+            "a bucket that held money at some point"
+        );
+    }
+
+    /// **A genuine add of a card no marketplace quotes changes nothing at all** — not the value,
+    /// not `moved`, and so not the collection change either: there is no money for a marker to
+    /// mark. The nonfoil `free` arrives between two snapshots and a foil one today, beside a
+    /// `ring` held and priced flat throughout.
+    #[test]
+    fn an_unpriced_card_bought_moves_no_value_and_marks_nothing() {
+        let conn = conn();
+        own(&conn, "ring", "nonfoil", "NM", 1); // 100.00
+        own(&conn, "free", "nonfoil", "NM", 3);
+        own(&conn, "free", "foil", "NM", 1); // bought today
+        past(&conn, 2, "ring", "nonfoil", 100.0, Some(1));
+        past(&conn, 1, "ring", "nonfoil", 100.0, Some(1));
+        unpriced(&conn, 1, "free", "nonfoil", 3); // bought yesterday
+
+        let h = tcg(&conn, "type");
+
+        assert_eq!(totals(&h), [100.0, 100.0, 100.0]);
+        assert_eq!(moved(&h), [None, Some(0.0), Some(0.0)]);
+        assert_eq!(changes(&h), [0.0, 0.0]);
+        assert_eq!(keys(&h), ["artifact"], "a bucket worth nothing is no line");
+    }
+
+    /// **A thinned table reads as the un-thinned one did with unpriced weeks in it too.** Since
+    /// v50 the prune keeps a bucket's newest row *and* its newest priced one, so a week that ends
+    /// unquoted leaves two rows behind for one printing — and the read, which keeps the newest per
+    /// printing per period, must not turn the extra one into a point or a value.
+    #[test]
+    fn a_thinned_table_reads_the_same_with_unpriced_rows_in_it() {
+        let conn = conn();
+        own(&conn, "ring", "nonfoil", "NM", 1);
+        own(&conn, "bolt", "nonfoil", "NM", 1);
+        for ago in 1..=90 {
+            past(&conn, ago, "ring", "nonfoil", 100.0, Some(1));
+            if ago % 3 == 0 {
+                unpriced(&conn, ago, "bolt", "nonfoil", 1);
+            } else {
+                past(&conn, ago, "bolt", "nonfoil", ago as f64, Some(1));
+            }
+        }
+
+        let before = tcg(&conn, "total");
+        crate::price_history::prune(&conn, None).unwrap();
+        let after = tcg(&conn, "total");
+
+        assert_eq!(before, after);
+        assert!(after.points.windows(2).all(|w| w[0].day < w[1].day));
+        assert!(
+            changes(&after).iter().all(|c| c.abs() < 0.005),
+            "two cards held throughout: every step is prices, {:?}",
+            changes(&after)
+        );
     }
 
     /// **A printing sold mid-week in the thinned region makes no point of its own**, and the
