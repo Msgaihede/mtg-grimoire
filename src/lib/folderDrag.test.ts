@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, useEffect } from "react";
 import { act, renderHook } from "@testing-library/react";
+import { Feedback } from "@dnd-kit/dom";
 import { dragData, readDragData } from "@/features/decks/dnd";
 import { startPointerDrag } from "@/test-drag";
 import { dndManager } from "@/lib/dndManager";
@@ -306,6 +307,32 @@ describe("folderDraggable", () => {
     const held = await startPointerDrag(source, { pressOn: name });
     expect(held.started).toBe(true);
     await held.cancel();
+  });
+
+  /**
+   * **`animateDrop: false` is the shelves' opt-in, and the default is the library's animation.**
+   * dnd-kit's drop animation flies the floating copy back to the slot it measured when the drag
+   * began; a shelf heading moved far on a virtualised wall has left that slot by the time the
+   * animation runs, so the copy slid off the screen for 2–4 frames (live re-check, new finding 3).
+   * The deck tree and the deck folder cards keep their animation, so a source that did not ask
+   * carries no plugin config at all. Pinned as the registration's config: the animation is
+   * `Feedback`'s WAAPI machinery, which jsdom does not run.
+   */
+  it("keeps the drop animation unless asked not to", () => {
+    const registered = (element: HTMLElement) =>
+      [...dndManager.registry.draggables].find((entity) => entity.element === element);
+
+    const plain = mountSource(() => FOLDER);
+    expect(registered(plain)?.pluginConfig(Feedback)).toBeUndefined();
+
+    const still = document.createElement("div");
+    document.body.append(still);
+    const stop = folderDraggable({ element: still, folder: () => FOLDER, animateDrop: false });
+    undo.push(() => {
+      stop();
+      still.remove();
+    });
+    expect(registered(still)?.pluginConfig(Feedback)).toEqual({ dropAnimation: null });
   });
 });
 
@@ -705,5 +732,97 @@ describe("useFolderDropTarget with pointerOnly", () => {
     expect(target.state.edge).toBe("inside");
     await held.drop();
     expect(onDrop).toHaveBeenCalledWith(FOLDER, "inside");
+  });
+});
+
+/**
+ * One `pointermove`, dispatched **once**. `test-drag.ts`'s `moveTo` fires every move twice on
+ * purpose — `dragOperation.position.current` lags one move behind, and a test driven through it
+ * would otherwise read each landing one move early — which is exactly why no test built on it can
+ * see the lag the live re-check found. This is the reader's pointer: one event per step.
+ */
+async function oneMove(x: number, y: number): Promise<void> {
+  await act(async () => {
+    document.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: x,
+        clientY: y,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+        button: 0,
+        buttons: 1,
+      }),
+    );
+  });
+  for (let i = 0; i < 3; i++) {
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+  }
+}
+
+/**
+ * **The mark is the landing the release makes, from the move that arrived** — the live re-check's
+ * new finding 4. dnd-kit dispatches `dragmove` with the new coordinates in `to` and writes
+ * `position.current` a microtask *later*, so a listener reading the operation's position reads the
+ * move before this one. Arriving in a heading's bottom quarter from its middle drew the `inside`
+ * wash with no line, and a release there landed `after` — the screen said one landing and the drop
+ * made another. Reproduced twice in the shipped window; one 3px nudge more always corrected it.
+ */
+describe("useFolderDropTarget, one pointer move at a time", () => {
+  it("reports the landing of the move that arrived, not the one before it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
+
+    await held.over(target.element, INSIDE);
+    expect(target.state.edge).toBe("inside");
+
+    const box = target.element.getBoundingClientRect();
+    await oneMove(box.left + box.width / 2, box.top + box.height * AFTER.y);
+    expect(target.state.edge).toBe("after");
+
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith(FOLDER, "after");
+  });
+});
+
+/**
+ * **A pointer-inside folder target that has moved out from under the pointer lands nothing** —
+ * the live re-check's new finding 5, for a folder. Autoscroll carries a heading past a still
+ * pointer and the collisions follow a step behind, so the heading was still the operation's target
+ * at the release — and `folderEdge`, answering a point outside the box by the end it is past, turned
+ * that into a reorder beside a heading the pointer had already left. Staged as `dndTarget.test.ts`
+ * stages it: over the target, then its box moves with no pointer move, then the release.
+ */
+describe("useFolderDropTarget, a target that moved away before the release", () => {
+  it("files nothing from a pointer-inside target the pointer is no longer inside", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
+
+    await held.over(target.element, INSIDE);
+    expect(target.state.edge).toBe("inside");
+    // Autoscroll carries the heading 200px up past the still pointer; nothing measures it again.
+    boxed(target.element, 0);
+    await held.drop();
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  /** The fence: a plain folder target (the deck tree, the deck folder cards) still lands the drop
+   *  its collision gave it, by the end the pointer is past — exactly as before. */
+  it("leaves a plain target landing the drop the last collision gave it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
+
+    await held.over(target.element, INSIDE);
+    boxed(target.element, 0);
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith(FOLDER, "after");
   });
 });

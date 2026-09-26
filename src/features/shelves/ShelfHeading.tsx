@@ -51,6 +51,7 @@ import { cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { Shelf, ShelfKind } from "@/lib/shelves";
 import { cn } from "@/lib/utils";
 import { SHELF_CHEVRON, SHELF_ICON_BUTTON } from "./shelfButtons";
+import { FOLD_PAUSED_LOOK } from "./ShelfToolbar";
 
 /** Every mark a heading can wear during a drag — `useShelfDropTarget`'s answer, drawn here. */
 export type ShelfDropMark = "none" | "armed" | "over" | "before" | "after" | "inside";
@@ -99,6 +100,14 @@ export interface ShelfHeadingProps {
   dropMark?: ShelfDropMark;
   /** Folder drag source (`useShelfDragSource`); absent ⇒ not draggable. Stable, as above. */
   dragRef?: (el: HTMLElement | null) => void;
+  /**
+   * Why folding is refused right now — `FOLD_PAUSED_REASON` while a filter is on (spec §3.4).
+   * Set, the chevron is `aria-disabled` (never `disabled`: it keeps its tab stop, so the reason is
+   * reachable by keyboard), carries the reason as its description and as its tooltip, and a press
+   * calls nothing. Its name and `aria-expanded` go on saying what the shelf is. Nothing else on
+   * the row is about folding, so nothing else changes. Absent is the chevron exactly as before.
+   */
+  foldPaused?: string;
 }
 
 /** A callback ref as this row calls it: the element in, and whatever React 19 allows back out. */
@@ -162,8 +171,10 @@ export function ShelfHeading({
   dropRef,
   dropMark = "none",
   dragRef,
+  foldPaused,
 }: ShelfHeadingProps): ReactElement {
   const tip = useTooltip();
+  const foldRefused = Boolean(foldPaused);
   const own = shelf.kind === "folder";
   const unfiled = shelf.kind === "unfiled";
   const addFolder = own ? onAddFolder : undefined;
@@ -226,8 +237,18 @@ export function ShelfHeading({
           aria-expanded={open}
           aria-label={`${open ? "Collapse" : "Expand"} ${shelf.name}`}
           data-no-drag=""
-          onClick={onToggle}
-          className={SHELF_CHEVRON}
+          onClick={foldRefused ? undefined : onToggle}
+          className={cn(SHELF_CHEVRON, foldRefused && FOLD_PAUSED_LOOK)}
+          // Refused in the open while a filter is on — `ShelfToolbar`'s Expand all and Collapse
+          // all wear the same three things. `aria-description` rather than the tooltip's own
+          // `aria-describedby`, which is wired only while the panel is open.
+          {...(foldRefused
+            ? {
+                "aria-disabled": true as const,
+                "aria-description": foldPaused,
+                ...tip(foldPaused, { describes: false }),
+              }
+            : {})}
         >
           {open ? (
             <ChevronDown className="size-4" aria-hidden="true" />

@@ -11,6 +11,7 @@ import {
   ShelfHeading,
   type ShelfHeadingProps,
 } from "./ShelfHeading";
+import { FOLD_PAUSED_REASON } from "./ShelfToolbar";
 
 /** A shelf as `buildShelves` hands one over — a reader's top-level folder unless told otherwise. */
 function shelfOf(over: Partial<Shelf> & { id: number; name: string }): Shelf {
@@ -102,6 +103,52 @@ describe("ShelfHeading", () => {
     const shut = screen.getByRole("button", { name: "Expand Trade binder" });
     expect(shut).toHaveAccessibleName("Expand Trade binder");
     expect(shut).toHaveAttribute("aria-expanded", "false");
+  });
+
+  /**
+   * **Collapse is suspended while a filter is on** (spec §3.4): a filtered wall shows every
+   * matching shelf open, so a fold pressed then would be written for a wall the reader is not
+   * looking at. The chevron is refused in the open — `aria-disabled`, the reason as its
+   * description, still a tab stop — and a press by pointer or by key calls nothing. Its name and
+   * `aria-expanded` keep saying what the shelf is; the rest of the heading is not about folding
+   * and works as ever.
+   */
+  it("pauses its chevron while a filter is on, and nothing else on the row", async () => {
+    const user = userEvent.setup();
+    const view = mount({ onAddFolder, foldPaused: FOLD_PAUSED_REASON });
+
+    const chevron = screen.getByRole("button", { name: "Collapse Trade binder" });
+    expect(chevron).toHaveAttribute("aria-disabled", "true");
+    expect(chevron).not.toHaveAttribute("disabled");
+    expect(chevron).toHaveAttribute("aria-expanded", "true");
+    expect(chevron).toHaveAccessibleDescription(FOLD_PAUSED_REASON);
+    expect(chevron.classList.contains("opacity-60")).toBe(true);
+    await user.click(chevron);
+    chevron.focus();
+    expect(chevron).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onToggle).not.toHaveBeenCalled();
+
+    // A shut shelf is paused the same way — it names the press it would be, and refuses it.
+    view.show({ shelf: { ...BINDER, collapsed: true }, onAddFolder, foldPaused: FOLD_PAUSED_REASON });
+    const shut = screen.getByRole("button", { name: "Expand Trade binder" });
+    expect(shut).toHaveAttribute("aria-disabled", "true");
+    await user.click(shut);
+    expect(onToggle).not.toHaveBeenCalled();
+
+    // Not folding, so not paused.
+    const add = screen.getByRole("button", { name: "Add folder in Trade binder" });
+    expect(add).not.toHaveAttribute("aria-disabled");
+    await user.click(add);
+    expect(onAddFolder).toHaveBeenCalledTimes(1);
+  });
+
+  /** Absent is today's chevron exactly: no mark and no description. */
+  it("carries no pause on its chevron without the prop", () => {
+    mount();
+    const chevron = screen.getByRole("button", { name: "Collapse Trade binder" });
+    expect(chevron).not.toHaveAttribute("aria-disabled");
+    expect(chevron).not.toHaveAccessibleDescription();
   });
 
   /** Spec §3.7 and decision 6: the title is the way in, and there is no separate Open button. */

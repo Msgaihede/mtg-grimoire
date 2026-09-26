@@ -154,21 +154,37 @@ export const dndManager = new DragDropManager({
  * costs on a source with a handle. A rule that said "never declare sensors" would be a landmine
  * with no fence, and the failure it guards is silent — nothing throws, nothing logs, and the
  * gesture merely stops starting. `dndManager.test.ts` drives the press that proves it.
+ *
+ * **The plugin registry has the same trap and the same fence** (Folder Shelves, 2026-09-26).
+ * `Draggable` re-registers a per-source `plugins` list from an effect with the options dropped —
+ * `manager.registry.plugins.register(plugin)` — so the first source to carry one would clear the
+ * manager's own configuration of that plugin for the rest of the session. It was armed rather than
+ * live until a shelf heading became the first such source (`folderDraggable`'s
+ * `animateDrop: false`, a per-source `Feedback` config): the manager configures `Feedback` with
+ * nothing today, so a clear is `undefined` over `undefined`. The fence goes in with the first
+ * source that could trip it rather than on the day someone configures `Feedback` here and every
+ * drop animation in the app quietly loses it. `dndManager.test.ts` holds it too.
  */
 {
   /**
-   * The registry as this patch has to hold it. `register` is generic over the plugin constructor
+   * A registry as this patch has to hold it. `register` is generic over the plugin constructor
    * and `get` returns that constructor's own instance type, so a wrapper that passes one's result
    * to the other cannot be written in those generics — the compiler has no way to know the two
    * mention the same plugin. The shape below is the whole of what this touches, and it is
    * deliberately the narrowest reach past the library's types rather than an `any`.
    */
-  const sensors = dndManager.registry.sensors as unknown as {
+  type Registry = {
     register: (plugin: object, options?: unknown) => unknown;
     get: (plugin: object) => { options?: unknown } | undefined;
   };
-  const register = sensors.register.bind(sensors);
-  sensors.register = (plugin, options) => register(plugin, options ?? sensors.get(plugin)?.options);
+  /** An omitted `options` keeps what the instance has; passing some still replaces them. */
+  const keepOptions = (registry: Registry) => {
+    const register = registry.register.bind(registry);
+    registry.register = (plugin, options) =>
+      register(plugin, options ?? registry.get(plugin)?.options);
+  };
+  keepOptions(dndManager.registry.sensors as unknown as Registry);
+  keepOptions(dndManager.registry.plugins as unknown as Registry);
 }
 
 /**

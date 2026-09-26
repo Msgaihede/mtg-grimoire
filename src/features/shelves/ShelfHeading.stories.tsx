@@ -5,6 +5,7 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { Shelf } from "@/lib/shelves";
 import { printing } from "../../../.storybook/fake/fixtures";
 import { ShelfHeading, type ShelfDropMark, type ShelfHeadingProps } from "./ShelfHeading";
+import { FOLD_PAUSED_REASON } from "./ShelfToolbar";
 
 /** A shelf as `buildShelves` hands one over. Not exported: CSF indexes every named export. */
 function shelfOf(over: Partial<Shelf> & { id: number; name: string }): Shelf {
@@ -229,6 +230,25 @@ export const NotSorted: Story = {
     const canvas = within(canvasElement);
     await expect(canvas.getAllByRole("button")).toHaveLength(1);
     await expect(canvas.getByRole("heading", { level: 3 })).toHaveAccessibleName("Not sorted");
+  },
+};
+
+/**
+ * While a filter is on, collapse is suspended (spec §3.4): the chevron is refused in the open —
+ * dimmed, still a tab stop, the reason on hover and as its description — and a press writes
+ * nothing. The rest of the heading is not about folding and works as ever.
+ */
+export const FoldPaused: Story = {
+  args: { foldPaused: FOLD_PAUSED_REASON },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const chevron = canvas.getByRole("button", { name: "Collapse Trade binder" });
+    await expect(chevron).toHaveAttribute("aria-disabled", "true");
+    await expect(chevron).toHaveAccessibleDescription(FOLD_PAUSED_REASON);
+    await userEvent.click(chevron);
+    await expect(args.onToggle).not.toHaveBeenCalled();
+    await userEvent.click(canvas.getByRole("button", { name: "Trade binder" }));
+    await expect(args.onOpen).toHaveBeenCalledWith(3);
   },
 };
 

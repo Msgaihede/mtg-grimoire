@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import { ShelfToolbar } from "./ShelfToolbar";
+import { FOLD_PAUSED_REASON, ShelfToolbar } from "./ShelfToolbar";
 
 const meta = {
   title: "Shelves/Toolbar",
@@ -38,5 +38,27 @@ export const WithoutAddFolder: Story = {
   args: { onAddFolder: undefined },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).queryByRole("button", { name: "Add folder" })).toBeNull();
+  },
+};
+
+/**
+ * While a filter is on, collapse is suspended (spec §3.4): Expand all and Collapse all are refused
+ * in the open — dimmed, still in the tab order, the reason on hover and as their description — and
+ * a press writes nothing. Add folder is not about folding and works as ever.
+ */
+export const FoldPaused: Story = {
+  args: { foldPaused: FOLD_PAUSED_REASON },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    for (const name of ["Expand all", "Collapse all"]) {
+      const button = canvas.getByRole("button", { name });
+      await expect(button).toHaveAttribute("aria-disabled", "true");
+      await expect(button).toHaveAccessibleDescription(FOLD_PAUSED_REASON);
+      await userEvent.click(button);
+    }
+    await expect(args.onExpandAll).not.toHaveBeenCalled();
+    await expect(args.onCollapseAll).not.toHaveBeenCalled();
+    await userEvent.click(canvas.getByRole("button", { name: "Add folder" }));
+    await expect(args.onAddFolder).toHaveBeenCalledTimes(1);
   },
 };

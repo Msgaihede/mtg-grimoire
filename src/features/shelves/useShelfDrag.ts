@@ -17,6 +17,10 @@
  * folded wall landing a folder dropped in the 8px gap between two headings: there it now lands
  * nowhere, and a reorder is aimed at a heading's top or bottom quarter instead.
  *
+ * **The sticky bar is the one shelf target drawn over the others**, so it has a hook of its own,
+ * {@link useShelfStickyDropTarget}: `overlay` rather than `pointerOnly`, which is the same
+ * pointer-inside rule ranked above whatever scrolls underneath it (review finding S-M1).
+ *
  * **The results are named `attach` and `mark`, never `…Ref`**: the React Compiler lint reads a hook
  * result named like a ref as a ref object and flags every read beside it
  * (`features/home/stickyNoteDrag.ts` carries the finding).
@@ -131,6 +135,39 @@ export function useShelfDropTarget<T>(
 }
 
 /**
+ * The sticky bar's card target — {@link useShelfDropTarget}'s card half, drawn **over** the wall.
+ *
+ * **An overlay, because that is what the bar is** (review finding S-M1). The bar is pinned at the
+ * top of the wall and headings and table bands scroll underneath it, so for the length of that
+ * overlap the pointer is inside two targets at once — and dnd-kit ranks two pointer collisions by
+ * distance to each box's centre, never by paint order. A heading half under the bar whose centre
+ * is nearer the pointer won the drop: the card filed into a heading the reader could not see,
+ * under the bar they were aiming at. `overlay` is `useDndDropTarget`'s existing answer to exactly
+ * that — `pointerIntersection` plus `CollisionPriority.Highest` — so the bar takes the card
+ * wherever it is drawn and nowhere else.
+ *
+ * Cards only: the bar's path segments are buttons and take no folder (the coordinator's ruling),
+ * so there is no folder half and the mark is {@link CardDropMark}.
+ */
+export function useShelfStickyDropTarget<T>(card: ShelfCardDrop<T>): {
+  attach: AttachDrop;
+  mark: CardDropMark;
+} {
+  const { ref, attach } = useDndTargetRef();
+  const { armed, over } = useDndDropTarget({
+    ref,
+    read: card.read,
+    canDrop: card.canDrop,
+    onDrop: card.onDrop,
+    armOnMount: true,
+    // Pointer-inside *and* the highest priority — see above. `pointerOnly` would be redundant
+    // beside it: `overlay` already sets the same detector.
+    overlay: true,
+  });
+  return { attach, mark: over ? "over" : armed ? "armed" : "none" };
+}
+
+/**
  * A heading as something to pick up — `CollectionFolderCard`'s `useFolderDragSource`, as a callback
  * ref because a virtualised heading's element comes and goes. `null` (Not sorted, an app-owned
  * shelf) registers nothing and answers `undefined`, which is the heading's "not draggable".
@@ -159,6 +196,10 @@ export function useShelfDragSource(
           parentId: latest.current?.parentId ?? null,
           scope,
         }),
+        // No flight home on a drop: the wall folds for the drag, the heading is reordered and
+        // re-anchored under the pointer, and the slot dnd-kit measured at the start is gone — the
+        // floating copy slid off toward it for 2–4 frames (live re-check, new finding 3).
+        animateDrop: false,
       });
     },
     [id, scope],

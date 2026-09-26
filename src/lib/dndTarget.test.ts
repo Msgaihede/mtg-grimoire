@@ -386,3 +386,44 @@ describe("useDndDropTarget with pointerOnly", () => {
     expect(onDrop).toHaveBeenCalledWith({ id: 7 });
   });
 });
+
+/**
+ * **A pointer-inside target that has moved out from under the pointer takes nothing** — the live
+ * re-check's new finding 5. The wall autoscrolls while a reader holds a card still, and the
+ * collisions follow the moving rows about one update behind: a heading stayed the operation's
+ * target up to 16px after it had passed the pointer, so a release in that window filed the card
+ * into the heading just passed. A `pointerOnly` target promises a drop only from over it, so it
+ * checks the pointer against its own rect **as it is at the release**, not as it was at the last
+ * collision.
+ *
+ * The staging is the window itself: the pointer is over the target, then the target's box moves
+ * away with **no pointer move** — so no collision pass runs and the operation's target is still
+ * this one when the release arrives, exactly as it was in the shipped window.
+ */
+describe("useDndDropTarget, a target that moved away before the release", () => {
+  it("files nothing from a pointer-inside target the pointer is no longer inside", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(7));
+
+    await held.over(target.element);
+    expect(target.state.over).toBe(true);
+    // Autoscroll carries the row 200px up past the still pointer; nothing measures it again.
+    boxed(target.element, 0);
+    await held.drop();
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  /** The fence for everybody who did not ask: a plain target takes the drop its collision gave
+   *  it, as it always has — the deck editor's piles, zones and tray keep this exactly. */
+  it("leaves a plain target taking the drop the last collision gave it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(7));
+
+    await held.over(target.element);
+    boxed(target.element, 0);
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith({ id: 7 });
+  });
+});

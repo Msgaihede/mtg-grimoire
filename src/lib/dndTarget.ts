@@ -50,6 +50,19 @@ function subscribeToDrags(notify: () => void): () => void {
   };
 }
 
+/**
+ * Whether a point is inside a box, every edge included — `@dnd-kit/geometry`'s own
+ * `Rectangle.containsPoint` rule, so a target `pointerIntersection` chose is one this agrees the
+ * pointer is on. What a pointer-inside target asks of its **current** rect at the release (see
+ * `pointerOnly` on {@link useDndDropTarget}); `folderDrag.ts` asks it too.
+ */
+export function containsPointer(
+  rect: { top: number; right: number; bottom: number; left: number },
+  at: { x: number; y: number },
+): boolean {
+  return rect.top <= at.y && at.y <= rect.bottom && rect.left <= at.x && at.x <= rect.right;
+}
+
 /** What a disabled {@link useDragRecord} subscribes with: no listener, and never a record. */
 const subscribeToNothing = (): (() => void) => () => {};
 const nothingInFlight = (): null => null;
@@ -141,7 +154,11 @@ export function useDndDropTarget<T>({
    *
    * `pointerIntersection` as the detector is the fix and it is the narrower statement of what was
    * meant all along: an overlay produces **no collision at all** unless the pointer is inside it,
-   * and wins outright when it is. Nothing else in the app passes this, so nothing else changes.
+   * and wins outright when it is. **Every surface that passes it is drawn over other targets** —
+   * the deck editor's quick-zone bar and its remove tray (`PriceStrip`), and since review finding
+   * S-M1 the folder shelves' sticky bar (`useShelfStickyDropTarget`), which headings and table
+   * bands scroll underneath. Grep `overlay: true` for the census rather than trusting a count here.
+   * A target that is merely thin rather than drawn over something wants `pointerOnly` below.
    */
   overlay?: boolean;
   /**
@@ -171,6 +188,13 @@ export function useDndDropTarget<T>({
    * No priority change, unlike `overlay`: a shelf target is not drawn over another one, so there
    * is nothing to outrank — the pointer's own `High` is already what decides between two targets
    * the pointer could be in. Off by default, so every other target keeps the default detector.
+   *
+   * **It is asked twice: by the detector on every collision pass, and again at the release, of the
+   * target's own rect as it is then.** The collisions follow a scrolling wall about one update
+   * behind, so a heading autoscroll carried past a still pointer stayed the operation's target up
+   * to 16px after it had passed (live re-check, new finding 5) — the release check is what keeps
+   * that window from filing a card into the heading just passed. Same rule, same edges:
+   * {@link containsPointer}.
    */
   pointerOnly?: boolean;
 }): { armed: boolean; over: boolean } {
@@ -230,6 +254,13 @@ export function useDndDropTarget<T>({
         setArmed(false);
         setOver(false);
         if (canceled || operation.target !== droppable) return;
+        // A pointer-inside target asks again, of its rect **now**: the collisions follow a
+        // scrolling wall about one update behind, so a heading autoscroll has carried past a still
+        // pointer can still be the operation's target at the release — and would take a card the
+        // reader let go beside it (Folder Shelves live re-check, new finding 5). Only a target that
+        // opted in asks; every other one takes the drop its last collision gave it, as before.
+        const released = operation.position.current;
+        if (pointerOnly && !containsPointer(element.getBoundingClientRect(), released)) return;
         const drop = taken(operation.source);
         if (drop !== null) latest.current.onDrop(drop);
       }),

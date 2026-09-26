@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
+import { Feedback } from "@dnd-kit/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { dndManager } from "@/lib/dndManager";
 import { dndDraggable } from "@/lib/dndTarget";
 import { folderDraggable, readFolderDrag, type FolderDrag } from "@/lib/folderDrag";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
@@ -7,6 +9,7 @@ import {
   shelfDropMark,
   useShelfDragSource,
   useShelfDropTarget,
+  useShelfStickyDropTarget,
   type ShelfDragFolder,
   type ShelfFolderDrop,
 } from "./useShelfDrag";
@@ -190,6 +193,66 @@ describe("useShelfDropTarget", () => {
   });
 });
 
+/**
+ * **The sticky bar wins the pointer where it is drawn** — review finding S-M1. The bar is an overlay
+ * at the top of the wall, and headings and table bands scroll *underneath* it, so for the length of
+ * that overlap the pointer is inside two targets at once. dnd-kit does not consult paint order: two
+ * pointer collisions are ranked by distance to each box's centre, and a 36px bar over a 40px heading
+ * whose centre is nearer loses — the card files into the heading the reader cannot see, under the
+ * bar they are looking at. `useShelfStickyDropTarget` is the bar's own hook and asks for `overlay`,
+ * which is pointer-inside **and** `CollisionPriority.Highest`.
+ *
+ * The geometry: the bar at 200–236 (centre 218), the heading scrolled half under it at 210–250
+ * (centre 230), the pointer at 228 — inside both, 10px from the bar's centre and 2px from the
+ * heading's.
+ */
+describe("useShelfStickyDropTarget", () => {
+  function Sticky({ onDrop }: { onDrop: (thing: Thing) => void }) {
+    const { attach, mark } = useShelfStickyDropTarget({ read, canDrop: () => true, onDrop });
+    return <div ref={attach} data-testid="sticky" data-mark={mark} />;
+  }
+
+  function Heading({ onDrop }: { onDrop: (thing: Thing) => void }) {
+    const { attach, mark } = useShelfDropTarget({ read, canDrop: () => true, onDrop });
+    return <div ref={attach} data-testid="heading" data-mark={mark} />;
+  }
+
+  it("takes a card over a heading scrolled underneath it, where the heading is nearer the pointer", async () => {
+    const onSticky = vi.fn();
+    const onHeading = vi.fn();
+    render(
+      <>
+        <Sticky onDrop={onSticky} />
+        <Heading onDrop={onHeading} />
+      </>,
+    );
+    const sticky = boxed(screen.getByTestId("sticky"), 200, 36);
+    const heading = boxed(screen.getByTestId("heading"), 210);
+    const held = await startPointerDrag(cardSource(7));
+
+    await held.moveTo(100, 228);
+    expect(sticky).toHaveAttribute("data-mark", "over");
+    expect(heading).toHaveAttribute("data-mark", "armed");
+    await held.drop();
+    expect(onSticky).toHaveBeenCalledWith({ id: 7 });
+    expect(onHeading).not.toHaveBeenCalled();
+  });
+
+  /** Still pointer-inside: an overlay's detector is `pointerIntersection`, so a card whose
+   *  rectangle only brushes the bar lands nowhere — the shelf targets' rule, kept. */
+  it("takes nothing while the pointer is outside it however near the card is", async () => {
+    const onSticky = vi.fn();
+    render(<Sticky onDrop={onSticky} />);
+    const sticky = boxed(screen.getByTestId("sticky"), 200);
+    const held = await startPointerDrag(cardSource(7, 230));
+
+    await held.moveTo(100, 330);
+    expect(sticky).toHaveAttribute("data-mark", "armed");
+    await held.drop();
+    expect(onSticky).not.toHaveBeenCalled();
+  });
+});
+
 describe("useShelfDragSource", () => {
   /** Read at the press, not at mount — a folder renamed or re-filed since it mounted carries what
    *  it is now, which is what lets its current parent refuse a nest that moves nothing. */
@@ -214,5 +277,25 @@ describe("useShelfDragSource", () => {
 
     expect(held.started).toBe(false);
     await held.cancel();
+  });
+
+  /**
+   * The live re-check's new finding 3. On a drop that moves a heading far, dnd-kit animated the
+   * floating heading toward the slot it measured **before** the reorder landed — 355 → 458 → 620 →
+   * 1482 … 7276 in one run, up to −308 in another — so a ghost heading slid off the screen for 2–4
+   * frames while the real one already sat under the pointer. A heading asks for no drop
+   * animation: `Feedback`'s per-source `dropAnimation: null` is the library's own off switch.
+   *
+   * Pinned as the registration's configuration because the animation cannot run here: it is the
+   * `Feedback` plugin's WAAPI machinery, which jsdom does not have, so a behaviour test would pass
+   * whether the flag was set or not. What reaches the library is the source's own plugin config.
+   */
+  it("asks for no drop animation, so a moved heading does not fly toward its old slot", () => {
+    render(<Source folder={{ id: 4, name: "Signed", parentId: null }} />);
+    const element = screen.getByTestId("source");
+    const draggable = [...dndManager.registry.draggables].find((d) => d.element === element);
+
+    expect(draggable).toBeDefined();
+    expect(draggable!.pluginConfig(Feedback)).toEqual({ dropAnimation: null });
   });
 });
