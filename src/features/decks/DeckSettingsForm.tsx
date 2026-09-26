@@ -300,9 +300,13 @@ export function DeckSettingsForm({
 }: DeckSettingsFormProps): JSX.Element {
   return (
     <div className="flex flex-wrap gap-6">
-      <div className="w-full space-y-3.5 sm:w-[22.5rem] sm:shrink-0">
-        {/* Straight through: the picker owns its own preview, its grid, its search and its
-            upload, and this form owns none of that — it owns where the column sits. */}
+      {/* A flex column, and stretched: the row's default `align-items` makes this column as tall
+          as the fields beside it, and the column hands that height down to the picker, whose
+          grid grows into it (`DeckCoverPicker`'s `CHOICE_GRID` has why each class is there).
+          Below `sm` the two wrap onto lines of their own, so there is nothing to match. */}
+      <div className="flex w-full flex-col sm:w-[22.5rem] sm:shrink-0">
+        {/* Straight through: the picker owns its own preview, its grid and its search, and this
+            form owns none of that — it owns where the column sits and how tall it is. */}
         <DeckCoverPicker {...cover} />
       </div>
 

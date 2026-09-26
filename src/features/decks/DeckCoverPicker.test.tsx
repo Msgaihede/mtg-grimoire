@@ -115,6 +115,34 @@ describe("DeckCoverPicker", () => {
   });
 
   /**
+   * **The grid grows into the column beside the fields, and its tiles never decide how tall that
+   * column is.** jsdom lays nothing out, so the height itself is a live claim; what can go red
+   * here is the four classes it rests on, each of which fails silently on its own. `basis-0`
+   * rather than `flex-1`, whose `0%` basis is read as `content` in a column of unknown height and
+   * would hand every tile's height to the dialog; `content-start`, without which a stretched grid
+   * pushes its rows apart. `classList.contains` rather than a matcher on the class string, so a
+   * variant spelling like `max-sm:basis-0` cannot satisfy it.
+   */
+  it("grows into its column from sm up without its tiles deciding the column's height", () => {
+    picker({ deckCards: [card({ name: "Lightning Bolt" }), card({ name: "Shivan Dragon" })] });
+
+    const grid = screen.getByRole("list", { name: "Pick art from cards in this deck" });
+    for (const cls of ["sm:grow", "sm:basis-0", "sm:min-h-52", "sm:max-h-none", "content-start"]) {
+      expect(grid.classList.contains(cls), cls).toBe(true);
+    }
+    expect(grid.classList.contains("flex-1")).toBe(false);
+    // Every box between the grid and the picker's root is a growing flex column, or the height
+    // the form stretches the root to stops one level short of the grid.
+    const section = grid.parentElement!;
+    const root = section.parentElement!;
+    for (const box of [section, root]) {
+      expect(box.classList.contains("flex"), box.className).toBe(true);
+      expect(box.classList.contains("flex-col"), box.className).toBe(true);
+      expect(box.classList.contains("grow"), box.className).toBe(true);
+    }
+  });
+
+  /**
    * A deck being created has no cards, which is the state the search box exists for — but the
    * grid still has to say what it is empty *of* rather than showing nothing at all.
    */
