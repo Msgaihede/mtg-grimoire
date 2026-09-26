@@ -20,9 +20,8 @@ export const SEARCH_OPEN_KEY = ["searchOpen"];
  * writes into `app_meta.search_open`.
  *
  * **This side owns the vocabulary and the backend deliberately does not.** `searchopen.rs` refuses
- * a blank section and nothing else, exactly as `flatten.rs` does — which page has a column is a
- * question about screens the crate never draws, so a word it does not know is a row it stores
- * rather than a row it refuses.
+ * a blank section and nothing else — which page has a column is a question about screens the
+ * crate never draws, so a word it does not know is a row it stores rather than a row it refuses.
  *
  * `SearchSurface` in `CardSearchPanel.tsx` is the same three words for the `data-search-over`
  * attribute. Two names for one vocabulary is deliberate: one is the storage key and one is a DOM

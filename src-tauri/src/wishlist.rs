@@ -116,7 +116,12 @@ pub struct WishlistQuery {
     /// implementation of arithmetic `folderTree.ts` already does.
     pub folder_id: Option<i64>,
     /// `true` ignores [`WishlistQuery::folder_id`] entirely and answers every wish, wherever
-    /// it is filed — the page's **Flatten** switch.
+    /// it is filed — **the every-folder answer**. The page stopped sending it when its Flatten
+    /// switch was deleted for the Shelves wall, which asks with [`Self::shelves`]; the callers
+    /// that mean the whole wishlist send it now — the Wishlist savings widget and the page's
+    /// savings hand-off (`wholeWishlistQuery`, for `wishlist_optimize`), the To review widget,
+    /// the export sweep, the shared binder's owned index, and the plain-text mirror's
+    /// `Source::WholeWishlist`.
     ///
     /// **This is what tells "the root" apart from "no folder filter"; a nullable field alone
     /// cannot.** `folder_id: None` already means the root, so there is no value left in that
@@ -214,8 +219,8 @@ pub struct WishRow {
     /// cheapest printing of its oracle card, so only a genuine orphan answers `None`.
     pub legalities: Option<String>,
     /// Where the wish is filed. `None` is the root, and it is on every row rather than
-    /// implied by the query because the **Flatten** view asks for every wish at once and
-    /// then has to say where each one lives.
+    /// implied by the query because a list can read many folders at once — the Shelves wall's
+    /// `shelves`, or `flatten` — and each row then has to say which shelf it belongs on.
     pub folder_id: Option<i64>,
     /// How many **other** wishes are on the list for the same oracle card — in another
     /// folder, at the root, pinned to another printing, in another finish. `0` is the
@@ -1289,8 +1294,8 @@ pub(crate) fn wishlist_scope(
         Some(false) => p.wheres.push("w.needs_review IS NULL".to_owned()),
         None => {}
     }
-    // Where the reader is standing. Flattened, they are standing everywhere and no term is
-    // pushed at all — which is not the same as `folder_id IS NULL`, and is the whole reason
+    // Which folder the list reads. With `flatten` it reads every folder and no term is pushed at
+    // all — which is not the same as `folder_id IS NULL`, and is the whole reason
     // [`WishlistQuery::flatten`] exists as a second field.
     //
     // **`IS`, never `=`.** The root is `folder_id IS NULL` and `= NULL` is not false but
@@ -1299,8 +1304,8 @@ pub(crate) fn wishlist_scope(
     // `IS` compares NULLs as equal and is the same device [`WISHLIST_GRAIN`]'s `coalesce`es
     // are, one operator instead of one wrapper per side.
     //
-    // **A shelves list replaces both of the questions above** — where the reader is standing and
-    // whether they flattened — for [`WishlistQuery::shelves`]' reason. The term is the
+    // **A shelves list replaces both of the questions above** — which folder, and whether every
+    // folder — for [`WishlistQuery::shelves`]' reason. The term is the
     // collection's, over this table's column, so `0` is the root here exactly as it is there.
     if let Some(shelves) = &q.shelves {
         p.push(
@@ -1459,8 +1464,10 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
 /// **The id is `c.id` off [`priced_wishes`]' join**, which is the join [`wishlist_scope`] spells
 /// and so the very id a row's `art_card_id` carries: a pinned wish's own printing, an any-printing
 /// wish's cheapest printing at `price`. A genuine orphan has no picture and is left out. **No
-/// filter** — only shelf membership, for the collection's reason.
-fn wishlist_peek_sql(price: &str) -> String {
+/// filter** — only shelf membership, for the collection's reason, and that membership is
+/// [`crate::collection::shelf_term`]'s for the shelves it is built for: a peek that leaves out the
+/// root searches `idx_wishlist_folder` rather than reading every wish.
+fn wishlist_peek_sql(price: &str, shelves: &[i64]) -> String {
     format!(
         "SELECT shelf, card_id FROM (
              SELECT shelf, card_id,
@@ -1474,7 +1481,7 @@ fn wishlist_peek_sql(price: &str) -> String {
           WHERE n <= {peek}
           ORDER BY shelf, n",
         from = priced_wishes(price),
-        member = crate::collection::shelf_member("w.folder_id"),
+        member = crate::collection::shelf_term("w.folder_id", shelves),
         peek = crate::collection::SHELF_PEEK,
     )
 }
@@ -1524,7 +1531,9 @@ pub fn shelf_counts(conn: &Connection, q: &WishlistQuery) -> Result<Vec<ShelfCou
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| e.to_string())?
     };
-    crate::collection::fill_peek(conn, &mut counts, &wishlist_peek_sql(&price))?;
+    crate::collection::fill_peek(conn, &mut counts, |shelves| {
+        wishlist_peek_sql(&price, shelves)
+    })?;
     Ok(counts)
 }
 
@@ -4144,6 +4153,42 @@ mod tests {
                 "the {what} statement takes no OR over the index: {plan:?}"
             );
         }
+    }
+
+    /// `collection::tests::a_peek_without_the_unfiled_shelf_is_searched_through_the_folder_index`
+    /// one table over: the peek reads every wish on the shelves it names and no filter narrows it,
+    /// so a peek inside a folder searches `idx_wishlist_folder`, and one naming the root scans.
+    #[test]
+    fn a_wishlist_peek_without_the_root_is_searched_through_the_folder_index() {
+        let s = shelved_wishes();
+        let price = crate::sorting::row_price_expr(
+            crate::sorting::Marketplace::default(),
+            WISH_PREFERRED_FINISH,
+        );
+        let peek_plan = |shelves: &[i64]| {
+            plan_of(
+                &s.conn,
+                &wishlist_peek_sql(&price, shelves),
+                &[Box::new(crate::collection::shelf_list(shelves)) as Box<dyn rusqlite::ToSql>],
+            )
+        };
+
+        let filed = peek_plan(&[1, 2]);
+        assert!(
+            filed.iter().any(|d| d.starts_with("SEARCH w ")
+                && d.contains("INDEX idx_wishlist_folder (folder_id=?)")),
+            "the peek reaches the folder index: {filed:?}"
+        );
+
+        let rooted = peek_plan(&[0, 1]);
+        assert!(
+            rooted.iter().any(|d| d.starts_with("SCAN w")),
+            "the peek scans for a list naming the root: {rooted:?}"
+        );
+        assert!(
+            !rooted.iter().any(|d| d.contains("MULTI-INDEX OR")),
+            "the peek takes no OR over the index: {rooted:?}"
+        );
     }
 
     /// **Absent is today's answer.** The other fences are `list_wishes_at_the_root_leaves_out_what_is_filed`,

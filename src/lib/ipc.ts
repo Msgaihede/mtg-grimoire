@@ -67,32 +67,34 @@
  * `ScannerPrefs`, `ScannerTrayRow` and `ScannerTrayChoice` — because they are this app's stored
  * rows rather than the detector's JSON, and they sit on `plainMirrors` with every other one.
  *
- * **Eleven settings are one `app_meta` row each, and nine of them carry no struct at all.** (The
- * scanner's two rows, `scanner_prefs` and `scanner_tray`, are on top of those eleven and both
- * carry structs; see {@link ScannerPrefs} and {@link ScannerTrayRow}.) Of the
- * nine: four answered as a
+ * **The stored settings are one `app_meta` row each, and most of them carry no struct at all.**
+ * (The scanner's two rows, `scanner_prefs` and `scanner_tray`, carry structs; see
+ * {@link ScannerPrefs} and {@link ScannerTrayRow}.) Of the settings without one, some answer as a
  * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
  * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`),
  * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) and
- * `startView`/`setStartView` (`src-tauri/src/startview.rs`) — four as a bare map,
+ * `startView`/`setStartView` (`src-tauri/src/startview.rs`) — some as a bare map,
  * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
  * (`src-tauri/src/listview.rs`), `markColors`/`setMarkColor`
  * (`src-tauri/src/markcolors.rs`) and `searchOpen`/`setSearchOpen`
- * (`src-tauri/src/searchopen.rs`), and one as a
- * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). All eleven are
- * the shape a stored preference has to have: the read falls back on its default for a row that
- * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
+ * (`src-tauri/src/searchopen.rs`), and one as a bare `boolean`:
+ * `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). The settings that do carry a struct
+ * are `deckFolderPane`, `homeLayout` and `shelfFolds`, below. Every one of them is the shape a
+ * stored preference has to have: the read falls back on its default for a row that is missing
+ * *or* holds a value this build does not recognise, and only the *write* refuses. **They are
+ * named here and never counted**: this paragraph said "eleven" after `shelfFolds` made the rows
+ * one more, because a count is a fact a build answers (`grep -rln "app_meta::" src-tauri/src`)
+ * and a prose-only edit turns nothing red.
  *
- * Eight of them are therefore typed loosely here rather than as their unions: the narrowing
- * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
+ * All of those but the boolean are therefore typed loosely here rather than as their unions: the
+ * narrowing belongs to the module that owns the vocabulary (`@/lib/marketplace`,
  * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for its list-layout row,
  * `@/features/decks/deckSort`, `@/lib/useMarkColors`, `@/features/search/useSearchOpen`,
- * `@/features/home` for the start view), and a
- * row a newer build wrote
- * must reach this side as what it is. **The deck sort and the start view are the two where the
- * *write* refuses nothing but a blank**, and they are the rule above meeting a vocabulary the
- * backend does not have rather than an exception to it: three of the six sort keys are computed on
- * this side, so `deck_sort.rs` has no list to check a word against, and which views exist is a
+ * `@/features/home` for the start view), and a row a newer build wrote must reach this side as
+ * what it is. **The deck sort and the start view are where the *write* refuses nothing but a
+ * blank**, and they are the rule above meeting a vocabulary the backend does not have rather than
+ * an exception to it: some of the sort keys are computed on this side, so `deck_sort.rs` has no
+ * list to check a word against, and which views exist is a
  * fact about this app's router, so `startview.rs` has none either — see {@link ipc.setDeckSort}
  * and {@link ipc.setStartView}. **The one bare boolean left is the one with no narrowing to do**, and that is
  * the same argument arriving at nothing rather than an exception to it: a boolean has no
@@ -110,8 +112,7 @@
  * {@link ipc.searchOpen} now, a map keyed by section — so the setting moved out of the boolean
  * paragraph and into the map one without a word of either argument changing.
  *
- * **The tenth is the first stored preference that carries a struct**, and it is on the list above
- * rather than in the paragraph below because of it: {@link DeckFolderPane}
+ * **The folder pane is the first stored preference that carried a struct**: {@link DeckFolderPane}
  * (`src-tauri/src/deckpane.rs`) is how wide the decks page's folder tree was dragged *and*
  * whether it is folded to its rail, and the two are one row because they are one gesture's worth
  * of state — a reader who folds a tree they had widened must come back to both facts, and two
@@ -120,15 +121,16 @@
  * search-column row has one *kind* of value under keys this side invents, and this one has two
  * *different* values under names both sides already know, so a `Record<string, unknown>` here
  * would throw away the only thing worth checking. Being a struct is also what puts it on
- * `ipc.test.ts`' mirror table, where the nine below cannot be — a bare `boolean` has no fields
- * to compare — so it is one of the two stored settings whose *shape* cannot drift silently.
- * **`width` is nullable and `collapsed` is not**, which is the same asymmetry those nine turn on:
- * how wide is a number a reader has to have produced, so a database nobody has dragged has
+ * `ipc.test.ts`' mirror table, where the unstructured settings cannot be — a bare `boolean` has
+ * no fields to compare — so it is one of the stored settings whose *shape* cannot drift silently.
+ * **`width` is nullable and `collapsed` is not**, which is the same asymmetry the unstructured
+ * ones turn on: how wide is a number a reader has to have produced, so a database nobody has
+ * dragged has
  * nothing honest to say and says `null`; folded-or-not has a default that is true of every
  * database from the first launch. `@/features/decks/useFolderPane` is where the `null` becomes a
  * pixel count, and `FolderTree` owns that number.
  *
- * **The eleventh is the second, and it is a struct for the opposite reason.** {@link HomeLayout}
+ * **The home layout is the second, and it is a struct for the opposite reason.** {@link HomeLayout}
  * (`src-tauri/src/home.rs`) is the home page's tiles — their order, their widths and whatever each
  * one remembers — and where the folder pane is a struct because its two *known* fields must land
  * together, this one is a struct because most of what it holds is **unknown to the backend
@@ -139,10 +141,20 @@
  * struct puts it on the same mirror table, which is what its two declared fields are worth
  * checking for; nothing on this side can fence the rest, and nothing should try.
  *
- * The zoom row, the list-layout row, the mark-colour row and the search-column row are the four
- * of the nine whose *shape* is a map, and the difference is worth a sentence:
- * none has a single default to fall back on, because there are eight walls, four lists, three
- * search columns and a handful of marks, and each one has been touched or not. So
+ * **The shelf folds are the third, and the struct is the one vocabulary both sides spell.**
+ * {@link ShelfFolds} (`src-tauri/src/shelffolds.rs`, `shelfFolds`/`setShelfFolds`) is which
+ * shelves the reader folded away from their default, per page. The *pages* are named on both
+ * sides — {@link ShelfFoldPage} here and the Rust struct's fields there, held together by
+ * `ipc.test.ts` (and `shelffolds::PAGES` held to those fields by the crate's own test) — and
+ * under each page it is the search-column row's shape one level deeper:
+ * folder ids this side sends, mapped to plain booleans. Its write follows the rules above — it
+ * refuses an unknown page or a key that is not a folder id, keeps a page this build does not
+ * know — and a `null` takes an override back off rather than storing the default.
+ *
+ * The zoom row, the list-layout row, the mark-colour row and the search-column row are the
+ * unstructured settings whose *shape* is a map, and the difference is worth a sentence:
+ * none has a single default to fall back on, because each covers several walls, lists, search
+ * columns or marks, and each one of those has been touched or not. So
  * the backend answers only what it has, and a section it says nothing about keeps the default the
  * store was built with — which for the mark colours is the one `index.css` draws, a default this
  * side does not hold as a value at all.

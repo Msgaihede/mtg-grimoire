@@ -1648,13 +1648,13 @@ pub struct CollectionQuery {
     /// landed, and the failure would not look like a bug on a page: the plain-text mirror would
     /// write a whole-collection backup holding only the rows nobody had filed, and raise nothing.
     ///
-    /// **So "the root, and only the root" is a third field rather than a flip of this one.** It
-    /// *is* asked now — the collection page asks it on every render where the reader is standing
-    /// at the root with Flatten off, which is the wishlist's question one table over — and the
-    /// third state is how it gets asked without touching anybody else's answer. An unasked
-    /// question keeps today's answer, so a caller nobody updated cannot silently lose rows;
-    /// flipping the meaning of a field every caller already sends would have made "nobody
-    /// updated it" the *failure* mode instead of the safe one.
+    /// **So "the root, and only the root" is a third field rather than a flip of this one.** The
+    /// collection page asked it for the root, the wishlist's question one table over, until the
+    /// Shelves wall replaced its folder questions with [`Self::shelves`] (2026-09-26); nothing in
+    /// the app sends it today, and the third state was how it got asked without touching
+    /// anybody else's answer. An unasked question keeps today's answer, so a caller nobody
+    /// updated cannot silently lose rows; flipping the meaning of a field every caller already
+    /// sends would have made "nobody updated it" the *failure* mode instead of the safe one.
     ///
     /// Direct members only — a folder's page lists what is filed *in* it, never what is filed in
     /// the folders inside it, which is `collection_folders::folder_summary`'s rule and
@@ -1672,7 +1672,7 @@ pub struct CollectionQuery {
     ///
     /// It is [`crate::wishlist::WishlistQuery::flatten`] read from the other end — that flag
     /// widens the root to everything, this one narrows everything to the root — because the two
-    /// surfaces mean opposite things by an absent folder. Same page control, opposite polarity.
+    /// surfaces mean opposite things by an absent folder. One question, opposite polarity.
     pub root_only: bool,
     /// **The shelves to answer, in the order to answer them** — folder ids, with `0` standing for
     /// the shelf of rows filed nowhere (`e.folder_id IS NULL`). The collection page's Shelves wall
@@ -1954,8 +1954,10 @@ pub(crate) fn shelf_list(ids: &[i64]) -> String {
 
 /// The bound value behind a shelf's **position** — the list in order between commas,
 /// `,3,0,12,`. [`shelf_position`] reads an offset into it. Built by hand for [`shelf_list`]'s
-/// reason, and the comma on **both** ends of every id is the whole of what keeps `,1,` from
-/// being found inside `,12,` and `,2,` inside `,12,`.
+/// reason. **The comma on both sides of every id is what keeps one id from being found inside
+/// another**: without the trailing comma, shelf `1`'s `,1` is found at the front of `,12,`, and
+/// without the leading one, shelf `2`'s `2,` is found at its back — either way a shelf would take
+/// another shelf's place, with every total still right.
 pub(crate) fn shelf_order(ids: &[i64]) -> String {
     let joined = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
     format!(",{joined},")
@@ -1964,27 +1966,30 @@ pub(crate) fn shelf_order(ids: &[i64]) -> String {
 /// `column`'s shelf is one the list names — `coalesce(…, 0)`, so a NULL is the unfiled shelf.
 /// Binds [`shelf_list`] once.
 ///
-/// **The form a list naming `0` takes, and the peek statements' form**; [`shelf_term`] picks it.
-/// It scans: no index can answer `coalesce(folder_id, 0)`. That is the measured choice for the
-/// lists that need it — Task 9 timed every index plan for a list naming Not sorted (an `OR
-/// folder_id IS NULL` over `idx_collection_folder`, an expression index) and each lost to this
-/// scan at the root. An id nothing answers to is simply a value no row has: no error, no row.
+/// **The form a list naming `0` takes**, and [`shelf_term`] is what picks it. It scans: no index
+/// can answer `coalesce(folder_id, 0)`. That is the measured choice for the lists that need it —
+/// every index plan timed for a list naming Not sorted (an `OR folder_id IS NULL` over
+/// `idx_collection_folder`, an expression index) lost to this scan at the root, on a
+/// 100,000-entry copy in both debug and release builds (`collection-folders.md`, *What the
+/// `shelves` query costs*). An id nothing answers to is simply a value no row has: no error, no
+/// row.
 pub(crate) fn shelf_member(column: &str) -> String {
     format!("coalesce({column}, 0) IN (SELECT j.value FROM json_each(?) AS j)")
 }
 
-/// The membership term a list's scope takes — shared with `wishlist::wishlist_scope`, which
-/// passes `w.folder_id`. Binds [`shelf_list`] once, either way.
+/// The membership term a list takes — the list's scope (shared with `wishlist::wishlist_scope`,
+/// which passes `w.folder_id`) and both peek statements. Binds [`shelf_list`] once, either way.
 ///
 /// **A list that leaves out Not sorted asks `column IN (…)`, which the folder index can
 /// search** (`idx_collection_folder`, `idx_wishlist_folder`). Written as [`shelf_member`] it
-/// scanned the whole table, and Task 9 measured the cost: one 120-row folder four levels down
-/// took 25× (debug) and 33× (release) what `folderId` takes for the same rows, where this form
-/// takes 1.06× and 0.98×. **A list naming `0` keeps [`shelf_member`]**, because only the
-/// `coalesce` finds a NULL and every index plan for that list measured slower than its scan.
-/// Two statement shapes, decided here in Rust from the list itself — the SQL spelling of the
-/// same split (`… OR folder_id IS NULL AND 0 IN (…)`) kept a 3.5–7 ms floor walking every
-/// unfiled row to evaluate a constant.
+/// scanned the whole table: on a 100,000-entry copy, one 120-row folder four levels down took
+/// 25× (debug build) and 33× (release build) what `folderId` takes for the same rows, and this
+/// form takes 1.09× (debug) and 1.04× (release) — `collection-folders.md`, *What the `shelves`
+/// query costs*. **A list naming `0` keeps [`shelf_member`]**, because only the `coalesce` finds
+/// a NULL and every index plan for that list measured slower than its scan. Two statement
+/// shapes, decided here in Rust from the list itself — the SQL spelling of the same split
+/// (`… OR folder_id IS NULL AND 0 IN (…)`) kept a 3.5–7 ms floor, walking every unfiled row to
+/// evaluate a constant.
 pub(crate) fn shelf_term(column: &str, shelves: &[i64]) -> String {
     if shelves.contains(&0) {
         shelf_member(column)
@@ -1997,10 +2002,12 @@ pub(crate) fn shelf_term(column: &str, shelves: &[i64]) -> String {
 /// sorts exactly as the list does. Binds [`shelf_order`] once.
 ///
 /// **`instr` answers the first occurrence**, so a list naming one shelf twice answers its
-/// **first** place. It replaced a correlated `json_each` lookup per row, which Task 9 measured as
-/// most of the like-for-like cost at the root: 1263 → 902 ms (release) over the same 100,277
-/// rows. It is an `ORDER BY` term and defeats any index the sort could have used; nothing here
-/// could use one anyway, since no index orders by a list only the caller knows.
+/// **first** place. It replaced a correlated `json_each` lookup per row, which was most of the
+/// like-for-like cost at the root: on a 100,000-entry copy, `instr` alone took the root wall's
+/// statements from 1263 to 902 ms in a release build and from 1643 to 1021 ms in a debug one
+/// (`collection-folders.md`, *What the `shelves` query costs*). It is an `ORDER BY` term and
+/// defeats any index the sort could have used; nothing here could use one anyway, since no index
+/// orders by a list only the caller knows.
 pub(crate) fn shelf_position(column: &str) -> String {
     format!("instr(?, ',' || coalesce({column}, 0) || ',')")
 }
@@ -2576,20 +2583,25 @@ pub struct ShelfCount {
     pub peek: Vec<String>,
 }
 
-/// Fill each count's `peek` from `sql` — a statement that binds the returned shelves as **one**
-/// [`shelf_list`] and answers `(shelf, card id)` rows already ordered and already cut to
-/// [`SHELF_PEEK`] per shelf. Shared with [`crate::wishlist::shelf_counts`], which passes its own
-/// statement; an empty `counts` asks nothing.
+/// Fill each count's `peek` from the statement `sql` builds for the returned shelves — one that
+/// binds them as **one** [`shelf_list`] and answers `(shelf, card id)` rows already ordered and
+/// already cut to [`SHELF_PEEK`] per shelf. Shared with [`crate::wishlist::shelf_counts`], which
+/// passes its own builder; an empty `counts` asks nothing.
+///
+/// **The builder is handed the shelves because the statement's text depends on them**:
+/// [`shelf_term`] searches the folder index for a list without Not sorted and scans for one with
+/// it, so the peek of a wall standing inside a folder is an index search and not a pass over the
+/// whole table.
 pub(crate) fn fill_peek(
     conn: &Connection,
     counts: &mut [ShelfCount],
-    sql: &str,
+    sql: impl FnOnce(&[i64]) -> String,
 ) -> Result<(), String> {
     if counts.is_empty() {
         return Ok(());
     }
     let shelves: Vec<i64> = counts.iter().map(|c| c.folder_id).collect();
-    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&sql(&shelves)).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([shelf_list(&shelves)], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
@@ -2611,7 +2623,11 @@ pub(crate) fn fill_peek(
 /// **No [`scope`] and no filter**, only shelf membership: the peek describes what a shelf holds.
 /// One `row_number()` window over every returned shelf rather than a query per shelf, so it is
 /// one round trip whatever the shelf count, and the per-shelf `LIMIT 4` is the window's `n`.
-fn collection_peek_sql() -> String {
+///
+/// **Its membership term is [`shelf_term`]'s for the shelves it is built for**, so a peek that
+/// leaves out Not sorted searches `idx_collection_folder` where it used to read every entry —
+/// with no filter to narrow it, the term is the whole of what bounds the statement.
+fn collection_peek_sql(shelves: &[i64]) -> String {
     format!(
         "SELECT shelf, card_id FROM (
              SELECT shelf, card_id,
@@ -2625,7 +2641,7 @@ fn collection_peek_sql() -> String {
           WHERE n <= {SHELF_PEEK}
           ORDER BY shelf, n",
         from = from_sql(),
-        member = shelf_member("e.folder_id"),
+        member = shelf_term("e.folder_id", shelves),
     )
 }
 
@@ -2682,7 +2698,7 @@ pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfC
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| e.to_string())?
     };
-    fill_peek(conn, &mut counts, &collection_peek_sql())?;
+    fill_peek(conn, &mut counts, collection_peek_sql)?;
     Ok(counts)
 }
 
@@ -4102,12 +4118,13 @@ mod tests {
     }
 
     /// **A shelves list that leaves out Not sorted is searched through `idx_collection_folder`**,
-    /// the index `folderId` has always used — Task 9's measurement: planned as a scan, one small
-    /// folder cost 25× (debug) and 33× (release) what `folderId` costs for the same 120 rows.
-    /// **A list naming Not sorted scans, on purpose**: `coalesce(folder_id, 0)` is what finds the
-    /// unfiled rows, and every index plan measured for such a list (a `MULTI-INDEX OR`, an
-    /// expression index) lost to the scan at the root. Both of [`list_entries`]' statements are
-    /// explained from the text it runs, so neither half can regress without this going red.
+    /// the index `folderId` has always used. Planned as a scan, one small folder cost 25× (debug)
+    /// and 33× (release) what `folderId` costs for the same 120 rows on a 100,000-entry copy —
+    /// `collection-folders.md`, *What the `shelves` query costs*. **A list naming Not sorted
+    /// scans, on purpose**: `coalesce(folder_id, 0)` is what finds the unfiled rows, and every
+    /// index plan measured for such a list (a `MULTI-INDEX OR`, an expression index) lost to the
+    /// scan at the root. Both of [`list_entries`]' statements are explained from the text it
+    /// runs, so neither half can regress without this going red.
     #[test]
     fn a_list_without_the_unfiled_shelf_is_searched_through_the_folder_index() {
         let s = shelved_collection();
@@ -4144,6 +4161,62 @@ mod tests {
                 "the {what} statement takes no OR over the index, the plan that lost: {plan:?}"
             );
         }
+    }
+
+    /// **The peek takes the list's own membership term**, so a wall standing inside a folder
+    /// peeks through `idx_collection_folder` rather than reading every entry in the collection —
+    /// the peek has no filter to narrow it, so its membership term is the whole of what bounds
+    /// it. A peek naming Not sorted scans, for the list's reason. Explained from the text
+    /// [`collection_peek_sql`] builds for the shelves [`fill_peek`] hands it.
+    #[test]
+    fn a_peek_without_the_unfiled_shelf_is_searched_through_the_folder_index() {
+        let s = shelved_collection();
+        let peek_plan = |shelves: &[i64]| {
+            plan_of(
+                &s.conn,
+                &collection_peek_sql(shelves),
+                &[Box::new(shelf_list(shelves)) as Box<dyn rusqlite::ToSql>],
+            )
+        };
+
+        let filed = peek_plan(&[s.binder, s.sleeve]);
+        assert!(
+            filed.iter().any(|d| d.starts_with("SEARCH e ")
+                && d.contains("INDEX idx_collection_folder (folder_id=?)")),
+            "the peek reaches the folder index: {filed:?}"
+        );
+
+        let unfiled = peek_plan(&[0, s.binder]);
+        assert!(
+            unfiled.iter().any(|d| d.starts_with("SCAN e")),
+            "the peek scans for a list naming Not sorted: {unfiled:?}"
+        );
+        assert!(
+            !unfiled.iter().any(|d| d.contains("MULTI-INDEX OR")),
+            "the peek takes no OR over the index: {unfiled:?}"
+        );
+    }
+
+    /// **`fill_peek` builds its statement for exactly the shelves the counts answered** — the
+    /// ones it then binds — so the term [`shelf_term`] picks is decided by the shelves that are
+    /// really there: a Not sorted with nothing in scope answers no count row, and its absence is
+    /// what lets the peek search the index.
+    #[test]
+    fn fill_peek_builds_its_statement_for_the_shelves_the_counts_answered() {
+        let s = shelved_collection();
+        let mut counts = vec![
+            counted(s.binder, 2, 4, None, 0, &[]),
+            counted(s.sleeve, 1, 1, None, 0, &[]),
+        ];
+        let mut asked: Vec<i64> = Vec::new();
+        fill_peek(&s.conn, &mut counts, |shelves| {
+            asked = shelves.to_vec();
+            collection_peek_sql(shelves)
+        })
+        .unwrap();
+        assert_eq!(asked, vec![s.binder, s.sleeve]);
+        assert_eq!(counts[0].peek, vec!["bolt-jp", "bolt-lea"]);
+        assert_eq!(counts[1].peek, vec!["bolt-lea"]);
     }
 
     /// A [`ShelfCount`] in one line — the four figures, then the peek's card ids in order.
