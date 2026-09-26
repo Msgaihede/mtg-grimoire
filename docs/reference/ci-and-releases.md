@@ -23,18 +23,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   cannot merge, a direct push to `main` still can, so "Work on `main`" below stays true.
   Proven 2026-08-09 by a deliberate lint error: `frontend` red, both `rust` legs green,
   **`ci-ok` red**. A green pipeline proves nothing about a gate; that run is the proof.
-- **A change only builds the half it touched.** The `changes` job diffs against the base
-  (`git diff --name-only --no-renames`, so it needs `fetch-depth: 0`) and routes each path:
-  `src-tauri/**` → `rust`; `src/**`, `public/**`, `index.html`, the lockfiles and the
-  frontend's configs, plus **`scripts/` because `eslint .` lints it** (its ignore list is
-  `dist/`, `src-tauri/`, `node_modules/` and nothing else) → `frontend`;
-  `src/workers/**`, `src/web/**`, `src/lib/core/**`, `scripts/build-wasm.mjs` and
-  `vite.web.config.ts` → `frontend` **and `wasm`**, and `src-tauri/**` → `rust` **and
-  `wasm`** as well;
-  `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` itself → **all four**; **`crates/*` →
-  `frontend`, `rust`, `wasm` and `android`** (declared 2026-09-08 — it is what the fail-safe
-  below was already doing for the `card-scanner` crate, whose `.rs` files `ipc.test.ts` reads
-  as text and whose `scripts/*.mjs` `eslint .` lints);
+- **A change only builds what it can have broken.** The `changes` job diffs against the base
+  (`git diff --name-only --no-renames`, so it needs `fetch-depth: 0`) and pipes the paths to
+  **`scripts/ci-route.mjs`** (moved out of an inline `case` on 2026-09-26, with `case`'s
+  first-match-wins order and `*`-crosses-`/` matching kept), which routes each one:
+  `src-tauri/**` → **`frontend`, `rust`, `wasm` and `android`**; `src/**`, `public/**`,
+  `index.html`, the lockfiles and the frontend's configs, plus **`scripts/` because `eslint .`
+  lints it** (its ignore list does not name it) → `frontend`;
+  **`src/features/transfer/__golden__/**` and `src/lib/userTables.json` → `frontend` and
+  `rust`**; `src/workers/**`, `src/web/**`, `src/lib/core/**`, `scripts/build-wasm.mjs` and
+  `vite.web.config.ts` → `frontend` **and `wasm`**;
+  `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router itself → **every job**;
+  **`crates/*` → `frontend`, `rust`, `wasm` and `android`** (declared 2026-09-08 — it is what
+  the fail-safe below was already doing for the `card-scanner` crate, whose `.rs` files
+  `ipc.test.ts` reads as text and whose `scripts/*.mjs` `eslint .` lints);
   prose and editor/release bookkeeping → neither; and **anything unrecognised → every**
   build job.
   That last arm is the fail-safe that makes the lists safe to be wrong in the cheap
@@ -122,12 +124,28 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   pass, so `changes` itself may never be one**: if the router dies both build jobs skip, and
   without the explicit `needs.changes.result == 'success'` line the gate goes green having run
   nothing at all.
-- Skipping `frontend` on a Rust-only change gives up nothing CI ever caught: **no test on
-  either side reads a file across the boundary.** The frontend's two source sweeps glob
-  `/src/**` (`layers.test.ts`, `tokens.test.ts`), vitest only collects `src/**/*.test.{ts,tsx}`,
-  and the crate's one `include_str!` is its own `tauri.conf.json`. The TS↔Rust contract in
-  `src/lib/ipc.ts` is hand-mirrored and, in its own words, "can drift silently" — that was
-  already true when both jobs ran on every commit.
+- **A Rust-only change runs `frontend` too, because tests on each side read the other's
+  files.** This bullet used to say no test did, and the router skipped `frontend` on it; both
+  were wrong for as long as `ipc.test.ts` had existed, so a Rust PR that drifted from
+  `src/lib/ipc.ts` merged green and the red landed on the next unrelated PR. Censused
+  2026-09-26: **ten frontend test files read 50 files under `src-tauri/` and `crates/` as
+  `?raw` text** — `ipc.test.ts` alone reads 37 app modules and eight `card-scanner` ones for
+  its mirror rows, and six tests read the share golden
+  `src-tauri/src/share/__golden__/snapshot.json` — while **Rust tests read `src/lib/userTables.json` (`changes`), the whole
+  `src/features/transfer/__golden__/` directory (`transfer::{card,fields,write}`) and
+  `share-worker/wrangler.jsonc` (`share::publish`)**, every one inside `#[cfg(test)]`, so
+  `wasm` and `android` are not involved. Those figures are the day's, and nothing relies on
+  them: **`scripts/ci-route.test.mjs` derives the census from the sources on every run** and
+  fails when a file is read by a job the router does not send it to, or crosses the boundary and
+  is not routed to both `frontend` and `rust`. Reverting either half of the fix was run as a
+  mutation and the derived census went red both times, not only the hand-written table. Cost
+  measured on the runs before the change: `frontend` takes 8–12 min and `rust` 4–9, so a
+  Rust-only PR now waits on `frontend`'s clock instead of `rust`'s.
+- **A push to `main` gets a concurrency group of its own; PR runs still cancel each other.**
+  Routing on a push diffs from `github.event.before`, so a cancelled `main` run's commits were
+  never routed by the next one — and turning `cancel-in-progress` off alone would not have
+  saved them, because GitHub replaces a *pending* run in a group with the next arrival
+  regardless.
 - The `rust` job writes a stub `dist/index.html` first. `tauri-build` reads
   `frontendDist: "../dist"` and fails outright when it is missing, so a Rust-only job cannot
   compile a fresh checkout; the stub is what keeps it parallel with `frontend` instead of
