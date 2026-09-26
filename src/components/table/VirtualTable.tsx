@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useSyncExternalStore,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { needsNextPage } from "@/features/search/useCardSearch";
@@ -14,6 +22,13 @@ export const TABLE_ROW_HEIGHT = 44;
 
 /** Height of the sticky header row, which the virtualiser has to account for. */
 export const TABLE_HEADER_HEIGHT = 36;
+
+/**
+ * Height of a heading band — a row {@link VirtualTable}'s `band` answers for — when the caller
+ * names none. The shelf grid draws its heading at 40px plus an 8px gap; a table packs its rows
+ * flush, so it takes the 40 without the gap, and a shelf heading is one height in both views.
+ */
+export const TABLE_BAND_HEIGHT = 40;
 
 /** What the virtualiser's window is under `grow`, where nothing reads it. A module constant
  *  rather than a literal `[]`, which would be a new array on every render and a new dependency
@@ -94,6 +109,13 @@ export interface RowRenderProps {
  * **{@link VirtualTable.grow} is the fourth caller's opt-out of the scroller**, and it is opt-in
  * precisely because the other three are 100k-row lists whose virtualisation must not move.
  *
+ * **{@link VirtualTable.band} is the second opt-in, and the shelves are its callers** — the
+ * collection's and the wishlist's table views, where a folder's heading is a row across every
+ * column above that folder's cards (spec §3.10, §5.8). "Heading band" throughout, because this
+ * file already says "band" for the reconciler's flagged strip under a row (`extraHeight`), and
+ * the two are different things. Without the prop, or with every row answering `null`, the table
+ * is exactly what it was.
+ *
  * The column template is an inline style rather than a Tailwind arbitrary value on purpose:
  * Tailwind scans source text for whole class names, so a template joined at runtime would
  * emit no rule at all.
@@ -113,6 +135,9 @@ export function VirtualTable<Row>({
   isSelected,
   rowClassName,
   renderRow,
+  band,
+  bandHeight,
+  stickyBand,
 }: {
   rows: Row[];
   columns: TableColumn<Row>[];
@@ -135,6 +160,10 @@ export function VirtualTable<Row>({
    * positions its neighbour accordingly, so a band that outgrows the number is painted over.
    * Under `grow` it is only a **floor**: nothing has to be told, so a row that outgrows it
    * simply gets taller. See the geometry note at the row's own `style`.
+   *
+   * **Asked about a heading band too** ({@link band}), where it adds to `bandHeight` instead of
+   * to 44px — which is how a band that needs more room than a heading (an empty shelf's dashed
+   * box) says so without a second height prop.
    */
   extraHeight?: (row: Row) => number;
   /**
@@ -167,22 +196,76 @@ export function VirtualTable<Row>({
   onActivate?: (row: Row, event: React.MouseEvent | React.KeyboardEvent) => void;
   isSelected?: (row: Row) => boolean;
   rowClassName?: (row: Row) => string | undefined;
-  /** Wraps the row. The default is a plain `div`; two callers make it a drag source. */
+  /**
+   * Wraps the row. The default is a plain `div`; two callers make it a drag source.
+   *
+   * **Never called for a heading band** ({@link band}), which the table draws itself: a
+   * caller's wrapper adds a drag source and a click and keys of its own, and a heading must
+   * carry none of them.
+   */
   renderRow?: (props: RowRenderProps, row: Row) => ReactNode;
+  /**
+   * Which rows are **heading bands** rather than data, and what each one draws. Anything but
+   * `null` or `undefined` makes the row a band: one `role="row"` holding one `role="cell"` with
+   * `aria-colspan` over every column, {@link bandHeight} tall, with the node inside. Absent — or
+   * `null` for every row — the table is exactly what it is without the prop.
+   *
+   * **A band is chrome the table places, and nothing more.** It never reaches `onActivate`,
+   * `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, and it carries no
+   * `tabIndex`, no click and no Enter or Space — so row activation skips it and no drag-source
+   * wrapper ever wraps a heading. What a heading does (a chevron, a title that opens the folder,
+   * a drop target) is the node's own. `extraHeight` **is** asked about it, and adds to
+   * `bandHeight`.
+   *
+   * **It is a row to assistive tech**: `aria-rowindex` counts it, and `aria-rowcount` is
+   * `total + 1 + (bands among rows)` — `total` stays a count of data rows.
+   *
+   * Asked of every loaded row whenever `rows` or this callback changes, so pass a stable one
+   * (`useCallback`), and let whether a row is a band depend on the row alone. The node is asked
+   * for again at render, for the bands in the window only, so a heading that redraws on state (a
+   * drop mark, a rename) is never stale.
+   */
+  band?: (row: Row) => ReactNode | null;
+  /**
+   * A heading band's height in px, before `extraHeight`. {@link TABLE_BAND_HEIGHT} when
+   * omitted.
+   */
+  bandHeight?: number;
+  /**
+   * An overlay pinned directly under the sticky column header — the shelves' sticky bar
+   * (spec §5.3) — drawn from the index in `rows` of the row under the header's bottom edge.
+   *
+   * When a heading band reaches that edge the index is the heading's own, so a caller that
+   * returns `null` whenever `rows[index]` is itself a heading lets the heading be its own bar
+   * and hands over to the bar as the heading scrolls away; a bar drawn over a heading hides the
+   * heading's controls. Called only while there are rows, so the index is always one of them,
+   * and **never under `grow`**: the page scrolls there and no offset of this table names a row —
+   * and nothing that grows draws shelves.
+   */
+  stickyBand?: (firstVisibleRowIndex: number) => ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const tip = useTooltip();
 
   const template = useMemo(() => columns.map((c) => c.width).join(" "), [columns]);
 
+  // Which rows are heading bands, asked once per list rather than once per estimate: the size
+  // estimate, the re-measure key and `aria-rowcount` all read it. `null` without `band`, which is
+  // what keeps all three exactly as they were for every caller that never passes one.
+  const bandAt = useMemo(() => (band ? rows.map((row) => band(row) != null) : null), [rows, band]);
+  const bandCount = useMemo(() => (bandAt ? bandAt.filter(Boolean).length : 0), [bandAt]);
+  const bandSize = bandHeight ?? TABLE_BAND_HEIGHT;
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     // Exact rather than estimated: a row that carries the reconciler's band is taller, and a
     // virtualiser told every row is 44px would overlap the one below it by exactly that band.
+    // A heading band starts from `bandSize` rather than 44, and `extraHeight` adds to either.
     estimateSize: (index) => {
       const row = rows[index];
-      return TABLE_ROW_HEIGHT + (row && extraHeight ? extraHeight(row) : 0);
+      const extra = row && extraHeight ? extraHeight(row) : 0;
+      return (bandAt?.[index] ? bandSize : TABLE_ROW_HEIGHT) + extra;
     },
     overscan: 10,
     // The sticky header shares the scroll container with the rows, so the list does not
@@ -193,16 +276,25 @@ export function VirtualTable<Row>({
   // Row heights are cached from the first `estimateSize` call, so a page that lands with a
   // taller row in it — or a fix that shortens one — has to say so, or the rows keep the old
   // pitch. Usually the empty string: nothing is flagged in a healthy list.
-  const heightKey = useMemo(
-    () =>
-      extraHeight
-        ? rows
-            .map((r, i) => (extraHeight(r) > 0 ? i : -1))
-            .filter((i) => i >= 0)
-            .join(",")
-        : "",
-    [rows, extraHeight],
-  );
+  //
+  // A heading band is a height of its own, and a row that becomes one — or stops being one — at
+  // the same index changes no `count`, which is the only thing the virtualiser re-reads by
+  // itself. So the bands' positions and their height join the key. Without `band` it is the
+  // string it always was.
+  const heightKey = useMemo(() => {
+    const flagged = extraHeight
+      ? rows
+          .map((r, i) => (extraHeight(r) > 0 ? i : -1))
+          .filter((i) => i >= 0)
+          .join(",")
+      : "";
+    if (!bandAt) return flagged;
+    const banded = bandAt
+      .map((isBand, i) => (isBand ? i : -1))
+      .filter((i) => i >= 0)
+      .join(",");
+    return `${flagged}|${banded}@${bandSize}`;
+  }, [rows, extraHeight, bandAt, bandSize]);
   useEffect(() => {
     virtualizer.measure();
   }, [heightKey, virtualizer]);
@@ -236,6 +328,32 @@ export function VirtualTable<Row>({
     if (needsNextPage(lastRendered, rows.length)) onNeedNextPage();
   }, [grow, lastRendered, rows.length, onNeedNextPage]);
 
+  // `stickyBand`'s question: which row is under the column header's bottom edge — content
+  // offset `scrollTop + TABLE_HEADER_HEIGHT`, because the rows' coordinates start below the
+  // header (`scrollMargin`). Not `virtualizer.range.startIndex`: that is the row at the
+  // scroller's *top* edge, 36px higher, which is a row the header is already hiding — and the
+  // virtualiser re-renders only when its window's ends move, not when this edge crosses a row.
+  //
+  // So it is a subscription to the scroller's own `scroll` event with a number for a snapshot:
+  // React re-renders when the index moves and never per pixel, and no effect sets state. Dormant
+  // — no listener, a constant 0 — without `stickyBand` or under `grow`.
+  const stickyLive = stickyBand !== undefined && !grow;
+  const subscribeToScroll = useCallback(
+    (notify: () => void) => {
+      const el = scrollRef.current;
+      if (!stickyLive || !el) return () => {};
+      el.addEventListener("scroll", notify, { passive: true });
+      return () => el.removeEventListener("scroll", notify);
+    },
+    [stickyLive],
+  );
+  const readFirstVisibleRow = useCallback(() => {
+    const el = scrollRef.current;
+    if (!stickyLive || !el) return 0;
+    return virtualizer.getVirtualItemForOffset(el.scrollTop + TABLE_HEADER_HEIGHT)?.index ?? 0;
+  }, [stickyLive, virtualizer]);
+  const firstVisibleRowIndex = useSyncExternalStore(subscribeToScroll, readFirstVisibleRow);
+
   // The one place the two modes part: `grow` draws every row, in document order, in normal
   // flow, and reads nothing off the virtualiser; otherwise it is the window as before.
   const laidOut: LaidOutRow[] = grow
@@ -249,7 +367,13 @@ export function VirtualTable<Row>({
       aria-label={label}
       // Every matching row plus the header, not just the rows currently in the DOM —
       // otherwise a virtualised list tells assistive tech the database holds 20 cards.
-      aria-rowcount={total === null ? -1 : total + 1}
+      //
+      // Plus every heading band among `rows`: a band is a row to assistive tech — it carries an
+      // `aria-rowindex`, and the indices run down `rows` counting it — while `total` is a count
+      // of data rows, which is all a backend count answers. So `total + 1 + bands`, and `-1`
+      // stays `-1`: unknown plus anything is unknown. Bands are counted as loaded, so a caller
+      // that lists every heading up front gets an exact figure.
+      aria-rowcount={total === null ? -1 : total + 1 + bandCount}
       tabIndex={0}
       // Under `grow` this element stops being a scroll container: no height of its own, no
       // `overflow`, and the page scrolls it instead. The border and the radius stay — they are
@@ -310,6 +434,28 @@ export function VirtualTable<Row>({
         )}
       </div>
 
+      {/* The sticky band: an overlay pinned directly under the column header, showing whatever
+          `stickyBand` draws for the row at the header's edge. CSS `sticky` cannot pin a row —
+          rows are `absolute` and translated — so this is an element of its own, in flow for the
+          header's own reason: `sticky` works on an in-flow box and resolves against this
+          scroller. Zero tall, so it moves no row; its content is `absolute` inside it and is
+          drawn over the rows below. On the header's rung: the rows scroll under it, and it
+          follows the header in the DOM without overlapping it.
+
+          Inside the scroller rather than laid over it from outside, on purpose: a box over the
+          scroller covers the scrollbar and needs a wrapper around the table. Not under `grow`,
+          where the page scrolls and no offset of this element names a row; not over an empty
+          list, so the index handed out is always a row of `rows`. */}
+      {stickyBand && !grow && rows.length > 0 && (
+        <div
+          data-sticky-band=""
+          style={{ top: TABLE_HEADER_HEIGHT }}
+          className={cn("sticky h-0", LAYER.header)}
+        >
+          <div className="absolute inset-x-0 top-0">{stickyBand(firstVisibleRowIndex)}</div>
+        </div>
+      )}
+
       {/* Holds the scrollbar open to the full list height while the rows inside it are
           positioned absolutely — and wants neither number under `grow`, where the rows are in
           normal flow: there is no scrollbar to hold open, and nothing absolute for this box to
@@ -322,6 +468,51 @@ export function VirtualTable<Row>({
           const row = rows[index];
           if (!row) return null;
           const extra = extraHeight?.(row) ?? 0;
+          // A heading band, drawn here and never through `renderRow`: one cell across every
+          // column, and none of a row's tab stop, click, keys, selection colour or state colour
+          // — see `band`. Placed exactly as a row is, in both modes, from the same `item`.
+          //
+          // **No lift, unlike a row.** `LAYER.raisedWhenPopupOpen` keys on a descendant with
+          // `aria-expanded="true"`, and a shelf heading's collapse chevron carries exactly that
+          // for as long as the shelf is open — so every open heading would sit a rung up for
+          // good, and at the same rung as a row's open popup above it, document order would
+          // paint the heading over that popup. A heading's menus are root-mounted, so there is
+          // nothing inside it to lift.
+          //
+          // One track across and none split down: the cell takes the whole height, including any
+          // `extraHeight`, and `self-stretch` makes it — and so a drop target filling it — as
+          // tall as the band rather than as tall as its text.
+          if (band && bandAt?.[index]) {
+            return (
+              <div
+                key={key}
+                role="row"
+                aria-rowindex={index + 2}
+                data-band=""
+                className={cn(
+                  "grid items-center border-b border-border/50 px-3 text-sm",
+                  item === null ? "relative" : "absolute inset-x-0 top-0",
+                )}
+                style={{
+                  ...(item === null
+                    ? { minHeight: bandSize + extra }
+                    : {
+                        height: item.size,
+                        transform: `translateY(${item.start - TABLE_HEADER_HEIGHT}px)`,
+                      }),
+                  gridTemplateColumns: "minmax(0,1fr)",
+                }}
+              >
+                <span
+                  role="cell"
+                  aria-colspan={columns.length}
+                  className="flex min-w-0 items-center self-stretch"
+                >
+                  {band(row)}
+                </span>
+              </div>
+            );
+          }
           const props: RowRenderProps = {
             role: "row",
             "aria-rowindex": index + 2,

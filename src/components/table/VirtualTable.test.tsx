@@ -1,8 +1,16 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { LAYER } from "@/lib/layers";
 import type { SortSpec } from "@/lib/sort";
-import { VirtualTable, type TableColumn } from "./VirtualTable";
+import {
+  TABLE_BAND_HEIGHT,
+  TABLE_HEADER_HEIGHT,
+  VirtualTable,
+  type RowRenderProps,
+  type TableColumn,
+} from "./VirtualTable";
 
 /**
  * jsdom lays nothing out: every element measures 0, so the virtualiser computes an empty
@@ -21,6 +29,8 @@ interface Row {
   id: string;
   name: string;
   price: number;
+  /** Set only on a heading band's row — see the band blocks at the foot of this file. */
+  shelf?: string;
 }
 
 const ROWS: Row[] = [
@@ -286,5 +296,298 @@ describe("VirtualTable told to grow", () => {
   it("still counts the whole list, header included", () => {
     draw(true);
     expect(screen.getByRole("table")).toHaveAttribute("aria-rowcount", "101");
+  });
+});
+
+type Props = ComponentProps<typeof VirtualTable<Row>>;
+
+/**
+ * A heading band's row, as these tests spell one: a `Row` that names a shelf. The real callers
+ * (the collection's and the wishlist's shelves) use a `kind` union; one optional field is the
+ * smallest shape that lets {@link COLUMNS} be reused unchanged.
+ */
+const shelf = (name: string): Row => ({ id: `shelf:${name}`, name: "", price: 0, shelf: name });
+const card = (i: number): Row => ({ id: String(i), name: `Card ${i}`, price: i });
+
+/** Module-stable, as a caller's `useCallback` would be. */
+const bandOf = (r: Row) => (r.shelf ? <span>{r.shelf} heading</span> : null);
+
+/** Everything but the list, so a test names only what it is about. */
+const BASE = {
+  columns: COLUMNS,
+  label: "Test rows",
+  listKey: "k",
+  onNeedNextPage: () => {},
+  sort: [] as SortSpec,
+  onSort: () => {},
+};
+
+/** The row element holding a piece of text — a band's heading or a card's name. */
+const rowOf = (text: string) => screen.getByText(text).closest('[role="row"]') as HTMLElement;
+
+/**
+ * **Heading bands are the table's second opt-in, and the shelves are their callers** (spec
+ * §3.10, §5.8): a folder's heading drawn as one row across every column, above that folder's
+ * cards. The deck editor's `TableView` draws the same shape through `renderRow`; this is the
+ * table doing it itself, so that a heading can never pick up a row's click, keys, selection
+ * colour or drag source by accident.
+ *
+ * jsdom lays nothing out, but every figure here is an inline style the virtualiser computed from
+ * the heights it was told — which is the whole of what "the estimate uses `bandHeight`" means.
+ */
+describe("VirtualTable with heading bands", () => {
+  /** Two shelves, five cards: `Binder` over cards 1–2, `Trade` over cards 3–5. */
+  const SHELVED: Row[] = [
+    shelf("Binder"),
+    card(1),
+    card(2),
+    shelf("Trade"),
+    card(3),
+    card(4),
+    card(5),
+  ];
+
+  const draw = (props: Partial<Props> = {}) =>
+    render(<VirtualTable {...BASE} rows={SHELVED} total={5} band={bandOf} {...props} />);
+
+  it("draws a band as one row holding one cell across every column", () => {
+    draw();
+    const band = rowOf("Binder heading");
+    expect(band).toHaveAttribute("data-band");
+    expect(band).toHaveAttribute("aria-rowindex", "2");
+    const cells = within(band).getAllByRole("cell");
+    expect(cells).toHaveLength(1);
+    expect(cells[0]).toHaveAttribute("aria-colspan", String(COLUMNS.length));
+    // One track across rather than the table's three, or the cell is squeezed into the first.
+    expect(band.style.gridTemplateColumns).toBe("minmax(0,1fr)");
+
+    // The rows around it are the table's own, and their indices count the band.
+    const first = rowOf("Card 1");
+    expect(first).not.toHaveAttribute("data-band");
+    expect(first).toHaveAttribute("aria-rowindex", "3");
+    expect(within(first).getAllByRole("cell")).toHaveLength(COLUMNS.length);
+    expect(rowOf("Trade heading")).toHaveAttribute("aria-rowindex", "5");
+  });
+
+  /** `aria-rowindex` runs down `rows` counting the bands, so the count has to as well. */
+  it("counts every band into aria-rowcount, beside the header and the data rows", () => {
+    draw();
+    // 5 data rows + 2 bands + the header.
+    expect(screen.getByRole("table")).toHaveAttribute("aria-rowcount", "8");
+  });
+
+  /** Unknown plus anything is unknown. Passes before the change too: a fence, not a driver. */
+  it("still says unknown when the count is capped, however many bands there are", () => {
+    draw({ total: null });
+    expect(screen.getByRole("table")).toHaveAttribute("aria-rowcount", "-1");
+  });
+
+  it("never hands a band to onActivate, isSelected, rowClassName, renderRow or a cell", async () => {
+    const user = userEvent.setup();
+    const onActivate = vi.fn();
+    const isSelected = vi.fn((row: Row) => row.id === "none");
+    const rowClassName = vi.fn((row: Row) => (row.id === "none" ? "text-dim" : undefined));
+    const cell = vi.fn((row: Row) => row.name);
+    const renderRow = vi.fn((props: RowRenderProps, row: Row) => (
+      <div data-id={row.id} {...props} />
+    ));
+    draw({
+      columns: [{ key: "name", width: "minmax(0,1fr)", header: "Name", cell }],
+      onActivate,
+      isSelected,
+      rowClassName,
+      renderRow,
+    });
+
+    const bandsAmong = (rows: Row[]) => rows.filter((r) => r.shelf !== undefined);
+    // Each was asked — so the empty lists below are not a table that asked nothing at all.
+    expect(isSelected).toHaveBeenCalled();
+    expect(bandsAmong(isSelected.mock.calls.map(([r]) => r))).toEqual([]);
+    expect(rowClassName).toHaveBeenCalled();
+    expect(bandsAmong(rowClassName.mock.calls.map(([r]) => r))).toEqual([]);
+    expect(cell).toHaveBeenCalled();
+    expect(bandsAmong(cell.mock.calls.map(([r]) => r))).toEqual([]);
+    expect(renderRow).toHaveBeenCalled();
+    expect(bandsAmong(renderRow.mock.calls.map(([, r]) => r))).toEqual([]);
+
+    // The band is the table's drawing, not `renderRow`'s, and it takes none of a row's gestures.
+    const band = rowOf("Binder heading");
+    expect(band).not.toHaveAttribute("data-id");
+    expect(band).not.toHaveAttribute("tabindex");
+    await user.click(band);
+    fireEvent.keyDown(band, { key: "Enter" });
+    fireEvent.keyDown(band, { key: " " });
+    expect(onActivate).not.toHaveBeenCalled();
+
+    // A card beside it still opens: the guard is on the band, not on the table.
+    fireEvent.keyDown(rowOf("Card 1"), { key: "Enter" });
+    expect(onActivate).toHaveBeenCalledTimes(1);
+    expect(onActivate.mock.calls[0][0]).toBe(SHELVED[1]);
+  });
+
+  /**
+   * The no-band mode's own fence, beside the untouched tests above: a `band` that answers `null`
+   * for every row — with a `bandHeight` that would move things if it were read — draws exactly
+   * the DOM the table draws without the prop. Passes before the change too.
+   */
+  it("draws exactly what it drew without the prop when every row answers null", () => {
+    const without = render(<VirtualTable {...BASE} rows={SHELVED} total={SHELVED.length} />);
+    const plain = without.container.innerHTML;
+    const table = screen.getByRole("table");
+    // No band and no sticky overlay: the header row and the body are the only two children.
+    expect(table.children).toHaveLength(2);
+    expect(table.querySelector("[data-band]")).toBeNull();
+    without.unmount();
+
+    const nulls = render(
+      <VirtualTable
+        {...BASE}
+        rows={SHELVED}
+        total={SHELVED.length}
+        band={() => null}
+        bandHeight={56}
+      />,
+    );
+    expect(nulls.container.innerHTML).toBe(plain);
+  });
+
+  it("sizes a band at 40px unless told, and starts the next row where it ends", () => {
+    const { unmount } = draw();
+    expect(TABLE_BAND_HEIGHT).toBe(40);
+    expect(rowOf("Binder heading").style.height).toBe("40px");
+    // The first card starts where the band ends, not a row's 44px down.
+    expect(rowOf("Card 1").style.transform).toBe("translateY(40px)");
+    expect(rowOf("Card 1").style.height).toBe("44px");
+    unmount();
+
+    draw({ bandHeight: 56 });
+    expect(rowOf("Binder heading").style.height).toBe("56px");
+    expect(rowOf("Card 1").style.transform).toBe("translateY(56px)");
+    // Band, two cards, then the second band: 56 + 44 + 44.
+    expect(rowOf("Trade heading").style.transform).toBe("translateY(144px)");
+  });
+
+  /**
+   * How a band that needs more room than a heading says so, with one `bandHeight` for all of
+   * them: the empty shelf's dashed box is the case the shelves have.
+   */
+  it("adds a band's extraHeight to its height and keeps it one track tall", () => {
+    draw({ extraHeight: (r) => (r.shelf === "Binder" ? 30 : 0) });
+    const band = rowOf("Binder heading");
+    expect(band.style.height).toBe("70px");
+    // A data row with extra is split into a 44px track and the extra; a band is one cell that
+    // takes the whole height, so it is not split.
+    expect(band.style.gridTemplateRows).toBe("");
+    expect(rowOf("Card 1").style.transform).toBe("translateY(70px)");
+  });
+
+  /**
+   * The virtualiser caches sizes and re-reads them only when `count` changes, so a row that
+   * becomes a band at the same index has to be announced — the `heightKey` half of this change.
+   */
+  it("re-measures when a row becomes a band at the same index", () => {
+    const { rerender } = render(
+      <VirtualTable {...BASE} rows={[shelf("A"), card(1), card(2)]} total={2} band={bandOf} />,
+    );
+    // 40 + 44.
+    expect(rowOf("Card 2").style.transform).toBe("translateY(84px)");
+
+    rerender(
+      <VirtualTable {...BASE} rows={[shelf("A"), shelf("B"), card(2)]} total={1} band={bandOf} />,
+    );
+    expect(rowOf("B heading").style.height).toBe("40px");
+    // 40 + 40, not 40 + 44 from the cache.
+    expect(rowOf("Card 2").style.transform).toBe("translateY(80px)");
+  });
+
+  it("lays a band out in flow under grow, floored at its height", () => {
+    draw({ grow: true });
+    const band = rowOf("Binder heading");
+    expect(band.className).toContain("relative");
+    expect(band.className).not.toContain("absolute");
+    expect(band.style.transform).toBe("");
+    expect(band.style.height).toBe("");
+    expect(band.style.minHeight).toBe("40px");
+  });
+});
+
+/**
+ * **The sticky band names the shelf the reader is scrolled into**, pinned under the column
+ * header (spec §3.10, §5.3). CSS `sticky` cannot pin a row here — rows are absolute and
+ * translated — so it is an overlay, and what the table owes the caller is one number: the index
+ * of the row under the header's bottom edge.
+ *
+ * **Tested through the real virtualiser rather than a pure helper.** jsdom keeps a `scrollTop`
+ * it is given and `fireEvent.scroll` reaches both the virtualiser's listener and this table's,
+ * so the index comes out of the same measurements the rows are placed by — band 40, nine cards
+ * at 44, band 40, from an origin of 36 (the header, `scrollMargin`).
+ */
+describe("VirtualTable's sticky band", () => {
+  /** A hundred rows, a band every tenth: `S0` over cards 1–9, `S1` over 11–19, and so on. */
+  const LONG: Row[] = Array.from({ length: 100 }, (_, i) =>
+    i % 10 === 0 ? shelf(`S${i / 10}`) : card(i),
+  );
+
+  const drawLong = (props: Partial<Props> = {}) =>
+    render(<VirtualTable {...BASE} rows={LONG} total={90} band={bandOf} {...props} />);
+
+  const bar = () => vi.fn((index: number) => <span>Bar {index}</span>);
+
+  it("pins an overlay under the column header, and asks about the row at the top", () => {
+    const stickyBand = bar();
+    drawLong({ stickyBand });
+    expect(stickyBand).toHaveBeenLastCalledWith(0);
+    expect(screen.getByText("Bar 0")).toBeInTheDocument();
+
+    const table = screen.getByRole("table");
+    const overlay = table.querySelector("[data-sticky-band]") as HTMLElement;
+    // Between the column header and the body — in flow, so `sticky` works where the rows
+    // cannot — and zero tall, so it moves no row.
+    expect(table.children[0]).toBe(screen.getAllByRole("row")[0]);
+    expect(table.children[1]).toBe(overlay);
+    expect(table.children[2]).toBe(screen.getByRole("rowgroup"));
+    expect(overlay).toHaveClass("sticky", "h-0", LAYER.header);
+    expect(overlay.style.top).toBe(`${TABLE_HEADER_HEIGHT}px`);
+    expect(rowOf("S0 heading").style.transform).toBe("translateY(0px)");
+  });
+
+  /**
+   * The row under the header's edge, not the row at the scroller's top: those differ by the
+   * header's 36px, and the second is a row the header is already hiding. Both assertions fail if
+   * the `+ TABLE_HEADER_HEIGHT` goes — they would read 9 and 10.
+   */
+  it("follows the scroll to the row under the header's edge", () => {
+    const stickyBand = bar();
+    drawLong({ stickyBand });
+    const table = screen.getByRole("table");
+
+    // S1's heading starts at 36 + 40 + 9 × 44 = 472, which is the header's edge at 436.
+    table.scrollTop = 436;
+    fireEvent.scroll(table);
+    expect(stickyBand).toHaveBeenLastCalledWith(10);
+
+    // 64px further, the edge (536) is inside card 11 (512–556): the heading has scrolled away.
+    table.scrollTop = 500;
+    fireEvent.scroll(table);
+    expect(stickyBand).toHaveBeenLastCalledWith(11);
+    expect(screen.getByText("Bar 11")).toBeInTheDocument();
+  });
+
+  /** Passes before the change too — a fence on the `grow` path, which must not move. */
+  it("draws no overlay under grow, where no offset of the table names a row", () => {
+    const stickyBand = bar();
+    drawLong({ stickyBand, grow: true });
+    expect(stickyBand).not.toHaveBeenCalled();
+    expect(screen.getByRole("table").querySelector("[data-sticky-band]")).toBeNull();
+  });
+
+  /** So the index handed out is always a row of `rows`. Passes before the change too. */
+  it("asks nothing of an empty table", () => {
+    const stickyBand = bar();
+    render(
+      <VirtualTable {...BASE} rows={[]} total={0} band={bandOf} stickyBand={stickyBand} />,
+    );
+    expect(stickyBand).not.toHaveBeenCalled();
+    expect(screen.getByRole("table").querySelector("[data-sticky-band]")).toBeNull();
   });
 });

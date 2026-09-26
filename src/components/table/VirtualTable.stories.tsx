@@ -31,6 +31,8 @@ interface Row {
   collectorNumber: string;
   rarity: string | null;
   priceUsd: number | null;
+  /** Set only on a heading band's row — {@link Shelved} — and read only by its `band`. */
+  shelf?: string;
 }
 
 const row = (c: FakeCard): Row => ({
@@ -168,7 +170,10 @@ const meta = {
           "would, which is what the two sorted stories below do.\n\n" +
           "The column template is an inline style rather than a Tailwind arbitrary value on " +
           "purpose: Tailwind scans source text for whole class names, so a template joined at " +
-          "runtime would emit no rule at all.",
+          "runtime would emit no rule at all.\n\n" +
+          "**Heading bands** are opt-in: a row `band` answers for is drawn as one cell across " +
+          "every column, takes none of a row's gestures, and counts in `aria-rowcount`; " +
+          "`stickyBand` pins an overlay under the column header. See `Shelved`.",
       },
     },
   },
@@ -386,5 +391,108 @@ export const CountUnknown: Story = {
   args: { total: null },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getByRole("table")).toHaveAttribute("aria-rowcount", "-1");
+  },
+};
+
+/**
+ * A shelf heading as this file draws one — a stand-in, because the real one belongs to the
+ * collection and the wishlist and this file is about the table. It stands in for exactly what
+ * the table sees: a node inside a band.
+ */
+function StandInHeading({ name, count }: { name: string; count: number }) {
+  return (
+    <span className="flex min-w-0 items-baseline gap-2">
+      <span className="truncate font-medium text-text">{name}</span>
+      <span className="shrink-0 text-xs text-dim">{count} cards</span>
+    </span>
+  );
+}
+
+const shelfRow = (name: string): Row => ({
+  id: `shelf:${name}`,
+  name,
+  setCode: "",
+  collectorNumber: "",
+  rarity: null,
+  priceUsd: null,
+  shelf: name,
+});
+
+/** Three shelves over the 43 fixture printings: 12, 18 and the remaining 13. */
+const SHELVED: Row[] = [
+  shelfRow("Binder"),
+  ...ALL.slice(0, 12),
+  shelfRow("Trade binder"),
+  ...ALL.slice(12, 30),
+  shelfRow("Foils"),
+  ...ALL.slice(30),
+];
+
+/** The shelf a row sits on: the nearest heading at or above it. A page derives this from its
+ *  own rows; the table only says which row is at the top. */
+const shelfAt = (index: number): string | undefined => {
+  for (let i = index; i >= 0; i--) {
+    const name = SHELVED[i]?.shelf;
+    if (name) return name;
+  }
+  return undefined;
+};
+
+const shelfSize = (name: string) =>
+  SHELVED.filter((r, i) => r.shelf === undefined && shelfAt(i) === name).length;
+
+const shelfBand = (r: Row) =>
+  r.shelf ? <StandInHeading name={r.shelf} count={shelfSize(r.shelf)} /> : null;
+
+/** The bar. Reads {@link SHELVED} rather than the `rows` arg, so it names nothing sensible if
+ *  the rows are swapped in the controls panel — a story's shortcut, not the pages' shape. */
+const shelfBar = (index: number) => {
+  // A heading at the top is its own bar; one drawn over it would hide it.
+  if (SHELVED[index]?.shelf) return null;
+  return (
+    <div className="flex h-10 items-center border-b border-border bg-surface px-3 text-sm">
+      <span className="truncate font-medium text-text">{shelfAt(index)}</span>
+    </div>
+  );
+};
+
+/**
+ * Heading bands and the sticky bar over them — the shape the collection's and the wishlist's
+ * table views take with their folders drawn as shelves (spec §3.10).
+ *
+ * A band is one row holding one cell that spans every column, 40px where a row is 44, and it is
+ * a row to assistive tech: `aria-rowcount` is the 43 cards, the three headings and the header.
+ * The bar is pinned under the column header and names the shelf of the row at the header's
+ * edge; at the top it draws nothing, because the first heading is right there. Scroll to watch
+ * it hand over at each heading.
+ */
+export const Shelved: Story = {
+  args: { rows: SHELVED, total: ALL.length, band: shelfBand, stickyBand: shelfBar },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const table = canvas.getByRole("table");
+    await expect(table).toHaveAttribute("aria-rowcount", String(ALL.length + 3 + 1));
+
+    const heading = canvas.getByText("Binder").closest('[role="row"]') as HTMLElement;
+    await expect(heading).toHaveAttribute("aria-rowindex", "2");
+    const cells = within(heading).getAllByRole("cell");
+    await expect(cells).toHaveLength(1);
+    await expect(cells[0]).toHaveAttribute("aria-colspan", String(COLUMNS.length));
+
+    // The first card is the row after it, with the table's own five cells.
+    const first = canvas.getByText("LEA · 161").closest('[role="row"]') as HTMLElement;
+    await expect(first).toHaveAttribute("aria-rowindex", "3");
+    await expect(within(first).getAllByRole("cell")).toHaveLength(5);
+
+    // At the top the first heading is its own bar, so the overlay is empty.
+    const bar = canvasElement.querySelector("[data-sticky-band]") as HTMLElement;
+    await expect(bar.textContent).toBe("");
+
+    // 800px down puts the header's edge at 836: past `Trade binder`'s heading (604–644) and
+    // inside its fifth card, so the bar names it. Dispatched as well as set, because jsdom
+    // fires no event for an assigned `scrollTop`; a browser's own arrives after and agrees.
+    table.scrollTop = 800;
+    table.dispatchEvent(new Event("scroll"));
+    await expect(await within(bar).findByText("Trade binder")).toBeInTheDocument();
   },
 };
