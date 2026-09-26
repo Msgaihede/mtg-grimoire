@@ -560,10 +560,13 @@ pub enum Op {
     /// entries became one — comes back as two.
     ///
     /// **It also rides the card writes**, which is the half of it that is not a token command:
-    /// [`record_cells`], [`record_variant`] and three hand-built steps run
-    /// [`crate::deck_tokens::reconcile_in`] after their write and append the entries it removed
-    /// — a Treasure nothing makes any more — so Ctrl+Z on the cut puts back the card **and** the
-    /// reader's Treasure printings.
+    /// [`record_cells`], [`record_variant`] and `deck_meta`'s two hand-built steps (a pile
+    /// switched off, a pile deleted) run [`crate::deck_tokens::reconcile_in`] after their write
+    /// and append the entries it removed through [`push_removed_tokens`] — a Treasure nothing
+    /// makes any more — so Ctrl+Z on the cut puts back the card **and** the reader's Treasure
+    /// printings. **The theory switch builds its own pair instead** (`deck::token_step`): it
+    /// *moves* the live list's entries into the plan as well as reconciling, so its step carries
+    /// the net difference between the deck's entries before and after, in both directions.
     ///
     /// No FK to order it against: `deck_token_printings` points at `decks` and at nothing a step
     /// restores, so every caller appends it after the card ops.
@@ -706,9 +709,11 @@ fn variants_of(cells: &[Cell]) -> Vec<&'static str> {
 /// simply where a reader of the step expects the consequence. An empty list appends nothing, so
 /// every step recorded for a deck that makes no tokens is the shape it always was.
 ///
-/// `pub(crate)` for the three steps built without [`record_cells`] or [`record_variant`] —
-/// `deck::update_deck`'s theory switch and `deck_meta`'s pile switch and pile delete — which
-/// append the same op by hand.
+/// `pub(crate)` for `deck_meta`'s two steps built without [`record_cells`] or
+/// [`record_variant`] — the pile switch and the pile delete — which append the same op by hand.
+/// `deck::update_deck`'s theory switch is the third step built by hand and does **not** come
+/// through here: it moves entries as well as removing them, so it records a net difference of
+/// its own (`deck::token_step`).
 pub(crate) fn push_removed_tokens(
     removed: Vec<TokenEntryRow>,
     undo: &mut Vec<Op>,
@@ -1365,6 +1370,16 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
 /// sides, so deleting the side being left and upserting the side being reached lands exactly on
 /// the recorded state whether or not a row survived in between.
 ///
+/// ⚠️ **Except a grain the same op also restores, which is left for the upsert to rewrite in
+/// place.** Deleting it first would land on the same quantity through a *new row* — and a new
+/// row is a new `sync_uid`: a tombstone and a put on the wire for an entry the step only
+/// re-counted, and a row a peer still names by the old uid, which add-wins can resurrect beside
+/// the new one on the same grain, where the unique index refuses it and that peer's stream
+/// stalls. `deck::token_step` records the theory switch's net difference for the same reason;
+/// this makes every token step net at the one place they are all applied, so a step recorded
+/// whole — as `deck_tokens`' journal records them — keeps its entries' names too.
+/// `an_undo_rewrites_the_entries_it_keeps_in_place_and_keeps_their_uids` is the paired fixture.
+///
 /// **The restore is an upsert on [`crate::schema::DECK_TOKEN_PRINTING_GRAIN`] that writes the
 /// recorded quantity**, never a sum: a step carries a state, not a delta, and replaying one twice
 /// must not double a reader's Treasures. The grain is interpolated and never retyped, because an
@@ -1381,7 +1396,12 @@ fn apply_tokens(
     delete: &[TokenEntryRow],
     states: &[TokenStateRow],
 ) -> Result<(), String> {
-    for row in delete {
+    let kept = |row: &TokenEntryRow| {
+        restore
+            .iter()
+            .any(|r| r.variant == row.variant && r.card_id == row.card_id && r.finish == row.finish)
+    };
+    for row in delete.iter().filter(|row| !kept(row)) {
         tx.execute(
             "DELETE FROM deck_token_printings
               WHERE deck_id = ?1 AND variant = ?2 AND card_id = ?3 AND finish = ?4",

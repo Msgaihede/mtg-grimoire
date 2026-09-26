@@ -1055,12 +1055,13 @@ fn printing_by_id(conn: &Connection, card_id: &str) -> Result<Printing, String> 
 /// Whether a layout is a token's or an emblem's **on its own** — [`TOKEN_LAYOUTS`], the first half
 /// of [`is_token_printing`].
 ///
-/// **Not the routing question**, and a caller deciding whether a printing is filed as a token
-/// must ask [`is_token_printing`]: a layout-only test answers `false` for the six `flip` and
-/// `reversible_card` tokens, and `deck::add_card` would then write them as deck cards. Public
-/// only while `deck::add_card`'s reroute still names it; once that call site asks
-/// [`printing_is_token`] this can be private.
-pub fn is_token_layout(layout: &str) -> bool {
+/// **Not the routing question, and private so that nothing outside this module can ask it as
+/// one.** A caller deciding whether a printing is filed as a token asks [`is_token_printing`] (or
+/// [`printing_is_token`] over a row): a layout-only test answers `false` for the six `flip` and
+/// `reversible_card` tokens, and `deck::add_card` routed on exactly that until its call site moved
+/// to [`printing_is_token`] — writing those six as deck cards. `deckTokens.ts`' `isTokenLayout`
+/// is the TypeScript twin, and it draws a wall of rows this crate already chose.
+fn is_token_layout(layout: &str) -> bool {
     TOKEN_LAYOUTS.contains(&layout)
 }
 
@@ -1394,10 +1395,17 @@ impl Change {
 /// **The one place a token write records**, inside the transaction the caller already opened —
 /// so the five writes cannot differ in how they journal.
 ///
-/// In order: the deck fence ([`crate::deck::touch_deck`], which answers `deck::GONE` for a stale
-/// editor's dead id and moves the deck to the top of a gallery sorted by *recently touched*); a
-/// read of every entry of the token in `list` and of its state; the write itself (`f`); the same
-/// read again; then **one** `deck_audit` row and **one** `deck_undo` step, keyed on it.
+/// In order: the deck fence (a read, answering `deck::GONE` for a stale editor's dead id before
+/// anything else can refuse); a read of every entry of the token in `list` and of its state; the
+/// write itself (`f`); the same read again; then — only if something changed —
+/// [`crate::deck::touch_deck`], which moves the deck to the top of a gallery sorted by *recently
+/// touched*, and **one** `deck_audit` row and **one** `deck_undo` step, keyed on it.
+///
+/// **The fence is a read and the touch comes last**, which is `touch_deck` split in two: its
+/// `UPDATE` is the usual fence, but it stamps as it checks, so a swap onto the entry's own art
+/// would move the deck to the top of the gallery for a press that changed nothing. Checking first
+/// with a `SELECT` keeps `GONE` ahead of every other sentence a dead deck could otherwise hear
+/// (`TOKEN_GONE`, `ENTRY_GONE`), and stamping after the no-op check keeps a no-op silent.
 ///
 /// * **The history row is kind `deck` with `field: "token"`**, never a new kind — see this
 ///   module's header — and `delta` 0: a token is not a card, and the day header's `+7 / −6` adds
@@ -1420,7 +1428,16 @@ fn journal_in(
     oracle_id: &str,
     f: impl FnOnce(&Connection) -> Result<Change, String>,
 ) -> Result<(), String> {
-    crate::deck::touch_deck(tx, deck_id)?;
+    let there: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM decks WHERE id = ?1)",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !there {
+        return Err(crate::deck::GONE.to_owned());
+    }
     let read = |tx: &Connection| -> Result<(Vec<TokenEntryRow>, TokenStateRow), String> {
         Ok((
             match list {
@@ -1436,6 +1453,7 @@ fn journal_in(
     if entries_before == entries_after && state_before == state_after {
         return Ok(());
     }
+    crate::deck::touch_deck(tx, deck_id)?;
 
     let token = newest_printing(tx, oracle_id)?;
     let mut payload = json!({
@@ -1710,9 +1728,9 @@ pub fn add_printing(
 ///
 /// **The three callers** are this module's [`add_printing`] (one copy, from the band's picker),
 /// and the two writes every add of a card ends in — `deck::add_card` and
-/// `collection_alloc::collection_to_deck` — which reroute a printing whose layout
-/// [`is_token_printing`] here rather than writing a `deck_cards` row: a token is never a deck card.
-/// That is why this takes a transaction rather than opening one.
+/// `collection_alloc::collection_to_deck` — which send here every printing
+/// [`printing_is_token`] answers `true` for, rather than writing a `deck_cards` row: a token is
+/// never a deck card. That is why this takes a transaction rather than opening one.
 pub fn add_printing_in(
     tx: &Connection,
     deck_id: i64,
@@ -1894,9 +1912,14 @@ pub fn reconcile_in(
 
 /// **The backstop**: [`reconcile_in`] over both lists of every deck a write since the last settle
 /// touched, run by [`crate::sync::with_write`] after every write — for the writes that file no
-/// undo step: `collection_alloc`'s filing and cut, a sync pull, Scryfall's reconcile of vanished
-/// printings, and **undo and redo themselves**. Its deletions sit in no step, so a redo does not
-/// bring back entries a post-undo reconcile removed — the one cost of the arrangement.
+/// undo step: `collection_alloc`'s filing and cut, a sync pull, and **undo and redo themselves**.
+/// Its deletions sit in no step, so a redo does not bring back entries a post-undo reconcile
+/// removed — the one cost of the arrangement.
+///
+/// **Scryfall's `reconcile::apply` is covered one write late.** It takes the write connection
+/// through `sync::lock_db` rather than `with_write`, so no backstop runs after it; the marks its
+/// `deck_cards` writes leave in the dirty table are reconciled at the **next** write through
+/// `with_write`, on any deck. A token its repoint stopped deriving keeps its entries until then.
 ///
 /// **"Touched" is the managed wishlist's TEMP dirty-deck table**, which that module's `arm`
 /// fills from triggers on `deck_cards`, `deck_categories` and `decks` — read here and **never
@@ -1964,19 +1987,31 @@ pub fn reconcile_dirty_logged(conn: &Connection) {
 /// touches only what the rung could not decide. A printing that has left the corpus, or whose
 /// `finishes` says nothing, is left alone.
 ///
+/// **The entry keeps its row, and so its `sync_uid`.** Where the target finish is free in that
+/// list the finish is rewritten **in place** (`UPDATE … WHERE id`), never deleted and inserted
+/// again: the capture triggers' uid mint sits inside the same guard `suppressed` switches off, so
+/// a re-inserted row would come back with no name, and the next captured write to it — a stepper,
+/// whose update trigger has no uid guard — would put a NULL into `sync_ops.uid NOT NULL` and fail
+/// on every press from then on. Every device runs the same repair over the same rows, so the name
+/// the v52 rung gave the entry stays the name every peer knows it by.
+///
 /// **A repair that lands on an entry the list already holds folds into it**, on the grain,
-/// rather than failing the launch on the unique index.
+/// rather than failing the launch on the unique index: the held row takes the quantity and keeps
+/// its own name, and the repaired row is deleted — an `UPDATE` and a `DELETE`, neither of which
+/// needs a uid minted.
 ///
 /// **Behind `capture::suppressed`**, `src-tauri/CLAUDE.md`'s rule for a write every device
 /// derives for itself: whether a printing is foil-only is a fact of *this* device's corpus, each
 /// device repairs its own rows, and a captured fold would arrive on the other device as a second
-/// sum.
+/// sum. `the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured` is the paired
+/// fixture that holds the name.
 pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
-    let wrong: Vec<(i64, TokenEntryRow, &'static str)> = {
+    // `(id, deck, variant, card, quantity, the finish it should be)`.
+    type Wrong = (i64, i64, String, String, i64, &'static str);
+    let wrong: Vec<Wrong> = {
         let mut stmt = conn
             .prepare(
-                "SELECT e.deck_id, e.variant, e.oracle_id, e.card_id, e.finish, e.quantity,
-                        c.finishes
+                "SELECT e.id, e.deck_id, e.variant, e.card_id, e.finish, e.quantity, c.finishes
                    FROM deck_token_printings e
                    JOIN cards c ON c.id = e.card_id",
             )
@@ -1985,25 +2020,24 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
             .query_map([], |r| {
                 Ok((
                     r.get::<_, i64>(0)?,
-                    TokenEntryRow {
-                        variant: r.get(1)?,
-                        oracle_id: r.get(2)?,
-                        card_id: r.get(3)?,
-                        finish: r.get(4)?,
-                        quantity: r.get(5)?,
-                    },
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
                     r.get::<_, Option<String>>(6)?,
                 ))
             })
             .map_err(|e| e.to_string())?;
         let mut out = Vec::new();
         for row in rows {
-            let (deck_id, entry, finishes) = row.map_err(|e| e.to_string())?;
+            let (id, deck_id, variant, card_id, finish, quantity, finishes) =
+                row.map_err(|e| e.to_string())?;
             let sold = offered(finishes.as_deref());
-            if sold.is_empty() || sold.contains(&entry.finish.as_str()) {
+            if sold.is_empty() || sold.contains(&finish.as_str()) {
                 continue;
             }
-            out.push((deck_id, entry, sold[0]));
+            out.push((id, deck_id, variant, card_id, quantity, sold[0]));
         }
         out
     };
@@ -2012,26 +2046,41 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
     }
     crate::sync_engine::capture::suppressed(conn, || {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        for (deck_id, entry, finish) in &wrong {
+        for (id, deck_id, variant, card_id, quantity, finish) in &wrong {
             let held: Option<i64> = tx
                 .query_row(
-                    "SELECT quantity FROM deck_token_printings
+                    "SELECT id FROM deck_token_printings
                       WHERE deck_id = ?1 AND variant = ?2 AND card_id = ?3 AND finish = ?4",
-                    params![deck_id, entry.variant, entry.card_id, finish],
+                    params![deck_id, variant, card_id, finish],
                     |r| r.get(0),
                 )
                 .optional()
                 .map_err(|e| e.to_string())?;
-            drop_entry(&tx, *deck_id, entry)?;
-            put_entry(
-                &tx,
-                *deck_id,
-                &TokenEntryRow {
-                    finish: (*finish).to_owned(),
-                    quantity: held.unwrap_or(0) + entry.quantity,
-                    ..entry.clone()
-                },
-            )?;
+            match held {
+                Some(held) => {
+                    tx.execute(
+                        "UPDATE deck_token_printings
+                            SET quantity = quantity + ?2, updated_at = unixepoch()
+                          WHERE id = ?1",
+                        params![held, quantity],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    tx.execute(
+                        "DELETE FROM deck_token_printings WHERE id = ?1",
+                        params![id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                None => {
+                    tx.execute(
+                        "UPDATE deck_token_printings
+                            SET finish = ?2, updated_at = unixepoch()
+                          WHERE id = ?1",
+                        params![id, finish],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
         }
         tx.commit().map_err(|e| e.to_string())
     })
@@ -3769,6 +3818,11 @@ mod tests {
         let conn = open();
         let (deck, _, _) = tithe_deck(&conn);
         conn.execute("DELETE FROM deck_audit", []).unwrap();
+        conn.execute(
+            "UPDATE decks SET updated_at = 0 WHERE id = ?1",
+            params![deck],
+        )
+        .unwrap();
 
         swap(
             &conn,
@@ -3781,6 +3835,45 @@ mod tests {
         .unwrap();
         assert!(entries(&conn, deck).is_empty());
         assert_eq!(audit_rows(&conn), 0);
+        let stamped: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM decks WHERE id = ?1",
+                params![deck],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stamped, 0, "and the deck is not moved up a gallery for it");
+    }
+
+    /// **A dead deck hears `GONE` from every write, and before any other sentence** — the fence
+    /// is a read ahead of the write, so a stale editor is not told a token or an entry has gone
+    /// when it is the deck that has.
+    #[test]
+    fn every_token_write_refuses_a_deck_that_is_gone() {
+        let conn = open();
+        tithe_deck(&conn);
+        let gone = Err(crate::deck::GONE.to_owned());
+        assert_eq!(
+            set_quantity(&conn, 9999, "live", treasure().oracle_id, None, 3),
+            gone
+        );
+        assert_eq!(
+            swap(
+                &conn,
+                9999,
+                "live",
+                treasure().oracle_id,
+                Some(&treasure_key(&treasure(), "nonfoil")),
+                &treasure_key(&treasure_older(), "foil"),
+            ),
+            gone
+        );
+        assert_eq!(set_state(&conn, 9999, treasure().oracle_id, "hidden"), gone);
+        assert_eq!(reset(&conn, 9999, "live", treasure().oracle_id), gone);
+        assert_eq!(
+            add_printing(&conn, 9999, "live", treasure().id, None).map(|_| ()),
+            gone
+        );
     }
 
     // ── Rule 5: adding a printing ────────────────────────────────────────────────────
@@ -4536,6 +4629,158 @@ mod tests {
             entries(&conn, deck),
             once,
             "a second launch changes nothing"
+        );
+    }
+
+    /// **The repair keeps the entry's `sync_uid`, on a device where capture is live.**
+    ///
+    /// The repair runs behind `capture::suppressed`, and the insert trigger's uid mint sits inside
+    /// the same guard — so a repair written as delete-then-insert brings the row back **with no
+    /// name**, and the next captured write to it (a stepper, whose update trigger has no uid
+    /// guard) puts a NULL into `sync_ops.uid NOT NULL` and fails for good. The fixture is paired
+    /// (a `sync_group` row) with the capture triggers installed, which is the only fixture that
+    /// can see it: an unpaired file mints uids the same way and records nothing to fail on.
+    #[test]
+    fn the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured() {
+        let conn = paired();
+        let foil_only = Card {
+            id: "c-treasure-foil-only",
+            finishes: r#"["foil"]"#,
+            ..treasure()
+        };
+        foil_only.insert(&conn);
+        let (deck, _, _) = deck_with_piles(&conn);
+        seed_entry(&conn, deck, "live", &foil_only, "nonfoil", 2);
+        let uid_of = |c: &Connection| -> Option<String> {
+            c.query_row(
+                "SELECT sync_uid FROM deck_token_printings WHERE deck_id = ?1",
+                params![deck],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let named = uid_of(&conn).expect("a captured insert names the row");
+
+        repair_entry_finishes(&conn).unwrap();
+        assert_eq!(
+            entries(&conn, deck),
+            vec![e("live", treasure().oracle_id, foil_only.id, "foil", 2)],
+            "the finish moved"
+        );
+        assert_eq!(
+            uid_of(&conn),
+            Some(named.clone()),
+            "and the row kept its name"
+        );
+
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        set_quantity(
+            &conn,
+            deck,
+            "live",
+            treasure().oracle_id,
+            Some(&treasure_key(&foil_only, "foil")),
+            3,
+        )
+        .expect("a step on a repaired entry must still be capturable");
+        let op_uids: Vec<String> = conn
+            .prepare("SELECT uid FROM sync_ops WHERE tbl = 'deck_token_printings'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            op_uids,
+            vec![named],
+            "the step's op names the entry it moved"
+        );
+    }
+
+    /// A database with the capture triggers installed **and a sync group**, so capture is live —
+    /// `sync_engine::capture`'s own test fixture. The only fixture that can see a write that loses
+    /// a row's `sync_uid`: an unpaired file mints uids the same way and records nothing to fail on.
+    fn paired() -> Connection {
+        let conn = open();
+        crate::sync_engine::capture::install(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'dev-a', x'00', x'01', 'A', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+             VALUES (1, 'g', 0, x'02', 0)",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    /// **An undo rewrites an entry it keeps in place, so the entry keeps its name.** A token step
+    /// records every entry of the token on both sides, and an `Op::Tokens` that deleted them all
+    /// and inserted them again would hand each a fresh `sync_uid` — a tombstone and a put on the
+    /// wire for every entry a step merely re-counted, and a row a peer still names by the old uid
+    /// which add-wins can resurrect beside the new one, on the same grain. Checked on a stepper's
+    /// undo and redo, and on a swap's undo, whose third entry the swap never touched.
+    #[test]
+    fn an_undo_rewrites_the_entries_it_keeps_in_place_and_keeps_their_uids() {
+        let conn = paired();
+        let (deck, _, _) = tithe_deck(&conn);
+        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
+        seed_entry(&conn, deck, "live", &treasure_older(), "nonfoil", 1);
+        let uids = |c: &Connection| -> Vec<(String, String, String)> {
+            c.prepare(
+                "SELECT card_id, finish, sync_uid FROM deck_token_printings
+                  WHERE deck_id = ?1 ORDER BY card_id, finish",
+            )
+            .unwrap()
+            .query_map(params![deck], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+        };
+        let named = uids(&conn);
+        assert_eq!(named.len(), 2);
+
+        set_quantity(
+            &conn,
+            deck,
+            "live",
+            treasure().oracle_id,
+            Some(&treasure_key(&treasure(), "nonfoil")),
+            5,
+        )
+        .unwrap();
+        let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
+        assert_eq!(
+            uids(&conn),
+            named,
+            "the undo re-counted both entries in place"
+        );
+        crate::deck_undo::apply_reversal(&conn, deck, audit, false).unwrap();
+        assert_eq!(uids(&conn), named, "and so did the redo");
+
+        swap(
+            &conn,
+            deck,
+            "live",
+            treasure().oracle_id,
+            Some(&treasure_key(&treasure(), "nonfoil")),
+            &treasure_key(&treasure_older(), "foil"),
+        )
+        .unwrap();
+        let untouched = uids(&conn)
+            .into_iter()
+            .find(|(card, finish, _)| card == treasure_older().id && finish == "nonfoil")
+            .expect("the swap leaves the third entry where it was");
+        let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
+        assert!(
+            uids(&conn).contains(&untouched),
+            "the swap's undo never touched the entry the swap never touched"
         );
     }
 
