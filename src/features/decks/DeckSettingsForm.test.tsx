@@ -211,6 +211,22 @@ describe("DeckSettingsForm", () => {
   });
 
   /**
+   * **The picker's column is a flex column, stretched to the row, so its grid can match the
+   * fields beside it.** The other half of `DeckCoverPicker.test.tsx`'s class fence: the grid
+   * grows only into a height somebody handed down, and this column is who hands it. An `items-*`
+   * on the row would stop the stretch, and nothing here could see the column go short.
+   */
+  it("gives the picker a flex column the row stretches to the fields' height", () => {
+    form();
+
+    const column = screen.getByTestId("cover").parentElement!;
+    expect(column.classList.contains("flex"), column.className).toBe(true);
+    expect(column.classList.contains("flex-col"), column.className).toBe(true);
+    const row = column.parentElement!;
+    expect([...row.classList].filter((c) => /(^|:)items-/.test(c))).toEqual([]);
+  });
+
+  /**
    * A text field says every keystroke and then says it is finished, and the two are different
    * events on purpose: the create dialog wants the first and cannot use the second.
    */

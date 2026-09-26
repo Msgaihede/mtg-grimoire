@@ -30,8 +30,32 @@ const COVER_SEARCH_LIMIT = 50;
  * should not have to reorder the deck to reach it. Four columns and a scroller, so the list
  * cannot push the fields beside it off screen — which is also what keeps a fifty-tile search
  * answer from being taller than the panel it is in.
+ *
+ * **Beside the fields it is as tall as they are** (2026-09-26). It was capped at `max-h-52`, so
+ * a Theory + Actual deck — whose column of switches runs well past the picture and the grid —
+ * drew 208px of tiles behind a scrollbar with the column under them empty down to the foot of
+ * the fields. From `sm` up, where the form stands its two columns side by side, the grid is the
+ * one growing item of a flex column that `DeckSettingsForm` stretches to the row's height, so it
+ * takes whatever the fields leave. Four classes carry it and each is invisible to jsdom:
+ *
+ * - **`sm:basis-0` and never `flex-1`.** The tiles must not be what decides how tall the row is,
+ *   or a fifty-tile search answer makes the dialog taller rather than scrolling. A zero basis
+ *   makes the grid's contribution to the column its floor alone; `flex-1`'s basis is `0%`, and a
+ *   percentage basis in a column whose height is not yet known is read as `content` — every tile.
+ * - **`sm:min-h-52`, the old ceiling as the new floor.** Where the fields are shorter than the
+ *   picture and a 208px grid — a Regular deck's are, measured in Storybook's settings dialog — the
+ *   grid keeps the 208px it always had rather than being squeezed to a strip, and the dialog is
+ *   exactly as tall as it was.
+ * - **`content-start`.** A grid's `align-content` defaults to stretch, so three tiles in a 600px
+ *   box would stretch their one implicit row to 600px. The tiles hold their aspect ratio either
+ *   way; what moves is every row after the first, pushed apart by the stretch.
+ * - **`max-h-52` below `sm`**, where the form wraps into one column and there are no fields
+ *   beside the grid to match: the cap it always had, so a short deck still draws a short grid.
  */
-const CHOICE_GRID = "grid max-h-52 grid-cols-4 gap-1.5 overflow-y-auto";
+const CHOICE_GRID = cn(
+  "grid max-h-52 grid-cols-4 content-start gap-1.5 overflow-y-auto",
+  "sm:max-h-none sm:min-h-52 sm:grow sm:basis-0",
+);
 
 export interface DeckCoverPickerProps {
   /** What the preview draws, and what a tile marks as current. `null` before a deck has one. */
@@ -181,7 +205,10 @@ export function DeckCoverPicker({
   const searchId = `${idPrefix}-cover-search`;
 
   return (
-    <div className="space-y-3.5">
+    // Two flex columns, each growing, so the height `DeckSettingsForm` stretches this to reaches
+    // the grid at the bottom of the second — see {@link CHOICE_GRID}. Outside a stretched column
+    // (a story's plain `<div>`) `grow` has nothing to take and this is a stack like any other.
+    <div className="flex grow flex-col gap-3.5">
       <div>
         <p className={cn(CAPTION, "mb-1.5")}>Deck picture</p>
         <CoverPreview
@@ -205,7 +232,7 @@ export function DeckCoverPicker({
         )}
       </div>
 
-      <div>
+      <div className="flex grow flex-col">
         <label htmlFor={searchId} className={cn(CAPTION, "mb-1.5")}>
           Search every card
         </label>
