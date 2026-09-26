@@ -2087,15 +2087,25 @@ export interface FakeRecentCard {
 }
 
 /**
- * One row of `price_history`: what a printing's finish cost at one marketplace when a refresh
- * looked at it. `takenAt` is Unix seconds, and **one row per day** is the table's grain — a second
- * refresh on the same day replaces the first rather than adding a snapshot.
+ * One row of `price_history`: a printing's finish the collection **held** when a refresh looked
+ * at one marketplace, and what it cost there. `takenAt` is Unix seconds, and **one row per day**
+ * is the table's grain — a second refresh on the same day replaces the first rather than adding a
+ * snapshot.
  */
 export interface FakePriceSnapshot {
   marketplace: MarketplaceId;
   cardId: string;
   finish: "nonfoil" | "foil" | "etched";
-  price: number;
+  /**
+   * **`null` is held but unpriced** — the marketplace quoted no price for this finish that day.
+   * A row means *held*, so the row is written anyway: without it the value graph could not tell
+   * a card whose price appeared from one the reader bought, and would call a new quote a
+   * purchase. Every reader that wants a *price* — {@link readHandlers.price_movers},
+   * {@link readHandlers.price_history}, and the totals of
+   * {@link readHandlers.collection_value_history} — skips such a row exactly as it would skip no
+   * row at all; only the value graph's `moved` reads it, as present at a price of nothing.
+   */
+  price: number | null;
   takenAt: number;
   /**
    * `price_snapshots.copies` (user schema v50) — how many copies of this printing, in this
@@ -3310,14 +3320,16 @@ function priceDrift(cardId: string, finish: string, mp: string): number {
 
 /**
  * `price_history` for a world with a collection: one snapshot per {@link HISTORY_DAYS} day for
- * every owned printing's finish at every marketplace that prices it **today** — today's price is
- * {@link finishPriceAt}, the collection's own, and each older one walks back along
+ * every held printing's finish the corpus knows, at every marketplace this app can quote — today's
+ * price is {@link finishPriceAt}, the collection's own, and each older one walks back along
  * {@link priceDrift} in proportion to its age, rounded to the cent.
  *
- * So a printing up 30 % over ninety days is up about 2 % over the week, a cheap card can round to
- * no move at all (and is then not a mover, which is `price_movers`' rule), and a finish a
- * marketplace does not quote has **no rows** — `marketplace_prices`' rule for an unpriced finish,
- * one table over.
+ * So a printing up 30 % over ninety days is up about 2 % over the week, and a cheap card can round
+ * to no move at all (and is then not a mover, which is `price_movers`' rule). **A finish a
+ * marketplace does not quote is still a row, with a `null` price** — a snapshot row means *held*
+ * ({@link FakePriceSnapshot.price}), so the value graph can tell a quote appearing from a
+ * purchase — and it is `null` on every day, since the drift walks back from a price there is not.
+ * A printing the corpus has lost is no row at all: the snapshot joins `cards`.
  *
  * **`copies` is the count held today, on every day** — `collection_source`'s sum over every row of
  * that printing and finish, whichever folder it is filed in, which is what the snapshot writes
@@ -3345,15 +3357,16 @@ export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
   const priced = Object.values(MARKETPLACES).filter((m) => m.priced);
   for (const { id: mp } of priced) {
     for (const e of owned.values()) {
-      const now = finishPriceAt(db, byId.get(e.cardId) ?? null, e.finish, mp);
-      if (now === null) continue;
+      const card = byId.get(e.cardId);
+      if (card === undefined) continue;
+      const now = finishPriceAt(db, card, e.finish, mp);
       const drift = priceDrift(e.cardId, e.finish, mp);
       for (const days of HISTORY_DAYS) {
         out.push({
           marketplace: mp,
           cardId: e.cardId,
           finish: e.finish,
-          price: Math.round(now * (1 - (drift * days) / 90) * 100) / 100,
+          price: now === null ? null : Math.round(now * (1 - (drift * days) / 90) * 100) / 100,
           takenAt: CLOCK_BASE - days * 86_400,
           copies: e.copies,
         });
@@ -11131,7 +11144,12 @@ export function readHandlers(db: FakeDb) {
       const direction = ["both", "up", "down"].includes(args.direction) ? args.direction : "both";
       const mp = marketplaceOf(args.marketplace);
       const limit = Math.min(100, Math.max(1, Math.trunc(args.limit)));
-      const history = db.priceHistory.filter((s) => s.marketplace === mp);
+      // A held-but-unpriced row is no price to measure from, and reads exactly as no row: it
+      // neither counts a day nor makes a baseline.
+      const history = db.priceHistory.filter(
+        (s): s is FakePriceSnapshot & { price: number } =>
+          s.marketplace === mp && s.price !== null,
+      );
       const days = new Set(history.map((s) => Math.floor(s.takenAt / 86_400))).size;
       const times = [...new Set(history.map((s) => s.takenAt))].sort((a, b) => a - b);
       const since =
@@ -11218,9 +11236,12 @@ export function readHandlers(db: FakeDb) {
         const kept = latest.get(day);
         if (kept === undefined || s.takenAt > kept.takenAt) latest.set(day, s);
       }
+      // A day whose row is held-but-unpriced has no point, exactly as a day with no row: folded
+      // first, because the crate's table holds one row a day and a later unpriced snapshot
+      // replaced an earlier priced one rather than sitting beside it.
       const points: PricePoint[] = [...latest]
         .sort(([a], [b]) => a - b)
-        .map(([day, s]) => ({ day, price: s.price }));
+        .flatMap(([day, s]) => (s.price === null ? [] : [{ day, price: s.price }]));
       const now = finishPriceAt(db, cardById(db, args.cardId), finish, mp);
       return { points, now, today };
     },
@@ -11248,10 +11269,17 @@ export function readHandlers(db: FakeDb) {
      * two widgets on one page must never disagree about. Today's own snapshot is left out for
      * that reason, and an empty collection answers no points at all.
      *
+     * **A row means held, and its price may be `null`** ({@link FakePriceSnapshot.price}): a
+     * held-but-unpriced printing adds nothing to a total or a line, exactly as no row would —
+     * but it is *present*, which is what `moved` needs.
+     *
      * **`moved` is the price-only part of each step**: for every printing present at both points,
-     * the earlier copies times the change in price. At the live point a printing is present when
-     * the reader still holds a copy **and** the marketplace still quotes it. `null` on the first
-     * point.
+     * the earlier copies times the change in price, a missing price counting as nothing. A
+     * snapshot period's printings are its rows, priced or not; at the live point a printing is
+     * present when the reader still holds a copy, whether or not the marketplace quotes it. So a
+     * held card whose price appears is a price move — the whole of its new value is `moved` and
+     * none of it reads as a card the reader added — and one whose quote vanishes is a price move
+     * down. `null` on the first point.
      *
      * **A line is kept only where it is worth something somewhere**, and every copy is on exactly
      * one: `type` is {@link typeBucket}, `color` is {@link colorBucket}, and `set` is the card's own
@@ -11273,14 +11301,16 @@ export function readHandlers(db: FakeDb) {
       const held = db.collectionEntries.filter((e) => e.quantity > 0);
       if (held.length === 0) return { buckets: [], points: [], today };
 
-      /** One point's arithmetic before it is aligned to the answer's lines. `holding` is each
-       *  printing's copies and price at a snapshot period — what the *next* step's `moved` reads
-       *  — and `null` at the live point, which is always last and so is nobody's "before". */
+      /** One point's arithmetic before it is aligned to the answer's lines. `present` is every
+       *  printing held at the point and its price, an unpriced one at `0` — what this step's
+       *  `moved` reads as *after*. `holding` is each printing's copies and price at a snapshot
+       *  period, priced the same way — what the *next* step's `moved` reads as *before* — and
+       *  `null` at the live point, which is always last and so is nobody's "before". */
       interface Tally {
         day: number;
         total: number;
         byBucket: Map<string, number>;
-        prices: Map<string, number>;
+        present: Map<string, number>;
         holding: Map<string, { copies: number; price: number }> | null;
       }
       // `max()` over a bucket's non-null names, the breakdown's own aggregate: an orphan's `null`
@@ -11325,14 +11355,16 @@ export function readHandlers(db: FakeDb) {
             day: period.day,
             total: 0,
             byBucket: new Map(),
-            prices: new Map(),
+            present: new Map(),
             holding: new Map(),
           };
           for (const [printing, s] of period.rows) {
             const copies = s.copies ?? 0;
-            add(t, cardById(db, s.cardId), copies * s.price);
-            t.prices.set(printing, s.price);
-            t.holding?.set(printing, { copies, price: s.price });
+            // Held but unpriced: worth nothing to the total, and present all the same.
+            if (s.price !== null) add(t, cardById(db, s.cardId), copies * s.price);
+            const price = s.price ?? 0;
+            t.present.set(printing, price);
+            t.holding?.set(printing, { copies, price });
           }
           return t;
         });
@@ -11340,14 +11372,14 @@ export function readHandlers(db: FakeDb) {
         day: today,
         total: 0,
         byBucket: new Map(),
-        prices: new Map(),
+        present: new Map(),
         holding: null,
       };
       for (const e of held) {
         const card = cardById(db, e.cardId);
         const unit = finishPriceAt(db, card, e.finish, mp);
         add(live, card, e.quantity * (unit ?? 0));
-        if (unit !== null) live.prices.set(`${e.cardId}:${e.finish}`, unit);
+        live.present.set(`${e.cardId}:${e.finish}`, unit ?? 0);
       }
       tallies.push(live);
 
@@ -11382,7 +11414,7 @@ export function readHandlers(db: FakeDb) {
         if (before !== null) {
           moved = 0;
           for (const [printing, then] of before) {
-            const now = t.prices.get(printing);
+            const now = t.present.get(printing);
             if (now !== undefined) moved += then.copies * (now - then.price);
           }
         }

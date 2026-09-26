@@ -17,10 +17,16 @@
  * Change, so the wash says which side of the start the line is on); every other line is 1.5px at
  * 30%. On hover every line gets a dot on the crosshair, the context ones smaller and fainter.
  *
- * **The slider is the readout's keyboard**: ←/→ a point, PageUp/PageDown a week of points,
- * Home/End the ends, Escape lets go. A pointer that leaves lets go too — unless the keys were
- * walking it, so a reader nudging the mouse aside does not lose the day they arrowed to. Focus by
- * keyboard lands on today. The readout itself is `ValueReadout.tsx`'s, mounted at the app root.
+ * **The slider is the readout's keyboard**: ←/→ a point, PageUp/PageDown seven points (up is
+ * later, as ↑ is), Home/End the ends, Escape lets go. A mouse that leaves lets go too — unless the
+ * keys were walking it, so a reader nudging the mouse aside does not lose the day they arrowed to
+ * — and a finger that lifts does not, because a tap is how a phone reads a day. Focus by keyboard
+ * lands on today. The readout itself is `ValueReadout.tsx`'s, mounted at the app root.
+ *
+ * **A press re-opens the readout on the day it is already on.** The app's tooltip puts its panel
+ * down on any press outside it, from a capture-phase listener on the window that runs before this
+ * element hears the press, and a press on the hovered day changes no readout — so nothing else
+ * would open it again until the pointer crossed into another day.
  *
  * **A still or editing body passes no `onHover`**, and then there is no slider at all — nothing to
  * focus, nothing to press — while the drawing stays whole.
@@ -107,7 +113,7 @@ const MARK_R = 4;
 /** Half the width of the band the readout is anchored to: the air between crosshair and panel. */
 const ANCHOR_HALF = 6;
 
-/** A week of points, for PageUp / PageDown. */
+/** Seven points, for PageUp / PageDown — a week inside the daily band, seven weeks past it. */
 const PAGE = 7;
 
 /** The surface the dots are ringed in — the page's, since a widget card draws no fill of its own. */
@@ -239,7 +245,7 @@ export function ValueChart({
 
   // Away from the half the pointer is in, so the line under it stays visible.
   const side = hot !== null && xs[hot] > (left + right) / 2 ? "left" : "right";
-  useReadoutPanel(anchor, hot === null ? null : readout, side);
+  const reopen = useReadoutPanel(anchor, hot === null ? null : readout, side);
 
   /**
    * The nearest point to the pointer **by x alone** — the reader aims at a date, never at a 2px
@@ -256,14 +262,26 @@ export function ValueChart({
     return best;
   }
 
-  function onPointer(event: ReactPointerEvent<HTMLDivElement>) {
+  function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     keyed.current = false;
     const at = indexAt(event);
     if (at !== null && at !== hot) onHover?.(at);
   }
 
+  /** A press answers at once, so a tap reads a point without a drag — and a press on the day
+   *  already read puts back the readout the tooltip's window listener has just put down. */
+  function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    keyed.current = false;
+    const at = indexAt(event);
+    if (at === null) return;
+    if (at !== hot) onHover?.(at);
+    else reopen();
+  }
+
   function onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     const from = hot ?? n - 1;
+    // Up raises the value and down lowers it, the page keys as the arrows do: `aria-valuenow` is
+    // the index, so up is later.
     const to: Record<string, number> = {
       ArrowLeft: from - 1,
       ArrowRight: from + 1,
@@ -271,8 +289,8 @@ export function ValueChart({
       ArrowUp: from + 1,
       Home: 0,
       End: n - 1,
-      PageUp: from - PAGE,
-      PageDown: from + PAGE,
+      PageUp: from + PAGE,
+      PageDown: from - PAGE,
     };
     const next = to[event.key];
     if (next !== undefined) {
@@ -449,10 +467,17 @@ export function ValueChart({
           // the page. A press answers at once, so a tap reads a point without a drag.
           className={cn("absolute top-0 left-0 cursor-crosshair touch-pan-y rounded-sm", FOCUS)}
           style={{ width: right, height: bottom }}
-          onPointerDown={onPointer}
-          onPointerMove={onPointer}
-          onPointerLeave={() => {
-            if (!keyed.current) onHover(null);
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerLeave={(event) => {
+            // A lifted finger leaves too — a touch pointer stops existing at `pointerup` — and on
+            // a phone the tap *is* the reading, so it keeps the day it tapped; a tap elsewhere
+            // blurs the slider, which lets go below. A mouse moving off lets go at once.
+            if (!keyed.current && event.pointerType !== "touch") onHover(null);
+          }}
+          onPointerCancel={(event) => {
+            // The page took the finger for an upright scroll (`pan-y`): not a reading any more.
+            if (!keyed.current && event.pointerType === "touch") onHover(null);
           }}
           onKeyDown={onKeyDown}
           onFocus={(event) => {

@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import {
   QueryClient,
@@ -79,6 +80,28 @@ const THREE_DAYS_TOTAL: ValueHistory = {
   points: THREE_DAYS.points.map((p) => ({ ...p, values: [] })),
 };
 
+/** The same three days split by colour — what `split: "color"` answers. */
+const THREE_DAYS_COLOR: ValueHistory = {
+  ...THREE_DAYS,
+  buckets: [
+    { key: "R", name: null },
+    { key: "G", name: null },
+  ],
+};
+
+/** Twelve days of one line — enough for a page key to move a whole page, and to be clamped. */
+const TWELVE_DAYS: ValueHistory = {
+  buckets: [{ key: "creature", name: null }],
+  points: Array.from({ length: 12 }, (_, i) => ({
+    day: ago(11 - i),
+    total: 100 + i,
+    values: [100 + i],
+    moved: i === 0 ? null : 1,
+    live: i === 11,
+  })),
+  today: TODAY,
+};
+
 /** A database with one day in it — a first launch, or one upgraded from before v50, whose
  *  snapshots have prices and no copies and are never read. */
 const FIRST_DAY: ValueHistory = {
@@ -140,23 +163,49 @@ function seedRefusal(key: QueryKey, message: string): void {
  */
 function draw(over: Partial<WidgetBodyProps> = {}) {
   const p = props(over);
-  return render(
+  const tree = (again: Partial<WidgetBodyProps> = {}): ReactElement => (
     <QueryClientProvider client={client}>
       <TooltipProvider>
-        <ValueHistoryWidget {...p} />
+        <ValueHistoryWidget {...p} {...again} />
       </TooltipProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const drawn = render(tree());
+  /** The same body drawn again with some props changed — a config the settings popover wrote,
+   *  which reaches the body as a new `widget` and runs none of its handlers. */
+  const redraw = (again: Partial<WidgetBodyProps>) => drawn.rerender(tree(again));
+  return { ...drawn, redraw };
 }
 
 /**
  * One pointer event with a real `clientX` — `PriceChart.test.tsx`'s helper: jsdom ships no
- * `PointerEvent`, so Testing Library's helpers drop the coordinate.
+ * `PointerEvent`, so Testing Library's helpers drop the coordinate, and the pointer's kind with
+ * it. **A leave is dispatched as `pointerout`**, because React builds `onPointerLeave` from
+ * `pointerout` and never listens for the native `pointerleave`.
  */
-function pointer(target: Element, type: string, clientX: number) {
+function pointer(target: Element, type: string, clientX: number, pointerType = "mouse") {
   const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX });
   Object.defineProperty(event, "pointerId", { value: 1 });
+  Object.defineProperty(event, "pointerType", { value: pointerType });
   fireEvent(target, event);
+}
+
+/** The readout panel, once the tooltip has drawn it. */
+async function findReadout(): Promise<HTMLElement> {
+  return waitFor(
+    () => {
+      const el = document.querySelector<HTMLElement>("[data-value-readout]");
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    },
+    { timeout: 2000 },
+  );
+}
+
+/** Long enough for a panel that was put down to finish leaving — motion's exit is skipped in
+ *  this suite, but its removal still waits on a frame. */
+async function settle(): Promise<void> {
+  await act(() => new Promise<void>((resolve) => setTimeout(resolve, 100)));
 }
 
 /** The slider, drawn 1000px wide from x = 0 — jsdom lays nothing out, so the box is stated. */
@@ -313,6 +362,103 @@ describe("ValueHistoryWidget", () => {
 
     fireEvent.pointerLeave(s);
     expect(container.querySelector('[data-mark="crosshair"]')).toBeNull();
+    await waitFor(() => expect(document.querySelector("[data-value-readout]")).toBeNull());
+  });
+
+  /** `aria-valuenow` is the index, so up is later — for the page keys exactly as for the arrows. */
+  it("pages seven points, PageUp later and PageDown earlier, clamped at the ends", () => {
+    seed(TWELVE_DAYS);
+    draw();
+    const s = screen.getByRole("slider");
+    expect(s).toHaveAttribute("aria-valuemax", "11");
+
+    fireEvent.keyDown(s, { key: "Home" });
+    fireEvent.keyDown(s, { key: "PageUp" });
+    expect(s).toHaveAttribute("aria-valuenow", "7");
+    fireEvent.keyDown(s, { key: "ArrowUp" });
+    expect(s).toHaveAttribute("aria-valuenow", "8");
+    fireEvent.keyDown(s, { key: "PageUp" });
+    expect(s).toHaveAttribute("aria-valuenow", "11");
+    fireEvent.keyDown(s, { key: "PageDown" });
+    expect(s).toHaveAttribute("aria-valuenow", "4");
+    fireEvent.keyDown(s, { key: "PageDown" });
+    expect(s).toHaveAttribute("aria-valuenow", "0");
+  });
+
+  /**
+   * The tooltip puts its panel down on any press outside it, from a capture-phase listener on the
+   * window that runs before the slider hears the press — and a press on the day already read
+   * changes no readout, so without the slider putting it back it stayed down until the pointer
+   * crossed into another day.
+   */
+  it("keeps the readout up when the plot is pressed on the day it shows", async () => {
+    seed();
+    const { container } = draw();
+    const s = slider();
+    pointer(s, "pointermove", 500);
+    await findReadout();
+
+    pointer(s, "pointerdown", 500);
+    await settle();
+    expect(document.querySelector("[data-value-readout]")).not.toBeNull();
+    expect(within(await findReadout()).getByText("25 Sept 2026")).toBeInTheDocument();
+    expect(container.querySelector('[data-mark="crosshair"]')).not.toBeNull();
+  });
+
+  /** A touch pointer stops existing when it lifts, so the browser sends a leave straight after
+   *  the up — and on a phone the tap is the reading. A mouse moving off still lets go. */
+  it("keeps a tapped day's readout after the finger lifts, and lets go when a mouse leaves", async () => {
+    seed();
+    const { container } = draw();
+    const s = slider();
+    pointer(s, "pointerdown", 500, "touch");
+    pointer(s, "pointerup", 500, "touch");
+    pointer(s, "pointerout", 500, "touch");
+    await settle();
+    expect(s).toHaveAttribute("aria-valuenow", "1");
+    expect(container.querySelector('[data-mark="crosshair"]')).not.toBeNull();
+    expect(within(await findReadout()).getByText("25 Sept 2026")).toBeInTheDocument();
+
+    pointer(s, "pointermove", 900);
+    pointer(s, "pointerout", 900);
+    expect(container.querySelector('[data-mark="crosshair"]')).toBeNull();
+    await waitFor(() => expect(document.querySelector("[data-value-readout]")).toBeNull());
+  });
+
+  /**
+   * **The settings popover writes the same keys the chips do and runs none of the body's
+   * handlers**, so what a new split or range puts down has to follow the config rather than the
+   * press: the hovered day's index, its readout, and a pin made under another split — which,
+   * pinned on *type* and back from *colour*, must not come back.
+   */
+  it("puts the hovered day down, and the pin with its split, when the popover changes either", async () => {
+    seed();
+    client.setQueryData(valueHistoryKey("color", MARKETPLACE), THREE_DAYS_COLOR);
+    const user = userEvent.setup();
+    const { container, redraw } = draw({ widget: widget({ split: "type" }) });
+    const lines = () => within(screen.getByRole("group", { name: "Line to follow" }));
+
+    await user.click(lines().getByRole("button", { name: /^Land/ }));
+    pointer(slider(), "pointermove", 500);
+    await findReadout();
+
+    redraw({ widget: widget({ split: "color" }) });
+    expect(screen.getByRole("slider")).toHaveAttribute("aria-valuenow", "2");
+    expect(container.querySelector('[data-mark="crosshair"]')).toBeNull();
+    await waitFor(() => expect(document.querySelector("[data-value-readout]")).toBeNull());
+
+    redraw({ widget: widget({ split: "type" }) });
+    expect(lines().getByRole("button", { name: /^Creature/ })).toHaveAttribute("aria-pressed", "true");
+    expect(lines().getByRole("button", { name: /^Land/ })).toHaveAttribute("aria-pressed", "false");
+
+    // A range draws the same lines, so the pin stays and only the day goes.
+    await user.click(lines().getByRole("button", { name: /^Land/ }));
+    pointer(slider(), "pointermove", 500);
+    await findReadout();
+    redraw({ widget: widget({ split: "type", window: "30d" }) });
+    expect(screen.getByRole("slider")).toHaveAttribute("aria-valuenow", "2");
+    expect(container.querySelector('[data-mark="crosshair"]')).toBeNull();
+    expect(lines().getByRole("button", { name: /^Land/ })).toHaveAttribute("aria-pressed", "true");
     await waitFor(() => expect(document.querySelector("[data-value-readout]")).toBeNull());
   });
 

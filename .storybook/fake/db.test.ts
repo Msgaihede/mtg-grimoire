@@ -16007,7 +16007,7 @@ describe("the price movers", () => {
   const DAY = 86_400;
   const NOW = readHandlers(makeDb()).card_detail({ id: FOIL_ONLY.id })!.finishPrices.foil!;
 
-  function snap(price: number, daysAgo: number, over: Partial<FakePriceSnapshot> = {}) {
+  function snap(price: number | null, daysAgo: number, over: Partial<FakePriceSnapshot> = {}) {
     return {
       marketplace: "tcgplayer" as MarketplaceId,
       cardId: FOIL_ONLY.id,
@@ -16055,6 +16055,22 @@ describe("the price movers", () => {
     ]);
     expect(ask(db, "30d").since).toBe(CLOCK_BASE - 40 * DAY);
     expect(ask(db, "all").movers[0].then).toBe(90);
+  });
+
+  /**
+   * **A held-but-unpriced row is no price, and reads exactly as no row**: it counts no day of its
+   * own, and it is never the baseline — not even as the newest row at a window's start, or the
+   * oldest row of all, where taken as one it would name a mover measured from nothing.
+   */
+  it("reads a held-but-unpriced row as no row at all", () => {
+    const rows = [snap(NOW, 0), snap(150, 3), snap(100, 8), snap(90, 40)];
+    const unpriced = world([...rows, snap(null, 7), snap(null, 20), snap(null, 50)]);
+
+    for (const window of ["7d", "30d", "all"]) {
+      expect(ask(unpriced, window), window).toEqual(ask(world(rows), window));
+    }
+    expect(ask(unpriced, "7d")).toMatchObject({ since: CLOCK_BASE - 8 * DAY, days: 4 });
+    expect(ask(world([snap(null, 8)]), "7d")).toEqual({ movers: [], since: null, days: 0 });
   });
 
   /** History, but none old enough: the widget's second sentence, so `days` still answers. */
@@ -16133,7 +16149,7 @@ describe("the price history", () => {
   const TODAY = Date.UTC(2026, 7, 9) / 1_000;
   const NOW = readHandlers(makeDb()).card_detail({ id: FOIL_ONLY.id })!.finishPrices.foil!;
 
-  function snap(price: number, takenAt: number, over: Partial<FakePriceSnapshot> = {}) {
+  function snap(price: number | null, takenAt: number, over: Partial<FakePriceSnapshot> = {}) {
     return {
       marketplace: "tcgplayer" as MarketplaceId,
       cardId: FOIL_ONLY.id,
@@ -16174,6 +16190,20 @@ describe("the price history", () => {
       now: NOW,
       today: TODAY,
     });
+  });
+
+  /**
+   * A day whose row is held but unpriced is no point, exactly as a day with no row. **One row a
+   * day**, so a later unpriced snapshot is the day's row — it replaced the priced one, which is
+   * the crate's `INSERT OR REPLACE` — and that day has no point either.
+   */
+  it("draws no point for a day whose row is held but unpriced", () => {
+    const priced = [snap(10, TODAY - 3 * DAY + 9 * 3_600), snap(20, TODAY - DAY + 9 * 3_600)];
+    const between = makeDb({ priceHistory: [...priced, snap(null, TODAY - 2 * DAY + 9 * 3_600)] });
+
+    expect(ask(between)).toEqual(ask(makeDb({ priceHistory: priced })));
+    const replaced = makeDb({ priceHistory: [...priced, snap(null, TODAY - DAY + 10 * 3_600)] });
+    expect(ask(replaced).points).toEqual([{ day: TODAY - 3 * DAY, price: 10 }]);
   });
 
   /** Another marketplace's, another finish's and another card's rows are not this line's. */
@@ -16262,7 +16292,7 @@ describe("the value history", () => {
   const SPHINX = priceOf(FOIL_ONLY.id, "foil");
   const BOLT_NOW = priceOf(BOLT.id, "nonfoil");
 
-  function snap(over: Partial<FakePriceSnapshot> & { price: number; takenAt: number }) {
+  function snap(over: Partial<FakePriceSnapshot> & { price: number | null; takenAt: number }) {
     return {
       marketplace: "tcgplayer" as MarketplaceId,
       cardId: FOIL_ONLY.id,
@@ -16436,6 +16466,76 @@ describe("the value history", () => {
     // `+ 0` because a float that lands a hair under zero rounds to `-0`, which `toEqual` tells
     // apart from `0`.
     expect(changes(got.points).map((c) => Math.round(c * 100) / 100 + 0)).toEqual([0, 0, 120, 0]);
+  });
+
+  /**
+   * **A row means held, so a held card whose price appears is a price move.** One copy, never
+   * bought or sold: unpriced, priced at 100, unpriced again, and priced today. The totals count
+   * only the priced days, every step is `moved` whole, and not one cent reads as a card the reader
+   * added — which is what the graph would say if a held-but-unpriced row were read as no row.
+   */
+  it("reads a held card's price appearing and vanishing as price moves, never as the reader's", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ cardId: FOIL_ONLY.id, finish: "foil" })],
+      priceHistory: [
+        snap({ price: null, takenAt: TODAY - 3 * DAY + 9 * 3_600 }),
+        snap({ price: 100, takenAt: TODAY - 2 * DAY + 9 * 3_600 }),
+        snap({ price: null, takenAt: TODAY - DAY + 9 * 3_600 }),
+      ],
+    });
+    const got = ask(db);
+
+    expect(got.points).toEqual([
+      { day: TODAY - 3 * DAY, total: 0, values: [], moved: null, live: false },
+      { day: TODAY - 2 * DAY, total: 100, values: [], moved: 100, live: false },
+      { day: TODAY - DAY, total: 0, values: [], moved: -100, live: false },
+      { day: TODAY, total: SPHINX, values: [], moved: expect.closeTo(SPHINX, 6), live: true },
+    ]);
+    expect(changes(got.points).map((c) => Math.round(c * 100) / 100 + 0)).toEqual([0, 0, 0, 0]);
+    // A split's lines sum the same priced rows, so they still add up to each total.
+    for (const p of ask(db, "type").points) {
+      expect(p.values.reduce((n, v) => n + v, 0)).toBeCloseTo(p.total, 6);
+    }
+  });
+
+  /**
+   * The live side: a finish still held today that the marketplace no longer quotes is its price
+   * falling to nothing, not its copies leaving. Cardmarket has no `eur_etched` at all.
+   */
+  it("reads a held finish whose quote is gone today as a price move down", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ cardId: FOIL_ONLY.id, finish: "etched", quantity: 2 })],
+      priceHistory: [
+        snap({
+          marketplace: "cardmarket",
+          finish: "etched",
+          price: 50,
+          copies: 2,
+          takenAt: TODAY - DAY + 9 * 3_600,
+        }),
+      ],
+    });
+
+    expect(ask(db, "total", "cardmarket").points).toEqual([
+      { day: TODAY - DAY, total: 100, values: [], moved: null, live: false },
+      { day: TODAY, total: 0, values: [], moved: -100, live: true },
+    ]);
+  });
+
+  /** The derived history writes a row for every held finish — Mana Pool leaves every fourth
+   *  printing out — and a finish a marketplace does not quote today has no price on any day. */
+  it("derives a held finish a marketplace does not quote as rows with no price", () => {
+    const db = seed("starter");
+    const unpriced = db.priceHistory.filter((s) => s.price === null);
+
+    expect(unpriced.length).toBeGreaterThan(0);
+    for (const s of unpriced) {
+      const same = db.priceHistory.filter(
+        (r) => r.marketplace === s.marketplace && r.cardId === s.cardId && r.finish === s.finish,
+      );
+      expect(same.every((r) => r.price === null)).toBe(true);
+      expect(s.copies).toBeGreaterThan(0);
+    }
   });
 
   /**

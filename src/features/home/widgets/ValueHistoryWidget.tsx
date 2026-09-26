@@ -209,6 +209,20 @@ export function ValueHistoryWidget({
   const [peek, setPeek] = useState<string | null>(null);
   const [hover, setHover] = useState<number | null>(null);
 
+  // **Put down on a new split or range, however it arrived** — an in-card chip or the settings
+  // popover, which writes the same keys and never runs this body's handlers. Adjusted during
+  // render, not in an effect, so no frame draws the old day's index into the new line. The pin
+  // goes only with its split: a range change draws the same lines, and a key means nothing under
+  // another split — nor, pinned on *type* and back from *set*, should it come back.
+  const shape = `${split}|${range}`;
+  const [drawnShape, setDrawnShape] = useState(shape);
+  if (drawnShape !== shape) {
+    setDrawnShape(shape);
+    setHover(null);
+    setPeek(null);
+    if (followed !== null && followed.split !== split) setFollowed(null);
+  }
+
   const summary = useQuery({
     queryKey: collectionTotalKey(marketplace.id),
     // `CollectionValueWidget`'s read, word for word: every copy, and `limit: 0` makes it a count.
@@ -278,17 +292,10 @@ export function ValueHistoryWidget({
   const tile = fit.tier === 0;
   const inRail = layout.rail !== null;
 
-  // The in-card chips. A still or editing body draws them and gives them no press.
-  const pickSplit = (id: string) => {
-    setFollowed(null);
-    setPeek(null);
-    setHover(null);
-    onConfig({ split: id });
-  };
-  const pickWindow = (id: string) => {
-    setHover(null);
-    onConfig({ window: id });
-  };
+  // The in-card chips. A still or editing body draws them and gives them no press. What a new
+  // split or range puts down is the render-phase adjustment's above, which the popover reaches too.
+  const pickSplit = (id: string) => onConfig({ split: id });
+  const pickWindow = (id: string) => onConfig({ window: id });
   const pickMeasure = (id: ValueMeasure) => onConfig({ measure: id });
 
   // A list row: hover previews, a press pins.

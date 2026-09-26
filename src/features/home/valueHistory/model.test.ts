@@ -976,11 +976,26 @@ describe("layoutFor — every footprint", () => {
     expect(problems).toEqual([]);
   });
 
-  it("always leaves the chart a region", () => {
-    for (const { fit } of fits) {
+  /**
+   * **A region with room in it, not merely a rect.** `chart` is typed nullable but `layoutFor`
+   * never answers `null` for it, so asserting that was true by construction; what can really go
+   * wrong is the fallback arrangement squeezing it to nothing under the figure line. The floor is
+   * a positive size rather than `MIN_CHART_H`, because that constant is what the arrangements
+   * *try* for and not what the last one promises: a 4×2 band at the smallest cell keeps its
+   * figure line and leaves the chart 35px.
+   */
+  it("always leaves the chart a region with room in it", () => {
+    const problems: string[] = [];
+    for (const { label, fit } of fits) {
       for (const split of splits) {
-        expect(layoutFor(fit, { split, figures: true, bucketCount: 7 }).chart).not.toBeNull();
+        for (const figures of [true, false]) {
+          const chart = layoutFor(fit, { split, figures, bucketCount: 7 }).chart;
+          if (chart === null || !(chart.w > 0) || !(chart.h > 0)) {
+            problems.push(`${label} ${split}${figures ? "" : " no-figures"}: ${JSON.stringify(chart)}`);
+          }
+        }
       }
     }
+    expect(problems).toEqual([]);
   });
 });

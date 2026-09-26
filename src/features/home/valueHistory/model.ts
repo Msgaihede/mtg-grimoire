@@ -595,10 +595,11 @@ const RAIL_GAP = 12;
 const RANGES_AT = 400;
 const MEASURE_AT = 520;
 /**
- * The least chart worth keeping beside a rail, and under the rest of a band. The grid never comes
- * near either — the smallest cell (68px) leaves a six-cell row a 220px chart and a four-cell band
- * a 48px one — so these decide only the stacked page on a phone and a catalogue box, where the
- * alternative is a chart of no width or a list drawn over it.
+ * The least chart worth keeping beside a rail, and under the rest of a band. The width floor never
+ * binds on the grid — the smallest cell (68px) still leaves a six-cell row a 220px chart — so it
+ * decides only the stacked page on a phone and a catalogue box. The height floor binds in one grid
+ * case: a two-cell-tall band at that smallest cell leaves the chart 35px with the figure line on,
+ * and at two cells tall there are no chips, strip or list to give way, so the chart draws at 35.
  */
 const MIN_CHART_W = 160;
 const MIN_CHART_H = 40;

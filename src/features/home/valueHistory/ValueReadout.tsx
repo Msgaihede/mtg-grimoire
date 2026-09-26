@@ -44,7 +44,7 @@
 import { useContext, useEffect, type ReactElement, type RefObject } from "react";
 import { TrendingDown, TrendingUp } from "lucide-react";
 
-import { TooltipContext } from "@/components/tooltip/useTooltip";
+import { TooltipContext, type TooltipApi } from "@/components/tooltip/useTooltip";
 import { cn } from "@/lib/utils";
 
 import { DOWN_FILL, UP_FILL } from "../WidgetParts";
@@ -220,7 +220,9 @@ export function ValueReadout({ readout }: { readout: Readout }): ReactElement {
 
 /**
  * Open the readout beside `anchor` while `readout` is set, move it whenever the readout or the
- * side changes, and close it when the readout ends or the chart goes away.
+ * side changes, and close it when the readout ends or the chart goes away. **Answers `reopen`**,
+ * which enters the current readout again — for a press on the day already shown, which the
+ * tooltip's own window listener has just put down and which changes nothing an effect keys on.
  *
  * **The anchor is the chart's**: a band a few pixels wide centred on the crosshair and as tall as
  * the plot, so `placeTooltip` puts the panel beside the hovered day, vertically centred on the
@@ -236,18 +238,14 @@ export function useReadoutPanel(
   anchor: RefObject<HTMLElement | null>,
   readout: Readout | null,
   side: "left" | "right",
-): void {
+): () => void {
   const api = useContext(TooltipContext);
   const open = readout !== null;
 
   useEffect(() => {
     const el = anchor.current;
     if (el === null || readout === null) return;
-    api.enter(el, <ValueReadout readout={readout} />, {
-      side,
-      describes: false,
-      immediate: true,
-    });
+    enterReadout(api, el, readout, side);
   }, [api, anchor, readout, side]);
 
   // Keyed on *whether* it is open, so its cleanup runs once when the readout ends — or when the
@@ -259,4 +257,22 @@ export function useReadoutPanel(
       if (el !== null) api.leave(el);
     };
   }, [api, anchor, open]);
+
+  // Called from a pointer handler and never a dependency, so it is a plain closure: the anchor is
+  // read when it is pressed, which is after the commit that drew it.
+  return () => {
+    const el = anchor.current;
+    if (el !== null && readout !== null) enterReadout(api, el, readout, side);
+  };
+}
+
+/** The one way the readout is opened — `immediate`, and `describes: false`, for the reasons at the
+ *  head of this file. */
+function enterReadout(
+  api: TooltipApi,
+  el: HTMLElement,
+  readout: Readout,
+  side: "left" | "right",
+): void {
+  api.enter(el, <ValueReadout readout={readout} />, { side, describes: false, immediate: true });
 }
