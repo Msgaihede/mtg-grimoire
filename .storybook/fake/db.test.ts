@@ -16007,13 +16007,15 @@ describe("the price movers", () => {
   const DAY = 86_400;
   const NOW = readHandlers(makeDb()).card_detail({ id: FOIL_ONLY.id })!.finishPrices.foil!;
 
-  function snap(price: number, daysAgo: number, over: Partial<FakePriceSnapshot> = {}) {
+  function snap(price: number | null, daysAgo: number, over: Partial<FakePriceSnapshot> = {}) {
     return {
       marketplace: "tcgplayer" as MarketplaceId,
       cardId: FOIL_ONLY.id,
       finish: "foil" as const,
       price,
       takenAt: CLOCK_BASE - daysAgo * DAY,
+      // The movers read a price and never a holding, so the count is the fixture's one copy.
+      copies: 1,
       ...over,
     };
   }
@@ -16053,6 +16055,22 @@ describe("the price movers", () => {
     ]);
     expect(ask(db, "30d").since).toBe(CLOCK_BASE - 40 * DAY);
     expect(ask(db, "all").movers[0].then).toBe(90);
+  });
+
+  /**
+   * **A held-but-unpriced row is no price, and reads exactly as no row**: it counts no day of its
+   * own, and it is never the baseline — not even as the newest row at a window's start, or the
+   * oldest row of all, where taken as one it would name a mover measured from nothing.
+   */
+  it("reads a held-but-unpriced row as no row at all", () => {
+    const rows = [snap(NOW, 0), snap(150, 3), snap(100, 8), snap(90, 40)];
+    const unpriced = world([...rows, snap(null, 7), snap(null, 20), snap(null, 50)]);
+
+    for (const window of ["7d", "30d", "all"]) {
+      expect(ask(unpriced, window), window).toEqual(ask(world(rows), window));
+    }
+    expect(ask(unpriced, "7d")).toMatchObject({ since: CLOCK_BASE - 8 * DAY, days: 4 });
+    expect(ask(world([snap(null, 8)]), "7d")).toEqual({ movers: [], since: null, days: 0 });
   });
 
   /** History, but none old enough: the widget's second sentence, so `days` still answers. */
@@ -16131,13 +16149,15 @@ describe("the price history", () => {
   const TODAY = Date.UTC(2026, 7, 9) / 1_000;
   const NOW = readHandlers(makeDb()).card_detail({ id: FOIL_ONLY.id })!.finishPrices.foil!;
 
-  function snap(price: number, takenAt: number, over: Partial<FakePriceSnapshot> = {}) {
+  function snap(price: number | null, takenAt: number, over: Partial<FakePriceSnapshot> = {}) {
     return {
       marketplace: "tcgplayer" as MarketplaceId,
       cardId: FOIL_ONLY.id,
       finish: "foil" as const,
       price,
       takenAt,
+      // The popup reads a price and never a holding, so the count is the fixture's one copy.
+      copies: 1,
       ...over,
     };
   }
@@ -16170,6 +16190,20 @@ describe("the price history", () => {
       now: NOW,
       today: TODAY,
     });
+  });
+
+  /**
+   * A day whose row is held but unpriced is no point, exactly as a day with no row. **One row a
+   * day**, so a later unpriced snapshot is the day's row — it replaced the priced one, which is
+   * the crate's `INSERT OR REPLACE` — and that day has no point either.
+   */
+  it("draws no point for a day whose row is held but unpriced", () => {
+    const priced = [snap(10, TODAY - 3 * DAY + 9 * 3_600), snap(20, TODAY - DAY + 9 * 3_600)];
+    const between = makeDb({ priceHistory: [...priced, snap(null, TODAY - 2 * DAY + 9 * 3_600)] });
+
+    expect(ask(between)).toEqual(ask(makeDb({ priceHistory: priced })));
+    const replaced = makeDb({ priceHistory: [...priced, snap(null, TODAY - DAY + 10 * 3_600)] });
+    expect(ask(replaced).points).toEqual([{ day: TODAY - 3 * DAY, price: 10 }]);
   });
 
   /** Another marketplace's, another finish's and another card's rows are not this line's. */
@@ -16233,6 +16267,424 @@ describe("the price history", () => {
     expect(got.points.every((p) => p.day < TODAY)).toBe(true);
     expect(got.points.every((p, i) => i === 0 || got.points[i - 1].day < p.day)).toBe(true);
     expect(ask(seed("empty"), owned.cardId, owned.finish).points).toEqual([]);
+  });
+});
+
+/**
+ * `collection_value_history` — the Collection value graph's read: a point per kept snapshot
+ * period before today, a live point for today, the price-only part of every step, and the lines
+ * a split cuts the value into.
+ *
+ * The fixtures are the movers block's foil-only Sphinx and the `lea` Bolt, so every live price is
+ * a known number. Today is **2026-08-09** and the weekly bucket the thinning cases use is
+ * **2026-06-09 to 2026-06-15**, both spelt as dates rather than derived from the constants the
+ * handler reads — a bucket computed from the crate's formula here would agree with a handler that
+ * got the formula wrong in the same way.
+ */
+describe("the value history", () => {
+  const DAY = 86_400;
+  const TODAY = Date.UTC(2026, 7, 9) / 1_000;
+  /** Midnight of a 2026 date, by month (1-based) and day. */
+  const on = (month: number, day: number) => Date.UTC(2026, month - 1, day) / 1_000;
+  const priceOf = (id: string, finish: "nonfoil" | "foil", marketplace = "tcgplayer") =>
+    readHandlers(makeDb()).card_detail({ id, marketplace: marketplace as MarketplaceId })!
+      .finishPrices[finish]!;
+  const SPHINX = priceOf(FOIL_ONLY.id, "foil");
+  const BOLT_NOW = priceOf(BOLT.id, "nonfoil");
+
+  function snap(over: Partial<FakePriceSnapshot> & { price: number | null; takenAt: number }) {
+    return {
+      marketplace: "tcgplayer" as MarketplaceId,
+      cardId: FOIL_ONLY.id,
+      finish: "foil" as const,
+      copies: 1,
+      ...over,
+    } satisfies FakePriceSnapshot;
+  }
+
+  const ask = (db: FakeDb, split = "total", marketplace?: string) =>
+    readHandlers(db).collection_value_history({ split, marketplace });
+
+  /** The last element — index access, because this program's `lib` predates `Array.at`. */
+  function lastOf<T>(xs: readonly T[]): T {
+    return xs[xs.length - 1];
+  }
+
+  /** Each step's collection change — what the widget derives from the three figures. */
+  const changes = (points: readonly { total: number; moved: number | null }[]) =>
+    points.map((p, i) =>
+      i === 0 || p.moved === null ? 0 : p.total - points[i - 1].total - p.moved,
+    );
+
+  /**
+   * **The one number the two value widgets on one home page may never disagree about.** Asked at
+   * every priced marketplace, because each has its own holes and a live point priced through a
+   * second expression would agree at one of them by luck.
+   */
+  it("ends on a live point worth exactly what the collection summary says", () => {
+    const db = seed("starter");
+    for (const marketplace of ["tcgplayer", "cardmarket", "cardkingdom", "manapool"] as const) {
+      const got = ask(db, "total", marketplace);
+      const summary = readHandlers(db).collection_summary({
+        query: { limit: 0, offset: 0, marketplace },
+      });
+      const last = lastOf(got.points);
+
+      expect(last).toMatchObject({ day: TODAY, live: true });
+      expect(summary.value).toBeGreaterThan(0);
+      expect(last.total).toBeCloseTo(summary.value, 2);
+      expect(got.points.filter((p) => p.live)).toHaveLength(1);
+    }
+  });
+
+  /** The derived history, walked: 90 and 60 days are past the daily band and each is its own
+   *  week; the rest are days; today's own snapshot is replaced by the live point. */
+  it("draws the starter collection's history one point per kept period, oldest first", () => {
+    const got = ask(seed("starter"));
+
+    expect(got.today).toBe(TODAY);
+    expect(got.buckets).toEqual([]);
+    expect(got.points.map((p) => (TODAY - p.day) / DAY)).toEqual([90, 60, 30, 14, 7, 2, 1, 0]);
+    expect(got.points.every((p) => p.values.length === 0)).toBe(true);
+    expect(got.points[0].moved).toBeNull();
+    expect(got.points.slice(1).every((p) => p.moved !== null)).toBe(true);
+    // The derived world held the same cards for ninety days, so every step is price and nothing
+    // is marked as added or removed — and the prices did move, so `moved` is not a zero either.
+    expect(changes(got.points).every((c) => Math.abs(c) < 0.005)).toBe(true);
+    expect(got.points.slice(1).some((p) => Math.abs(p.moved!) >= 0.01)).toBe(true);
+  });
+
+  /**
+   * All four splits answer over one set of points, and a point's lines always sum to its total —
+   * every copy is on exactly one line, which is the whole of what lets the widget fold them.
+   */
+  it("answers all four splits over one set of points, each point's lines summing to it", () => {
+    const db = seed("starter");
+    const total = ask(db, "total");
+
+    for (const split of ["type", "color", "set"]) {
+      const got = ask(db, split);
+      expect(got.buckets.length, split).toBeGreaterThan(0);
+      expect(got.points.map((p) => p.day)).toEqual(total.points.map((p) => p.day));
+      got.points.forEach((p, i) => {
+        expect(p.total).toBeCloseTo(total.points[i].total, 6);
+        expect(p.moved).toEqual(total.points[i].moved);
+        expect(p.values).toHaveLength(got.buckets.length);
+        expect(p.values.reduce((n, v) => n + v, 0)).toBeCloseTo(p.total, 6);
+      });
+      // A line is only answered where it is worth something somewhere.
+      got.buckets.forEach((_, b) => expect(got.points.some((p) => p.values[b] !== 0)).toBe(true));
+    }
+  });
+
+  /** Colour is fixed WUBRG-then-`c`-then-`multi`, whatever the values; type is the deck builder's
+   *  lowercase words ranked by today's value with `other` last; only `set` carries a name. */
+  it("orders colour by identity and ranks type by today's value, other last", () => {
+    const db = seed("starter");
+    const color = ask(db, "color");
+    const order = ["W", "U", "B", "R", "G", "c", "multi"];
+    const keys = color.buckets.map((b) => b.key);
+    expect(keys).toEqual(order.filter((k) => keys.includes(k)));
+    expect(color.buckets.every((b) => b.name === null)).toBe(true);
+
+    const type = ask(db, "type");
+    const named = type.buckets.filter((b) => b.key !== "other");
+    const words = [
+      "creature",
+      "planeswalker",
+      "instant",
+      "sorcery",
+      "artifact",
+      "enchantment",
+      "battle",
+      "land",
+      "other",
+    ];
+    expect(named.length).toBeGreaterThan(1);
+    expect(type.buckets.every((b) => words.includes(b.key) && b.name === null)).toBe(true);
+    if (named.length < type.buckets.length) expect(lastOf(type.buckets).key).toBe("other");
+    const live = lastOf(type.points).values;
+    for (let i = 1; i < named.length; i++) expect(live[i - 1]).toBeGreaterThanOrEqual(live[i]);
+
+    const set = ask(db, "set");
+    expect(set.buckets.filter((b) => b.key !== "other").every((b) => b.name !== null)).toBe(true);
+  });
+
+  /** Eight named sets and the rest summed into `other`: the two cheapest of ten. */
+  it("keeps eight named sets and sums the rest into other", () => {
+    // Ten sets the fixture prices a regular copy of, one copy each.
+    const picks: FakeCard[] = [];
+    for (const card of CARDS) {
+      if (picks.length === 10 || picks.some((p) => p.setCode === card.setCode)) continue;
+      const priced = readHandlers(makeDb()).card_detail({ id: card.id })?.finishPrices.nonfoil;
+      if (priced) picks.push(card);
+    }
+    expect(picks).toHaveLength(10);
+    const db = makeDb({
+      collectionEntries: picks.map((card, i) => entry({ id: i + 1, cardId: card.id })),
+      priceHistory: [],
+    });
+    const got = ask(db, "set");
+    const worth = picks.map((card) => priceOf(card.id, "nonfoil")).sort((a, b) => a - b);
+
+    expect(got.buckets).toHaveLength(9);
+    expect(lastOf(got.buckets)).toEqual({ key: "other", name: null });
+    expect(got.points).toHaveLength(1);
+    expect(lastOf(got.points[0].values)).toBeCloseTo(worth[0] + worth[1], 6);
+    expect(got.buckets.slice(0, 8).map((b) => b.name)).toEqual(
+      got.buckets.slice(0, 8).map((b) => picks.find((p) => p.setCode === b.key)!.setName),
+    );
+  });
+
+  /**
+   * A price rise and one added copy over three days: the totals are copies times price, `moved`
+   * is the price part alone, and what is left of each step is the copy the reader added.
+   */
+  it("splits each step into the price move and the copies the reader added", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ cardId: FOIL_ONLY.id, finish: "foil", quantity: 2 })],
+      priceHistory: [
+        snap({ price: 100, takenAt: TODAY - 3 * DAY + 9 * 3_600 }),
+        snap({ price: 110, takenAt: TODAY - 2 * DAY + 9 * 3_600 }),
+        snap({ price: 120, takenAt: TODAY - DAY + 9 * 3_600, copies: 2 }),
+      ],
+    });
+    const got = ask(db);
+
+    expect(got.points).toEqual([
+      { day: TODAY - 3 * DAY, total: 100, values: [], moved: null, live: false },
+      { day: TODAY - 2 * DAY, total: 110, values: [], moved: 10, live: false },
+      { day: TODAY - DAY, total: 240, values: [], moved: 10, live: false },
+      {
+        day: TODAY,
+        total: 2 * SPHINX,
+        values: [],
+        moved: expect.closeTo(2 * (SPHINX - 120), 6),
+        live: true,
+      },
+    ]);
+    // `+ 0` because a float that lands a hair under zero rounds to `-0`, which `toEqual` tells
+    // apart from `0`.
+    expect(changes(got.points).map((c) => Math.round(c * 100) / 100 + 0)).toEqual([0, 0, 120, 0]);
+  });
+
+  /**
+   * **A row means held, so a held card whose price appears is a price move.** One copy, never
+   * bought or sold: unpriced, priced at 100, unpriced again, and priced today. The totals count
+   * only the priced days, every step is `moved` whole, and not one cent reads as a card the reader
+   * added — which is what the graph would say if a held-but-unpriced row were read as no row.
+   */
+  it("reads a held card's price appearing and vanishing as price moves, never as the reader's", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ cardId: FOIL_ONLY.id, finish: "foil" })],
+      priceHistory: [
+        snap({ price: null, takenAt: TODAY - 3 * DAY + 9 * 3_600 }),
+        snap({ price: 100, takenAt: TODAY - 2 * DAY + 9 * 3_600 }),
+        snap({ price: null, takenAt: TODAY - DAY + 9 * 3_600 }),
+      ],
+    });
+    const got = ask(db);
+
+    expect(got.points).toEqual([
+      { day: TODAY - 3 * DAY, total: 0, values: [], moved: null, live: false },
+      { day: TODAY - 2 * DAY, total: 100, values: [], moved: 100, live: false },
+      { day: TODAY - DAY, total: 0, values: [], moved: -100, live: false },
+      { day: TODAY, total: SPHINX, values: [], moved: expect.closeTo(SPHINX, 6), live: true },
+    ]);
+    expect(changes(got.points).map((c) => Math.round(c * 100) / 100 + 0)).toEqual([0, 0, 0, 0]);
+    // A split's lines sum the same priced rows, so they still add up to each total.
+    for (const p of ask(db, "type").points) {
+      expect(p.values.reduce((n, v) => n + v, 0)).toBeCloseTo(p.total, 6);
+    }
+  });
+
+  /**
+   * The live side: a finish still held today that the marketplace no longer quotes is its price
+   * falling to nothing, not its copies leaving. Cardmarket has no `eur_etched` at all.
+   */
+  it("reads a held finish whose quote is gone today as a price move down", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ cardId: FOIL_ONLY.id, finish: "etched", quantity: 2 })],
+      priceHistory: [
+        snap({
+          marketplace: "cardmarket",
+          finish: "etched",
+          price: 50,
+          copies: 2,
+          takenAt: TODAY - DAY + 9 * 3_600,
+        }),
+      ],
+    });
+
+    expect(ask(db, "total", "cardmarket").points).toEqual([
+      { day: TODAY - DAY, total: 100, values: [], moved: null, live: false },
+      { day: TODAY, total: 0, values: [], moved: -100, live: true },
+    ]);
+  });
+
+  /** The derived history writes a row for every held finish — Mana Pool leaves every fourth
+   *  printing out — and a finish a marketplace does not quote today has no price on any day. */
+  it("derives a held finish a marketplace does not quote as rows with no price", () => {
+    const db = seed("starter");
+    const unpriced = db.priceHistory.filter((s) => s.price === null);
+
+    expect(unpriced.length).toBeGreaterThan(0);
+    for (const s of unpriced) {
+      const same = db.priceHistory.filter(
+        (r) => r.marketplace === s.marketplace && r.cardId === s.cardId && r.finish === s.finish,
+      );
+      expect(same.every((r) => r.price === null)).toBe(true);
+      expect(s.copies).toBeGreaterThan(0);
+    }
+  });
+
+  /**
+   * **The Review Focus case.** A printing sold mid-week in the weekly region leaves its last row
+   * two days before the rest of its bucket's — and the bucket is still **one** point, dated by
+   * its latest day and counting the sold printing at its last row. An un-thinned table and a
+   * thinned one read the same, because the read keeps each printing's latest row per bucket
+   * exactly as the prune does.
+   */
+  it("reads a thinned week as one point, a printing sold mid-week included", () => {
+    const at = (day: number) => day + 9 * 3_600;
+    const bolt = { cardId: BOLT.id, finish: "nonfoil" as const };
+    const unthinned = [
+      // The Sphinx, every day of 2026-06-09..15 and once in the week after.
+      ...[9, 10, 11, 12, 13, 14, 15].map((d) => snap({ price: 100 + d, takenAt: at(on(6, d)) })),
+      snap({ price: 130, takenAt: at(on(6, 18)) }),
+      // The Bolt, held at three copies and sold on the 11th: its last row is mid-week.
+      ...[9, 10, 11].map((d) => snap({ ...bolt, price: d, copies: 3, takenAt: at(on(6, d)) })),
+    ];
+    const thinned = unthinned.filter(
+      (s) =>
+        s.takenAt === at(on(6, 15)) ||
+        s.takenAt === at(on(6, 18)) ||
+        (s.cardId === BOLT.id && s.takenAt === at(on(6, 11))),
+    );
+    const entries = [entry({ cardId: FOIL_ONLY.id, finish: "foil" })];
+    const read = (history: FakePriceSnapshot[]) =>
+      ask(makeDb({ collectionEntries: entries, priceHistory: history }));
+
+    const got = read(unthinned);
+    expect(got.points.map((p) => p.day)).toEqual([on(6, 15), on(6, 18), TODAY]);
+    expect(got.points[0]).toMatchObject({ total: 115 + 3 * 11, moved: null });
+    // Only the Sphinx is in both weeks, so only its price counts as a move.
+    expect(got.points[1]).toMatchObject({ total: 130, moved: 15 });
+    expect(read(thinned)).toEqual(got);
+  });
+
+  /**
+   * The daily horizon is **2026-07-05** and its week is **2026-06-30 to 07-06**. Before the horizon
+   * the prune leaves that week only the printings sold during it, so its thinned days are not a
+   * period: a row there is skipped, while the week before it and the horizon's own daily days
+   * are read.
+   */
+  it("skips the horizon's own week before the horizon", () => {
+    const at = (day: number) => day + 9 * 3_600;
+    const db = makeDb({
+      collectionEntries: [entry({ cardId: FOIL_ONLY.id, finish: "foil" })],
+      priceHistory: [
+        snap({ price: 10, takenAt: at(on(6, 29)) }),
+        snap({ price: 20, takenAt: at(on(7, 2)) }),
+        snap({ cardId: BOLT.id, finish: "nonfoil", price: 5, takenAt: at(on(7, 4)) }),
+        snap({ price: 30, takenAt: at(on(7, 5)) }),
+      ],
+    });
+
+    expect(ask(db).points.map((p) => [p.day, p.total])).toEqual([
+      [on(6, 29), 10],
+      [on(7, 5), 30],
+      [TODAY, SPHINX],
+    ]);
+  });
+
+  /** Nothing older than `KEEP_DAYS` is read — **2025-07-05** is the oldest day a prune keeps. */
+  it("reads nothing older than the prune keeps", () => {
+    const at = (day: number) => day + 9 * 3_600;
+    const world = (day: number) =>
+      makeDb({
+        collectionEntries: [entry({ cardId: FOIL_ONLY.id, finish: "foil" })],
+        priceHistory: [snap({ price: 10, takenAt: at(day) })],
+      });
+
+    expect(ask(world(Date.UTC(2025, 6, 4) / 1_000)).points).toHaveLength(1);
+    expect(ask(world(Date.UTC(2025, 6, 5) / 1_000)).points.map((p) => p.day)).toEqual([
+      Date.UTC(2025, 6, 5) / 1_000,
+      TODAY,
+    ]);
+  });
+
+  /** A snapshot dated today or later is never read — the live point is today's figure. */
+  it("ignores a snapshot at or after today", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ cardId: FOIL_ONLY.id, finish: "foil" })],
+      priceHistory: [
+        snap({ price: 50, takenAt: TODAY - DAY + 9 * 3_600 }),
+        snap({ price: 999, takenAt: TODAY }),
+        snap({ price: 999, takenAt: CLOCK_BASE }),
+        snap({ price: 999, takenAt: TODAY + DAY }),
+      ],
+    });
+
+    expect(ask(db).points.map((p) => [p.day, p.total])).toEqual([
+      [TODAY - DAY, 50],
+      [TODAY, SPHINX],
+    ]);
+  });
+
+  /**
+   * **A database upgraded from v49**: every row it held has a price and no count, and none of them
+   * is read — so the answer is the live point alone, never a line drawn out of nothing.
+   */
+  it("reads no row written before copies were recorded", () => {
+    const upgraded = seed("starter");
+    upgraded.priceHistory = upgraded.priceHistory.map((s) => ({ ...s, copies: null }));
+    const got = ask(upgraded, "type");
+
+    expect(upgraded.priceHistory.length).toBeGreaterThan(0);
+    expect(got.points).toHaveLength(1);
+    expect(got.points[0]).toMatchObject({ day: TODAY, live: true, moved: null });
+    expect(got.points[0].total).toBeCloseTo(lastOf(ask(seed("starter")).points).total, 6);
+  });
+
+  /** Another marketplace's snapshots are not this one's; `cardtrader` quotes TCGplayer's. */
+  it("keeps to one marketplace and reads cardtrader as TCGplayer", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ cardId: BOLT.id }),
+        entry({ id: 2, cardId: FOIL_ONLY.id, finish: "foil" }),
+      ],
+      priceHistory: [
+        snap({ price: 1, takenAt: TODAY - DAY }),
+        snap({ price: 2, takenAt: TODAY - DAY, marketplace: "cardmarket" }),
+      ],
+    });
+    const tcgplayer = ask(db, "total", "tcgplayer");
+
+    expect(tcgplayer.points[0].total).toBe(1);
+    expect(lastOf(tcgplayer.points).total).toBeCloseTo(BOLT_NOW + SPHINX, 6);
+    expect(ask(db, "total", "cardmarket").points[0].total).toBe(2);
+    expect(ask(db, "total", "cardtrader")).toEqual(tcgplayer);
+    expect(ask(db, "total")).toEqual(tcgplayer);
+  });
+
+  /** An empty collection is no points at all, whatever the table still holds. */
+  it("answers no points for the empty world and for a collection sold down to nothing", () => {
+    expect(ask(seed("empty"), "type")).toEqual({ buckets: [], points: [], today: TODAY });
+    const sold = makeDb({
+      collectionEntries: [],
+      priceHistory: [snap({ price: 5, takenAt: TODAY - DAY })],
+    });
+    expect(ask(sold)).toEqual({ buckets: [], points: [], today: TODAY });
+  });
+
+  /** A split the crate does not know is refused in its words, before a row is read — so `empty`
+   *  hears the same sentence `starter` does. */
+  it("refuses a split it does not know, in the crate's words, over any world", () => {
+    for (const db of [seed("starter"), seed("empty")]) {
+      expect(() => ask(db, "rarity")).toThrow("That is not a way to split collection value.");
+      expect(() => ask(db, "constructor")).toThrow("That is not a way to split collection value.");
+    }
   });
 });
 

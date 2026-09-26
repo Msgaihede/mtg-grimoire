@@ -82,7 +82,7 @@
 import type { QueryKey } from "@tanstack/react-query";
 
 import type { Finish } from "@/lib/finish";
-import type { PriceMoverDirection, PriceMoverWindow } from "@/lib/ipc";
+import type { PriceMoverDirection, PriceMoverWindow, ValueSplit } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 
 import type { BreakdownDimension } from "./widgets";
@@ -202,6 +202,23 @@ export const priceHistoryKey = (
   finish: Finish,
   marketplace: MarketplaceId,
 ): QueryKey => ["collection", "priceHistory", cardId, finish, marketplace];
+
+/**
+ * The whole collection's value over time, one way split — `ipc.collectionValueHistory`, the
+ * value graph's read.
+ *
+ * Under `["collection"]` for both of {@link priceMoversKey}'s reasons at once, and this read needs
+ * each of them more than that one does: a copy added or removed moves the live point at the end of
+ * the line, and a feed landing is the moment a new day's snapshot is taken and today's price
+ * changes — so every collection write and every `invalidatePricedQueries` sweep reaches it with no
+ * mutation learning a new key. The split and the marketplace are the question, since each changes
+ * what Rust answers. **The range and the measure are deliberately absent**: the command answers
+ * every kept point and the widget windows and scales them itself, so a reader stepping from 90
+ * days to a year, or from change to value, re-renders one cached answer rather than re-reading it.
+ */
+export function valueHistoryKey(split: ValueSplit, marketplace: MarketplaceId) {
+  return ["collection", "valueHistory", split, marketplace] as const;
+}
 
 /**
  * The root the recently viewed strip is filed under — the module doc's second exception, and the

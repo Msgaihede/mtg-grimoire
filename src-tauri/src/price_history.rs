@@ -2,21 +2,35 @@
 //!
 //! **The home page's Price movers widget, both halves, and the detail a mover opens**:
 //! [`snapshot`] records today's price for every printing the collection owns, in every priced
-//! marketplace, into `price_snapshots` (user schema v45); [`movers`] compares today's live price
-//! against the snapshot a window ago; [`history`] answers one printing's every kept snapshot, for
-//! the chart in that detail. The third only reads what the first wrote, so the rules below are
-//! its too.
+//! marketplace, into `price_snapshots` (user schema v45) — and, since v50, how many copies of it
+//! were held that day; [`movers`] compares today's live price against the snapshot a window ago;
+//! [`history`] answers one printing's every kept snapshot, for the chart in that detail. The
+//! third only reads what the first wrote, so the rules below are its too, and so are they
+//! [`crate::value_history`]'s, which reads the same table for the Collection value graph.
 //!
 //! # The rules
 //!
 //! * **Every price is `sorting::price_expr`'s**, the crate's one price builder, at the copy's own
 //!   finish. So a snapshot is exactly the number the collection page showed that day, the etched
-//!   hole in Cardmarket and a feed that does not quote a printing included — an unpriced finish
-//!   writes **no row**, never a zero, and is never a mover.
+//!   hole in Cardmarket and a feed that does not quote a printing included — and an unpriced
+//!   finish is a **NULL**, never a zero.
+//! * **A row is a holding, not a price (user schema v50).** Every printing the reader holds gets
+//!   its row, priced or not, so a card whose price starts or stops being quoted stays in the
+//!   table and [`crate::value_history`] reads that as a price moving rather than as a card
+//!   arriving or leaving. **Every reader in this module skips a NULL-price row exactly as it
+//!   skipped an absent one** — never a mover, a baseline, a history point or a day held — and the
+//!   thinning never lets one displace a priced row a reader here would have kept (see [`prune`]).
+//!   **One exception, per marketplace per day: a marketplace that prices none of the held
+//!   printings writes nothing.** That is a feed the reader never selected, and its rows would say
+//!   nothing while doubling the table — and, worse, would make the day the feed first arrives read
+//!   as the whole collection's value appearing in one price move. A missing day is a gap in that
+//!   marketplace's line and never a step, because a period is only ever made from rows.
 //! * **The day comes from SQLite's `date('now')`, UTC**, never `SystemTime::now()`, which panics on
-//!   the web target. A calendar day is the key: two snapshots on one day are one row, the second
-//!   replacing the first, so a sync and a feed refresh on the same afternoon leave the day's latest
-//!   price and nothing else.
+//!   the web target — read **once** per snapshot and bound into every statement it makes. A
+//!   calendar day is the key, and **a snapshot replaces its marketplace's whole day** — deleted,
+//!   then written — so the day holds its last snapshot's prices and holding and nothing older: a
+//!   printing sold between a sync and a feed refresh on one afternoon has no row that day, where an
+//!   insert-or-replace would have left the morning's.
 //! * **A marketplace is the *priced* one**: [`crate::marketplace::MARKETPLACE_IDS`] mapped through
 //!   [`Marketplace::from_id`], so `cardtrader` — which quotes TCGplayer — is not a key of its own
 //!   and cannot store a second copy of every TCGplayer row. [`market_key`] is the spelling.
@@ -49,17 +63,19 @@
 //! reader's, on a USB stick. Nothing the widget asks is lost: its 7-day and 30-day baselines read
 //! the daily band, and `all` reads the oldest surviving row.
 //!
-//! Thinning runs **on the first snapshot of a calendar day**, and weighs **only the rows that
-//! crossed the daily horizon since the previous snapshot day** — a row can only cross when the
-//! date changes, and the survivor of a bucket is its newest row, so each row needs weighing once.
-//! [`prune`] carries the measurement that made the floor necessary.
+//! Thinning runs **on the first snapshot of a calendar day** — decided before that snapshot
+//! deletes anything, since the delete is what empties the day — and weighs **only the rows that
+//! crossed the daily horizon since the previous snapshot day**: a row can only cross when the
+//! date changes, and the survivors of a bucket are its newest rows, so each row needs weighing
+//! once. [`prune`] carries the measurement that made the floor necessary.
 //!
 //! # Movers, and the two sentences they must keep apart
 //!
 //! A mover is an owned, priced printing whose live price differs from its baseline: the latest
-//! snapshot on or before `date('now', '-7 days')` (or `-30 days`), or for `all` the oldest snapshot
-//! before today. **There is no fallback to a younger baseline** — a window with no snapshot old
-//! enough answers no movers and `since: null`, which is the widget's "no history yet". `since` is
+//! priced snapshot on or before `date('now', '-7 days')` (or `-30 days`), or for `all` the oldest
+//! priced snapshot before today — a NULL-price row is no baseline, as an absent one was not.
+//! **There is no fallback to a younger baseline** — a window with no snapshot old enough answers
+//! no movers and `since: null`, which is the widget's "no history yet". `since` is
 //! the newest baseline day across every printing that *has* one, **before** zero moves and the
 //! direction are filtered out: computed over the returned movers instead, a window in which
 //! nothing moved would also answer `null`, and "nothing moved" would read as "no history yet" —
@@ -131,10 +147,16 @@ pub fn snapshot_market(conn: &Connection, market: Marketplace) -> rusqlite::Resu
 
 fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Result<usize> {
     let tx = conn.unchecked_transaction()?;
-    // One seek on the primary key, which leads with `day`.
+    // The day, read once and bound into every statement below — the first-of-day probe, the
+    // floor, and each marketplace's delete and insert — so a snapshot straddling UTC midnight
+    // cannot delete one day's rows and write the next day's.
+    let today: String = tx.query_row("SELECT date('now')", [], |r| r.get(0))?;
+    // **Decided before anything is deleted, and the order is the rule**: the loop below empties
+    // today for each marketplace it writes, so asked after it every snapshot would look like the
+    // day's first and thin again. One seek on the primary key, which leads with `day`.
     let first_today: bool = tx.query_row(
-        "SELECT NOT EXISTS (SELECT 1 FROM price_snapshots WHERE day = date('now'))",
-        [],
+        "SELECT NOT EXISTS (SELECT 1 FROM price_snapshots WHERE day = ?1)",
+        params![today],
         |r| r.get(0),
     )?;
     if first_today {
@@ -144,36 +166,62 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
         // earlier day weighs everything — which on the first day ever is nothing.
         let floor: Option<String> = tx.query_row(
             "SELECT date(max(day), '-' || ?1 || ' days') FROM price_snapshots
-              WHERE day < date('now')",
-            params![DAILY_DAYS],
+              WHERE day < ?2",
+            params![DAILY_DAYS, today],
             |r| r.get(0),
         )?;
         prune(&tx, floor.as_deref())?;
     }
     let mut written = 0;
     for market in markets {
-        written += tx.execute(&snapshot_sql(&tx, *market), params![market_key(*market)])?;
+        let key = market_key(*market);
+        // The day's rows for this marketplace go before its new ones arrive, so the day holds its
+        // LAST snapshot's holding and nothing older. An insert-or-replace would leave the row of a
+        // printing sold since the morning's snapshot standing, and the value graph would count it
+        // held that day. The insert below is a plain `INSERT` for the same reason: without this
+        // line a second snapshot today is a primary-key failure rather than a stale row.
+        tx.execute(
+            "DELETE FROM price_snapshots WHERE day = ?1 AND marketplace = ?2",
+            params![today, key],
+        )?;
+        written += tx.execute(&snapshot_sql(&tx, *market), params![key, today])?;
     }
     tx.commit()?;
     Ok(written)
 }
 
-/// One marketplace's insert-or-replace for today.
+/// One marketplace's insert for today, into a day [`write_snapshot`] has just emptied for it.
+/// Bound: `?1` the marketplace key, `?2` today (`YYYY-MM-DD`).
 ///
 /// **`WITH owned(card_id, finish, copies)`** is [`collection_source::copies_by_printing_and_finish`]
 /// under [`Availability::Everything`], named — the crate's one statement of "which printings does
-/// the reader own, per finish". The price is filtered in an outer `SELECT` so the expression is
-/// written once: a correlated subquery repeated in a `WHERE` is a second evaluation per row.
+/// the reader own, per finish". `held` writes the price expression once for the two places that
+/// read it, the rows and the gate.
+///
+/// **Every held printing is a row, priced or not** (user schema v50): `price` is NULL where this
+/// marketplace does not quote that finish, and `cards` is a `LEFT JOIN`, so a printing the corpus
+/// has lost is still a holding — the live point of [`crate::value_history`] counts it, and a
+/// snapshot that did not would read its return to the corpus as a purchase. **The one gate is
+/// the `EXISTS`**: a marketplace that prices none of the held printings today writes nothing at
+/// all, which the module doc argues.
+///
+/// **`copies` rides beside the price**: the same sum `owned` already computes to decide what is
+/// owned, every folder at once, so a day's row says what the reader's holding of that printing was
+/// worth and not only what one copy cost. [`crate::value_history`] is the reader.
 fn snapshot_sql(conn: &Connection, market: Marketplace) -> String {
     format!(
-        "WITH owned(card_id, finish, copies) AS ({owned})
-         INSERT OR REPLACE INTO price_snapshots (day, marketplace, card_id, finish, price)
-         SELECT date('now'), ?1, card_id, finish, price
-           FROM (SELECT o.card_id AS card_id, o.finish AS finish, {price} AS price
-                   FROM owned o
-                   JOIN cards c ON c.id = o.card_id
-                  WHERE o.copies > 0)
-          WHERE price IS NOT NULL",
+        "WITH owned(card_id, finish, copies) AS ({owned}),
+         held AS (
+             SELECT o.card_id AS card_id, o.finish AS finish, {price} AS price,
+                    o.copies AS copies
+               FROM owned o
+               LEFT JOIN cards c ON c.id = o.card_id
+              WHERE o.copies > 0
+         )
+         INSERT INTO price_snapshots (day, marketplace, card_id, finish, price, copies)
+         SELECT ?2, ?1, card_id, finish, price, copies
+           FROM held
+          WHERE EXISTS (SELECT 1 FROM held WHERE price IS NOT NULL)",
         owned = collection_source::copies_by_printing_and_finish(conn, Availability::Everything),
         price = sorting::price_expr(market, "o.finish"),
     )
@@ -196,27 +244,52 @@ fn snapshot_sql(conn: &Connection, market: Marketplace) -> String {
 /// row and a newer one can only arrive inside the daily band — so [`snapshot`] passes the previous
 /// snapshot day minus the band, and a daily reader weighs one day's rows: ~2 000, tens of
 /// milliseconds. `None` weighs the whole band, which is the first day ever (nothing to weigh) and
-/// the tests.
-fn prune(conn: &Connection, floor: Option<&str>) -> rusqlite::Result<usize> {
+/// the tests — `pub(crate)` for [`crate::value_history`]'s, which prove that a thinned table
+/// reads exactly as the un-thinned one did.
+///
+/// **Two survivors per bucket, not one, once a row can carry no price** (user schema v50). The
+/// bucket's newest row is what [`crate::value_history`] reads, priced or not; its newest *priced*
+/// row is what [`movers`] and [`history`] read, since they skip a NULL. Keeping only the first
+/// would let a week that ended unquoted take the bucket's last price with it, and a mover's
+/// baseline or a history point would move because a NULL arrived — so a priced row goes only
+/// when a later *priced* row shares its bucket, and a NULL row whenever any later row does,
+/// because a NULL that is not the newest is read by nobody. On a table with no NULL rows that is
+/// exactly the rule before v50. It costs the probe a primary-key lookup per later row it weighs,
+/// since the index carries the key and not the price.
+pub(crate) fn prune(conn: &Connection, floor: Option<&str>) -> rusqlite::Result<usize> {
     let old = conn.execute(
         "DELETE FROM price_snapshots WHERE day < date('now', '-' || ?1 || ' days')",
         params![KEEP_DAYS],
     )?;
     let thinned = conn.execute(
-        "DELETE FROM price_snapshots
-          WHERE day < date('now', '-' || ?1 || ' days')
-            AND day >= coalesce(?2, '')
-            AND EXISTS (
-                SELECT 1 FROM price_snapshots later
-                 WHERE later.marketplace = price_snapshots.marketplace
-                   AND later.card_id = price_snapshots.card_id
-                   AND later.finish = price_snapshots.finish
-                   AND later.day > price_snapshots.day
-                   AND CAST(julianday(later.day) AS INTEGER) / 7
-                     = CAST(julianday(price_snapshots.day) AS INTEGER) / 7)",
+        &format!(
+            "DELETE FROM price_snapshots
+              WHERE day < date('now', '-' || ?1 || ' days')
+                AND day >= coalesce(?2, '')
+                AND EXISTS (
+                    SELECT 1 FROM price_snapshots later
+                     WHERE later.marketplace = price_snapshots.marketplace
+                       AND later.card_id = price_snapshots.card_id
+                       AND later.finish = price_snapshots.finish
+                       AND later.day > price_snapshots.day
+                       AND {later} = {this}
+                       AND (later.price IS NOT NULL OR price_snapshots.price IS NULL))",
+            later = week_bucket("later.day"),
+            this = week_bucket("price_snapshots.day"),
+        ),
         params![DAILY_DAYS, floor],
     )?;
     Ok(old + thinned)
+}
+
+/// The seven-day bucket a `YYYY-MM-DD` day falls in, as SQL over `day` — [`prune`]'s thinning
+/// key, and the one [`crate::value_history`] applies again at read time.
+///
+/// **One spelling for both**, because the read's whole promise is that an un-thinned table and a
+/// thinned one draw the same line: a bucket boundary that moved by a day between the two would
+/// split one of the prune's buckets in two at read time and invent a point.
+pub(crate) fn week_bucket(day: &str) -> String {
+    format!("CAST(julianday({day}) AS INTEGER) / 7")
 }
 
 /// One owned printing whose price moved.
@@ -343,6 +416,7 @@ pub fn movers(
                     (SELECT p.day FROM price_snapshots p
                       WHERE p.marketplace = ?1 AND p.card_id = l.card_id
                         AND p.finish = l.finish AND {cutoff}
+                        AND p.price IS NOT NULL
                       ORDER BY p.day {order} LIMIT 1) AS then_day
                FROM live l
               WHERE l.now IS NOT NULL
@@ -405,7 +479,8 @@ pub fn movers(
     })
 }
 
-/// Distinct snapshot days held for one marketplace.
+/// Distinct snapshot days held for one marketplace — days holding a **priced** row, so a day of
+/// nothing but NULL-price holdings counts no more than a day with no row did before v50.
 ///
 /// **A skip-scan rather than `count(DISTINCT day) … WHERE marketplace = ?`**, which reads every
 /// row that marketplace holds — hundreds of thousands on a large collection, on every draw of the
@@ -425,7 +500,8 @@ fn snapshot_days(conn: &Connection, key: &str) -> rusqlite::Result<i64> {
          SELECT count(*) FROM d
           WHERE d.day IS NOT NULL
             AND EXISTS (SELECT 1 FROM price_snapshots p
-                         WHERE p.day = d.day AND p.marketplace = ?1)",
+                         WHERE p.day = d.day AND p.marketplace = ?1
+                           AND p.price IS NOT NULL)",
         params![key],
         |r| r.get(0),
     )
@@ -472,8 +548,8 @@ pub struct PricePoint {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PriceHistory {
-    /// Every kept snapshot for this printing, finish and marketplace **before today**, oldest
-    /// first.
+    /// Every kept priced snapshot for this printing, finish and marketplace **before today**,
+    /// oldest first.
     pub points: Vec<PricePoint>,
     /// Today's live price at the asked marketplace — the number [`movers`] calls `now` — or
     /// `None` when that finish is unpriced there or the card is not in the corpus.
@@ -483,9 +559,11 @@ pub struct PriceHistory {
     pub today: i64,
 }
 
-/// [`history`]'s points. Bound: marketplace key, card id, finish, and today's `YYYY-MM-DD`.
+/// [`history`]'s points. Bound: marketplace key, card id, finish, and today's `YYYY-MM-DD`. A
+/// NULL-price row is a day the printing was held and not quoted — no point, as no row was not.
 const HISTORY_SQL: &str = "SELECT unixepoch(day), price FROM price_snapshots
      WHERE marketplace = ?1 AND card_id = ?2 AND finish = ?3 AND day < ?4
+       AND price IS NOT NULL
      ORDER BY day";
 
 /// One printing's history at `market`: every kept snapshot before today, oldest first, and the
@@ -613,7 +691,19 @@ mod tests {
         .unwrap();
     }
 
-    fn rows(conn: &Connection) -> Vec<(String, String, String, f64)> {
+    /// A held printing's row with no price — what a snapshot writes, since user schema v50, for a
+    /// finish the marketplace does not quote.
+    fn unpriced(conn: &Connection, ago: i64, market: &str, card_id: &str, finish: &str) {
+        conn.execute(
+            "INSERT OR REPLACE INTO price_snapshots (day, marketplace, card_id, finish, price,
+                                                     copies)
+             VALUES (date('now', '-' || ?1 || ' days'), ?2, ?3, ?4, NULL, 2)",
+            params![ago, market, card_id, finish],
+        )
+        .unwrap();
+    }
+
+    fn rows(conn: &Connection) -> Vec<(String, String, String, Option<f64>)> {
         let mut stmt = conn
             .prepare(
                 "SELECT marketplace, card_id, finish, price FROM price_snapshots
@@ -654,32 +744,219 @@ mod tests {
         }
     }
 
-    /// Only owned printings, only priced finishes, at every priced marketplace — and the price is
-    /// the copy's own finish, never a neighbour's.
+    /// **Every held printing is a row, and a finish the marketplace does not quote is a NULL
+    /// price — never a zero, and since user schema v50 never a missing row.** The price is the
+    /// copy's own finish, never a neighbour's; a printing the corpus has lost is still held; and
+    /// a marketplace that prices none of the holding writes nothing at all.
     #[test]
-    fn a_snapshot_writes_only_owned_printings_and_skips_unpriced_ones() {
+    fn a_snapshot_writes_every_held_printing_and_an_unpriced_one_as_null() {
         let conn = conn();
         own(&conn, "bolt", "nonfoil");
         own(&conn, "bolt", "foil");
         own(&conn, "ring", "etched");
         own(&conn, "free", "nonfoil");
+        own(&conn, "gone", "nonfoil");
 
         let written = snapshot(&conn).unwrap();
 
-        let row = |m: &str, id: &str, finish: &str, price: f64| {
-            (m.to_owned(), id.to_owned(), finish.to_owned(), price)
+        let held = |m: &str, bolt: Option<f64>, bolt_foil: Option<f64>| {
+            [
+                ("bolt", "foil", bolt_foil),
+                ("bolt", "nonfoil", bolt),
+                ("free", "nonfoil", None),
+                ("gone", "nonfoil", None),
+                ("ring", "etched", None),
+            ]
+            .map(|(id, finish, price)| (m.to_owned(), id.to_owned(), finish.to_owned(), price))
         };
-        // No `lonely` (not owned), no `free` (unpriced everywhere), no etched `ring` (no
-        // `usd_etched`, Cardmarket's etched hole, no feed row) — and **no Cardmarket foil bolt**:
-        // the blob has no `eur_foil`, and a foil copy is never quoted at the nonfoil rate.
-        let want = vec![
-            row("cardkingdom", "bolt", "nonfoil", 12.5),
-            row("cardmarket", "bolt", "nonfoil", 8.0),
-            row("tcgplayer", "bolt", "foil", 50.0),
-            row("tcgplayer", "bolt", "nonfoil", 10.0),
-        ];
+        // No `lonely` (not owned). `free` is unpriced everywhere and `gone` is not in the corpus,
+        // so both are NULL wherever they are written; so is the etched `ring` (no `usd_etched`,
+        // Cardmarket's etched hole, no feed row) and **the Cardmarket foil bolt**: the blob has no
+        // `eur_foil`, and a foil copy is never quoted at the nonfoil rate. **No Mana Pool row at
+        // all**: its feed quotes none of the five, and a marketplace that prices nothing held
+        // writes nothing rather than five NULLs.
+        let want = [
+            held("cardkingdom", Some(12.5), None),
+            held("cardmarket", Some(8.0), None),
+            held("tcgplayer", Some(10.0), Some(50.0)),
+        ]
+        .concat();
         assert_eq!(rows(&conn), want);
         assert_eq!(written, want.len());
+    }
+
+    /// **The day holds its last snapshot's holding** (Finding B of the value graph's review): a
+    /// printing sold between two snapshots on one afternoon has no row that day, and one bought
+    /// up in between carries the later count. With an insert-or-replace the sold printing's
+    /// morning row stood, and the graph counted it held on a day it had already gone.
+    #[test]
+    fn a_second_snapshot_the_same_day_keeps_only_the_last_holding() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil");
+        own(&conn, "ring", "nonfoil");
+        snapshot(&conn).unwrap();
+
+        conn.execute_batch(
+            "DELETE FROM collection_entries WHERE card_id = 'ring';
+             UPDATE collection_entries SET quantity = 5 WHERE card_id = 'bolt';",
+        )
+        .unwrap();
+        snapshot(&conn).unwrap();
+
+        let today = |sql: &str| -> i64 {
+            conn.query_row(
+                &format!("SELECT {sql} FROM price_snapshots WHERE day = date('now')"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            today("count(*) FILTER (WHERE card_id = 'ring')"),
+            0,
+            "the sold printing has no row on the day it went"
+        );
+        assert_eq!(today("min(copies)"), 5);
+        assert_eq!(
+            today("count(*)"),
+            3,
+            "bolt at the three marketplaces pricing it"
+        );
+
+        // **One marketplace's snapshot replaces that marketplace's day and no other's** — a feed
+        // store rewrites its own prices, and the rest keep the reading their own last snapshot
+        // took.
+        own(&conn, "ring", "nonfoil");
+        snapshot_market(&conn, Marketplace::Cardkingdom).unwrap();
+        assert_eq!(today("count(*) FILTER (WHERE card_id = 'ring')"), 1);
+        assert_eq!(
+            today("count(*) FILTER (WHERE card_id = 'ring' AND marketplace = 'cardkingdom')"),
+            1,
+            "Card Kingdom quotes no ring, so its row is the holding without a price"
+        );
+    }
+
+    /// **The day's first snapshot is decided before any snapshot deletes the day**, so a second
+    /// one does not prune again — which it would if the probe ran after the delete had emptied
+    /// the day. An ancient row planted between the two is the witness: only a prune removes it.
+    #[test]
+    fn a_second_snapshot_the_same_day_does_not_prune() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil");
+        snapshot(&conn).unwrap();
+        past(&conn, KEEP_DAYS + 1, "tcgplayer", "bolt", "nonfoil", 1.0);
+
+        snapshot(&conn).unwrap();
+
+        let ancient: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM price_snapshots WHERE day < date('now', '-400 days')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ancient, 1, "the second snapshot of a day is not its first");
+    }
+
+    /// **A NULL-price row changes nothing for movers or history** — not a baseline, not a point,
+    /// not a day held — before a prune and after one. Two tables are built from the same priced
+    /// rows and one of them is also given the unpriced holdings a v50 snapshot writes, each placed
+    /// where a reader that did not skip it would answer differently: newer than a window's
+    /// baseline, older than `all`'s, a day holding nothing else, a printing never priced at all,
+    /// and — the prune's half — a week that ends unquoted, whose last price the thinning must not
+    /// give up to the NULL behind it.
+    #[test]
+    fn an_unpriced_row_changes_nothing_for_movers_or_history() {
+        let week_end = |conn: &Connection| -> i64 {
+            // A day whose next day shares its seven-day bucket, beyond the daily band.
+            (55..=65)
+                .find(|&ago| {
+                    let bucket = |ago: i64| -> i64 {
+                        conn.query_row(
+                            &format!(
+                                "SELECT {}",
+                                week_bucket("date('now', '-' || ?1 || ' days')")
+                            ),
+                            [ago],
+                            |r| r.get(0),
+                        )
+                        .unwrap()
+                    };
+                    bucket(ago) == bucket(ago - 1)
+                })
+                .unwrap()
+        };
+        let build = |with_nulls: bool| -> Connection {
+            let conn = conn();
+            own(&conn, "bolt", "nonfoil"); // live 10
+            own(&conn, "bolt", "foil"); // live 50
+            own(&conn, "ring", "nonfoil"); // live 100
+            own(&conn, "free", "nonfoil"); // never priced
+            let end = week_end(&conn);
+            for (ago, price) in [(3, 9.0), (8, 7.0), (31, 4.0), (end, 2.0)] {
+                past(&conn, ago, "tcgplayer", "bolt", "nonfoil", price);
+            }
+            past(&conn, 8, "tcgplayer", "bolt", "foil", 45.0);
+            past(&conn, end, "tcgplayer", "ring", "nonfoil", 90.0);
+            if with_nulls {
+                unpriced(&conn, 7, "tcgplayer", "bolt", "nonfoil"); // newer than 7d's baseline
+                unpriced(&conn, 30, "tcgplayer", "bolt", "nonfoil"); // newer than 30d's
+                unpriced(&conn, end - 1, "tcgplayer", "bolt", "nonfoil"); // the week ends unquoted
+                unpriced(&conn, end - 1, "tcgplayer", "ring", "nonfoil");
+                unpriced(&conn, 80, "tcgplayer", "bolt", "nonfoil"); // older than `all`'s
+                unpriced(&conn, 80, "tcgplayer", "bolt", "foil"); // and alone on its day
+                for ago in [1, 8, 31, 80] {
+                    unpriced(&conn, ago, "tcgplayer", "free", "nonfoil");
+                }
+            }
+            conn
+        };
+        let answers = |conn: &Connection| {
+            let mut out: Vec<String> = Vec::new();
+            for window in ["7d", "30d", "all"] {
+                for direction in ["both", "up", "down"] {
+                    let m = movers(conn, window, direction, Marketplace::Tcgplayer, 10).unwrap();
+                    out.push(format!("{window} {direction}: {m:?}"));
+                }
+            }
+            for (id, finish) in [("bolt", "nonfoil"), ("bolt", "foil"), ("ring", "nonfoil")] {
+                let h = history(conn, id, finish, Marketplace::Tcgplayer).unwrap();
+                out.push(format!("{id} {finish}: {h:?}"));
+            }
+            let free = history(conn, "free", "nonfoil", Marketplace::Tcgplayer).unwrap();
+            out.push(format!("free: {free:?}"));
+            out
+        };
+
+        let plain = build(false);
+        let mixed = build(true);
+        assert_eq!(answers(&mixed), answers(&plain));
+
+        prune(&plain, None).unwrap();
+        prune(&mixed, None).unwrap();
+        assert_eq!(answers(&mixed), answers(&plain), "and after a prune");
+
+        // The prune kept the unquoted week's last price *and* its NULL: the one a mover and a
+        // history point read, and the one the value graph reads.
+        let kept: Vec<Option<f64>> = {
+            let end = week_end(&mixed);
+            let mut stmt = mixed
+                .prepare(
+                    "SELECT price FROM price_snapshots
+                      WHERE card_id = 'bolt' AND finish = 'nonfoil'
+                        AND day IN (date('now', '-' || ?1 || ' days'),
+                                    date('now', '-' || ?2 || ' days'))
+                      ORDER BY day",
+                )
+                .unwrap();
+            let out = stmt
+                .query_map(params![end, end - 1], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            out
+        };
+        assert_eq!(kept, [Some(2.0), None]);
     }
 
     #[test]
@@ -720,6 +997,51 @@ mod tests {
         let got = rows(&conn);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, "cardkingdom");
+    }
+
+    /// **`copies` is the holding, every folder at once** (user schema v50): two copies at the
+    /// root and one in a folder are one printing held three times, and the row says 3 — while a
+    /// printing held at another finish is its own row with its own count.
+    #[test]
+    fn a_snapshot_records_the_copies_held_across_every_folder() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil"); // two, at the root
+        own(&conn, "bolt", "foil"); // two foil, their own row
+        conn.execute_batch(
+            "INSERT INTO collection_folders (id, name, sort_order, created_at, updated_at)
+                 VALUES (7, 'Binder', 0, 0, 0);
+             INSERT INTO collection_entries (card_id, set_code, collector_number, lang, finish,
+                                             condition, quantity, folder_id, created_at,
+                                             updated_at)
+                 VALUES ('bolt', 'lea', '0', 'en', 'nonfoil', 'NM', 1, 7, 0, 0);",
+        )
+        .unwrap();
+
+        snapshot(&conn).unwrap();
+
+        let copies = |finish: &str| -> Option<i64> {
+            conn.query_row(
+                "SELECT copies FROM price_snapshots
+                  WHERE day = date('now') AND marketplace = 'tcgplayer'
+                    AND card_id = 'bolt' AND finish = ?1",
+                [finish],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(copies("nonfoil"), Some(3), "two at the root and one filed");
+        assert_eq!(copies("foil"), Some(2), "a finish is its own holding");
+        let unrecorded: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM price_snapshots WHERE copies IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unrecorded, 0,
+            "every row a snapshot writes carries its count"
+        );
     }
 
     /// The fence the module doc leans on: inside somebody else's transaction a snapshot refuses

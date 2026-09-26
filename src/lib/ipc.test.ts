@@ -51,6 +51,7 @@ import startviewRs from "../../src-tauri/src/startview.rs?raw";
 import stickyNotesRs from "../../src-tauri/src/sticky_notes.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
+import valueHistoryRs from "../../src-tauri/src/value_history.rs?raw";
 import wishlistFoldersRs from "../../src-tauri/src/wishlist_folders.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
 import wishlistOptimizeRs from "../../src-tauri/src/wishlist_optimize.rs?raw";
@@ -2980,6 +2981,36 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **The Collection value graph's read** (user schema v50), pinned beside the movers' on the day
+   * it was written — its own case rather than a line in the one above, because its crate is its
+   * own file and a pass there must never mean this one was not read.
+   *
+   * The trap is the one every read on this page has: `invoke` matches by name, and a key Tauri
+   * cannot map onto a parameter is a deserialisation error with no type error anywhere. It is
+   * sharper here than it looks. The command takes `marketplace` as an `Option`, so a wrapper that
+   * spelled it `market` is **not** refused — the crate reads `None`, prices at TCGplayer, and a
+   * Cardmarket reader's graph ends on a dollar figure beside a Collection value widget quoting
+   * euros, which is exactly the disagreement the live point exists to rule out.
+   */
+  it("sends the value graph's split and marketplace under the names its command declares", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(valueHistoryRs.length, "value_history.rs was not read").toBeGreaterThan(1_000);
+    const declares = (param: string) =>
+      expect(valueHistoryRs, `\`collection_value_history\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn collection_value_history\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+
+    invoke.mockResolvedValue({ buckets: [], points: [], today: 0 });
+    await ipc.collectionValueHistory("color", "cardmarket");
+    expect(invoke).toHaveBeenCalledWith("collection_value_history", {
+      split: "color",
+      marketplace: "cardmarket",
+    });
+    declares("split");
+    declares("marketplace");
+  });
+
+  /**
    * **The sticky notes' five** (user schema v46), pinned on the day they were written — one case,
    * because they are one widget's worth of commands and the traps are one family's.
    *
@@ -4798,6 +4829,20 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // a renamed `today` leaves the page no day to place the live point on.
     ["PricePoint", priceHistoryRs, "PricePoint"],
     ["PriceHistory", priceHistoryRs, "PriceHistory"],
+    // **The Collection value graph's three** (user schema v50), nested two deep for `PriceMovers`'
+    // reason: a field renamed inside `ValuePoint` or `ValueBucket` leaves `ValueHistory` agreeing
+    // while every point of every line reads `undefined`.
+    //
+    // Each is the quiet kind, and two are quieter than any row above them. A renamed `moved` is
+    // `undefined`, which is not `null`, so the *first point* test the readout keys on never fires
+    // and every step's collection change is `total − previous − undefined` — `NaN`, drawn as no
+    // marker and no note, which is exactly what a week with no additions looks like. A renamed
+    // `live` makes the last point an ordinary snapshot, and the readout dates today's figure
+    // instead of saying *Today*. A renamed `values` empties every line but the total, which reads
+    // as a collection all of one kind; a renamed `key` puts every line under a label for nothing.
+    ["ValueBucket", valueHistoryRs, "ValueBucket"],
+    ["ValuePoint", valueHistoryRs, "ValuePoint"],
+    ["ValueHistory", valueHistoryRs, "ValueHistory"],
     // **The tenth widget's three**, and they are nested two deep for `PriceMovers`' reason: a
     // field renamed inside `NewPrintingDeck` leaves both structs above it agreeing while every
     // row of the drill-down popover reads `undefined`.

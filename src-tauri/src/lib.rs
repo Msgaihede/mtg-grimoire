@@ -245,6 +245,12 @@ pub mod transfer;
 /// controls a browser cannot honour. [`update::InstallKind::Web`] is the answer that was
 /// missing.
 pub mod update;
+/// **The home page's Collection value graph** — user schema v50's `price_snapshots.copies`
+/// multiplied back out into what the collection was worth each day, split four ways, with a live
+/// point for today. One read over the table [`price_history`] writes and the collection
+/// [`collection`] summarises; its only clock is SQLite's `date('now')`, so it answers in a browser
+/// exactly as it does on the desktop.
+pub mod value_history;
 pub mod web;
 pub mod wishlist;
 pub mod wishlist_folders;
