@@ -129,7 +129,11 @@ written, never whether a collision folds.
   `useWishlist` still holds underneath. **The wishlist's flatten default is `false` where the
   collection's is `true`**, so this sidebar starts with a real folder default the moment the reader
   opens a folder, while the collection's starts at the root out of the box. Do not copy the
-  collection's default across; the two lists ship differently on purpose.
+  collection's default across; the two lists ship differently on purpose. **History
+  (2026-09-26):** Flatten is deleted on both pages, and this fence and the difference between the
+  two defaults went with it. The page passes the level it stands on — the root inside a deck's
+  managed folder, which refuses a hand add (`WishlistPage.tsx:2155`). See
+  [Shelves](#shelves-2026-09-26).
 - **Absent and `null` are different on the wire**, and the page sends `null` explicitly — absent
   sends no `folderId` field at all, which is what `SearchPage` and the Tags page still do and why
   neither was touched by this.
@@ -413,6 +417,12 @@ gets back *out*: without them a drag could only ever push wishes deeper. Both wr
 and the panel stays complete on its own, because a drag-only affordance is half a feature and it is
 the half a keyboard cannot use.
 
+**History (2026-09-26):** the folder cards are shelf headings now, joined by the empty shelf's
+dashed box and the sticky bar as card targets, and a breadcrumb segment takes a folder too. A
+heading carries its card target and its folder target **on one element** (`useShelfDropTarget`,
+`src/features/shelves/useShelfDrag.ts`), which the entity-id registry described above allowed all
+along. See [Shelves](#shelves-2026-09-26).
+
 ### `WishDrop`, the discriminator the wishlist never had (2026-09-07)
 
 The search sidebar put a **third** kind of thing in the air over a folder card: a card nobody
@@ -435,6 +445,8 @@ Prop-type churn across six sites and **no new mechanism**: `useWishDropTarget`, 
 `canDrop`/`onDropCard`, `WishParentFolderCard`'s pair, `WishlistBreadcrumb`'s `Segment`, and the
 page's `canFile`/`fileWish`. `readWishDrag` survives unchanged as the arm that reads a wish
 already on the list, so nothing that only ever wanted a wish had to learn about the union.
+(`WishFolderCard` and `WishParentFolderCard` went with the folder band on 2026-09-26; the shelves
+read the same `readWishDrop` through `WishShelfHeading.tsx`.)
 
 **A second droppable per folder card would now be legal and was still refused.** dnd-kit keys its
 registry by entity id, so two registrations on one element both stand and `accepts()` keeps them
@@ -449,6 +461,11 @@ wins.** A record carrying both would be a bug upstream, and the narrower fact is
 because moving a row that already exists and creating one are not equally reversible.
 
 ## The way back up is a tile on the wall, not only a word in the trail
+
+**History (2026-09-26):** the tile went with the folder band. Its folder half moved onto the
+breadcrumb: a folder dropped on a segment files **last inside** that level, the `inside` landing
+the tile's argument below relied on (`WishlistBreadcrumb.tsx`'s header) — so the refusal this
+section quotes for a segment no longer stands. See [Shelves](#shelves-2026-09-26).
 
 Issue #283 is one sentence — *"there is no easy way to remove them from that folder and move them
 back to the main wishlist"* — and the interesting part is that the gesture already worked. A
@@ -495,6 +512,13 @@ reader is standing, and is still the only way out of a level whose wall is not d
 is that the ordinary case has a target the size of the things around it.
 
 ## The wall names its own folders, and the strip kept two of its four jobs
+
+**History (2026-09-26):** the `New folder` tile, the folder cards and the `max-h-44` scroller are
+gone. **Add folder** is on the path row and on every heading of the reader's own folders, the name
+is typed on the heading where the folder will appear, and Rename is a button on the heading. The
+`openPanel` level clause below lost its `flatten` arm and became `panelGone`: a naming field closes
+when its heading is no longer on the wall (`WishlistPage.tsx:999-1005`). See
+[Shelves](#shelves-2026-09-26). The strip still holds `Move to folder…`, `Delete…` and `Clear…`.
 
 **2026-09-03.** `New folder` and a folder card's `⋯ → Rename…` used to raise a **bordered strip
 under the breadcrumb** — a box with its own edge, an input, `Create folder` and `Cancel` spelled
@@ -543,6 +567,100 @@ on the two rename shapes. The method and the full table are in
 on the way out of the field, and the app lock was held elsewhere all session — so nothing here has
 been driven in the real app, and the pass recorded at the end of this page predates the change and
 says nothing about it.
+
+## Shelves (2026-09-26)
+
+**Since 2026-09-26 the wishlist's wall at any level is every wish at and below it, one shelf per
+folder**, the collection's wall on the same day — design
+[2026-09-26-folder-shelves-design.md](../superpowers/specs/2026-09-26-folder-shelves-design.md).
+[collection-folders.md's Shelves](collection-folders.md#shelves-2026-09-26) is the record of what
+the two pages share and is not repeated here: `buildShelves`' order, Not sorted first, collapse and
+its per-window memory, the fold during a folder drag, the path row's **Add folder**, **Expand all**
+and **Collapse all**, the table's bands, and the query cost. What follows is the wishlist's own. **A wishlist tile was already one wish**, so the collection's per-folder tile key
+changed nothing here.
+
+**Flatten defaulted *off* on this page, and that default is what made the empty page this list's
+normal state.** The root asked for the wishes filed nowhere (`w.folder_id IS ?` bound to NULL), so
+a reader who filed every wish stood on a page holding the figures band, the filter bar, the
+breadcrumb and a band of folder cards — and the header read **Wishes 0** and **Total cost —**,
+because its figures described the level being drawn. The collection shipped with Flatten on and
+this list with it off (`collectionFlattened: true`, `wishlistFlattened: false` in `store.ts`, spec
+§1), so the collection hid the problem and the wishlist showed it by default. Shelves draws every
+wish at and below the level, and Flatten is deleted on both pages rather than kept as a "no
+headings" mode — the spec's decision 2, argued in
+[the collection's section](collection-folders.md#flatten-was-deleted-not-hidden). **The wire kept
+its field**: `WishlistQuery::flatten` is still read, and *Export everything* and the shared-binder
+view's owned-and-wanted index still send `flatten: true` (`src/features/transfer/export/scope.ts:170`,
+`src/features/share/useOwnedIndex.ts:174`).
+
+### `WishlistQuery::shelves`
+
+The collection's field one table over, and every rule of it holds: **present, it replaces
+`folder_id` and `flatten` outright**; `0` names the root (`w.folder_id IS NULL`); rows come back in
+list position, then the sort, then `w.id`; an id no folder answers to matches nothing and refuses
+nothing; and **absent is the old answer** — the root, or everything when flattened — for every
+caller that does not send it. The term is the collection's builder over `w.folder_id`, so a list
+that leaves out `0` searches `idx_wishlist_folder` rather than scanning.
+`wishlist_shelves_win_over_folder_id_and_flatten`,
+`wishlist_an_unknown_shelf_id_returns_no_rows_and_no_error` and
+`a_wishlist_query_without_shelves_answers_exactly_what_it_did_before` are the fences.
+
+**The page sends two lists, as the collection does** (`useWishlist.ts:247-255`): the list asks for
+the open shelves (`fetchIds`, `:339`), and the counts, the export sweep and the optimise sweep ask
+for every shelf at and below the level (`countIds`, riding `filters` at `:298`). Nothing is asked
+until the folder list has answered (`ready`, `:256`).
+
+**Measured only on the real dev database, and only before the fix**, in the collection's harness
+(Windows, 2026-09-26; medians of twenty): 89 wishes, 87 of them at the root and 2 in one folder.
+`wishlist_list` with `shelves=[0, 1]` took 1.78 ms debug and 0.91 ms release, against 1.57 ms and
+0.81 ms for the pre-shelves root read of 87 rows and 1.65 ms and 0.84 ms for a flattened read of the same
+89; `wishlist_shelf_counts` for that list took 0.92 ms and 0.54 ms. The 100,000-entry copy seeded
+no wishes, so the wishlist has no figure at scale — the builders are the collection's, and so is
+the fix.
+
+### `wishlist_shelf_counts`
+
+The collection's `ShelfCount` (`wishlist.rs` imports it), answered over `wishlist_scope` — every
+filter included — by `wishlist::shelf_counts`:
+
+| Field | On the wishlist |
+| --- | --- |
+| `tiles` | `count(*)` — one wish is one tile on this wall |
+| `copies` | `sum(quantity)` |
+| `value` | the cost over `row_price_expr(…, WISH_PREFERRED_FINISH)`, the expression `WishRow.unitPrice` is; `null` where nothing in the shelf is priced, where `folder_summary` answers `0.0` |
+| `unpriced` | **wishes** (rows), the unit of the heading's `6 wishes` — the collection counts copies here |
+| `peek` | `c.id` off `priced_wishes`' join — a pinned wish's own printing, an any-printing wish's cheapest — so each is the id that wish's tile is drawn from; a genuine orphan has no picture and is left out. **Unfiltered**, for the collection's reason |
+
+**The loaded rows are a floor under a count, never a ceiling** (`effectiveCounts`,
+`src/features/wishlist/wishShelfPlan.ts:99-121`). The list and the counts are two reads settled by
+one invalidation, so for a round trip either can be ahead; a shelf laid out from a count one short
+of the rows on screen would drop a wish the reader can see.
+
+### **Wishes** and **Total cost** are summed from the counts
+
+`countTotals` (`wishShelfPlan.ts:135-146`) sums the **server's** counts — never the loaded rows —
+into the header's two figures (`WishlistPage.tsx:1705`, drawn at `:1835` and `:1848-1853`):
+`Wishes` is every shelf's `tiles`, and `Total cost` every priced shelf's `value`, with the unpriced
+wishes counted in its note. Both cover the whole wall — this level and every shelf below it, shut
+ones included — or, under a filter, everything that matches. **That is what turned `Wishes 0` into
+the reader's real count**, and it took the other note with it: `Total cost` used to be a sum over
+the rows that happened to be loaded, so it carried `N of M counted` whenever a page was still out
+(`${rows.length} of ${total} counted`, until `5dad8d51`). A sum over the whole scope has nothing
+un-counted to own up to. `Total cost` reads `—` while the wall holds no wishes.
+
+### Managed folders are shelves under **Managed by decks**
+
+`toShelfFolder` maps a folder with a `managedDeckId` to the kind `managed` (`wishShelfPlan.ts:37-46`),
+which `buildShelves` draws **at the root only**, under a `Managed by decks` label, by name, and shut
+by default. A managed heading draws its chevron, its title, a **Managed** pill
+(`ShelfHeading.tsx:308-315`) and its figures, and **nothing a hand write could be refused for** —
+no Add folder, no Rename, no `⋯`, no drag, and no card target that arms, because `canFile` refuses a
+managed destination (`WishlistPage.tsx:1474-1566`). **An empty managed folder keeps its heading**,
+because a deck whose plan asks for nothing more is good news rather than a hidden shelf. The table
+draws `MANAGED_EMPTY` (*Nothing missing — this deck has every card its plan asks for.*) under it
+(`:1570-1578`); the grid draws the heading alone, since `layoutShelves` gives an empty row only to a
+reader's folder — so the two views say it differently. Standing inside one, `ManagedFolderNote`
+still says whose list it is.
 
 ## What a wish costs, and which printing it is drawn as
 
@@ -924,7 +1042,10 @@ confirmation.
 same `FROM` and `WHERE` `list_wishes` draws with, rather than a second copy of the folder rule and
 the filter terms. So the folder the reader is standing in, the Flatten switch and every active card
 filter scope the sweep, and the sentence the dialog opens with is about the list they are looking
-at.
+at. **History (2026-09-26):** there is no Flatten switch now. The page's query carries the wall's
+`shelves` — every shelf at and below the level, shut ones included (`useWishlist.ts:298`) — and
+`plan` reads it through the same `wishlist_scope`, so the sweep covers what the wall covers. See
+[Shelves](#shelves-2026-09-26).
 
 **`limit` and `offset` are ignored**, which is the half worth stating: a preview that stopped at the
 foot of page one would leave wishes un-optimised for a reason nothing on screen mentions, and the
@@ -1171,17 +1292,19 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | --- | --- |
 | `src-tauri/src/schema.rs` | The v23 step, `WISHLIST_GRAIN`, and the whole-schema `ON DELETE` inventory |
 | `src-tauri/src/wishlist_folders.rs` | The folder commands, `set_wish_folder`, `folder_summary`, and since issue #471 `clear_folder` and `delete_folder_and_wishes` |
-| `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `WISH_PREFERRED_FINISH`, the cheapest-printing join |
+| `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `WISH_PREFERRED_FINISH`, the cheapest-printing join — and since 2026-09-26 `WishlistQuery::shelves`, `shelf_counts`, `wishlist_peek_sql` and `wishlist_shelf_counts` |
 | `src-tauri/src/wishlist_optimize.rs` | `plan` and `apply`, the candidate query, and the six DTOs `ipc.test.ts`'s `plainMirrors` pins |
 | `src/features/wishlist/optimizePlan.ts` | The conclusions drawn from those facts — the ticked set, the headline, the outcome reading |
 | `src/features/wishlist/OptimizeWishlistDialog.tsx` | The preview, and the one press that commits it |
 | `src-tauri/src/sorting.rs` | `row_price_expr`'s two arms, and `deck_card_price_expr` as one caller of it |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery |
 | `src/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
-| `src/features/wishlist/WishFolderCard.tsx` | The tile, its `rename` branch, and its stories beside it |
-| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` |
-| `src/components/NewFolderCard.tsx` | The tile that makes a folder, and the field it becomes |
-| `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
+| ~~`src/features/wishlist/WishFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band, beside `ManagedWishFolders.tsx`. A folder is a shelf heading |
+| `src/features/wishlist/wishShelfPlan.ts` | The wishlist's reading of the shelves: `toShelfFolder`, `NEW_FOLDER_SHELF`, `effectiveCounts`, `countTotals`, `shelfStat`, `foldedForDrag` and the table's `shelfTable` |
+| `src/features/wishlist/WishShelfHeading.tsx` | The heading, the sticky bar and the empty box, each wired to `readWishDrop` and this page's filing policy |
+| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` — drawn on a shelf heading since 2026-09-26 |
+| ~~`src/components/NewFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band. Add folder is `ShelfToolbar` and `ShelfHeading` |
+| `src/components/ParentFolderCard.tsx` | The up-one-level tile — drawn by no cabinet since 2026-09-26, with its stories kept; the deck gallery's `FolderCard` imports its words. Its folder half is a breadcrumb segment's drop now |
 | `src/features/card/cardMenu.tsx` | `buildWishlistTargetItems` — `Add to → Wishlist` |
 | `src/features/wishlist/WishDestination.tsx` | The destination dropdown both deck sweeps draw — the root, the full-path rows, and `New folder…` |
 | `src-tauri/src/deck_theory.rs` | `missing_to_wishlist`, the Compare dialog's write and its up-front folder check |
@@ -1240,4 +1363,6 @@ their folders.
   offers a managed wish.
 - **The frontend draws no editing control for a managed folder or wish**, and never offers one
   as a destination; the deck hooks' `invalidate` helpers fire `["wishlist"]` with `["decks"]`
-  because every deck write can rewrite a folder.
+  because every deck write can rewrite a folder. Since 2026-09-26 the folders are shelves under
+  **Managed by decks**, shut by default — see
+  [Managed folders are shelves](#managed-folders-are-shelves-under-managed-by-decks).

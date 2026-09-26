@@ -187,6 +187,11 @@ rather than on "skip slot 0". `a_folder_the_app_owns_is_not_part_of_the_readers_
 group at `sort_order` 9 alongside the holding area at 0, because either weaker spelling passes with
 one system folder in the table.
 
+**History (2026-09-26):** there is no pinned section any more — the app's folders are shelves under
+a `Decks` label, ordered by name in `buildShelves` and never by `sort_order`, so the `kind` fence
+still matters for the reader's sequence and nothing reads the app folders' numbers at all. See
+[Shelves](#shelves-2026-09-26).
+
 ## The eleventh term, and why it is load-bearing
 
 ```rust
@@ -263,7 +268,10 @@ is what it was for.
   reads `Collection · all folders`, there is no folder on screen to be standing in, and the page
   passes `folderId: null` rather than whatever `useCollection` still holds underneath. The
   collection ships flattened, so out of the box the sidebar behaves exactly as the `+` always has,
-  and the default starts working the moment a reader opens a folder.
+  and the default starts working the moment a reader opens a folder. **History (2026-09-26):**
+  Flatten is deleted, so this fence went with it — the page always passes the level it stands on
+  (`CollectionPage.tsx:3531`), which is the shelf at the top of the wall. See
+  [Shelves](#shelves-2026-09-26).
 - **Absent and `null` are different on the wire**, and the page sends `null` explicitly. Absent
   sends no `folderId` field at all — which is what `SearchPage` and the Tags page still do, and why
   they were untouched by this — where `null` sends `folderId: null` and *names* the root as the
@@ -698,6 +706,13 @@ UI side. A copy in a locked drawer is drawn wearing a `Lock`:
 - **the table's Folder cell** — `CollectionTable.folderLocked`, a caller-supplied predicate in
   `quantityBlocked`'s way, drawing a `role="img"` glyph named `Locked`.
 
+**History (2026-09-26):** both marks went with the surfaces that drew them — shelves draw no caption
+under a tile, and the table dropped its Folder column because every row now sits under the band
+that names its drawer (`CollectionTable.tsx:91-94`). A set-aside copy is marked by its **shelf**
+instead: a locked folder's heading wears the `Lock` (`ShelfHeading.tsx:303-307`), and the table's
+band is that same heading. The rest of this subsection is the record of the two marks as they
+shipped on 2026-09-09. See [Shelves](#shelves-2026-09-26).
+
 **The wall's mark answers on *any*, and the asymmetry with the caption beside it is deliberate.** A
 tile merges every copy of one printing in one finish across drawers, so it can stand for a copy in
 a display case and a copy loose at the root at once. `filedIn` refuses to *name* one of several
@@ -786,6 +801,10 @@ and a lock on either would be a control with nothing to say. **Unlocking is like
 visible**, and the menu is where that is answered: the write touches the folder's own flag only, so
 clearing the flag on a child of a locked parent changes what the row says and not what the reader
 sees — that row is greyed with its reason rather than reporting a success the badge contradicts.
+
+**History (2026-09-26):** `PinnedFolders.tsx` draws nothing now — the strip became the `Decks`
+shelves — and keeps only the vocabulary (`DECK_KIND`, `REMOVED_KIND`, `pinnedFolders`). The word
+argument above holds for those shelves' headings unchanged. See [Shelves](#shelves-2026-09-26).
 
 ## The deck groups, `Recently removed`, and what v25 converted
 
@@ -1555,6 +1574,11 @@ rather than rediscovering.** Not flattened, the query is scoped to `folderId`, s
 wall is in that folder and the per-tile rule fences every tile of its own accord. The per-tile rule
 is the one that does all the work, because Flatten starts `true`.
 
+**History (2026-09-26):** both paragraphs above describe a wall that is gone. Flatten is deleted,
+and since shelves a tile is one folder's, so no tile can mix a binder with a deck's group and
+"every copy behind the art" and "the tile's folder" are one question (`CollectionPage.tsx:2059-2062`).
+The fence itself is unchanged. See [Shelves](#shelves-2026-09-26).
+
 **In the table the fence is a prop rather than a lookup**, `quantityBlocked?: (row) => string | null`
 — the *sentence*, not a boolean, because a control that vanishes without saying why is worse than
 one that refuses in words. The page supplies it from the same predicate the wall uses, one helper
@@ -1628,6 +1652,14 @@ reason.
   — a clear is not a way to change a deck. This one confirms where the menu row does not because it
   is aimed at the whole folder, not at the cards the reader is pointing at.
 
+**History (2026-09-26):** "never a flattened tile that mixes one in" and "not flattened" describe a
+state that no longer exists — Flatten is deleted and no tile mixes folders — and the
+*Drag a card onto a folder…* sentence went with the folder band. `Clear…` sits on the path row
+beside `ShelfToolbar` while the reader stands in `Recently removed` (`CollectionPage.tsx:3087-3099`).
+The `New folder` card and the pinned strip the next paragraph names are gone as well: Add folder
+is on the path row and on the reader's own headings, and a `Recently removed` heading carries no
+`⋯`. See [Shelves](#shelves-2026-09-26).
+
 **`clear_removed` is the first write aimed *at* `Recently removed` by the reader, and it did not
 open the folder to edits.** The folder is still no destination (`readersOwnLevel` still answers the
 drop and the `New folder` card, and `set_entry_folder` still refuses a `removed` destination), still
@@ -1684,6 +1716,11 @@ about them.
 
 ## The way back up is a tile on the wall, and inside `Recently removed` it is the target that was missing
 
+**History (2026-09-26):** the tile and the `Recently removed` substitution are both gone with the
+folder band. Moving a copy or a folder up is a drop on a path segment, and #209's drag back into a
+binder happens at the root, where `Recently removed` is a shelf beside the binders' headings — see
+[Shelves](#shelves-2026-09-26), which records that move.
+
 Issue #283 was reported against the wishlist and the cabinet here has exactly the same shape, so
 the tile is one component drawn by all three walls —
 `src/components/ParentFolderCard.tsx`, wrapped here by `CollectionParentFolderCard`, which holds
@@ -1716,6 +1753,13 @@ every card in the group — the invitation to a gesture that does nothing that `
 make one paragraph up. The breadcrumb is still the way out of one, as it always was.
 
 ## The wall names its own folders, and the strip kept two of its four jobs
+
+**History (2026-09-26):** the `New folder` tile and the folder cards are gone. **Add folder** is on
+the path row and on every heading of the reader's own folders, the name is typed on the heading
+where the folder will appear, and Rename is a button on the heading — see
+[Shelves](#shelves-2026-09-26). The strip still holds `Move to folder…`, `Delete…` and `Clear…`.
+The `openPanel` level clause below lost its `flatten` arm and became `onThisWall`: a naming field
+closes when its heading is no longer on the wall (`CollectionPage.tsx:1626-1641`).
 
 **2026-09-03.** The tile that makes a folder and the card that holds one both answer their naming
 gesture **on themselves** now. `New folder` and a folder card's `⋯ → Rename…` used to raise a
@@ -1865,6 +1909,11 @@ and an id nothing answers to would sail through.
 
 ## The root is the ungrouped cards, and Flatten is the whole binder
 
+**History (2026-09-26):** neither half of this heading is true any more. The root draws every card
+the reader owns — Not sorted first, then every folder as a shelf — and Flatten is deleted. The wire
+this section designed is unchanged and its table still describes `CollectionQuery` exactly; the
+page asks with `shelves` instead. See [Shelves](#shelves-2026-09-26), directly below.
+
 **Until 2026-08-26 this cabinet had a root that was also the whole binder**, and the two could not
 be told apart by any press. `useCollection` sent no `folderId`, `CollectionQuery::folder_id` reads
 an absent one as *every folder* (spec §8.4), and so the level a reader stood on at the top of the
@@ -1940,7 +1989,276 @@ Two consequences that are easy to miss and are each pinned by a test:
   Flatten by design, so `inRemoved` stayed true under a page drawing no folder cards at all, and
   the caption invited a drag onto targets that were not there.
 
+## Shelves (2026-09-26)
+
+**Since 2026-09-26 the wall at any level is every card at and below it, one shelf per folder.**
+The design is
+[2026-09-26-folder-shelves-design.md](../superpowers/specs/2026-09-26-folder-shelves-design.md),
+and every *why* this section does not repeat is there. Until then every level was a drill-down that
+drew a folder's **direct** members and nothing below it — the root sent `rootOnly: true` whenever
+Flatten was off — so a reader who filed everything stood on a page holding a band of folder cards
+and no cards at all. The sections above that describe that wall (the folder band, the `New folder`
+tile, the up-one-level tile, the pinned strip, Flatten) are the record, and each carries a
+**History (2026-09-26)** line pointing here. The wishlist took the same wall the same day; what is its own is in
+[wishlist-folders.md](wishlist-folders.md#shelves-2026-09-26).
+
+**Vocabulary, fixed by the spec so it cannot drift.** A **shelf** is one folder's section of the
+wall: its **heading** and the cards filed directly in it. **Not sorted** is the shelf of copies
+filed in no folder — `UNFILED_SHELF` in TypeScript, `0` on the wire (`src/lib/shelves.ts:30`) — and
+the only shelf that is not a folder. The button is **Add folder**, never "New folder".
+
+### What the wall is
+
+`buildShelves` (`src/lib/shelves.ts:140-202`) decides the whole order, and it is TypeScript's:
+
+- **At the root, Not sorted comes first**, and is drawn only once the counts say it holds
+  something (`visibleShelves`, `:259-278`). **Then the reader's folders, depth-first** — a shelf
+  before its subfolders' shelves, siblings in `buildFolderTree`'s `sortOrder, name, id`. **Then, at
+  the root only, the app's own under a `Decks` label**: every deck group by name, then `Recently
+  removed` (`:195-201`).
+- **Inside an opened folder** the level's own cards come first under no heading, because the path
+  row already names the folder — a `headless` shelf, never collapsed (`:173-178`) — and its
+  subfolders follow, starting again at depth 0. No app-owned group is drawn below the root.
+- **Collapse starts from the kind** (`defaultCollapsed`, `:89-91`): a reader's folder and Not sorted
+  open, a deck group and `Recently removed` shut, because they are built decks and a holding area
+  rather than binders. The reader's own overrides are one `app_meta` row, `shelf_folds`, kept
+  [per window](multi-window.md#app_meta-which-rows-follow-and-which-stay). **Any active search or
+  filter suspends collapse and writes nothing**: every shelf with a match opens, every shelf with
+  none is hidden, and a folder whose matches are all below it keeps its heading as their container.
+- **Indentation stops at three levels** (`MAX_SHELF_INDENT`, `:37`); a deeper heading keeps the
+  third level's indent and names its path from the ancestor on the cap. `SHELF_INDENT_PX` is 32 per
+  level on the grid and the table alike (`src/lib/shelfLayout.ts:46`).
+- **An empty folder is a heading over a dashed drop box, and only a reader's folder with nothing
+  drawn inside it gets one** (`layoutShelves`, `shelfLayout.ts:102-104`). A folder whose cards are
+  all in its subfolders draws its heading and no box; Not sorted, a deck group and `Recently
+  removed` never draw one.
+
+**The path row** is the breadcrumb on the left and `ShelfToolbar` on the right — **Add folder**,
+**Expand all**, **Collapse all** (`CollectionPage.tsx:3100-3104`) — with Add folder gated by
+`canMakeFolder`, which is `readersOwnLevel` exactly as the `New folder` tile was (`:2667`). Expand
+all and Collapse all reach every shelf below the level, app-owned ones included, and skip the
+headless one, which has no chevron to reopen it with (`foldAll`,
+`collectionShelfModel.ts:167-177`). **A reader's-folder heading carries Add folder, Rename and `⋯`;
+a deck group or `Recently removed` heading carries its chevron, its title and its figures and
+nothing a press could be refused for**, because every folder write refuses those two kinds in words
+(`headingFor`, `CollectionPage.tsx:2785-2854`). Not sorted has a chevron and plain text. Add folder
+draws a heading whose name is the naming field, last among its siblings, under the id
+`DRAFT_SHELF` (`-1`), which never reaches the wire (`collectionShelfModel.ts:29`).
+
+### The wire: `shelves`, an ordered list the crate never builds
+
+`CollectionQuery::shelves: Option<Vec<i64>>`, serde-defaulted to `None`, beside `root_only` in
+`collection.rs`. **Present, it replaces the folder question outright**: `folder_id`, `root_only`
+**and `exclude_locked`** are not read, which is `root_only`'s own named-folder rule applied to a
+list. Rows come back in **list position first**, then the reader's sort, then the `e.id` tiebreak.
+`0` names the unfiled shelf, an id no folder answers to matches nothing and refuses nothing — a
+folder deleted in another window is a shelf with no rows — and an empty list answers nothing
+rather than everything. **Absent is the old answer byte for byte**: the plain-text mirror, *Export
+everything*, the importer and the deck builder's Collection Search send no list and kept their
+behaviour untouched — and the share snapshot never reads through this query at all.
+`shelves_win_over_folder_id_root_only_and_exclude_locked`,
+`an_unknown_shelf_id_returns_no_rows_and_no_error` and
+`a_query_without_shelves_answers_exactly_what_it_did_before` are the fences.
+
+**The page sends two lists** (`useCollection.ts:321-326`). The list query asks for the shelves
+drawn **open** (`shelvesToFetch`, `shelves.ts:225-230`) — a shut shelf's cards, and those of every
+shelf under it, are never fetched. The summary, the counts and the export sweep ask for **every**
+shelf at and below the level, shut ones included (`shelvesToCount`, riding `filters` at
+`useCollection.ts:382`). So `Cards`, `Unique`, `Value` and `For trade` describe the whole wall
+whatever is folded, and Export pressed inside a folder exports that folder and everything under it,
+which is what is on screen. Nothing is asked until the folder census answers (`censusReady`,
+`:333`): before it the list would be Not sorted alone, the empty page drawn for one round trip.
+
+**No app code sends `rootOnly: true` any more.** The field stays on the wire and its default is
+still what keeps an unasked query wide; the only senders left are two `CollectionPage.stories.tsx`
+fixtures that read the root the way any other caller would.
+[The three-state table](#the-wire-was-widened-not-flipped-and-that-was-the-whole-design) still
+describes the query exactly. It no longer describes the page.
+
+**Why TypeScript builds the list** is the spec's decision 10, and
+[`folder_summary`'s rule](#folder_summary-answers-direct-counts-and-no-row-at-all-for-an-empty-folder)
+one step further: the tree already lives in `buildFolderTree`, and SQL orders siblings
+`sort_order, id` where the tree orders them `sortOrder, name, id`. With the list arriving from one
+side, only one of them ever decides.
+
+**Two statement shapes, decided in Rust from the list itself** — the measurement below is why.
+`collection::shelf_term` asks `e.folder_id IN (SELECT j.value FROM json_each(?))` when the list
+leaves out `0`, which `idx_collection_folder` can search, and keeps `shelf_member`'s
+`coalesce(e.folder_id, 0) IN (…)` — a scan — when the list names `0`, because only the `coalesce`
+finds a NULL and every index plan measured for that list lost to the scan. The position is
+`shelf_position`, an `instr` over one bound comma-wrapped string (`,3,0,12,`, from `shelf_order`)
+whose first occurrence keeps a shelf named twice at its first place. Each binds one string whatever
+the list's length, so a statement's text does not vary with it and nothing a caller sent is
+interpolated. `wishlist::wishlist_scope` calls the same builders over `w.folder_id`.
+
+### `collection_shelf_counts`
+
+One `ShelfCount` per **non-empty** shelf, over `scope` — the search and every filter included, so a
+count and the list it sizes describe the same rows (`collection::shelf_counts`). The struct is
+defined once in `collection.rs` and `wishlist.rs` imports it, `BreakdownRow`'s arrangement.
+
+| Field | On the collection |
+| --- | --- |
+| `folderId` | the shelf; `0` is Not sorted |
+| `tiles` | `count(DISTINCT card_id \|\| '/' \|\| finish)` — what the wall draws for that shelf |
+| `copies` | `sum(quantity)` |
+| `value` | `sum(quantity × unit price)` at the query's marketplace; `null` when nothing in the shelf is priced, never `0` |
+| `unpriced` | the unpriced entries' **copies** — the unit of the heading's `42 cards` and of `CollectionSummary::unpriced` |
+| `peek` | up to `SHELF_PEEK` (4) card ids, one per printing, by card name then id — **unfiltered** |
+
+**It is what places every heading before a page of cards has arrived**: `layoutShelves` sizes each
+shelf from `tiles`, and a slot whose page has not landed draws an empty 5:7 frame. It is also what
+hides a shelf with no match under a filter, and what a heading's figures are summed from. **A
+heading states its subtree, not its own row** — `rolledUp` adds every shelf's count into each of
+its ancestors (`collectionShelfModel.ts:96-114`), so a folder whose cards are all in subfolders does
+not read `0 cards` over twelve — and under a filter it reads `3 of 42 cards`, the `42` coming from
+`collection_folder_summary` plus `subtotalsOf` (`shelfStat`, `:128-151`). **The peek is the only
+picture a shut shelf has**, because its cards are never fetched: `fill_peek` answers every shelf in
+one `row_number()` window statement, and `peekOf` walks the shut shelf and everything under it
+(`:210-225`).
+
+### A tile is one folder's: the eleventh term reaches the wall
+
+**The grain has carried the folder since v24, and the wall did not until shelves** (the spec's
+decision 11). [The wall's grain](#the-walls-grain-is-the-printing-and-the-finish) was the printing
+and the finish, and the folder was one of the terms that merged, so one tile could carry copies from
+a binder and from a deck's group at once. **A tile now belongs to one shelf.** Its key is
+`tileKeyOf(cardId, finish, folderId)`, spelled `` `${cardId}:${finish}@${folderId}` ``, where a copy
+filed nowhere reads `@unfiled` and `null` and `0` are one key (`src/lib/tileKey.ts:64-68`; the
+`tiles` memo, `CollectionPage.tsx:1093-1151`). **The ring key is `tileKeyOf(cardId, finish)`, with
+no folder** (`:1117`), compared by `CardGrid` against a `selectedId` the page builds the same way
+(`:3293-3295`) — so opening a card rings **every** tile of that printing on screen, one per shelf.
+**The third argument is optional and absent is byte-identical**, which keeps `collectionTiles.ts`'s
+`foldCopies` — the deck editor's docked collection column, a wall with no shelves — merging across
+folders as it always has.
+
+What that retired, and what it did not:
+
+- **The stepper's "every copy behind the art" clause** ([the copies
+  control](#the-copies-control-belongs-to-a-normal-folder-in-both-views)) can no longer meet a mixed
+  tile: every row behind a tile shares its folder, so "every row" and "the tile's folder" are one
+  question (`stepperByTile`'s doc, `CollectionPage.tsx:2059-2062`). The loop still asks per row,
+  which costs nothing.
+- **`Remove from collection`'s "never a flattened tile that mixes one in"**
+  ([issue #506](#managing-recently-removed--issue-506)) is the same clause from the menu's side and
+  went the same way.
+- **The lock mark moved to the heading.** #436's two marks — the flattened wall's caption and the
+  table's Folder cell — went with the surfaces that drew them, and a locked folder's heading wears
+  the `Lock` (`ShelfHeading.tsx:303-307`).
+- **Not retired: a tile is still several rows.** Grade and language still merge, so a drag still
+  hands a folder every row behind the art and `PickCopies` still asks which; its folder column now
+  reads one drawer down the whole list.
+
+### Flatten was deleted, not hidden
+
+The spec's decision 2: keeping Flatten as a "no headings" mode was weighed against Shelves being
+the only way either wall is drawn, and lost. The root now puts every card on screen, which was the
+whole of what Flatten was for, and a second drawing of the same cards is a second set of answers to
+which copies a control reaches. **Deleted in `6fb98daa`**: `FilterBar`'s `flatten` prop, the store's
+`collectionFlattened` flag (it started `true` here and `false` on the wishlist),
+`useFlattenPersistence`, the `flatten_state` / `set_flatten_state` commands and the whole
+`src-tauri/src/flatten.rs` module. **The `app_meta` row they kept, `flatten`, is read by nothing now
+and deleted by nothing either** — no rung was owed for a key nobody asks for. What survives is the
+wire: `CollectionQuery::root_only` and `WishlistQuery::flatten` stay fields, and the wishlist's
+*Export everything* still sends `flatten: true`.
+
+### One behaviour moved rather than survived: #209's drag back
+
+**Standing inside `Recently removed`, the wall used to substitute the reader's own top level for its
+own children**, so a copy that had just left a deck could be dragged straight back into a binder
+([the section that recorded it](#the-way-back-up-is-a-tile-on-the-wall-and-inside-recently-removed-it-is-the-target-that-was-missing)).
+Shelves has no band to substitute into, and a level draws what is at and below it. **The same drag
+now happens at the root**, where `Recently removed` is a shelf under `Decks` on the same wall as
+every binder's heading: open it and drag from it onto a heading. It starts shut, so the gesture is
+one chevron press longer than it was.
+
+### A folder drag folds the wall, on the grid only
+
+A reader's folder is moved by dragging its heading — before, inside or after by `folderDrag.ts`'s
+vertical edge zones — and Move up / Move down in the `⋯` are the non-drag path. **For the length of
+that drag every shelf folds to its heading** (`foldedForDrag`, `collectionShelfModel.ts:258-267`), a
+render-time override that writes nothing, and `useFoldAnchor` scrolls `AppShell`'s `main` in a
+layout effect so the carried heading stays under the pointer as the wall folds and unfolds
+(`src/features/shelves/useFoldAnchor.ts`). **The table does not fold** (`CollectionPage.tsx:2690-2691`):
+`VirtualTable` keys its rows by position, so folding under a carried heading would remount it and
+end the drag.
+
+### The table draws bands, and stops at the edge of what has loaded
+
+The same shelves, as heading rows spanning every column — `VirtualTable`'s `band` — with the sticky
+bar pinned under the column header (`stickyBand`). **While pages remain, `shelvedRows` stops after
+the shelf holding the last loaded row** (`CollectionTable.tsx:449-496`). A shelf's count is in
+*tiles* and the table draws *entries*, so the edge is found from rows; without it every later band
+stood over rows that were not there, and `VirtualTable`, which asks for the next page when the rows
+it has drawn run low, counted those bands as rows and asked late. The wishlist's `shelfTable`
+reached the same rule first.
+
+### What the `shelves` query costs — measured 2026-09-26, in a test harness on Windows
+
+**Not in the shipped window.** Taken on Windows 11 Pro (AMD Ryzen 9 5900X), SQLite 3.53.2 bundled
+through rusqlite 0.40.1, at `3efd50b0`, by a temporary `#[ignore]` harness (`shelves_bench.rs`,
+since deleted) that called the crate's own functions on `db::open_read` after `prepare_database`.
+**debug** is `cargo test`, the `tauri dev` profile; **release** is `cargo test --release`. Three
+warm-up calls, then twenty timed; every figure is a median. Two data sets, both byte copies of
+`src-tauri/target/debug/data/`: the real one — 277 entries in 7 folders, migrated from user v46 to
+v51 on the copy — and the same copy with 100,000 entries seeded into user tables only, 100,277 in
+all, 30,001 of them unfiled, 57 folders to depth 6, so the root sends 58 ids.
+
+**The plan's gate was `shelves` at no more than 3× `rootOnly`'s median. The first measurement
+tripped it, and found a second regression the gate had not asked about:**
+
+| 100k copy, before the fix | debug | release |
+| --- | --- | --- |
+| The root wall (58 ids) against `rootOnly` | 4.51× | 3.72× |
+| One folder four levels down, 120 rows, `shelves=[id]` against `folderId=id` | 25× | 33× |
+
+The two causes are different. The root wall reads 100,277 rows where `rootOnly` reads 30,001, and
+paid a correlated `json_each` position lookup per row on top. **A folder below the root lost
+`idx_collection_folder`**, because `coalesce(folder_id, 0) IN (…)` cannot use it: `EXPLAIN QUERY
+PLAN` read `SCAN e` for every `shelves` statement against `SEARCH e USING INDEX idx_collection_folder`
+for `rootOnly` and `folderId`.
+
+**The fix is the two builder changes above, and no schema rung.** Each variant was timed as its
+count and page statements over the same rows, and asserted to answer the same total and the same
+first-page ids in the same order:
+
+| 100k copy, after the fix | debug | release |
+| --- | --- | --- |
+| The root wall, against `rootOnly` | 1021 ms / 366 ms = **2.79×** | 902 ms / 334 ms = **2.70×** |
+| The 120-row folder, against `folderId` | 1.36 ms / 1.28 ms = **1.06×** | 0.835 ms / 0.856 ms = **0.98×** |
+
+**What is left of the root's ratio is row count.** The position lookup was most of the
+like-for-like cost, and `instr` alone took the root wall's statements from 1643 to 1021 ms (debug)
+and from 1263 to 902 ms (release) over the same rows. An expression index
+on `coalesce(folder_id, 0)` was measured and refused: it gained nothing the builder change does
+not, it cost 20–26% on the whole-root list, and it would have been a user-schema rung.
+
+**On the real dev database the whole question is milliseconds.** The root's `shelves` list took
+4.0 ms debug and 2.1 ms release, and the list, the counts and the summary together 7.3 ms debug and
+4.0 ms release — medians taken **before** the fix, since the variants were timed on the 100k copy
+only.
+
+⚠️ **Open: `collection_shelf_counts` is the largest read on a very large collection, and the fix
+does not touch it.** At the 100k root (58 shelves) it took **3.06 s debug and 2.44 s release**, and
+**`fill_peek` was 45% and 47% of that** (1.38 s and 1.15 s): the peek groups every scoped row by
+`(shelf, card_id)` and fetches `cards.name` for each before the window cuts to four. Inside a
+7-shelf, 8,813-row subtree it took 271 ms debug and 221 ms release; on the real database 2.2 ms and
+1.3 ms. The list, the counts and the summary all take the one `db_read` mutex, so they run in
+series. The likeliest next step — ask for a peek only for the shelves whose heading is shut, since
+only a shut heading draws one — changes `ShelfCount`'s contract across both pages, is not built,
+and has no figure behind it.
+
+**Not driven in the shipped window when this section was written.** What only a live pass can
+see — the sticky bar tracking its shelf, a heading that scrolls in mid-drag arming, the fold anchor,
+arrows across a short last row, Ctrl+wheel with headings, and the empty page this exists to fix —
+is spec §8's list and the plan's Task 9 Step 5.
+
 ## The page, and the drag payload's own key
+
+**History (2026-09-26):** the folder cards are headings now and wear the same two marks —
+`DROP_EDGE` on the heading's own always-present transparent edge, `DROP_OVER` under the pointer
+(`ShelfHeading.tsx:212-218`) — and a breadcrumb segment takes a folder as well as a copy. See
+[Shelves](#shelves-2026-09-26).
 
 The collection page is the wishlist's page ported, and the pieces it reuses are named in
 [wishlist-folders.md](wishlist-folders.md) rather than re-argued: folder cards in the grid, a
@@ -2223,6 +2541,11 @@ explaining that it does not work teaches nothing its absence would not have. **`
 folder edit**: it deletes the entries filed in `Recently removed` and leaves the folder standing,
 and its button lives inside the level rather than on this strip, which still has no `⋯`.
 
+**History (2026-09-26):** *pinned* is gone. The app's folders are shelves under the `Decks` label
+at the root only (spec §3.1), so reaching `Recently removed` from three drawers down is a walk back
+to the root again; *flat* and *fixed* still hold, and are why those headings carry no Add folder,
+Rename, `⋯` or drag. See [Shelves](#shelves-2026-09-26).
+
 **That third word was *locked* until v33, and it was renamed rather than kept.** #365 gave the
 reader a lock of their own, and the two are very nearly opposites: a folder locked by a reader is
 still theirs to rename, to move, to file cards into and out of, and still carries its full `⋯`
@@ -2444,7 +2767,7 @@ build, not a description of this one.
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the pair that moves a row across the deck boundary and back — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/deck_pull.rs` | The third crossing (2026-09-03, issue #351): `deck_pull_plan` and `deck_pull_from_collection` — filling a hole the list already declares, writing no `deck_cards` row. Candidate eligibility, the pre-pick order, the all-or-nothing batch, and the `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has) |
 | `src-tauri/src/deck_quick_add.rs` | The fourth crossing (2026-09-03, issue #350): `deck_quick_add_wishes` and `deck_quick_add_to_collection` — the only one that *creates* a row rather than moving one. The seven-step order, `WISH_GONE` and `WISH_WRONG_CARD`, the wishlist predicate and why it drops the any-printing arm, and the fourth `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-quick-add-recording-cardboard-nobody-had-written-down) |
-| `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation`, `CollectionQuery::exclude_locked` with `scope`'s term for it, and `add_entry_filed` with `DECK_WRITE_FOLDERS` — the private door that takes the folder fence as a parameter, and its two callers |
+| `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation`, `CollectionQuery::exclude_locked` with `scope`'s term for it, and `add_entry_filed` with `DECK_WRITE_FOLDERS` — the private door that takes the folder fence as a parameter, and its two callers. Since 2026-09-26 also `CollectionQuery::shelves`, the shelf term builders `wishlist.rs` shares, `ShelfCount`, `shelf_counts`, `fill_peek` and `collection_shelf_counts` |
 | `src-tauri/src/deck_theory.rs` | `OWNED_SPARE_SQL` — "what can I build with", and the first ownership-shaped statement the lock changed, unconditionally |
 | `src-tauri/src/collection_source.rs` | The three scoped fragments, `copies_by_printing_and_finish` (the whole statement, 2026-09-09) and `Availability` — the second thing the lock reaches, as a **scope a caller passes** rather than a statement: `ForDeck` drops another deck's group and every locked drawer, keeping the asking deck's own group, and has two readers that must stay one pool — the deck builder's card search (issue #349) and a `theory` row's owned figure (issue #435) |
 | `src-tauri/src/deck.rs` | `owned_by_printing` (`owned_by_oracle` before 2026-09-07), `available_by_printing` (the plan's wider pool, 2026-09-09) and `attribute_owned` — a `live` row's owned/missing as a sum over the group, a `theory` row's over everything this deck could use, both keyed `(card_id, finish)`, with `get_deck` the one line that picks — `delete_deck`, which re-files into `Recently removed`, `release_unclaimed_copies` — the sweep `swap_printing` and `set_card_finish` each call after rewriting a row's identity — and `release_group_copies`, the crate's one walk over a group's rows — exact `(card_id, finish)` only since the oracle-grain fallback left it the same day — which `deck_to_collection` calls for its one row and `release_live_copies` loops for the four bulk sites (`clear_category`, `clear_variant`, `deck_meta::delete_category`'s cascade arm, `import::commit_import`'s `replace` arm), carrying the `live` fence for all of them |
@@ -2453,15 +2776,21 @@ build, not a description of this one.
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, and `lockedFolderIds` — the one function there that is this cabinet's alone |
 | `src/features/collection/collectionDrag.ts` | Both payloads under their own keys, the row and the tile that offer them, the targets that take either |
 | `src/features/collection/PickCopies.tsx` | The question a drop asks when the art stands for more than one row |
-| `src/lib/tileKey.ts` | `tileKeyOf` — **the one place** `` `${cardId}:${finish}` `` is spelled, and the `?? "nonfoil"` the ring composite meets a tile's key on. Both folds and both walls call it |
-| `src/features/collection/CollectionPage.tsx` | The `tiles` memo, `copiesByTile`, `entryIdsOf` — the wall's own printing-and-finish grain, keyed through `tileKeyOf` |
+| `src/lib/tileKey.ts` | `tileKeyOf` — **the one place** `` `${cardId}:${finish}` `` is spelled, and the `?? "nonfoil"` the ring composite meets a tile's key on. Both folds and both walls call it. Its optional third argument, the folder, is the shelved wall's (2026-09-26) |
+| `src/features/collection/CollectionPage.tsx` | The `tiles` memo, `copiesByTile`, `entryIdsOf` — the wall's own grain, keyed through `tileKeyOf` on the printing, the finish and, since shelves, the folder — and the wall's shelves, headings and path row |
 | `src/features/decks/collectionTiles.ts` | `foldCopies` — the *other* fold of the same rows, split the same way and keyed through the same `tileKeyOf` |
 | `src/features/search/CardGrid.tsx` | `GridCard.key` and `tileKey` — a tile's identity where it differs from its card's |
-| `src/features/collection/CollectionFolderCard.tsx` | The tile, `folderFace`, its `rename` branch, and its stories beside it |
-| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` |
-| `src/components/NewFolderCard.tsx` | The tile that makes a folder, and the field it becomes |
-| `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
-| `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and **fixed**, the word that used to be *locked* — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |
+| `src/features/collection/CollectionFolderCard.tsx` | `folderFace` and `CollectionFolderTotals` — the folder card's figures line, kept for the home page's Folders widget. The card itself went with the folder band on 2026-09-26 |
+| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` — drawn on a shelf heading since 2026-09-26 |
+| ~~`src/components/NewFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band. Add folder is `ShelfToolbar` and `ShelfHeading` |
+| `src/components/ParentFolderCard.tsx` | The up-one-level tile — drawn by no cabinet since 2026-09-26, with its stories kept; the deck gallery's `FolderCard` imports its words (`UP_ONE_LEVEL`, `upCardName`) |
+| `src/features/collection/PinnedFolders.tsx` | `DECK_KIND`, `REMOVED_KIND` and `pinnedFolders` — the vocabulary. The pinned strip it drew became the `Decks` shelves on 2026-09-26 |
+| `src/lib/shelves.ts` | `buildShelves`, `defaultCollapsed`, `shelvesToFetch`, `shelvesToCount`, `visibleShelves`, `UNFILED_SHELF` — the order, the folds and the two id lists, shared with the wishlist |
+| `src/lib/shelfLayout.ts` | `layoutShelves` — the shelves as heading, tile, label and empty rows at one column count — and the heights and indent constants |
+| `src/features/shelves/` | `ShelfHeading`, `ShelfStickyBar`, `EmptyShelf`, `ShelfLabel`, `ShelfToolbar`, `useShelfFolds`, `useShelfDrag`, `useFoldOnFolderDrag`, `useFoldAnchor` — shared by both pages |
+| `src/features/collection/collectionShelfModel.ts` | This cabinet's reading of the shelves: `shelfFolderOf`, `DRAFT_SHELF`, `rolledUp`, `shelfStat`, `foldAll`, `peekOf`, `keepShelf`, `foldedForDrag` |
+| `src/features/collection/CollectionShelfParts.tsx` | The heading, the empty box and the sticky bar, each wired to the drags this cabinet answers |
+| `src-tauri/src/shelffolds.rs` | The `shelf_folds` `app_meta` row — `shelf_folds` and `set_shelf_folds` |
 | `src/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |
 | `src/features/transfer/import/destinations/collection.ts` | `grainKey` — the importer's fold, now every grain term it can vary |
 | `src/lib/ipc.ts` | `MoveOutcome`, `collectionToDeck` and `deckToCollection`, and `CollectionQuery.allocation` — whose two words nothing sent until Collection Search |

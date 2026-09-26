@@ -77,12 +77,22 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **144 commands of 185**, re-derived 2026-09-08 with `node scripts/routed-census.mjs` and
-  correct only for as long as nobody adds one; the script is the answer, this line is a
-  reminder that there is one. (It read **115 of 156**, then **120 of 155**, then **123 of 160**,
-  then **139 of 176**,
-  each written by hand beside a script that prints both — and each pair was already stale when the
-  next branch found it, five times on one line now. Run the script.) The first four are the browse —
+- **184 commands of 240**, re-derived 2026-09-26 and correct only for as long as nobody adds one;
+  the script is the answer, this line is a reminder that there is one. (It read **115 of 156**,
+  then **120 of 155**, then **123 of 160**, then **139 of 176**, then **144 of 185**, each written
+  by hand beside a script that prints both — and each pair was already stale when the next branch
+  found it, six times on one line now. Run the script.) ⚠️ **The script's routed line is one high
+  today, and the two numbers above are the ones to trust.** `node scripts/routed-census.mjs`
+  prints `named in COMMANDS 185` and then flags `wasm` as *in COMMANDS but not a command
+  anywhere*: its `"[a-z_0-9]+"` match reads the `cfg(not(target_family = "wasm"))` inside a
+  comment in the array literal. `route.rs`'s `COMMANDS.len()` assertion and the `awk` count its
+  comment gives (`awk '/^pub const COMMANDS/,/^\];/' src-tauri/src/web/route.rs | grep -c
+  '^\s*"'`) both say **184**, and 240 less the script's own **56** unrouted is 184 too.
+  **Folder shelves (2026-09-26) routed four and deleted two**: `collection_shelf_counts`,
+  `wishlist_shelf_counts`, `shelf_folds` and `set_shelf_folds` in, and the `flatten_state` /
+  `set_flatten_state` pair out with the `flatten` module — **+2 crate, +2 routed, +0 unrouted**.
+  The rest of the climb from 144 of 185 — **+53 crate, +38 routed, +15 unrouted** — is other
+  branches' work between 2026-09-08 and 2026-09-26 and is not itemised here. The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
   thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen), the
@@ -102,9 +112,11 @@ the real 43-column one, `raw` included**.
   2026-09-07 and 2026-09-08**, and none of them is this branch's either: `combos_clear`,
   `deck_missing_plan`, `deck_missing_to_collection`, `mark_colors` and `set_mark_color`.
   Adding one, once its module is in the
-  map, is a line in `web::route::COMMANDS` and a `match` arm. **What the remaining 41 are, and
-  why none of them is an oversight, is tabulated at the foot of this file** — grouped by file,
-  exactly as the script prints them.
+  map, is a line in `web::route::COMMANDS` and a `match` arm. **What the remaining 56 are, and
+  why none of them is an oversight, is tabulated at the foot of this file — for 41 of them.** That
+  table was last re-derived at 144 of 185, and the fifteen unrouted since — `scanner.rs`'s eight
+  more, `share/commands.rs`'s four, `desktop.rs`'s `window_count` and `window_new`, and
+  `startup.rs`'s `startup_status` — are not in it yet. The script prints all 56, grouped by file.
 
   `route.rs`'s `every_advertised_command_is_actually_routed` pins the routed number and is the
   reason it cannot rot; the crate total is prose and has drifted before, so re-count it in the
@@ -122,7 +134,7 @@ the real 43-column one, `raw` included**.
 
 | Compiled for wasm | Desktop/Android only |
 | --- | --- |
-| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `flatten` · `listview` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `reset` · `schema` · `search` · `slug` · `nav` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `tags` · `transfer` · `update` · `web` · `wishlist` · `wishlist_folders` · `zoom` · **`mirror`** — `layout`, `paths`, `read`, `readme`, `snapshot` | `export` · `images` · `import` · `marketplace_feed` · **`mirror`** — `run`, `settings`, `watch` · `paths` · `picked` · `reconcile` · `scryfall` · `window` |
+| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `listview` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `reset` · `schema` · `search` · `slug` · `nav` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `tags` · `transfer` · `update` · `web` · `wishlist` · `wishlist_folders` · `zoom` · **`mirror`** — `layout`, `paths`, `read`, `readme`, `snapshot` | `export` · `images` · `import` · `marketplace_feed` · **`mirror`** — `run`, `settings`, `watch` · `paths` · `picked` · `reconcile` · `scryfall` · `window` |
 
 **Nineteen modules have moved left**: eleven on 2026-08-29 (PR 10a) — the deck domain, the
 collection, the wishlist, both folder tables and `marketplace` — then `card` (PR 10f) and
@@ -134,6 +146,12 @@ twelve changed**: they were on the right because each file *ends* in a block of
 inside an otherwise portable module, because that half downloads. **`update` is the second
 and the largest**: about two thirds of that file is gated where it stands. See the PR 10a,
 10g and the 2026-08-31 sections at the foot of this file.
+
+**`flatten` left the table above on 2026-09-26**, deleted with Flatten itself when folder shelves
+replaced the drill-down (the nineteen still counts it, because it did move). The view-state
+module that arrived with shelves, `shelffolds` — which shelves the reader folded — is on the
+every-target half, and so are modules this table never listed, `searchopen` among them: **`lib.rs`
+is the census and this table is not**.
 
 **One module is permanently excluded whole** — `window`'s Win32 snap layouts. Everything else
 on the right is either "not yet" or **half of a module whose other half already crossed**, and
@@ -165,11 +183,12 @@ record in [text-mirror.md](text-mirror.md#web-and-android-the-same-files-as-one-
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is **144 of 185** — `node scripts/routed-census.mjs`, re-derived
-2026-09-08. (This sentence said 115 of 156, then 120 of 155, then 123 of 160, then 139 of 176, the
+`web::route::COMMANDS`, which is **184 of 240** — `node scripts/routed-census.mjs`, re-derived
+2026-09-26, whose routed line reads one high for the reason *What the web target is* gives. (This
+sentence said 115 of 156, then 120 of 155, then 123 of 160, then 139 of 176, then 144 of 185, the
 same hand-written
 pair *What the web target is* carried; two copies of a number a script prints is two chances to be
-wrong, and both have now been wrong four times.)
+wrong, and both have now been wrong five times.)
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -900,6 +919,13 @@ backend.
   the bundle.
 
 ## Where PR 10 got to: 144 of 185 routed, and what the other 41 are
+
+**Re-derived 2026-09-26, on the folder-shelves branch: 240 in the crate, 184 routed, 56 not.** This
+heading, the three-row table and the row breakdown below are 2026-09-08's. That branch corrected
+the figures at the top of this file and did not re-tabulate the fifteen unrouted commands other
+branches added since, which *What the web target is* names. ⚠️ **`--check 184` exits 1 and
+`--check 185` exits 0 today**, because the script reads a word in a comment inside `COMMANDS` as a
+route — the same paragraph says which.
 
 **Do not hand-count this — run `node scripts/routed-census.mjs`.** It walks every
 `#[tauri::command]` in the crate (both attribute spellings, skipping doc-comment mentions),

@@ -228,11 +228,25 @@ everything not on it stays where its window put it.
 
 | Follows live | Stays per window |
 | --- | --- |
-| `["startView"]`, `["homeLayout"]`, `["marketplace"]`, `["markColors"]`, `["recentCards"]`, `["decks","lastFormat"]`, `["mirror"]` | `["navCollapsed"]`, `["searchOpen"]`, `["deckFolderPane"]`, `["deckSort"]`, `["deckSearchTab"]`, `["printingGroupBy"]` |
+| `["startView"]`, `["homeLayout"]`, `["marketplace"]`, `["markColors"]`, `["recentCards"]`, `["decks","lastFormat"]`, `["mirror"]` | `["navCollapsed"]`, `["searchOpen"]`, `["deckFolderPane"]`, `["deckSort"]`, `["deckSearchTab"]`, `["printingGroupBy"]`, `["shelfFolds"]` |
 
-Card zoom, list/grid and flatten are on neither list because they are **store state seeded once at
-launch, never a query**. Refetching the follow-live keys is what closes the whole-value race: every
-window writes the home layout from fresh data rather than over another window's change.
+**`["shelfFolds"]` joined the per-window column on 2026-09-26** — the `shelf_folds` row, which
+records the collection's and the wishlist's shelves the reader folded away from their default.
+Collapse is a view preference, so a second window keeps its own folds until the app relaunches; a
+window opened later reads the row as it stands then. It is
+`useShelfFolds`' `SHELF_FOLDS_KEY` (`src/features/shelves/useShelfFolds.ts:17`), read once per window
+at `staleTime: Infinity` and prefetched in `AppShell`; `lib/crossWindow.ts` spells it in
+`PER_WINDOW_KEYS` rather than importing it, because `lib` imports nothing from `features`, and
+`crossWindow.test.ts`'s *"stay per window, under the key the hook reads"* pins the two spellings
+together and that `app_meta` maps to neither. **Two windows' presses do not overwrite each other in
+the row**: `shelffolds::store` reads the stored object back and applies only the ids a press names,
+so the row holds both windows' folds while each window draws its own — unlike `["homeLayout"]`,
+which is a whole-value save and is why that one follows live.
+
+Card zoom and list/grid are on neither list because they are **store state seeded once at launch,
+never a query**. (Flatten was a third until 2026-09-26, when folder shelves deleted it.) Refetching
+the follow-live keys is what closes the whole-value race: every window writes the home layout from
+fresh data rather than over another window's change.
 
 ⚠️ **Two fences keep a view preference per window, and the first is the one that matters.** The
 predicate on this refresh spares the per-window keys — but the *writing* window's own invalidations

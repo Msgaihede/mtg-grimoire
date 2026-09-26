@@ -254,7 +254,7 @@ export function useFoldOnFolderDrag(): boolean;
 // Both opt into mid-drag arming (`armOnMount` in lib/dndTarget.ts and lib/folderDrag.ts), which a heading
 // that scrolls into view during a drag needs. Argument shapes: Task 3.
 export function useShelfDropTarget(card: ShelfCardDropPolicy, folder?: ShelfFolderDropPolicy): { attach: (el: HTMLElement | null) => void; mark: ShelfDropMark };
-export function useShelfDragSource(folder: ShelfDragFolder | null, scope: "collection" | "wishlist"): (el: HTMLElement | null) => void;
+export function useShelfDragSource(folder: ShelfDragFolder | null, scope: "collection" | "wishlist"): ((el: HTMLElement | null) => (() => void) | undefined) | undefined; // a callback ref, or `undefined` for `null` (Not sorted, an app-owned shelf) — the heading's "not draggable"
 ```
 
 ### `CardGrid` (Task 4)
@@ -288,7 +288,7 @@ bandHeight?: number;                         // px; defaults to 40
 stickyBand?: (firstVisibleRowIndex: number) => React.ReactNode; // overlay pinned under the column header
 ```
 
-A band row is drawn by `VirtualTable` itself as a `role="row"` (carrying `data-band`) holding one `role="cell"` with `aria-colspan={columns.length}`, sized `bandHeight ?? TABLE_BAND_HEIGHT` (a new export, 40) **plus `extraHeight(row)`** — which is how a caller gets a taller band (an empty shelf's dashed box). It never reaches `onActivate`, `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, so a caller's draggable row wrapper can never land on a heading. **Bands are counted**: `aria-rowcount = total === null ? -1 : total + 1 + (band rows among rows)`, and `aria-rowindex` stays `index + 2`. The sticky band is a zero-height `sticky` element at `top: 36px` on `LAYER.header` between the header and the row group, with the caller's node absolutely positioned inside it; `stickyBand(i)` receives the index of the row under the header's bottom edge. **Caller rule:** `stickyBand` returns `null` when `rows[i]` is itself a heading, or the bar covers that heading's controls.
+A band row is drawn by `VirtualTable` itself as a `role="row"` (carrying `data-band`) holding one `role="cell"` with `aria-colspan={columns.length}`, sized `bandHeight ?? TABLE_BAND_HEIGHT` (a new export, 40) **plus `extraHeight(row)`** — which is how a caller gets a taller band (an empty shelf's dashed box). It never reaches `onActivate`, `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, so a caller's draggable row wrapper can never land on a heading. **Bands are counted**: `aria-rowcount = total === null ? -1 : total + 1 + (band rows among rows)`, and `aria-rowindex` stays `index + 2`. The sticky band is a zero-height sticky anchor at `top: 36px` on `LAYER.header`, placed **beside** the `role="table"` element — first, ahead of it — inside a plain scroller while a band is live, so its controls are not owned by the table (the table may own only rows and row groups); the caller's node is absolutely positioned inside it, and the scroller takes a `scroll-padding-top` of the header's height plus the band's, so a focused row scrolls clear of both. Without `stickyBand` the table is its own scroller and its DOM is unchanged. `stickyBand(i)` receives the index of the row under the header's bottom edge. *(Corrected at the docs task: this sentence first said "between the header and the row group", which Task 5's review overrode — see the ledger's rulings.)* **Caller rule:** `stickyBand` returns `null` when `rows[i]` is itself a heading, or the bar covers that heading's controls.
 
 ---
 
@@ -13077,7 +13077,7 @@ export function useFoldOnFolderDrag(): boolean;
 // Both opt into mid-drag arming (`armOnMount` in lib/dndTarget.ts and lib/folderDrag.ts), which a heading
 // that scrolls into view during a drag needs. Argument shapes: Task 3.
 export function useShelfDropTarget(card: ShelfCardDropPolicy, folder?: ShelfFolderDropPolicy): { attach: (el: HTMLElement | null) => void; mark: ShelfDropMark };
-export function useShelfDragSource(folder: ShelfDragFolder | null, scope: "collection" | "wishlist"): (el: HTMLElement | null) => void;
+export function useShelfDragSource(folder: ShelfDragFolder | null, scope: "collection" | "wishlist"): ((el: HTMLElement | null) => (() => void) | undefined) | undefined; // a callback ref, or `undefined` for `null` (Not sorted, an app-owned shelf) — the heading's "not draggable"
 ```
 
 ### `CardGrid` (Task 4)
@@ -13111,7 +13111,7 @@ bandHeight?: number;                         // px; defaults to 40
 stickyBand?: (firstVisibleRowIndex: number) => React.ReactNode; // overlay pinned under the column header
 ```
 
-A band row is drawn by `VirtualTable` itself as a `role="row"` (carrying `data-band`) holding one `role="cell"` with `aria-colspan={columns.length}`, sized `bandHeight ?? TABLE_BAND_HEIGHT` (a new export, 40) **plus `extraHeight(row)`** — which is how a caller gets a taller band (an empty shelf's dashed box). It never reaches `onActivate`, `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, so a caller's draggable row wrapper can never land on a heading. **Bands are counted**: `aria-rowcount = total === null ? -1 : total + 1 + (band rows among rows)`, and `aria-rowindex` stays `index + 2`. The sticky band is a zero-height `sticky` element at `top: 36px` on `LAYER.header` between the header and the row group, with the caller's node absolutely positioned inside it; `stickyBand(i)` receives the index of the row under the header's bottom edge. **Caller rule:** `stickyBand` returns `null` when `rows[i]` is itself a heading, or the bar covers that heading's controls.
+A band row is drawn by `VirtualTable` itself as a `role="row"` (carrying `data-band`) holding one `role="cell"` with `aria-colspan={columns.length}`, sized `bandHeight ?? TABLE_BAND_HEIGHT` (a new export, 40) **plus `extraHeight(row)`** — which is how a caller gets a taller band (an empty shelf's dashed box). It never reaches `onActivate`, `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, so a caller's draggable row wrapper can never land on a heading. **Bands are counted**: `aria-rowcount = total === null ? -1 : total + 1 + (band rows among rows)`, and `aria-rowindex` stays `index + 2`. The sticky band is a zero-height sticky anchor at `top: 36px` on `LAYER.header`, placed **beside** the `role="table"` element — first, ahead of it — inside a plain scroller while a band is live, so its controls are not owned by the table (the table may own only rows and row groups); the caller's node is absolutely positioned inside it, and the scroller takes a `scroll-padding-top` of the header's height plus the band's, so a focused row scrolls clear of both. Without `stickyBand` the table is its own scroller and its DOM is unchanged. `stickyBand(i)` receives the index of the row under the header's bottom edge. *(Corrected at the docs task: this sentence first said "between the header and the row group", which Task 5's review overrode — see the ledger's rulings.)* **Caller rule:** `stickyBand` returns `null` when `rows[i]` is itself a heading, or the bar covers that heading's controls.
 
 ---
 
@@ -16334,7 +16334,7 @@ export function useFoldOnFolderDrag(): boolean;
 // Both opt into mid-drag arming (`armOnMount` in lib/dndTarget.ts and lib/folderDrag.ts), which a heading
 // that scrolls into view during a drag needs. Argument shapes: Task 3.
 export function useShelfDropTarget(card: ShelfCardDropPolicy, folder?: ShelfFolderDropPolicy): { attach: (el: HTMLElement | null) => void; mark: ShelfDropMark };
-export function useShelfDragSource(folder: ShelfDragFolder | null, scope: "collection" | "wishlist"): (el: HTMLElement | null) => void;
+export function useShelfDragSource(folder: ShelfDragFolder | null, scope: "collection" | "wishlist"): ((el: HTMLElement | null) => (() => void) | undefined) | undefined; // a callback ref, or `undefined` for `null` (Not sorted, an app-owned shelf) — the heading's "not draggable"
 ```
 
 ### `CardGrid` (Task 4)
@@ -16368,7 +16368,7 @@ bandHeight?: number;                         // px; defaults to 40
 stickyBand?: (firstVisibleRowIndex: number) => React.ReactNode; // overlay pinned under the column header
 ```
 
-A band row is drawn by `VirtualTable` itself as a `role="row"` (carrying `data-band`) holding one `role="cell"` with `aria-colspan={columns.length}`, sized `bandHeight ?? TABLE_BAND_HEIGHT` (a new export, 40) **plus `extraHeight(row)`** — which is how a caller gets a taller band (an empty shelf's dashed box). It never reaches `onActivate`, `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, so a caller's draggable row wrapper can never land on a heading. **Bands are counted**: `aria-rowcount = total === null ? -1 : total + 1 + (band rows among rows)`, and `aria-rowindex` stays `index + 2`. The sticky band is a zero-height `sticky` element at `top: 36px` on `LAYER.header` between the header and the row group, with the caller's node absolutely positioned inside it; `stickyBand(i)` receives the index of the row under the header's bottom edge. **Caller rule:** `stickyBand` returns `null` when `rows[i]` is itself a heading, or the bar covers that heading's controls.
+A band row is drawn by `VirtualTable` itself as a `role="row"` (carrying `data-band`) holding one `role="cell"` with `aria-colspan={columns.length}`, sized `bandHeight ?? TABLE_BAND_HEIGHT` (a new export, 40) **plus `extraHeight(row)`** — which is how a caller gets a taller band (an empty shelf's dashed box). It never reaches `onActivate`, `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, so a caller's draggable row wrapper can never land on a heading. **Bands are counted**: `aria-rowcount = total === null ? -1 : total + 1 + (band rows among rows)`, and `aria-rowindex` stays `index + 2`. The sticky band is a zero-height sticky anchor at `top: 36px` on `LAYER.header`, placed **beside** the `role="table"` element — first, ahead of it — inside a plain scroller while a band is live, so its controls are not owned by the table (the table may own only rows and row groups); the caller's node is absolutely positioned inside it, and the scroller takes a `scroll-padding-top` of the header's height plus the band's, so a focused row scrolls clear of both. Without `stickyBand` the table is its own scroller and its DOM is unchanged. `stickyBand(i)` receives the index of the row under the header's bottom edge. *(Corrected at the docs task: this sentence first said "between the header and the row group", which Task 5's review overrode — see the ledger's rulings.)* **Caller rule:** `stickyBand` returns `null` when `rows[i]` is itself a heading, or the bar covers that heading's controls.
 
 ---
 
@@ -19629,7 +19629,7 @@ export function useFoldOnFolderDrag(): boolean;
 // Both opt into mid-drag arming (`armOnMount` in lib/dndTarget.ts and lib/folderDrag.ts), which a heading
 // that scrolls into view during a drag needs. Argument shapes: Task 3.
 export function useShelfDropTarget(card: ShelfCardDropPolicy, folder?: ShelfFolderDropPolicy): { attach: (el: HTMLElement | null) => void; mark: ShelfDropMark };
-export function useShelfDragSource(folder: ShelfDragFolder | null, scope: "collection" | "wishlist"): (el: HTMLElement | null) => void;
+export function useShelfDragSource(folder: ShelfDragFolder | null, scope: "collection" | "wishlist"): ((el: HTMLElement | null) => (() => void) | undefined) | undefined; // a callback ref, or `undefined` for `null` (Not sorted, an app-owned shelf) — the heading's "not draggable"
 ```
 
 ### `CardGrid` (Task 4)
@@ -19663,7 +19663,7 @@ bandHeight?: number;                         // px; defaults to 40
 stickyBand?: (firstVisibleRowIndex: number) => React.ReactNode; // overlay pinned under the column header
 ```
 
-A band row is drawn by `VirtualTable` itself as a `role="row"` (carrying `data-band`) holding one `role="cell"` with `aria-colspan={columns.length}`, sized `bandHeight ?? TABLE_BAND_HEIGHT` (a new export, 40) **plus `extraHeight(row)`** — which is how a caller gets a taller band (an empty shelf's dashed box). It never reaches `onActivate`, `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, so a caller's draggable row wrapper can never land on a heading. **Bands are counted**: `aria-rowcount = total === null ? -1 : total + 1 + (band rows among rows)`, and `aria-rowindex` stays `index + 2`. The sticky band is a zero-height `sticky` element at `top: 36px` on `LAYER.header` between the header and the row group, with the caller's node absolutely positioned inside it; `stickyBand(i)` receives the index of the row under the header's bottom edge. **Caller rule:** `stickyBand` returns `null` when `rows[i]` is itself a heading, or the bar covers that heading's controls.
+A band row is drawn by `VirtualTable` itself as a `role="row"` (carrying `data-band`) holding one `role="cell"` with `aria-colspan={columns.length}`, sized `bandHeight ?? TABLE_BAND_HEIGHT` (a new export, 40) **plus `extraHeight(row)`** — which is how a caller gets a taller band (an empty shelf's dashed box). It never reaches `onActivate`, `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, so a caller's draggable row wrapper can never land on a heading. **Bands are counted**: `aria-rowcount = total === null ? -1 : total + 1 + (band rows among rows)`, and `aria-rowindex` stays `index + 2`. The sticky band is a zero-height sticky anchor at `top: 36px` on `LAYER.header`, placed **beside** the `role="table"` element — first, ahead of it — inside a plain scroller while a band is live, so its controls are not owned by the table (the table may own only rows and row groups); the caller's node is absolutely positioned inside it, and the scroller takes a `scroll-padding-top` of the header's height plus the band's, so a focused row scrolls clear of both. Without `stickyBand` the table is its own scroller and its DOM is unchanged. `stickyBand(i)` receives the index of the row under the header's bottom edge. *(Corrected at the docs task: this sentence first said "between the header and the row group", which Task 5's review overrode — see the ledger's rulings.)* **Caller rule:** `stickyBand` returns `null` when `rows[i]` is itself a heading, or the bar covers that heading's controls.
 
 ---
 
@@ -22715,7 +22715,7 @@ export function useFoldOnFolderDrag(): boolean;
 // Both opt into mid-drag arming (`armOnMount` in lib/dndTarget.ts and lib/folderDrag.ts), which a heading
 // that scrolls into view during a drag needs. Argument shapes: Task 3.
 export function useShelfDropTarget(card: ShelfCardDropPolicy, folder?: ShelfFolderDropPolicy): { attach: (el: HTMLElement | null) => void; mark: ShelfDropMark };
-export function useShelfDragSource(folder: ShelfDragFolder | null, scope: "collection" | "wishlist"): (el: HTMLElement | null) => void;
+export function useShelfDragSource(folder: ShelfDragFolder | null, scope: "collection" | "wishlist"): ((el: HTMLElement | null) => (() => void) | undefined) | undefined; // a callback ref, or `undefined` for `null` (Not sorted, an app-owned shelf) — the heading's "not draggable"
 ```
 
 ### `CardGrid` (Task 4)
@@ -22749,7 +22749,7 @@ bandHeight?: number;                         // px; defaults to 40
 stickyBand?: (firstVisibleRowIndex: number) => React.ReactNode; // overlay pinned under the column header
 ```
 
-A band row is drawn by `VirtualTable` itself as a `role="row"` (carrying `data-band`) holding one `role="cell"` with `aria-colspan={columns.length}`, sized `bandHeight ?? TABLE_BAND_HEIGHT` (a new export, 40) **plus `extraHeight(row)`** — which is how a caller gets a taller band (an empty shelf's dashed box). It never reaches `onActivate`, `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, so a caller's draggable row wrapper can never land on a heading. **Bands are counted**: `aria-rowcount = total === null ? -1 : total + 1 + (band rows among rows)`, and `aria-rowindex` stays `index + 2`. The sticky band is a zero-height `sticky` element at `top: 36px` on `LAYER.header` between the header and the row group, with the caller's node absolutely positioned inside it; `stickyBand(i)` receives the index of the row under the header's bottom edge. **Caller rule:** `stickyBand` returns `null` when `rows[i]` is itself a heading, or the bar covers that heading's controls.
+A band row is drawn by `VirtualTable` itself as a `role="row"` (carrying `data-band`) holding one `role="cell"` with `aria-colspan={columns.length}`, sized `bandHeight ?? TABLE_BAND_HEIGHT` (a new export, 40) **plus `extraHeight(row)`** — which is how a caller gets a taller band (an empty shelf's dashed box). It never reaches `onActivate`, `isSelected`, `rowClassName`, `renderRow` or any column's `cell`, so a caller's draggable row wrapper can never land on a heading. **Bands are counted**: `aria-rowcount = total === null ? -1 : total + 1 + (band rows among rows)`, and `aria-rowindex` stays `index + 2`. The sticky band is a zero-height sticky anchor at `top: 36px` on `LAYER.header`, placed **beside** the `role="table"` element — first, ahead of it — inside a plain scroller while a band is live, so its controls are not owned by the table (the table may own only rows and row groups); the caller's node is absolutely positioned inside it, and the scroller takes a `scroll-padding-top` of the header's height plus the band's, so a focused row scrolls clear of both. Without `stickyBand` the table is its own scroller and its DOM is unchanged. `stickyBand(i)` receives the index of the row under the header's bottom edge. *(Corrected at the docs task: this sentence first said "between the header and the row group", which Task 5's review overrode — see the ledger's rulings.)* **Caller rule:** `stickyBand` returns `null` when `rows[i]` is itself a heading, or the bar covers that heading's controls.
 
 ---
 

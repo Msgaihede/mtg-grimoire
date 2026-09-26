@@ -556,48 +556,47 @@ Every one of these has its measurement and its story in
   rather than staying beside the filters.
   **No folder control sits among the filters, and the fence is "not among the filters" rather
   than "not on the bar"** — a distinction the first draft of this rule collapsed. Where the reader
-  is *standing* is navigation, so the breadcrumb and the drill-down stay off the row entirely:
-  either one among the filters would be the one thing in it Reset all could not undo. The other two
-  moved, and each moved to the place that already says what it is. **`+ New folder` is a tile of
-  the folder wall** (`NewFolderCard`), shaped to a folder card's footprint and
-  solid-bordered where the folders are dashed — the dash means *container, not a thing you own*,
-  and a button wearing it would spend that vocabulary. It is drawn wherever the wall is, which is
-  why the wall now renders at zero folders: gated on the folder count, a reader with an empty
-  cabinet had no way to make their first one. **Pressed, it *becomes* the field — changed
-  2026-09-03.** The tile used to raise a bordered strip under the breadcrumb (an input,
-  `Create folder` and `Cancel` spelled out in words, and a line reading *in Collection* saying
-  which level the strip was about), and every piece of that re-established a context the wall on
-  screen already carried. The name is typed on the line the folder's name will occupy, at the same
-  track and the same footprint, so nothing above the wall opens and nothing in the wall reflows;
-  a folder card's `⋯ → Rename…` does the same on the card, keeping its figures line under the
-  field so a reader can still see which drawer they are renaming. `components/FolderNameField.tsx`
-  is both, and **the border is the whole of what tells them apart**, on the dashed rule above: the
-  create tile stays **solid** because it is still a control, the renaming card stays **dashed**
-  because it is already a container, and both go `border-accent` while open. The strip survives
-  for `Move to folder…` and `Delete…` — plus the wishlist's `Clear…` since issue #471 and the
-  collection's `Clear…` inside `Recently removed` since issue #506 — and for
-  nothing else: none of them is a name typed on a line, and none has a tile of its own. **The caret's return is the part a new naming tile must not reinvent**: the
-  page's `dismiss` focuses the element it remembered as the opener, and here that element is
-  exactly what the field replaced, so by then it is a detached node whose `focus()` is a silent
-  no-op. `useFolderFieldReturn(open)` is the fix — the host refs the control React renders in the
-  field's place and restores the caret **only** when `document.activeElement` is null or
+  is *standing* is navigation, so the breadcrumb stays off the row entirely: among the filters it
+  would be the one thing Reset all could not undo. **Since folder shelves (2026-09-26) the folder
+  controls sit on the path row above the wall and on the wall's headings** — each in the place that
+  already says what it is. **Add folder** is on the path row (`features/shelves/ShelfToolbar`,
+  beside Expand all and Collapse all, for the level the reader stands on) and on every heading of
+  the reader's own folders (`ShelfHeading`, inside that folder), and is drawn nowhere a create
+  would be refused — a deck group, `Recently removed`, a deck's managed wishlist folder. The path row
+  is drawn at every level whatever the folder count, so a reader with an empty cabinet can still
+  make their first one. **Moving a folder up is a drop on a path segment**, which files it last
+  inside that level. The `+ New folder` tile (`NewFolderCard`, deleted) and the up-one-level tile
+  (`ParentFolderCard`, issue #283 — the component survives with no cabinet drawing it) went with
+  the folder band; [collection-folders.md](../docs/reference/collection-folders.md#shelves-2026-09-26)
+  has the record. **Pressed, Add folder draws a heading whose name *is* the field — the tile's
+  2026-09-03 change, carried onto the heading.** The tile used to raise a bordered strip under the
+  breadcrumb (an input, `Create folder` and `Cancel` spelled out in words, and a line reading
+  *in Collection* saying which level the strip was about), and every piece of that
+  re-established a context the wall on screen already carried. The name is typed on the line the
+  folder's name will occupy, where the folder will appear — last among its siblings — so nothing
+  above the wall opens; a heading's Rename does the same on the heading, keeping its figures
+  beside the field. `components/FolderNameField.tsx` is both, and its rule is unchanged: **the
+  border is the whole of what tells its two shapes apart** — `create` stays **solid** because it
+  is a control, `rename` stays **dashed** because it is already a container, and both go
+  `border-accent` while open. **A heading draws the dashed `rename` shape for both jobs**: the
+  solid shape carries the tile wall's 62px floor and a heading is 40px, so `renaming.mode:
+  "create"` changes only the words (`Folder name`, `Create folder`) and drops the chevron — which
+  leaves the solid shape with no caller in the app today. The strip survives for
+  `Move to folder…` and `Delete…` — plus the wishlist's `Clear…` since issue #471 and the
+  collection's `Clear…` inside `Recently removed` since issue #506 — and for nothing else: none of
+  them is a name typed on a line. **The caret's return is the part a new naming field must not
+  reinvent**: the page's `dismiss` focuses the element it remembered as the opener, and here that
+  element is exactly what the field replaced, so by then it is a detached node whose `focus()` is a
+  silent no-op. `useFolderFieldReturn(open)` is the fix — the host refs the control React renders
+  in the field's place and restores the caret **only** when `document.activeElement` is null or
   `document.body`, which is the state Escape, the ✕ and a committed write all leave behind and
-  which keeps the outside-click rule above intact. **The geometry is measured and the caret is
-  not**: headless Edge over the built stylesheet, 2026-09-03, put all four states in one row and
-  read 62px and one `top` for every tile, `y = 34` for the `⋯` and both ✓ / ✕ pairs, and 5px of
-  clear air between a name and the tick on both shapes — but the app lock was held elsewhere all
-  session, so nothing here has been driven in the shipped window, and where the caret lands after
+  which keeps the outside-click rule above intact; `ShelfHeading` aims it at Rename, else the `⋯`,
+  else the title. **The tile geometry was measured and the heading's has not been**: headless Edge
+  over the built stylesheet, 2026-09-03, read 62px and one `top` for every tile, `y = 34` for the
+  `⋯` and both ✓ / ✕ pairs, and 5px of clear air between a name and the tick — but a 40px heading
+  around that field has not been driven in the shipped window, and where the caret lands after
   each of the four exits is still owed
-  ([frontend-design.md](../docs/reference/frontend-design.md)). **The first tile is the way *out* wherever there is
-  one** — `ParentFolderCard`, drawn only inside a folder, dashed like the drawers because it *is*
-  one (the level above), naming that level and taking a card or a folder dropped on it. At the root
-  it is absent and `New folder` is first again; the breadcrumb above is untouched. Issue #283, and
-  [wishlist-folders.md](../docs/reference/wishlist-folders.md) carries the argument. **`Flatten` rides the bar past the hairline
-  divider**, beside the grid-or-table pair. That end of the row is already the home for controls
-  about how the list is *drawn* rather than which rows are in it, and it is already untouched by
-  Reset all — so Flatten satisfies the fence on the far side of the rule rather than breaking it.
-  Both card views with a cabinet pass it the same way, as one `flatten={{ pressed, onToggle }}`
-  prop that cannot be handed over half.
+  ([frontend-design.md](../docs/reference/frontend-design.md)).
   Two rules carry it and both have a measured failure behind them
   ([frontend-design.md](../docs/reference/frontend-design.md)): the arrangement is **`order` plus
   a `basis-full` break**, never one `<div>` per breakpoint with `hidden` on the rest — that build
