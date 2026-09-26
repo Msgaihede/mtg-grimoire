@@ -19,9 +19,11 @@ import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip"
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { collectionDraggable } from "@/features/collection/collectionDrag";
 import { CONDITION_LABEL, CONDITION_NOT_SET, type Condition } from "@/lib/conditions";
+import { useDragRecord } from "@/lib/dndTarget";
 import { finishLabel, isFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
+import { readFolderDrag } from "@/lib/folderDrag";
 import type { CollectionRow, CollectionSortKey } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -743,6 +745,45 @@ export function CollectionTable({
     return at < 0 ? null : at;
   }, [shelved, revealShelfId]);
 
+  /**
+   * **A band asked for past the loaded edge pages until it is drawn** (the final review's C-I1).
+   * {@link shelvedRows} stops after the shelf holding the last loaded row, so on any list longer
+   * than a page a heading laid out further down — Add folder's draft, last among its siblings, or a
+   * heading a caret request is waiting for — was simply not drawn: the naming field was invisible
+   * while it still held the Escape rung, and a later page mounted it under the reader and yanked
+   * the caret and the scroll with it. So while the requested heading is in the layout and not among
+   * the rows, the table asks for the next page, and again as each lands — the page's own guard
+   * (`hasNextPage`, not while one is fetching) is what keeps that to one request at a time.
+   *
+   * A shelf the layout does not hold at all asks for nothing: paging would never draw it.
+   */
+  const revealWaiting =
+    revealShelfId !== null &&
+    revealIndex === null &&
+    !complete &&
+    (layout?.some((row) => row.kind === "heading" && row.shelf.id === revealShelfId) ?? false);
+  useEffect(() => {
+    if (revealWaiting) onNeedNextPage();
+  }, [revealWaiting, shelved, onNeedNextPage]);
+
+  /**
+   * **The heading being dragged stays drawn wherever the table scrolls** (the final review's S-I3,
+   * `VirtualTable`'s `keepRow`). A heading band is a drag source inside a virtualised row, so one
+   * carried more than the overscan past the window unmounted its own source and the drag ended
+   * with it. Read off the drag in flight — the collection's own folder drag, never a card — as the
+   * band index of that folder's heading, or nothing.
+   */
+  const inFlight = useDragRecord(shelves !== undefined);
+  const carriedId =
+    inFlight === null ? null : (readFolderDrag(inFlight, "collection")?.folderId ?? null);
+  const keepRow = useMemo(() => {
+    if (shelved === null || carriedId === null) return null;
+    const at = shelved.rows.findIndex(
+      (row) => isBand(row) && row.band.kind === "heading" && row.band.shelf.id === carriedId,
+    );
+    return at < 0 ? null : at;
+  }, [shelved, carriedId]);
+
   // A band never reaches a column's cell (`VirtualTable` draws it itself), so the guard below is
   // for the type, which is the union. The first column also carries the row's rails and is
   // indented by its shelf's depth, so the name lines up under its heading's title.
@@ -845,6 +886,7 @@ export function CollectionTable({
         }
         stickyBand={shelves ? stickyBand : undefined}
         revealIndex={revealIndex}
+        keepRow={keepRow}
         // A row opens the card, from the mouse and from the keyboard both.
         onActivate={(row) => {
           if (!isBand(row)) selectCard(row.cardId);

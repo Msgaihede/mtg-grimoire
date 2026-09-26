@@ -21,9 +21,15 @@ import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { deckListKey } from "@/features/home/keys";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
-import { ShelfToolbar } from "@/features/shelves/ShelfToolbar";
+import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
 import { useFoldAnchor } from "@/features/shelves/useFoldAnchor";
 import { useFoldOnFolderDrag } from "@/features/shelves/useFoldOnFolderDrag";
+import {
+  caretIsNowhere,
+  pathRowAddFolder,
+  sameIds,
+  useHeadingCaret,
+} from "@/features/shelves/useHeadingCaret";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
 import { wishlistDestination } from "@/features/transfer/import/destinations/WishlistPreview";
@@ -32,7 +38,8 @@ import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { SearchCardDrag } from "@/features/search/searchCardDrag";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { count, plural, verb } from "@/lib/counts";
-import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
+import { useDragRecord } from "@/lib/dndTarget";
+import { readFolderDrag, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
 import { isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
@@ -55,7 +62,7 @@ import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { layoutShelves } from "@/lib/shelfLayout";
 import { buildShelves, visibleShelves, type Shelf } from "@/lib/shelves";
-import { useAppStore, type SearchView } from "@/lib/store";
+import { useAppStore } from "@/lib/store";
 import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
@@ -80,7 +87,6 @@ import {
   WishShelfHeading,
   WishShelfSticky,
   type CardDrops,
-  type HeadingCaret,
 } from "./WishShelfHeading";
 import {
   countTotals,
@@ -206,28 +212,6 @@ const NO_WISHES: FolderTotals = { wishes: 0, copies: 0, cost: 0, unpriced: 0 };
 const NO_ROWS: readonly WishRow[] = [];
 /** No thumbnails — a shelf the counts have not reached yet. */
 const NO_PEEK: readonly { cardId: string; name: string }[] = [];
-
-/**
- * A heading the caret is owed to — `caretBack` in the page, and `CollectionPage`'s shape of the
- * same name: which request it is, the heading and its control, the element that was pressed, and
- * **where the request was made** — the level drawn, the level asked for and the view — because it
- * lives there and nowhere else. A move carries its planned `order` until the folder list's first
- * answer after the write decides it.
- */
-interface CaretBack {
-  id: number;
-  shelfId: number;
-  control: HeadingCaret["control"];
-  from: HTMLElement | null;
-  level: number | null;
-  asked: number | null;
-  view: SearchView;
-  order?: { parentId: number | null; ids: readonly number[] };
-}
-
-/** Two id lists, same ids in the same order. */
-const sameIds = (a: readonly number[], b: readonly number[]) =>
-  a.length === b.length && a.every((id, at) => id === b[at]);
 
 /**
  * The button that was just pressed, for a control whose callback carries no event — a heading's
@@ -400,20 +384,8 @@ const WISHLIST_TRAY: readonly TrayCell[] = [
 ];
 
 export function WishlistPage() {
-  /**
-   * **The To review widget's needs-review hand-off** — `useReviewHandoff` has the whole rule, and
-   * its two halves sit either side of the list hook: `initialNeedsReview` so the list is *born*
-   * filtered, `settle` for a hand-off landing on a page already mounted.
-   *
-   * **Its sweep never arms here, and that is the shelves answering the question it existed for.**
-   * The hook turns on a local flat read wherever the reader's own Flatten is off, because a flat
-   * list was once the only way to see every flagged wish at once — without it a reader sent by the
-   * `Wishes` row landed on a flagged root holding none of the wishes they were counted. Flatten is
-   * gone and the root's shelves hold every wish, filed or not, so the page already reads the whole
-   * list the way the sweep did: `true` is that answer, passed where the hook asks whether the list
-   * is read flat. What is left for the page is to be **at the root** — see the adjustment below.
-   */
-  const review = useReviewHandoff("wishlist", true);
+  // The To review widget's needs-review hand-off — `useReviewHandoff` has the whole rule.
+  const review = useReviewHandoff("wishlist");
   const wishlist = useWishlist({ initialNeedsReview: review.initialNeedsReview });
   review.settle(wishlist.needsReview, wishlist.setNeedsReview);
   const {
@@ -569,85 +541,6 @@ export function WishlistPage() {
    */
   const [panel, setPanel] = useState<Panel>(null);
   const openerRef = useRef<HTMLElement | null>(null);
-  /**
-   * **The caret handed back to a heading that may no longer be drawn** (live pass §8) —
-   * `CollectionPage`'s `caretBack`, and the two pages share the contract as well as the name. After
-   * **Add folder in a heading** the caret belongs on that heading's `Add folder`, and after **Move up
-   * / Move down** on the moved heading's `⋯`. A wall is virtualised: the new folder's field is
-   * revealed at the end of its parent's subtree, which scrolls the parent's heading out of the
-   * window, and a move carries the heading past its neighbour's whole subtree. Either way the element
-   * the page remembered as the opener can be gone, and `focus()` on a detached node is a silent no-op.
-   *
-   * So the page records **which heading's control** the caret belongs on, both views bring that
-   * heading into view (the wall's `revealShelfId`, the table's `revealIndex`), and the heading takes
-   * the caret itself as it is drawn (`WishShelfHeading`'s `caret`) — **only while nothing else has
-   * it**, and spending the request whether it took it or not (`claimCaret`).
-   *
-   * - **Recorded** after a *successful* move, and after Add folder in a heading on a commit and on a
-   *   keyboard cancel (Escape, ✕). A blur-discard records it only when the caret has nowhere else to
-   *   be — a click on a tile below the draft must neither scroll the wall back up nor take the caret.
-   * - **Dropped** on a level change (drawn or asked), a view change and the next `open`. A move is
-   *   decided at the folder list's **first** answer after the write: its planned order there, and it
-   *   goes on to the reveal; not there — another window moved something, or the read failed — and it
-   *   is dropped rather than left to fire on some later re-read that happens to match.
-   */
-  const [caretBack, setCaretBack] = useState<CaretBack | null>(null);
-  /** The newest request's id. `open` moves it on too, so a request whose write answers after the
-   *  reader has opened something else finds itself superseded and is never recorded. */
-  const caretSeq = useRef(0);
-  const caretClaimed = useRef<number | null>(null);
-  // A claim **spends** the request: its reveal has done its job, and a request left standing would
-  // reveal the heading again — the table's `revealIndex` answers every new index — whenever
-  // something above it moved. The ref is what stops a second run of the heading's effect in the same
-  // commit (StrictMode's) from taking it twice. Called from that effect: the heading's comment says
-  // why this one `setState` from an effect is an event and not a derived sync.
-  const claimCaret = useCallback((id: number) => {
-    if (caretClaimed.current === id) return false;
-    caretClaimed.current = id;
-    setCaretBack((current) => (current?.id === id ? null : current));
-    return true;
-  }, []);
-  /** A request stamped with where it is made — the levels, the view, the pressed element — and a
-   *  fresh id. Made at the press; {@link recordCaret} files it once its moment comes. */
-  const askCaret = useCallback(
-    (
-      shelfId: number,
-      control: HeadingCaret["control"],
-      order?: CaretBack["order"],
-    ): CaretBack => {
-      caretSeq.current += 1;
-      return {
-        id: caretSeq.current,
-        shelfId,
-        control,
-        from: openerRef.current,
-        level: folderId,
-        asked: requestedFolderId,
-        view,
-        order,
-      };
-    },
-    [folderId, requestedFolderId, view],
-  );
-  /** File a request — unless another has been made, or a layer opened, since it was asked. */
-  const recordCaret = useCallback((request: CaretBack) => {
-    if (caretSeq.current === request.id) setCaretBack(request);
-  }, []);
-  /**
-   * A blur-discard's decision, waiting one task for the caret to land (`cancelNewFolder`). During
-   * a blur the caret is on `<body>` whether or not a click is about to put it somewhere, so the
-   * question "has it nowhere else to be" can only be asked once the focus change has finished. A
-   * newer blur replaces a waiting one, and the page going clears it — the collection's arrangement,
-   * so the two pages decide a blur alike.
-   */
-  const blurDecision = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (blurDecision.current !== null) window.clearTimeout(blurDecision.current);
-    },
-    [],
-  );
-
   /**
    * The row the list and the docked search column share, and the box the column is pinned inside —
    * `DeckEditor`'s desk and dock, on a page that had neither because it was `flex-col` from its
@@ -1094,6 +987,46 @@ export function WishlistPage() {
   const subtotals = useMemo(() => subtotalsOf(nodes, folders.summary), [nodes, folders.summary]);
 
   /**
+   * **A level deleted from under the reader** (the final review's C-M4) — by another window, or a
+   * synced device. The page stood on in a drawer that no longer exists: an empty wall, a breadcrumb
+   * with nothing to name, and Escape the only way out. So once the folder list has **answered**
+   * without the level asked for, the page opens its **nearest surviving ancestor** — the root if
+   * none survives, which is where a deleted drawer's wishes have gone anyway.
+   *
+   * The ancestors are the last answer's that still held the level (`levelTrail`, root-most first),
+   * because the answer that removed it cannot say where it was: a delete takes its sub-folders
+   * with it, so the reader's own drawer can go with an ancestor, and the one to land in is the
+   * deepest that is left. The trail is kept **with the level it belongs to**, so an answer about
+   * one level is never read back for another. Both writes are React's adjustment during render and
+   * each removes its own condition — the trail is written only when it changed, and the walk lands
+   * on a level the list holds, or on the root.
+   *
+   * **A hand-off waiting for this page outranks it** (`pendingHere === null`), the collection's
+   * ordering too: the hand-off above opens the folder another page named, and two render-phase
+   * writes pulling the level different ways in one pass could chase each other. With the hand-off
+   * first, the walk only ever acts on a level the reader is actually left standing in.
+   */
+  const [levelTrail, setLevelTrail] = useState<{ level: number; ids: readonly number[] } | null>(
+    null,
+  );
+  const census = folders.query.data;
+  if (census !== undefined && requestedFolderId !== null && pendingHere === null) {
+    if (census.some((folder) => folder.id === requestedFolderId)) {
+      const ids = trailOf(census, requestedFolderId).map((folder) => folder.id);
+      if (levelTrail?.level !== requestedFolderId || !sameIds(ids, levelTrail.ids)) {
+        setLevelTrail({ level: requestedFolderId, ids });
+      }
+    } else {
+      const known = levelTrail?.level === requestedFolderId ? levelTrail.ids : [];
+      // Deepest first — `findLast` is ES2023 and this program's lib stops at ES2020.
+      const survivor = [...known]
+        .reverse()
+        .find((id) => id !== requestedFolderId && census.some((folder) => folder.id === id));
+      openFolder(survivor ?? null);
+    }
+  }
+
+  /**
    * **The cabinet split in two: the reader's drawers and the decks' managed ones** (issue #512).
    *
    * `nodes` above stays the *whole* tree, because the trail and the subtotals are read from it and a
@@ -1214,8 +1147,33 @@ export function WishlistPage() {
   const openPanel = panelGone ? null : panel;
 
   /**
+   * **The caret handed back to a heading that may no longer be drawn** (live pass §8) — after Add
+   * folder in a heading, to its `Add folder`, and after Move up / Move down, to the moved heading's
+   * `⋯`. `useHeadingCaret` is the whole machine, shared with the collection; the page asks for a
+   * request at the press, records it when its moment comes, and hands the due one to its heading
+   * (`caretFor`) and to both views' reveal (`caretDue`). Called here, where the folder tree a move is
+   * decided against exists and before every callback that asks for one.
+   */
+  const {
+    due: caretDue,
+    caretFor,
+    ask: askCaret,
+    record: recordCaret,
+    supersede: supersedeCaret,
+    afterBlur,
+    leave: leaveCaret,
+  } = useHeadingCaret({
+    level: folderId,
+    asked: requestedFolderId,
+    view,
+    opener: openerRef,
+    fetching: folders.query.isFetching,
+    levelIds: (parentId) => folderLevel(userNodes, parentId).map((node) => node.folder.id),
+  });
+
+  /**
    * The Add folder a naming field was opened from, when that is a **heading's** — the one whose
-   * caret has to be handed back by request ({@link caretBack}). The path row's makes a folder *at*
+   * caret has to be handed back by request (`useHeadingCaret`). The path row's makes a folder *at*
    * the level, its parent is the level itself, and its button is never scrolled away.
    */
   const headingAddedIn =
@@ -1228,7 +1186,7 @@ export function WishlistPage() {
   // Escape, and each panel's own Cancel. `close` below is the click-away way and is deliberately a
   // different function: an outside click does *not* hand the caret back.
   //
-  // **Add folder in a heading also records a request** ({@link caretBack}), committed or cancelled:
+  // **Add folder in a heading also records a request** (`useHeadingCaret`), committed or cancelled:
   // the field is revealed at the end of the parent's subtree, so on a long wall the parent's heading
   // — and with it the opener — has been virtualised away by the time the field closes, and the focus
   // above is a no-op on a detached node. The heading takes the caret back as it is drawn.
@@ -1249,31 +1207,29 @@ export function WishlistPage() {
    *   so a heading's Add folder has its request recorded at once.
    * - **A heading's field, blurred, is the click-away way** — closed without handing anything back
    *   — and records the heading's request **only when the caret has nowhere else to be**. That is
-   *   asked one task later ({@link blurDecision}), once the focus change has finished: a click on a
+   *   asked one task later (`afterBlur`), once the focus change has finished: a click on a
    *   tile below the draft has put the caret on the tile by then, and must neither scroll the wall
    *   back up to the heading nor have the caret taken away.
-   * - **The path row's field is unchanged**: `dismiss` for every exit, as before this round. Its
-   *   button is never scrolled away, no request is ever made for it, and the blur's own focus call is
-   *   the live pass's to check — jsdom overwrites a focus made during a blur, so no test here could
-   *   pin either answer (the collection's field is left the same way).
+   * - **The path row's field decides the same way** (the final review's W-I1): a focus made from
+   *   inside a `focusout` handler is one Blink refuses the click its own focus, so `dismiss` there
+   *   took the caret off whatever was clicked and scrolled the page to the top. One task later, and
+   *   only if the caret is still nowhere, it goes back to the path row's Add folder **without
+   *   scrolling** — `CollectionPage`'s rule, word for word.
    */
   const cancelNewFolder = useCallback(() => {
-    const active = document.activeElement;
-    if (headingAddedIn === null || (active !== null && active !== document.body)) {
+    if (!caretIsNowhere()) {
       dismiss();
       return;
     }
-    const request = askCaret(headingAddedIn, "add");
-    if (blurDecision.current !== null) window.clearTimeout(blurDecision.current);
-    blurDecision.current = window.setTimeout(() => {
-      blurDecision.current = null;
-      const landed = document.activeElement;
-      // `recordCaret` also refuses a request something newer has superseded — a layer opened in
-      // the same task as the click that blurred the field.
-      if (landed === null || landed === document.body) recordCaret(request);
-    }, 0);
+    if (headingAddedIn !== null) {
+      const request = askCaret(headingAddedIn, "add");
+      afterBlur(() => recordCaret(request));
+    } else {
+      const opener = openerRef.current;
+      afterBlur(() => opener?.focus({ preventScroll: true }));
+    }
     setPanel(null);
-  }, [dismiss, headingAddedIn, recordCaret, askCaret]);
+  }, [dismiss, headingAddedIn, recordCaret, askCaret, afterBlur]);
 
   useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: openPanel !== null });
 
@@ -1303,10 +1259,9 @@ export function WishlistPage() {
     openerRef.current = opener;
     // A caret still owed to a heading is the last layer's business, not this one's — and a request
     // whose write has not answered yet is superseded, so it is never recorded at all.
-    caretSeq.current += 1;
-    setCaretBack(null);
+    supersedeCaret();
     setPanel(next);
-  }, []);
+  }, [supersedeCaret]);
 
   /**
    * **Add folder** — on the path row for the level on screen, and on a heading for inside that
@@ -1343,19 +1298,42 @@ export function WishlistPage() {
    * **A new folder does not become the folder the reader is standing in**: they are looking at the
    * wishes they are about to file, and walking them into an empty drawer would take exactly those
    * off screen. The new heading is right there to drag onto.
+   *
+   * **A made folder starts on its own kind's fold** (the final review's R-M2): `wishlist_folders.id`
+   * is an `INTEGER PRIMARY KEY` without `AUTOINCREMENT`, so a new folder can take a deleted folder's
+   * id — and with it whatever fold was stored under that id. The create clears it, and only where
+   * something is stored, so an ordinary create writes nothing.
+   *
+   * **The path row's caret comes back without scrolling** (ledger 217): the new heading is drawn
+   * last among its siblings, and an ordinary `focus()` on the path row's button took the page to
+   * the top and off it. A heading's Add folder is `dismiss`'s request, which reveals the heading.
    */
   const nameFolder = useCallback(
     (name: string) => {
       if (panel?.kind === "newFolder") {
         const { parentId } = panel;
-        // Opened from a heading, `dismiss` also hands the caret back to that heading's Add folder,
-        // wherever the field took the wall ({@link caretBack}).
-        folders.create.mutate({ parentId, name }, { onSuccess: dismiss });
+        const pathRow = headingAddedIn === null;
+        folders.create.mutate(
+          { parentId, name },
+          {
+            onSuccess: (made) => {
+              if (folds[String(made.id)] !== undefined) setFold(made.id, null);
+              // Opened from a heading, `dismiss` also hands the caret back to that heading's Add
+              // folder, wherever the field took the wall (`useHeadingCaret`).
+              if (!pathRow) {
+                dismiss();
+                return;
+              }
+              openerRef.current?.focus({ preventScroll: true });
+              setPanel(null);
+            },
+          },
+        );
       } else if (panel?.kind === "renameFolder") {
         folders.rename.mutate({ id: panel.folderId, name }, { onSuccess: dismiss });
       }
     },
-    [panel, folders.create, folders.rename, dismiss],
+    [panel, headingAddedIn, folders.create, folders.rename, folds, setFold, dismiss],
   );
 
   /**
@@ -1462,7 +1440,7 @@ export function WishlistPage() {
    * {@link folderPlacement} as the before/after drop on the neighbouring heading would be, so the
    * two routes cannot disagree about what a reorder writes.
    *
-   * **And the caret follows the heading to its new place** ({@link caretBack}): the menu hands the
+   * **And the caret follows the heading to its new place** (`useHeadingCaret`): the menu hands the
    * caret to the heading's `⋯` before it runs the row, and the move then carries that heading past
    * its neighbour's whole subtree — out of the virtual window on a deep shelf. The request is asked
    * at the press and **recorded only once the write has succeeded** (a refused move owes the caret
@@ -1481,7 +1459,7 @@ export function WishlistPage() {
         step < 0 ? "before" : "after",
       );
       if (plan === null) return;
-      const request = askCaret(folder.id, "manage", plan);
+      const request = askCaret(folder.id, "manage", { order: plan });
       folders.reorder.mutate(plan, { onSuccess: () => recordCaret(request) });
     },
     [userNodes, treeParent, folderPlacement, folders.reorder, askCaret, recordCaret],
@@ -1699,6 +1677,33 @@ export function WishlistPage() {
     [countMap, foldsWall, drawnShelves, filtering, visible],
   );
 
+  /**
+   * **Where the caret goes once a folder has left its heading** — Move to folder… and Delete…
+   * (the final review's C-M5). `useHeadingCaret`'s `leave` is the rule, shared with the collection;
+   * this is the wall it is asked about — which headings are drawn open, the tree's parents, and the
+   * path row. The strip's three writes each land the caret through it.
+   */
+  const pathRowRef = useRef<HTMLDivElement>(null);
+  const leaveHeading = useCallback(
+    (id: number, write: (done: { onSuccess: () => void }) => void, into?: number | null) => {
+      const land = leaveCaret({
+        id,
+        into,
+        drawnOpen: (shelfId) =>
+          visible.some((shelf) => shelf.id === shelfId && !shelf.headless && !shelf.collapsed),
+        parentOf: (folder) => treeParent.get(folder) ?? null,
+        pathRowAdd: () => pathRowAddFolder(pathRowRef.current),
+      });
+      write({
+        onSuccess: () => {
+          setPanel(null);
+          land();
+        },
+      });
+    },
+    [leaveCaret, visible, treeParent],
+  );
+
   /** A folder's unfiltered figures, recursive — `null` for Not sorted and before the summary. */
   const figuresOf = useCallback(
     (shelf: Shelf): ShelfFigures | null => {
@@ -1728,9 +1733,14 @@ export function WishlistPage() {
   );
 
   /**
-   * A chevron press — the stored override, or `null` back to the kind's default (spec §5.7).
-   * **A no-op while filtering**: collapse is suspended then (decision 4), so a press would store a
-   * state the reader cannot see take effect until the box empties. Never on the folder being added.
+   * A chevron press — the stored override, or `null` back to the kind's default (spec §5.7) — and
+   * the path row's Expand all / Collapse all.
+   *
+   * **All three write nothing while a filter is on** (spec §3.4, decision 4; the final review's
+   * C-I2 / W-M14): collapse is suspended then, so a press would store a state the reader cannot
+   * see take effect until the box empties — and then the wall would re-fold on its own, by a press
+   * made minutes earlier. One rule for the three: the chevron alone used to honour it, and Expand
+   * all and Collapse all still wrote. Never on the folder being added.
    */
   const toggleShelf = useCallback(
     (shelf: Shelf) => {
@@ -1739,8 +1749,19 @@ export function WishlistPage() {
     },
     [filtering, setFold],
   );
-  const expandAll = useCallback(() => setMany(foldChanges(shelves, false)), [setMany, shelves]);
-  const collapseAll = useCallback(() => setMany(foldChanges(shelves, true)), [setMany, shelves]);
+  const expandAll = useCallback(() => {
+    if (!filtering) setMany(foldChanges(shelves, false));
+  }, [filtering, setMany, shelves]);
+  const collapseAll = useCallback(() => {
+    if (!filtering) setMany(foldChanges(shelves, true));
+  }, [filtering, setMany, shelves]);
+  /**
+   * **And all three say so** — `aria-disabled` with the reason as their description and their
+   * tooltip, from the shared components (`ShelfToolbar`'s and `ShelfHeading`'s `foldPaused`), so a
+   * reader is told why a press does nothing rather than left to guess. The guards above stay: they
+   * are the page's own promise that nothing is written, whatever a component does with a press.
+   */
+  const foldPaused = filtering ? FOLD_PAUSED_REASON : undefined;
 
   /** A card let go on a shelf files into it — the root for Not sorted — through the page's own
    *  `canFile`, which refuses a managed destination, so a deck's heading never arms. */
@@ -1752,39 +1773,6 @@ export function WishlistPage() {
     },
     [canFile, fileWish],
   );
-
-  /**
-   * **The request's lifetime, answered as the page renders** — React's adjustment of state from
-   * information in the render, never an effect, and each write terminates because it removes its
-   * own condition.
-   *
-   * A request walked away from — another level drawn or asked for, the other view — is dropped
-   * rather than kept for a return: a wall that remounts would otherwise reveal a heading the reader
-   * has long left. A move is **decided at the folder list's first answer after the write**, data or
-   * error — `isFetching` falling, since the write's own `settleOrder` started that read before the
-   * request was recorded: the planned order on screen, and the request goes on to its reveal with
-   * the order spent; anything else, and it is dropped rather than waiting for a later re-read.
-   */
-  const caretHere =
-    caretBack !== null &&
-    caretBack.level === folderId &&
-    caretBack.asked === requestedFolderId &&
-    caretBack.view === view
-      ? caretBack
-      : null;
-  if (caretBack !== null && caretHere === null) setCaretBack(null);
-  if (caretHere?.order !== undefined && !folders.query.isFetching) {
-    const { parentId, ids } = caretHere.order;
-    const landed = sameIds(
-      folderLevel(userNodes, parentId).map((node) => node.folder.id),
-      ids,
-    );
-    setCaretBack(landed ? { ...caretHere, order: undefined } : null);
-  }
-  /** The heading the caret is owed to, once it is where it is going — `null` while there is none
-   *  or while a move is still waiting on its answer. What both views reveal, and what the heading
-   *  is handed. */
-  const caretDue = caretHere !== null && caretHere.order === undefined ? caretHere : null;
 
   /**
    * A shelf's heading (spec §3.2). The reader's folders get Add folder, Rename, the `⋯`, a folder
@@ -1835,6 +1823,8 @@ export function WishlistPage() {
           }
           peek={peekOf(shelf)}
           onToggle={() => toggleShelf(shelf)}
+          // Refused in the open while a filter is on — see `foldPaused`.
+          foldPaused={foldPaused}
           onOpen={openFolder}
           onAddFolder={
             node === undefined ? undefined : () => startNewFolder(shelf.id, pressedElement())
@@ -1859,22 +1849,12 @@ export function WishlistPage() {
                 }
           }
           source={node?.folder ?? null}
-          caret={
-            caretDue !== null && caretDue.shelfId === shelf.id
-              ? {
-                  id: caretDue.id,
-                  control: caretDue.control,
-                  from: caretDue.from,
-                  claim: claimCaret,
-                }
-              : undefined
-          }
+          caret={caretFor(shelf.id)}
         />
       );
     },
     [
-      caretDue,
-      claimCaret,
+      caretFor,
       nodeById,
       nameFolder,
       dismiss,
@@ -1889,6 +1869,7 @@ export function WishlistPage() {
       filtering,
       currency,
       toggleShelf,
+      foldPaused,
       openFolder,
       startNewFolder,
       open,
@@ -1999,6 +1980,49 @@ export function WishlistPage() {
           (row) => isBand(row) && row.band === "heading" && row.shelf.id === revealShelfId,
         );
   const tableRevealIndex = revealBand < 0 ? null : revealBand;
+
+  /**
+   * **Page until the band a reveal waits for is drawn** (the final review's W-I2, ledger 146 and
+   * 223). The table's rows stop at the first shelf whose cards are still loading (`shelfTable`), and
+   * a folder being added is drawn **last** among its siblings — so on any list past one page, Add
+   * folder in the table drew no field at all, while the invisible layer still held the Escape rung,
+   * and a later page, arriving as the reader scrolled, mounted the field and yanked the caret and
+   * the scroll to it. A Move whose heading landed past the edge sat unrevealed the same way.
+   *
+   * So while a naming field is open, or a caret request is waiting for its band (both are
+   * `revealShelfId`), and the band is not among the rows, the table asks for the next page — once
+   * per page landed (`onNeedNextPage` holds while one is in flight), until the band is drawn or no
+   * page is left. Only for a shelf the wall lays out, so an id nothing will ever draw (a shelf a
+   * filter hid) pages nothing. The grid needs none of it: `CardGrid` lays out every shelf, with
+   * empty slots for the cards not loaded yet.
+   */
+  const bandPastEdge =
+    view === "table" &&
+    revealShelfId !== null &&
+    revealBand < 0 &&
+    !complete &&
+    sections.some(({ shelf }) => shelf.id === revealShelfId);
+  useEffect(() => {
+    if (bandPastEdge) onNeedNextPage();
+  }, [bandPastEdge, onNeedNextPage]);
+
+  /**
+   * **The heading band being dragged stays drawn wherever the table scrolls** (the final review's
+   * S-I3) — `VirtualTable`'s `keepRow`. The table does not fold during a folder drag, so a heading
+   * carried past the overscan used to scroll out of the window and unmount its own drag source,
+   * which ended the drag or lost its floating copy. The folder in flight is read off the drag's own
+   * record, and only in the table.
+   */
+  const inFlight = useDragRecord(view === "table");
+  const carried = inFlight === null ? null : readFolderDrag(inFlight, "wishlist");
+  const carriedBand =
+    carried === null
+      ? -1
+      : table.rows.findIndex(
+          (row) => isBand(row) && row.band === "heading" && row.shelf.id === carried.folderId,
+        );
+  const keepRow = carriedBand < 0 ? null : carriedBand;
+
   const tableBands: WishTableBands = {
     heading: renderHeading,
     empty: renderEmpty,
@@ -2086,7 +2110,6 @@ export function WishlistPage() {
     pending: totals === null || query.isPending,
     drawn,
     inFolder: folderId !== null,
-    managedSentence: managedHere === null ? null : managedSentenceOf(managedHere.id),
   });
 
   /** Everything both layouts are handed about the cabinet, in one object because it is one set
@@ -2278,15 +2301,24 @@ export function WishlistPage() {
                 />
               )}
             </div>
-            <ShelfToolbar
-              // The `canMakeFolder` gate, unchanged (spec §3.8): nothing is made inside a deck's
-              // managed folder, so the button is absent there rather than greyed.
-              onAddFolder={
-                managedHere === null ? () => startNewFolder(folderId, pressedElement()) : undefined
-              }
-              onExpandAll={expandAll}
-              onCollapseAll={collapseAll}
-            />
+            {/* The ref the caret's path-row answer searches (`pathRowAddFolder`) is the toolbar's
+                alone — the collection's arrangement. Around the breadcrumb too, it found a trail
+                segment first for a folder a reader had named "Add folder". `contents`, so the
+                wrapper draws no box and the toolbar stays the row's flex item. */}
+            <div ref={pathRowRef} className="contents">
+              <ShelfToolbar
+                // The `canMakeFolder` gate, unchanged (spec §3.8): nothing is made inside a deck's
+                // managed folder, so the button is absent there rather than greyed.
+                onAddFolder={
+                  managedHere === null
+                    ? () => startNewFolder(folderId, pressedElement())
+                    : undefined
+                }
+                onExpandAll={expandAll}
+                onCollapseAll={collapseAll}
+                foldPaused={foldPaused}
+              />
+            </div>
           </div>
 
           {/* Standing inside a deck's managed folder: whose list this is and that it keeps
@@ -2346,7 +2378,11 @@ export function WishlistPage() {
                   inline
                   pending={folders.move.isPending}
                   onPick={(parentId) =>
-                    folders.move.mutate({ id: openPanel.folderId, parentId }, { onSuccess: dismiss })
+                    leaveHeading(
+                      openPanel.folderId,
+                      (done) => folders.move.mutate({ id: openPanel.folderId, parentId }, done),
+                      parentId,
+                    )
                   }
                   onClose={close}
                 />
@@ -2359,10 +2395,14 @@ export function WishlistPage() {
                   // on its way would be a different write racing it to the same folder.
                   pending={folders.remove.isPending || folders.removeWithWishes.isPending}
                   onConfirm={() =>
-                    folders.remove.mutate(openPanel.folderId, { onSuccess: dismiss })
+                    leaveHeading(openPanel.folderId, (done) =>
+                      folders.remove.mutate(openPanel.folderId, done),
+                    )
                   }
                   onConfirmWithWishes={() =>
-                    folders.removeWithWishes.mutate(openPanel.folderId, { onSuccess: dismiss })
+                    leaveHeading(openPanel.folderId, (done) =>
+                      folders.removeWithWishes.mutate(openPanel.folderId, done),
+                    )
                   }
                   onCancel={dismiss}
                   onClose={close}
@@ -2391,12 +2431,20 @@ export function WishlistPage() {
 
           {/* One live region, mounted for the life of the view: a region that appears together
               with its text announces nothing, because there was no change for a screen reader
-              to notice. Empty — and therefore no taller than nothing — while the list below is
-              answering for itself. */}
+              to notice.
+
+              **Over a wall, it holds its one line open whether or not it is saying anything**
+              (`min-h-4`, the `text-xs` line's own 1rem). It used to be empty, and so no taller
+              than nothing, until a write's re-read put `Updating…` in it for 40–80 ms — which
+              pushed the wall down 16px for exactly the frames the grid's reveal and the drop
+              anchor measured it in, and then Chromium's scroll anchoring took the 16 back, so a
+              revealed heading landed 16px short (the live re-check's new 2). A line that never
+              changes height cannot move the wall. The empty list's sentence is the one case that
+              does grow, and there is no wall under it to move. */}
           <p
             role="status"
             className={cn(
-              empty && status ? "py-16 text-center text-sm" : "text-xs",
+              empty && status ? "py-16 text-center text-sm" : "min-h-4 text-xs",
               empty && failure ? "text-destructive" : "text-dim",
             )}
           >
@@ -2452,6 +2500,7 @@ export function WishlistPage() {
                 total={table.total}
                 bands={tableBands}
                 revealIndex={tableRevealIndex}
+                keepRow={keepRow}
                 listKey={wishlist.queryKeyString}
                 sort={wishlist.sort}
                 onSort={wishlist.toggleSort}
@@ -2809,14 +2858,11 @@ function statusOf(
     pending,
     drawn,
     inFolder,
-    managedSentence,
   }: {
     empty: boolean;
     pending: boolean;
     drawn: boolean;
     inFolder: boolean;
-    /** The reader is standing in a deck's managed folder: the sentence for the view it follows. */
-    managedSentence: string | null;
   },
 ): string {
   const { query, activeCount } = wishlist;
@@ -2825,13 +2871,12 @@ function statusOf(
     if (failure) return failure;
     if (pending) return "Reading your wishlist…";
     // A wall with anything on it — headings, or the empty folder's own box — is the answer to
-    // "what is here", and the box already says the folder is empty. `CollectionPage`'s order.
+    // "what is here", and the box already says the folder is empty. `CollectionPage`'s order. That
+    // includes a deck's managed folder: `layoutShelves` draws its box too, holding the sentence for
+    // the view the deck follows, so the status line never has to say it.
     if (drawn) return "";
     // Something was filtered out rather than never there: a statement about the filters.
     if (activeCount > 0) return "No wishes match these filters.";
-    // A deck's managed folder holding nothing, where the wall draws no box for it: the same
-    // sentence the box would hold, so the two views and the status line say one thing.
-    if (managedSentence !== null) return managedSentence;
     // Nothing filtered and nothing there. Two statements, and which one is honest depends on
     // where the reader is: "No wishes match" would blame the reader for a list nobody has put
     // anything on yet, and the root's instruction would answer the wrong question inside a

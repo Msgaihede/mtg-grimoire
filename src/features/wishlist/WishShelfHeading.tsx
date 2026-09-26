@@ -14,13 +14,17 @@
  * (`data-shelf-heading`), `EmptyShelf` and `ShelfStickyBar` already mark the element each registers
  * on, and that element is what the suites box.
  */
-import { useCallback, useLayoutEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 import { Layers } from "lucide-react";
 import { EmptyShelf } from "@/features/shelves/EmptyShelf";
-import { HEADING_CARET_CONTROL, type HeadingCaret } from "@/features/shelves/headingCaret";
+import { useTakeHeadingCaret, type HeadingCaret } from "@/features/shelves/headingCaret";
 import { ShelfHeading, type ShelfHeadingProps } from "@/features/shelves/ShelfHeading";
 import { ShelfStickyBar } from "@/features/shelves/ShelfStickyBar";
-import { useShelfDragSource, useShelfDropTarget } from "@/features/shelves/useShelfDrag";
+import {
+  useShelfDragSource,
+  useShelfDropTarget,
+  useShelfStickyDropTarget,
+} from "@/features/shelves/useShelfDrag";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import type { WishlistFolder } from "@/lib/ipc";
 import type { Shelf } from "@/lib/shelves";
@@ -78,29 +82,8 @@ export function WishShelfHeading({
     },
     [attach],
   );
-  /**
-   * Take the caret when drawn with a request on it — **only while nothing else has it**: it is on
-   * `<body>`, where a detached opener or a closed field leaves it, or still on the element the reader
-   * pressed (`from`). And only once per request, so a heading scrolled back into view later never
-   * pulls the caret off whatever the reader has moved on to. A layout effect, so the caret is placed
-   * in the commit that draws the heading rather than a frame after it. A control not drawn (a field
-   * is open over the heading) is not a claim: the request waits for it.
-   *
-   * **`claim` sets the page's state from this effect, and that is a deliberate exception** to the
-   * house rule against a `setState` in an effect. The rule is about *derived* state synced after the
-   * fact; this is an **event** — the heading reached the screen and the caret was handed over — and
-   * the page cannot see it happen, because only this commit knows the control is drawn. It is
-   * guarded and loop-free: `claim` answers `true` once per id (the page's ref, which also stops
-   * StrictMode's second run from taking twice), the state it clears is the request itself, and the
-   * render that follows hands this heading no `caret`, so the effect has nothing left to do.
-   */
-  useLayoutEffect(() => {
-    if (caret === undefined) return;
-    const control = row.current?.querySelector<HTMLElement>(HEADING_CARET_CONTROL[caret.control]);
-    if (control == null || !caret.claim(caret.id)) return;
-    const active = document.activeElement;
-    if (active === null || active === document.body || active === caret.from) control.focus();
-  }, [caret]);
+  // Take the caret when drawn with a request on it — `headingCaret.ts` has the whole rule.
+  useTakeHeadingCaret(caret, row);
   return <ShelfHeading {...heading} dropRef={dropRef} dropMark={drop.mark} dragRef={drag} />;
 }
 
@@ -116,6 +99,11 @@ export type { HeadingCaret };
  * reader is scrolled inside. Cards only: its path segments are buttons and take no folder (the
  * coordinator's spec change — only the path row's segments do). Its `canDrop` reads the shelf of
  * the moment through the hook's own ref, so scrolling past a shelf re-binds nothing.
+ *
+ * **It wins the pointer where it is drawn** (`useShelfStickyDropTarget`, the final review's S-M1):
+ * headings and table bands scroll *underneath* the bar, and dnd-kit ranks two targets the pointer
+ * is inside by distance to each one's centre rather than by paint order — so a heading half under
+ * the bar, its centre nearer the pointer, took a card released on the bar.
  */
 export function WishShelfSticky({
   shelf,
@@ -129,7 +117,7 @@ export function WishShelfSticky({
   cards: (shelf: Shelf) => CardDrops | undefined;
 }) {
   const drops = (shelf === null ? undefined : cards(shelf)) ?? NO_CARDS;
-  const drop = useShelfDropTarget({ read: readWishDrop, ...drops });
+  const drop = useShelfStickyDropTarget({ read: readWishDrop, ...drops });
   return (
     <ShelfStickyBar
       shelf={shelf}

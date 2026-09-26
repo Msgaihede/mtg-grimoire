@@ -47,8 +47,8 @@ import { readSearchCardDrag, type SearchCardDrag } from "@/features/search/searc
  *
  * **A card off a *search* wall is a fourth key and a third `CollectionDrop` arm** — `searchCardDrag.ts`,
  * added with the collection's own docked search column on 2026-09-07. That module carries the
- * argument for its key; what it means here is that a folder card now takes a card the reader does
- * **not** own, and the drop is an `collection_add` rather than a refile.
+ * argument for its key; what it means here is that a shelf takes a card the reader does **not**
+ * own, and the drop is a `collection_add` rather than a refile.
  *
  * {@link readCollectionDrop} is what a target that takes any of them asks, and {@link CollectionDrop}
  * is its discriminated answer. The union rather than the tile shape alone: a folder's answer about
@@ -189,9 +189,9 @@ export function readCollectionTileDrag(data: Record<string, unknown>): Collectio
  * the collection at all. That difference is the whole reason it earns a `kind` rather than being
  * folded into `"tile"` with an empty `copies`: every `canDrop` on this page asks *which folders is
  * this leaving*, and the honest answer for a card the reader does not own is that the question
- * does not apply. Adding it here reaches `useCollectionDropTarget`, `CollectionFolderCard`,
- * `CollectionParentFolderCard` and `CollectionBreadcrumb`'s segments with no component edit at
- * all, which is what the discriminated union was for.
+ * does not apply. Adding it here reaches every target that reads {@link readCollectionDrop} — the
+ * shelf headings, the sticky bar, an empty folder's box and `CollectionBreadcrumb`'s segments —
+ * with no component edit at all, which is what the discriminated union was for.
  */
 export type CollectionDrop =
   | { kind: "entry"; entry: CollectionDrag }

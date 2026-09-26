@@ -19,12 +19,16 @@
  * `reorder_folders` refuses a deck group or `Recently removed` at either end in words, and a mark
  * over a target the backend always refuses is a promise the next press breaks.
  */
-import { useCallback, useLayoutEffect, useRef, type ReactElement } from "react";
+import { useCallback, useRef, type ReactElement } from "react";
 import { EmptyShelf } from "@/features/shelves/EmptyShelf";
-import { HEADING_CARET_CONTROL, type HeadingCaret } from "@/features/shelves/headingCaret";
+import { useTakeHeadingCaret, type HeadingCaret } from "@/features/shelves/headingCaret";
 import { ShelfHeading, type ShelfHeadingProps } from "@/features/shelves/ShelfHeading";
 import { ShelfStickyBar } from "@/features/shelves/ShelfStickyBar";
-import { useShelfDragSource, useShelfDropTarget } from "@/features/shelves/useShelfDrag";
+import {
+  useShelfDragSource,
+  useShelfDropTarget,
+  useShelfStickyDropTarget,
+} from "@/features/shelves/useShelfDrag";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import type { CollectionFolder } from "@/lib/ipc";
 import type { Shelf } from "@/lib/shelves";
@@ -110,31 +114,8 @@ export function CollectionShelfHeading({
     [attach, takes],
   );
 
-  /**
-   * Take the caret when drawn with a request on it — **only while nothing else has it** (it is on
-   * `<body>`, where a detached opener leaves it, or still on the element the reader pressed), and
-   * only once per request, so scrolling this heading back into view later never pulls the caret off
-   * whatever the reader has moved on to. A layout effect, so the caret is placed in the commit that
-   * draws the heading rather than a frame after it. A control not drawn (a field is open over the
-   * heading) is not a claim: the request waits for it.
-   *
-   * **Found through the row, never through `document`**: a lookup across the page answers with
-   * whichever heading's control comes first, and during a reorder two rows can briefly stand for
-   * one folder.
-   *
-   * ⚠️ **`claim` spends the request with a `setState` in the page, called from this effect — a
-   * deliberate, guarded exception to "no `setState` inside an effect"**: it reports an event (the
-   * caret was placed, or declined) rather than synchronising a value, it answers `true` once per
-   * id and `false` to every later call, and the write removes the very prop that made this run —
-   * so it cannot loop. `CollectionPage`'s `claimCaret` carries the same note.
-   */
-  useLayoutEffect(() => {
-    if (caret === undefined) return;
-    const control = row.current?.querySelector<HTMLElement>(HEADING_CARET_CONTROL[caret.control]);
-    if (control == null || !caret.claim(caret.id)) return;
-    const active = document.activeElement;
-    if (active === null || active === document.body || active === caret.from) control.focus();
-  }, [caret]);
+  // Take the caret when drawn with a request on it — `headingCaret.ts` has the whole rule.
+  useTakeHeadingCaret(caret, row);
 
   return <ShelfHeading {...heading} dropRef={dropRef} dropMark={drop.mark} dragRef={drag} />;
 }
@@ -174,7 +155,10 @@ export function CollectionShelfSticky({
   cards: CardTarget;
 }): ReactElement | null {
   const to = shelf === null ? undefined : shelfTarget(shelf);
-  const drop = useShelfDropTarget({
+  // `useShelfStickyDropTarget` rather than the headings' own: the bar is drawn **over** the wall,
+  // and a heading scrolled half under it whose centre is nearer the pointer took the drop the bar
+  // was showing it would take (the final review's S-M1). The overlay's priority is what wins it.
+  const drop = useShelfStickyDropTarget({
     read: readCollectionDrop,
     canDrop: (one: CollectionDrop) => to !== undefined && cards.canDrop(one, to),
     onDrop: (one: CollectionDrop) => {

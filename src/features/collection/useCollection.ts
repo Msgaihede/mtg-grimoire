@@ -748,8 +748,8 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
      *  arrives. The rows on screen are that level's, so nothing may page past them meanwhile. */
     levelHeld: held !== null,
     /** Open a folder, or `null` for the root. This hook only tracks where the reader now is; it
-     *  does not create, rename, move or delete a folder — those live on the page, beside the
-     *  folder cards. */
+     *  does not create, rename, move or delete a folder — those live on the page, on the path row
+     *  and the shelf headings. */
     openFolder: setAsked,
     /**
      * The wall's shelves at the level on screen, in drawing order, **as built** — collapsed ones and

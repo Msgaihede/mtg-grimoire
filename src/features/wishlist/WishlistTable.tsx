@@ -575,6 +575,7 @@ export function WishlistTable({
   nodes,
   bands,
   revealIndex,
+  keepRow,
   readOnly = NOTHING_READ_ONLY,
   onNeedNextPage,
   onSetQuantity,
@@ -594,6 +595,10 @@ export function WishlistTable({
   /** A row to scroll into view — `VirtualTable`'s `revealIndex`, passed straight through: the page
    *  names the heading band it owes the caret to, or the band of the folder being added. */
   revealIndex?: number | null;
+  /** A row kept drawn wherever the table scrolls — `VirtualTable`'s `keepRow`, passed straight
+   *  through: the page names the band of the folder heading being dragged, so its drag source is
+   *  never scrolled out of the window mid-gesture. */
+  keepRow?: number | null;
   /**
    * Whether a wish is the **deck's** — filed in a managed folder (issue #512), where the backend
    * refuses every edit. Such a row draws its count without a stepper, no pencil and no removal,
@@ -679,6 +684,7 @@ export function WishlistTable({
       band={bands === undefined ? undefined : bandOf}
       stickyBand={bands?.sticky}
       revealIndex={revealIndex}
+      keepRow={keepRow}
       // **No `rowClassName` here, and the absence is the change rather than an omission.** A wish
       // the collection already covered used to recede to `text-dim` — a record rather than a
       // want, saying so without disappearing — and that dimming went on 2026-09-08 with the

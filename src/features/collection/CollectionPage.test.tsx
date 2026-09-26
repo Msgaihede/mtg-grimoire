@@ -35,6 +35,7 @@ import {
 import { readDragData } from "@/features/decks/dnd";
 import { EMPTY_SHELF_ATTR } from "@/features/shelves/EmptyShelf";
 import { SHELF_HEADING_ATTR } from "@/features/shelves/ShelfHeading";
+import { FOLD_PAUSED_REASON } from "@/features/shelves/ShelfToolbar";
 import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import type {
   CardSummary,
@@ -4577,6 +4578,62 @@ describe("the caret after Add folder in a heading and after a move", () => {
     [...document.querySelectorAll<HTMLElement>("*")].filter((el) => el.scrollTop > 0);
 
   /**
+   * **The table pages until Add folder's draft heading is drawn** (the final review's C-I1). The
+   * draft is last among its siblings, so on a list longer than a page it is laid out past the
+   * loaded edge — `Trade binder`'s hundred and fifty rows, a hundred of them loaded — and the table
+   * drew nothing for it: the field was invisible while it held the Escape rung.
+   */
+  it("pages the table until Add folder's draft heading is drawn, past the loaded edge", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation(listOf(filedIn(BINDER.id, 150)));
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      expect(collectionList.mock.calls.every(([q]) => (q.offset ?? 0) === 0)).toBe(true);
+
+      await user.click(pathRowAddFolder()!);
+
+      expect(await screen.findByRole("textbox", { name: "Folder name" })).toHaveFocus();
+      expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ offset: 100 }));
+    } finally {
+      undo();
+    }
+  });
+
+  /** **And until a heading a caret request is waiting for is drawn** — `Trade binder` moved down
+   *  past `Sealed`'s hundred and fifty rows lands past the new list's first page. */
+  it("pages the table until a moved heading waiting for the caret is drawn", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation(listOf(filedIn(SEALED.id, 150)));
+    const reread = rereadAfterReorder([SEALED, BINDER]);
+    const undo = letJsdomScroll();
+    try {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+
+      await shelfMenu(user, "Trade binder");
+      await user.click(screen.getByRole("menuitem", { name: /^Move down/ }));
+      await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [4, 3]));
+      await act(async () => reread());
+
+      // Past Sealed's hundred and fifty rows — drawn only once the second page came — and holding
+      // the caret. (The `⋯` keeps the caret it had from the menu until the list re-reads, so the
+      // row index is what says this is the heading's new place and not its old one.)
+      await waitFor(() => {
+        expect(manageOf("Trade binder")).toHaveFocus();
+        const band = heading("Trade binder").closest('[role="row"]');
+        expect(Number(band?.getAttribute("aria-rowindex"))).toBeGreaterThan(100);
+      });
+      expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ offset: 100 }));
+    } finally {
+      undo();
+    }
+  });
+
+  /**
    * **The table keys its rows by position**, so a move used to leave the `⋯` the reader pressed
    * mounted and focused — drawing whichever folder took the moved one's place. The caret has to
    * follow the folder, not the row.
@@ -5178,6 +5235,260 @@ describe("the caret after Add folder in a heading and after a move", () => {
     } finally {
       undo();
     }
+  });
+});
+
+/**
+ * **The caret after the path row's Add folder, Move to folder… and Delete…** (the final review's
+ * C-I3 / W-I1, ledger 217 and C-M5). Each of these used to hand the caret back through `dismiss` to
+ * an element that was the wrong place for it: the path row's Add folder on a click away — which in
+ * Blink takes the focus the click was giving and scrolls the page to the top — the same button,
+ * scrolling, after a commit, and a `⋯` that had moved, been virtualised away or been deleted.
+ *
+ * jsdom neither scrolls on a focus nor lets a focus made inside a blur survive the one that caused
+ * it, so the cases read the **focus calls themselves**, through a spy: which element was focused,
+ * and whether it was asked not to scroll.
+ */
+describe("the caret after the path row's Add folder, Move to folder… and Delete…", () => {
+  /** Every `focus()` made while the spy is up, with the element it was made on. */
+  const watchFocus = () => {
+    const spy = vi.spyOn(HTMLElement.prototype, "focus");
+    return {
+      spy,
+      /** The options each focus of `element` was made with, in order. */
+      on: (element: HTMLElement | null) =>
+        spy.mock.contexts
+          .map((context, at) => ({ context, options: spy.mock.calls[at][0] }))
+          .filter(({ context }) => context === element)
+          .map(({ options }) => options),
+    };
+  };
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+  };
+
+  /**
+   * **A click away is not a keyboard cancel, on the path row either** (C-I3). The field is given up
+   * and the caret stays where the click put it — the path row's Add folder is never focused on the
+   * way, which in Blink is what took the click's focus and scrolled the page to the top.
+   */
+  it("gives the path row's field up without taking the caret back to Add folder", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+    const add = pathRowAddFolder()!;
+    await user.click(add);
+    await screen.findByRole("textbox", { name: "Folder name" });
+
+    const focus = watchFocus();
+    try {
+      const box = screen.getByRole("searchbox", { name: "Search your collection" });
+      await user.click(box);
+      await settle();
+
+      expect(screen.queryByRole("textbox", { name: "Folder name" })).toBeNull();
+      expect(focus.on(add)).toEqual([]);
+      expect(box).toHaveFocus();
+    } finally {
+      focus.spy.mockRestore();
+    }
+  });
+
+  /** **A blur that leaves the caret nowhere** hands it back to the path row's Add folder — one task
+   *  later, and without scrolling the page off where the reader is. */
+  it("hands the caret back to the path row's Add folder, unscrolled, when a blur leaves it nowhere", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+    const add = pathRowAddFolder()!;
+    await user.click(add);
+    const field = await screen.findByRole("textbox", { name: "Folder name" });
+
+    const focus = watchFocus();
+    try {
+      act(() => field.blur());
+
+      await waitFor(() => expect(add).toHaveFocus());
+      expect(focus.on(add)).toEqual([{ preventScroll: true }]);
+    } finally {
+      focus.spy.mockRestore();
+    }
+  });
+
+  /**
+   * **A committed folder leaves the page on the folder just made** (ledger 217). The caret still
+   * goes back to the path row's Add folder — spec §3.8 — but without the scroll that took the page
+   * to the top and off the new heading.
+   */
+  it("hands the caret back to the path row's Add folder without scrolling, once a folder is made", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+    const add = pathRowAddFolder()!;
+    await user.click(add);
+    const field = await screen.findByRole("textbox", { name: "Folder name" });
+
+    const focus = watchFocus();
+    try {
+      await user.type(field, "Sleeves{Enter}");
+
+      await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(null, "Sleeves"));
+      await waitFor(() => expect(add).toHaveFocus());
+      expect(focus.on(add)).toEqual([{ preventScroll: true }]);
+    } finally {
+      focus.spy.mockRestore();
+    }
+  });
+
+  /**
+   * **A made folder starts on its own kind's fold** (R-M2). `collection_folders.id` is an
+   * `INTEGER PRIMARY KEY` without `AUTOINCREMENT`, so a new folder can take a deleted folder's id —
+   * and with it that folder's stored fold, shutting a shelf the reader has never touched. The
+   * create clears whatever is stored under the new id.
+   */
+  it("clears a stored fold the new folder's id inherited from a deleted one", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    shelfFolds.mockResolvedValue({ collection: { "12": true }, wishlist: {} });
+    collectionFolderCreate.mockResolvedValue({ ...BINDER, id: 12, name: "Sleeves" });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+    await user.click(pathRowAddFolder()!);
+    const field = await screen.findByRole("textbox", { name: "Folder name" });
+
+    await user.type(field, "Sleeves{Enter}");
+
+    await waitFor(() => expect(setShelfFolds).toHaveBeenCalledWith("collection", { "12": null }));
+  });
+
+  /** And a folder whose id nothing had folded writes nothing to the folds at all. */
+  it("writes no fold for a new folder whose id has none stored", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionFolderCreate.mockResolvedValue({ ...BINDER, id: 12, name: "Sleeves" });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+    await user.click(pathRowAddFolder()!);
+    const field = await screen.findByRole("textbox", { name: "Folder name" });
+
+    await user.type(field, "Sleeves{Enter}");
+    await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalled());
+    await settle();
+
+    expect(setShelfFolds).not.toHaveBeenCalled();
+  });
+
+  /** Open a heading's ⋯ and press one of its strip rows. */
+  const fromMenu = async (user: Clicker, name: string, row: RegExp) => {
+    await shelfMenu(user, name);
+    await user.click(screen.getByRole("menuitem", { name: row }));
+  };
+  /** Pick a destination in the Move to folder… strip. */
+  const moveInto = async (user: Clicker, name: string, into: string) => {
+    const strip = await screen.findByRole("group", { name: `Move ${name} into a folder` });
+    await user.click(within(strip).getByRole("button", { name: new RegExp(`^${ESC(into)}`) }));
+  };
+
+  /**
+   * **Moved to a folder still on this wall, the caret follows the heading** (C-M5) — to its `⋯`,
+   * once the folder list says it is there. It used to go back to the `⋯` it was pressed on, which
+   * the re-laid wall had just taken away.
+   */
+  it("hands the caret to the moved heading's ⋯ when it lands on this wall", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionFolderMove.mockImplementation(async () => {
+      collectionFolderList.mockResolvedValue([BINDER, { ...SEALED, parentId: BINDER.id }]);
+      return { ...SEALED, parentId: BINDER.id };
+    });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Sealed");
+
+    await fromMenu(user, "Sealed", /^Move to folder/);
+    await moveInto(user, "Sealed", "Trade binder");
+
+    await waitFor(() => expect(collectionFolderMove).toHaveBeenCalledWith(SEALED.id, BINDER.id));
+    await waitFor(() => expect(manageOf("Sealed")).toHaveFocus());
+  });
+
+  /**
+   * **Moved somewhere this wall does not draw it** — into a shut folder here — the caret goes to
+   * the heading it was filed under, which is where the reader was.
+   */
+  it("hands the caret to the heading the folder left, when it lands where the wall does not draw it", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, SEALED]);
+    shelfFolds.mockResolvedValue({ collection: { [String(SEALED.id)]: true }, wishlist: {} });
+    collectionFolderMove.mockImplementation(async () => {
+      collectionFolderList.mockResolvedValue([BINDER, { ...FOILS, parentId: SEALED.id }, SEALED]);
+      return { ...FOILS, parentId: SEALED.id };
+    });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Foils");
+
+    await fromMenu(user, "Foils", /^Move to folder/);
+    await moveInto(user, "Foils", "Sealed");
+
+    await waitFor(() => expect(collectionFolderMove).toHaveBeenCalledWith(FOILS.id, SEALED.id));
+    await waitFor(() => expect(manageOf("Trade binder")).toHaveFocus());
+  });
+
+  /** **Moved off this wall from the top of a level**, the heading it was under is the level itself,
+   *  which has no heading — so the caret goes to the path row's Add folder. */
+  it("hands the caret to the path row's Add folder when the folder leaves the level it stood at the top of", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    collectionFolderMove.mockImplementation(async () => {
+      collectionFolderList.mockResolvedValue([BINDER, { ...FOILS, parentId: null }]);
+      return { ...FOILS, parentId: null };
+    });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await openShelf(user, "Trade binder");
+    await waitFor(() => expect(standingIn()).toBe(BINDER.id));
+    await findHeading("Foils");
+
+    await fromMenu(user, "Foils", /^Move to folder/);
+    await moveInto(user, "Foils", "Collection");
+
+    await waitFor(() => expect(collectionFolderMove).toHaveBeenCalledWith(FOILS.id, null));
+    await waitFor(() => expect(pathRowAddFolder()).toHaveFocus());
+  });
+
+  /** **Deleted, the folder's `⋯` is gone with it**, so the caret goes to its parent heading's. */
+  it("hands the caret to the parent heading's ⋯ once a folder is deleted", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    collectionFolderDelete.mockImplementation(async () => {
+      collectionFolderList.mockResolvedValue([BINDER]);
+    });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Foils");
+
+    await fromMenu(user, "Foils", /^Delete/);
+    await user.click(await screen.findByRole("button", { name: "Delete folder" }));
+
+    await waitFor(() => expect(collectionFolderDelete).toHaveBeenCalledWith(FOILS.id));
+    await waitFor(() => expect(manageOf("Trade binder")).toHaveFocus());
+  });
+
+  /** And at the top of the level there is no parent heading: the path row's Add folder. */
+  it("hands the caret to the path row's Add folder once a top-level folder is deleted", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionFolderDelete.mockImplementation(async () => {
+      collectionFolderList.mockResolvedValue([]);
+    });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+
+    await fromMenu(user, "Trade binder", /^Delete/);
+    await user.click(await screen.findByRole("button", { name: "Delete folder" }));
+
+    await waitFor(() => expect(collectionFolderDelete).toHaveBeenCalledWith(BINDER.id));
+    await waitFor(() => expect(pathRowAddFolder()).toHaveFocus());
   });
 });
 
@@ -5925,11 +6236,281 @@ describe("rearranging the collection's cabinet", () => {
 
     const held = await holdHeading("Sealed");
 
+    // The drag really started: the drawer it could land on is lit for it (C-M6).
+    expect(held.started).toBe(true);
+    expect(wearsDropMark(heading("Trade binder"))).toBe(true);
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
     expect(
       within(heading("Trade binder")).getByRole("button", { name: "Collapse Trade binder" }),
     ).toHaveAttribute("aria-expanded", "true");
     await held.cancel();
+  });
+
+  /**
+   * **The carried heading stays drawn wherever the table scrolls** (S-I3, `VirtualTable`'s
+   * `keepRow`). A heading band is a drag source inside a virtualised row, so one carried past the
+   * overscan unmounted its own source and the drag went with it.
+   */
+  it("keeps the carried heading drawn when the table scrolls far past it", async () => {
+    useAppStore.setState({ collectionView: "table" });
+    collectionList.mockResolvedValue(
+      page(
+        Array.from({ length: 90 }, (_, i) => ({
+          ...BOLT,
+          id: 1000 + i,
+          cardId: `c-sealed-${i}`,
+          name: `Sealed ${i}`,
+          folderId: SEALED.id,
+          folderName: SEALED.name,
+        })),
+      ),
+    );
+    wrap(<CollectionPage />);
+    await wall();
+
+    const held = await holdHeading("Trade binder");
+    const carried = heading("Trade binder");
+    const scroller = screen.getByRole("table", { name: "Your collection" }).parentElement!;
+    act(() => {
+      scroller.scrollTop = 3500;
+      fireEvent.scroll(scroller);
+    });
+
+    // The window moved past it — a row between the two has gone…
+    await waitFor(() => expect(screen.queryByText("Sealed 10")).toBeNull());
+    // …and the heading is still there, as the element the drag started from.
+    expect(carried.isConnected).toBe(true);
+    expect(queryHeading("Trade binder")).toBe(carried);
+    await held.cancel();
+  });
+});
+
+/**
+ * **The final fix wave's collection items** — folding held while a filter is on (C-I2), a drawer
+ * deleted elsewhere (C-M4), the status line's reserved slot (re-check new 2), the table's loaded
+ * edge (`complete`, C-M6) and the drops a shelf refuses or files at the root (C-M6).
+ */
+describe("folding while filtering, a drawer deleted elsewhere, and the loaded edge", () => {
+  /**
+   * **Folding is paused while a filter is on** (the C-I2 ruling), and each of the three fold
+   * controls says so. Every shelf is drawn open then (spec §3.4), so a press on the chevron, Expand
+   * all or Collapse all stored a fold the reader could not see, which came back as a shut shelf the
+   * moment the filter cleared. Each is `aria-disabled` — never `disabled`, which would take it out
+   * of the tab order — with the reason as its description, and a press writes nothing.
+   */
+  describe("while a filter is on", () => {
+    /** `Trade binder` shut by a stored fold and holding the card, so the filter keeps its shelf on
+     *  the wall and draws it open — which is how the case knows the filter has taken. */
+    async function filtered() {
+      collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+      collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 3, folderName: "Trade binder" }]));
+      shelfFolds.mockResolvedValue({ collection: { [String(BINDER.id)]: true }, wishlist: {} });
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await within(heading("Trade binder")).findByRole("button", { name: "Expand Trade binder" });
+      await user.type(screen.getByRole("searchbox", { name: "Search your collection" }), "bolt");
+      await within(heading("Trade binder")).findByRole("button", { name: "Collapse Trade binder" });
+      return user;
+    }
+    const refused = (control: HTMLElement) => {
+      expect(control).toHaveAttribute("aria-disabled", "true");
+      expect(control).not.toHaveAttribute("disabled");
+      expect(control).toHaveAttribute("aria-description", FOLD_PAUSED_REASON);
+    };
+
+    it("refuses the chevron, and a press on it writes no fold", async () => {
+      const user = await filtered();
+      const chevron = within(heading("Trade binder")).getByRole("button", {
+        name: "Collapse Trade binder",
+      });
+
+      refused(chevron);
+      await user.click(chevron);
+      expect(setShelfFolds).not.toHaveBeenCalled();
+    });
+
+    it("refuses Expand all, and a press on it writes no fold", async () => {
+      const user = await filtered();
+      const expand = within(pathRow()).getByRole("button", { name: "Expand all" });
+
+      refused(expand);
+      await user.click(expand);
+      expect(setShelfFolds).not.toHaveBeenCalled();
+    });
+
+    it("refuses Collapse all, and a press on it writes no fold", async () => {
+      const user = await filtered();
+      const collapse = within(pathRow()).getByRole("button", { name: "Collapse all" });
+
+      refused(collapse);
+      await user.click(collapse);
+      expect(setShelfFolds).not.toHaveBeenCalled();
+    });
+  });
+
+  /** None of the three is refused without a filter. */
+  it("offers the chevron, Expand all and Collapse all with no filter on", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+
+    for (const control of [
+      within(heading("Trade binder")).getByRole("button", { name: "Collapse Trade binder" }),
+      within(pathRow()).getByRole("button", { name: "Expand all" }),
+      within(pathRow()).getByRole("button", { name: "Collapse all" }),
+    ]) {
+      expect(control).not.toHaveAttribute("aria-disabled");
+      expect(control).not.toHaveAttribute("aria-description");
+    }
+  });
+
+  /** And the same three presses write as before once the filter is off. */
+  it("still writes folds once no filter is on", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+
+    await user.click(within(heading("Trade binder")).getByRole("button", { name: "Collapse Trade binder" }));
+
+    await waitFor(() =>
+      expect(setShelfFolds).toHaveBeenCalledWith("collection", { [String(BINDER.id)]: true }),
+    );
+  });
+
+  /**
+   * **A drawer deleted elsewhere is walked out of** (C-M4) — to its nearest surviving ancestor.
+   * Before, the page stood on an empty wall under an inert breadcrumb with only Escape to leave by.
+   */
+  it("opens the nearest surviving ancestor of a drawer deleted elsewhere", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, SEALED]);
+    const user = userEvent.setup();
+    const { client } = wrap(<CollectionPage />);
+    await openShelf(user, "Trade binder");
+    await openShelf(user, "Foils");
+    await waitFor(() => expect(standingIn()).toBe(FOILS.id));
+
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    act(() => void client.invalidateQueries({ queryKey: ["collection", "folders"] }));
+
+    await waitFor(() => expect(standingIn()).toBe(BINDER.id));
+  });
+
+  /** None surviving, the root. */
+  it("opens the root when a deleted drawer's whole line of ancestors is gone", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, SEALED]);
+    const user = userEvent.setup();
+    const { client } = wrap(<CollectionPage />);
+    await openShelf(user, "Trade binder");
+    await openShelf(user, "Foils");
+    await waitFor(() => expect(standingIn()).toBe(FOILS.id));
+
+    collectionFolderList.mockResolvedValue([SEALED]);
+    act(() => void client.invalidateQueries({ queryKey: ["collection", "folders"] }));
+
+    expect(await findHeading("Sealed")).toBeInTheDocument();
+  });
+
+  /**
+   * **The status line keeps its slot** (the re-check's new 2). `Updating…` came and went after
+   * every write, and a line that is nothing tall while empty pushed the wall down 16px for exactly
+   * the frames a reveal or a drop anchor was measured across. The line is one line of `text-xs`,
+   * `min-h-4`, whether it says anything or not — pinned as the classes, because jsdom lays nothing
+   * out.
+   */
+  it("keeps the status line's slot while it says nothing and while it says Updating…", async () => {
+    const { client } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    let answer: (() => void) | undefined;
+    collectionList.mockImplementation(
+      () => new Promise((resolve) => (answer = () => resolve(page([BOLT])))),
+    );
+    act(() => void client.invalidateQueries({ queryKey: ["collection", "list"] }));
+    const line = await screen.findByText("Updating…");
+    expect(line).toHaveAttribute("role", "status");
+    const updating = line.className;
+    expect(line).toHaveClass("min-h-4");
+
+    await act(async () => answer!());
+    await waitFor(() => expect(line).toHaveTextContent(""));
+    expect(line.className).toBe(updating);
+  });
+
+  /**
+   * **While pages remain, the table draws no heading past the loaded edge** — `complete`, wired
+   * from the list on screen (C-M6). `Trade binder`'s hundred and fifty rows are a page and a half;
+   * with the second page never answering, `Sealed`'s heading after them is not drawn however far
+   * down the table is scrolled.
+   */
+  it("draws no heading past the loaded edge while pages remain", async () => {
+    const rows = Array.from({ length: 150 }, (_, i) => ({
+      ...BOLT,
+      id: 1000 + i,
+      cardId: `c-binder-${i}`,
+      name: `Filed ${i}`,
+      folderId: BINDER.id,
+      folderName: BINDER.name,
+    }));
+    collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+    collectionList.mockImplementation((q: CollectionQuery) => {
+      const from = q.offset ?? 0;
+      if (from > 0 && (q.limit ?? 100) <= 100) return new Promise(() => {});
+      return Promise.resolve(page(rows.slice(from, from + (q.limit ?? 100)), rows.length));
+    });
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+
+    const scroller = screen.getByRole("table", { name: "Your collection" }).parentElement!;
+    act(() => {
+      scroller.scrollTop = 100_000;
+      fireEvent.scroll(scroller);
+    });
+
+    await waitFor(() => expect(screen.getByText("Filed 99")).toBeInTheDocument());
+    expect(queryHeading("Sealed")).toBeNull();
+  });
+
+  /** **Not sorted's heading files at the root** — `null`, never its shelf id `0` (C-M6). */
+  it("files a copy dropped on Not sorted's heading at the root", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(
+      page([
+        BOLT,
+        { ...BOLT, id: 8, cardId: "c-shock", name: "Shock", folderId: 3, folderName: "Trade binder" },
+      ]),
+    );
+    wrap(<CollectionPage />);
+    await findHeading("Not sorted");
+    const row = (await screen.findByText("Shock")).closest<HTMLElement>('[role="row"]')!;
+    const notSorted = standHeading("Not sorted");
+
+    const held = await holdCopy(row, { pressOn: screen.getByText("Shock") });
+    await held.over(notSorted);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(8, null));
+  });
+
+  /** **Recently removed takes no copy** (C-M6): nothing is dropped *into* the holding area, so its
+   *  heading is not lit for one and a release there writes nothing. */
+  it("refuses a copy dropped on Recently removed's heading", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, REMOVED]);
+    collectionList.mockResolvedValue(
+      page([{ ...BOLT, id: 8, cardId: "c-shock", name: "Shock", folderId: 3, folderName: "Trade binder" }]),
+    );
+    wrap(<CollectionPage />);
+    await findHeading("Recently removed");
+    const row = (await screen.findByText("Shock")).closest<HTMLElement>('[role="row"]')!;
+    const removed = standHeading("Recently removed");
+
+    const held = await holdCopy(row, { pressOn: screen.getByText("Shock") });
+    expect(wearsDropMark(removed)).toBe(false);
+    await held.over(removed);
+    await held.drop();
+
+    expect(collectionSetFolder).not.toHaveBeenCalled();
   });
 });
 

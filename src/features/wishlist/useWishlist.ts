@@ -623,10 +623,12 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
     resetAll: () => {
       setText("");
       setFormat("");
+      // The `Exact` flag is cleared although it is not counted, and the asymmetry is the point:
+      // Reset all means "no filters", and a strict flag left standing over an empty colour row is
+      // exactly the leftover that would turn the reader's next colour press into an exact match
+      // they never asked for. `NO_COLORS` clears the row and the flag together.
       setColorFilter(NO_COLORS);
-      // Cleared although it is not counted, and the asymmetry is the point: Reset all means "no
-      // filters", and a strict flag left standing over an empty colour row is exactly the
-            setSets([]);
+      setSets([]);
       setTypes([]);
       setManaValues([]);
       setManaX(false);
@@ -692,12 +694,19 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
     filters: held === null ? filters : held.filters,
     query,
     rows,
-    /** Whether the drawn list has pages still to load — `query.hasNextPage`, asked of the held
-     *  level's own pages while a walk is answering, since the query's belong to the new level. */
-    hasMore:
-      held === null
-        ? query.hasNextPage
-        : held.pages !== undefined && nextOffset(held.pages.pages) !== undefined,
+    /**
+     * Whether the drawn list has pages still to load — `getNextPageParam`'s own answer, asked of
+     * **the pages on screen**: the held level's while a walk is answering, and otherwise the query's,
+     * placeholder included.
+     *
+     * **Not `query.hasNextPage`, which is `false` while a new key's first page is loading** — it is
+     * asked of the new key's data, which does not exist yet, while the rows drawn are the previous
+     * key's (`keepPreviousData`). A fold or a move re-keys the list, so for that round trip the table
+     * read every shelf as complete, drew headings past the loaded edge with nothing under them, and
+     * a moved heading drawn there took the caret back — then vanished past the edge when the real
+     * first page arrived (the final review's W-I2).
+     */
+    hasMore: pages !== undefined && nextOffset(pages.pages) !== undefined,
     /** Wishes on the **open** shelves matching the filters, counted in full — the list's own
      *  total. `0` until the first page answers. The whole wall's count is {@link counts}'. */
     total: pages?.pages[0]?.total ?? 0,

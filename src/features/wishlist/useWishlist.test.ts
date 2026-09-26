@@ -472,3 +472,29 @@ describe("activeFilterCount", () => {
     ).toBe(8);
   });
 });
+
+/**
+ * **`hasMore` is asked of the pages on screen, a re-keyed list's placeholder included** (the final
+ * review's W-I2). A fold, a sort or a move re-keys the list, and for the round trip the rows drawn
+ * are the previous key's (`keepPreviousData`) — while `query.hasNextPage` is asked of the new key's
+ * data, which does not exist yet, and answers `false`. Read that way, the table took every shelf
+ * as complete for that moment and drew headings past the loaded edge with nothing under them.
+ */
+describe("hasMore", () => {
+  it("still has more to load while a re-keyed list shows the previous key's pages", async () => {
+    const LOOSE = { id: 11, folderId: null, name: "Lightning Bolt" } as WishRow;
+    wishlistList.mockImplementation(async (q: WishlistQuery) =>
+      q.sort !== undefined ? new Promise<never>(() => {}) : { items: [LOOSE], total: 2 },
+    );
+    const { result } = renderHook(() => useWishlist(), { wrapper });
+    await waitFor(() => expect(result.current.rows).toEqual([LOOSE]));
+    expect(result.current.hasMore).toBe(true);
+
+    act(() => result.current.toggleSort("name", false));
+
+    await waitFor(() => expect(lastQuery().sort).toBeDefined());
+    expect(result.current.query.isPlaceholderData).toBe(true);
+    expect(result.current.rows).toEqual([LOOSE]);
+    expect(result.current.hasMore).toBe(true);
+  });
+});

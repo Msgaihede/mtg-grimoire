@@ -1,9 +1,18 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HeadingCaret } from "@/features/shelves/headingCaret";
 import { SHELF_HEADING_ATTR } from "@/features/shelves/ShelfHeading";
-import type { Shelf } from "@/lib/shelves";
-import { CollectionShelfHeading } from "./CollectionShelfParts";
+import { SHELF_STICKY_ATTR } from "@/features/shelves/ShelfStickyBar";
+import { dndDraggable } from "@/lib/dndTarget";
+import { UNFILED_SHELF, type Shelf } from "@/lib/shelves";
+import { boxed, startPointerDrag } from "@/test-drag";
+import { collectionDragData } from "./collectionDrag";
+import {
+  CollectionEmptyShelf,
+  CollectionShelfHeading,
+  CollectionShelfSticky,
+  type CardTarget,
+} from "./CollectionShelfParts";
 
 /**
  * **A heading takes back the caret the page hands it** (live pass, check 8). After Add folder in a
@@ -29,7 +38,7 @@ describe("CollectionShelfHeading's caret", () => {
   };
   const menu = { onContextMenu: vi.fn(), onKeyDown: vi.fn(), onClick: vi.fn() };
 
-  /** The page's `claimCaret`: `true` exactly once per id. */
+  /** `useHeadingCaret`'s `claim`: `true` exactly once per id. */
   const claims = () => {
     let taken: number | null = null;
     return vi.fn((id: number) => {
@@ -126,5 +135,147 @@ describe("CollectionShelfHeading's caret", () => {
 
     rerender(heading({ id: 1, control: "add", from: null, claim }));
     expect(addFolder()).toHaveFocus();
+  });
+});
+
+/**
+ * **Where a copy let go on a shelf's three targets is filed** — the heading, the sticky bar and an
+ * empty folder's box, each through `shelfTarget` (the final review's C-M6), and the sticky bar's
+ * claim on the pointer where it is drawn over a heading (S-M1).
+ *
+ * dnd-kit hit-tests by coordinate and jsdom measures nothing, so every target and the copy are
+ * given a box (`boxed`) and the pointer is walked into them.
+ */
+describe("the collection's shelf targets", () => {
+  const NOT_SORTED: Shelf = {
+    id: UNFILED_SHELF,
+    name: "Not sorted",
+    kind: "unfiled",
+    group: "own",
+    pathIds: [UNFILED_SHELF],
+    path: ["Not sorted"],
+    depth: 0,
+    indent: 0,
+    lead: [],
+    leadIds: [],
+    headless: false,
+    collapsed: false,
+    locked: false,
+  };
+  const folderShelf = (id: number, name: string): Shelf => ({
+    ...NOT_SORTED,
+    id,
+    name,
+    kind: "folder",
+    pathIds: [id],
+    path: [name],
+  });
+  const BINDER = folderShelf(3, "Trade binder");
+  const SEALED = folderShelf(4, "Sealed");
+
+  const undo: (() => void)[] = [];
+  afterEach(() => undo.splice(0).forEach((stop) => stop()));
+
+  /** A collection row in the air, filed in `Trade binder`, with a box of its own at `top`. */
+  const copy = (top = 0) => {
+    const element = boxed(document.createElement("div"), top);
+    document.body.append(element);
+    const stop = dndDraggable({
+      element,
+      data: () => collectionDragData({ entryId: 7, name: "Lightning Bolt", folderId: 3 }),
+    });
+    undo.push(() => {
+      stop();
+      element.remove();
+    });
+    return element;
+  };
+  const target = () => ({
+    canDrop: (): boolean => true,
+    onDrop: vi.fn<CardTarget["onDrop"]>(),
+  });
+  const menu = { onContextMenu: vi.fn(), onKeyDown: vi.fn(), onClick: vi.fn() };
+
+  /** `Not sorted`'s address is the root: `null`, never its shelf id `0`. */
+  it("files a copy let go on Not sorted's heading at the root", async () => {
+    const cards = target();
+    render(
+      <CollectionShelfHeading
+        shelf={NOT_SORTED}
+        stat=""
+        peek={[]}
+        onToggle={vi.fn()}
+        onOpen={vi.fn()}
+        cards={cards}
+      />,
+    );
+    boxed(document.querySelector<HTMLElement>(`[${SHELF_HEADING_ATTR}]`)!, 200);
+    const held = await startPointerDrag(copy());
+
+    await held.moveTo(100, 220);
+    await held.drop();
+
+    expect(cards.onDrop).toHaveBeenCalledWith(expect.objectContaining({ kind: "entry" }), null);
+  });
+
+  it("files a copy let go on Not sorted's sticky bar at the root", async () => {
+    const cards = target();
+    render(
+      <CollectionShelfSticky shelf={NOT_SORTED} onOpen={vi.fn()} onTop={vi.fn()} cards={cards} />,
+    );
+    boxed(document.querySelector<HTMLElement>(`[${SHELF_STICKY_ATTR}]`)!, 200, 36);
+    const held = await startPointerDrag(copy());
+
+    await held.moveTo(100, 218);
+    await held.drop();
+
+    expect(cards.onDrop).toHaveBeenCalledWith(expect.objectContaining({ kind: "entry" }), null);
+  });
+
+  it("files a copy let go on an empty box under Not sorted at the root", async () => {
+    const cards = target();
+    const { container } = render(<CollectionEmptyShelf shelf={NOT_SORTED} cards={cards} />);
+    boxed(container.querySelector<HTMLElement>("[data-shelf-empty]")!, 200, 96);
+    const held = await startPointerDrag(copy());
+
+    await held.moveTo(100, 240);
+    await held.drop();
+
+    expect(cards.onDrop).toHaveBeenCalledWith(expect.objectContaining({ kind: "entry" }), null);
+  });
+
+  /**
+   * **The sticky bar takes the card where it is drawn over a heading** (S-M1). The bar is pinned at
+   * the top of the wall and headings scroll underneath it, so a heading half under the bar whose
+   * centre is nearer the pointer used to take the drop the bar was showing it would take. Here the
+   * bar is 200–236 (centre 218), `Trade binder`'s heading 210–250 (centre 230), and the pointer at
+   * 228 — inside both, nearer the heading.
+   */
+  it("gives the sticky bar the copy over a heading scrolled underneath it", async () => {
+    const bar = target();
+    const under = target();
+    render(
+      <>
+        <CollectionShelfSticky shelf={SEALED} onOpen={vi.fn()} onTop={vi.fn()} cards={bar} />
+        <CollectionShelfHeading
+          shelf={BINDER}
+          stat=""
+          peek={[]}
+          onToggle={vi.fn()}
+          onOpen={vi.fn()}
+          menu={menu}
+          cards={under}
+        />
+      </>,
+    );
+    boxed(document.querySelector<HTMLElement>(`[${SHELF_STICKY_ATTR}]`)!, 200, 36);
+    boxed(document.querySelector<HTMLElement>(`[${SHELF_HEADING_ATTR}]`)!, 210, 40);
+    const held = await startPointerDrag(copy());
+
+    await held.moveTo(100, 228);
+    await held.drop();
+
+    expect(bar.onDrop).toHaveBeenCalledWith(expect.objectContaining({ kind: "entry" }), SEALED.id);
+    expect(under.onDrop).not.toHaveBeenCalled();
   });
 });
