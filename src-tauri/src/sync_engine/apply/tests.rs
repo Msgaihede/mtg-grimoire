@@ -1496,7 +1496,9 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
 /// **Two devices adding one printing of one token to one list end with one entry** (user schema
 /// v52) — the grain `META` restates, driven the way it fails: each device inserts its own row
 /// under its own uid, and without the grain the far op is an insert that hits
-/// `idx_deck_token_printings_grain`, rolls the savepoint back and stalls that device's stream.
+/// `idx_deck_token_printings_grain`, rolls the savepoint back and defers the op — which the client
+/// today drops, with the rest of that device's page (`sync.md`, *Deferred ops are dropped, not
+/// held*).
 ///
 /// The deck crosses first, so both entries hang off one deck uid. **The count is a field**, so
 /// the two devices' `2` and `3` do not sum: last writer wins, and both devices agree on which.

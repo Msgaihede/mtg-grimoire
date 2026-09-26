@@ -73,8 +73,10 @@
 //! **One `deck_audit` row of kind `deck` with `field: "token"`, and one `deck_undo` step**, for
 //! each of the five writes — which reverses what this module said until v52, that token writes
 //! record nothing. Never a new audit kind: `deck_audit` syncs, a word a paired device's `CHECK`
-//! does not know would be refused there, and its applier would stall that device's stream until
-//! it upgraded. [`journal_in`] is the one place the five record, so they cannot differ in how.
+//! does not know would be refused there, and its applier would defer the op — which the client
+//! today drops rather than holds (`sync.md`, *Deferred ops are dropped, not held*), taking the
+//! rest of that device's page with it. [`journal_in`] is the one place the five record, so they
+//! cannot differ in how.
 
 use crate::deck_undo::{Op, Step, TokenEntryRow, TokenStateRow};
 use crate::schema::{DECK_TOKEN_GRAIN, DECK_TOKEN_PRINTING_GRAIN};
