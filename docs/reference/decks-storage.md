@@ -792,14 +792,63 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
     changes rather than toggling one.
   - **`undone_at` persists and the redo queue does not.** Undo therefore survives a restart and
     carries on below where it stopped; redo is a list of ids in the webview (`useDeckUndo`),
-    thrown away with the window and cleared by any other write to the deck. A database-backed
-    redo would offer to resurrect a fortnight-old branch of edits the reader had forgotten making.
+    thrown away with the window and cleared by any other write *that window* makes. A
+    database-backed redo would offer to resurrect a fortnight-old branch of edits the reader had
+    forgotten making.
   - **Three commands**: `deck_undo_state(deckId, redoId)` — the two `DeckAuditEntry`s the buttons
-    name themselves from, the redo half answered only for the id the caller hands in —
-    and `deck_undo_apply` / `deck_redo_apply`, which check the id against the cursor rather than
-    trusting it. **They ended with one `allocate_deck` run until schema v25 and now end with
-    nothing**: what a deck owns is where its collection rows sit, and putting a `deck_cards` row
-    back does not move a card.
+    name themselves from, the redo half answered only for the id the caller hands in, and only when
+    it is `next_redo` —
+    and `deck_undo_apply` / `deck_redo_apply`, which check the id against a cursor rather than
+    trusting it: `next_undo` for an undo, and for a redo `next_redo`, the undone step above the
+    undo cursor with the newest `undone_at`. **An undo stamps `max(now, newest + 1)` rather than
+    the wall clock**, because a change undone before a later edit is a dead branch and has to carry
+    an older stamp than anything undone after it — two presses in one second would otherwise tie,
+    and a tie broken by id picks the dead one. **They ended with one `allocate_deck` run until
+    schema v25 and now end with nothing**: what a deck owns is where its collection rows sit, and
+    putting a `deck_cards` row back does not move a card.
+  - **Then the deck itself is checked, because the cursor cannot see every write.** The cut and
+    the Collection tab's filing (`collection_alloc`), a copy another deck's filing takes, a sync
+    pull (`deck_cards` syncs, `deck_undo` does not) and Scryfall's reconcile all change
+    `deck_cards` **without** filing a step. Applied blindly, a step deletes its scope and inserts
+    its rows over them: Ctrl+Z after a cut brought the cut card back reading 0 owned, and undoing a
+    move or an import after a filing left copies in the deck's group that no row claimed. So an
+    undo needs the deck to hold the step's **redo** side and a redo its **undo** side, compared by
+    content (row ids and timestamps ignored): the rows in an `Op::Cards` scope or a whole
+    `Op::Variant` as a multiset; every `restore`/`patch` row of `categories`, `labels` and `notes`
+    with its recorded columns, a note's whole attachment set, and each carrier cell still wearing
+    its label; the `Op::Deck` columns the step moved. **`delete` lists are not checked there** —
+    every id is a rowid alias somebody else's insert may hold, and every restore already remaps a
+    taken id — and **the three view-state columns are never a reason to refuse** (a tab switch
+    files no step and is not an edit).
+  - **A delete on the side being *applied* is asked what it would take.** A pile delete CASCADEs
+    every card under it and a label delete SET-NULLs it in every deck, so undoing "New category",
+    or a quick add that invented its pile, took a card the Collection tab filed there since, and
+    undoing "New label" stripped it off a card another deck labelled since. Such a delete may take
+    only rows the same side's `cards`/`variant` ops rewrite anyway, or — for a label — cells the
+    other side records as its carriers. A labelling carrier being applied may only land on a bare
+    cell (or one already wearing it), which is the one check a label delete's undo gets: its redo
+    side records no carriers.
+  - **A refused undo retires its step; a refused redo writes nothing.** A redo refusal is
+    `MOVED_ON`, and the webview drops that id. A refused undo deletes its own `deck_undo` row (the
+    history row stays) and says **`RETIRED`** — "That change can no longer be undone…" — because a
+    cursor that refuses refuses at every press and nothing older could ever be undone again, and
+    because `MOVED_ON`'s "not the most recent change" would be false there: a reader believing it
+    presses again and undoes the older change. **A write that fails is a refusal too**: the undo
+    runs in a savepoint, and any error — a restored card naming a label deleted since, a restored
+    pile whose name was taken since — rolls back to it and retires the step rather than failing the
+    same way at every press.
+  - **`undone_at` is an ordinal, not a time**, and a schema rung that rewrites `deck_cards`,
+    `decks` or category, label or note contents without clearing `deck_undo` retires every step it
+    touched at the first Ctrl+Z.
+  - **`Op::Deck` writes only the columns whose two sides differ, and so does the category op's
+    `default_category_id`.** Every `deck_update` step records all of `DECK_FIELDS`
+    (`read_deck_row`), so a rename carries the folder, the archive flag and the view state on both
+    sides; writing them all back reverted a folder delete's SET NULL, a tab switch and columns
+    another device synced — and put a deleted folder's id into a real foreign key, which failed
+    and left the cursor on a step that could never succeed. The rule reads the step, so every step
+    already on disk keeps working. A `folder_id` the reversal *would* write that names a deleted
+    folder is refused (and retired, like any refused undo) rather than skipped: a skipped column
+    would report an undo that left the deck where it was.
   - **Three things are deliberately out of reach, and each has a reason rather than a gap** (it
     was four until 2026-08-31; the fourth is the last paragraph here).
     `deck_create`/`deck_duplicate`/`deck_delete` are gallery writes with no editor open, and

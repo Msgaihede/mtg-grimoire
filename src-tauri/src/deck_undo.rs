@@ -21,18 +21,41 @@
 //!   the exact rows that were there is data plumbing, which is the side of CLAUDE.md's boundary
 //!   this belongs on. `auditText.ts` is still the only thing that words an undo.
 //!
-//! # The cursor, and why redo is not in this table
+//! # The cursor, and why the redo stack is not in this table
 //!
 //! `deck_undo.undone_at` is NULL while a change is still applied, and the cursor is the newest
 //! row of a deck that is still NULL ([`next_undo`]). It **persists**, so undo survives a restart
 //! and carries on below where it stopped — "as far back as the history allows".
 //!
-//! **Redo is deliberately not derivable from this table.** A redo stack is the *reader's*
-//! position in a session, not a fact about the deck: the webview holds the ids it has just
-//! undone and hands one back to [`redo_apply`], and closing the window throws them away. That is
-//! the asymmetry this feature was asked for, and it is why `undone_at` is a stamp rather than a
-//! second cursor — a database-backed redo would resurrect a fortnight-old branch of edits the
-//! reader had forgotten making.
+//! **The redo stack is the webview's, and the table only says which id may come off it.** A redo
+//! stack is the *reader's* position in a session, not a fact about the deck: the webview holds
+//! the ids it has just undone and hands one back to `deck_redo_apply`, and closing the window
+//! throws them away — a database-backed redo would resurrect a fortnight-old branch of edits the
+//! reader had forgotten making. What the table *does* answer is [`next_redo`], undo's cursor
+//! mirrored: the one undone step a redo may take, so an id from a window that another window has
+//! overtaken is refused rather than applied out of order.
+//!
+//! # A reversal is checked against the deck before it writes anything
+//!
+//! **Not every write to `deck_cards` files a step**: the cut and the Collection tab's filing
+//! (`collection_alloc`), a sync pull, another deck's filing that took a copy from this one, and
+//! Scryfall's reconcile all change rows with no step. So the cursor alone cannot say the deck
+//! still looks the way a step left it, and a step applied blindly deletes its scope and inserts
+//! its rows over whatever those writes did. [`apply_reversal`] therefore checks the side it is
+//! moving *away from* against the database first — an undo needs the deck to hold the step's
+//! redo side, a redo its undo side — and refuses when it does not. What each op kind compares is
+//! [`holds`]' to say; what a delete being applied may take is [`deletes_hold`]'s.
+//!
+//! **A refused undo retires its step; a refused redo changes nothing.** The undo's step is the
+//! cursor, and a cursor that refuses is refused again at every press after it: nothing older in
+//! the deck could ever be undone. So the refusal deletes that one `deck_undo` row (the history
+//! row stays), says [`RETIRED`], and the next Ctrl+Z is the change below it — and a write that
+//! *fails* is a refusal too, rolled back to a savepoint first. A redo is the webview's id and the
+//! webview drops it on any refusal, so there is nothing to retire; it says [`MOVED_ON`].
+//!
+//! **`undone_at` is an ordinal, not a time.** An undo stamps `max(now, newest in this deck + 1)`,
+//! so it reads as roughly when, but what [`next_redo`] relies on is that it strictly increases
+//! within a deck.
 //!
 //! # An undo is a `deck` audit row and adds no kind
 //!
@@ -51,7 +74,8 @@ use std::collections::{BTreeSet, HashMap};
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
-/// What an apply says when the id it was handed is not the deck's cursor.
+/// What an apply says when the id it was handed is not the deck's cursor (or, for a redo, not
+/// [`next_redo`]), or when a redo finds the deck no longer the way the undo left it.
 ///
 /// The id travels from the webview rather than being implied, so a window showing a stale
 /// toolbar cannot undo something it was not looking at. The sentence names the situation rather
@@ -59,6 +83,16 @@ use std::sync::Arc;
 pub const MOVED_ON: &str =
     "That is not the most recent change any more — the deck has been edited since. \
      Open the history to see what happened.";
+
+/// What an undo says when the step at the cursor can no longer be applied, and has been taken off
+/// the undo list for it.
+///
+/// **Not [`MOVED_ON`], because that sentence would be false here and the difference is the next
+/// press.** The step *is* the most recent change; what happened is that it was discarded, and the
+/// Undo button now names an older one. A reader told "not the most recent change" presses Ctrl+Z
+/// again to retry — and undoes that older change without meaning to.
+pub const RETIRED: &str = "That change can no longer be undone — the deck has changed since, \
+     so it was taken off the undo list.";
 
 /// What an apply says when there is nothing at the cursor at all.
 pub const NOTHING_TO_UNDO: &str = "There is nothing left to undo in this deck.";
@@ -156,6 +190,15 @@ const DECK_FIELDS: &[&str] = &[
     "last_group_by",
     "last_sort_by",
 ];
+
+/// The [`DECK_FIELDS`] that `deck::set_view_state` writes on every tab switch, with no history
+/// row and no step.
+///
+/// **They never refuse a reversal.** A step that moved one (the theory switch moves
+/// `last_variant`) still writes it back, but [`holds`] does not compare them: switching tabs is
+/// not an edit, and a Ctrl+Z that depended on which tab was open since would be refused for a
+/// reason the reader cannot see.
+const VIEW_FIELDS: &[&str] = &["last_variant", "last_group_by", "last_sort_by"];
 
 /// One `deck_cards` row, as a step carries it.
 ///
@@ -1179,6 +1222,530 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
     Ok(())
 }
 
+/// What a reversal writes — `forward`, the side being applied — once the deck has been checked
+/// against `backward`, the side it is moving away from. `None` means the deck has moved on and
+/// nothing may be written.
+///
+/// **Two ops come back narrower than they were recorded, for one reason.**
+///
+/// * **[`Op::Deck`] writes only the columns whose two sides differ.** Every `deck_update` step
+///   records all of [`DECK_FIELDS`] ([`read_deck_row`]), so a rename carries the folder, the
+///   archive flag, the bracket and the view state on both sides; writing them all back reverted
+///   whatever had moved them since without a step — a folder delete's SET NULL, a tab switch, a
+///   column another device synced — and put a deleted folder's id into a real foreign key. The
+///   rule reads the step and not a list, so every step already on a reader's disk keeps working.
+/// * **[`Op::Categories`]' `default_category_id` is written only when the two sides differ**, for
+///   the same reason: a category delete records the deck's default on both sides whether or not
+///   the delete moved it.
+///
+/// **A `folder_id` naming a folder that has gone refuses rather than being skipped.** The check
+/// can pass there — the deck is exactly where the step left it, and the folder it came *from* was
+/// deleted — and the write is a foreign-key failure. Skipping the column would answer success for
+/// an undo that left the deck where it was, which is the `0 rows changed` [`MISSING_ROW`] exists
+/// to refuse. Refusing here is only the case this function can foresee: [`apply_reversal`] also
+/// runs the write inside a savepoint and treats *any* failure of it as a refusal, which is what
+/// keeps the ones nobody foresaw — a restored card naming a label deleted since, a restored pile
+/// whose name was taken since — from wedging the cursor.
+///
+/// **And a delete being applied may take only what the step recorded** ([`deletes_hold`]), and a
+/// carrier being applied may only label a bare cell ([`carriers_free`]).
+fn plan(
+    tx: &Connection,
+    deck_id: i64,
+    forward: &[Op],
+    backward: &[Op],
+) -> Result<Option<Vec<Op>>, String> {
+    let ahead = deck_fields(forward)?;
+    let behind = deck_fields(backward)?;
+    let changed: BTreeSet<&str> = ahead
+        .iter()
+        .filter(|(field, value)| {
+            behind
+                .get(field.as_str())
+                .is_none_or(|was| !same_value(was, value))
+        })
+        .map(|(field, _)| field.as_str())
+        .collect();
+    let default_moved = category_default(forward) != category_default(backward);
+
+    if !holds(tx, deck_id, backward, &changed, default_moved)?
+        || !deletes_hold(tx, deck_id, forward, backward)?
+        || !carriers_free(tx, deck_id, forward)?
+    {
+        return Ok(None);
+    }
+
+    let mut ops = Vec::with_capacity(forward.len());
+    for op in forward {
+        ops.push(match op {
+            Op::Deck { fields } => {
+                let fields: serde_json::Map<String, Value> = fields
+                    .iter()
+                    .filter(|(field, _)| changed.contains(field.as_str()))
+                    .map(|(field, value)| (field.clone(), value.clone()))
+                    .collect();
+                if let Some(folder) = fields.get("folder_id").and_then(Value::as_i64) {
+                    let there: bool = tx
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM deck_folders WHERE id = ?1)",
+                            params![folder],
+                            |r| r.get(0),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    if !there {
+                        return Ok(None);
+                    }
+                }
+                Op::Deck { fields }
+            }
+            Op::Categories {
+                restore,
+                patch,
+                delete,
+                default_category_id,
+            } => Op::Categories {
+                restore: restore.clone(),
+                patch: patch.clone(),
+                delete: delete.clone(),
+                default_category_id: default_category_id.filter(|_| default_moved),
+            },
+            other => other.clone(),
+        });
+    }
+    Ok(Some(ops))
+}
+
+/// Every [`Op::Deck`] column one side of a step names, merged — and refused by name when one is
+/// not on [`DECK_FIELDS`], **before** [`plan`] narrows the list. Narrowing first would let a step
+/// naming a column nobody decided was undoable through silently whenever its two sides agreed.
+fn deck_fields(ops: &[Op]) -> Result<serde_json::Map<String, Value>, String> {
+    let mut out = serde_json::Map::new();
+    for op in ops {
+        if let Op::Deck { fields } = op {
+            for (field, value) in fields {
+                if !DECK_FIELDS.contains(&field.as_str()) {
+                    return Err(format!(
+                        "`{field}` is not a deck column an undo step may write."
+                    ));
+                }
+                out.insert(field.clone(), value.clone());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The `decks.default_category_id` one side of a step writes through [`Op::Categories`], if any.
+fn category_default(ops: &[Op]) -> Option<i64> {
+    ops.iter().rev().find_map(|op| match op {
+        Op::Categories {
+            default_category_id,
+            ..
+        } => *default_category_id,
+        _ => None,
+    })
+}
+
+/// Two step values as the one SQLite value each is written as — [`JsonParam`]'s mapping, so a
+/// hand-built `true` and the `1` [`read_deck_fields`] reads back are the same value.
+fn same_value(a: &Value, b: &Value) -> bool {
+    fn canonical(v: &Value) -> Value {
+        match v {
+            Value::Bool(b) => json!(i64::from(*b)),
+            other => other.clone(),
+        }
+    }
+    canonical(a) == canonical(b)
+}
+
+/// Does the deck still hold what `ops` — one recorded side of a step — says it holds?
+///
+/// **Every side is read out of the database after or before a real write**, so each op in it is a
+/// set of true facts about one real state, and each can be checked on its own. Content is
+/// compared and row ids and timestamps are not — [`CardRow`]'s rule, since a restored row is a new
+/// row. Per kind:
+///
+/// * **[`Op::Cards`]**: the rows in its scope, as a multiset, equal the recorded rows exactly.
+/// * **[`Op::Variant`]**: the same over the whole variant.
+/// * **[`Op::Categories`] / [`Op::Labels`] / [`Op::Notes`]**: every `restore` and `patch` row is
+///   there (categories and notes in *this* deck) with the recorded columns; a note's attachment
+///   set is the recorded set; a carrier's cell still holds at least as many rows wearing the
+///   recorded label as the carriers name (a carrier names no finish, so a cell with a foil and a
+///   regular row wearing different labels has to be read as "at least"). The deck's default pile
+///   is compared only when the step moved it.
+/// * **[`Op::Deck`]**: the columns in `changed` — the ones the step moved — hold the recorded
+///   values, [`VIEW_FIELDS`] excepted.
+///
+/// ⚠️ **`delete` lists are deliberately not checked**, in any of the three kinds. They state an
+/// absence ("no row has this id"), and every row id here is a rowid alias that another deck's, or
+/// another label's, next insert is handed — so the check would refuse an undo because somebody
+/// elsewhere made a pile. It protects nothing either: every restore finds a taken id and moves
+/// through [`Remap`] instead of overwriting it.
+///
+/// One thing this cannot see: an id a later reversal restored under a **fresh** number (the
+/// remap). A step recorded before that names the old id and is refused rather than applied to a
+/// pile it no longer describes — which is what applying it would have got wrong.
+fn holds(
+    tx: &Connection,
+    deck_id: i64,
+    ops: &[Op],
+    changed: &BTreeSet<&str>,
+    default_moved: bool,
+) -> Result<bool, String> {
+    for op in ops {
+        let held = match op {
+            Op::Cards { scope, rows } => same_rows(read_cells(tx, deck_id, scope)?, rows),
+            Op::Variant { variant, rows } => same_rows(read_variant(tx, deck_id, variant)?, rows),
+            Op::Categories {
+                restore,
+                patch,
+                default_category_id,
+                ..
+            } => {
+                categories_hold(tx, deck_id, restore.iter().chain(patch))?
+                    && match default_category_id.filter(|_| default_moved) {
+                        Some(want) => {
+                            let now: i64 = tx
+                                .query_row(
+                                    "SELECT default_category_id FROM decks WHERE id = ?1",
+                                    params![deck_id],
+                                    |r| r.get(0),
+                                )
+                                .map_err(|e| e.to_string())?;
+                            now == want
+                        }
+                        None => true,
+                    }
+            }
+            Op::Labels {
+                restore,
+                patch,
+                carriers,
+                ..
+            } => {
+                let mut held = true;
+                for row in restore.iter().chain(patch) {
+                    held &= read_label(tx, row.id)?.as_ref() == Some(row);
+                }
+                held && carriers_hold(tx, deck_id, carriers)?
+            }
+            Op::Notes {
+                restore,
+                patch,
+                attachments,
+                ..
+            } => notes_hold(tx, deck_id, restore.iter().chain(patch), attachments)?,
+            Op::Deck { fields } => {
+                let wanted: Vec<&str> = fields
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|f| changed.contains(f) && !VIEW_FIELDS.contains(f))
+                    .collect();
+                let now = read_deck_fields(tx, deck_id, &wanted)?;
+                wanted.iter().all(|f| same_value(&now[*f], &fields[*f]))
+            }
+        };
+        if !held {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Two row sets as multisets: the order `read_cells` answers in is not part of the fact.
+fn same_rows(mut now: Vec<CardRow>, recorded: &[CardRow]) -> bool {
+    fn order(a: &CardRow, b: &CardRow) -> std::cmp::Ordering {
+        let key = |r: &CardRow| {
+            (
+                r.category_id,
+                r.variant.clone(),
+                r.card_id.clone(),
+                r.finish.clone(),
+                r.label_id,
+                r.quantity,
+                r.needs_review.clone(),
+                r.set_code.clone(),
+                r.collector_number.clone(),
+                r.lang.clone(),
+                r.name.clone(),
+            )
+        };
+        key(a).cmp(&key(b))
+    }
+    let mut recorded = recorded.to_vec();
+    now.sort_by(order);
+    recorded.sort_by(order);
+    now == recorded
+}
+
+/// Each category is this deck's and has the recorded columns.
+fn categories_hold<'a>(
+    tx: &Connection,
+    deck_id: i64,
+    rows: impl Iterator<Item = &'a CategoryRow>,
+) -> Result<bool, String> {
+    for row in rows {
+        let now = tx
+            .query_row(
+                "SELECT id, name, kind, is_active, sort_order, origin
+                   FROM deck_categories WHERE id = ?1 AND deck_id = ?2",
+                params![row.id, deck_id],
+                |r| {
+                    Ok(CategoryRow {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        kind: r.get(2)?,
+                        is_active: r.get(3)?,
+                        sort_order: r.get(4)?,
+                        origin: r.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if now.as_ref() != Some(row) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Each carrier's cell still holds at least as many rows wearing the recorded label as the
+/// carriers name for it.
+fn carriers_hold(tx: &Connection, deck_id: i64, carriers: &[Carrier]) -> Result<bool, String> {
+    let mut wanted: HashMap<(i64, &str, i64, &str, Option<i64>), i64> = HashMap::new();
+    for c in carriers {
+        *wanted
+            .entry((
+                c.deck_id.unwrap_or(deck_id),
+                c.variant.as_str(),
+                c.category_id,
+                c.card_id.as_str(),
+                c.label_id,
+            ))
+            .or_default() += 1;
+    }
+    for ((deck, variant, category, card, label), count) in wanted {
+        let held: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM deck_cards
+                  WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3 AND card_id = ?4
+                    AND label_id IS ?5",
+                params![deck, variant, category, card, label],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if held < count {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Each note is this deck's with the recorded columns, and every note the op names carries
+/// exactly the recorded attachment set.
+fn notes_hold<'a>(
+    tx: &Connection,
+    deck_id: i64,
+    rows: impl Iterator<Item = &'a NoteRow>,
+    attachments: &[NoteCard],
+) -> Result<bool, String> {
+    let mut scope: BTreeSet<i64> = attachments.iter().map(|c| c.note_id).collect();
+    for row in rows {
+        let now = tx
+            .query_row(
+                "SELECT id, deck_id, title, body, sort_order
+                   FROM deck_notes WHERE id = ?1 AND deck_id = ?2",
+                params![row.id, deck_id],
+                |r| {
+                    Ok(NoteRow {
+                        id: r.get(0)?,
+                        deck_id: r.get(1)?,
+                        title: r.get(2)?,
+                        body: r.get(3)?,
+                        sort_order: r.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if now.as_ref() != Some(row) {
+            return Ok(false);
+        }
+        scope.insert(row.id);
+    }
+    let mut stmt = tx
+        .prepare("SELECT oracle_id FROM deck_note_cards WHERE note_id = ?1")
+        .map_err(|e| e.to_string())?;
+    for id in scope {
+        let now: BTreeSet<String> = stmt
+            .query_map(params![id], |r| r.get(0))
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(|e| e.to_string())?;
+        let recorded: BTreeSet<String> = attachments
+            .iter()
+            .filter(|c| c.note_id == id)
+            .map(|c| c.oracle_id.clone())
+            .collect();
+        if now != recorded {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Would a delete in `forward` — the side being applied — take rows the step never recorded?
+///
+/// [`holds`] reads the side being moved *away from*, which is the right question for every write
+/// the reversal makes except a delete's reach. **A pile delete CASCADEs every card under it and a
+/// label delete SET-NULLs it off every card in every deck**, so undoing "New category" or a quick
+/// add that invented its pile takes a card the Collection tab filed into that pile since (its
+/// copies left in the deck's group with no row claiming them), and undoing "New label" strips a
+/// label another deck put on a card since — a press filed in *that* deck's journal, where this
+/// cursor cannot see it.
+///
+/// A row is the step's to take when an [`Op::Cards`] scope or an [`Op::Variant`] on the same side
+/// rewrites it anyway — those were checked against the other side by [`holds`] — or, for a label,
+/// when the other side names its cell as a carrier of that label: those are the cards the step
+/// recorded wearing it. Anything else refuses.
+fn deletes_hold(
+    tx: &Connection,
+    deck_id: i64,
+    forward: &[Op],
+    backward: &[Op],
+) -> Result<bool, String> {
+    let rewritten = |variant: &str, category_id: i64, card_id: &str| {
+        forward.iter().any(|op| match op {
+            Op::Cards { scope, .. } => scope.iter().any(|cell| {
+                cell.variant == variant
+                    && cell.category_id == category_id
+                    && cell.card_id.as_deref().is_none_or(|id| id == card_id)
+            }),
+            Op::Variant { variant: v, .. } => v == variant,
+            _ => false,
+        })
+    };
+    for op in forward {
+        match op {
+            Op::Categories { delete, .. } => {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT variant, card_id FROM deck_cards
+                          WHERE deck_id = ?1 AND category_id = ?2",
+                    )
+                    .map_err(|e| e.to_string())?;
+                for pile in delete {
+                    let under: Vec<(String, String)> = stmt
+                        .query_map(params![deck_id, pile], |r| Ok((r.get(0)?, r.get(1)?)))
+                        .map_err(|e| e.to_string())?
+                        .collect::<rusqlite::Result<_>>()
+                        .map_err(|e| e.to_string())?;
+                    if !under
+                        .iter()
+                        .all(|(variant, card)| rewritten(variant, *pile, card))
+                    {
+                        return Ok(false);
+                    }
+                }
+            }
+            Op::Labels { delete, .. } => {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT deck_id, variant, category_id, card_id FROM deck_cards
+                          WHERE label_id = ?1",
+                    )
+                    .map_err(|e| e.to_string())?;
+                for label in delete {
+                    let wearing: Vec<(i64, String, i64, String)> = stmt
+                        .query_map(params![label], |r| {
+                            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                        })
+                        .map_err(|e| e.to_string())?
+                        .collect::<rusqlite::Result<_>>()
+                        .map_err(|e| e.to_string())?;
+                    let recorded = |deck: i64, variant: &str, category_id: i64, card: &str| {
+                        backward.iter().any(|op| match op {
+                            Op::Labels { carriers, .. } => carriers.iter().any(|c| {
+                                c.deck_id.unwrap_or(deck_id) == deck
+                                    && c.variant == variant
+                                    && c.category_id == category_id
+                                    && c.card_id == card
+                                    && c.label_id == Some(*label)
+                            }),
+                            _ => false,
+                        })
+                    };
+                    if !wearing.iter().all(|(deck, variant, category, card)| {
+                        (*deck == deck_id && rewritten(variant, *category, card))
+                            || recorded(*deck, variant, *category, card)
+                    }) {
+                        return Ok(false);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(true)
+}
+
+/// May each labelling carrier in `forward` be written? Only over a cell whose rows are bare, or
+/// already wear the label the carrier names.
+///
+/// A carrier's UPDATE labels every row of its cell, so applying one over a card labelled since by
+/// a write that files no step replaces that label. This is the one check a label delete's undo
+/// gets: its redo side records no carriers — the delete's own SET NULL is what cleared them — so
+/// [`holds`] has nothing to compare, and it is the carriers being *applied* that can be asked.
+///
+/// **The label a carrier names stops counting as its own when this op restores it and another
+/// label holds that id now** — the freed rowid was handed on, so a row wearing it wears somebody
+/// else's label. A clearing carrier (`label_id: None`) is not asked: [`holds`] has already found
+/// its cell wearing the label it clears, on the other side.
+fn carriers_free(tx: &Connection, deck_id: i64, forward: &[Op]) -> Result<bool, String> {
+    for op in forward {
+        let Op::Labels {
+            restore, carriers, ..
+        } = op
+        else {
+            continue;
+        };
+        for c in carriers {
+            let Some(label) = c.label_id else {
+                continue;
+            };
+            let handed_on = restore.iter().any(|row| row.id == label)
+                && tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM deck_labels WHERE id = ?1)",
+                        params![label],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .map_err(|e| e.to_string())?;
+            let own = (!handed_on).then_some(label);
+            let clashing: i64 = tx
+                .query_row(
+                    "SELECT count(*) FROM deck_cards
+                      WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3 AND card_id = ?4
+                        AND label_id IS NOT NULL AND label_id IS NOT ?5",
+                    params![
+                        c.deck_id.unwrap_or(deck_id),
+                        c.variant,
+                        c.category_id,
+                        c.card_id,
+                        own
+                    ],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if clashing > 0 {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// A JSON value bound as the SQLite value it came out of the database as.
 ///
 /// `serde_json::Value` has no `ToSql`, and a blanket `to_string()` would write the *text*
@@ -1459,6 +2026,35 @@ pub fn next_undo(conn: &Connection, deck_id: i64) -> Result<Option<i64>, String>
     .map_err(|e| e.to_string())
 }
 
+/// The audit id of the change Ctrl+Y may put back in this deck, or `None` — [`next_undo`]'s
+/// mirror, and what makes a redo checked rather than trusted.
+///
+/// The undone step **above the cursor** with the **newest `undone_at`**:
+///
+/// * **Above the cursor**, because an applied step newer than an undone one can only have been
+///   filed after the undo — the reader edited past it, in this window or another, and that branch
+///   is gone.
+/// * **Newest stamp**, because among the undone steps above the cursor the one undone last is the
+///   top of the stack, and a step undone before the last edit — a dead branch that the cursor has
+///   since come back down past — always carries an older stamp than any undone after it. That
+///   holds only if stamps strictly increase within a deck, which is why [`apply_reversal`] stamps
+///   `max(now, newest + 1)` rather than the wall clock: two presses inside one second would tie,
+///   and a tie broken by id picks the dead branch
+///   (`a_change_undone_before_a_later_edit_can_never_be_redone`).
+pub fn next_redo(conn: &Connection, deck_id: i64) -> Result<Option<i64>, String> {
+    conn.query_row(
+        "SELECT audit_id FROM deck_undo
+          WHERE deck_id = ?1 AND undone_at IS NOT NULL
+            AND audit_id > coalesce((SELECT max(audit_id) FROM deck_undo
+                                      WHERE deck_id = ?1 AND undone_at IS NULL), 0)
+          ORDER BY undone_at DESC, audit_id ASC LIMIT 1",
+        params![deck_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
 /// The step stored for one history row, and whether it has been undone.
 pub fn read_step(conn: &Connection, audit_id: i64) -> Result<Option<(Step, bool)>, String> {
     let found: Option<(String, Option<i64>)> = conn
@@ -1530,10 +2126,20 @@ fn record_reversal(
 
 /// Apply one step, in one transaction, and record the history row for having done it.
 ///
-/// `undoing` picks the direction. The id is checked against the cursor rather than trusted:
-/// the webview's toolbar can be a moment behind the deck, and undoing "the most recent change"
-/// when the most recent change is not the one on the button is exactly the surprise this
-/// feature must not produce.
+/// `undoing` picks the direction. The id is checked against the cursor — [`next_undo`], or
+/// [`next_redo`] for a redo — rather than trusted: the webview's toolbar can be a moment behind
+/// the deck, and undoing "the most recent change" when the most recent change is not the one on
+/// the button is exactly the surprise this feature must not produce. **Then the deck itself is
+/// checked** ([`plan`]), because a write that files no step moves the rows without moving the
+/// cursor; see the module doc.
+///
+/// **A refused undo at the cursor retires its step** — deletes the `deck_undo` row, keeps the
+/// history row, commits that and nothing else, and answers [`RETIRED`] — because the cursor would
+/// otherwise refuse the same way at every press and nothing older could ever be undone. "Refused"
+/// means [`plan`] said no **or the write itself failed**: it runs inside a savepoint, and any
+/// error rolls back to it, so a constraint nobody foresaw (a label deleted since, a pile name
+/// taken since) cannot wedge the cursor either. A refused redo writes nothing and answers
+/// [`MOVED_ON`], or the write's own error.
 ///
 /// **`pub(crate)` since 2026-08-29**, and the `allow(dead_code)` it carried for one PR is gone:
 /// `web::route` is the second caller, so the direction flag now has two callers on every
@@ -1553,22 +2159,79 @@ pub(crate) fn apply_reversal(
         }
     }
     let (step, undone) = read_step(&tx, audit_id)?.ok_or(NOTHING_TO_UNDO)?;
-    if !undoing && !undone {
-        return Err(NOTHING_TO_REDO.to_owned());
+    if !undoing {
+        if !undone {
+            return Err(NOTHING_TO_REDO.to_owned());
+        }
+        if next_redo(&tx, deck_id)? != Some(audit_id) {
+            return Err(MOVED_ON.to_owned());
+        }
     }
     let entry = crate::deck_audit::by_id(&tx, audit_id)?.ok_or(NOTHING_TO_UNDO)?;
     if entry.deck_id != deck_id {
         return Err(MOVED_ON.to_owned());
     }
 
-    apply(&tx, deck_id, if undoing { &step.undo } else { &step.redo })?;
-    tx.execute(
-        match undoing {
-            true => "UPDATE deck_undo SET undone_at = unixepoch() WHERE audit_id = ?1",
-            false => "UPDATE deck_undo SET undone_at = NULL WHERE audit_id = ?1",
-        },
-        params![audit_id],
-    )
+    let (forward, backward) = match undoing {
+        true => (&step.undo, &step.redo),
+        false => (&step.redo, &step.undo),
+    };
+    // `None` when the reversal went through; otherwise why it did not — no plan (the deck moved
+    // on), or the write's own error, already rolled back to the savepoint.
+    let refused: Option<Option<String>> = match plan(&tx, deck_id, forward, backward)? {
+        None => Some(None),
+        Some(ops) => {
+            tx.execute_batch("SAVEPOINT reversal")
+                .map_err(|e| e.to_string())?;
+            match apply(&tx, deck_id, &ops) {
+                Ok(()) => {
+                    tx.execute_batch("RELEASE reversal")
+                        .map_err(|e| e.to_string())?;
+                    None
+                }
+                Err(e) => {
+                    tx.execute_batch("ROLLBACK TO reversal; RELEASE reversal")
+                        .map_err(|e| e.to_string())?;
+                    Some(Some(e))
+                }
+            }
+        }
+    };
+    if let Some(failure) = refused {
+        if !undoing {
+            return Err(failure.unwrap_or_else(|| MOVED_ON.to_owned()));
+        }
+        if let Some(e) = failure {
+            // The reader hears [`RETIRED`]; the constraint that failed is worth a line for
+            // whoever reads the log, because a step that no check foresaw may be a step built
+            // wrong.
+            eprintln!("deck {deck_id}: undo of history row {audit_id} failed and was retired: {e}");
+        }
+        tx.execute(
+            "DELETE FROM deck_undo WHERE audit_id = ?1",
+            params![audit_id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        return Err(RETIRED.to_owned());
+    }
+    if undoing {
+        // Strictly increasing within the deck, and never behind the wall clock — see
+        // [`next_redo`] for why a plain `unixepoch()` is the bug.
+        tx.execute(
+            "UPDATE deck_undo
+                SET undone_at = max(unixepoch(),
+                                    coalesce((SELECT max(undone_at) FROM deck_undo
+                                               WHERE deck_id = ?2), 0) + 1)
+              WHERE audit_id = ?1",
+            params![audit_id, deck_id],
+        )
+    } else {
+        tx.execute(
+            "UPDATE deck_undo SET undone_at = NULL WHERE audit_id = ?1",
+            params![audit_id],
+        )
+    }
     .map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
     record_reversal(
@@ -1602,12 +2265,13 @@ pub fn undo_state(
         Some(id) => crate::deck_audit::by_id(conn, id)?,
         None => None,
     };
+    // The press's own question, [`next_redo`], so a window whose redo another window has
+    // overtaken draws a greyed button rather than one that is refused when pressed.
     let redo = match redo_id {
-        Some(id) => match read_step(conn, id)? {
-            Some((_, true)) => crate::deck_audit::by_id(conn, id)?.filter(|e| e.deck_id == deck_id),
-            _ => None,
-        },
-        None => None,
+        Some(id) if next_redo(conn, deck_id)? == Some(id) => {
+            crate::deck_audit::by_id(conn, id)?.filter(|e| e.deck_id == deck_id)
+        }
+        _ => None,
     };
     Ok(DeckUndoState { undo, redo })
 }
@@ -3648,5 +4312,693 @@ mod tests {
         drop(tx);
 
         assert_eq!(next_undo(&conn, id).unwrap(), None);
+    }
+
+    /// `bolt-lea`'s quantity in `Ramp`'s live pile — the cell the staleness cases below edit.
+    fn bolt(conn: &Connection, deck_id: i64) -> i64 {
+        quantity(conn, deck_id, ramp(conn, deck_id), "bolt-lea")
+    }
+
+    /// Step `bolt-lea` in `Ramp` to `to`, through the command the stepper calls.
+    fn step_bolt(conn: &Connection, deck_id: i64, to: i64) -> i64 {
+        let ramp = ramp(conn, deck_id);
+        crate::deck::set_card_quantity(conn, deck_id, "bolt-lea", ramp, "live", None, to).unwrap();
+        next_undo(conn, deck_id).unwrap().unwrap()
+    }
+
+    /// Step `serra-lea` in `Draw` to `to` — a second cell, which shares nothing with `bolt-lea`'s.
+    fn step_serra(conn: &Connection, deck_id: i64, to: i64) -> i64 {
+        let draw = draw(conn, deck_id);
+        crate::deck::set_card_quantity(conn, deck_id, "serra-lea", draw, "live", None, to).unwrap();
+        next_undo(conn, deck_id).unwrap().unwrap()
+    }
+
+    /// **The step-filing half of a stale redo.** Window A undoes a change and keeps its id on its
+    /// redo stack; window B edits the same card, which files a step of its own. A's stack is only
+    /// cleared by A's own writes, so A's Ctrl+Y still names the undone change — and applying it
+    /// would put A's old quantity over B's newer one.
+    #[test]
+    fn a_redo_is_refused_once_another_window_has_filed_a_change() {
+        let (conn, id) = fresh();
+        let a = step_bolt(&conn, id, 3);
+        undo(&conn, id).unwrap();
+
+        step_bolt(&conn, id, 5);
+        let before = snapshot(&conn, id);
+
+        let refused = redo(&conn, id, a).unwrap_err();
+
+        assert_eq!(refused, MOVED_ON);
+        assert_eq!(
+            snapshot(&conn, id),
+            before,
+            "and window B's 5 is still the deck's"
+        );
+        assert_eq!(bolt(&conn, id), 5);
+    }
+
+    /// **The half of a stale redo no cursor can see.** The same stale redo, over a write that files
+    /// no step — a sync pull, a cut, the copy another deck's filing took. The undone change is
+    /// still the one the next redo would take, so only the rows themselves can say the deck has
+    /// moved on.
+    #[test]
+    fn a_redo_is_refused_when_its_cells_changed_without_a_step() {
+        let (conn, id) = fresh();
+        let a = step_bolt(&conn, id, 3);
+        undo(&conn, id).unwrap();
+        conn.execute(
+            "UPDATE deck_cards SET quantity = 7
+              WHERE deck_id = ?1 AND card_id = 'bolt-lea' AND variant = 'live'",
+            params![id],
+        )
+        .unwrap();
+        let before = snapshot(&conn, id);
+
+        let refused = redo(&conn, id, a).unwrap_err();
+
+        assert_eq!(refused, MOVED_ON);
+        assert_eq!(
+            snapshot(&conn, id),
+            before,
+            "the 7 nobody filed a step for stays"
+        );
+        assert!(
+            matches!(read_step(&conn, a).unwrap(), Some((_, true))),
+            "and a refused redo changes nothing, the journal included"
+        );
+    }
+
+    /// **Redo mirrors undo's cursor.** Two changes to two cells, both undone: the one undone last
+    /// is the only one a redo may take, exactly as the newest applied change is the only one an
+    /// undo may take. The cells do not overlap, so nothing but the order can refuse this.
+    #[test]
+    fn only_the_change_undone_last_can_be_redone() {
+        let (conn, id) = fresh();
+        let first = step_bolt(&conn, id, 3);
+        let second = step_serra(&conn, id, 4);
+        undo(&conn, id).unwrap();
+        undo(&conn, id).unwrap();
+        let before = snapshot(&conn, id);
+
+        let refused = redo(&conn, id, second).unwrap_err();
+        assert_eq!(refused, MOVED_ON);
+        assert_eq!(snapshot(&conn, id), before, "and it changed nothing");
+
+        redo(&conn, id, first).unwrap();
+        redo(&conn, id, second).unwrap();
+        assert_eq!(bolt(&conn, id), 3);
+        assert_eq!(quantity(&conn, id, draw(&conn, id), "serra-lea"), 4);
+    }
+
+    /// **An edit made after an undo cuts that branch off for good** — in the database, and not
+    /// only in the window that made it. Both changes end up undone and the dead one has the lower
+    /// id, so only the order they were undone in can tell them apart — and a wall-clock
+    /// `undone_at` cannot: two presses inside one second tie (and a tie broken by id picks the
+    /// dead one), and a clock that steps back puts the later press first.
+    ///
+    /// **The dead stamp is pushed a hundred seconds ahead to make that deterministic**, rather
+    /// than hoping both presses land in one second: `undone_at` is an ordinal that must strictly
+    /// increase within a deck, and a wall-clock stamp fails this case every time.
+    #[test]
+    fn a_change_undone_before_a_later_edit_can_never_be_redone() {
+        let (conn, id) = fresh();
+        let dead = step_bolt(&conn, id, 3);
+        undo(&conn, id).unwrap();
+        conn.execute(
+            "UPDATE deck_undo SET undone_at = unixepoch() + 100 WHERE audit_id = ?1",
+            params![dead],
+        )
+        .unwrap();
+        let live = step_serra(&conn, id, 4);
+        undo(&conn, id).unwrap();
+        let stamp = |audit_id: i64| -> i64 {
+            conn.query_row(
+                "SELECT undone_at FROM deck_undo WHERE audit_id = ?1",
+                params![audit_id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert!(
+            stamp(live) > stamp(dead),
+            "the change undone last carries the later stamp"
+        );
+
+        assert_eq!(redo(&conn, id, dead).unwrap_err(), MOVED_ON);
+        redo(&conn, id, live).unwrap();
+        assert_eq!(
+            redo(&conn, id, dead).unwrap_err(),
+            MOVED_ON,
+            "and it stays dead once the change above it is back"
+        );
+        assert_eq!(bolt(&conn, id), 2, "the dead branch never came back");
+    }
+
+    /// The Redo button asks the same question the press does, so a window whose redo has been
+    /// overtaken draws a greyed button rather than one that refuses when pressed.
+    #[test]
+    fn the_redo_button_is_offered_only_for_the_change_a_redo_would_take() {
+        let (conn, id) = fresh();
+        let first = step_bolt(&conn, id, 3);
+        let second = step_serra(&conn, id, 4);
+        undo(&conn, id).unwrap();
+        undo(&conn, id).unwrap();
+
+        assert!(
+            undo_state(&conn, id, Some(second)).unwrap().redo.is_none(),
+            "the second change cannot come back before the first"
+        );
+        assert_eq!(
+            undo_state(&conn, id, Some(first))
+                .unwrap()
+                .redo
+                .map(|e| e.id),
+            Some(first)
+        );
+    }
+
+    /// A connection with `foreign_keys` on, as [`crate::db::open`] hands out every one the app
+    /// uses — the folder cases below are about what the `REFERENCES deck_folders(id)` on
+    /// `decks.folder_id` does, and an in-memory database starts without it.
+    fn seeded_with_fks() -> Connection {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn
+    }
+
+    /// The four `decks` columns the folder cases below are about, as they are now.
+    fn deck_columns(
+        conn: &Connection,
+        id: i64,
+    ) -> (String, Option<i64>, Option<String>, Option<String>) {
+        conn.query_row(
+            "SELECT name, folder_id, last_group_by, description FROM decks WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    }
+
+    /// **A rename undone after its folder was deleted.** Every `deck_update` step records every column [`DECK_FIELDS`] names, so
+    /// a rename carries the deck's folder on both sides. Deleting that folder from the gallery
+    /// SET-NULLs `folder_id` with no step, by design — and an undo that wrote every recorded
+    /// column put the deleted folder's id back into a real foreign key, failed, and left the
+    /// cursor on a step that could never succeed. The view state and a column another device
+    /// synced were reverted by the same statement list, silently.
+    ///
+    /// Undoing the rename writes the name and nothing else, and the step below it is refused
+    /// **and retired** rather than left to refuse every press after it.
+    #[test]
+    fn undoing_a_rename_writes_the_name_and_leaves_every_other_column_where_it_now_is() {
+        let conn = seeded_with_fks();
+        let id = deck(&conn, "Burn");
+        let folder = crate::deck_meta::create_folder(&conn, None, "Commander")
+            .unwrap()
+            .id;
+        crate::deck::set_folder(&conn, id, Some(folder)).unwrap();
+        let filed = next_undo(&conn, id).unwrap().unwrap();
+        crate::deck::update_deck(
+            &conn,
+            id,
+            &crate::deck::DeckPatch {
+                name: Some("Burn v2".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let renamed = next_undo(&conn, id).unwrap().unwrap();
+
+        // Three writes that file no step: the gallery's folder delete, a tab switch, and a
+        // column another device changed and synced.
+        crate::deck_meta::delete_folder(&conn, folder).unwrap();
+        crate::deck::set_view_state(
+            &conn,
+            id,
+            &crate::deck::DeckViewState {
+                group_by: Some("type".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE decks SET description = 'Synced from the laptop.' WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+
+        apply_reversal(&conn, id, renamed, true).unwrap();
+
+        assert_eq!(
+            deck_columns(&conn, id),
+            (
+                "Burn".to_owned(),
+                None,
+                Some("type".to_owned()),
+                Some("Synced from the laptop.".to_owned())
+            ),
+            "the name went back and nothing the rename did not change moved"
+        );
+
+        assert_eq!(next_undo(&conn, id).unwrap(), Some(filed));
+        let refused = apply_reversal(&conn, id, filed, true).unwrap_err();
+        assert_eq!(
+            refused, RETIRED,
+            "the deck is not in the folder that step filed it in any more"
+        );
+        assert_eq!(
+            next_undo(&conn, id).unwrap(),
+            None,
+            "and the cursor moved on — a step that can never apply is not left to wedge it"
+        );
+    }
+
+    /// **The folder a reversal would write.** Moving a deck from F to G and then
+    /// deleting F leaves the deck exactly where the step says it is — so the rows agree — and the
+    /// undo would write F's id into a real foreign key. It is refused in words, with the deck left
+    /// in G, and the cursor moves on.
+    #[test]
+    fn undoing_a_move_out_of_a_folder_deleted_since_is_refused_and_moves_the_cursor_on() {
+        let conn = seeded_with_fks();
+        let id = deck(&conn, "Burn");
+        let from = crate::deck_meta::create_folder(&conn, None, "Old")
+            .unwrap()
+            .id;
+        let to = crate::deck_meta::create_folder(&conn, None, "New")
+            .unwrap()
+            .id;
+        crate::deck::set_folder(&conn, id, Some(from)).unwrap();
+        let first = next_undo(&conn, id).unwrap().unwrap();
+        crate::deck::set_folder(&conn, id, Some(to)).unwrap();
+        let second = next_undo(&conn, id).unwrap().unwrap();
+        crate::deck_meta::delete_folder(&conn, from).unwrap();
+
+        let refused = apply_reversal(&conn, id, second, true).unwrap_err();
+
+        assert_eq!(refused, RETIRED);
+        assert_eq!(deck_columns(&conn, id).1, Some(to), "the deck stays in G");
+        assert_eq!(
+            next_undo(&conn, id).unwrap(),
+            Some(first),
+            "and the next Ctrl+Z is the change below it, not the same refusal"
+        );
+    }
+
+    /// **The view state is not a reason to refuse.** Turning theory on with an empty plan moves
+    /// the live list into it and `last_variant` to `theory`, and switching tabs afterwards moves
+    /// that again through `set_view_state`, which files no step. The deck has not been *edited*
+    /// since, so Ctrl+Z still works.
+    ///
+    /// **Not [`fresh`]**: its plan already holds a card, so the switch moves nothing and leaves
+    /// `last_variant` alone — and this case would pass with the view columns compared.
+    #[test]
+    fn switching_tabs_after_turning_theory_on_does_not_block_its_undo() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let ramp = category(&conn, id, "Ramp");
+        crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", None, 2).unwrap();
+        crate::deck::update_deck(
+            &conn,
+            id,
+            &crate::deck::DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let kind = |c: &Connection| -> (i64, String) {
+            c.query_row(
+                "SELECT theory_enabled, last_variant FROM decks WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            kind(&conn),
+            (1, "theory".to_owned()),
+            "the press moved the view, or this case proves nothing"
+        );
+        crate::deck::set_view_state(
+            &conn,
+            id,
+            &crate::deck::DeckViewState {
+                variant: Some("live".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        undo(&conn, id).unwrap();
+
+        assert_eq!(kind(&conn).0, 0);
+        assert_eq!(
+            quantity(&conn, id, ramp, "bolt-lea"),
+            2,
+            "and the list is live again"
+        );
+    }
+
+    /// `Op::Categories`' `default_category_id`, on [`Op::Deck`]'s rule: a category delete records
+    /// the deck's default on both sides, and where the delete did not move it, an undo has no
+    /// business writing it back over one another device changed since.
+    #[test]
+    fn undoing_a_category_delete_leaves_a_default_it_did_not_move_alone() {
+        let (conn, id) = fresh();
+        let draw = draw(&conn, id);
+        crate::deck::update_deck(
+            &conn,
+            id,
+            &crate::deck::DeckPatch {
+                default_category_id: Some(draw),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        crate::deck_meta::delete_category(&conn, ramp(&conn, id), None).unwrap();
+        conn.execute(
+            "UPDATE decks SET default_category_id = 0 WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+
+        undo(&conn, id).unwrap();
+
+        let default: i64 = conn
+            .query_row(
+                "SELECT default_category_id FROM decks WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(default, 0, "the synced Auto stands");
+        assert_eq!(bolt(&conn, id), 2, "and the pile and its cards came back");
+    }
+
+    /// `Op::Categories`: a pile changed without a step is not overwritten by an undo.
+    #[test]
+    fn undoing_a_pile_rename_is_refused_once_the_pile_changed_without_a_step() {
+        let (conn, id) = fresh();
+        let ramp = ramp(&conn, id);
+        crate::deck_meta::rename_category(&conn, ramp, "Acceleration").unwrap();
+        conn.execute(
+            "UPDATE deck_categories SET is_active = 0 WHERE id = ?1",
+            params![ramp],
+        )
+        .unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        let (name, active): (String, bool) = conn
+            .query_row(
+                "SELECT name, is_active FROM deck_categories WHERE id = ?1",
+                params![ramp],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((name.as_str(), active), ("Acceleration", false));
+    }
+
+    /// `Op::Labels`: a label is app-wide, so it can be renamed from somewhere that files no step
+    /// in this deck — the Appearance panel files none anywhere. Ctrl+Z here must not put the old
+    /// name over that one.
+    #[test]
+    fn undoing_a_label_rename_is_refused_once_the_label_was_renamed_elsewhere() {
+        let (conn, id) = fresh();
+        let label = label_id(&conn, id);
+        crate::deck_meta::update_label(&conn, Some(id), label, "Keep", "amber").unwrap();
+        crate::deck_meta::update_label(&conn, None, label, "Trade", "amber").unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        assert_eq!(read_label(&conn, label).unwrap().unwrap().name, "Trade");
+    }
+
+    /// `Op::Labels`' carriers: taking a label off this deck's cards and then having one of them
+    /// labelled again by a write that files no step. Undoing the removal would put the old label
+    /// over the new one.
+    #[test]
+    fn undoing_a_label_removal_is_refused_once_a_carrier_was_relabelled_without_a_step() {
+        let (conn, id) = fresh();
+        let label = label_id(&conn, id);
+        crate::deck_meta::remove_label_from_deck(&conn, id, label, "live").unwrap();
+        let other = crate::deck_meta::create_label(&conn, None, "Trade", "jade")
+            .unwrap()
+            .id;
+        conn.execute(
+            "UPDATE deck_cards SET label_id = ?2 WHERE deck_id = ?1 AND card_id = 'serra-lea'",
+            params![id, other],
+        )
+        .unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        let worn: Option<i64> = conn
+            .query_row(
+                "SELECT label_id FROM deck_cards WHERE deck_id = ?1 AND card_id = 'serra-lea'",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(worn, Some(other));
+    }
+
+    /// `Op::Notes`: a note body another device synced is not overwritten by an undo of an edit
+    /// made before it.
+    #[test]
+    fn undoing_a_note_edit_is_refused_once_the_note_changed_without_a_step() {
+        let (conn, id) = fresh();
+        let note = crate::deck_notes::create_note(&conn, id, "Mana", "Fourteen sources.", &[])
+            .unwrap()
+            .id;
+        crate::deck_notes::update_note(&conn, id, note, Some("Mana base"), None).unwrap();
+        conn.execute(
+            "UPDATE deck_notes SET body = 'Fifteen, from the laptop.' WHERE id = ?1",
+            params![note],
+        )
+        .unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        assert_eq!(
+            read_note(&conn, note),
+            Some((
+                "Mana base".to_owned(),
+                "Fifteen, from the laptop.".to_owned(),
+                0
+            ))
+        );
+    }
+
+    /// `Op::Notes`' attachment set: undoing an attach rebuilds the note's whole set, so a card
+    /// another device attached since would be taken off with it.
+    #[test]
+    fn undoing_an_attach_is_refused_once_the_note_named_another_card_without_a_step() {
+        let (conn, id) = fresh();
+        let note = crate::deck_notes::create_note(&conn, id, "Mana", "Fourteen sources.", &[])
+            .unwrap()
+            .id;
+        crate::deck_notes::attach_card(&conn, id, note, "o1").unwrap();
+        conn.execute(
+            "INSERT INTO deck_note_cards (note_id, oracle_id, created_at, updated_at)
+             VALUES (?1, 'o2', unixepoch(), unixepoch())",
+            params![note],
+        )
+        .unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        assert_eq!(
+            attached(&conn, note),
+            vec!["o1".to_owned(), "o2".to_owned()]
+        );
+    }
+
+    /// The deck's piles by name — whether a pile of that name is there, and how many.
+    fn piles_named(conn: &Connection, deck_id: i64, name: &str) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM deck_categories WHERE deck_id = ?1 AND name = ?2",
+            params![deck_id, name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **Any write a reversal cannot make retires its step, not only the ones the check
+    /// foresees.** Undoing a pile delete restores the pile and then its cards — and a card that
+    /// wore a label deleted since from the Appearance panel (which files no step) fails the
+    /// label's foreign key at the second op, after the first has written. Every press failed the
+    /// same way with the cursor never moving; now the half-written undo is rolled back and the
+    /// step retired.
+    #[test]
+    fn an_undo_whose_write_fails_is_rolled_back_and_retired() {
+        let (conn, id) = fresh();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let below = next_undo(&conn, id).unwrap().unwrap();
+        crate::deck_meta::delete_category(&conn, draw(&conn, id), None).unwrap();
+        let deleted = next_undo(&conn, id).unwrap().unwrap();
+        crate::deck_meta::delete_label(&conn, None, label_id(&conn, id)).unwrap();
+
+        assert_eq!(
+            apply_reversal(&conn, id, deleted, true).unwrap_err(),
+            RETIRED
+        );
+        assert_eq!(
+            piles_named(&conn, id, "Draw"),
+            0,
+            "the pile the first op restored went back out with the failed second"
+        );
+        assert_eq!(
+            next_undo(&conn, id).unwrap(),
+            Some(below),
+            "and the cursor moved on"
+        );
+    }
+
+    /// The same over a pile's name: a pile deleted with a step and made again with none — the
+    /// Collection tab's filing by name makes one — passes the check and then fails the
+    /// `(deck_id, name)` index on every press.
+    #[test]
+    fn undoing_a_pile_delete_after_the_pile_was_made_again_is_retired() {
+        let (conn, id) = fresh();
+        let below = next_undo(&conn, id).unwrap().unwrap();
+        crate::deck_meta::delete_category(&conn, ramp(&conn, id), None).unwrap();
+        crate::deck_meta::category_for_name(&conn, id, "Ramp").unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        assert_eq!(piles_named(&conn, id, "Ramp"), 1);
+        assert_eq!(next_undo(&conn, id).unwrap(), Some(below));
+    }
+
+    /// **A delete in the side being applied takes whatever sits under it, not only what the step
+    /// recorded.** Undoing "New category" deletes the pile, and a card filed into it since by a
+    /// write that files no step — the Collection tab — would go with it through the CASCADE,
+    /// leaving its copies in the deck's group with no row claiming them.
+    #[test]
+    fn undoing_a_new_pile_is_retired_once_a_card_was_filed_into_it_without_a_step() {
+        let (conn, id) = fresh();
+        let pile = crate::deck_meta::create_category(&conn, id, "Removal")
+            .unwrap()
+            .id;
+        conn.execute(
+            "INSERT INTO deck_cards
+                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                  name, quantity, created_at, updated_at)
+             VALUES (?1, ?2, 'live', 'bolt-m10', 'm10', '146', 'en', 'Lightning Bolt', 1,
+                     unixepoch(), unixepoch())",
+            params![id, pile],
+        )
+        .unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        assert_eq!(quantity(&conn, id, pile, "bolt-m10"), 1);
+    }
+
+    /// A second deck playing Serra Angel, for the label cases: a label is app-wide, so the card
+    /// a reversal must not touch can be in a deck whose journal this one's cursor cannot see.
+    fn angels(conn: &Connection) -> (i64, i64) {
+        let other = deck(conn, "Angels");
+        let pile = category(conn, other, "Main");
+        crate::deck::add_card(conn, other, "serra-lea", Some(pile), None, "live", None, 1).unwrap();
+        (other, pile)
+    }
+
+    /// The label a card in a deck wears, if any.
+    fn worn(conn: &Connection, deck_id: i64) -> Option<i64> {
+        conn.query_row(
+            "SELECT label_id FROM deck_cards WHERE deck_id = ?1 AND card_id = 'serra-lea'",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The same rule over a label, whose delete clears it off every card in every deck. Undoing
+    /// "New label" here must not take it off a card another deck labelled with it since — that
+    /// press filed its step in *that* deck's journal.
+    #[test]
+    fn undoing_a_new_label_is_retired_once_another_deck_wears_it() {
+        let (conn, id) = fresh();
+        let keep = crate::deck_meta::create_label(&conn, Some(id), "Keep", "jade")
+            .unwrap()
+            .id;
+        let (other, pile) = angels(&conn);
+        crate::deck_meta::set_card_label(&conn, other, "serra-lea", pile, "live", None, Some(keep))
+            .unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        assert!(read_label(&conn, keep).unwrap().is_some());
+        assert_eq!(worn(&conn, other), Some(keep));
+    }
+
+    /// And from the redo end: a label delete undone, the label then put on a card in another
+    /// deck, then Ctrl+Y — the redo's delete would take it off a card the step never recorded
+    /// wearing it.
+    #[test]
+    fn redoing_a_label_delete_is_refused_once_a_card_it_never_recorded_wears_the_label() {
+        let (conn, id) = fresh();
+        let label = label_id(&conn, id);
+        crate::deck_meta::delete_label(&conn, Some(id), label).unwrap();
+        let deleted = next_undo(&conn, id).unwrap().unwrap();
+        undo(&conn, id).unwrap();
+        let (other, pile) = angels(&conn);
+        crate::deck_meta::set_card_label(
+            &conn,
+            other,
+            "serra-lea",
+            pile,
+            "live",
+            None,
+            Some(label),
+        )
+        .unwrap();
+
+        assert_eq!(redo(&conn, id, deleted).unwrap_err(), MOVED_ON);
+        assert!(read_label(&conn, label).unwrap().is_some());
+        assert_eq!(worn(&conn, other), Some(label));
+    }
+
+    /// Undoing a label delete puts the label back on every card that wore it, and one of them may
+    /// wear another label since, put there by a write that files no step. The delete's redo side
+    /// records no carriers — its own SET NULL is what cleared them — so it is the carriers being
+    /// *applied* that are checked: a cell may be bare and nothing else.
+    #[test]
+    fn undoing_a_label_delete_is_retired_once_a_card_that_wore_it_wears_another() {
+        let (conn, id) = fresh();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let label = label_id(&conn, id);
+        // Made first, so it cannot take the deleted label's rowid.
+        let trade = crate::deck_meta::create_label(&conn, None, "Trade", "jade")
+            .unwrap()
+            .id;
+        crate::deck_meta::delete_label(&conn, Some(id), label).unwrap();
+        conn.execute(
+            "UPDATE deck_cards SET label_id = ?2 WHERE deck_id = ?1 AND card_id = 'serra-lea'",
+            params![id, trade],
+        )
+        .unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        assert_eq!(worn(&conn, id), Some(trade));
+    }
+
+    /// The same, when the label made since was **handed the deleted one's rowid**: a card wearing
+    /// that id wears the new label, not the one the undo restores, and the restore — which moves
+    /// to a fresh id — would relabel it anyway.
+    #[test]
+    fn undoing_a_label_delete_leaves_a_label_that_took_its_id_alone() {
+        let (conn, id) = fresh();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let label = label_id(&conn, id);
+        crate::deck_meta::delete_label(&conn, Some(id), label).unwrap();
+        let trade = crate::deck_meta::create_label(&conn, None, "Trade", "jade")
+            .unwrap()
+            .id;
+        assert_eq!(
+            trade, label,
+            "the case only tests anything if the id was reused"
+        );
+        conn.execute(
+            "UPDATE deck_cards SET label_id = ?2 WHERE deck_id = ?1 AND card_id = 'serra-lea'",
+            params![id, trade],
+        )
+        .unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        assert_eq!(worn(&conn, id), Some(trade));
     }
 }
