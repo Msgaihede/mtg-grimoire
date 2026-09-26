@@ -132,7 +132,8 @@ written, never whether a collision folds.
   collection's default across; the two lists ship differently on purpose. **History
   (2026-09-26):** Flatten is deleted on both pages, and this fence and the difference between the
   two defaults went with it. The page passes the level it stands on — the root inside a deck's
-  managed folder, which refuses a hand add (`WishlistPage.tsx:2155`). See
+  managed folder, which refuses a hand add (the docked search column's `folderId` in
+  `WishlistPage.tsx`). See
   [Shelves](#shelves-2026-09-26).
 - **Absent and `null` are different on the wire**, and the page sends `null` explicitly — absent
   sends no `folderId` field at all, which is what `SearchPage` and the Tags page still do and why
@@ -517,7 +518,7 @@ is that the ordinary case has a target the size of the things around it.
 gone. **Add folder** is on the path row and on every heading of the reader's own folders, the name
 is typed on the heading where the folder will appear, and Rename is a button on the heading. The
 `openPanel` level clause below lost its `flatten` arm and became `panelGone`: a naming field closes
-when its heading is no longer on the wall (`WishlistPage.tsx:999-1005`). See
+when its heading is no longer on the wall (`panelGone` in `WishlistPage.tsx`). See
 [Shelves](#shelves-2026-09-26). The strip still holds `Move to folder…`, `Delete…` and `Clear…`.
 
 **2026-09-03.** `New folder` and a folder card's `⋯ → Rename…` used to raise a **bordered strip
@@ -575,8 +576,12 @@ folder**, the collection's wall on the same day — design
 [2026-09-26-folder-shelves-design.md](../superpowers/specs/2026-09-26-folder-shelves-design.md).
 [collection-folders.md's Shelves](collection-folders.md#shelves-2026-09-26) is the record of what
 the two pages share and is not repeated here: `buildShelves`' order, Not sorted first, collapse and
-its per-window memory, the fold during a folder drag, the path row's **Add folder**, **Expand all**
-and **Collapse all**, the table's bands, and the query cost. What follows is the wishlist's own. **A wishlist tile was already one wish**, so the collection's per-folder tile key
+its per-window memory and its pause under a filter, the fold during a folder drag and its anchor,
+the path row's **Add folder**, **Expand all** and **Collapse all**, the status line that keeps its
+slot, the table's bands with their focus frame, reveal and Top, the grid's sticky bar and a caret
+across a zoom, the level held until the next has answered, the caret a heading is owed, the
+targets that take a drop only under the pointer, and the query cost. What follows is the
+wishlist's own. **A wishlist tile was already one wish**, so the collection's per-folder tile key
 changed nothing here.
 
 **Flatten defaulted *off* on this page, and that default is what made the empty page this list's
@@ -590,8 +595,8 @@ wish at and below the level, and Flatten is deleted on both pages rather than ke
 headings" mode — the spec's decision 2, argued in
 [the collection's section](collection-folders.md#flatten-was-deleted-not-hidden). **The wire kept
 its field**: `WishlistQuery::flatten` is still read, and *Export everything* and the shared-binder
-view's owned-and-wanted index still send `flatten: true` (`src/features/transfer/export/scope.ts:170`,
-`src/features/share/useOwnedIndex.ts:174`).
+view's owned-and-wanted index still send `flatten: true` (`useExportScope`'s sweep in
+`src/features/transfer/export/scope.ts`, and `src/features/share/useOwnedIndex.ts`).
 
 ### `WishlistQuery::shelves`
 
@@ -607,10 +612,19 @@ table over. `wishlist_shelves_win_over_folder_id_and_flatten`,
 `wishlist_an_unknown_shelf_id_returns_no_rows_and_no_error` and
 `a_wishlist_query_without_shelves_answers_exactly_what_it_did_before` are the other fences.
 
-**The page sends two lists, as the collection does** (`useWishlist.ts:247-255`): the list asks for
-the open shelves (`fetchIds`, `:339`), and the counts, the export sweep and the optimise sweep ask
-for every shelf at and below the level (`countIds`, riding `filters` at `:298`). Nothing is asked
-until the folder list has answered (`ready`, `:256`).
+**The page sends two lists, as the collection does** (`useWishlist`): the list asks for the open
+shelves (`fetchIds`), and the counts, the export sweep and the optimise sweep ask for every shelf at
+and below the level (`countIds`, riding `filters`). Nothing is asked until the folder list has
+answered (`ready`).
+
+**`hasMore` is read from the pages on screen, not from the query** (the final review, found while
+paging the table to a heading it had to show). It was `query.hasNextPage`, which a re-keyed list
+answers from the new key's data — and while `keepPreviousData` shows the previous key's pages there
+is none, so it read `false`. A move re-keys the list, because `fetchIds` changes order, so for that
+round trip the table took every shelf as complete, drew the moved heading straight after the loaded
+wishes, gave it the caret there, and lost the caret when the real first page landed. `hasMore` is
+`nextOffset` over the drawn pages now — `getNextPageParam`'s own rule, so nothing changes outside a
+placeholder. The collection's `complete` already read its drawn pages.
 
 **Timed only on the real dev database, and only in the first measurement** (`3efd50b0`, before the
 fix; the collection's harness, Windows, 2026-09-26, medians of twenty): 89 wishes, 87 of them at
@@ -634,15 +648,15 @@ filter included — by `wishlist::shelf_counts`:
 | `unpriced` | **wishes** (rows), the unit of the heading's `6 wishes` — the collection counts copies here |
 | `peek` | `c.id` off `priced_wishes`' join — a pinned wish's own printing, an any-printing wish's cheapest — so each is the id that wish's tile is drawn from; a genuine orphan has no picture and is left out. **Unfiltered**, for the collection's reason |
 
-**The loaded rows are a floor under a count, never a ceiling** (`effectiveCounts`,
-`src/features/wishlist/wishShelfPlan.ts:99-121`). The list and the counts are two reads settled by
+**The loaded rows are a floor under a count, never a ceiling** (`effectiveCounts` in
+`src/features/wishlist/wishShelfPlan.ts`). The list and the counts are two reads settled by
 one invalidation, so for a round trip either can be ahead; a shelf laid out from a count one short
 of the rows on screen would drop a wish the reader can see.
 
 ### **Wishes** and **Total cost** are summed from the counts
 
-`countTotals` (`wishShelfPlan.ts:135-146`) sums the **server's** counts — never the loaded rows —
-into the header's two figures (`WishlistPage.tsx:1705`, drawn at `:1835` and `:1848-1853`):
+`countTotals` (`wishShelfPlan.ts`) sums the **server's** counts — never the loaded rows — into the
+header's two figures (the page's `totals`, drawn in its figures band):
 `Wishes` is every shelf's `tiles`, and `Total cost` every priced shelf's `value`, with the unpriced
 wishes counted in its note. Both cover the whole wall — this level and every shelf below it, shut
 ones included — or, under a filter, everything that matches. **That is what turned `Wishes 0` into
@@ -653,19 +667,46 @@ un-counted to own up to. `Total cost` reads `—` while the wall holds no wishes
 
 ### Managed folders are shelves under **Managed by decks**
 
-`toShelfFolder` maps a folder with a `managedDeckId` to the kind `managed` (`wishShelfPlan.ts:37-46`),
+`toShelfFolder` (`wishShelfPlan.ts`) maps a folder with a `managedDeckId` to the kind `managed`,
 which `buildShelves` draws **at the root only**, under a `Managed by decks` label, by name, and shut
-by default. A managed heading draws its chevron, its title, a **Managed** pill
-(`ShelfHeading.tsx:308-315`) and its figures, and **nothing a hand write could be refused for** —
-no Add folder, no Rename, no `⋯`, no drag, and no card target that arms. `renderHeading` wires the
-first four only for a reader's own folder (`WishlistPage.tsx:1474-1566`), and every heading's card
-target comes from `cardDrops` (`:1460-1467`), which asks `canFile` — and `canFile` refuses a managed
-destination (`:1101-1109`). **An empty managed folder keeps its heading**,
-because a deck whose plan asks for nothing more is good news rather than a hidden shelf. The table
-draws `MANAGED_EMPTY` (*Nothing missing — this deck has every card its plan asks for.*) under it
-(`:1570-1578`); the grid draws the heading alone, since `layoutShelves` gives an empty row only to a
-reader's folder — so the two views say it differently. Standing inside one, `ManagedFolderNote`
-still says whose list it is.
+by default. A managed heading draws its chevron, its title, a **Managed** pill (`ShelfHeading`) and
+its figures, and **nothing a hand write could be refused for** — no Add folder, no Rename, no `⋯`,
+no drag, and no card target that arms. `renderHeading` wires the first four only for a reader's own
+folder, and every heading's card target comes from `cardDrops`, which asks `canFile` — and
+`canFile` refuses a managed destination (all three in `WishlistPage.tsx`).
+
+**An empty managed folder keeps its heading and draws one box under it, identical in both views**,
+because a deck whose plan asks for nothing more is good news rather than a hidden shelf.
+`layoutShelves` gives the `managed` kind an empty row exactly as it gives a reader's empty folder
+one, and the page's `renderEmpty` — the one function both views draw an empty row with — fills it
+with `WishManagedEmpty` (`WishShelfHeading.tsx`, marked `data-shelf-managed-empty`): the same
+96px place the dashed box takes, with no dash and no drop registration, because the folder takes
+no hand write and a dashed box would light up under a drag it can only refuse. **The sentence is
+per mode** — `managedEmptySentence` in `managed.ts`, reading the `MANAGED_EMPTY` table by the
+Compare view the deck follows (`DeckRow.managedWishlist`, off the deck list the page reads only
+where a managed folder exists):
+
+| Mode | The box says |
+| --- | --- |
+| `all` | *The two lists agree — everything this deck's plan asks for is already in the deck.* |
+| `missing` | *Nothing missing — this deck has every card its plan asks for.* |
+| `other` | *No substitutions — nothing in this deck stands in for a printing its plan asks for.* |
+| not known yet, or a deck this page cannot find | *Nothing here — this folder follows its deck and fills itself.* (`MANAGED_EMPTY_UNKNOWN`) |
+
+**The status line says nothing over it**: `statusOf` stays silent whenever the wall draws anything,
+headings or an empty box, because the box already says the folder is empty. Standing inside a
+managed folder, `ManagedFolderNote` still says whose list it is.
+
+**This is what the live pass's FAIL 13 changed** (2026-09-26, debug build, 1920×1080). Until then
+the table drew the `missing` mode's sentence under every empty managed folder and the grid drew the
+heading alone, so `Azula`, a deck following `all` with no wishes, read *Nothing missing* in one
+view and nothing in the other. The first pass also found an opened empty folder of the reader's own
+saying *Nothing filed here yet.* twice over in the grid — the status line and the dashed box — and,
+in the table, the status line over an empty table with **no box and so no drop target**. The
+re-check measured one answer everywhere: the dashed box alone in both views for the reader's folder,
+with a card dropped on the table's box filing into it, and for `Azula` the same words-only box in
+both views reading the `all` sentence. The final review then took out `statusOf`'s managed branch,
+which nothing could reach once the box said it (W-M8).
 
 ## What a wish costs, and which printing it is drawn as
 
@@ -1290,6 +1331,49 @@ nothing on a confirmation plainly on screen; find it by its text.
 **Confirmed and unchanged across all three passes**: the drop ring clears its scroller by exactly
 6.0 px on the first and last folder card mid-drag, 8 of 8 ringed; and the `⋯` menu opens at
 dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClick` exists for.
+
+### Folder shelves — a first pass, a fix wave and a re-check, 2026-09-26
+
+Both pages were driven together, on the **debug** build at 1920×1080, and
+[the collection's record](collection-folders.md#folder-shelves--a-first-pass-a-fix-wave-and-a-re-check-2026-09-26)
+has the method, the tallies (8 pass and 6 fail on the first pass, 6 pass and 2 fail on the
+re-check) and the fix wave's five commits. The staging here was `Want › Later › Much later ›
+Deep Four` and `Upgrades`, with every root wish filed, and later three managed wishlists: `Azula`
+following `all` with no wishes, and two following `other`. What was this page's own:
+
+- **The wall full** (check 1): `Tst`, `Want` with its nested shelves, then `Upgrades`, and the header
+  reading `Wishes 89 · Total cost $732.93`, equal to `wishlist_summary`. With the managed folders it
+  read `Wishes 156 · $2,126.33 · 1 unpriced`, so they are counted.
+- **The sticky bar** (check 2) flush at 0.0px over 22 wheel steps; its `Later` segment opened a level
+  reading `Wishes 18`, which is 10 + 5 + 3.
+- **A drag from the docked search** (check 3): `Upgrades` mounted at wheel step 20 already armed, and
+  the release filed into it.
+- **A card released on blank wall** (outside the list): on the first pass it went into
+  `Live Wish Root`, the heading 100px below; on the re-check it filed nothing, and neither did a
+  card on a path segment inside `Want`, or a folder band released over the table's card rows.
+- **The fold anchor** (check 4): the first pass's fold went from scrollTop 7828 to the folded
+  wall's clamp, 216. On the re-check, 9372 → 188 in one frame, with the heading in all 298 frames,
+  and Escape put it back at the pointer (674 against 674). One of this page's two drops settled 16px
+  low.
+- **A column change** (check 6): tile 18 lost the caret on the first pass and kept it on the
+  re-check both ways; tile 60, deep in the wall, still lost it.
+- **Arrows and a Shift range** (check 5) across `Upgrades`, the two-tile `Tst` and `Want`: Down from
+  17 to 21 to 23, and a Shift range from 19 to 23 spanning all three shelves.
+- **Paging** (check 12): all 156 wishes loaded across the page boundary with a 16px transient in the
+  scroll height that settled within about 400 ms — likely the same `Updating…` line the
+  re-check traced.
+- **Empty states** (check 13) — [the managed-folders section](#managed-folders-are-shelves-under-managed-by-decks)
+  has the first pass's failure and the re-check's single answer.
+- **Walking up a level** (check 14): the first pass drew `Wishes 18 · $81.97` for up to 106 ms on a
+  walk from `Later` to `Want`, which is `Wishes 68 · $510.46`. On the re-check the walks from
+  `Deep Four`, `Much later` and `Later` each switched in one frame, at 137, 142 and 180 ms.
+- **The caret** (check 8): right in every case on the re-check, but after a far Move up and after
+  the commit of Add folder in `Want` the heading landed half under the sticky bar, the focused
+  control's ring visibly cut — the `Updating…` line again.
+
+The sidebar's stray drop (the re-check's first new finding) was found on this page, adding a wish at
+the root from a card held on `Want`'s first tile; it applies to both. **None of the final review's
+fixes had been driven in the shipped window when this was written.**
 
 ## Where the code is
 

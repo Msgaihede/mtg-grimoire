@@ -20,8 +20,13 @@
 //!   default, so "back to the default" deletes the entry rather than storing the default's value,
 //!   which would outlive a later change of what the default is.
 //! * **A stale id is stored and answered, never pruned.** A folder deleted in another window or
-//!   on another device leaves an entry nothing matches; the page ignores it (Review Focus 5), and
-//!   pruning here would mean reading the folder tables, which this module has no reason to.
+//!   on another device leaves an entry behind; while no folder has that id the page ignores it
+//!   (Review Focus 5), and pruning here would mean reading the folder tables, which this module
+//!   has no reason to. **But the id can come back**: `collection_folders.id` and
+//!   `wishlist_folders.id` are `INTEGER PRIMARY KEY` without `AUTOINCREMENT`, so SQLite hands the
+//!   next folder `max(id) + 1`, which reuses a deleted highest id. A new folder would then inherit
+//!   the deleted one's fold, so both pages clear any override stored under the id a create answers
+//!   (final review R-M2), and a create whose id has nothing stored writes nothing here.
 //! * **Two refusals, both sentences, and the whole change set is refused**: a page that is not one
 //!   of [`PAGES`], and a key that is not a folder id — decimal digits, `0` for Not sorted.
 //! * **Per device and never synced**: `app_meta` is on no capture spec. Each window reads the row

@@ -1433,9 +1433,10 @@ export function DecksPage() {
                   rename field and a delete confirmation and false of a menu. */}
               {openNode !== null && (
                 <div className="relative">
-                  {/* **`aria-haspopup="menu"` and no `aria-expanded`** — `WishFolderCard`'s
-                      ruling for its reasons, and this is the second plain-click menu trigger in
-                      the app rather than the first. The popup *kind* is a fact about this
+                  {/* **`aria-haspopup="menu"` and no `aria-expanded`** — the ruling the deleted
+                      `WishFolderCard` made first and a shelf heading's `⋯` (`ShelfHeading`)
+                      carries now, for its reasons; this was the second plain-click menu trigger
+                      in the app rather than the first. The popup *kind* is a fact about this
                       button and is free. The expanded *state* is `ContextMenuProvider`'s: it
                       holds the one open menu and publishes only `openMenu`/`closeMenu`, and a
                       static `aria-expanded="false"` would be an assertion that is wrong for

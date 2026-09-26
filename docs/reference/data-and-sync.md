@@ -498,16 +498,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   different one. Grep the *calls* rather than the `K_*` constants: `maintenance.rs` names two of
   those and both are `sync_meta` keys. What is worth knowing without grepping is the split: most
   of these rows are a reader's *choice* (`marketplace`, `printing_group_by`, `nav_collapsed`,
-  `card_zoom`, `list_view`, `flatten`, `search_open`), one is a *memory* of what they last
+  `card_zoom`, `list_view`, `search_open`, `shelf_folds`), one is a *memory* of what they last
   did (`last_deck_format`), and the rest are the app's own bookkeeping (the update check's three,
   `scryfall_penalty_until`). **None of them belongs in `sync_meta`** — a row in that one the sync
   did not write makes every later timing claim a fiction.
+  **`flatten` was on that first list until 2026-09-26**, when folder shelves deleted the Flatten
+  switch, its `flatten.rs` module and both commands. Nothing reads or writes the row now and no
+  rung deletes it — the same standing as `deck_search_open` below. **`shelf_folds` is the row that
+  arrived in the same change**: `shelffolds.rs`, one JSON object per page of folder id → folded,
+  holding only the shelves a reader moved off their default
+  ([collection-folders.md](collection-folders.md#shelves-2026-09-26)).
   **`search_open` replaced `deck_search_open` on 2026-09-07 and no rung was spent on it**, which
   is the shape to copy the next time a one-surface preference grows a second surface. It is a JSON
   object of section → bool (`{"deck":true,"collection":false}`), `searchopen.rs`, and it exists
   because the collection and the wishlist each grew a docked search column of their own: three
   rows, six commands and three query keys for one fact, against one keyed map — which is what
-  `zoom`, `listview` and `flatten` already are. **The old row is carried across by the read rather
+  `zoom` and `listview` already are (and `flatten` was, until 2026-09-26; `shelf_folds` is the
+  same shape one level deeper). **The old row is carried across by the read rather
   than by a migration.** `searchopen::stored` falls back to `deck_search_open` when the map has no
   `deck` entry, and **the bridge decays on its own**: nothing writes the legacy row again, so the
   first press stores the map and the fallback is only ever consulted for a reader who has not

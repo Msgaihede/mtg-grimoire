@@ -1015,7 +1015,8 @@ layer.
     overlap, `collisionPriority` decides them, and without one they are separated by distance —
     which is why an element with no measured rectangle in jsdom can win a drop the pointer never
     went near. `frontend-design.md`'s dnd-kit section is the measured version, and
-    `CollectionFolderCard.tsx`, `ParentFolderCard.tsx`, `dnd.ts` and `StackView.tsx` each carry it
+    `features/shelves/useShelfDrag.ts` (where the note moved from `CollectionFolderCard.tsx` with
+    folder shelves, 2026-09-26), `ParentFolderCard.tsx`, `dnd.ts` and `StackView.tsx` each carry it
     at their own site.
   - **The heading is the draggable and the grip only says where the press may start** — the
     dialog's `mousedown`-in-capture plus `canDrag` arrangement, kept verbatim. **It is a choice
@@ -3284,9 +3285,11 @@ layer.
   2.5.3). **The suite found it, and only the suite could**: the collision exists only while a
   dialog is open, so nothing about *reading* the row would have shown it. A name collision is a
   property of what is on screen together, so the surfaces to check are the layers that can be up at
-  once. The trigger carries `aria-haspopup="menu"` and **no `aria-expanded`** — `WishFolderCard`'s
-  ruling: the popup kind is this button's fact and free, the expanded state is
-  `ContextMenuProvider`'s, and a static `false` is wrong for exactly as long as the menu is up.
+  once. The trigger carries `aria-haspopup="menu"` and **no `aria-expanded`** — the ruling the
+  deleted `WishFolderCard` made first and a shelf heading's `⋯` (`features/shelves/ShelfHeading`)
+  carries since folder shelves (2026-09-26): the popup kind is this button's fact and free, the
+  expanded state is `ContextMenuProvider`'s, and a static `false` is wrong for exactly as long as
+  the menu is up.
   **`{ kind: "moveFolder" }` left `panels.ts` and must not come back**: the picker is the menu's
   lazy `Move to` submenu, drawn by the menu panel at the app root, so there is no layer of this
   view's own for the arm to be about. *A picker that lives in a menu is not a panel.* The delete

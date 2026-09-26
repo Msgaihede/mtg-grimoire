@@ -77,11 +77,11 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **184 commands of 240**, re-derived 2026-09-26 and correct only for as long as nobody adds one;
-  the script is the answer, this line is a reminder that there is one. (It read **115 of 156**,
-  then **120 of 155**, then **123 of 160**, then **139 of 176**, then **144 of 185**, each written
-  by hand beside a script that prints both — and each pair was already stale when the next branch
-  found it, six times on one line now. Run the script.) Of the 184 routed, the first four are the
+- **How many commands the browser can call is `node scripts/routed-census.mjs`'s to answer, and
+  this line stopped writing the number on 2026-09-27.** It read **115 of 156**, then **120 of 155**,
+  then **123 of 160**, then **139 of 176**, then **144 of 185**, then **184 of 240** — each written
+  by hand beside a script that prints both, and each pair already stale when the next branch found
+  it. The last one lasted a day. Run the script. Of the routed commands, the first four are the
   browse — `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
   thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen), the
@@ -102,22 +102,21 @@ the real 43-column one, `raw` included**.
   `deck_missing_plan`, `deck_missing_to_collection`, `mark_colors` and `set_mark_color`.
   **Folder shelves (2026-09-26) routed four and deleted two**: `collection_shelf_counts`,
   `wishlist_shelf_counts`, `shelf_folds` and `set_shelf_folds` in, and the `flatten_state` /
-  `set_flatten_state` pair out with the `flatten` module — **+2 crate, +2 routed, +0 unrouted**.
-  The rest of the climb from 144 of 185 — **+53 crate, +38 routed, +15 unrouted** — is other
-  branches' work between 2026-09-08 and 2026-09-26 and is not itemised here.
-  ⚠️ **The script's routed line is one high today, and 184 is the number to trust.**
-  `node scripts/routed-census.mjs` prints `named in COMMANDS 185` and then flags `wasm` as *in
-  COMMANDS but not a command anywhere*: its `"[a-z_0-9]+"` match reads the
-  `cfg(not(target_family = "wasm"))` inside a comment in the array literal. `route.rs`'s
-  `COMMANDS.len()` assertion and the `awk` count its comment gives (`awk '/^pub const COMMANDS/,/^\];/'
-  src-tauri/src/web/route.rs | grep -c '^\s*"'`) both say **184**, and 240 less the script's own
-  **56** unrouted is 184 too.
+  `set_flatten_state` pair out with the `flatten` module. Everything else that moved the count
+  after 2026-09-08 is other branches' work and is not itemised here.
+  **The script read one high for a day, and does not any more.** Its name reader matched every
+  quoted word inside the `COMMANDS` literal, so the `cfg(not(target_family = "wasm"))` in a
+  comment there counted `wasm` as a route, and it flagged `wasm` as *in COMMANDS but not a
+  command anywhere*. Since the folder-shelves branch's final review (R-M8) `routedNames` cuts each
+  line at `//` before it matches, and `scripts/routed-census.test.mjs` pins that on a fixture with
+  a quoted word in a full-line comment, a trailing one and a commented-out name. `route.rs`'s
+  `COMMANDS.len()` assertion is the other count, and the two now agree.
   Adding one, once its module is in the
-  map, is a line in `web::route::COMMANDS` and a `match` arm. **What the remaining 56 are, and
-  why none of them is an oversight, is tabulated at the foot of this file — for 41 of them.** That
-  table was last re-derived at 144 of 185, and the fifteen unrouted since — `scanner.rs`'s eight
-  more, `share/commands.rs`'s four, `desktop.rs`'s `window_count` and `window_new`, and
-  `startup.rs`'s `startup_status` — are not in it yet. The script prints all 56, grouped by file.
+  map, is a line in `web::route::COMMANDS` and a `match` arm. **What the commands the browser does
+  not call are, and why none of them is an oversight, is tabulated at the foot of this file — as
+  of 2026-09-08.** The ones unrouted since — more of `scanner.rs`, `share/commands.rs`'s
+  publisher, `desktop.rs`'s `window_count` and `window_new`, and `startup.rs`'s
+  `startup_status` — are not in that table yet. The script prints every one, grouped by file.
 
   `route.rs`'s `every_advertised_command_is_actually_routed` pins the routed number and is the
   reason it cannot rot; the crate total is prose and has drifted before, so re-count it in the
@@ -184,12 +183,11 @@ record in [text-mirror.md](text-mirror.md#web-and-android-the-same-files-as-one-
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is **184 of 240** — `node scripts/routed-census.mjs`, re-derived
-2026-09-26, whose routed line reads one high for the reason *What the web target is* gives. (This
-sentence said 115 of 156, then 120 of 155, then 123 of 160, then 139 of 176, then 144 of 185, the
-same hand-written
-pair *What the web target is* carried; two copies of a number a script prints is two chances to be
-wrong, and both have now been wrong five times.)
+`web::route::COMMANDS`, and how many that is is `node scripts/routed-census.mjs`'s to say. (This
+sentence said 115 of 156, then 120 of 155, then 123 of 160, then 139 of 176, then 144 of 185, then
+184 of 240, the same hand-written pair *What the web target is* carried; two copies of a number a
+script prints is two chances to be wrong, and both went wrong together every time. It stopped
+writing one on 2026-09-27.)
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -304,9 +302,9 @@ were not sharing one database — the second had silently been given a different
 
 ## What is not built yet
 
-- **The other 41 commands**, and the modules in the right-hand column above. (This line read
-  **132** from the PR-10 era until 2026-09-08, when it was re-derived with the rest of this
-  file's counts; the unrouted number has been 37 and is 41 with the scanner's four.)
+- **The commands `COMMANDS` does not name** — `node scripts/routed-census.mjs` lists them by
+  file — and the modules in the right-hand column above. (This line read **132** from the PR-10
+  era, then **41** from 2026-09-08, and stopped carrying a number on 2026-09-27.)
 - **The image cache.** On web it is Cache Storage, which is a rewrite rather than a port.
 - **The price feeds**, and **Mana Pool is unavailable on web at all** (spec §5.3): it sends no
   `Access-Control-Allow-Origin`. Card Kingdom does. *(PR 11 built the path; the CORS finding
@@ -921,12 +919,12 @@ backend.
 
 ## Where PR 10 got to: 144 of 185 routed, and what the other 41 are
 
-**Re-derived 2026-09-26, on the folder-shelves branch: 240 in the crate, 184 routed, 56 not.** This
-heading, the three-row table and the row breakdown below are 2026-09-08's. That branch corrected
-the figures at the top of this file and did not re-tabulate the fifteen unrouted commands other
-branches added since, which *What the web target is* names. ⚠️ **`--check 184` exits 1 and
-`--check 185` exits 0 today**, because the script reads a word in a comment inside `COMMANDS` as a
-route — the same paragraph says which.
+**This heading, the three-row table and the row breakdown below are 2026-09-08's, and today's
+figures are the script's.** Nothing here has been re-tabulated since: the commands other branches
+left unrouted after that date, which *What the web target is* names, are not in the rows below.
+**The script's routed line read one high when the folder-shelves branch ran it on 2026-09-26** — it
+counted a word in a comment inside `COMMANDS` as a route — and it has not since that branch's
+final review (R-M8) made it read `COMMANDS` with its comments cut away.
 
 **Do not hand-count this — run `node scripts/routed-census.mjs`.** It walks every
 `#[tauri::command]` in the crate (both attribute spellings, skipping doc-comment mentions),
@@ -1421,10 +1419,11 @@ caller's test is *presence*: a bare `boolean` would make `updateCheck(false)` �
 throttle-honouring call — indistinguishable from every other command in the app, and every
 `search_cards` would be posted as an update check.
 
-**`node scripts/routed-census.mjs` reads 144 / 41, and the table above says why.** It counts
-`COMMANDS` membership, which since PR 11 is not the same question as "does the web target answer
-this". Five of the 41 are served through `glue.rs`. The routed half moved for the first time in
-three changes on 2026-09-03, and by exactly the two arms #358 added — PR 11 diverted names rather
+**`node scripts/routed-census.mjs` read 144 / 41 on 2026-09-08, and the table above says why.** It
+counts `COMMANDS` membership, which since PR 11 is not the same question as "does the web target
+answer this". Five of that day's 41 are served through `glue.rs`. The routed half moved for the
+first time in three changes on 2026-09-03, and by exactly the two arms #358 added — PR 11 diverted
+names rather
 than adding arms, and the cover work deleted a command that was never in `COMMANDS`.
 
 ⚠️ **This line said the script "still reads 120 / 37", which was true when written and was

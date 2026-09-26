@@ -4733,6 +4733,13 @@ rows below.
 | Decks wall (a deck tile, `DeckTile`) | `<li>` | none | none | **no** |
 | Any card wall (`CardGrid`: search, collection, wishlist, tags, the deck panel) | `<div>` | none | `-1` | **no** |
 
+**History (2026-09-26):** the first two rows describe surfaces folder shelves deleted. A folder on
+either page is now a shelf heading, whose drag source is the heading's row `<div>`
+(`ShelfHeading`), carrying `tabindex="-1"` where the heading has a `⋯` so the menu can hand the
+caret back, and no role — so Tab still does not reach it, and `lib/dndAccessibility.test.tsx`
+asserts the heading where it asserted the cards. The rest of the table is the 2026-08-28
+measurement as it stood.
+
 **The two bolded rows are the correction; four of the others were not on the plan's list at all.**
 The 3c plan tabulated four surfaces and concluded that the category grip is the only tab-reachable
 draggable in the app. It is not, and the ones it missed are the most numerous:
@@ -5637,7 +5644,7 @@ is prose about something else.
 | **Ctrl+wheel — the card zoom** | `lib/useCardZoomGesture.ts:82–88`: one native `wheel` listener at `{ passive: false }` that returns unless `e.ctrlKey`, then `preventDefault()`s and calls `zoomCards(section, e.deltaY < 0 ? 1 : -1)`. It steps the sixteen-stop ladder in `lib/cardZoom.ts:79–81` for one of the eight sections at `:125–134`. | **Nothing. The grep is below, and it is the finding this round rests on.** |
 | **Ctrl/⌘-click** | `readModifiers` (`lib/multiSelect.ts:70–79`) sets `toggle` from `ctrlKey \|\| metaKey`; `applySelect` (`:80` onward) toggles that one key in or out of the set. It reaches a surface through `useCardSelection`'s `pick` (`lib/useCardSelection.ts:79`, `:125`), which returns whether the press was a selection. | **Nothing.** There is no "Select all", no checkbox column and no selection mode anywhere in the tree — `grep -rni "select all\|selectAll\|selectRange"` outside tests and stories returns no lines. `CardGrid`'s arrow walk returns early on **any** modifier (`features/search/CardGrid.tsx:969`), so the wall's keyboard path offers no chord either. |
 | **Shift-click** | The same `readModifiers`, setting `range` from `shiftKey`; `applySelect` replaces the set with the run from the anchor, and Ctrl+Shift adds that run instead. Four cases and no others, Shift outranking Ctrl (`lib/multiSelect.ts:80–110`). | As above. |
-| **Right-click** | `useContextMenu`'s `menu(build)` (`components/menu/useContextMenu.ts:151`), spread as `onContextMenu` at 14 shipped attachments over 9 handler factories, above a document-level suppressor at `components/menu/ContextMenuProvider.tsx:67`. It is how a card, a table row, a folder, a deck tile, a pile heading and the card pane are acted on. | **Two doors, and neither belongs to touch.** `menuKey` answers Shift+F10 and the ContextMenu key (`useContextMenu.ts:153–162`) — a keyboard. `menuClick` opens the same menu from a plain click on a `⋯` trigger (`:182–185`) — and it exists at exactly **two** surfaces, the collection's and the wishlist's folder cards (`features/collection/CollectionPage.tsx:1322` and `features/wishlist/WishlistPage.tsx:862`, drawn at `CollectionFolderCard.tsx:244` and `WishFolderCard.tsx:229`). Every other menu in the app has no plain-click door. |
+| **Right-click** | `useContextMenu`'s `menu(build)` (`components/menu/useContextMenu.ts:151`), spread as `onContextMenu` at 14 shipped attachments over 9 handler factories, above a document-level suppressor at `components/menu/ContextMenuProvider.tsx:67`. It is how a card, a table row, a folder, a deck tile, a pile heading and the card pane are acted on. | **Two doors, and neither belongs to touch.** `menuKey` answers Shift+F10 and the ContextMenu key (`useContextMenu.ts:153–162`) — a keyboard. `menuClick` opens the same menu from a plain click on a `⋯` trigger (`:182–185`) — and on the day of this census it existed at **two** surfaces, the collection's and the wishlist's folder cards (`features/collection/CollectionPage.tsx:1322` and `features/wishlist/WishlistPage.tsx:862`, drawn at `CollectionFolderCard.tsx:244` and `WishFolderCard.tsx:229`). **Both cards went with folder shelves on 2026-09-26** and each page's shelf headings carry the `⋯` now (`ShelfHeading`), and other `⋯` triggers have joined since — `grep -rn "menuClick(" src/` is the census rather than a count here. A menu with no `⋯` still has no plain-click door. |
 | **Resting a pointer** | Four dwell timers, each keyed on a pointer that arrives and does not leave: `TOOLTIP_OPEN_MS` 400 (`components/tooltip/TooltipProvider.tsx:17`), `SUBMENU_HOVER_MS` 120 (`components/menu/ContextMenu.tsx:48`), ~~`PREVIEW_DWELL_MS` 250 (`features/card/PrintingPreview.tsx:25`)~~ — **deleted 2026-09-03, so three** — and `STACK_OPEN_DWELL_MS` 80 (`features/decks/CardStack.tsx:271`). | Per site, in the table above. **The tooltip's own mechanics deserve stating precisely, and they were not measured on hardware for this census.** The binding is `onPointerEnter`, not `onMouseEnter` (`components/tooltip/useTooltip.ts:113`), and a touch tap *does* dispatch `pointerenter` — so the 400ms timer is armed. What happens next has three parts: the provider's document-level `pointerdown` handler calls `hideNow` (`TooltipProvider.tsx:190–195`), which clears the *close* timer and hides what is open but does **not** clear the open timer; `pointerleave` at lift-off calls `leave`, which does clear it (`:155–160`); and the `focus` door is fenced on `anchor.matches(":focus-visible")` (`:141`), which a pointer press makes false. Whether a deliberate press-and-hold past 400ms puts a panel up is therefore a **reading somebody owes on a device**, and not a conclusion this census may draw from source. |
 
 ### The zoom is the one with no other door
@@ -6215,6 +6222,15 @@ cache since this database has neither).
 frame by frame, and nothing here was read on Android or in the browser build.
 
 ## The folder wall names its own folders (2026-09-03) — measured over the built CSS, not in the window
+
+**History (2026-09-26):** the folder wall this section measures is gone — folder shelves replaced
+the band of folder cards with a heading per folder, `NewFolderCard` is deleted, the `openPanel`
+clause below lost its `flatten` arm, and the naming field is drawn on a 40px heading at
+`FolderNameField`'s `size="heading"`. The field's live pass on a heading (debug build, 2026-09-26)
+and its fix are recorded in
+[collection-folders.md](collection-folders.md#what-driving-the-shipped-window-found). What follows is
+the 2026-09-03 record of the tile shapes. `size="tile"`, the default, still draws them, but only
+`FolderNameField`'s own stories do: `ShelfHeading` is the component's one app caller.
 
 The Collection and Wishlist walls were rearranged from a Claude Design mock, and **the geometry it
 promised was measured the same day**: 2026-09-03, in **headless Edge** (`msedge --headless=new`)
@@ -7056,7 +7072,8 @@ word stays the first word of the name (WCAG 2.5.3, so "click Folder" still works
 shown it.** That is the general lesson rather than a fact about this button: a name collision is a
 property of what is on screen *together*, so the surface to check is every layer that can be up at
 once, and the suite is the only thing that walks them all. The trigger carries
-`aria-haspopup="menu"` and **no `aria-expanded`** — `WishFolderCard`'s ruling, for its reasons: the
+`aria-haspopup="menu"` and **no `aria-expanded`** — the ruling the deleted `WishFolderCard` made
+first and a shelf heading's `⋯` (`ShelfHeading`) carries since 2026-09-26, for its reasons: the
 popup *kind* is a fact about this button and is free, the expanded *state* belongs to
 `ContextMenuProvider`, and a static `aria-expanded="false"` is an assertion that is wrong for
 exactly as long as the menu is up.

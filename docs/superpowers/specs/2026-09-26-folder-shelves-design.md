@@ -309,7 +309,11 @@ has moved off their default** (§3.4). Read and written the `useSearchOpen` way 
 `staleTime: Infinity`, an optimistic `setQueryData`, then the IPC write, prefetched in `AppShell`. It
 joins **the per-window list** in `docs/reference/multi-window.md` (~lines 224–235) and must not sit
 under a query-key root `lib/crossWindow.ts` maps to a table (~237–243). Ids of deleted folders are
-ignored rather than pruned.
+ignored rather than pruned — **while no folder has the id again.** Both folder tables key on
+`INTEGER PRIMARY KEY` without `AUTOINCREMENT`, so SQLite can hand a deleted highest id to the next
+folder made, which would inherit its fold. *(Added in the final review, R-M2.)* So a create clears
+any override stored under the id it answers, on both pages, and a create with nothing stored there
+writes nothing.
 
 ### 5.8 `VirtualTable` gains heading rows
 
