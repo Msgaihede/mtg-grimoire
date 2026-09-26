@@ -49,12 +49,13 @@
   // slash on either side fails the exchange with `invalid_grant`, which says nothing about a
   // path.
   //
-  // **`PATREON_CLIENT_ID` and `PATREON_CAMPAIGN_ID` are deliberately absent rather than empty.**
-  // Neither real value exists yet, and a guess in this file is a guess that gets deployed
-  // against; `required()` in `patreon.ts` turns an unset binding into a 500 that names it. Both
-  // are public and belong here beside `RELAY_BASE` the day they are known — as `vars`, not as
-  // secrets. The three that are never committed, set with `wrangler secret put`, are
-  // `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET` and `RELAY_HMAC_KEY`.
+  // **`PATREON_CLIENT_ID` and `PATREON_CAMPAIGN_ID` are the real values**, public for the same
+  // reason and so `vars` rather than secrets. `PATREON_CLIENT_ID` must equal
+  // `entitlement::PATREON_CLIENT_ID` in the Rust byte for byte: the app builds the authorize URL
+  // and the relay builds the code exchange, and Patreon compares the two. `required()` in
+  // `patreon.ts` still turns a binding removed from here into a 500 that names it. The three that
+  // are never committed, set with `wrangler secret put`, are `PATREON_CLIENT_SECRET`,
+  // `PATREON_WEBHOOK_SECRET` and `RELAY_HMAC_KEY`.
   "vars": {
     "RELAY_BASE": "https://mtg-grimoire-relay.denmark-east.workers.dev",
     "PATREON_CLIENT_ID": "UFkUESN45GFyy36WQBaOpedWwFvtcOfujPZz_s8Yhu54z4I7-eA8Zg9lv-FEXqV4",
