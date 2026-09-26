@@ -99,6 +99,17 @@ pub const FOLDER_NOT_YOURS: &str = "That folder is the app's own and is not your
 /// second caller meets.
 pub const FOLDER_IS_LOCKED: &str = "That folder is locked. Unlock it before deleting it.";
 
+/// What [`delete_folder`] says about an unlocked folder with a **locked folder somewhere inside
+/// it** — [`FOLDER_IS_LOCKED`]'s refusal, read downward.
+///
+/// Deleting re-files the whole sub-tree to the root, so deleting `Binder` scatters the copies in
+/// a locked `Binder/Graded` exactly as deleting `Graded` would — back among the ones the app
+/// offers a deck, which is the one thing the lock exists to prevent. A sentence of its own
+/// because [`FOLDER_IS_LOCKED`]'s "unlock it" would send the reader to the folder they pressed,
+/// which carries no lock at all.
+pub const FOLDER_HOLDS_LOCKED: &str =
+    "A folder inside that one is locked. Unlock it before deleting this one.";
+
 /// What [`set_entry_folder`] says about the row it was **given**, when that row is sitting in a
 /// deck's group.
 ///
@@ -645,6 +656,18 @@ pub fn reorder_folders(
     list_folders(conn)
 }
 
+/// The folder `?1` and every folder beneath it, as a `WITH` clause naming `doomed(id)` — what
+/// [`delete_folder`] re-files, and what it asks [`FOLDER_HOLDS_LOCKED`]'s question of. Spelled
+/// once so the refusal and the re-filing are about the same folders.
+///
+/// **`UNION` and never `UNION ALL`**, [`LOCKED_FOLDER_IDS`]' reason: a `parent_id` cycle that
+/// arrived some other way converges instead of looping.
+const DOOMED_FOLDERS: &str = "WITH RECURSIVE doomed(id) AS (
+             SELECT ?1
+             UNION
+             SELECT f.id FROM collection_folders f JOIN doomed d ON f.parent_id = d.id
+         )";
+
 /// Delete a folder. **Does not delete the cards in it** — they surface at the root, filed
 /// nowhere, still exactly as they were. Sub-folders go with it. Like
 /// [`crate::deck_meta::delete_folder`] and [`crate::deck::delete_deck`], an id that resolves to
@@ -653,7 +676,8 @@ pub fn reorder_folders(
 /// when its deck does and the removed-cards folder is the app's own drawer.
 ///
 /// **And a folder the reader has set aside is the other** — [`FOLDER_IS_LOCKED`], on the
-/// *effective* lock, checked before anything below happens. Everything this function does after
+/// *effective* lock, checked before anything below happens, and [`FOLDER_HOLDS_LOCKED`] when the
+/// lock is on a folder anywhere beneath this one instead. Everything this function does after
 /// that is the un-filing described here, which is what a lock exists to prevent: rename and move
 /// disturb no card and are allowed on a locked folder for exactly that reason.
 ///
@@ -701,6 +725,23 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
     if effectively_locked(conn, id)? {
         return Err(FOLDER_IS_LOCKED.to_owned());
     }
+    // **And downward** ([`FOLDER_HOLDS_LOCKED`]): every folder beneath this one is re-filed by
+    // the same press, so a locked one anywhere in [`DOOMED_FOLDERS`] is scattered as surely as
+    // this one would be. Asked of the same sub-tree the re-filing below walks, so the two cannot
+    // disagree about which folders the press reaches.
+    let holds_lock: bool = conn
+        .query_row(
+            &format!(
+                "{DOOMED_FOLDERS}
+                 SELECT EXISTS (SELECT 1 FROM doomed WHERE id IN ({LOCKED_FOLDER_IDS}))"
+            ),
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if holds_lock {
+        return Err(FOLDER_HOLDS_LOCKED.to_owned());
+    }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // Not [`user_folder`]: an id that is not there is a **success** here, so the two halves of
     // that helper come apart. Only a folder that exists and is the app's is refused.
@@ -725,16 +766,12 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
     // the planner.
     let filed: Vec<i64> = {
         let mut stmt = tx
-            .prepare(
-                "WITH RECURSIVE doomed(id) AS (
-                     SELECT ?1
-                     UNION
-                     SELECT f.id FROM collection_folders f JOIN doomed d ON f.parent_id = d.id
-                 )
+            .prepare(&format!(
+                "{DOOMED_FOLDERS}
                  SELECT e.id FROM collection_entries e
                   WHERE e.folder_id IN (SELECT id FROM doomed)
-                  ORDER BY e.id",
-            )
+                  ORDER BY e.id"
+            ))
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map(params![id], |r| r.get(0))
@@ -2167,6 +2204,55 @@ mod tests {
         );
         assert_eq!(delete_folder(&conn, rares).unwrap_err(), FOLDER_IS_LOCKED);
         assert_eq!(folder_of(&conn, card), Some(rares), "and it wrote nothing");
+    }
+
+    /// **And the same refusal read downward**: the delete re-files every folder beneath the one
+    /// pressed, so a locked folder *inside* it is scattered by the press just as surely as a
+    /// locked one above it. The lock sits two levels down, so a check of the direct children
+    /// alone would miss it; `Vault` is locked elsewhere in the cabinet and must not block
+    /// anything, which is what the delete at the end proves once `PSA` is unlocked.
+    #[test]
+    fn a_folder_holding_a_locked_one_refuses_to_be_deleted() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap().id;
+        let graded = create_folder(&conn, Some(binder), "Graded").unwrap().id;
+        let psa = create_folder(&conn, Some(graded), "PSA").unwrap().id;
+        let vault = create_folder(&conn, None, "Vault").unwrap().id;
+        let loose = insert_entry(&conn, "bolt", Some(binder), 1);
+        let slabbed = insert_entry(&conn, "sol", Some(psa), 1);
+        set_folder_locked(&conn, psa, true).unwrap();
+        set_folder_locked(&conn, vault, true).unwrap();
+
+        for pressed in [binder, graded] {
+            assert!(!effectively_locked(&conn, pressed).unwrap());
+            assert_eq!(
+                delete_folder(&conn, pressed).unwrap_err(),
+                FOLDER_HOLDS_LOCKED
+            );
+        }
+        assert_eq!(
+            user_folders(&conn).len(),
+            4,
+            "every folder is still standing"
+        );
+        assert_eq!(
+            folder_of(&conn, slabbed),
+            Some(psa),
+            "the set-aside copy stayed put"
+        );
+        assert_eq!(
+            folder_of(&conn, loose),
+            Some(binder),
+            "and so did everything else"
+        );
+
+        set_folder_locked(&conn, psa, false).unwrap();
+        delete_folder(&conn, binder).unwrap();
+        assert_eq!(
+            folder_of(&conn, slabbed),
+            None,
+            "unlocked, the press goes through"
+        );
     }
 
     /// **Rename and move disturb no card, so neither is refused** — a locked folder is still the

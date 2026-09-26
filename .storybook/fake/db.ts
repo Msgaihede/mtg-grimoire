@@ -12170,6 +12170,11 @@ const FOLDER_NOT_YOURS = "That folder is the app's own and is not yours to chang
  */
 const FOLDER_IS_LOCKED = "That folder is locked. Unlock it before deleting it.";
 /**
+ * `collection_folders::FOLDER_HOLDS_LOCKED` — {@link FOLDER_IS_LOCKED} read downward: an unlocked
+ * folder whose sub-tree holds a locked one, which the same delete would scatter.
+ */
+const FOLDER_HOLDS_LOCKED = "A folder inside that one is locked. Unlock it before deleting this one.";
+/**
  * `collection_folders::ENTRY_IN_A_DECK` — what {@link collection_set_folder} says about the row
  * it was **given**, when that row is sitting in a deck's group.
  *
@@ -15006,6 +15011,11 @@ export function writeHandlers(db: FakeDb) {
             grew = true;
           }
         }
+      }
+      // {@link FOLDER_HOLDS_LOCKED}: the same press re-files every folder beneath this one, so a
+      // lock anywhere in the sub-tree refuses it too — before anything below moves.
+      if ([...doomed].some((id) => collectionFolderLocked(db, id))) {
+        throw refuse(FOLDER_HOLDS_LOCKED);
       }
       // Ids rather than rows, taken before anything moves: a merge replaces
       // `db.collectionEntries` with a filtered copy, so a held reference is a row that is no

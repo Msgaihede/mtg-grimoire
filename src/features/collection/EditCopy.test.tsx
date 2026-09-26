@@ -109,15 +109,20 @@ describe("readPrice", () => {
     expect(readPrice("$")).toEqual({ kind: "unreadable" });
     // A negative is not a price. The column has no CHECK, so this fence is the only one there is.
     expect(readPrice("-3")).toEqual({ kind: "unreadable" });
-    // A German `1.234,56` is refused rather than guessed at: stripping the dots would record a
-    // fifth of a cent, and a number silently wrong is worse than a field that took nothing.
-    expect(readPrice("1.234,56")).toEqual({ kind: "unreadable" });
+    // Malformed grouping is refused rather than guessed at — a number silently wrong is worse
+    // than a field that took nothing. (A German `1.234,56` is well-formed and reads as 1234.56:
+    // with both separators present, the later one is the decimal point.)
+    expect(readPrice("1,2,3")).toEqual({ kind: "unreadable" });
+    expect(readPrice("1.234,56")).toEqual({ kind: "number", value: 1234.56 });
+    // And a lone dot before three digits is refused: `1.500` is fifteen hundred in a Danish hand
+    // and one and a half in this app's own export, and guessing either is a thousand-fold error.
+    expect(readPrice("1.500")).toEqual({ kind: "unreadable" });
   });
 
   /** The arithmetic is `AddToCollection.parsePurchasePrice`'s, verbatim, and these are the cases
    *  that say so — if the two ever disagree, one of them is broken. */
   it("reads what the app itself would have written", () => {
-    // A lone comma is a decimal point.
+    // A lone comma before one or two digits is a decimal point.
     expect(readPrice("12,50")).toEqual({ kind: "number", value: 12.5 });
     expect(readPrice(" 12.50 ")).toEqual({ kind: "number", value: 12.5 });
     // The currency symbol is stripped, so the hint a reader was shown can be retyped verbatim.
@@ -242,6 +247,39 @@ describe("EditCopy", () => {
     expect(save()).toHaveAttribute("aria-disabled", "true");
   });
 
+  /**
+   * **A price this app stored is never one its own box refuses.** A lone dot before three digits
+   * is refused as ambiguous, and `String(1.125)` is exactly that — so a row priced with three
+   * decimals (an older build, a sync, `1.1250` typed into the add popup) opened *unreadable*, and
+   * the greyed Save then refused every edit on the row, a grade included. The box is seeded in the
+   * four-decimal form the parser reads back exactly, and the price is left out of the patch.
+   */
+  it("opens a three-decimal price readable, and saves an unrelated edit around it", async () => {
+    const user = userEvent.setup();
+    wrap(<Harness target={{ ...COPY, purchasePrice: 1.125 }} />);
+
+    const box = screen.getByRole("textbox", { name: PRICE_FIELD });
+    expect(box).toHaveValue("1.1250");
+    expect(box).not.toHaveAttribute("aria-invalid");
+
+    await pickOption(user, "Condition", "Lightly played");
+    await user.click(save());
+    await waitFor(() => expect(collectionUpdate).toHaveBeenCalledWith(42, { condition: "LP" }));
+  });
+
+  /** **An untouched box is the stored number, whatever its text reads as.** A negative the old CSV
+   *  importer stored is one the parser refuses; a reader who opens that row to fix the grade must
+   *  not find Save greyed over a box they never touched. */
+  it("treats an untouched box as the stored price, even one the parser would refuse", async () => {
+    const user = userEvent.setup();
+    wrap(<Harness target={{ ...COPY, purchasePrice: -4 }} />);
+
+    expect(screen.getByRole("textbox", { name: PRICE_FIELD })).not.toHaveAttribute("aria-invalid");
+    await pickOption(user, "Condition", "Lightly played");
+    await user.click(save());
+    await waitFor(() => expect(collectionUpdate).toHaveBeenCalledWith(42, { condition: "LP" }));
+  });
+
   /** The empty box is not a veto on the rest of the form: the grade still saves, and the price
    *  column is simply left out. */
   it("still saves the grade over an emptied price box", async () => {
@@ -284,6 +322,22 @@ describe("EditCopy", () => {
     expect(save()).toHaveAttribute("aria-disabled", "true");
     await user.click(save());
     expect(collectionUpdate).not.toHaveBeenCalled();
+  });
+
+  /** **A lone dot before three digits is refused with both of its readings named** — fifteen
+   *  hundred in a Danish hand, one and a half in this app's own export — rather than saved as
+   *  either, silently. */
+  it("refuses an ambiguous 1.500 and says both things it could mean", async () => {
+    const user = userEvent.setup();
+    wrap(<Harness target={COPY} />);
+
+    const box = screen.getByRole("textbox", { name: PRICE_FIELD });
+    await user.clear(box);
+    await user.type(box, "1.500");
+
+    expect(box).toHaveAttribute("aria-invalid", "true");
+    expect(box).toHaveAccessibleDescription(`Write 1500 or 1.50 — "1.500" could mean either.`);
+    expect(save()).toHaveAttribute("aria-disabled", "true");
   });
 
   /** Enter in the price field is the write, which is what a two-field form owes a keyboard. */
