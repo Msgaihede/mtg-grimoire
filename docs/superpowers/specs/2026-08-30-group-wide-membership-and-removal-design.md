@@ -147,8 +147,11 @@ any device signed into Patreon, all the devices in the group are valid" becomes 
 the protocol rather than a thing pairing happened to carry.
 
 **`pairing.rs` stops sealing the refresh secret into the blob.** It no longer needs to, and
-keeping it would be actively harmful: a device that holds the refresh secret can re-register the
-group auth (§2.3) and therefore evict the devices that removed it. Restricting the Patreon-side
+keeping it would be actively harmful: a device that holds the refresh secret could re-register
+the group auth through `/rotate` (§2.3, as first written) and therefore evict the devices that
+removed it. `/rotate` no longer takes the secret at all, and the rule stands on the retirement in
+§4: the relay retires a secret with the one device `/claim` recorded as its holder, so a copy on
+another device would survive that device's removal. Restricting the Patreon-side
 secret to the device that pressed Connect is what makes a removal stick. The blob's plaintext
 loses one field and one separator.
 
@@ -164,8 +167,8 @@ Object, so a rotation never touches the metered log path.
 ```
 POST /g/{group}/rotate
   body   { epoch, auth, keys: [ { device, blob }, … ] }
-  auth   the CURRENT group auth, or the refresh secret
-  refuse 409 unless epoch > stored group_epoch
+  auth   the CURRENT group auth, and nothing else
+  refuse 409 if epoch <= stored group_epoch; 422 if epoch > stored group_epoch + 1
 
 GET  /g/{group}/keys?device=<id>
   auth   any auth this group has registered in the last 8 epochs
@@ -303,11 +306,11 @@ unrecorded for spec §10's reason.
 | What fails | What happens | Why that is the right answer |
 | --- | --- | --- |
 | `/rotate` refused or unreachable | The removal does not happen. The reader sees a refusal and can press again. | Better than today's rotation that reaches nobody. The group is exactly as it was. |
-| `/rotate` succeeds, the local commit fails | The relay holds epoch *N+1*; this device is still at *N*. Its own `/keys` check finds a blob addressed to it and adopts it. | Self-healing, because the remover is on its own manifest. |
+| `/rotate` succeeds, the local commit fails | The relay holds epoch *N+1*; this device is still at *N*. Its own `/keys` check finds a blob addressed to it and adopts it. | Self-healing, because the remover is on its own manifest — and only because `check_keys` also tries this device itself as the sealer. Excluding itself, the device failed every `/keys` check after a lost 2xx and never pushed again. |
 | A device is offline across two removals | `/keys` answers the current epoch and a blob for it, if it is still in the group. | The blob is per-epoch-current, not a chain, so no replay is needed. |
 | A device is offline across nine removals | Its auth is older than the eight epochs `/keys` keeps and it is refused. | Re-pair by hand. Nine removals with one device dark is not a case worth carrying state for, and the refusal says so rather than being silent. |
-| The reader removes the device that holds the refresh secret | The remaining devices keep working on the group auth; the entitlement stays bound to the same group. Connecting Patreon again on any device re-binds the same group and mints a fresh secret. | `/claim` already passes `row.group_id === group`. Selling a laptop must not cost the group. |
-| A removed device tries to re-register its own auth | `/rotate` refuses an epoch that is not strictly higher, and it cannot compute the new epoch's auth. | The monotonic check is the whole guard. |
+| The reader removes the device that holds the refresh secret | The remaining devices keep working on the group auth; the entitlement stays bound to the same group, and the rotation that removed the device retires its secret (`entitlements.refresh_device` names the holder `/claim` handed it to). Connecting Patreon again on any device re-binds the same group and mints a fresh secret. | `/claim` already passes `row.group_id === group`. Selling a laptop must not cost the group — and must not leave the laptop's `user.db` holding a secret that mints tokens for it. |
+| A removed device tries to re-register its own auth | `/rotate` refuses an epoch that is not the group's next, and it cannot compute the new epoch's auth. | The monotonic check is the whole guard. Exactly-next rather than merely higher, so a credential cannot move the group to an epoch no device will plan from. |
 | Remove is pressed in a group with no membership | Refused, with the sentence in §2.4. | An unentitled group is not syncing, so there is nothing to protect — and rotating locally is today's bug. |
 | A group has claimed but never rotated | `/keys` answers the claim's epoch with an empty manifest; every device sees equal epochs and does nothing. | The epoch guard in §2.3. Without it this is the case that dissolves a healthy group. |
 | The relay is compromised | It learns `group_auth`, which is one-way from the group key, and a pile of blobs sealed to keys it does not hold. | Unchanged from today: it still decrypts nothing. |

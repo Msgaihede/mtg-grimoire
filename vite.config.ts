@@ -109,6 +109,10 @@ export default defineConfig({
       // anywhere in it. `share/SharePage.test.tsx` holds a sweep of its own import graph that
       // keeps it that way.
       "share/**/*.test.{ts,tsx}",
+      // The sixth is CI's own router, `scripts/ci-route.mjs`: plain `.mjs` like the rest of
+      // `scripts/`, so its test is too — no `tsc` program includes `scripts/`, and a `.ts` test
+      // under `src/` importing it would need a declaration file to satisfy `strict`.
+      "scripts/**/*.test.mjs",
     ],
     // Vitest stubs CSS imports as empty strings by default, which would hand
     // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No *component* imports

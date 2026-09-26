@@ -14,6 +14,7 @@ import { THEORY_MATCH_ATTR } from "../CardMarks";
 import { DECK_CARD_ATTR } from "../dnd";
 import { buildGroups } from "../grouping";
 import { RAIL_ATTR } from "./columns";
+import { MARKER_WORDS } from "./GroupHeader";
 import { COMMAND_ATTR, StackView, STACK_ATTR } from "./StackView";
 
 const meta = {
@@ -149,8 +150,8 @@ function wideGroups(switchedOff?: string) {
  * the reader's own category order — with the Sideboard *and the Maybeboard* lifted out of that
  * flow and held against the right edge.
  *
- * Five piles, and each one shows a different part of a header — the Commander's `RULE`, the
- * Maybeboard's `INACTIVE`, an empty Sideboard that still draws because it is where the next
+ * Five piles, and each one shows a different part of a header — the Commander's rule mark, the
+ * Maybeboard's switched-off mark, an empty Sideboard that still draws because it is where the next
  * sideboard card goes, and two categories the reader named.
  *
  * **Two of the five flow now, and the deck is drawn in three boxes rather than two.** The
@@ -173,7 +174,7 @@ function wideGroups(switchedOff?: string) {
  * the rail. (Nothing packs here at all any more — see {@link WrappedPiles}.) The active pile is its cards and its heading and nothing else. The switched-off one
  * is found by the three quieter signals `StackGroup` spends on it instead of an edge: the wash
  * under the section, the stack drawn at `opacity-60` so the cards themselves recede, and the
- * header's own pair — the name in the dim face and the `INACTIVE` chip beside it. A line around
+ * header's own pair — the name in the dim face and the switched-off mark beside it. A line around
  * either pile, or a Maybeboard as bright as Removal, is the failure this story is here to make
  * obvious.
  */
@@ -181,9 +182,10 @@ export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // Two piles the rules read by name — the Commander and the Sideboard. A category the
-    // reader made has no rules role and carries no marker.
-    expect(canvas.getAllByText("RULE")).toHaveLength(2);
-    expect(canvas.getByText("INACTIVE")).toBeInTheDocument();
+    // reader made has no rules role and carries no marker. Both pile marks are icons, so each
+    // is found by its `sr-only` words.
+    expect(canvas.getAllByText(MARKER_WORDS.rule)).toHaveLength(2);
+    expect(canvas.getByText(MARKER_WORDS.inactive)).toBeInTheDocument();
     expect(canvas.getByText("Nothing here yet.")).toBeInTheDocument();
     // The rule break and the game changer, in the two corners they never share — and since
     // 2026-09-08 only one of them is spelled out. `RULE BREAK` is still the only mark on a card
@@ -572,7 +574,7 @@ export const UnevenPiles: Story = {
  * fixture's Sideboard is **empty** and the rail is drawn anyway: an empty pile is where the next
  * sideboard card goes, and a rail that only appeared with the first card would shove the layout
  * sideways under the hand that was dropping it. The Maybeboard under it is switched off and holds
- * cards, so it arrives carrying the wash, the dimmed name, the `INACTIVE` chip and its stack's
+ * cards, so it arrives carrying the wash, the dimmed name, the switched-off mark and its stack's
  * `opacity-60` — none of which the rail knows anything about, because a group in it is the same
  * `StackGroup` as a group in the flow.
  */
@@ -627,7 +629,7 @@ export const Rail: Story = {
  *   would sink under whatever the reader turned off most recently, which is the rail's fixed head
  *   moving in the ordinary case rather than a corner.
  * * **Two dimmed piles in one column, and neither cost this view any code.** The Maybeboard and
- *   Threats carry the same four marks — the section's wash, the dim heading, the `INACTIVE` chip
+ *   Threats carry the same four marks — the section's wash, the dim heading, the switched-off mark
  *   and the stack at `opacity-60` — because a group in the rail is the same `StackGroup` as a group
  *   in the flow. That is also why there is **no divider** above the switched-off run: an inactive
  *   pile already says so four times over, and the pile heading the rail is switched off too, so a
@@ -668,7 +670,7 @@ export const SwitchedOffPile: Story = {
     ]);
     // Both switched-off piles are marked, and both marks are inside the rail — the chip travels
     // with the group, so a rail that had grown a lighter definition of a pile would lose them.
-    expect(within(rail).getAllByText("INACTIVE")).toHaveLength(2);
+    expect(within(rail).getAllByText(MARKER_WORDS.inactive)).toHaveLength(2);
   },
 };
 
@@ -702,7 +704,7 @@ export const ByManaValue: Story = {
   args: { groups: deckGroups("manaValue", "manaCost") },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    expect(canvas.getByText("INACTIVE")).toBeInTheDocument();
+    expect(canvas.getByText(MARKER_WORDS.inactive)).toBeInTheDocument();
     // The Maybeboard is in the rail rather than at the tail of the curve, and it is there alone.
     // Read off the headings the sections are `aria-labelledby` rather than by looking for the
     // word in a box, so a card whose name contained it could not answer for the pile.

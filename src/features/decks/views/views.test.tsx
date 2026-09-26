@@ -5,8 +5,13 @@ import { isWebTarget } from "@/pwa/target";
 // vitest, so this changes nothing here until a case below asks for a browser.
 vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  ReactElement,
+} from "react";
 import { TooltipProvider, TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import {
   DEFAULT_SECTION_ZOOMS,
@@ -24,6 +29,7 @@ import { LAYER } from "@/lib/layers";
 import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { dndManager } from "@/lib/dndManager";
 import { boxed, pointerDrag, startPointerDrag } from "@/test-drag";
 import {
@@ -46,9 +52,11 @@ import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { buildGroups, type CardGroup } from "../grouping";
 import { RAIL_ATTR } from "./columns";
 import { GridView } from "./GridView";
+import { MARKER_WORDS } from "./GroupHeader";
 import {
   COMMAND_ATTR,
   flowRowSpan,
+  GRIP_ATTR,
   StackView,
   STACK_ATTR,
   stackColumnWidth,
@@ -638,10 +646,11 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
   it("marks the piles the rules read and the piles that count toward nothing", async () => {
     setup();
 
-    // The Commander pile has a rules role; a category the reader made does not.
-    expect(screen.getAllByText("RULE")).toHaveLength(1);
-    expect(screen.getAllByText("INACTIVE")).toHaveLength(1);
-    fireEvent.pointerEnter(screen.getByText("INACTIVE"));
+    // The Commander pile has a rules role; a category the reader made does not. Both marks are
+    // icons, so each is found by its `sr-only` words and hovered on the chip that holds them.
+    expect(screen.getAllByText(MARKER_WORDS.rule)).toHaveLength(1);
+    expect(screen.getAllByText(MARKER_WORDS.inactive)).toHaveLength(1);
+    fireEvent.pointerEnter(screen.getByText(MARKER_WORDS.inactive).parentElement!);
     const tooltip = await screen.findByRole(
       "tooltip",
       {},
@@ -2077,7 +2086,7 @@ describe("StackView group chrome", () => {
 
   /**
    * The dashed outline was one of four things saying "this counts toward nothing" — the others
-   * being the `INACTIVE` chip, the dimmed heading and the wash — and it is the one that went with
+   * being the switched-off mark, the dimmed heading and the wash — and it is the one that went with
    * the border. The wash carries what is left, which is why it is heavier than the `bg-surface/40`
    * it succeeds: a wash competing with a dashed line can afford to be faint, a wash standing in
    * for one cannot.
@@ -2113,7 +2122,7 @@ describe("StackView group chrome", () => {
  * 2026-09-08 with the ordering change above, and the ordering is what made the absence cost
  * something.
  *
- * This view drew `GroupHeader`'s dimmed name and `INACTIVE` chip and nothing else, which was
+ * This view drew `GroupHeader`'s dimmed name and switched-off mark and nothing else, which was
  * survivable while a switched-off pile sat wherever the reader's `sortOrder` put it among the
  * deck's own columns — a heading is right there above the tiles it names. `GridView` calls
  * `splitRail` now and puts every railed pile **last**, so a nineteen-card Maybeboard is the whole
@@ -4652,12 +4661,11 @@ describe("the deck grid's art", () => {
 });
 
 /**
- * The deck's tokens and emblems as a pile in every view (issue #507) — drawn only when a deck has
- * opted in and has tokens, drawn **last**, and never a deck row: no count, no total and no card
- * affordance of a deck card can reach it.
+ * One token as the four views are handed it — a Treasure, three copies, made by the deck's Sol
+ * Ring, with the chin facts and the price `deckTokens.ts` passes through from the row.
  */
-describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
-  const TOKEN = (over: Partial<DeckTokenView>): DeckTokenView => ({
+function tokenView(over: Partial<DeckTokenView> = {}): DeckTokenView {
+  return {
     oracleId: "o-treasure",
     name: "Treasure",
     typeLine: "Token Artifact — Treasure",
@@ -4670,8 +4678,56 @@ describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
     overridden: false,
     subtitle: "Colorless · {T}, Sacrifice this token: Add one mana of any color.",
     imageUrl: null,
+    imageUris: null,
+    setCode: "tclb",
+    collectorNumber: "5",
+    setName: "Commander Legends",
+    rarity: "common",
+    finishes: '["nonfoil"]',
+    unitPrice: 0.25,
     ...over,
+  };
+}
+
+/** A pile of `tokens` at the rail's last slot, which is where every deck's pile starts — the
+ *  column's `DEFAULT -1`. `over` names a slot, or a `moveTo`, where a case is about one. */
+function tokenPileOf(tokens: readonly DeckTokenView[], over: Partial<TokenPile> = {}): TokenPile {
+  return { tokens, setQuantity: vi.fn(), pickArt: vi.fn(), railIndex: -1, ...over };
+}
+
+/**
+ * The providers a view drawing the token pile needs, and the one it needs that nothing else in
+ * this file does: **a query client**. The pile reads the marketplace itself (`useMarketplace`,
+ * for its heading's total and every chin's price) rather than having every view thread it, so the
+ * four views mount it under a `QueryClientProvider` in the app and must here too.
+ *
+ * Seeded rather than answered: both marketplace keys are written before the first render and kept
+ * fresh for ever, so the pile never reaches for a backend this file has no mock of — `keys.test`'s
+ * arrangement. The setting is the one {@link TCG} quotes, so a figure here is in the same money as
+ * every pile's heading beside it.
+ */
+function withTokenProviders(ui: ReactElement): ReactElement {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: Infinity } },
   });
+  client.setQueryData(MARKETPLACE_KEY, TCG.id);
+  client.setQueryData(MARKETPLACE_FEEDS_KEY, []);
+  return (
+    <QueryClientProvider client={client}>
+      <TooltipProvider>{ui}</TooltipProvider>
+    </QueryClientProvider>
+  );
+}
+
+/**
+ * The deck's tokens and emblems as a pile in every view (issue #507) — drawn only when a deck has
+ * opted in and has tokens, drawn **last** at the stored index every deck starts at, and never a
+ * deck row: its copies and its price are its own heading's, and no pile's count, no pile's total
+ * and no card affordance of a deck card can reach it. Where a stored index other than last puts
+ * it is the rail block below.
+ */
+describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
+  const TOKEN = tokenView;
   const TOKENS: DeckTokenView[] = [
     TOKEN({}),
     TOKEN({ oracleId: "o-wurm-d", name: "Wurm", subtitle: "Colorless 3/3 · Deathtouch" }),
@@ -4679,12 +4735,11 @@ describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
   ];
 
   const setup = (tokens: readonly DeckTokenView[] | undefined, groups = GROUPS) => {
-    const pile: TokenPile | undefined =
-      tokens === undefined ? undefined : { tokens, setQuantity: vi.fn(), pickArt: vi.fn() };
+    const pile: TokenPile | undefined = tokens === undefined ? undefined : tokenPileOf(tokens);
     const view = render(
-      <TooltipProvider>
-        {renderView({ groups, marketplace: TCG, violations: VIOLATIONS, tokenPile: pile })}
-      </TooltipProvider>,
+      withTokenProviders(
+        renderView({ groups, marketplace: TCG, violations: VIOLATIONS, tokenPile: pile }),
+      ),
     );
     const root = view.container.querySelector<HTMLElement>(`[${TOKEN_PILE_ATTR}]`);
     return { pile, view, root };
@@ -4696,11 +4751,12 @@ describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
     expect(setup([]).root).toBeNull();
   });
 
-  it("draws the pile last, under the heading and the distinct-token pill", () => {
+  it("draws the pile last, under the heading and the pill of its copies", () => {
     const { root } = setup(TOKENS);
     expect(root).not.toBeNull();
     expect(root).toBe(screen.getByRole("group", { name: TOKENS_HEADING }));
-    expect(within(root!).getByText("3 tokens and emblems to bring")).toBeInTheDocument();
+    // Copies, not distinct tokens — three of each of the three (spec §3.1).
+    expect(within(root!).getByText("9 tokens and emblems")).toBeInTheDocument();
     // Last among its siblings — and on the two column views, last in the rail.
     expect(root!.parentElement!.lastElementChild).toBe(root);
     if (name === "StackView" || name === "TextView") {
@@ -4747,38 +4803,337 @@ describe("StackView token pile", () => {
   it("draws the rail for the pile alone, on a deck with nothing railed", () => {
     const groups = buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical");
     const { container } = render(
-      <TooltipProvider>
+      withTokenProviders(
         <StackView
           tracksCollection
           groups={groups}
           marketplace={TCG}
-          tokenPile={{
-            tokens: [
-              {
-                oracleId: "o-treasure",
-                name: "Treasure",
-                typeLine: null,
-                layout: "token",
-                printingId: "p-treasure",
-                quantity: 1,
-                sources: [],
-                derived: false,
-                state: "manual",
-                overridden: true,
-                subtitle: null,
-                imageUrl: null,
-              },
-            ],
-            setQuantity: vi.fn(),
-            pickArt: vi.fn(),
-          }}
-        />
-      </TooltipProvider>,
+          tokenPile={tokenPileOf([
+            tokenView({
+              typeLine: null,
+              quantity: 1,
+              sources: [],
+              derived: false,
+              state: "manual",
+              overridden: true,
+              subtitle: null,
+            }),
+          ])}
+        />,
+      ),
     );
     const rail = container.querySelector(`[${RAIL_ATTR}]`);
     expect(rail).not.toBeNull();
     expect(rail!.children).toHaveLength(1);
     expect(rail!.firstElementChild).toHaveAttribute(TOKEN_PILE_ATTR);
+  });
+});
+
+/**
+ * **The pile's place in the rail is the reader's** (spec §3.4) — `decks.token_rail_index`, the
+ * number of rail piles drawn above it, spent as a *slot* by Stacks and Text and as *order* by Grid,
+ * and not spent at all by Table, whose token section is a list after the table rather than a band
+ * among its rows.
+ *
+ * The deck is the Sideboard and the Maybeboard railed, so a stored `1` has a pile on either side
+ * of it and every placement below is a claim about which one it is between.
+ */
+describe("the token pile's place in the rail", () => {
+  const RAILED = buildGroups(
+    [...CARDS, card({ name: "Rest in Peace", categoryKind: "side" })],
+    [COMMANDER, RAMP, SIDE, MAYBE],
+    "category",
+    "alphabetical",
+  );
+  const TOKENS = [tokenView()];
+
+  /**
+   * What each of `parent`'s children is called, read the way a screen reader reads it — through the
+   * `aria-labelledby` every pile and the token pile carry. A pile's heading holds its name alone,
+   * so this is the order of the names and nothing else on the line.
+   */
+  const names = (parent: Element) =>
+    [...parent.children].map((child) => {
+      const id = child.getAttribute("aria-labelledby");
+      return id === null ? null : (document.getElementById(id)?.textContent ?? null);
+    });
+  const pileRoot = () => document.querySelector<HTMLElement>(`[${TOKEN_PILE_ATTR}]`)!;
+  const railOf = () => document.querySelector<HTMLElement>(`[${RAIL_ATTR}]`)!;
+
+  const renderStacks = (over: Partial<TokenPile> = {}, extra: Partial<ViewProps> = {}) => {
+    const pile = tokenPileOf(TOKENS, over);
+    render(
+      withTokenProviders(
+        <StackView
+          tracksCollection
+          groups={RAILED}
+          marketplace={TCG}
+          tokenPile={pile}
+          {...extra}
+        />,
+      ),
+    );
+    return pile;
+  };
+
+  it("draws the pile between the Sideboard and the Maybeboard at slot 1, in Stacks", () => {
+    renderStacks({ railIndex: 1 });
+    expect(names(railOf())).toEqual(["Sideboard", TOKENS_HEADING, "Maybeboard"]);
+  });
+
+  /** Review focus 2: an index the rail no longer has — piles switched back on since the pile was
+   *  put there — draws the pile last, rather than nowhere or at a slot that is not there. */
+  it("draws the pile last for a stored index the rail does not have", () => {
+    renderStacks({ railIndex: 7 });
+    expect(railOf().lastElementChild).toBe(pileRoot());
+    expect(names(railOf())).toEqual(["Sideboard", "Maybeboard", TOKENS_HEADING]);
+  });
+
+  it("draws the pile first at slot 0", () => {
+    renderStacks({ railIndex: 0 });
+    expect(names(railOf())).toEqual([TOKENS_HEADING, "Sideboard", "Maybeboard"]);
+  });
+
+  it("names the grip for the pile's place among the rail's piles", () => {
+    renderStacks({ railIndex: 1, moveTo: vi.fn() });
+    const grip = screen.getByRole("button", { name: `Move ${TOKENS_HEADING}, 2 of 3` });
+    expect(grip).toHaveAttribute(GRIP_ATTR);
+    expect(within(pileRoot()).getByRole("button", { name: /^Move / })).toBe(grip);
+  });
+
+  /**
+   * **The grip's arrows are the pile's, and the view's own arrows never see them** — the
+   * `defaultPrevented` handshake `CategoryGrip` makes with `onArrowKey`. ArrowRight from slot 1 of
+   * a two-pile rail is the last slot, which is stored as `-1` so a pile switched on later lands
+   * above the tokens rather than under them; ArrowLeft is slot 0.
+   */
+  it("steps the pile along the rail with the arrow keys, storing the last slot as -1", async () => {
+    const moveTo = vi.fn();
+    const onSelect = vi.fn();
+    renderStacks({ railIndex: 1, moveTo }, { onSelect });
+    const user = userEvent.setup();
+    const grip = screen.getByRole("button", { name: `Move ${TOKENS_HEADING}, 2 of 3` });
+
+    act(() => grip.focus());
+    await user.keyboard("{ArrowRight}");
+    expect(moveTo).toHaveBeenLastCalledWith(-1);
+    await user.keyboard("{ArrowLeft}");
+    expect(moveTo).toHaveBeenLastCalledWith(0);
+    expect(moveTo).toHaveBeenCalledTimes(2);
+
+    expect(grip).toHaveFocus();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The handshake itself, read off the event: `fireEvent` answers `false` for a press something
+   * called `preventDefault()` on. Both arrows claim the press — **the dead end included**, which
+   * is the half a tidy would drop: slot 0 has nowhere to go left, sends nothing, and must still
+   * keep the press from reaching the view's caret walk.
+   */
+  it("claims both arrows on the grip, the dead end included", () => {
+    const moveTo = vi.fn();
+    renderStacks({ railIndex: 0, moveTo });
+    const grip = screen.getByRole("button", { name: `Move ${TOKENS_HEADING}, 1 of 3` });
+
+    expect(fireEvent.keyDown(grip, { key: "ArrowLeft" })).toBe(false);
+    expect(moveTo).not.toHaveBeenCalled();
+    expect(fireEvent.keyDown(grip, { key: "ArrowRight" })).toBe(false);
+    expect(moveTo).toHaveBeenCalledWith(1);
+    // Up and down are the page's, as they are on a category's grip.
+    expect(fireEvent.keyDown(grip, { key: "ArrowDown" })).toBe(true);
+  });
+
+  it("draws no grip when the host offers no move", () => {
+    renderStacks({ railIndex: 1 });
+    expect(screen.queryByRole("button", { name: /^Move Tokens/ })).not.toBeInTheDocument();
+  });
+
+  /* ---------------------------------------------------------------- the drag ---------- */
+
+  const sectionOf = (group: CardGroup) =>
+    document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${group.categoryId}"]`)!;
+  const pile = (groupName: string) => RAILED.find((group) => group.name === groupName)!;
+  /** Give a box somewhere to be, and every wrapper inside it the same rect — the drop targets and
+   *  the drag sources are nested `div`s that very nearly fill the box in a real window. */
+  const boxAll = (element: HTMLElement, top: number) => {
+    boxed(element, top, 50);
+    for (const div of element.querySelectorAll("div")) boxed(div, top, 50);
+    return element;
+  };
+  /** Ramp in the flow, then the rail as it is drawn at slot 0 — tokens, Sideboard, Maybeboard —
+   *  each 80px below the last so no two overlap. */
+  const boxRail = () => {
+    boxAll(sectionOf(pile("Ramp")), 0);
+    boxAll(pileRoot(), 80);
+    boxAll(sectionOf(pile("Sideboard")), 160);
+    boxAll(sectionOf(pile("Maybeboard")), 240);
+  };
+  const tokenGrip = () => screen.getByRole("button", { name: /^Move Tokens & Emblems,/ });
+
+  /**
+   * A drop lands the pile **where the target pile is** — `CategoriesDialog`'s rule, which the grip
+   * keeps too. From slot 0, the Sideboard is at index 1 of what is drawn, so the pile takes slot 1
+   * and goes under it; the Maybeboard is the last pile, so the pile takes the last slot, stored as
+   * `-1`.
+   */
+  it("moves the pile onto a railed pile's place when dropped on it", async () => {
+    const moveTo = vi.fn();
+    renderStacks({ railIndex: 0, moveTo });
+    boxRail();
+    const press = { pressOn: tokenGrip() };
+
+    const onSide = await startPointerDrag(pileRoot(), press);
+    try {
+      expect(onSide.started).toBe(true);
+      await onSide.over(sectionOf(pile("Sideboard")));
+      await onSide.drop();
+    } finally {
+      await onSide.cancel();
+    }
+    expect(moveTo).toHaveBeenLastCalledWith(1);
+
+    const onMaybe = await startPointerDrag(pileRoot(), press);
+    try {
+      await onMaybe.over(sectionOf(pile("Maybeboard")));
+      await onMaybe.drop();
+    } finally {
+      await onMaybe.cancel();
+    }
+    expect(moveTo).toHaveBeenLastCalledWith(-1);
+    expect(moveTo).toHaveBeenCalledTimes(2);
+  });
+
+  /** `useCategoryDragSource`'s collision, avoided the same way: the source declares its own
+   *  pointer-only `sensors`, so Space on the grip is not a library drag while the arrows beside it
+   *  write a real move. Pressed on a focused button with `user.keyboard`, for that case's reason. */
+  it("keeps Space off the grip, so the arrow keys are the only keyboard move", async () => {
+    const moveTo = vi.fn();
+    renderStacks({ railIndex: 1, moveTo });
+    const user = userEvent.setup();
+
+    act(() => tokenGrip().focus());
+    await user.keyboard(" ");
+    expect(dndManager.dragOperation.status.idle).toBe(true);
+    expect(moveTo).not.toHaveBeenCalled();
+
+    await user.keyboard("{ArrowLeft}");
+    expect(moveTo).toHaveBeenCalledWith(0);
+    expect(dndManager.dragOperation.status.idle).toBe(true);
+  });
+
+  /** The flow is not the rail: the pile let go on a flowing pile goes nowhere, and a press on the
+   *  pile's name rather than its grip is not a drag at all. */
+  it("refuses the flow, and drags only from the grip", async () => {
+    const moveTo = vi.fn();
+    renderStacks({ railIndex: 0, moveTo });
+    boxRail();
+
+    const refused = await startPointerDrag(pileRoot());
+    expect(refused.started).toBe(false);
+    await refused.cancel();
+
+    const onFlow = await startPointerDrag(pileRoot(), { pressOn: tokenGrip() });
+    try {
+      expect(onFlow.started).toBe(true);
+      await onFlow.over(sectionOf(pile("Ramp")));
+      await onFlow.drop();
+    } finally {
+      await onFlow.cancel();
+    }
+    expect(moveTo).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The two drops on one wrapper, both still working.** A railed pile's reorder wrapper carries
+   * the category drop it always had and the token drop beside it, composed in one ref callback — so
+   * a railed pile must still take a railed pile. And a pile let go on the token pile goes nowhere:
+   * the token pile is in neither category run, and registers no category target at all.
+   */
+  it("still reorders the rail's own piles, and refuses a pile dropped on the tokens", async () => {
+    const moveCategory = vi.fn();
+    const moveTo = vi.fn();
+    renderStacks({ railIndex: 0, moveTo }, { actions: { moveCategory } });
+    boxRail();
+    const press = { pressOn: screen.getByRole("button", { name: /^Move Maybeboard,/ }) };
+
+    const onTokens = await startPointerDrag(sectionOf(pile("Maybeboard")), press);
+    try {
+      expect(onTokens.started).toBe(true);
+      await onTokens.over(pileRoot());
+      await onTokens.drop();
+    } finally {
+      await onTokens.cancel();
+    }
+    expect(moveCategory).not.toHaveBeenCalled();
+
+    const onSide = await startPointerDrag(sectionOf(pile("Maybeboard")), press);
+    try {
+      await onSide.over(sectionOf(pile("Sideboard")));
+      await onSide.drop();
+    } finally {
+      await onSide.cancel();
+    }
+    expect(moveCategory).toHaveBeenCalledWith(MAYBE.id, SIDE.id);
+    expect(moveTo).not.toHaveBeenCalled();
+  });
+
+  /* ------------------------------------------------------------ the other views ------- */
+
+  /** Grid spends the index as order: the pile's group sits among the rail's groups, which are
+   *  drawn last on the wall, full width like every other. */
+  it("draws the pile's group between the Sideboard's and the Maybeboard's in Grid", () => {
+    render(
+      withTokenProviders(
+        <GridView
+          tracksCollection
+          groups={RAILED}
+          marketplace={TCG}
+          tokenPile={tokenPileOf(TOKENS, { railIndex: 1 })}
+        />,
+      ),
+    );
+    expect(names(pileRoot().parentElement!)).toEqual([
+      "Commander",
+      "Ramp",
+      "Sideboard",
+      TOKENS_HEADING,
+      "Maybeboard",
+    ]);
+  });
+
+  it("draws the pile between the Sideboard and the Maybeboard inside Text's rail", () => {
+    render(
+      withTokenProviders(
+        <TextView
+          tracksCollection
+          groups={RAILED}
+          marketplace={TCG}
+          tokenPile={tokenPileOf(TOKENS, { railIndex: 1 })}
+        />,
+      ),
+    );
+    expect(names(railOf())).toEqual(["Sideboard", TOKENS_HEADING, "Maybeboard"]);
+  });
+
+  /** Table does not spend it: the token section is a list after the table, not a band among its
+   *  rows, so there is no place among the rail's bands for it to take (spec §3.4). */
+  it("keeps Table's token section after the table whatever the stored index", () => {
+    render(
+      withTokenProviders(
+        <TableView
+          tracksCollection
+          groups={RAILED}
+          marketplace={TCG}
+          tokenPile={tokenPileOf(TOKENS, { railIndex: 0 })}
+        />,
+      ),
+    );
+    const root = pileRoot();
+    expect(root.parentElement!.lastElementChild).toBe(root);
+    for (const band of document.querySelectorAll(`[${DECK_GROUP_ATTR}]`)) {
+      expect(band.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
   });
 });
 

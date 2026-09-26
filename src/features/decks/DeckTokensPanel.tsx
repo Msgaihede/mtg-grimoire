@@ -112,8 +112,8 @@ import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { stackCardWidth } from "./CardStack";
+import { CountPill, tokenCountWords } from "./CountPill";
 import type { DeckTokenView } from "./deckTokens";
-import { TokenCountPill } from "./TokenCountPill";
 import type { DeckTokens } from "./useDeckTokens";
 
 /**
@@ -188,7 +188,7 @@ export interface DeckTokensPanelProps {
  * The band: a header that always draws, and a wall that draws when the reader asks for it.
  *
  * **The read runs whether or not the wall is drawn**, and that is deliberate rather than an
- * oversight. The header has to say how many tokens this deck makes — that number *is* the reason
+ * oversight. The header has to say how many tokens this deck brings — that number *is* the reason
  * to open the area — and the resolve is ~5 ms for a 100-card deck against the corpus the app
  * already has (spec §3). Gating the query on `open` would trade that for a header that could only
  * say "press to find out".
@@ -213,11 +213,8 @@ export function DeckTokensPanel({
   const zoom = useAppStore((s) => s.cardZoom.deck);
 
   /**
-   * The resolver's rows, before `showDismissed` narrows them.
-   *
-   * The header counts off these rather than off `tokens.tokens`, so the number beside the heading
-   * does not move when the reader reveals a dismissal — the count is *what this deck brings*, and
-   * revealing a dismissed token does not bring it.
+   * The resolver's rows, before `showDismissed` narrows them — what decides whether there is
+   * anything to disclose, and how many dismissals the switch offers to show.
    */
   const rows = tokens.query.data ?? [];
   // Counted on every render and deliberately not memoised. `query.data ?? []` is a fresh array
@@ -226,7 +223,22 @@ export function DeckTokensPanel({
   // which is the one that sorts the wall. A `filter().length` over a deck's tokens is a handful
   // of rows and buys nothing back.
   const dismissed = rows.filter((row) => row.state === "hidden").length;
-  const kept = rows.length - dismissed;
+
+  /**
+   * How many copies the deck brings: the stepper's number summed over every token that is not
+   * dismissed — the figure beside the heading (token stacks spec §3.1).
+   *
+   * **Summed over `tokens.tokens`, the resolved views, and never over `rows`**: a view's
+   * `quantity` is `deckTokens.ts`' conclusion (`??` the untouched floor, a zeroed token staying
+   * 0), and re-deriving that fallback here would be a second copy of a rule that file owns. The
+   * views are narrowed by `showDismissed`, so the dismissed ones are filtered back out, which
+   * keeps the number still when the reader reveals a dismissal — looking at a token you put away
+   * does not bring it. That is the same set the views' token pile heads (never a dismissed one,
+   * whatever the switch says), so the band and the pile say one number.
+   */
+  const copies = tokens.tokens
+    .filter((view) => view.state !== "hidden")
+    .reduce((sum, view) => sum + view.quantity, 0);
 
   /**
    * The read's own refusal, which is **not** `tokens.failure` — that one is the newest *write*.
@@ -294,11 +306,11 @@ export function DeckTokensPanel({
             counted. It is its own element, so nothing computes it into another control's name.
 
             **A pill since 2026-09-24 (issue #507)**, where it read `N to bring`: the views' token
-            pile draws the same number beside the same heading, and one component is what keeps
-            the two drawings one mark. It still counts the **distinct kept** tokens — `kept`, off
-            the resolver's rows before `showDismissed` narrows them — so revealing a dismissal
-            does not move it. */}
-        {canOpen && <TokenCountPill count={kept} />}
+            pile draws the same number beside the same heading, and one component — `CountPill`,
+            the figure every pile heading in the four views wears — is what keeps the two
+            drawings one mark. **It counts copies since token stacks (spec §3.1)**, where it
+            counted distinct tokens: `copies`, above, so a Treasure stepped to 4 is four. */}
+        {canOpen && <CountPill count={copies} words={tokenCountWords(copies)} />}
 
         {answered && rows.length === 0 && (
           <p className="text-xs text-dim">Nothing in this deck makes a token or an emblem.</p>

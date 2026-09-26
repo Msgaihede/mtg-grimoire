@@ -399,7 +399,9 @@ pub async fn confirm(
     // for `identity::group` to read, so the values `identity::create_group` would mint are
     // reproduced here instead of minted by calling it, because that call also *writes* them, and
     // a write ahead of the post is exactly the ordering step 2's doc above exists to rule out.
-    let group = match identity::group(conn).map_err(err)? {
+    let existing = identity::group(conn).map_err(err)?;
+    let founding = existing.is_none();
+    let group = match existing {
         Some(g) => g,
         None => identity::Group {
             group_id: hex16(&crypto::random_bytes::<16>()),
@@ -443,7 +445,14 @@ pub async fn confirm(
     // above has written to the database — the candidate group was a local value, not a row.
     client::post_rendezvous(conn, &rv, "offer", &encoded).await?;
 
-    identity::join_group(conn, &group.group_id, group.epoch, &group.group_key, &me).map_err(err)?;
+    // Founding is the one moment this device knows the whole group, so it seeds the view the key
+    // history reads (`identity::found_group`); otherwise it re-writes the group it already holds.
+    if founding {
+        identity::found_group(conn, &group, &me).map_err(err)?;
+    } else {
+        identity::join_group(conn, &group.group_id, group.epoch, &group.group_key, &me)
+            .map_err(err)?;
+    }
     identity::add_device(
         conn,
         &peer_id,
@@ -791,6 +800,15 @@ use crate::sync_engine::commands;
 const COULD_NOT_COLLECT: &str =
     "Could not reach the relay to collect that device's last changes, so it was not removed.";
 
+/// What [`sync_device_revoke`] says while a join paired on this device is still unpublished
+/// (`identity::roster_is_dirty`, after the round trip in front of the removal has tried to pay it).
+///
+/// **The other devices do not know that device yet**, so a manifest that drops it drops nobody
+/// *they* know, and each would keep the superseded keys the removed device holds
+/// (`identity::supersede`). The next sync publishes the join, and then the removal can go out.
+const JOIN_NOT_PUBLISHED: &str = "Your other devices have not heard about a device paired here \
+     yet, so nothing was removed. Sync, then try again.";
+
 /// What Settings draws: this device, the group it is in, and the roster.
 #[tauri::command]
 pub async fn sync_pairing_status(
@@ -935,7 +953,8 @@ pub async fn sync_device_rename(
 ///    over such an envelope rather than stalling on it, so anything the leaving device pushed
 ///    that this one has not yet taken would be thrown away at the boundary. **It is the trip that
 ///    emits no baseline** — [`client::run_once`] would hand thousands of ops to the very device
-///    this is about to remove.
+///    this is about to remove. It also pays any unpublished join, and **a debt it could not pay
+///    refuses the removal** ([`JOIN_NOT_PUBLISHED`]).
 /// 3. **Plan the rotation, which writes nothing** ([`identity::plan_rotation`]), and publish it
 ///    ([`client::post_rotation`]).
 /// 4. **Commit only on a 2xx** ([`identity::commit_rotation`]).
@@ -955,6 +974,10 @@ async fn remove_device(conn: &Connection, device_id: &str) -> Result<(), String>
     let _ = client::run_once_without_baselines(conn)
         .await
         .map_err(|e| format!("{COULD_NOT_COLLECT} {e}"))?;
+    // After the round trip, which is what pays the debt when it can.
+    if identity::roster_is_dirty(conn)? {
+        return Err(JOIN_NOT_PUBLISHED.to_owned());
+    }
     let plan = identity::plan_rotation(conn, device_id)?;
     client::post_rotation(conn, &plan).await?;
     identity::commit_rotation(conn, device_id, &plan)
@@ -2000,6 +2023,50 @@ mod tests {
         });
     }
 
+    /// ⚠ **A removal waits while a join paired here is still unpublished.** The other devices do
+    /// not know that device yet, so a manifest dropping it drops nobody *they* know — and each
+    /// would keep the superseded keys the removed device holds. The round trip in front of the
+    /// removal is what pays the debt; here the relay's manifest names a device this one never
+    /// met, so `publish_join` declines and the debt stands.
+    ///
+    /// **What makes it red**: `remove_device` rotating with `roster_is_dirty` still set.
+    #[tokio::test]
+    async fn a_removal_waits_for_an_unpublished_join() {
+        let server = MockServer::start_async().await;
+        let (conn, _me, group) = removable(&server, true);
+        identity::set_roster_dirty(&conn, true).unwrap();
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys"));
+            then.status(200).json_body(serde_json::json!({
+                "epoch": 0, "blob": serde_json::Value::Null, "devices": ["stranger"],
+            }));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/pull"));
+            then.status(200)
+                .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+        });
+        server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/ack"));
+            then.status(204);
+        });
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        let refused = remove_device(&conn, "deadbeef")
+            .await
+            .expect_err("a removal went out while a join was still unpublished");
+
+        assert!(refused.contains("Sync"), "{refused}");
+        rotate.assert_calls(0);
+        assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
+        assert_eq!(identity::roster(&conn).unwrap().len(), 2);
+    }
+
     /// **A `/rotate` the relay refuses removes nothing at all.**
     ///
     /// This is the whole reason `plan_rotation` writes no row and `commit_rotation` runs last.
@@ -2340,6 +2407,31 @@ mod tests {
         accept(b, &mut pb, &offer.code).await.unwrap();
         poll(a, &mut pa, now_ms()).await.unwrap();
         confirm(a, &mut pa).await
+    }
+
+    /// **A device that founds its group at `confirm` knows the whole of it**, so it starts with a
+    /// view — `[itself]` — where a device that joins has none. Without one, its first rotation
+    /// would forget epoch 0's key and step over whatever the joiner wrote before it: the common
+    /// first pairing, where no membership exists to publish the join until later.
+    ///
+    /// **What makes it red**: `confirm` founding the group without seeding the view.
+    #[tokio::test]
+    async fn founding_a_group_at_confirm_starts_with_a_view_of_all_of_it() {
+        let relay = FakeRelay::start().await;
+        let (a, b) = (db(), db());
+        let me = identity::ensure(&a).unwrap();
+        assert!(
+            identity::group(&a).unwrap().is_none(),
+            "the fixture is wrong"
+        );
+
+        offer_to(&relay, &a, &b).await.expect("paired");
+
+        assert_eq!(
+            client::get_state(&a, "last_manifest").as_deref(),
+            Some(me.device_id.as_str()),
+            "a founder with no view of its own group forgets at its first rotation"
+        );
     }
 
     /// **The initiator refuses the sixth device, counts live rows only, and is not off by one.**

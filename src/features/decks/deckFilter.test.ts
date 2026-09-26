@@ -33,6 +33,7 @@ function deck(over: Partial<DeckRow> & { name: string }): DeckRow {
     bracket: 0,
     tokensOpen: false,
     tokenStack: false,
+    tokenRailIndex: -1,
     statsOpen: true,
     ...over,
   };

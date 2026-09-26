@@ -7,6 +7,7 @@
  * category. Neither declaration knows about the other, which is what stops this becoming a
  * per-surface list of things to remember to hide.
  */
+import { priceText } from "@/lib/prices";
 import type { ExportFormat } from "./formats";
 import type { TransferCard } from "./TransferCard";
 
@@ -116,7 +117,10 @@ export const TRANSFER_FIELDS: Record<TransferFieldId, TransferField> = {
   purchasePrice: {
     label: "Purchase price",
     csvHeader: "Purchase price",
-    read: (c) => num(c.purchasePrice),
+    // `priceText`, not `num`: a price with exactly three decimals gets a fourth, because the
+    // importer's parser refuses `1.125` as ambiguous and reads `1.1250` back exactly. The Rust
+    // writer's `price_text` is the other half, and the golden fence holds the two together.
+    read: (c) => (c.purchasePrice === null ? "" : priceText(c.purchasePrice)),
   },
   purchaseCurrency: {
     label: "Purchase currency",

@@ -33,6 +33,16 @@ import { isBeside, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 import { nextStackPosition, type StackPosition } from "./stackNav";
 import { hasTokenPile, TokenStackPile, type TokenPile } from "./TokenPile";
+import {
+  GRIP_ATTR,
+  storedRailIndex,
+  TOKEN_ITEM,
+  TokenPileGrip,
+  tokenRailSlot,
+  useTokenPileDragSource,
+  useTokenPileDrop,
+  withTokenPile,
+} from "./tokenRail";
 
 /**
  * The group section's own `p-1.5`, one side — 6px, read off the class below.
@@ -355,10 +365,13 @@ export function StackView({
    *  landed. Handed down whole, like `violations`. */
   landed?: ReadonlyMap<number, number>;
   /**
-   * The deck's tokens and emblems, drawn as the **last** pile of the rail (issue #507) — after the
-   * Sideboard, the Maybeboard and every switched-off pile. Absent, or with no tokens, the view is
-   * exactly what it was. It is not a `CardGroup`: it never enters `groups`, so no heading count,
-   * no total and not the arrow `walk` below can see it. See `TokenPile.tsx`.
+   * The deck's tokens and emblems, drawn as a pile **of the rail** (issue #507) at the slot the
+   * reader put it in — `railIndex`, the number of rail piles above it, and last where it names a
+   * slot the rail does not have (`tokenRail.tsx`). Where `moveTo` is given the pile's heading can
+   * be dragged onto any rail pile and its grip arrowed along the rail (spec §3.4). Absent, or with
+   * no tokens, the view is exactly what it was. It is not a `CardGroup`: it never enters `groups`,
+   * so no pile's count, no pile's total and not the arrow `walk` below can see it. See
+   * `TokenPile.tsx`.
    */
   tokenPile?: TokenPile;
   className?: string;
@@ -406,8 +419,10 @@ export function StackView({
   // Every group, not just `flow`: the rail is inside this same box, and a pile in it overflows
   // downward exactly as one in the flow does.
   const drawsTokens = hasTokenPile(tokenPile);
-  // The token pile fans the same way and pushes its tail no further than a deck pile does (a
-  // token card has no chin), so a token pile of two or more reserves the same room.
+  // The token pile is drawn with the deck stack's own parts — a token card is a `DeckCardFace`
+  // over a `CardChin`, exactly a deck card's height — so it fans the same way and an open token
+  // pushes its tail exactly as far as an open deck card does. A token pile of two or more
+  // therefore reserves the same room, and asks nothing of its own.
   const liftRoom =
     groups.some((group) => group.cards.length > 1) || (drawsTokens && tokenPile.tokens.length > 1)
       ? stackLiftRoom(cardZoom)
@@ -448,6 +463,28 @@ export function StackView({
   // would write a new order and still be drawn under it, so it is refused rather than ignored.
   const besideIds = categoryIdsOf(rail.filter(isBeside));
   const offIds = categoryIdsOf(rail.filter((group) => !isBeside(group)));
+  // **The token pile is a pile of the rail and in neither of its runs** (spec §3.4). It is not in
+  // the deck, so no kind and no switch places it; the reader does, with `railIndex` — how many
+  // rail piles are drawn above it. `tokenRailSlot` reads a slot the rail has lost as last, so a
+  // pile put at 3 before two piles were switched back on draws at the foot rather than nowhere.
+  // `tokenRail.tsx` carries why it is an index and never an anchor category.
+  const tokenSlot = drawsTokens ? tokenRailSlot(tokenPile.railIndex, rail.length) : 0;
+  // What the rail draws, in order — its piles with the tokens inserted at their slot. Each rail
+  // pile's index **here** is the slot the token pile takes when it is dropped on that pile, which
+  // is what `StackGroup`'s `tokenSlot` below is handed.
+  const railItems = drawsTokens
+    ? withTokenPile(
+        rail.map((group) => ({ group })),
+        tokenSlot,
+        TOKEN_ITEM,
+      )
+    : rail.map((group) => ({ group }));
+  // The pile moves only where the host offers it — `DeckEditor` hands a `moveTo` down, a story
+  // or a read-only host does not — and a move is stored as `tokenRail.tsx`' index: the last slot
+  // as `-1`, so a pile switched on later lands above the tokens rather than under them. Not
+  // memoised, and nothing needs it to be: every drop target reads its callback through a ref.
+  const moveTokens = drawsTokens ? tokenPile.moveTo : undefined;
+  const moveTokensTo = (slot: number) => moveTokens?.(storedRailIndex(slot, rail.length));
   // **Every card the arrows walk, in the order they are drawn** — the command zone, then the
   // flow, then the rail, each pile's cards in the order it already holds them. It is the same
   // `splitRail` answer the view is drawn from and deliberately not a second derivation of it: a
@@ -804,27 +841,49 @@ export function StackView({
           style={{ width: columnWidth, flex: `0 0 ${columnWidth}px` }}
           className="ml-auto flex flex-col gap-5"
         >
-          {rail.map((group) => (
-            <StackGroup
-              key={group.key}
-              group={group}
-              marketplace={marketplace}
-              violations={violations}
-              theoryPlan={theoryPlan}
-              noted={noted}
-              tracksCollection={tracksCollection}
-              onSelect={selectCard}
-              actions={actions}
-              selectedSlot={selectedSlot}
-              landed={landed}
-              zoom={cardZoom}
-              reorderIds={isBeside(group) ? besideIds : offIds}
-            />
-          ))}
-          {/* The tokens, last: not the deck, not played beside it, and not a pile a card can be
-              dropped into — so after everything that is. The rail is drawn for this alone on a
-              deck with nothing railed, which is the `drawsTokens` above. */}
-          {drawsTokens && <TokenStackPile pile={tokenPile} zoom={cardZoom} />}
+          {/* The rail's piles with the tokens among them, at the slot the reader put them in —
+              last until they move them, which is where every deck's pile started (issue #507).
+              The rail is drawn for the tokens alone on a deck with nothing railed, which is the
+              `drawsTokens` above.
+
+              **Every railed pile is also where the token pile may be let go** — `tokenSlot` is
+              the pile's own index in this list, the tokens counted, which is the slot the tokens
+              take when dropped on it (`useTokenPileDrop` has why). Handed only where the pile can
+              move at all; a pile in the flow or the command zone is never handed one. */}
+          {railItems.map((item, index) =>
+            item === TOKEN_ITEM ? (
+              // `drawsTokens` is always true here — the item is inserted only then — and is
+              // asked again only so the type narrows without an assertion.
+              drawsTokens && (
+                <RailTokenPile
+                  key="token-pile"
+                  pile={tokenPile}
+                  zoom={cardZoom}
+                  slot={tokenSlot}
+                  railLength={rail.length}
+                  onMove={moveTokens === undefined ? undefined : moveTokensTo}
+                />
+              )
+            ) : (
+              <StackGroup
+                key={item.group.key}
+                group={item.group}
+                marketplace={marketplace}
+                violations={violations}
+                theoryPlan={theoryPlan}
+                noted={noted}
+                tracksCollection={tracksCollection}
+                onSelect={selectCard}
+                actions={actions}
+                selectedSlot={selectedSlot}
+                landed={landed}
+                zoom={cardZoom}
+                reorderIds={isBeside(item.group) ? besideIds : offIds}
+                tokenSlot={moveTokens === undefined ? undefined : index}
+                onTokenMove={moveTokens === undefined ? undefined : moveTokensTo}
+              />
+            ),
+          )}
         </div>
       )}
     </div>
@@ -1011,6 +1070,8 @@ function StackGroup({
   zoom,
   flowWidth,
   reorderIds,
+  tokenSlot,
+  onTokenMove,
 }: {
   group: CardGroup;
   marketplace: Marketplace;
@@ -1054,6 +1115,17 @@ function StackGroup({
    * the grip's and the reorder drop's off switch, both at once. See {@link CommandZone}.
    */
   reorderIds?: readonly number[];
+  /**
+   * The slot the **token pile** takes when it is let go on this pile — this pile's own index in
+   * the rail as drawn, the tokens counted (`tokenRail.tsx`' `useTokenPileDrop` has why that is
+   * *land where this one is*). Handed to the rail's piles alone, and only where the host offers the
+   * move: the flow and the command zone are never somewhere the token pile can go, so absent is
+   * this drop's off switch the way `reorderIds` is the category's.
+   */
+  tokenSlot?: number;
+  /** Where a token pile let go here goes — the rail's own `moveTokensTo`, a slot in, the stored
+   *  index out. Absent with {@link tokenSlot}. */
+  onTokenMove?: (slot: number) => void;
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
   const inFlow = flowWidth !== undefined;
@@ -1069,6 +1141,32 @@ function StackGroup({
     over: reorderOver,
     eligible: reorderEligible,
   } = useCategoryReorderDrop(group.categoryId, moveCategory, reorderIds);
+  // **The token pile's drop, on the same wrapper as the category's** — a railed pile is where the
+  // tokens may be let go as well as where a railed pile may. Two `Droppable`s on one element are
+  // legal under `@dnd-kit/dom` (its registry is keyed by entity id, not by node), and what keeps
+  // them apart is `accept()`: `readCategoryDrag` refuses the token pile's payload and
+  // `tokenRail.tsx`' reader refuses a category's, so at most one of the two pairs of flags is ever
+  // up. Named apart for the ref lint's reason, as the pair above is.
+  const {
+    attach: attachTokenDrop,
+    over: tokenOver,
+    eligible: tokenEligible,
+  } = useTokenPileDrop(tokenSlot ?? null, onTokenMove);
+  // One `ref` for the two drops the wrapper carries, and **both cleanups returned**: React 19 calls
+  // what a ref callback returns *instead of* calling it again with `null`, so a composed callback
+  // that returned only one would leave the other registration holding a detached wrapper for the
+  // life of the view. `attachSection` below is the same shape for the section's two consumers.
+  const attachWrapper = useCallback(
+    (node: HTMLElement | null) => {
+      const detachReorder = attachReorder(node);
+      const detachToken = attachTokenDrop(node);
+      return () => {
+        detachReorder();
+        detachToken();
+      };
+    },
+    [attachReorder, attachTokenDrop],
+  );
   // The heading is what a pile is picked up by, and the grip inside it is where the press has to
   // start. `null` in the command zone and under a derived grouping, which registers nothing.
   const { attachSource, attachHandle } = useCategoryDragSource(
@@ -1149,19 +1247,19 @@ function StackGroup({
         // invisible. Said out loud because it is the first thing a reader will suspect: taking an
         // outline away from a drop target looks exactly like the change that would have broken
         // one, and this is not it.
-        // **The two drags share one pair of marks, because only one of them is ever in the
-        // air.** A card being dragged and a pile being dragged are the same two questions —
+        // **The three drags share one pair of marks, because only one of them is ever in the
+        // air.** A card, a pile and the token pile being dragged are the same two questions —
         // "could this pile take what you are holding" and "is it this one" — so a second
-        // colour would be a second vocabulary for one gesture. `useCategoryReorderDrop`
-        // refuses every card drag and `useCategoryDrop` refuses every category drag, so the
-        // two pairs can never both be true.
-        (eligible || reorderEligible) && DROP_RING,
-        (over || reorderOver) && DROP_OVER,
+        // colour would be a second vocabulary for one gesture. Each reader refuses the other two
+        // payloads (`useCategoryReorderDrop` every card and the tokens, `useCategoryDrop` every
+        // pile, `useTokenPileDrop` everything but the tokens), so no two pairs are ever up.
+        (eligible || reorderEligible || tokenEligible) && DROP_RING,
+        (over || reorderOver || tokenOver) && DROP_OVER,
       )}
     >
       {/* The app's own drop mark, the same one the deck's columns used to draw. Outside the
           reorder wrapper below because it is absolutely positioned against *this* section. */}
-      {(over || reorderOver) && <DropIndicator />}
+      {(over || reorderOver || tokenOver) && <DropIndicator />}
       {/* **The whole pile is where a dragged pile may be let go, and this wrapper is how.**
           It is an **ancestor** of everything in the pile rather than an overlay over it, so a
           category drag is accepted anywhere inside the column the reader is aiming at rather
@@ -1177,8 +1275,12 @@ function StackGroup({
           before it measures anything — `readDragGroup` refuses a category and `readCategoryDrag`
           refuses a card. The box stays because it is the right *geometry*: this wraps the whole
           pile, where the section adds its own 6px rim, and because every test and story here
-          addresses the two by element. */}
-      <div ref={attachReorder}>
+          addresses the two by element.
+
+          **It carries the token pile's drop as well, on a railed pile** — the same geometry
+          for the same reason: the tokens let go anywhere on the pile land at its place. Both
+          registrations ride one composed ref, `attachWrapper`. */}
+      <div ref={attachWrapper}>
         {/* **The heading is the drag source and the grip only says where the press may start.**
             What travels under the pointer is then the pile's name and its two numbers rather than
             a 14px ghost of the glyph — every other drag in this app previews the thing being
@@ -1246,13 +1348,57 @@ function StackGroup({
 }
 
 /**
- * How a test — or a live pass — finds one pile's grip. An attribute rather than a role, because
- * every one of these is a `button` with an accessible name of its own and the sweep that wants
- * them all wants "the piles that can be moved" rather than any particular name.
- *
- * `deckGroupProps`' `DECK_GROUP_ATTR` and `STACK_ATTR` are the same idea for the same reason.
+ * How a test — or a live pass — finds one pile's grip, the token pile's included. Declared in
+ * `tokenRail.tsx` since the token pile's grip wears it too (that module cannot import this view
+ * without the two importing each other), and exported here still, where every probe has always
+ * found it.
  */
-export const GRIP_ATTR = "data-category-grip";
+export { GRIP_ATTR };
+
+/**
+ * The token pile as the rail draws it — `TokenPile.tsx`'s `TokenStackPile`, handed the grip and
+ * the drag source that let a reader move it along the rail (spec §3.4).
+ *
+ * **A component of its own for `StackGroup`'s reason**: the drag source is a hook, and the pile
+ * is one item of the rail's `map`. What it adds to the pile is exactly what `StackGroup` adds to a
+ * category's heading — {@link useTokenPileDragSource}'s `attachSource` on the heading's wrapper,
+ * which is what is dragged, and a {@link TokenPileGrip} in the heading's grip slot, which is where
+ * the press must start and the whole of the keyboard's way to move it.
+ *
+ * `onMove` absent is the off switch for both at once, as `reorderIds` is for a category: a host
+ * that offers no move draws no grip and registers no source.
+ */
+function RailTokenPile({
+  pile,
+  zoom,
+  slot,
+  railLength,
+  onMove,
+}: {
+  pile: TokenPile;
+  zoom: number;
+  /** Where the pile is drawn — `tokenRailSlot`'s answer, never the stored index. */
+  slot: number;
+  /** How many rail piles there are besides the tokens — the `N` the grip's name counts to, less
+   *  the tokens themselves. */
+  railLength: number;
+  /** A move to slot `n`, stored by the caller. */
+  onMove?: (slot: number) => void;
+}) {
+  const { attachSource, attachHandle } = useTokenPileDragSource(onMove !== undefined);
+  return (
+    <TokenStackPile
+      pile={pile}
+      zoom={zoom}
+      sourceRef={attachSource}
+      handle={
+        onMove === undefined ? undefined : (
+          <TokenPileGrip ref={attachHandle} slot={slot} railLength={railLength} onMove={onMove} />
+        )
+      }
+    />
+  );
+}
 
 /**
  * The grip a pile is picked up by — **and the whole of the keyboard's way to move one.**

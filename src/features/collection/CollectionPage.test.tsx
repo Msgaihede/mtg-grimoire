@@ -340,6 +340,7 @@ const BURN: DeckRow = {
   separateXGroup: false,
   tokensOpen: false,
   tokenStack: false,
+  tokenRailIndex: -1,
   // `true` where its neighbour above is `false` — `decks.stats_open` is `NOT NULL
   // DEFAULT 1`, because every deck that exists today draws the Deck stats band and has
   // no control to hide it.
@@ -4565,6 +4566,51 @@ describe("locking a folder", () => {
     const remove = screen.getByRole("menuitem", { name: /^Delete/ });
     expect(remove).toHaveAttribute("aria-disabled", "true");
     expect(remove).toHaveAccessibleName(/a folder above it is locked/);
+  });
+
+  /**
+   * **And downward** — `delete_folder`'s `FOLDER_HOLDS_LOCKED`. `Trade binder` carries no lock of
+   * its own, but deleting it re-files everything under it, a locked `Graded` two levels down
+   * included, so the row greys and names the folder *inside* as the reason. Two levels, so a
+   * check of the direct children alone would miss it. Its own Lock row stays live: that flag is
+   * still the reader's to set.
+   *
+   * The second render is the control, and it differs only in `Graded`'s flag: a drawer with an
+   * unlocked sub-tree keeps a live Delete, so the greying is the lock's and not the children's.
+   */
+  it("greys Delete… over a locked folder inside it, naming that as the reason", async () => {
+    const GRADED: CollectionFolder = {
+      ...FOILS,
+      id: 11,
+      parentId: FOILS.id,
+      name: "Graded",
+      syncUid: "uid-graded",
+    };
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, { ...GRADED, locked: true }]);
+    const user = userEvent.setup();
+    const { unmount } = wrap(<CollectionPage />);
+    // The whole sub-tree on the wall, `Graded` included — so the menu opened below is asked about a
+    // cabinet the page has finished reading, not one still missing its deepest folder.
+    await findHeading("Graded");
+
+    await shelfMenu(user, "Trade binder");
+    const remove = screen.getByRole("menuitem", { name: /^Delete/ });
+    expect(remove).toHaveAttribute("aria-disabled", "true");
+    expect(remove).toHaveAccessibleName(/a folder inside it is locked/);
+    expect(screen.getByRole("menuitem", { name: "Lock folder" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+    await user.click(remove);
+    expect(screen.queryByRole("group", { name: "Delete Trade binder" })).toBeNull();
+    unmount();
+
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, GRADED]);
+    wrap(<CollectionPage />);
+    await findHeading("Graded");
+    await shelfMenu(user, "Trade binder");
+    expect(screen.getByRole("menuitem", { name: /^Delete/ })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 
   /**

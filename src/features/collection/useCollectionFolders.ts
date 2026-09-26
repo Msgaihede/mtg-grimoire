@@ -98,11 +98,12 @@ export function useCollectionFolders() {
    * the definition rather than on a call site.
    *
    * A refusal here is a busy database, a folder another surface has already deleted, or one of
-   * the cabinet's **five** refusals in words; the middle one must not leave a tree drawing a node
-   * that is gone. Four are `FOLDER_GONE`, `FOLDER_CYCLE`, `FOLDER_NOT_YOURS` and
-   * `FOLDER_IS_LOCKED` — which are the ones these five writes can raise — plus `ENTRY_IN_A_DECK`,
-   * which belongs to `set_entry_folder` and reaches {@link useSetCollectionFolder} below rather
-   * than this hook. That last one is the odd one out: the other four are about a **folder**, and
+   * the cabinet's **six** refusals in words; the middle one must not leave a tree drawing a node
+   * that is gone. Five are `FOLDER_GONE`, `FOLDER_CYCLE`, `FOLDER_NOT_YOURS`, `FOLDER_IS_LOCKED`
+   * and `FOLDER_HOLDS_LOCKED` — which are the ones these five writes can raise — plus
+   * `ENTRY_IN_A_DECK`, which belongs to `set_entry_folder` and reaches
+   * {@link useSetCollectionFolder} below rather than this hook. That last one is the odd one out:
+   * the other five are about a **folder**, and
    * it is about the **row** being filed, refusing to let a copy walk out of a deck's group by
    * hand.
    *

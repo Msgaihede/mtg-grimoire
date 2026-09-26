@@ -719,9 +719,11 @@ pub fn collection_to_deck(
 /// **And the consequence, said plainly, because the button's name is only visible to somebody
 /// reading it: a cut does not advance the undo cursor, so the previous step remains the one
 /// Ctrl+Z will take.** Cutting a card and pressing Ctrl+Z reverses the *older* change — the
-/// rename, the add, the pile move before it — rather than the cut and rather than nothing. The
-/// label is honest about that the whole time; a keyboard user who never looks at it is who this
-/// sentence is for.
+/// rename, the pile move before it — **when the deck still holds what that change left**. When
+/// the older change touched the card that was cut (the stepper's +1, the add), it does not: the
+/// press is refused with [`crate::deck_undo::RETIRED`] and the step retired, because putting its
+/// rows back would restore a card the reader has just cut and whose copies are in
+/// `Recently removed` — `ctrl_z_after_a_cut_is_refused_rather_than_bringing_the_card_back`.
 ///
 /// The complete way back is [`collection_to_deck`], and **the Collection Search tab is what
 /// calls it** — landed 2026-08-23, which is what this paragraph waited for. A deck group is
@@ -1483,6 +1485,150 @@ mod tests {
             history(&conn, deck).len(),
             2,
             "while the history carries both presses"
+        );
+    }
+
+    /// **What pressing Ctrl+Z after a cut does.** The stepper takes Bolt from 4 to
+    /// 5 and files a step; the cut takes the row to nothing and files none, so the button still
+    /// names the 4 → 5 change. Putting that step's "before" back would bring back a card the
+    /// reader has just cut — reading 0/4 owned, because its copies are in `Recently removed`.
+    /// The step's "after" (Bolt ×5) is not what the deck holds, so the press is refused, the cut
+    /// stands, and the step — which can never apply again — is retired so the next Ctrl+Z is
+    /// not the same refusal.
+    #[test]
+    fn ctrl_z_after_a_cut_is_refused_rather_than_bringing_the_card_back() {
+        let (conn, deck, cat, dc) = cut_fixture();
+        crate::deck::set_card_quantity(&conn, deck, "bolt", cat, "live", None, 5).unwrap();
+        let stepped = crate::deck_undo::next_undo(&conn, deck)
+            .unwrap()
+            .expect("the stepper filed one");
+        deck_to_collection(&conn, dc, 5).unwrap();
+        assert_eq!(deck_copies(&conn, deck, "bolt"), 0);
+
+        let refused = crate::deck_undo::apply_reversal(&conn, deck, stepped, true).unwrap_err();
+
+        assert_eq!(refused, crate::deck_undo::RETIRED);
+        assert_eq!(
+            deck_copies(&conn, deck, "bolt"),
+            0,
+            "the card the reader cut stays cut"
+        );
+        assert_eq!(
+            removed_copies(&conn, "bolt"),
+            4,
+            "and its copies stay where the cut put them"
+        );
+        assert_eq!(
+            crate::deck_undo::next_undo(&conn, deck).unwrap(),
+            None,
+            "the stale step is retired, so the cursor is not wedged on it"
+        );
+    }
+
+    /// Live copies of one printing in one pile of a deck.
+    fn pile_copies(conn: &Connection, deck: i64, category: i64, card_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM deck_cards
+              WHERE deck_id = ?1 AND category_id = ?2 AND card_id = ?3 AND variant = 'live'",
+            params![deck, category, card_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **Undoing a move after a filing.** Bolt ×2 moves Main → Ramp (a step), then two more copies are filed into
+    /// Ramp from the Collection tab (no step), so Ramp holds four. Undoing the move deleted the
+    /// Ramp ×4 row and put Main ×2 back — leaving two copies in the deck's group that no row
+    /// claims, invisible and unavailable to every other deck. Refused instead, and the filing
+    /// stands.
+    #[test]
+    fn undoing_a_move_after_copies_were_filed_into_its_pile_is_refused() {
+        let (conn, deck, main) = fixture();
+        plays(&conn, deck, main);
+        let ramp = crate::schema::tests::category(&conn, deck, "main", "Ramp");
+        let entry = seed_entry(&conn, "bolt", 4, None);
+        collection_to_deck(&conn, entry, deck, Pile::Id(main), 2).unwrap();
+        crate::deck::move_card(&conn, deck, "bolt", main, Some(ramp), None, "live", None).unwrap();
+        let moved = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        collection_to_deck(&conn, root_entry(&conn, "bolt"), deck, Pile::Id(ramp), 2).unwrap();
+        assert_eq!(pile_copies(&conn, deck, ramp, "bolt"), 4);
+
+        let refused = crate::deck_undo::apply_reversal(&conn, deck, moved, true).unwrap_err();
+
+        assert_eq!(refused, crate::deck_undo::RETIRED);
+        assert_eq!(pile_copies(&conn, deck, ramp, "bolt"), 4);
+        assert_eq!(pile_copies(&conn, deck, main, "bolt"), 0);
+        assert_eq!(
+            group_copies(&conn, deck, "bolt"),
+            4,
+            "every copy in the group is still claimed by a row"
+        );
+    }
+
+    /// The same over a whole list: undoing an import deleted every live row and put the
+    /// pre-import list back, so a card filed from the Collection tab since went with it — and its
+    /// copies stayed in the group with no row claiming them.
+    #[test]
+    fn undoing_an_import_after_a_card_was_filed_into_the_deck_is_refused() {
+        let (conn, deck, main) = fixture();
+        crate::import::commit_import(
+            &conn,
+            deck,
+            LIVE,
+            "merge",
+            &[crate::import::ImportItem {
+                card_id: "bolt-m10".to_owned(),
+                quantity: 2,
+                category_name: "Main deck".to_owned(),
+                inactive: false,
+                finish: None,
+                label_name: None,
+                label_color: None,
+            }],
+        )
+        .unwrap();
+        let imported = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        let entry = seed_entry(&conn, "bolt", 1, None);
+        collection_to_deck(&conn, entry, deck, Pile::Id(main), 1).unwrap();
+
+        let refused = crate::deck_undo::apply_reversal(&conn, deck, imported, true).unwrap_err();
+
+        assert_eq!(refused, crate::deck_undo::RETIRED);
+        assert_eq!(deck_copies(&conn, deck, "bolt"), 1, "the filed card stays");
+        assert_eq!(
+            deck_copies(&conn, deck, "bolt-m10"),
+            2,
+            "and so does the import"
+        );
+    }
+
+    /// **A pile a quick add invented, and a filing into it since.** Undoing the add deletes the
+    /// pile it made, and the CASCADE would take the filed card's row with it while its copies stay
+    /// in the group with no row claiming them — the filing's own cells are nowhere in the add's
+    /// step, so only asking what sits under a pile before deleting it can see this.
+    #[test]
+    fn undoing_an_add_that_made_its_pile_is_refused_once_the_pile_holds_a_filing() {
+        let (conn, deck, _main) = fixture();
+        crate::deck::add_card(&conn, deck, "bolt-m10", None, Some("Ramp"), LIVE, None, 1).unwrap();
+        let added = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        let entry = seed_entry(&conn, "bolt", 2, None);
+        collection_to_deck(&conn, entry, deck, Pile::Name("Ramp"), 2).unwrap();
+        let ramp: i64 = conn
+            .query_row(
+                "SELECT id FROM deck_categories WHERE deck_id = ?1 AND name = 'Ramp'",
+                params![deck],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let refused = crate::deck_undo::apply_reversal(&conn, deck, added, true).unwrap_err();
+
+        assert_eq!(refused, crate::deck_undo::RETIRED);
+        assert_eq!(pile_copies(&conn, deck, ramp, "bolt"), 2);
+        assert_eq!(
+            group_copies(&conn, deck, "bolt"),
+            2,
+            "and both copies are still claimed"
         );
     }
 

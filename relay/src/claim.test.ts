@@ -253,9 +253,20 @@ describe("DEVICE_ID", () => {
  * `fakeEnv` supplies D1 and nothing else, because `groupauth.ts` needs nothing else. `/token`
  * mints, so it also needs the signing key — and it asks for it through `required`, which turns
  * an unset binding into a throw rather than into tokens signed with the word "undefined".
+ *
+ * **And `GROUP`, because a refusal on this route can revoke** (spec §7.1): a dead row or a closed
+ * grace window drops the group's log through the Durable Object. Without the binding `dropGroup`
+ * threw a `TypeError` inside `serveOrRevoke`'s swallowed catch, so the tests below asserted a 401
+ * over a revocation that had never reached the log — `dropped` is what lets them say it did.
  */
-function tokenEnv(...groups: string[]): Env {
-  return { ...fakeEnv(...groups), RELAY_HMAC_KEY: HMAC };
+function tokenEnv(...groups: string[]): Env & { dropped: string[] } {
+  const dropped: string[] = [];
+  return {
+    ...fakeEnv(...groups),
+    RELAY_HMAC_KEY: HMAC,
+    GROUP: fakeGroups(dropped),
+    dropped,
+  } as unknown as Env & { dropped: string[] };
 }
 
 /**
@@ -541,6 +552,8 @@ describe("/token — the group door", () => {
     const { status } = await answer(await handleToken(request, env));
 
     expect(status).toBe(401);
+    // §7.1 ran on the way to that refusal, log and all — the half a 401 alone cannot show.
+    expect(env.dropped).toEqual(["/g/g1/drop"]);
   });
 
   it.each([
@@ -603,7 +616,7 @@ describe("/token — a grace window settles the same on both doors", () => {
    * the revocation is asserted where it belongs — in the cap suite below, on the one path where
    * the ordering of a refusal against a write is the whole point.
    */
-  async function twoDoors(graceUntil: number): Promise<Env> {
+  async function twoDoors(graceUntil: number): Promise<Env & { dropped: string[] }> {
     const env = tokenEnv("g1", "g2");
     await seedGroup(env, "g2", 0, AUTH_TWO);
     for (const subject of ["sub-0", "sub-1"]) {
@@ -643,6 +656,8 @@ describe("/token — a grace window settles the same on both doors", () => {
     expect(viaRefresh.status).toBe(401);
     expect(viaGroup.status).toBe(401);
     expect(viaGroup.body.access).toBeUndefined();
+    // Each door revoked its own subject's group, and only that one.
+    expect(env.dropped).toEqual(["/g/g1/drop", "/g/g2/drop"]);
   });
 });
 
@@ -735,6 +750,7 @@ describe("/token — the five-device cap", () => {
     const { tables, env } = harness({ groups: ["g1"] });
     await seedGroup(env, "g1", 0, AUTH_ONE);
     for (const device of ["d1", "d2", "d3", "d4"]) seat(tables, "g1", device);
+    tables.entitlements[0].refresh_device = "d1";
     await env.DB.prepare(`UPDATE entitlements SET status = ? WHERE subject = ?`)
       .bind("dead", "sub-0")
       .run();
@@ -749,6 +765,8 @@ describe("/token — the five-device cap", () => {
     // And §7.1's revocation did run, which is what makes the assertion above about the *cap*
     // rather than about a refusal that happened before anything at all was attempted.
     expect(tables.entitlements[0].refresh_secret).toBeNull();
+    // With its holder: a `refresh_device` beside a NULL secret names a device holding nothing.
+    expect(tables.entitlements[0].refresh_device).toBeNull();
   });
 
   it("spends no slot on a group auth it is about to refuse", async () => {
@@ -931,6 +949,7 @@ describe("/claim — registering the group's relay key", () => {
     const { tables, env } = harness({ groups: ["g1"], bound: true });
     withCode(tables);
     for (const device of ["d1", "d2", "d3", "d4", "d5"]) seat(tables, "g1", device);
+    tables.entitlements[0].refresh_device = "d1";
 
     const { status, body } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
 
@@ -940,6 +959,12 @@ describe("/claim — registering the group's relay key", () => {
     expect(body.error).toMatch(/5 devices/);
     expect(body.access).toBeUndefined();
     expect(idsIn(tables, "g1")).toEqual(["d1", "d2", "d3", "d4", "d5"]);
+    // **And the secret `d1` holds is still the one on the row.** Every claim mints a fresh
+    // secret, so a refusal decided after the write would have handed nobody the new one and taken
+    // the old one from the device that was using it — a sixth machine plugged in for a minute
+    // costing the paying device its refresh door.
+    expect(tables.entitlements[0].refresh_secret).toBe("secret-0");
+    expect(tables.entitlements[0].refresh_device).toBe("d1");
     // ⚠️ **And the group can still rotate**, which is the reader's way out — remove a device,
     // the rotation frees its row, claim again. `seedGroup` runs ahead of the cap for this: a
     // refusal placed before it would leave a group bound with `group_auth` still NULL, `/rotate`
@@ -1055,5 +1080,69 @@ describe("/claim — the binding moves rather than being refused", () => {
     // was already there rather than replacing the roll.
     expect(idsIn(tables, "g1")).toEqual([DEVICE, "desk"]);
     expect(dropped).toEqual([]);
+  });
+});
+
+/**
+ * The group-wide design's §4: *"Connecting Patreon again on any device re-binds the same group and
+ * mints a fresh secret."* `handleClaim` used to hand back the stored one, and no test asked.
+ *
+ * **What reuse cost.** The refresh secret opens `/rotate`, so a phone that pressed Connect and was
+ * then removed — the Remove dialog's own case, a phone that was lost — kept a credential that
+ * could publish a rotation to the group that removed it, and every later Connect press, on any
+ * device and onto any group, handed the same secret back out again.
+ */
+describe("/claim — the refresh secret", () => {
+  /** What `randomSecret` emits: thirty-two bytes through `md5.ts`'s lowercase `hex`. */
+  const SECRET_SHAPE = /^[0-9a-f]{64}$/;
+
+  it("mints a fresh secret on a re-claim, and the stored one stops opening anything", async () => {
+    // `fakeTables` files `sub-0` bound to `g1` holding `secret-0`: a membership that has claimed
+    // before, which is the state a second Connect press finds.
+    const { tables, env } = harness({ groups: ["g1"] });
+    withCode(tables);
+
+    const { status, body } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+
+    expect(status).toBe(200);
+    expect(body.refresh).not.toBe("secret-0");
+    expect(body.refresh).toMatch(SECRET_SHAPE);
+    // The app stores whatever this answers (`entitlement::claim` → `store_grant`), so the row
+    // and the answer have to be the same secret or the device that pressed Connect is stranded.
+    expect(tables.entitlements[0].refresh_secret).toBe(body.refresh);
+    const stale = post("/token", { refresh: "secret-0", device: DEVICE });
+    expect((await answer(await handleToken(stale, env))).status).toBe(401);
+  });
+
+  it("mints a different secret for each of two claims", async () => {
+    // From unbound, so the first claim is the one that used to mint and the second the one that
+    // used to reuse — `row.refresh_secret ?? randomSecret()` answered the same string twice.
+    const { tables, env } = harness({ groups: ["g1"], bound: false });
+
+    withCode(tables);
+    const first = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+    withCode(tables);
+    const second = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(first.body.refresh).toMatch(SECRET_SHAPE);
+    expect(second.body.refresh).toMatch(SECRET_SHAPE);
+    expect(second.body.refresh).not.toBe(first.body.refresh);
+  });
+
+  it("records the device the secret was handed to, and moves it with the next claim", async () => {
+    // `/rotate` retires the secret when an adopted manifest omits this device, so the relay has
+    // to know which device that is — and it is the claim's `device`, which is the only request
+    // the connecting device is certain to make.
+    const { tables, env } = harness({ groups: ["g1"], bound: false });
+
+    withCode(tables);
+    await handleClaim(post("/claim", { ...WELL_FORMED, device: "phone" }), env);
+    expect(tables.entitlements[0].refresh_device).toBe("phone");
+
+    withCode(tables);
+    await handleClaim(post("/claim", { ...WELL_FORMED, device: "desk" }), env);
+    expect(tables.entitlements[0].refresh_device).toBe("desk");
   });
 });

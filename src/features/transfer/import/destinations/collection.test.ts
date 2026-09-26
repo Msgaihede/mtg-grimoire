@@ -256,6 +256,45 @@ describe("planCollectionImport", () => {
       listOf(line({ extra: { purchasePrice: "ask seller" } })), [hit(0, "c1")], OPTIONS);
     expect(plan.items[0].purchasePrice).toBeUndefined();
   });
+
+  /**
+   * **A decimal comma is a decimal point**, which is how a spreadsheet in a Danish or German
+   * locale writes every price in the column. The importer stripped every comma, so `4,50` was
+   * stored as a purchase price of 450 — silently, on every row. `prices.ts`' one parser is what
+   * reads it now; its own test carries the whole table.
+   */
+  it("reads a decimal-comma purchase price, with or without a symbol", () => {
+    const plan = planCollectionImport(
+      listOf(
+        line({ extra: { purchasePrice: "4,50" } }),
+        line({ lineNumber: 2, extra: { purchasePrice: "€1.234,50" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c2")],
+      OPTIONS,
+    );
+    expect(plan.items.map((i) => i.purchasePrice)).toEqual([4.5, 1234.5]);
+    expect(plan.unreadablePrices).toEqual([]);
+  });
+
+  /**
+   * **A price cell the file filled and this could not read is said, not dropped** — the
+   * `unknownConditions` row's reasoning: silence here is indistinguishable from a file with no
+   * price column at all. The copy still lands, with no price, which is what a refusal means. A
+   * blank cell never reaches the planner (`parseCsvGrid` keeps only non-empty cells), so it is
+   * not flagged.
+   */
+  it("flags a price cell it could not read, and still files the copy", () => {
+    const plan = planCollectionImport(
+      listOf(
+        line({ extra: { purchasePrice: "1,2,3" } }),
+        line({ lineNumber: 2, name: "Bolt", extra: { purchasePrice: "0.99" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c2")],
+      OPTIONS,
+    );
+    expect(plan.items.map((i) => i.purchasePrice)).toEqual([undefined, 0.99]);
+    expect(plan.unreadablePrices).toEqual([{ lineNumber: 1, name: "Sol Ring", said: "1,2,3" }]);
+  });
 });
 
 /**
@@ -306,5 +345,50 @@ describe("an ungraded copy round-trips through the collection's own CSV", () => 
     expect(plan.items.map((i) => i.condition)).toEqual(["NONE", "NM"]);
     // An empty cell is a file this app read correctly, not a grade it failed to.
     expect(plan.unknownConditions).toEqual([]);
+  });
+});
+
+/**
+ * **A purchase price through the collection's own CSV and back, losslessly.** A price recorded
+ * with exactly three decimals is written `1.1250` (`priceText`), because `1.125` is how a Danish
+ * spreadsheet writes eleven hundred and twenty-five and the parser refuses it as ambiguous. A file
+ * an older build wrote still says `1.125`, and that one is **listed** rather than read as 1125.
+ */
+describe("a purchase price round-trips through the collection's own CSV", () => {
+  const rowOf = (name: string, purchasePrice: number): CollectionRow =>
+    ({
+      name, quantity: 1, setCode: "LTC", collectorNumber: "285", finish: "nonfoil", lang: "en",
+      condition: "NM", purchasePrice, purchaseCurrency: "EUR",
+    }) as unknown as CollectionRow;
+
+  const exported = () =>
+    formatExport(
+      [rowOf("Sol Ring", 4.25), rowOf("Arcane Signet", 1.125), rowOf("Command Tower", 1.2345)].map(
+        fromCollectionRow,
+      ),
+      "csv",
+      // The default set leaves the column off; a reader backing up what they paid switches it on.
+      [...defaultFields("csv", "collection"), "purchasePrice"],
+    );
+  const planOf = (text: string) =>
+    planCollectionImport(parseDecklist(text), [0, 1, 2].map((i) => hit(i, `c${i}`)), {
+      condition: CONDITION_NOT_SET,
+      finish: null,
+    });
+
+  it("writes every price so it reads back as itself, three decimals included", () => {
+    const text = exported();
+    expect(text.split("\n")[0]).toContain("Purchase price");
+    expect(text).toContain("1.1250");
+
+    const plan = planOf(text);
+    expect(plan.items.map((i) => i.purchasePrice)).toEqual([4.25, 1.125, 1.2345]);
+    expect(plan.unreadablePrices).toEqual([]);
+  });
+
+  it("lists the three-decimal cell an older build wrote, rather than reading it as 1125", () => {
+    const plan = planOf(exported().replace("1.1250", "1.125"));
+    expect(plan.items.map((i) => i.purchasePrice)).toEqual([4.25, undefined, 1.2345]);
+    expect(plan.unreadablePrices).toEqual([{ lineNumber: 3, name: "Arcane Signet", said: "1.125" }]);
   });
 });

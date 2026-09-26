@@ -11,22 +11,39 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   job's name embeds its matrix values, so the aggregator is what has teeth and the matrix
   underneath stays free. `enforce_admins` is **false**: a red PR cannot merge, a direct push to
   `main` still can.
-- **A change only builds the half it touched.** The `changes` job diffs against the base and
-  routes each path: `src-tauri/**` → `rust` **and `wasm`**; **`crates/*` → all four**, which
-  is what the `*)` fail-safe was already doing and is now declared (the `card-scanner` package
-  is compiled by `rust` and `android`, and `frontend` reads six of its `.rs` files as text for
-  `ipc.test.ts`'s mirror rows and lints its `scripts/*.mjs`); frontend sources, lockfiles,
-  configs and **`scripts/` because `eslint .` lints it** → `frontend`; `src/workers/`,
-  `src/web/`, `src/lib/core/`, `scripts/build-wasm.mjs` and `vite.web.config.ts` → `frontend`
-  and `wasm`; `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` itself → all four; prose and
-  editor bookkeeping → neither; and **anything unrecognised → every build job**. That last arm
-  is the
-  fail-safe that makes the lists safe to be wrong in the cheap direction. **Only the "neither"
-  arm can wrongly skip work, so it stays small.**
+- **A change only builds what it can have broken.** The `changes` job diffs against the base and
+  hands the paths to **`scripts/ci-route.mjs`**, whose arms are `case` semantics kept exactly —
+  first match wins, `*` crosses `/`. `src-tauri/**` → **all four build jobs**, `frontend`
+  included, because frontend tests read its files as text (`ipc.test.ts`'s mirror rows, the
+  share golden); `src/features/transfer/__golden__/**` and `src/lib/userTables.json` →
+  `frontend` **and `rust`**, because Rust tests read them; **`crates/*` → all four** (the
+  `card-scanner` package is compiled by `rust` and `android`, and `frontend` reads eight of its
+  `.rs` files as text for `ipc.test.ts` and lints its `scripts/*.mjs`); frontend sources,
+  lockfiles, configs and **`scripts/` because `eslint .` lints it** → `frontend`;
+  `src/workers/`, `src/web/`, `src/lib/core/`, `scripts/build-wasm.mjs` and
+  `vite.web.config.ts` → `frontend` and `wasm`; `*.ps1`/`*.psm1`/`*.psd1` → `powershell`;
+  `ci.yml` and the router itself → every job, `powershell` included; prose and editor
+  bookkeeping → neither; and **anything unrecognised → every build job**. That last arm is the
+  fail-safe that makes the lists safe to be wrong in the cheap direction — and it is
+  load-bearing for `share-worker/`, whose `wrangler.jsonc` a Rust test reads. **Only the
+  "neither" arm can wrongly skip work, so it stays small.**
   **`scanner-bundle.yml` has no arm of its own (2026-09-15)**, so a PR touching it falls to that
   fail-safe and runs `frontend`, `rust`, `wasm` and `android` — none of which reads the file —
   and not `powershell`. That errs in the cheap direction; the arm it belongs on is
   `release.yml`'s "neither", since no job in `ci.yml` reads either file.
+  - **The two halves read each other's files, and `scripts/ci-route.test.mjs` is the fence.**
+    Until 2026-09-26 the router said they shared no inputs, so a Rust-only PR that drifted from
+    `ipc.ts` merged green and the red landed on the next unrelated PR. The test derives the
+    census on every run — every `?raw` a collected test imports, every
+    `include_str!`/`include_bytes!`/`CARGO_MANIFEST_DIR` read in either cargo package — and fails
+    when a file is read by one job and not routed to it, or crosses and is not routed to both.
+    It also holds `ci.yml` to exposing and gating on the names `JOBS` prints, since a name the
+    workflow reads and the script never prints skips its job and `ci-ok` counts that as a pass;
+    the step itself fails on a missing or non-boolean output line.
+  - **A push to `main` gets a concurrency group of its own**; PR runs still cancel each other.
+    A `main` run's routing diffs from `github.event.before`, so a cancelled one's changes were
+    never routed again — and disabling `cancel-in-progress` alone would not save them, because
+    GitHub still replaces a *pending* run in the same group with the next.
 - **The `wasm` job exists because a fully green `npm run verify` can ship a broken web
   target.** The crate is one crate with two targets, and a `use tauri::` added to a module on
   the wasm side of `lib.rs`'s module map compiles on desktop and fails on
@@ -59,15 +76,16 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
     no Gradle file. `build.gradle.kts` and `AndroidManifest.xml` keep routing to `rust` alone,
     because they are `include_str!` test inputs rather than build inputs.
 - **The `powershell` job runs the repo's `.ps1` tests on `windows-latest`** — `lock.test.ps1`
-  for the worktree locks and `pr-auto.test.ps1` for the auto-PR guard — and its `case` arm must
-  stay **above** `src-tauri/*` and `scripts/*` — first-match-wins, and `scripts/` is on the
-  frontend list only because `eslint .` lints it, which a `.ps1` is not. It matches `.psm1`
-  and `.psd1` too, because **the `*)` fail-safe does not set `powershell`**: a module would
-  otherwise fall through it and skip the only job that tests the change. Windows is not a
+  for the worktree locks and `pr-auto.test.ps1` for the auto-PR guard — and its arm in
+  `ci-route.mjs` must stay **above** `src-tauri/*` and `scripts/*` — first-match-wins, and
+  `scripts/` is on the frontend list because `eslint .` lints it, which a `.ps1` is not. It
+  matches `.psm1` and `.psd1` too, because **the fail-safe does not set `powershell`**: a module
+  would otherwise fall through it and skip the only job that tests the change. Windows is not a
   preference — `lock.ps1` identifies a holder by pid + name + `StartTime`.
-- **A new job gated on a `changes` output belongs in two places, not one:** `ci-ok`'s `needs`
-  **and** its success-or-skipped loop. In `needs` alone, its failure is a result the gate never
-  reads.
+- **A new job gated on a `changes` output belongs in every list of jobs, not one:**
+  `ci-route.mjs`'s `JOBS`, the classify step's output-name check, `changes.outputs`, `ci-ok`'s
+  `needs` **and** its success-or-skipped loop. In `needs` alone, its failure is a result the gate
+  never reads.
 - **Three traps in that routing, all measured against a fixture repo:**
   1. A workflow-level `paths:` filter is the obvious implementation and is **wrong** — it skips
      the whole workflow, `ci-ok` included, and a required check that never reports leaves every
@@ -139,8 +157,8 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
 
 ## `scanner-bundle.yml`
 
-Added 2026-09-15 and **not yet run on GitHub** — every rule here is from the file, local checks
-and a live probe of Scryfall, not from a run. The whole record:
+Added 2026-09-15 and **green on GitHub** — dispatched on `main` that day (38 min, which published
+`scanner-bundle-v3`) and on its weekly schedule 2026-09-21 (28 min). The whole record:
 [card-scanner.md](../docs/reference/card-scanner.md) §10.
 
 - **It builds the card scanner's hash bundle from Scryfall's `default_cards`, weekly and on
@@ -174,5 +192,6 @@ and a live probe of Scryfall, not from a run. The whole record:
   `steps.eval.outcome`, because under `continue-on-error` a failed step's `conclusion` is `success`.
 - **Prerelease and `--latest=false`**, so nothing asking GitHub for the latest release — the in-app
   updater among them — is handed a bundle.
-- **`release.yml` depends on it having published** (see that section): dispatch it once on `main`
-  before the first release after it lands.
+- **`release.yml` depends on it having published** (see that section) — which it has since the
+  2026-09-15 dispatch. A new `FORMAT_VERSION` moves the tag, so the same holds again for the first
+  release after a bump: dispatch it once on `main` first.

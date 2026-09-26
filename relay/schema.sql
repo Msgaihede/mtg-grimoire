@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS entitlements (
   -- is the one that can be got wrong, and it is not in the file that does the deciding.
   grace_until    INTEGER CHECK (grace_until IS NULL OR grace_until > 0),
   group_id       TEXT,                     -- bound on first claim, trust-on-first-use
-  refresh_secret TEXT,                     -- NULL once revoked; this is what revocation clears
+  refresh_secret TEXT,                     -- NULL once revoked, or once its device is off the
+                                           -- roster; minted afresh by every claim
   patreon_refresh TEXT,                    -- for the daily reconciliation
   created_at     INTEGER NOT NULL,
   checked_at     INTEGER NOT NULL
@@ -125,7 +126,7 @@ CREATE TABLE IF NOT EXISTS group_devices (
 -- `IF NOT EXISTS` and does nothing at all on a database that already holds the table, so a new
 -- column written there reaches a fresh deploy and never an existing one.
 --
--- ⚠️ **These two are last in the file, and on a database that already has them they take the
+-- ⚠️ **The `ALTER`s are last in the file, and on a database that already has them they take the
 -- whole file down with them.** `wrangler d1 execute --file` is **atomic**: D1 has no
 -- `ADD COLUMN IF NOT EXISTS`, a duplicate column is an error, and one error rolls back every
 -- statement above — including `CREATE TABLE group_keys`, which would have succeeded alone. This
@@ -150,9 +151,17 @@ CREATE TABLE IF NOT EXISTS pairing_rendezvous (
   PRIMARY KEY (rv, slot)
 );
 
--- **`IF NOT EXISTS` still keeps this table above the two `ALTER TABLE` lines below.** Nothing
+-- **`IF NOT EXISTS` still keeps this table above the `ALTER TABLE` lines below.** Nothing
 -- about a `CREATE TABLE IF NOT EXISTS` needs to run last; the ordering rule this file's own
--- comment states is about the two statements that are NOT idempotent, and this one is not one of
+-- comment states is about the statements that are NOT idempotent, and this one is not one of
 -- them. Adding a table below them would only cost a reader the moment it took to check.
 ALTER TABLE entitlements ADD COLUMN group_epoch INTEGER;
 ALTER TABLE entitlements ADD COLUMN group_auth  TEXT;
+
+-- The device `/claim` handed `refresh_secret` to, so that `/rotate` can retire the secret when a
+-- manifest it adopts omits that device — a removed device keeps whatever its `user.db` holds, and
+-- the secret opens `/token`'s refresh door. NULL beside a live secret is a row claimed before this
+-- column existed, and the next accepted rotation retires that secret whatever its manifest says.
+-- On an existing database this is `relay/migrations/2026-09-26-refresh-device.sql`, run as its
+-- own `--command` for the reason the paragraph above the first `ALTER` gives.
+ALTER TABLE entitlements ADD COLUMN refresh_device TEXT;

@@ -4,7 +4,7 @@ import {
   authIsCurrent,
   authIsRecent,
   currentManifest,
-  equalsConstantTime,
+  groupEpoch,
   keepOnly,
   recordRotation,
 } from "./groupauth";
@@ -57,10 +57,9 @@ const DEVICE_ID = new RegExp(`^${GROUP_SEGMENT}$`);
 /**
  * What a credential looks like on both of these routes: 64 lowercase hex characters.
  *
- * A group auth is `relay_auth`'s 32 bytes as hex (spec §2.1) and a refresh secret is
- * `randomSecret`'s 32 bytes through the same `hex`, so the three credentials this file compares
- * are one shape. It is also the shape `/claim` demands of the `auth` it stores, which is what
- * makes a rotation's `auth` comparable to a claim's at all.
+ * A group auth is `relay_auth`'s 32 bytes as hex (spec §2.1), and it is the only credential either
+ * route takes. It is also the shape `/claim` demands of the `auth` it stores, which is what makes a
+ * rotation's `auth` comparable to a claim's at all.
  *
  * **On the *presented* credential this check changes no answer**, and it is worth saying so:
  * every value it refuses would be refused by the constant-time comparison a moment later
@@ -106,11 +105,9 @@ function json(body: unknown, status = 200): Response {
  * The credential the caller is presenting, or `null` for a request that has not presented one in
  * a shape this relay issues.
  *
- * **In an `authorization: Bearer` header and never in the body or the query string.** `/rotate`
- * may be authenticated with the Patreon refresh secret, which is the credential that can rebind
- * and re-register the whole group — putting it in the body beside the rotation it authorises, or
- * in a URL that lands in every access log between here and the reader, is not a thing to do with
- * it. `/keys` takes the header too, so the two routes are one story.
+ * **In an `authorization: Bearer` header and never in the body or the query string.** A group auth
+ * is the credential that publishes the whole group's roster, and a URL lands in every access log
+ * between here and the reader. `/keys` takes the header too, so the two routes are one story.
  */
 function presentedCredential(request: Request): string | null {
   const header = request.headers.get("authorization");
@@ -120,24 +117,55 @@ function presentedCredential(request: Request): string | null {
 }
 
 /**
- * Is this the refresh secret of the entitlement bound to this group? `/rotate`'s second door.
+ * Retire the group's refresh secret if the manifest just adopted leaves out the device holding it
+ * — the relay's half of a removal, since the removed device keeps whatever its `user.db` holds.
  *
- * **The second door exists for the device that has connected but not yet rotated.** It holds the
- * Patreon secret and the group key alike, so either credential would do; what it must not have
- * to do is derive an auth for an epoch it is about to replace. A group with no entitlement, or
- * one whose secret has been revoked, matches nothing — which is spec §2.4's "no membership, no
- * removal" arriving through the same 401 as a wrong credential.
+ * **Why this and not only the client's own clear.** `client::check_keys` clears the grant on a
+ * device that finds itself off the manifest, but a *lost* phone never runs it, and whoever holds
+ * its `user.db` holds the secret. That secret opens `/token`'s refresh door, so left alive it mints
+ * tokens for the group that removed it — spending the group's requests and one of its five slots,
+ * whose `last_seen` it keeps fresh so the TTL never frees it. The manifest is the roster
+ * (spec §2.3); a secret outlives its device's membership by not one rotation.
  *
- * Looked up by `group_id` and compared in constant time, never `WHERE refresh_secret = ?`: that
- * is a timing oracle on a credential and an index probe on a secret, exactly as `authIsCurrent`
- * says of its own column.
+ * ⚠️ **It no longer opens `/rotate`, and this is why that door was removed rather than guarded.**
+ * The refresh secret used to be `/rotate`'s second credential; no shipped client ever presented it
+ * (`client::post_rotation` always sends the group auth), and a device removed from the group but
+ * still logged into Patreon could press Connect, be handed a fresh secret recorded against itself,
+ * and publish a manifest naming itself back in — which this retirement, running after the record,
+ * would then have kept.
+ *
+ * **A row with no recorded holder is retired by any accepted rotation**, whatever the manifest
+ * says: it was claimed before `refresh_device` existed, and "cannot prove the holder is still
+ * here" is the case to fail closed in. What that costs a holder who *is* still here is one 401
+ * on the refresh door, which the app answers by dropping the dead secret and minting through the
+ * group door from then on (`entitlement::refused_secret`); pressing Connect again records it.
+ *
+ * **Read, then a compare-and-swap on the secret that was read**, because D1 has no interactive
+ * transaction and a `/claim` can land between the two statements. The `WHERE refresh_secret = ?`
+ * binds the value this function just read, never a presented one, so it is not a timing oracle
+ * on a credential; and it works as a version check only because every claim mints a new secret — a
+ * claim that landed in between has changed it, and this changes nothing.
  */
-async function refreshSecretMatches(env: Env, group: string, presented: string): Promise<boolean> {
-  const row = await env.DB.prepare(`SELECT refresh_secret FROM entitlements WHERE group_id = ?`)
+async function retireOrphanedSecret(
+  env: Env,
+  group: string,
+  keys: Record<string, string>,
+): Promise<void> {
+  const row = await env.DB.prepare(
+    `SELECT refresh_secret, refresh_device FROM entitlements WHERE group_id = ?`,
+  )
     .bind(group)
-    .first<{ refresh_secret: string | null }>();
-  if (row === null || row.refresh_secret === null) return false;
-  return equalsConstantTime(row.refresh_secret, presented);
+    .first<{ refresh_secret: string | null; refresh_device: string | null }>();
+  if (row === null || row.refresh_secret === null) return;
+  // `Object.hasOwn` for `handleKeys`' reason: a holder named `constructor` must not be found on
+  // the prototype of a manifest that does not name it.
+  if (row.refresh_device !== null && Object.hasOwn(keys, row.refresh_device)) return;
+  await env.DB.prepare(
+    `UPDATE entitlements SET refresh_secret = NULL, refresh_device = NULL
+      WHERE group_id = ? AND refresh_secret = ?`,
+  )
+    .bind(group, row.refresh_secret)
+    .run();
 }
 
 /**
@@ -172,10 +200,19 @@ function manifestProblem(keys: unknown): string | null {
  * device that stays.
  *
  * **A 409 is the answer that carries the whole guard.** `recordRotation` refuses an epoch that
- * does not strictly advance the group, in one statement, so a removed device that still knows
- * the auth for the epoch it remembers cannot re-register it and walk back into the group that
- * evicted it — and cannot compute the next epoch's auth either, because it no longer has the
- * key. Everything else here is shape.
+ * is not the group's next, in one statement, so a removed device that still knows the auth for
+ * the epoch it remembers cannot re-register it and walk back into the group that evicted it — and
+ * cannot compute the next epoch's auth either, because it no longer has the key. Everything else
+ * here is shape.
+ *
+ * **An epoch past the next one is a 422, not the 409, and the split is diagnostic.** A 409 is a
+ * device that is *behind* — it lost a race to another rotation, and its next `/keys` check adopts
+ * what won. An epoch that skips ahead is one no shipped client can produce: every plan is the
+ * device's own epoch plus one, and the auth it presents is current only if that epoch is the
+ * relay's. So it is a bug or a forgery, and a status of its own keeps it separable in the Worker's
+ * logs from the race that is ordinary. Not a 400: every 400 here is decided from the body alone,
+ * before D1 is read, and this one depends on what the group is standing on. The app treats every
+ * non-2xx from this route alike, so the choice changes no client behaviour.
  *
  * **The order is: every check that costs nothing, then the ones that cost a D1 read.** The
  * credential's shape and the body's are decided in the Worker's own memory; the credential's
@@ -210,16 +247,17 @@ export async function handleRotate(request: Request, env: Env, group: string): P
   if (problem !== null) return json({ error: problem }, 400);
   const keys = body.keys as Record<string, string>;
 
-  // Either credential opens this door and neither is weaker than the other: the group auth is
-  // held by every device in the group, and the refresh secret is held by the one that connected
-  // Patreon. The `||` short-circuits, so the common case — a device rotating with the auth it
-  // derived from the key it is replacing — costs one read rather than two.
-  const authorised =
-    (await authIsCurrent(env, group, presented)) ||
-    (await refreshSecretMatches(env, group, presented));
-  if (!authorised) return json({ error: "unauthorized" }, 401);
+  // **The group auth of the epoch being replaced, and nothing else.** Every device in the group
+  // holds it, and a device removed from the group cannot derive the next one. The Patreon refresh
+  // secret used to open this door too; see `retireOrphanedSecret` for why it no longer does.
+  if (!(await authIsCurrent(env, group, presented))) return json({ error: "unauthorized" }, 401);
 
   if (!(await recordRotation(env, group, epoch, auth, keys))) {
+    // Read after the refusal and only to word it — the decision was the statement above.
+    const current = (await groupEpoch(env, group)) ?? -1;
+    if (epoch > current + 1) {
+      return json({ error: "that rotation skips an epoch the group has not reached" }, 422);
+    }
     return json({ error: "that rotation does not advance the group's key" }, 409);
   }
 
@@ -233,6 +271,10 @@ export async function handleRotate(request: Request, env: Env, group: string): P
   // their own: both publish a manifest, #307 made the manifest the roster, and `keepOnly`
   // reconciles the device roll against it. `Object.keys` and not the object, because the roll
   // counts devices and holds no key material.
+  //
+  // **And where the refresh secret goes with its device**, first, because it is a credential: a
+  // removed device's secret must not outlive the rotation that removed it.
+  await retireOrphanedSecret(env, group, keys);
   await keepOnly(env, group, Object.keys(keys));
 
   // The caller reads the status and nothing else, but naming the epoch the relay is now standing

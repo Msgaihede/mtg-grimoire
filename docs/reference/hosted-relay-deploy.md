@@ -10,7 +10,7 @@ clean, and both clippy legs clean — host `--all-targets` and `--lib --target w
 which CI runs and `verify` does not. **Those three figures are that day's tree and have not been
 re-derived**; the counts move with every branch, so take them as the record of one green run
 rather than as today's number. **It is deployed**: step 1 is done, step 6 has run, and step 3 is
-done except for the two `vars` its own text still lists. **Two of step 4's three secrets are
+done — both `vars` are committed in `wrangler.jsonc`. **Two of step 4's three secrets are
 provably set**, probed 2026-08-30 — `/g/{group}/pull` with a *malformed* bearer answers **401**
 and not 500, and `required(env.RELAY_HMAC_KEY, …)` is called before `verify` can refuse it; the
 same shape holds for `POST /webhook/patreon` with no signature, where `required(env.
@@ -66,7 +66,7 @@ run — it runs workerd locally, contacts nothing and needs no login. Everything
 | The `group_keys` **table** | **applied.** The bearer-carrying `/keys` probe in step 2 is the test — **401 is the pass and 500 is a missing table** — and it answers 401. |
 | This branch's **device roll** | **not deployed, and no route path gives it away.** The tell is a body: `POST /token {group, auth}` **with no `device`** answers **401** from the entitlement lookup, where this tree's code answers **400 `that is not a device id`** before reading anything. So `group_devices`, the cap, `/claim`'s rebind and `keepOnly` are all still un-run. |
 | The D1 database | **exists.** `wrangler.jsonc`'s `database_id` is a real uuid, and has been since before this branch. It holds live entitlement rows, so step 2's `ALTER TABLE`s run against real data. |
-| The Patreon OAuth app | **the client exists.** `PATREON_CLIENT_ID` is real in `entitlement.rs` since `a0eb0c6` (2026-08-30) and was verified live: `GET /oauth2/authorize` with it and `/oauth/patreon/callback` answered 302 to Patreon's login, preserving both parameters, which an unregistered id or an unregistered redirect does not do. **What is still absent from `wrangler.jsonc`'s `vars` is the relay's own copy of it and `PATREON_CAMPAIGN_ID`** — on purpose, because `required()` turns each into a 500 naming it, which is louder than a committed guess. |
+| The Patreon OAuth app | **the client exists.** `PATREON_CLIENT_ID` is real in `entitlement.rs` since `a0eb0c6` (2026-08-30) and was verified live: `GET /oauth2/authorize` with it and `/oauth/patreon/callback` answered 302 to Patreon's login, preserving both parameters, which an unregistered id or an unregistered redirect does not do. **`wrangler.jsonc`'s `vars` carry the relay's own copy of it and `PATREON_CAMPAIGN_ID`**, both real, the client id byte for byte equal to the Rust constant. |
 
 A device pointed at that host today reaches a relay that speaks the whole membership flow, the
 whole log **and the key distribution**. **What is missing is one table and one deploy**, and
@@ -94,6 +94,19 @@ reading any of us.**
 ---
 
 ## The order
+
+⚠️ **The refresh-secret change ships in three moves, and the app goes first**: an app release
+carrying `entitlement::refused_secret`, then step 2's `refresh_device` migration, then step 6's
+deploy. The relay change makes a refresh-door 401 an ordinary event — every `/claim` replaces the
+secret, and a rotation retires one whose holder its manifest omits — and an app build without
+`refused_secret` (0.30.1 and earlier) answers every such 401 by clearing its grant and showing
+*Membership ended* over a live pledge. `refused_secret` asks the group door before concluding
+anything, and **it is safe against the relay that is live today**: that relay only refuses a
+refresh secret when a membership has ended or was never claimed, and then its group door refuses
+too — a `dead` row settles to 401 whatever auth reaches it, and a group claimed before
+`group_keys` has no auth to match — so a new build revokes exactly where an old one does. The
+other client-visible change, `/rotate` no longer taking the refresh secret, costs nothing: no
+build has ever sent one there.
 
 0. **Ask the host what is actually there, and branch on the answer rather than on this file.**
    Three `curl`s settle it in ten seconds and cost nothing:
@@ -157,10 +170,28 @@ reading any of us.**
      --command "ALTER TABLE entitlements ADD COLUMN group_auth TEXT"
    npx wrangler d1 execute mtg-grimoire-relay --remote \
      --command "CREATE TABLE IF NOT EXISTS pairing_rendezvous (rv TEXT NOT NULL, slot TEXT NOT NULL CHECK (slot IN ('offer', 'join')), blob TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY (rv, slot))"
+   npx wrangler d1 execute mtg-grimoire-relay --remote \
+     --command "ALTER TABLE entitlements ADD COLUMN refresh_device TEXT"
    ```
    Both migration files are `IF NOT EXISTS` throughout and safe to run any number of times. Each
    `ALTER` is its own invocation so a `duplicate column name` — the correct answer on a database
    that already has it — costs nothing else.
+
+   ⚠️ **`refresh_device` (`relay/migrations/2026-09-26-refresh-device.sql`) must be applied BEFORE
+   the deploy that reads it**, and a Worker without it fails quietly rather than loudly:
+   `/claim`'s binding `UPDATE` throws, is caught as if it were the unique violation, and answers a
+   misleading **409** *after* the claim code is spent; `/rotate` records the new epoch and then
+   **500s**, skipping `keepOnly`. So check it landed, against the host, before step 6:
+   ```
+   npx wrangler d1 execute mtg-grimoire-relay --remote \
+     --command "SELECT refresh_device FROM entitlements LIMIT 0"
+   ```
+   An empty result is the pass; `no such column` means the `ALTER` did not run. The column is
+   additive — every existing row reads NULL, which `/rotate` treats as *holder unknown*, so the
+   group's next accepted rotation retires that row's secret. What that costs the paying device,
+   if it is still in the group, is one 401 on `/token`'s refresh door, which a build carrying
+   `entitlement::refused_secret` answers silently by minting through the group door — the reason
+   the app release comes first.
 
    ⚠️ **`relay/migrations/2026-08-31-pairing-rendezvous.sql` is run as its own `--command`, never
    through `--file`, even though the checked-in file holds only this one statement.** The file
@@ -211,8 +242,8 @@ reading any of us.**
    Every caught-up device then 401ed on the group door until somebody rotated again, while the
    stale row was accepted by `authIsRecent` — so the one device that should have stopped was the
    one that kept working. **That is the state Markus's own pair reached.** Fixed on this branch:
-   both of `seedGroup`'s statements now carry *this epoch must be at least the highest the group
-   has*, the claim still succeeds and still mints a grant, and the key registration is left where
+   both of `seedGroup`'s statements now refuse an epoch behind the group — and, since, one ahead of
+   it or a foreign auth at its own epoch — the claim still succeeds and still mints a grant, and the key registration is left where
    it already correctly pointed. ⚠️ **Until this branch is deployed the hazard is live on the
    host**, so if this repair is needed before then, press Connect on a device that has just synced
    successfully — not on the one that has been failing.
@@ -222,13 +253,12 @@ reading any of us.**
    *the relay did not recognise this device's group key*. **No suite could have caught it**:
    every relay test starts from a group claimed under the new code, so "claimed before the
    migration" is a state the fixtures cannot express. It took a device with real history.
-3. **Create the Patreon OAuth client** — **already done as of 2026-08-30**, and this step is now
-   the two halves of it that are not. The client and its redirect URI
+3. **Create the Patreon OAuth client** — **done.** The client and its redirect URI
    `https://mtg-grimoire-relay.denmark-east.workers.dev/oauth/patreon/callback` are registered and
-   were verified live (see the table above). What is left is to put `PATREON_CLIENT_ID` into
-   `wrangler.jsonc`'s `vars` **byte for byte equal to `entitlement::PATREON_CLIENT_ID`** — this
+   were verified live (see the table above), and `wrangler.jsonc`'s `vars` carry
+   `PATREON_CLIENT_ID` — **byte for byte equal to `entitlement::PATREON_CLIENT_ID`**, because this
    side builds the authorize URL, the relay builds the exchange, and Patreon compares them — and
-   to add `PATREON_CAMPAIGN_ID` beside it. Both are public.
+   `PATREON_CAMPAIGN_ID` beside it. Both are public.
 4. **Set the three secrets.** There are three, not four.
    ```
    npx wrangler secret put PATREON_CLIENT_SECRET
@@ -240,7 +270,20 @@ reading any of us.**
    ```
 5. **Register the webhook** for `members:pledge:create`, `members:pledge:update`,
    `members:pledge:delete` and `members:update`, pointing at `/webhook/patreon`.
-6. **`npx wrangler deploy`.**
+6. **`npx wrangler deploy`.** Then, for the refresh-secret change:
+   - **Press Connect Patreon once on the paying device.** Not required, but it records which
+     device holds the secret, so the group's next rotation keeps it rather than retiring it as
+     *holder unknown* — and it spares any device still on 0.30.1 or earlier the *Membership ended*
+     that build draws when its secret is refused.
+   - **Once new builds are widespread, retire every secret no device was recorded against**, once,
+     by hand — it is not automated, because a holder still on an old build reads the refusal as a
+     lapse:
+     ```
+     npx wrangler d1 execute mtg-grimoire-relay --remote --command \
+       "UPDATE entitlements SET refresh_secret = NULL, refresh_device = NULL WHERE refresh_device IS NULL AND refresh_secret IS NOT NULL"
+     ```
+     Until then a legacy secret still opens `/token`'s refresh door for whoever holds it, until
+     the group's next rotation or its holder's next Connect press.
 7. **Add the free-tier ceiling alarm** — a Cloudflare notification at ~70% of the 100 000/day
    request cap. Decided 2026-08-29: stay free, watch the ceiling. The ceiling is a **cliff, not a
    slope** — past it *every* reader errors at once, so without the alarm the first signal is

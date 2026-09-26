@@ -1044,6 +1044,12 @@ layer.
     a reordered array alone changes nothing, because it sorts by that field. Dropped on a refusal
     and whenever the id set stops matching. `moveCategory` is handed down **only under
     `groupBy === "category"`**; absent is the off switch and a view draws no grip without it.
+  - **The Tokens & Emblems pile has a grip of its own since 2026-09-26, and it is in none of these
+    runs** (token stacks, spec §3.4). It moves by the same two gestures — its heading dragged from
+    the grip, or the grip's Left and Right — along the **whole** rail, with a drag mark of its own
+    that neither `categoryDrag.ts`' reader nor `dnd.ts`' accepts, and its write is one number
+    rather than two ids. Its `moveTo` is handed down under every grouping, where `moveCategory`
+    is not. *Tokens & Emblems* below has the storage, the gesture and the undo.
 - **A move has two routes: a drag, and the card's right-click `Move to`** (changed 2026-08-14, and
   again later the same day). Every deck card used to carry a native `Move…` `<select>` beside its
   stepper, listing every other category of the deck; it was removed whole, which left `moveCard`
@@ -1478,7 +1484,7 @@ layer.
   as it holds cards — and it stays that group _whole_: `buildGroups` appends it carrying its own
   `kind`, so a switched-off
   Sideboard is still `kind: "side"` under `manaValue` and `type`. Only the **derived** groups are
-  `kind: null`. So anything that keys on a kind — `GroupHeader`'s `RULE` marker, the two column
+  `kind: null`. So anything that keys on a kind — `GroupHeader`'s rule mark (the `Gavel` chip), the two column
   views' rail, and since the bullet below their command box — still sees a sideboard in the two
   modes that otherwise have no categories
   in them, which is the right answer in both cases and is a special case in neither.
@@ -1889,13 +1895,32 @@ layer.
       `decks`, `rarity`, `price` — and the two absences are facts about a collection. **No
       `owned`**: every row here is a copy the reader has, so a filter whose two states select the
       same list is a control that reads as broken. **No `printings`**: that switch folds a card's
-      printings together and these *are* the reader's printings. **And no `Any card` row in the
-      format picker since 2026-08-26** — `FilterSurface.anyCard`, which this tab does not set.
-      That row is not a format: it is what puts back the printings *no* format allows, and it only
-      means anything where `playableOnly` narrows the corpus to begin with. This tab has never sent
-      that flag, so picking the row put the `any-card` sentinel on the wire, `collection_list` read
-      it as a legalities key nothing matches, and the column went **empty**. It shipped that way
-      with the tray and nothing went red for it.
+      printings together and these *are* the reader's printings. **The format picker is the card
+      search's own ladder since 2026-09-26** (token stacks, spec §3.6) — `Any card`, `Any format`,
+      then the formats — **and it had no `Any card` row from 2026-08-26 until then.** That row is
+      not a format: it is what puts back the printings *no* format allows, and it only means
+      anything where `playableOnly` narrows the corpus to begin with. This tab sent no such flag,
+      so when it first drew the row a press put the `any-card` sentinel on the wire,
+      `collection_list` read it as a legalities key nothing matches, and the column went
+      **empty** — it shipped that way with the tray and nothing went red for it — and the fix was
+      to take the row away. **What that cost is why it is back.** The tab opens on the deck's own
+      format, a token is legal in none, and the row a reader reaches for to widen a filtered wall
+      — the `All cards` tab's `Any card` — was not there; the report was *"I can't select Any card
+      in the deck editor's card search"*, and no selection bug reproduced on either tab. So the tab
+      spells its format through `useCardSearch`'s `formatParams` and sets `FilterSurface.anyCard`:
+      `Any card` sends neither `format` nor `playableOnly`, **`Any format` sends `playableOnly` —
+      _legal somewhere_, the card search's meaning, where it used to mean every copy** — and a
+      named format sends both. Rust needed nothing: `collection::scope` builds its filters from
+      the request's own `CardFilters` and forces only `paper_only` off, so `playable_only` was
+      already honoured. **The trade is deliberate and a reader will notice it**: under `Any format`
+      this tab now hides tokens, orphan copies and every other card legal nowhere, a deck with no
+      legality data (`casual`, `limited` — no default passed) opens there, and so does Reset all,
+      which clears to `Any format` and never to the deck's format or to `Any card`, as
+      `useCardSearch` does. `activeFilterCount` takes the same three arms — `Any card` and the
+      seeded format count, `Any format` does not. `DeckSearchPanel.test.tsx` pins the row on
+      **both** tabs: pick it, wait out the debounce, and the trigger still reads `Any card` while
+      the last request carries neither field. The collection **page** (`useCollection`) is
+      untouched and offers no `Any card`: it narrows nothing, so the row would widen nothing.
     - **`decks` is the cell no other surface has**, and it is what this tab is for: `Not in a deck`,
       pressed by default. **Counted by nothing and cleared by nothing** — a badge that counted it
       would open every deck reading `Reset all 1` for a state nobody touched, and Reset all leaves
@@ -2762,7 +2787,8 @@ layer.
     _against_, so it is neither in front of the deck nor part of it.
   - **There is no divider between the rail's two runs, and no caption over the second.** A
     switched-off pile already says so three times — the section's `bg-surface/60` wash,
-    `GroupHeader`'s dimmed name and `INACTIVE` chip, and the stack's `opacity-60` — and the pile
+    `GroupHeader`'s dimmed name and switched-off chip (`PowerOff`, the word `INACTIVE` until
+    2026-09-26), and the stack's `opacity-60` — and the pile
     _heading_ the rail is switched off as well, so a rule drawn under it would mark a boundary that
     is not the one it looks like. The change is one function; neither view grew a line of drawing
     code.
@@ -3603,6 +3629,52 @@ layer.
   that paints nothing still occupies its 1px either side, so clearing the colour cost this sum
   nothing — while **deleting the class** would draw every card 2px wider than `stackCardWidth()`
   says it is, which is the one number the whole of `CardStack` is derived from.
+- **A pile's heading is one row since 2026-09-26, and its count is a pill** (token stacks spec
+  §3.1 — the reader's ask, made while the token pile was being redrawn). `GroupHeader` is drawn by
+  all four views and by `CategoriesDialog`, so the change is in every one of them rather than a
+  fork of the stacked layout: `[grip] name [rule][switched off] ········ [pill] price`.
+  - **The count is `CountPill` (`CountPill.tsx`), and the `N cards` line is gone.** A bare number
+    with its visible digits `aria-hidden` and **one** `sr-only` phrase the caller spells through
+    `words` — `cardCountWords` (`3 cards`) by default, `tokenCountWords` (`3 tokens and emblems`)
+    on the token pile — never two siblings assembled, which is the `Missing2` rule. The `·` between
+    count and price went with it: the pill's edge is the separator. A `{" "}` after the pill keeps
+    the pill's words and the price apart in a computed name, and **fixed a bug that was already
+    shipping**: `TableView` draws the heading inside a `role="cell"`, whose name read
+    `Ramp 3 cards$4.97`. The price keeps its `pricesAsOf` tooltip. Root alignment is
+    `items-center` in every layout, where `spread` and `tight` aligned on the baseline before.
+  - **Every layout is one `flex-wrap` row with the figures `shrink-0`**, so a column too narrow
+    for both wraps the figures under the name rather than hanging them out of it. `spread` keeps
+    them on the far edge (the name block is `flex-1` and never forces a wrap) and `tight` sets them
+    after the name. **`stacked` — the column's — is `min-w-16 flex-1` on the name block, and the
+    4rem floor is the whole of the wrap**: a row breaks lines on each item's basis clamped by its
+    min-width, so `flex-1` beside `min-w-0` counts the block as zero wide, the row never wraps, and
+    at a 97px header `Ramp` drew **0px**. `flex-auto` was measured and refused — it wraps whenever
+    the *whole* name does not fit, which gives up the one row at 1× for any long name and for the
+    default switched-off Maybeboard. The name span stays `min-w-0 truncate`, so the name is what
+    gives way first.
+  - **The two markers are 14px icon chips, not the words `RULE` and `INACTIVE`** — the reader's
+    decision on 2026-09-26, and the one-row heading is why. The floor counts the name and not the
+    markers in the same block, so a switched-off Sideboard's grip and two words (~114px) held a
+    block narrower than its own chrome to one row and **painted `INACTIVE` over the pill** — 26px
+    at 0.8×, 5px at 0.9×. As chips the chrome is 54px. The rule mark is `Gavel` (not `Scale`,
+    which the header's `Compare` already draws) and the switched-off mark `PowerOff` (the category
+    menu's `Deactivate` glyph); each spells its words in an `sr-only` span — `MARKER_WORDS`,
+    `Rules pile` and `Switched off` — so a heading's name reads
+    `Sideboard Rules pile Switched off 3 cards $4.97`, and each keeps its tooltip through
+    `useTooltip()` on the chip. The meaning of the two marks did not move; `RULE_KINDS` still has no
+    `maybe`, and `GroupHeader.tsx` says why.
+  All of it measured in a Chromium class-rewrite harness over these classes (a `file://` page,
+  **system fonts rather than Geist Mono**, 2026-09-26 — relative figures, not the shipped
+  window's): at every one of the sixteen zoom stops, no overlap and no overflow; one row from 0.8×
+  up for a long name and for both switched-off rails, the Sideboard's whole name at 1×; two rows
+  below that, with `Card Draw and Selection` keeping 77px of name at 0.5×. `GroupHeader`'s
+  `layout` doc carries the rest, including the floor under the *name span* that was measured and
+  refused because it wraps that Sideboard at 1×. **The shipped window agrees** (2026-09-26,
+  `npm run tauri dev`, debug build, 1920×1080, a copy of the real db, the 14 piles of a 100-card
+  Commander deck with a railed Sideboard, Maybeboard and token pile, **Geist**): every heading one
+  row at 0.8×, 0.9×, 1×, 1.1× and 2×, every heading two rows at 0.5×, and at all six stops no chip
+  over the pill, nothing past the heading's box and `document.scrollWidth === clientWidth`.
+  [decks-live-findings.md](../../../docs/reference/decks-live-findings.md) has the rest.
 - **A pile at rest has no edge, and the box that edge was drawn in is still there** (changed
   2026-08-14). `StackGroup`'s `<section>` is `border border-transparent` in **both** states, with
   a `bg-surface/60` wash under the inactive one; it used to be `border-border` active and
@@ -3610,7 +3682,8 @@ layer.
   rectangle with a hard edge, so an outline around it framed a frame, and fifteen of them read as a
   form rather than as a deck. **The cost is the one signal that told the two states apart**, so an
   inactive pile now says so three ways and an active pile says nothing at all: the wash, the dimmed
-  name beside `GroupHeader`'s `INACTIVE` marker, and the pile's own `CardStack` at `opacity-60`.
+  name beside `GroupHeader`'s switched-off marker (the `PowerOff` chip since 2026-09-26, the word
+  `INACTIVE` before), and the pile's own `CardStack` at `opacity-60`.
   The drag marks needed no rework — `DROP_RING` is `ring-2`, and a ring is a box shadow **outside**
   the border box, so the highlight never read the border it appears to sit on. One thing to know if
   the lift ever regresses in switched-off piles only: **`opacity-60` makes that `<ul>` a stacking
@@ -3626,7 +3699,7 @@ layer.
   no cards**, so a switched-off empty pile has no `<ul>` in the DOM at all and a probe reports it
   absent rather than 0.6. Move a card in before reading that signal (this cost the 2026-08-14 pass
   a read on the Maybeboard). An empty pile carries the other two signals only: the wash and the
-  `INACTIVE` marker.
+  switched-off marker.
 - **Exactly one card moves per step, and that is the whole reason the interaction works.**
   Opening card _N+1_ instead of _N_ leaves every other card's top unchanged. The reflow is one
   card sliding out of the stack, not a list resettling — and the pointer that armed it stays
@@ -4020,8 +4093,13 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
 
 `DeckTokensPanel.tsx` (the band), `TokenArtPicker.tsx` (the printings dialog),
 `useDeckTokens.ts` (the query and the four writes) and `deckTokens.ts` (every conclusion), landed
-2026-09-07 for [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388). The Rust half —
-the union keep rule, the `deck_tokens` table, the four commands and every measurement — is
+2026-09-07 for [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388). The pile the
+four views draw is `views/TokenPile.tsx` (issue #507, 2026-09-24), and the token-stacks work of
+2026-09-26 ([the spec](../../../docs/superpowers/specs/2026-09-26-token-stacks-design.md) §3) added
+`CountPill.tsx` (the count every pile heading wears), `views/tokenRail.tsx` (the pile's place in
+the rail and the gesture that moves it) and `tokenTheory.ts` (the plan's marks on tokens). The Rust
+half — the union keep rule, the `deck_tokens` table, the four commands, the chin facts and the
+price, and every measurement — is
 [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
 
 **Rust supplies the facts and `deckTokens.ts` draws every conclusion**, which is this feature's
@@ -4046,10 +4124,158 @@ one edit and not four components disagreeing.
   deck with `decks.token_stack` on — to the four views as `tokenPile` (visible tokens only, never a
   dismissed one whatever `Show dismissed` says). It mounts the **one** `TokenArtPicker` both
   surfaces open, holding `picking` by `oracle_id`. The band calls no hook and holds no picker; a
-  second hook call would be a second `showDismissed` and a second write observer. The band's count
-  is `TokenCountPill` — the distinct kept tokens as a bare number, the figure that read
-  `N to bring`. **The pile never enters `groups`**, which is what keeps a token out of the deck's
-  size, every pile total, the ledger, the stats and validation.
+  second hook call would be a second `showDismissed` and a second write observer. **There is one
+  second call since 2026-09-26, and it is a read of the _other_ list rather than a second drawing**
+  — `planTokens`, the theory list's tokens for the plan's marks (below): only its `tokens` and its
+  `isSuccess` are read, never a write or its switch, because the override is grained on
+  `(deck, oracle_id)` with no variant term and a write through that copy would land on the band's
+  row and report its refusal to nobody. **The pile never enters `groups`**, which is what keeps a
+  token out of the deck's size, every pile total, the ledger, the stats and validation.
+- **The count is copies, on every pile — the band's header included** (2026-09-26, token stacks
+  spec §3.1), and that reverses what shipped with issue #507. The band's figure was
+  `TokenCountPill`, **the distinct kept tokens and never copies**, on the argument that a count of
+  copies would move under the pointer of a reader nudging a stepper; it read `N to bring` before
+  that. The reader's answer was copies: the number is what they sleeve and put on the table, a
+  Treasure stepped to 6 is six tokens to find in the box, and a deck pile's count has always moved
+  when its stepper did. `TokenCountPill` is deleted and both surfaces draw `CountPill` with
+  `tokenCountWords` — `6 tokens and emblems`, no `to bring`, since the `Tokens & Emblems` heading
+  beside it already says what the pile is. **One number on both, by construction rather than by
+  agreement**: the band sums the resolved views' `quantity` over the tokens that are not
+  dismissed, and the pile's `tokenPileHeading` sums the same field over the same set
+  (`keptTokens`), so revealing a dismissal on the band moves neither. The two sums are written
+  twice today and are a candidate for one function in `deckTokens.ts`.
+- **The pile is drawn with the deck's own parts, so it cannot drift from them** (2026-09-26, token
+  stacks spec §3.2 — *"it should look and function like the other stack"*). It was a parallel
+  drawing: a heading of its own, a bare `CardArt` with a `CountTag` laid on it, and
+  `tokenStackCardHeight`/`tokenStackHeight` for geometry. Now:
+  - **The heading is `GroupHeader`**, handed `tokenPileHeading(tokens)` — `Tokens & Emblems`, the
+    copies, `Σ unitPrice × quantity` by `grouping.ts`' `totals` rule (restated, since that one is
+    module-private and takes `DeckCard`s; keep the two in step), `isActive: true`, `kind: null`, so
+    it draws no marker and no wash: the pile is not switched off, it is not in the deck at all.
+    **`GroupHeader`'s `group` is narrowed to `GroupHeading`**, a `Pick<CardGroup, …>` of the five
+    fields it reads, so the pile supplies one without inventing a `key`, a category id or a cards
+    list. Every other caller still passes a whole `CardGroup`, which satisfies it.
+  - **Each card is `DeckCardFace` with `CardChin` under it** — the stacked card's own pair — so a
+    token wears the same grey `QuantityTag` top-left (a token has no label), the same
+    `TheoryMatchMark` top-right, the printed-frame fallback and the foil sheen, and the chin says
+    rarity, set, number, finish and price (the set's name on hover, as on a deck card). **`DeckCardFace`'s `card` is narrowed to `DeckCardFaceFacts`**,
+    a `Pick<DeckCard, …>` of exactly the fields the face reads, and `tokenFaceFacts` is the
+    adapter: no mana cost, no review state, no label, never a game changer, `finish: null` (*not
+    said*, so `playedFinish` falls to a sole finish and a foil-only token still sheens). The
+    `Pick` is the fence: a new field read inside the face is a red build, and the adapter is the
+    one other place that then has to answer for it.
+  - **The geometry is the deck stack's** — `stackHeight`, `stackCollapsedMargin`,
+    `useFlipThrough`, the stepper column revealed by `revealedWhenOpen` — and the `<li>`'s body is
+    `CardStack.tsx`'s exported `STACKED_CARD_BODY` and `stackedCardShadow(open)`, which both cards
+    read so the pile cannot drift from the deck twice. A token card with a chin is exactly a deck
+    card's height, which is why the two token height functions were deleted rather than kept.
+  - **Grid draws the same face and chin through the same adapter; Table and Text keep their compact
+    drawings and take the new heading.**
+  - **Token prices never reach the deck's totals** — they are summed in this heading and nowhere
+    else. **What a token still is not** is unchanged from #507, and the reader confirmed it
+    (*"tokens should not act as 'real' cards"*): no drag source, no drop target, no deck card
+    menu, no card modal, no selection ring, not in the arrow walk. A press on the face opens the
+    one art picker. The *pile* may move along the rail; the cards in it never do.
+- **The pile's place in the rail is the reader's since 2026-09-26, and it is stored as a count**
+  (token stacks spec §3.4; the reader, twice: *"the tokens stack should be draggable to reorder in
+  the right hand rail"*). `decks.token_rail_index`, user schema **v51**, is **the number of rail
+  piles drawn above the token pile**, and **`-1` is last** — where every deck's pile was before the
+  column existed, and every existing deck's default. `views/tokenRail.tsx` is the whole mechanism.
+  - **An index and never an anchor.** "Under the Sideboard" would be a category id on a synced
+    row, which needs the sync's `sync_uid` translation, and switching the anchor pile on would take
+    it out of the rail and send the tokens to the bottom for a reason the reader cannot see. A
+    count needs neither.
+  - **Clamped on read, never on write.** `tokenRailSlot` draws anything that is not a whole number
+    in `[0, rail.length]` last — `-1`, a slot a shrunken rail no longer has, a `NaN` from a synced
+    row a build without the column wrote — and `DeckEditor` passes the column through untouched,
+    so a rail that shrinks and grows back puts the pile where it was. **Last is stored as `-1` and
+    never as the length** (`storedRailIndex`), so a pile moved to the bottom stays there when a
+    pile is switched on or off later.
+  - **`NOT NULL DEFAULT -1` and never a nullable "last"**, which is where the rung departs from the
+    spec's `NULL`: `update_deck` writes every field through `coalesce(?n, col)`, which reads a bound
+    NULL as *leave it*, so a NULL could never be written back once the reader had moved the pile.
+  - **Stacks draws the gesture; Grid and Text spend the index as order; Table does not spend it.**
+    Grid inserts the pile at `command + flow + slot` of its `[...command, ...flow, ...rail]` and
+    Text at `slot` in its rail, both through `withTokenPile`, as `splitRail`'s answer is already
+    spent. Table's token section is a compact list after the virtualised table rather than rows
+    inside it — a token row would be six empty cells — so it has no place among the bands to take,
+    and stays after them.
+  - **The gesture is a railed category's, copied rather than re-decided, on a mark of its own.**
+    The heading is the drag source and the grip (`TokenPileGrip`, `CategoryGrip`'s look) only says
+    where a press may start, so the pile's name travels under the pointer rather than a ghost of the
+    glyph. A drop on any rail pile lands the tokens **where that pile is** — above a pile that was
+    above them, below one that was below — with `DROP_RING`, `DROP_OVER` and `DropIndicator`, so no
+    drop onto a rail pile is a no-op. ArrowLeft and ArrowRight step one place and **always**
+    `preventDefault`, the dead ends included, against `StackView`'s own arrows; Space is not a drag.
+    The name is `Move Tokens & Emblems, n of N`, where N counts **every** rail pile plus the tokens,
+    because the pile is in neither of the rail's two runs. `TOKEN_PILE_DRAG` is neither
+    `categoryDrag.ts`' mark nor `dnd.ts`', each reader refuses the other two, and the pile
+    registers no category target — so a category let go on it is refused by construction.
+    `GRIP_ATTR` is declared in `tokenRail.tsx` now and re-exported from `StackView`, because the
+    token grip wears it and importing it from `StackView` would be a cycle.
+  - **Undoable, and a line in the history.** `token_rail_index` is on `deck_undo::DECK_FIELDS`, so
+    a move files one `Op::Deck { token_rail_index }` step — Ctrl+Z puts the pile back and
+    Ctrl+Shift+Z moves it again — and `record_deck_edit` writes one `deck_audit` row, field
+    `tokenRail`, which `auditText.ts` reads as **"Moved Tokens & Emblems"** with no position: the
+    numbers are slots in a rail that may have changed since. A re-send of the same index writes no
+    row. That is where it parts company with v47's `token_stack`, a setting with no history row:
+    this is an arrangement the reader drags, the category reorder's footing. `duplicate_deck`
+    carries it.
+  - **The move is optimistic** (`localTokenRail` in `DeckEditor`), for the category grip's reason:
+    a move is a round trip *and* a re-read of the deck, so drawn from the column alone the grip goes
+    on saying `3 of 3` after the press, and two presses inside that beat move the pile one place.
+    The press is drawn at once. A refusal drops it and the banner says why — the write is
+    `deck.update`, already in the editor's refused-write family. Success drops it only once the
+    write has settled **and** nothing is fetching, never at the answer itself (the re-read is still
+    in flight then, and the column in hand is the old one) and never "once the column equals the
+    press" (which would hold a stale press for ever the day an undo or another device moved the
+    pile in the same beat). A `seq` makes that the latest press's answer, and it is `mutateAsync`
+    rather than `mutate`, because a `mutate` call's callbacks belong to the observer and the next
+    `deck.update` of any kind would take them away.
+  - **Offered under every grouping**, where `moveCategory` is category-only. Under a derived
+    grouping the rail holds different piles, and the stored count is spent against whatever rail is
+    drawn. A rail holding only the tokens draws a grip reading `1 of 1` whose keys do nothing — the
+    category grip's own behaviour in a run of one.
+- **A token wears the plan's mark, and `tokenTheory.ts` is all it took** (2026-09-26, token stacks
+  spec §3.5). On a deck that keeps a plan, read on **Live**, the editor reads the theory list's
+  tokens (`planTokens`, above) and builds a token `TheoryPlan` with the existing
+  `theoryMatchPlan` — no new arithmetic and no new tier, under the deck's own three mark switches.
+  Each side is an effective printing keyed `theorySlot({ cardId: printingId, finish: null })`: a
+  token carries no finish on the wire yet, so two `null`s are one regular copy matching another.
+  **Both sides are built in TypeScript**, where a deck card's plan side is Rust's
+  `deck_theory_slots` — there is no such command for tokens and none is wanted, because the plan's
+  tokens are the theory list's own `deck_tokens` answer, so one `theorySlot` spells both halves.
+  - **The name tier keys on `oracleId`, never on the name** — the spec keyed it on the name and was
+    overruled while this was built. A token's name does not identify it (below: `Wurmcoil Engine`
+    makes two `Wurm`s), so keyed on the name a live Deathtouch Wurm against a planned Lifelink one
+    would read *the same token in another printing* about two different tokens. `theoryNameKey`'s
+    fold is a no-op on Scryfall's lowercase UUIDs, so `theoryMatch.ts` needs no second path. A card
+    keys that tier on its name because Scryfall omits `oracle_id` on reversible cards; a token's
+    `oracleId` is never empty — it is the grain `deck_tokens` stores.
+  - **Until PR 2 every mark carries a delta of 0 — never `±N` — and that is the data, not a limit
+    of the mark.** The override is grained on `(deck, oracle_id)` with no variant term, so a
+    token's art and quantity are one pair of values both lists share, and each list draws at most
+    one entry per `oracle_id`: at both grains `planned − live` is one quantity subtracted from
+    itself. So a token reads the tick (the plan makes it in the same printing), the blue tick
+    (another printing — the resolver's default can differ between the lists) or the X (only a
+    substitute makes it). Keyed on the name, the tier could have summed two different same-named
+    tokens and printed a number; keyed on the oracle id it cannot. PR 2 gives each list its own
+    printings and counts, and the same three functions answer it unedited.
+  - **Both sides are the tokens the deck brings**: the plan's list drops its dismissed tokens and
+    the live side is `keptTokens`, so a press on the band's `Show dismissed` cannot move a mark.
+  - **`undefined` until the theory read has succeeded**, and that gate is why a plan does not flash
+    a wall of red X on every open: `useDeckTokens` answers `[]` while in flight, and `[]` is a plan
+    that asks for nothing. `isSuccess` rather than a length, because a plan that genuinely makes no
+    tokens is an answer, and its marks are the X. The same gate means **a marketplace switch
+    briefly clears the marks** while the new key loads — they vanish rather than turn red, which
+    is the safe direction. A deck with no plan, the Theory tab, or a deck whose token pile is
+    switched off (nothing would draw the marks) makes no second read at all.
+- **A marked token's art button carries the plan's words in its name.** `TheoryMatchMark` is
+  `aria-hidden`, so a pile drawn with the mark and without the words would be a fact that reaches
+  sighted readers only; the button appends `theoryMatchLabel(tier, delta).toLowerCase()` after
+  the token's name and subtitle, exactly as `deckCardName` folds it for a deck card. An unmarked
+  token's name is unchanged, so `/^Change the art for Treasure/` still finds it — but a test that
+  asserts a marked token's **exact** name has to spell the clause.
 - **Four placement constraints, each already documented at its site and one of which has cost a
   session.** A **`<section>`, never an `<aside>`** — a second complementary landmark broke five of
   `App.test.tsx`'s pane assertions. **`shrink-0` is mandatory** — the editor's root is the only
@@ -4068,7 +4294,7 @@ one edit and not four components disagreeing.
   **Collapsed by default**, driven by `decks.tokens_open`, so a reader who never sleeves tokens
   pays one header row.
 - **The read runs whether or not the wall is drawn**, and that is deliberate. The header has to
-  say how many tokens the deck makes — that number *is* the reason to open the area — and the
+  say how many tokens the deck brings — that number *is* the reason to open the area — and the
   resolve is ~5 ms for a 100-card deck against the corpus the app already has. Gating the query on
   `open` would trade that for a header that could only say "press to find out".
 - **`??` and never `||`, in both fallbacks.** Effective printing is `cardId ?? defaultCardId` and
@@ -4171,15 +4397,27 @@ one edit and not four components disagreeing.
   "fixing" it later is a compile error rather than a wrong result, which is why it is written down.
   Treasure answers 97 paper printings across 70 distinct arts, so it is a grid with a scroller and
   never a dropdown, and `token !== null` is what opens it rather than a flag beside it.
-- **The query key is `["decks", "tokens", deckId, variant]`, under the `["decks"]` root on
-  purpose.** `useDeck`'s own `invalidate` fires that root for every write to what is *in* a deck,
-  so adding a card, moving one between piles or switching a category off already refreshes this
-  list — and it should, because all three change what the deck makes. **No `staleTime`**:
+- **The query key is `["decks", "tokens", deckId, variant, marketplace]`, under the `["decks"]`
+  root on purpose.** `useDeck`'s own `invalidate` fires that root for every write to what is *in*
+  a deck, so adding a card, moving one between piles or switching a category off already refreshes
+  this list — and it should, because all three change what the deck makes. **No `staleTime`**:
   `query.ts` caches 30 s app-wide, and a second one here could only make a missing invalidation
-  invisible. **No `marketplace` in the key** either — nothing this answers is priced.
-  Invalidation drops one segment (`["decks", "tokens", deckId]`) because the override is not
-  grained on variant while the derived list is, so a dismissal made on the Actual list has to reach
-  the plan's tab too.
+  invisible.
+  **The `marketplace` is in the key since 2026-09-26 (token stacks, spec §3.3), and that reverses
+  what stood here** — *no `marketplace` in the key, nothing this answers is priced*. That was true
+  of the band and stopped being true of the pile: every row now carries its effective printing's
+  `unitPrice`, the chin quotes it and the pile's heading sums it, so two marketplaces are two
+  answers and a switch has to refetch rather than relabel one feed's numbers as another's —
+  `useDeck`'s `deck_get` arrangement. It is read inside the hook through `useMarketplace()`, so no
+  caller's signature moved; the `["decks"]` root is also what `query.ts` sweeps when a price feed
+  lands, so the priced rows refresh with no new code. `useMarketplace` keys on TCGplayer until
+  `get_marketplace` answers, so a reader on another marketplace pays one extra read on the first
+  open, which is `deck_get`'s cost too.
+  Invalidation drops **two** segments (`["decks", "tokens", deckId]`): the override is not grained
+  on variant while the derived list is, so a dismissal made on the Actual list has to reach the
+  plan's tab too; and an art picked under one marketplace is the art under every other, so a
+  cached answer for the one the reader is not on would draw the old printing the moment they
+  switched back.
 - **Every write sends the whole triple, and `storedOverride` reads the *stored* columns rather
   than the effective ones.** `deck_token_set` has no `coalesce` — the row it upserts is defined by
   what it carries and is deleted outright when it would carry nothing — so a caller sending only

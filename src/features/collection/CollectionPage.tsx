@@ -1818,104 +1818,119 @@ export function CollectionPage() {
        *  width of the entire panel. The two arms point at the two different things a reader would
        *  go and do next, which is the grammar {@link blockedReason}'s greyed rows already use. */
       const ancestorReason = "a folder above it is locked";
-      const build = (): MenuItem[] => [
-        {
-          kind: "action",
-          id: "move",
-          label: "Move to folder…",
-          Icon: FolderInput,
-          onSelect: () => {
-            folders.move.reset();
-            open({ kind: "moveFolder", folderId: folder.id }, openerRef.current);
-          },
-        },
-        (() => {
-          const up = stepPlacement(folder.id, -1);
-          return {
-            kind: "action" as const,
-            id: "up",
-            label: "Move up",
-            Icon: ArrowUp,
-            ...(up === null ? { disabled: true, reason: "Already first" } : {}),
+      const build = (): MenuItem[] => {
+        /** A locked folder anywhere **beneath** this one, which the delete would re-file with
+         *  the rest — `delete_folder`'s `FOLDER_HOLDS_LOCKED`. Asked when the menu opens rather
+         *  than for every card drawn, because it walks the tree. */
+        const holdsLock =
+          !effectivelyLocked &&
+          [...folderDescendants(folders.folders, folder.id)].some((id) => lockedIds.has(id));
+        return [
+          {
+            kind: "action",
+            id: "move",
+            label: "Move to folder…",
+            Icon: FolderInput,
             onSelect: () => {
-              if (up !== null) folders.reorder.mutate(up);
+              folders.move.reset();
+              open({ kind: "moveFolder", folderId: folder.id }, openerRef.current);
             },
-          };
-        })(),
-        (() => {
-          const down = stepPlacement(folder.id, 1);
-          return {
-            kind: "action" as const,
-            id: "down",
-            label: "Move down",
-            Icon: ArrowDown,
-            ...(down === null ? { disabled: true, reason: "Already last" } : {}),
+          },
+          (() => {
+            const up = stepPlacement(folder.id, -1);
+            return {
+              kind: "action" as const,
+              id: "up",
+              label: "Move up",
+              Icon: ArrowUp,
+              ...(up === null ? { disabled: true, reason: "Already first" } : {}),
+              onSelect: () => {
+                if (up !== null) folders.reorder.mutate(up);
+              },
+            };
+          })(),
+          (() => {
+            const down = stepPlacement(folder.id, 1);
+            return {
+              kind: "action" as const,
+              id: "down",
+              label: "Move down",
+              Icon: ArrowDown,
+              ...(down === null ? { disabled: true, reason: "Already last" } : {}),
+              onSelect: () => {
+                if (down !== null) folders.reorder.mutate(down);
+              },
+            };
+          })(),
+          /**
+           * **Set the drawer aside, or bring it back** — issue #365, and the one row here that is
+           * neither a layer nor a field: it writes on the press, and what the reader watches change
+           * is the badge on the card behind the menu.
+           *
+           * **It toggles the folder's *own* flag**, where every other consumer of the lock on this
+           * page reads the effective one. That asymmetry is the feature rather than an
+           * inconsistency: the reader locks a drawer and gets the drawer, including whatever they
+           * have nested inside it — so there is one row per folder to press and no second copy of
+           * the fact to disagree with the first.
+           *
+           * **Greyed, with its reason in the row's accessible name, when an ancestor is locked.**
+           * Unlocking a child of a locked parent changes nothing a reader can see — the lock on the
+           * heading stays — and a row that reported success over an
+           * unmoved badge is worse than a greyed one. `Move to folder…` and the two steps above stay
+           * live in every state, deliberately: neither disturbs a card, so neither is what the lock
+           * is about (design §4.4).
+           *
+           * Above the separator, with the other two live rows: the rule below it is *destructive*,
+           * and locking is reversible in one press.
+           */
+          {
+            kind: "action",
+            id: "lock",
+            label: folder.locked ? "Unlock folder" : "Lock folder",
+            Icon: folder.locked ? LockOpen : Lock,
+            disabled: inherited ? true : undefined,
+            reason: inherited ? ancestorReason : undefined,
             onSelect: () => {
-              if (down !== null) folders.reorder.mutate(down);
+              folders.setLocked.reset();
+              folders.setLocked.mutate({ id: folder.id, locked: !folder.locked });
             },
-          };
-        })(),
-        /**
-         * **Set the drawer aside, or bring it back** — issue #365, and the one row here that is
-         * neither a layer nor a field: it writes on the press, and what the reader watches change
-         * is the badge on the card behind the menu.
-         *
-         * **It toggles the folder's *own* flag**, where every other consumer of the lock on this
-         * page reads the effective one. That asymmetry is the feature rather than an
-         * inconsistency: the reader locks a drawer and gets the drawer, including whatever they
-         * have nested inside it — so there is one row per folder to press and no second copy of
-         * the fact to disagree with the first.
-         *
-         * **Greyed, with its reason in the row's accessible name, when an ancestor is locked.**
-         * Unlocking a child of a locked parent changes nothing a reader can see — the lock on the
-         * heading stays — and a row that reported success over an
-         * unmoved badge is worse than a greyed one. `Move to folder…` and the two steps above stay
-         * live in every state, deliberately: neither disturbs a card, so neither is what the lock
-         * is about (design §4.4).
-         *
-         * Above the separator, with the other two live rows: the rule below it is *destructive*,
-         * and locking is reversible in one press.
-         */
-        {
-          kind: "action",
-          id: "lock",
-          label: folder.locked ? "Unlock folder" : "Lock folder",
-          Icon: folder.locked ? LockOpen : Lock,
-          disabled: inherited ? true : undefined,
-          reason: inherited ? ancestorReason : undefined,
-          onSelect: () => {
-            folders.setLocked.reset();
-            folders.setLocked.mutate({ id: folder.id, locked: !folder.locked });
           },
-        },
-        { kind: "separator", id: "before-delete" },
-        /**
-         * **Greyed on the *effective* lock**, which is `delete_folder`'s own fence said early:
-         * deleting re-files every card in the sub-tree to the root, silently undoing exactly the
-         * filing the lock was protecting, so the backend refuses it in words (`FOLDER_IS_LOCKED`)
-         * for a folder inside a locked parent as surely as for the one the reader pressed Lock on.
-         * **And the UI must not let the press happen**: the rule app-owned shelves follow is that a control
-         * whose only outcome is a sentence explaining that it does not work teaches the reader
-         * nothing its absence would not have. An app-owned heading answers it by omitting the menu; a locked
-         * drawer keeps its menu, so this greys with its reason in the row's accessible name.
-         */
-        {
-          kind: "action",
-          id: "delete",
-          label: "Delete…",
-          Icon: Trash2,
-          disabled: effectivelyLocked ? true : undefined,
-          reason: effectivelyLocked
-            ? inherited
-              ? ancestorReason
-              : "unlock it first"
-            : undefined,
-          onSelect: () => {
-            folders.remove.reset();
-            open({ kind: "deleteFolder", folderId: folder.id }, openerRef.current);
+          { kind: "separator", id: "before-delete" },
+          /**
+           * **Greyed on the *effective* lock**, which is `delete_folder`'s own fence said early:
+           * deleting re-files every card in the sub-tree to the root, silently undoing exactly the
+           * filing the lock was protecting, so the backend refuses it in words (`FOLDER_IS_LOCKED`)
+           * for a folder inside a locked parent as surely as for the one the reader pressed Lock on.
+           * **And the UI must not let the press happen**: the rule app-owned shelves follow is that
+           * a control whose only outcome is a sentence explaining that it does not work teaches the
+           * reader nothing its absence would not have. An app-owned heading answers it by omitting
+           * the menu; a locked drawer keeps its menu, so this greys with its reason in the row's
+           * accessible name.
+           *
+           * **And on a lock anywhere beneath it** (`holdsLock`), which the backend refuses in words
+           * of its own (`FOLDER_HOLDS_LOCKED`): the delete re-files the whole sub-tree, so a locked
+           * folder inside this one is scattered by this press as surely as by its own.
+           */
+          {
+            kind: "action",
+            id: "delete",
+            label: "Delete…",
+            Icon: Trash2,
+            disabled: effectivelyLocked || holdsLock ? true : undefined,
+            reason: effectivelyLocked
+              ? inherited
+                ? ancestorReason
+                : "unlock it first"
+              : holdsLock
+                ? "a folder inside it is locked"
+                : undefined,
+            onSelect: () => {
+              folders.remove.reset();
+              open({ kind: "deleteFolder", folderId: folder.id }, openerRef.current);
+            },
           },
-        },
-      ];
+        ];
+      };
       const remember = (element: HTMLElement) => {
         openerRef.current = element;
       };
@@ -1941,6 +1956,7 @@ export function CollectionPage() {
       open,
       lockedIds,
       stepPlacement,
+      folders.folders,
       folders.move,
       folders.remove,
       folders.reorder,

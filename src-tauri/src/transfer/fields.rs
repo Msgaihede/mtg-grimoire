@@ -237,6 +237,23 @@ fn num_f(v: Option<f64>) -> String {
     }
 }
 
+/// A **purchase** price: [`num_f`], plus a fourth decimal on a value with exactly three —
+/// `src/lib/prices.ts`'s `priceText`, which the TypeScript writer uses for the same column. The
+/// app's price parser refuses `1.125` as ambiguous (a Danish `1.125` is eleven hundred and
+/// twenty-five) and reads `1.1250` back exactly, so this is what keeps a three-decimal price
+/// round-tripping through the collection's own CSV. The unit price stays [`num_f`]: nothing reads
+/// that column back.
+fn price_text(v: Option<f64>) -> String {
+    let mut text = num_f(v);
+    if text
+        .split_once('.')
+        .is_some_and(|(_, decimals)| decimals.len() == 3)
+    {
+        text.push('0');
+    }
+    text
+}
+
 /// A borrowed string, or `""` when the card has nothing to say.
 fn text(v: &Option<String>) -> String {
     v.as_deref().unwrap_or_default().to_string()
@@ -257,7 +274,7 @@ pub fn read(id: FieldId, card: &Card) -> String {
         FieldId::Condition => text(&card.condition),
         FieldId::Lang => text(&card.lang),
         FieldId::TradelistQuantity => num_i(card.tradelist_quantity),
-        FieldId::PurchasePrice => num_f(card.purchase_price),
+        FieldId::PurchasePrice => price_text(card.purchase_price),
         FieldId::PurchaseCurrency => text(&card.purchase_currency),
         FieldId::AcquiredAt => text(&card.acquired_at),
         FieldId::AcquisitionSource => text(&card.acquisition_source),
@@ -615,6 +632,26 @@ mod tests {
         assert_eq!(read(FieldId::PurchasePrice, &card), "1.25");
         assert_eq!(read(FieldId::UnitPrice, &card), "2");
         assert_eq!(read(FieldId::Misprint, &sample()), "");
+    }
+
+    /// **A purchase price with exactly three decimals gets a fourth** — `src/lib/prices.ts`'s
+    /// `priceText`, the TypeScript writer's rule, which is why the two must agree. The app's own
+    /// price parser refuses `1.125` as ambiguous (a Danish `1.125` is eleven hundred and
+    /// twenty-five) and reads `1.1250` back exactly. Every other shape, and the unit price beside
+    /// it, is `num_f` unchanged.
+    #[test]
+    fn a_three_decimal_purchase_price_is_written_so_it_reads_back_exactly() {
+        let priced = |p: f64| Card {
+            purchase_price: Some(p),
+            unit_price: Some(1.125),
+            ..sample()
+        };
+        assert_eq!(read(FieldId::PurchasePrice, &priced(1.125)), "1.1250");
+        assert_eq!(read(FieldId::PurchasePrice, &priced(1234.567)), "1234.5670");
+        assert_eq!(read(FieldId::PurchasePrice, &priced(4.25)), "4.25");
+        assert_eq!(read(FieldId::PurchasePrice, &priced(1.2345)), "1.2345");
+        assert_eq!(read(FieldId::PurchasePrice, &priced(1500.0)), "1500");
+        assert_eq!(read(FieldId::UnitPrice, &priced(1.0)), "1.125");
     }
 
     /// `__golden__/fields.json`, which is TypeScript's answer to the two questions this file

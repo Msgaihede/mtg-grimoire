@@ -174,6 +174,18 @@ export function CollectionPreview({
           />
         )}
 
+        {/* The same shape for a purchase price the file filled and this app could not read —
+            refused rather than guessed (`parsePurchasePrice`), so the copy lands with no price
+            and this is the only place the reader learns the cell was not empty. */}
+        {plan.unreadablePrices.length > 0 && (
+          <ProblemList
+            caption={`${plural(plan.unreadablePrices.length, "line")} had a purchase price this app could not read, and will be added without one`}
+            lines={plan.unreadablePrices.map(
+              (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
+            )}
+          />
+        )}
+
         <ImportProblems
           unmatched={plan.unmatched}
           hintMisses={plan.hintMisses}

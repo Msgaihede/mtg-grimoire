@@ -106,6 +106,35 @@ async function devicesOf(env: Env, group: string): Promise<string[]> {
   return results.map((row) => row.device_id).sort();
 }
 
+/**
+ * Put a refresh secret on the group's entitlement, held by `device` — or by nobody the relay
+ * knows of, which is every row claimed before `refresh_device` existed.
+ */
+async function holdSecret(
+  env: Env,
+  group: string,
+  secret: string,
+  device: string | null,
+): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE entitlements SET refresh_secret = ?, refresh_device = ? WHERE group_id = ?`,
+  )
+    .bind(secret, device, group)
+    .run();
+}
+
+/** The group's entitlement's refresh secret and its holder, as the row has them. */
+async function secretOf(
+  env: Env,
+  group: string,
+): Promise<{ refresh_secret: string | null; refresh_device: string | null } | null> {
+  return env.DB.prepare(
+    `SELECT refresh_secret, refresh_device FROM entitlements WHERE group_id = ?`,
+  )
+    .bind(group)
+    .first();
+}
+
 // ---------------------------------------------------------------------------------------
 // POST /g/{group}/rotate
 // ---------------------------------------------------------------------------------------
@@ -135,25 +164,25 @@ describe("POST /rotate", () => {
     expect(await authIsCurrent(env, "g1", hex64(1))).toBe(true);
   });
 
-  it("accepts a rotation signed with the entitlement's refresh secret", async () => {
-    // The device that connected Patreon holds the secret and the group key alike; this is the
-    // door it uses. `fakeEnv` seeds a placeholder secret rather than a real one, so the fixture
-    // is put into the shape `randomSecret` actually writes instead of the route's credential
-    // check being loosened to accept a placeholder.
+  it("refuses the refresh secret, even one whose recorded holder the manifest names", async () => {
+    // **The group auth is the only credential this route takes.** The refresh secret used to be a
+    // second one, and no shipped client ever presented it — `client::post_rotation` always sends
+    // the auth of the epoch it is replacing — while a lost phone still logged into Patreon could
+    // press Connect, be handed a fresh secret recorded against itself, and publish a manifest of
+    // its choosing, naming itself. A real-shaped secret with a recorded holder, so what refuses it
+    // is the door being gone rather than its shape or a missing holder.
     const env = relayEnv("g1");
     await seedGroup(env, "g1", 0, hex64(0));
     const secret = hex64(0xbeef);
-    await env.DB.prepare(`UPDATE entitlements SET refresh_secret = ? WHERE group_id = ?`)
-      .bind(secret, "g1")
-      .run();
+    await holdSecret(env, "g1", secret, "phone");
 
     const response = await worker.fetch(
-      rotateRequest("g1", secret, { epoch: 1, auth: hex64(1), keys: { desk: "blob-desk" } }),
+      rotateRequest("g1", secret, { epoch: 1, auth: hex64(1), keys: { phone: "blob-phone" } }),
       env,
     );
 
-    expect(response.status).toBe(200);
-    expect(await currentManifest(env, "g1")).toEqual({ epoch: 1, keys: { desk: "blob-desk" } });
+    expect(response.status).toBe(401);
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 0, keys: {} });
   });
 
   it("refuses an auth the group has left behind", async () => {
@@ -211,6 +240,35 @@ describe("POST /rotate", () => {
     expect(await currentManifest(env, "g1")).toEqual({ epoch: 1, keys: { desk: "blob-desk" } });
     expect(await authIsCurrent(env, "g1", hex64(1))).toBe(true);
     expect(await authIsCurrent(env, "g1", hex64(0x1b))).toBe(false);
+  });
+
+  it("refuses an epoch that skips past the next one, and records nothing", async () => {
+    // **Advancing is not enough; the epoch has to be the next one.** Every device plans
+    // `epoch + 1` from the epoch it is standing on, and the group auth it presents is only
+    // current if that epoch is the relay's — so no shipped client can send anything else. A
+    // caller that can send `1e9` can instead put the group on an epoch no device will ever plan
+    // from again, with a manifest of its choosing: `{}` reads as a removal notice to every one.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+
+    for (const epoch of [2, 1_000_000_000, Number.MAX_SAFE_INTEGER]) {
+      const skipping = await worker.fetch(
+        rotateRequest("g1", hex64(0), { epoch, auth: hex64(0xa), keys: {} }),
+        env,
+      );
+      // 422 and not the 409 above: that one is a device that is behind, which is a race a
+      // shipped client can lose and recover from; this one no shipped client can produce.
+      expect(skipping.status).toBe(422);
+    }
+
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 0, keys: {} });
+    expect(await authIsCurrent(env, "g1", hex64(0))).toBe(true);
+    // And the refusal closed nothing: the next epoch is still the one the group will take.
+    const next = await worker.fetch(
+      rotateRequest("g1", hex64(0), { epoch: 1, auth: hex64(1), keys: { desk: "blob-desk" } }),
+      env,
+    );
+    expect(next.status).toBe(200);
   });
 
   it("refuses a body it cannot read as a rotation", async () => {
@@ -384,6 +442,195 @@ describe("POST /rotate", () => {
     expect(response.status).toBe(200);
     expect(await devicesOf(env, "g1")).toEqual(["desk"]);
     expect(await devicesOf(env, "g2")).toEqual(["phone", "tablet"]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// The refresh secret, which a rotation retires with its device
+// ---------------------------------------------------------------------------------------
+
+describe("POST /rotate — the refresh secret dies with its device's membership", () => {
+  it("leaves a removed phone's secret unable to publish anything", async () => {
+    // **The whole bug, end to end.** The phone presses Connect, so it holds the refresh secret;
+    // it is lost, and the desk removes it. Whoever has the phone's `user.db` still has that
+    // secret, and `/rotate` takes it — so `{epoch: 1e9, keys: {}}` would put every remaining
+    // device on an epoch with no blob for it, which each reads as its own removal and leaves.
+    const env = relayEnv("g1");
+    // A real-shaped secret on the row before the claim, so a claim that handed the stored secret
+    // back would hand back one this route accepts — rather than `fakeEnv`'s placeholder, which
+    // `/rotate` refuses for its shape and would make this test pass for the wrong reason.
+    await holdSecret(env, "g1", hex64(0xbeef), null);
+    await env.DB.prepare(`INSERT INTO claim_codes (code, subject, expires_at) VALUES (?, ?, ?)`)
+      .bind("0123456789AB", "sub-0", Date.now() + 60_000)
+      .run();
+
+    const claimed = await worker.fetch(
+      new Request("https://relay.example/claim", {
+        method: "POST",
+        body: JSON.stringify({
+          code: "0123-4567-89AB",
+          group: "g1",
+          epoch: 0,
+          auth: hex64(0),
+          device: "phone",
+        }),
+      }),
+      env,
+    );
+    expect(claimed.status).toBe(200);
+    const { refresh } = (await claimed.json()) as { refresh: string };
+
+    const removal = await worker.fetch(
+      rotateRequest("g1", hex64(0), { epoch: 1, auth: hex64(1), keys: { desk: "blob-desk" } }),
+      env,
+    );
+    expect(removal.status).toBe(200);
+
+    for (const epoch of [2, 1_000_000_000]) {
+      const attack = await worker.fetch(
+        rotateRequest("g1", refresh, { epoch, auth: hex64(0xbad), keys: {} }),
+        env,
+      );
+      expect(attack.status).toBe(401);
+    }
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 1, keys: { desk: "blob-desk" } });
+    // And it is gone rather than merely refused here: `/token`'s refresh door looks the same
+    // column up, so the phone cannot mint a token for the group either.
+    expect(await secretOf(env, "g1")).toEqual({ refresh_secret: null, refresh_device: null });
+
+    // **Then the phone, still logged into Patreon, presses Connect again.** The claim is a
+    // legitimate press by the paying account and is answered — but the fresh secret it is handed
+    // opens no `/rotate`, so it cannot publish a manifest that names itself back into the group.
+    await env.DB.prepare(`INSERT INTO claim_codes (code, subject, expires_at) VALUES (?, ?, ?)`)
+      .bind("ABCDEFGHJKMN", "sub-0", Date.now() + 60_000)
+      .run();
+    const reclaimed = await worker.fetch(
+      new Request("https://relay.example/claim", {
+        method: "POST",
+        body: JSON.stringify({
+          code: "ABCD-EFGH-JKMN",
+          group: "g1",
+          epoch: 0,
+          auth: hex64(0),
+          device: "phone",
+        }),
+      }),
+      env,
+    );
+    expect(reclaimed.status).toBe(200);
+    const fresh = ((await reclaimed.json()) as { refresh: string }).refresh;
+    const rejoin = await worker.fetch(
+      rotateRequest("g1", fresh, { epoch: 2, auth: hex64(0xbad), keys: { phone: "blob-phone" } }),
+      env,
+    );
+    expect(rejoin.status).toBe(401);
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 1, keys: { desk: "blob-desk" } });
+  });
+
+  it("keeps the secret while the manifest still names the device holding it", async () => {
+    // The other half, and the one an over-eager retirement breaks: the desk removes a laptop,
+    // the phone that connected Patreon stays, and its secret has to keep working.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    const secret = hex64(0xbeef);
+    await holdSecret(env, "g1", secret, "phone");
+
+    const removal = await worker.fetch(
+      rotateRequest("g1", hex64(0), {
+        epoch: 1,
+        auth: hex64(1),
+        keys: { desk: "blob-desk", phone: "blob-phone" },
+      }),
+      env,
+    );
+    expect(removal.status).toBe(200);
+    expect(await secretOf(env, "g1")).toEqual({ refresh_secret: secret, refresh_device: "phone" });
+
+    // Where the secret still matters: the phone refreshes its token through it.
+    const refreshed = await worker.fetch(
+      new Request("https://relay.example/token", {
+        method: "POST",
+        body: JSON.stringify({ refresh: secret, device: "phone" }),
+      }),
+      env,
+    );
+    expect(refreshed.status).toBe(200);
+  });
+
+  it("keeps a secret a claim minted between the retirement's read and its write", async () => {
+    // D1 has no interactive transaction, so `/claim` can land between the two statements. The
+    // retirement read the phone's secret; by the time it writes, the desk has pressed Connect and
+    // holds a fresh one — which the manifest names, and which must survive. The write is a
+    // compare-and-swap on the secret it read, and a claim always changes the secret.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    await holdSecret(env, "g1", hex64(0xbeef), "phone");
+    const db = env.DB;
+    env.DB = {
+      ...db,
+      prepare: (sql: string) => {
+        if (sql.includes("SET refresh_secret = NULL")) {
+          // The fake executes on `run()`, synchronously, so this lands before the retirement.
+          void db
+            .prepare(
+              `UPDATE entitlements SET refresh_secret = ?, refresh_device = ? WHERE group_id = ?`,
+            )
+            .bind(hex64(0xfeed), "desk", "g1")
+            .run();
+        }
+        return db.prepare(sql);
+      },
+    } as D1Database;
+
+    const removal = await worker.fetch(
+      rotateRequest("g1", hex64(0), { epoch: 1, auth: hex64(1), keys: { desk: "blob-desk" } }),
+      env,
+    );
+
+    expect(removal.status).toBe(200);
+    expect(await secretOf(env, "g1")).toEqual({
+      refresh_secret: hex64(0xfeed),
+      refresh_device: "desk",
+    });
+  });
+
+  it("retires the secret when its own holder publishes a manifest without itself", async () => {
+    // A departure by the device that connected Patreon. It clears its own grant locally
+    // (`pairing::leave_group_now`), and the relay's copy goes with it.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    const secret = hex64(0xbeef);
+    await holdSecret(env, "g1", secret, "phone");
+
+    const departure = await worker.fetch(
+      rotateRequest("g1", hex64(0), { epoch: 1, auth: hex64(1), keys: { desk: "blob-desk" } }),
+      env,
+    );
+
+    expect(departure.status).toBe(200);
+    expect(await secretOf(env, "g1")).toEqual({ refresh_secret: null, refresh_device: null });
+  });
+
+  it("retires a secret with no recorded holder at the next rotation, whatever it names", async () => {
+    // **Every row claimed before `refresh_device` existed is this row**, and the relay cannot
+    // tell whether its holder is still in the group — so the first rotation the group publishes
+    // retires it. A holder that is still here drops to the group door
+    // (`entitlement::refused_secret`); pressing Connect again records it.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    const secret = hex64(0xbeef);
+    await holdSecret(env, "g1", secret, null);
+
+    const viaAuth = await worker.fetch(
+      rotateRequest("g1", hex64(0), {
+        epoch: 1,
+        auth: hex64(1),
+        keys: { desk: "blob-desk", phone: "blob-phone" },
+      }),
+      env,
+    );
+    expect(viaAuth.status).toBe(200);
+    expect(await secretOf(env, "g1")).toEqual({ refresh_secret: null, refresh_device: null });
   });
 });
 

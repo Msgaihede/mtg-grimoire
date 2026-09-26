@@ -264,7 +264,7 @@ pub fn run_pass(
     // is one of **ours**, which is what the manifest below may claim.
     let readme_is_ours = put_readme(root, previous.as_deref(), cache, &mut report);
 
-    prune(root, &plan, previous, cache, &mut report);
+    prune(root, &plan, previous, cache, &mut report, &file_identity);
     put(
         root,
         MANIFEST_NAME,
@@ -478,12 +478,24 @@ fn safe_entry(rel: &str) -> bool {
 /// [`README_NAME`] is in `wanted` **unconditionally**, including when [`put_readme`] refused to
 /// write it: `wanted` is what may not be deleted, and a README that is the reader's own is the
 /// last file in the folder this pass is allowed to take away.
+///
+/// **A manifest line that differs from a planned path only by case is deleted only when the disk
+/// says the two are different files** — [`alias_of`], on file identity. A deck renamed
+/// `azula` → `Azula` is that line on a case-folding filesystem: [`put`] has just found
+/// `Decks/azula/azula.txt` through the new spelling and confirmed it, so deleting the old spelling
+/// deletes the file the plan wants, and an exact-case test took every file of the deck and then
+/// its directory. Lowercasing the test instead would be wrong the other way: on a case-sensitive
+/// filesystem the two spellings are two directories and the old one is an orphan like any renamed
+/// deck's. Asking the disk whether they are one file is the only question right on both, and
+/// **when it will not answer the file is kept**. A kept entry's digest is forgotten, because that
+/// key is not in the plan any more; one that is the planned file is also re-spelt ([`respell`]).
 fn prune(
     root: &Path,
     plan: &Plan,
     previous: Option<Vec<String>>,
     cache: &mut HashMap<String, u64>,
     report: &mut PassReport,
+    identity: Identity,
 ) {
     let wanted: HashSet<&str> = plan
         .files
@@ -495,9 +507,27 @@ fn prune(
 
     match previous {
         Some(previous) => {
+            // One per planned path: the layout assigns names case-insensitively, so no two
+            // planned paths fold to the same key.
+            let folded: HashMap<String, &str> =
+                wanted.iter().map(|w| (w.to_lowercase(), *w)).collect();
             for rel in previous {
                 if wanted.contains(rel.as_str()) || !safe_entry(&rel) {
                     continue;
+                }
+                if let Some(&planned) = folded.get(&rel.to_lowercase()) {
+                    match alias_of(&root.join(&rel), &root.join(planned), identity) {
+                        Alias::Same => {
+                            cache.remove(&rel);
+                            respell(root, &rel, planned);
+                            continue;
+                        }
+                        Alias::Unsettled => {
+                            cache.remove(&rel);
+                            continue;
+                        }
+                        Alias::Different => {}
+                    }
                 }
                 drop_file(root, &rel, cache, report, &mut emptied);
             }
@@ -506,6 +536,91 @@ fn prune(
     }
 
     sweep_empty(root, &wanted, &emptied, report);
+}
+
+/// Whether two paths are one file on disk — [`file_identity`] in a pass, a stand-in in a test.
+type Identity<'a> = &'a dyn Fn(&Path, &Path) -> std::io::Result<bool>;
+
+/// What [`alias_of`] found out about a manifest line and the planned path it folds to.
+#[derive(Debug, PartialEq)]
+enum Alias {
+    /// One file under two spellings: keep it, and re-spell it.
+    Same,
+    /// Two entries, or nothing at the old path: the old line is an orphan like any renamed
+    /// deck's, and [`drop_file`] takes it.
+    Different,
+    /// The disk would not say. **Kept**: see [`alias_of`].
+    Unsettled,
+}
+
+/// Are these one file — the same device and file number on Unix, the same volume and file index
+/// on Windows? `same_file` opens both and compares handles, which is identity; a comparison of
+/// `canonicalize` answers is a comparison of *spellings*, and glibc's `realpath` hands back the
+/// one it was given on a case-folding FAT stick, a CIFS share or a casefold directory.
+fn file_identity(a: &Path, b: &Path) -> std::io::Result<bool> {
+    same_file::is_same_file(a, b)
+}
+
+/// Is the entry at `old` — a manifest line this pass no longer plans — the file at `planned`,
+/// which differs from it by case alone?
+///
+/// **Only an answer can delete, and not knowing is not one.** A `NotFound` while `old` exists is
+/// an answer: the planned spelling names no entry, so the two are two, and the old one is an
+/// orphan. Any other failure to establish identity is [`Alias::Unsettled`], and [`prune`] keeps
+/// the file — deleting it when the two were one file deletes the deck, keeping it when they were
+/// two costs an orphan that deleting the folder clears, and only the first of those loses anything.
+fn alias_of(old: &Path, planned: &Path, identity: Identity) -> Alias {
+    if std::fs::symlink_metadata(old).is_err() {
+        return Alias::Different;
+    }
+    match identity(old, planned) {
+        Ok(true) => Alias::Same,
+        Ok(false) => Alias::Different,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Alias::Different,
+        Err(_) => Alias::Unsettled,
+    }
+}
+
+/// Give the planned spelling to the segments of `planned` that **this app renamed** — the ones
+/// where the old manifest line `old` spells them differently — so a case-only rename shows on disk.
+///
+/// **Without it the old spelling would stay for good**: every later [`put`] writes *through* it,
+/// and the manifest, which now names only the new spelling, never offers the old one to [`prune`]
+/// again — a reader who fixed a deck's capitals would never see the fix in the folder.
+///
+/// **Only the segments the rename changed**, never an ancestor the two paths agree on: a reader
+/// who re-cased `Decks` to `decks` by hand keeps their spelling, because the manifest still says
+/// `Decks` on both sides and nothing here asks what the disk says about it. For a segment that did
+/// change, the disk's own entry is found by listing its parent — not by `canonicalize`, which on
+/// Linux keeps whatever spelling it was handed — and one already spelt as planned (the second of
+/// a deck's fourteen lines through the same folder) is left alone.
+///
+/// **Best effort, and never retried.** A refused rename (a sync client holding the folder open)
+/// leaves the old spelling and every byte under it — the state before this function existed — and
+/// is not counted in [`PassReport::failed`], because no file is missing or stale. The manifest
+/// this pass writes names only the new spelling, so no later pass offers the line again: a
+/// re-spelling refused once stays unapplied until the deck is next renamed.
+fn respell(root: &Path, old: &str, planned: &str) {
+    let mut at = root.to_path_buf();
+    for (was, want) in old.split('/').zip(planned.split('/')) {
+        if was != want {
+            let folded = want.to_lowercase();
+            let Some(entry) = std::fs::read_dir(&at).ok().and_then(|entries| {
+                entries.flatten().map(|e| e.file_name()).find(|name| {
+                    name.to_str()
+                        .is_some_and(|name| name != want && name.to_lowercase() == folded)
+                })
+            }) else {
+                // Already spelt as planned, or not there at all: either way, nothing to rename.
+                at.push(want);
+                continue;
+            };
+            if std::fs::rename(at.join(&entry), at.join(want)).is_err() {
+                return;
+            }
+        }
+        at.push(want);
+    }
 }
 
 /// Prune with no manifest to go on: the narrow recovery path, and the only place [`is_ours`]
@@ -611,6 +726,10 @@ fn drop_file(
 /// **no planned file at all** are removed — which covers a deck's `Theory` after the switch was
 /// turned off (owned, but planning nothing) as well as a deleted deck's own directory, and
 /// leaves the root standing because `README.txt` is planned in it forever.
+///
+/// **`keep` compares spellings exactly, and that is safe where [`prune`]'s old test was not.**
+/// `remove_dir` refuses a directory with anything in it, so on a case-folding filesystem the
+/// worst a spelling mismatch can cost is a directory that was already empty.
 fn sweep_empty(
     root: &Path,
     wanted: &HashSet<&str>,
@@ -1412,6 +1531,290 @@ mod tests {
             std::fs::read(&planned).unwrap(),
             body,
             "the surviving file is not the one the pass wrote"
+        );
+    }
+
+    /// Every entry directly inside `rel`, spelt the way the disk spells it, sorted.
+    fn listing(dir: &tempfile::TempDir, rel: &str) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir.path().join(rel))
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    /// The directories under `Decks/` that are some spelling of `azula`.
+    fn azula_dirs(dir: &tempfile::TempDir) -> Vec<String> {
+        listing(dir, "Decks")
+            .into_iter()
+            .filter(|name| name.eq_ignore_ascii_case("azula"))
+            .collect()
+    }
+
+    /// `Theory`, as the layout spells it — the one entry in a deck directory not named after it.
+    const THEORY_NAME: &str = "Theory";
+
+    /// **A case-only rename, `azula` to `Azula`, must leave the deck's files on disk under the
+    /// new spelling — and the one assertion below is sharp on both kinds of filesystem, from
+    /// opposite sides.**
+    ///
+    /// On a case-folding one (NTFS, every measured claim in this repo) `put` finds the old file
+    /// through the new spelling and counts it unchanged, so the manifest's `Decks/azula/…` lines
+    /// name the very files this pass just confirmed — and an exact-case `wanted` deleted all of
+    /// them, then their directory. On a case-sensitive one (the Linux half of CI) the old
+    /// spelling is a *different* directory nothing plans any more, and it has to go like any
+    /// renamed deck's — so a fix that simply lowercased the comparison would leave it behind.
+    /// "Exactly one directory, spelt `Azula`, holding files spelt `Azula`" is the invariant
+    /// both answers share.
+    #[test]
+    fn a_case_only_rename_leaves_the_deck_under_its_new_spelling() {
+        let (conn, dir, id) = seeded_db_and_temp_root();
+        rename_deck(&conn, id, "azula");
+        pass(&conn, dir.path(), Dirty::ALL);
+        assert_eq!(
+            azula_dirs(&dir),
+            ["azula"],
+            "the fixture has to start lowercase"
+        );
+
+        rename_deck(&conn, id, "Azula");
+        let report = pass(&conn, dir.path(), Dirty::ALL);
+
+        assert!(
+            deck_file(&dir, "Azula").is_file(),
+            "the pass deleted the deck's file it had just confirmed: {report:?}"
+        );
+        assert_eq!(report.failed, 0, "{report:?}");
+        assert_eq!(
+            azula_dirs(&dir),
+            ["Azula"],
+            "one directory, spelt the way the deck is now named"
+        );
+        for rel in ["Decks/Azula", "Decks/Azula/Theory"] {
+            let files: Vec<String> = listing(&dir, rel)
+                .into_iter()
+                .filter(|name| name != THEORY_NAME)
+                .collect();
+            assert_eq!(files.len(), 7, "{rel}: {files:?}");
+            assert!(
+                files.iter().all(|name| name.starts_with("Azula.")),
+                "{rel} still spells a file the old way: {files:?}"
+            );
+        }
+    }
+
+    /// **The same rename where the app makes it: one digest cache carried across every pass, on
+    /// the filesystem that folds case.** Two things the test above cannot see:
+    ///
+    /// - nothing is pruned at all — the files are never deleted and rewritten, they are kept;
+    /// - the digest remembered under the **old** spelling is forgotten. The list changes while
+    ///   it is called `Azula` and changes back when it is called `azula` again, which is
+    ///   exactly the moment a remembered `Decks/azula/azula.txt` would vouch for a file that
+    ///   has since been overwritten under the other name, and the pass would call it unchanged.
+    ///
+    /// Windows-only because both are facts about one file answering to two spellings; on a
+    /// case-sensitive filesystem the old spelling is pruned like any rename and takes its digest
+    /// with it.
+    #[cfg(windows)]
+    #[test]
+    fn a_case_only_rename_on_windows_prunes_nothing_and_forgets_the_old_digest() {
+        let (conn, dir, id) = seeded_db_and_temp_root();
+        let set_bolts = |n: i64| {
+            conn.execute(
+                "UPDATE deck_cards SET quantity = ?2 WHERE deck_id = ?1 AND variant = 'live'",
+                rusqlite::params![id, n],
+            )
+            .unwrap();
+        };
+        let mut cache = DigestCache::default();
+        rename_deck(&conn, id, "azula");
+        run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
+
+        rename_deck(&conn, id, "Azula");
+        set_bolts(3);
+        let renamed = run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
+        assert_eq!(
+            renamed.pruned, 0,
+            "a case-only rename deletes nothing: {renamed:?}"
+        );
+        assert_eq!(renamed.failed, 0, "{renamed:?}");
+        assert_eq!(azula_dirs(&dir), ["Azula"]);
+        assert!(listing(&dir, "Decks/Azula").contains(&"Azula.txt".to_owned()));
+
+        // Back to the first spelling, and back to the first list with it.
+        rename_deck(&conn, id, "azula");
+        set_bolts(4);
+        run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
+
+        let fresh = tempfile::tempdir().unwrap();
+        pass(&conn, fresh.path(), Dirty::ALL);
+        assert_eq!(azula_dirs(&dir), ["azula"]);
+        assert_eq!(
+            std::fs::read_to_string(deck_file(&dir, "azula")).unwrap(),
+            std::fs::read_to_string(fresh.path().join("Decks/azula/azula.txt")).unwrap(),
+            "a digest remembered under the old spelling vouched for a file that had changed"
+        );
+    }
+
+    /// **[`file_identity`] asks the disk which file a path is, never how it is spelt.** A hard
+    /// link is two paths to one file on every filesystem this runs on, so it is the case that
+    /// tells identity from a spelling comparison: `canonicalize` answers two different strings
+    /// for it — and for a case-folding FAT stick or CIFS share on Linux, where glibc's `realpath`
+    /// keeps the spelling it was handed, which is how the delete this arm exists to stop would
+    /// come back.
+    #[test]
+    fn alias_of_asks_the_disk_which_file_and_not_how_it_is_spelt() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("old.txt");
+        std::fs::write(&old, b"4 Lightning Bolt\n").unwrap();
+        let linked = dir.path().join("linked.txt");
+        std::fs::hard_link(&old, &linked).unwrap();
+        let copied = dir.path().join("copied.txt");
+        std::fs::write(&copied, b"4 Lightning Bolt\n").unwrap();
+        let identity: Identity = &file_identity;
+
+        assert_eq!(alias_of(&old, &linked, identity), Alias::Same);
+        assert_eq!(
+            alias_of(&old, &copied, identity),
+            Alias::Different,
+            "the same bytes in another file are another file"
+        );
+        assert_eq!(
+            alias_of(&old, &dir.path().join("missing.txt"), identity),
+            Alias::Different,
+            "a planned file that is not there cannot be the old one"
+        );
+        assert_eq!(
+            alias_of(&dir.path().join("gone.txt"), &old, identity),
+            Alias::Different,
+            "nothing at the old path is nothing to keep"
+        );
+    }
+
+    /// **Never delete on uncertainty.** When the disk will not say whether the old spelling is
+    /// the planned file — a driver that refuses the question, a file another program holds —
+    /// the old one is kept: if they were one file, deleting it deletes the deck; if they were
+    /// two, keeping it costs an orphan the README already says deleting the folder clears. Only
+    /// the first of those loses anything.
+    #[test]
+    fn an_unsettled_identity_keeps_the_old_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("Decks/azula/azula.txt");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, b"4 Lightning Bolt\n").unwrap();
+        let plan = Plan {
+            files: vec![super::super::layout::PlannedFile {
+                path: "Decks/Azula/Azula.txt".to_owned(),
+                format: crate::transfer::Format::ALL[0],
+                surface: Surface::Deck,
+                source: Source::Deck {
+                    id: 1,
+                    variant: "live",
+                },
+            }],
+            dirs: Vec::new(),
+        };
+        let mut report = PassReport::default();
+        let refuses: Identity =
+            &|_, _| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+
+        prune(
+            dir.path(),
+            &plan,
+            Some(vec!["Decks/azula/azula.txt".to_owned()]),
+            &mut HashMap::new(),
+            &mut report,
+            refuses,
+        );
+
+        assert!(old.is_file(), "a file was deleted on a guess: {report:?}");
+        assert_eq!(report.pruned, 0, "{report:?}");
+    }
+
+    /// **A re-spelling touches only what this app renamed.** The reader re-cased `Decks` to
+    /// `decks` by hand; renaming the deck `azula` → `Azula` differs from the old manifest line in
+    /// the deck's own folder and files, and in nothing above them, so `decks` is left as the
+    /// reader spelt it.
+    #[cfg(windows)]
+    #[test]
+    fn a_respelling_leaves_a_folder_the_reader_recased_alone() {
+        let (conn, dir, id) = seeded_db_and_temp_root();
+        rename_deck(&conn, id, "azula");
+        pass(&conn, dir.path(), Dirty::ALL);
+        std::fs::rename(dir.path().join("Decks"), dir.path().join("decks")).unwrap();
+        assert!(listing(&dir, "").contains(&"decks".to_owned()));
+
+        rename_deck(&conn, id, "Azula");
+        pass(&conn, dir.path(), Dirty::ALL);
+
+        let top = listing(&dir, "");
+        assert!(
+            top.contains(&"decks".to_owned()) && !top.contains(&"Decks".to_owned()),
+            "the reader's own spelling of a folder the rename did not touch: {top:?}"
+        );
+        assert_eq!(
+            azula_dirs(&dir),
+            ["Azula"],
+            "and the deck's own folder follows the rename"
+        );
+    }
+
+    /// **Two decks one letter-case apart, and the name passing from one to the other.** `Azula`
+    /// (the fixture's) takes the name and the later `azula` is disambiguated to `azula (2)`, as
+    /// NTFS demands. Deleting `Azula` hands `azula` to the survivor — whose planned path is the
+    /// deleted deck's old one by case alone, so this is the alias arm meeting a *different* deck's
+    /// file. On a case-folding disk `put` has just written the survivor's list through it and the
+    /// arm keeps and re-spells it; on a case-sensitive one it is another file and is pruned.
+    /// Either way what is left is one `azula` holding the survivor's list.
+    #[test]
+    fn two_decks_one_case_apart_hand_the_name_over_when_the_first_goes() {
+        let (conn, dir, first) = seeded_db_and_temp_root();
+        let second = crate::deck::create_deck(
+            &conn,
+            &crate::deck::DeckInput {
+                name: "azula".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        crate::deck::add_card(
+            &conn,
+            second,
+            "sol-lea",
+            None,
+            Some("Main"),
+            "live",
+            None,
+            1,
+        )
+        .unwrap();
+        pass(&conn, dir.path(), Dirty::ALL);
+        assert_eq!(azula_dirs(&dir), ["Azula"]);
+        assert!(listing(&dir, "Decks").contains(&"azula (2)".to_owned()));
+
+        crate::deck::delete_deck(&conn, first).unwrap();
+        let report = pass(&conn, dir.path(), Dirty::ALL);
+
+        assert_eq!(report.failed, 0, "{report:?}");
+        assert_eq!(azula_dirs(&dir), ["azula"]);
+        assert!(!listing(&dir, "Decks").contains(&"azula (2)".to_owned()));
+        let files = listing(&dir, "Decks/azula");
+        assert!(
+            files.len() == 7 && files.iter().all(|name| name.starts_with("azula.")),
+            "{files:?}"
+        );
+        let fresh = tempfile::tempdir().unwrap();
+        pass(&conn, fresh.path(), Dirty::ALL);
+        assert_eq!(
+            std::fs::read_to_string(deck_file(&dir, "azula")).unwrap(),
+            std::fs::read_to_string(fresh.path().join("Decks/azula/azula.txt")).unwrap(),
+            "the survivor's list, not the deleted deck's"
         );
     }
 

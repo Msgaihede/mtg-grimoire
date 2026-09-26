@@ -99,6 +99,14 @@ entitlements(
 )
 ```
 
+**Every `/claim` mints a fresh `refresh_secret` and records the claiming device in
+`refresh_device`** (an `ALTER` at the end of `schema.sql`). The secret opens `/token`'s refresh
+door, so it must not outlive its device's place in the group: an accepted rotation whose manifest
+omits `refresh_device` sets both to NULL, and a lost phone that pressed Connect stops minting
+tokens for the group that removed it. A row with a secret and no recorded device was claimed
+before the column existed; the next accepted rotation retires it. **The secret opens no
+`/rotate`** — that route takes the group's current auth and nothing else.
+
 **`subject` is minted by the relay and is not the Patreon id.** The Patreon id lives in exactly
 one column of one table; the token, the group binding and every log line name the subject
 instead. A reader who moves between two sources keeps their subject and their group.
@@ -258,7 +266,7 @@ exemption.** ⚠️ **This section said "every one of them is behind the bearer 
 
 | Request | Body | Guarded by | Answer |
 | --- | --- | --- | --- |
-| `POST /g/{group}/rotate` | `{epoch, auth, keys}` | the group auth, or the refresh secret | `200 {epoch}`; `409` if the epoch does not advance |
+| `POST /g/{group}/rotate` | `{epoch, auth, keys}` | the group's current auth | `200 {epoch}`; `409` if the epoch does not advance; `422` if it skips past the next one |
 | `GET /g/{group}/keys?device={id}` | — | any auth the group has used in `EPOCH_HISTORY` epochs | `200 {epoch, blob, devices}` |
 
 A device that has just been rotated away from **cannot mint a token** — the auth it would present
@@ -269,6 +277,13 @@ which is what makes standing outside affordable: the gate is in front of the DO 
 that reaches one bills a Durable Object request whether it is honoured or refused, and nothing
 these two can be made to spend is on that line. They belong on the rate-limiting list instead —
 runbook step 8.
+
+**The epoch must be exactly one past the group's newest.** Every device plans its own epoch plus
+one, and the auth it presents is current only if that epoch is the relay's, so no shipped client
+sends anything else; "strictly higher" let a caller holding a credential move the group to `1e9`
+with a manifest of its choosing, which every device then reads its membership off. A behind
+epoch is still the `409` a device can lose a race to; a skipping one is a `422`, since no client
+produces it.
 
 `/rotate`'s manifest is capped at `MAX_GROUP_DEVICES` (**64 until 2026-08-30**, which was a bound
 on what D1 would store rather than a policy) and 4 KB per blob, and it calls `keepOnly` after
@@ -395,6 +410,7 @@ runbook, with the probes that say which of them are already done, is
    npx wrangler d1 execute mtg-grimoire-relay --remote --file=./migrations/2026-08-30-group-devices.sql
    npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN group_epoch INTEGER"
    npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN group_auth TEXT"
+   npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN refresh_device TEXT"
    ```
    ⚠️ **The migration files exist because `wrangler d1 execute --file` is atomic**, which is the
    whole of the reason and is worth reading before deciding to skip one. `schema.sql` ends with
@@ -411,7 +427,7 @@ runbook, with the probes that say which of them are already done, is
    call it on every trip, so a Worker pointed at a database without that table answers 500 on the
    route every device uses to sync. The reverse order costs nothing: a table nothing writes to yet
    is inert.
-3. Set the three secrets, and add the two public `vars` beside `RELAY_BASE`.
+3. Set the three secrets. The two public `vars` are already committed beside `RELAY_BASE`.
 4. `npx wrangler deploy`, then register the redirect URI and the webhook with Patreon. **Verify
    against the host and never against an exit code** — that is what the 500 above was.
 
@@ -431,10 +447,9 @@ member list, so there is no campaign-wide credential to hold. **§9 was correcte
 disagreement with a table that still carries it. If reconciliation ever moves to the campaign
 endpoint, that secret comes back with it.
 
-`PATREON_CLIENT_ID` and `PATREON_CAMPAIGN_ID` are **public** and belong in `vars` beside
-`RELAY_BASE` the day they are known. Both are deliberately absent rather than empty for step 1's
-reason; `required()` in `patreon.ts` turns an unset binding into a 500 that names it, rather than
-into a request Patreon rejects for a reason nobody can see.
+`PATREON_CLIENT_ID` and `PATREON_CAMPAIGN_ID` are **public** and are committed in `vars` beside
+`RELAY_BASE`, both real. `required()` in `patreon.ts` still turns an unset binding into a 500
+that names it, rather than into a request Patreon rejects for a reason nobody can see.
 
 **`RELAY_BASE` must equal `entitlement::RELAY_BASE` in the Rust byte for byte.** The redirect URI
 is built from it on both sides and Patreon compares redirect URIs exactly — at the authorize

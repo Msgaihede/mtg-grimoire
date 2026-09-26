@@ -152,6 +152,11 @@ qrcode = { version = "0.14", default-features = false }
 # and dependency edges, never feature selections, so an empty diff is the evidence rather than a
 # missing one.
 rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
+# File identity for the mirror's prune: whether two spellings of a path are one file on disk
+# (`mirror::run::alias_of`). `canonicalize` cannot answer it — glibc's `realpath` keeps the
+# spelling it was given on a case-folding FAT stick or CIFS share. Already in `Cargo.lock` at this
+# version through `walkdir`, so the lockfile gains one edge and no package.
+same-file = "1.0.6"
 # The card scanner. A plain path dependency across two standalone packages, which is what the
 # crate's own manifest anticipates — it is deliberately not a workspace member, so its three
 # tools keep building into `crates/card-scanner/target/`. `corpus` is the join back to

@@ -6,18 +6,25 @@ on:
   push:
     branches: [main]
 
+# A PR's runs share a group, so a new push cancels the stale run — the next one diffs the whole
+# PR against its base and loses nothing. **A push to `main` gets a group of its own.** Its routing
+# diffs from `github.event.before`, so a cancelled `main` run's changes are never routed again —
+# and turning off `cancel-in-progress` alone would not save them, because GitHub still replaces a
+# *pending* run in the same group with the next one.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  # Which halves of the repo this change can possibly have broken. The two build jobs
-  # share no inputs — `npm run build`/`lint`/`test:run` never read `src-tauri/`, and the
-  # Rust job stubs the one frontend artefact it needs (see below) — so a change confined
-  # to one side has nothing to prove on the other.
+  # Which jobs this change can possibly have broken. The decision is `scripts/ci-route.mjs`,
+  # where every arm carries its reason; this job only finds the changed paths and hands them
+  # over. **The two halves do read each other's files** — frontend tests read `src-tauri/` and
+  # `crates/` sources as text, Rust tests read `src/lib/userTables.json` and the transfer
+  # golden — so a crossing routes to both, and `scripts/ci-route.test.mjs` derives that census
+  # from the sources and fails when a crossing routes to only one side.
   #
   # Deliberately NOT a workflow-level `paths:` filter: that skips the whole workflow,
   # `ci-ok` included, and a required check that never reports leaves every PR merge-blocked
@@ -38,6 +45,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The router is a dependency-free Node script, so no `npm ci` — only a pinned Node, for the
+      # reason the `wasm` job pins its clang: whatever the runner image ships is not a contract.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: Classify the changed paths
         id: classify
         shell: bash
@@ -48,12 +61,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          frontend=false
-          rust=false
-          powershell=false
-          wasm=false
-          android=false
-
           # A first push to a branch reports an all-zero `before`, and a force-push can
           # report a commit that no longer exists. Neither can be diffed, so both run
           # everything rather than guessing.
@@ -61,12 +68,7 @@ jobs:
             || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] \
             || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
             echo "No usable base commit ('$BASE_SHA') — running every job."
-            files=""
-            frontend=true
-            rust=true
-            powershell=true
-            wasm=true
-            android=true
+            flags=$(node scripts/ci-route.mjs --all)
           else
             # `--no-renames` is load-bearing: with rename detection on (the default since
             # git 2.9) a file moved out of `src/` into `src-tauri/` is reported as the
@@ -77,183 +79,25 @@ jobs:
             files=$(git diff --name-only --no-renames "$BASE_SHA" HEAD)
             echo "Changed files vs $BASE_SHA:"
             echo "$files" | sed 's/^/  /'
+            flags=$(printf '%s\n' "$files" | node scripts/ci-route.mjs)
           fi
 
-          while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            case "$file" in
-              # This file. A change to the gate re-runs the whole gate.
-              .github/workflows/ci.yml)
-                frontend=true
-                rust=true
-                powershell=true
-                wasm=true
-                android=true
-                ;;
+          # Every output a job's `if:` reads must be printed, and printed as a boolean. A
+          # missing one reads as `''`, every job gated on it skips, and `ci-ok` counts a skip
+          # as a pass — so a router that printed nothing would take the gate green having run
+          # nothing. Fail here instead.
+          for job in frontend rust powershell wasm android; do
+            grep -Eqx "$job=(true|false)" <<< "$flags" \
+              || { echo "ci-route.mjs printed no '$job=true|false' line:" >&2; echo "$flags" >&2; exit 1; }
+          done
 
-              # The wasm build's own inputs, and nothing else's. **Above `scripts/*` and
-              # `src/*`**, both of which match more broadly and would route the wrong jobs
-              # first — `case` is first-match-wins, the rule this whole block is ordered by.
-              # `vite.web.config.ts` is not matched by the `vite.config.ts` arm below (that
-              # one is a literal), but it is listed here so the pair reads as one decision.
-              scripts/build-wasm.mjs|vite.web.config.ts)
-                frontend=true
-                wasm=true
-                ;;
-
-              # The frontend half of the web target. These three directories are what the
-              # web bundle adds on top of the desktop one, and `npm run web:build` type-checks
-              # and bundles all of it.
-              src/workers/*|src/web/*|src/lib/core/*)
-                frontend=true
-                wasm=true
-                ;;
-
-              # Affects neither job. Nothing here is compiled, linted or tested: `eslint .`
-              # never sees a `.md`, `vitest` only collects `src/**/*.test.{ts,tsx}`, and
-              # release-please's own files are read by `release.yml` rather than by this
-              # gate. Keep this list small — it is the only arm that can wrongly skip work.
-              docs/*|*.md) ;;
-              .vscode/*|.gitignore|.gitattributes) ;;
-              .release-please-manifest.json|release-please-config.json) ;;
-              .github/workflows/release.yml) ;;
-
-              # PowerShell. The `powershell` job runs this repo's `.ps1` test files, and
-              # nothing else here consumes a `.ps1`: `eslint` does not lint one, `vitest`
-              # does not collect one, cargo does not read one. So a `.ps1` needs this job
-              # and only this job.
-              #
-              # **This arm must stay above `src-tauri/*` and `scripts/*`.** `case` is
-              # first-match-wins, and `scripts/` is on the frontend list solely because
-              # `eslint .` lints it — which is untrue of a `.ps1`, so a `scripts/*.ps1`
-              # matching the frontend arm first would run the wrong job and skip this one.
-              #
-              # It also narrows the `*)` fail-safe below, which previously sent every `.ps1`
-              # to both build jobs: measured on PR #28, whose `lock.ps1` ran `frontend` and
-              # the full `rust` matrix to prove nothing about either.
-              #
-              # `.psm1`/`.psd1` are here because a module or manifest `lock.ps1` imported
-              # would otherwise fall through to `*)` — which runs the two build jobs and
-              # skips the only job that would actually have tested it. That is the one
-              # direction the fail-safe cannot cover, since it does not set `powershell`.
-              *.ps1|*.psm1|*.psd1)
-                powershell=true
-                ;;
-
-              # The two files under `gen/android/` that a Rust test actually reads, and they
-              # must sit above the arm that silences the rest of that tree.
-              # `the_generated_gradle_carries_the_floor_the_config_asked_for` and
-              # `the_android_manifest_asks_for_the_internet_and_nothing_else` `include_str!`
-              # exactly these — one pins `minSdk`/`targetSdk`/the debug suffix the APK is
-              # really built with, the other pins the permission list to `INTERNET` alone. Both
-              # are Kotlin-and-XML files that are also Rust test inputs, which is the case the
-              # arm below explicitly assumed did not exist.
-              src-tauri/gen/android/app/build.gradle.kts|src-tauri/gen/android/app/src/main/AndroidManifest.xml)
-                rust=true
-                ;;
-
-              # The rest of the Android Gradle project. Nothing in either build job reads it:
-              # `cargo` does not compile Kotlin, `eslint` does not lint a `.gradle.kts`, and the
-              # Rust job builds for the host target only. Building an APK needs an SDK and an
-              # NDK on the runner, which no job here installs. So this routes nowhere, exactly
-              # like `docs/`.
-              #
-              # **It must sit above `src-tauri/*`** — `case` is first-match-wins, and the arm
-              # below would otherwise run the whole clippy-and-test matrix on Windows *and*
-              # Linux for a theme colour or a launcher icon.
-              src-tauri/gen/android/*) ;;
-
-              # Rust. The crate is self-contained: nothing under `src-tauri/` reads a file
-              # outside it — every `include_str!` names its own `tauri.conf.json`, a
-              # `capabilities/` file, one of the two `gen/android/` files routed above, or
-              # `desktop.rs` itself — and the `dist/index.html` that `tauri-build` demands is
-              # stubbed by the job itself.
-              #
-              # **Every change here can break the wasm build too.** It is one crate with two
-              # targets, and a `use tauri::` added to a module on the wasm side of `lib.rs`'s
-              # map compiles on desktop and fails there — with a fully green `npm run verify`.
-              #
-              # **And the Android one, which is a third target of the same crate.** It is the
-              # closest of the three to the host build — `cfg(desktop)` is false but `tauri` is
-              # still there — so it breaks in a narrower way and a rarer one, which is exactly
-              # why nothing noticed the last time. It did break: #270 fixed a `main` that had
-              # stopped cross-compiling, and an APK build was how anybody found out.
-              src-tauri/*)
-                rust=true
-                wasm=true
-                android=true
-                ;;
-
-              # Frontend. What `npm run build` (`tsc && vite build`), `eslint .` and
-              # `vitest run` actually read. `scripts/` is in the list because `eslint .`
-              # lints it — the ignore list is `dist/`, `src-tauri/`, `node_modules/` and
-              # nothing else.
-              src/*|public/*|index.html)
-                frontend=true
-                ;;
-              package.json|package-lock.json|components.json|.prettierrc)
-                frontend=true
-                wasm=true
-                ;;
-              # `npm run web:build` is `tsc && vite build --config vite.web.config.ts`, and
-              # that config merges `vite.config.ts` — so all four of these are wasm inputs too.
-              tsconfig.json|tsconfig.node.json|vite.config.ts|eslint.config.js)
-                frontend=true
-                wasm=true
-                ;;
-              scripts/*)
-                frontend=true
-                ;;
-
-              # The `card-scanner` crate. It is a **separate cargo package** — deliberately not
-              # a workspace member — that `src-tauri` takes as a path dependency, and three jobs
-              # read it: `rust` compiles it into the app and now runs its own suite, `android`
-              # cross-compiles the same dependency, and `frontend` reads six of its `.rs` files
-              # as text (`ipc.test.ts`'s snake-case mirror rows) and lints
-              # `crates/*/scripts/**/*.mjs` under `eslint .`.
-              #
-              # **This arm changes nothing and declares what was already happening**: `crates/`
-              # matched no arm, so the `*)` fail-safe below sent it to all four. `wasm` is kept
-              # rather than narrowed away — nothing here reaches that build today, because
-              # `src-tauri/Cargo.toml` has the dependency in its `cfg(not(target_family =
-              # "wasm"))` block, but which block it sits in is that manifest's decision and this
-              # is not the commit to start skipping a job on the strength of it.
-              crates/*)
-                frontend=true
-                rust=true
-                wasm=true
-                android=true
-                ;;
-
-              # Anything unrecognised runs everything. This is the fail-safe that makes the
-              # lists above safe to be wrong in the cheap direction: a new root-level config
-              # file, a new top-level directory, a path nobody thought about — all of it
-              # gets full CI until someone deliberately narrows it here.
-              *)
-                frontend=true
-                rust=true
-                wasm=true
-                android=true
-                ;;
-            esac
-          done <<< "$files"
-
-          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
-          echo "rust=$rust" >> "$GITHUB_OUTPUT"
-          echo "powershell=$powershell" >> "$GITHUB_OUTPUT"
-          echo "wasm=$wasm" >> "$GITHUB_OUTPUT"
-          echo "android=$android" >> "$GITHUB_OUTPUT"
-
+          echo "$flags" >> "$GITHUB_OUTPUT"
           {
             echo "### Changed-path routing"
             echo
             echo "| job | runs |"
             echo "| --- | --- |"
-            echo "| frontend | \`$frontend\` |"
-            echo "| rust | \`$rust\` |"
-            echo "| powershell | \`$powershell\` |"
-            echo "| wasm | \`$wasm\` |"
-            echo "| android | \`$android\` |"
+            echo "$flags" | sed 's/^\([a-z]*\)=\(.*\)$/| \1 | `\2` |/'
           } >> "$GITHUB_STEP_SUMMARY"
 
   frontend:

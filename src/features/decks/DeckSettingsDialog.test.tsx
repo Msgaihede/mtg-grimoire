@@ -77,6 +77,7 @@ const BURN: DeckRow = {
   defaultCategoryId: 0,
   bracket: 0,
   tokenStack: false,
+  tokenRailIndex: -1,
 };
 
 const SPECS: FormatSpec[] = [spec("modern"), spec("commander"), spec("casual")];

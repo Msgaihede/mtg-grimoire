@@ -5,9 +5,9 @@ import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import type { DeckVariant } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { STACK_CARD_WIDTH, stackCardWidth } from "./CardStack";
+import { tokenCountWords } from "./CountPill";
 import { DeckTokensPanel, TOKENS_HEADING } from "./DeckTokensPanel";
 import { TokenArtPicker } from "./TokenArtPicker";
-import { tokenCountWords } from "./TokenCountPill";
 import { useDeckTokens } from "./useDeckTokens";
 
 interface TokensBandProps {
@@ -169,16 +169,22 @@ type Story = StoryObj<typeof meta>;
  * be a control asking the reader to guess. It costs one query against a corpus the app already
  * has.
  *
- * Four rather than five, because one of deck 1's tokens is dismissed — the number is what the
- * deck brings, so a dismissal is not in it.
+ * **Six, and the number is copies** (token stacks spec §3.1) — the stepper's figure summed over
+ * the tokens the deck brings: four Treasures, no Constructs (zeroed on purpose), one Wurm and
+ * Oko's emblem. The second Wurm is not in it, because it is dismissed and the number is what the
+ * deck brings. It counted *distinct* tokens until then, and read 4 here.
  */
 export const Collapsed: Story = {
   args: { open: false },
   play: async ({ canvas, args }) => {
     const disclosure = await canvas.findByRole("button", { name: TOKENS_HEADING });
     await expect(disclosure).toHaveAttribute("aria-expanded", "false");
-    // The pill: a bare `4` for the eye and the whole phrase for a screen reader.
-    await expect(await canvas.findByText(tokenCountWords(4))).toBeInTheDocument();
+    // The pill: a bare `6` for the eye and the whole phrase for a screen reader.
+    const words = await canvas.findByText(tokenCountWords(6));
+    await expect(words).toHaveClass("sr-only");
+    await expect(words.parentElement?.querySelector('[aria-hidden="true"]')).toHaveTextContent(
+      /^6$/,
+    );
 
     // Nothing of the wall is mounted while it is shut — no picture, no tile, no stepper.
     await expect(canvas.queryByRole("button", { name: /^Change the art for / })).toBeNull();
@@ -288,7 +294,7 @@ export const NothingToMake: Story = {
     await expect(canvas.getByText(TOKENS_HEADING)).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: TOKENS_HEADING })).toBeNull();
     // No count either: a `0` pill beside a sentence saying so is the same fact twice.
-    await expect(canvas.queryByText(/to bring$/)).toBeNull();
+    await expect(canvas.queryByText(tokenCountWords(0))).toBeNull();
   },
 };
 
@@ -341,8 +347,9 @@ export const DismissedRevealed: Story = {
       within(region).getByRole("button", { name: `Dismiss Wurm, ${SUBTITLE.wurmDeathtouch}` }),
     ).toBeInTheDocument();
 
-    // Unmoved, and deliberately: a dismissal is not one of the tokens this deck brings.
-    await expect(within(region).getByText(tokenCountWords(4))).toBeInTheDocument();
+    // Unmoved, and deliberately: a dismissal is not one of the tokens this deck brings — the
+    // revealed Wurm's one copy is not in the six.
+    await expect(within(region).getByText(tokenCountWords(6))).toBeInTheDocument();
   },
 };
 

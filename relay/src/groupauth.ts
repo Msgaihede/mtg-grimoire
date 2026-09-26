@@ -173,10 +173,24 @@ function parseManifest(text: string, group: string): Record<string, string> {
  * before `group_keys` existed has to do, and nothing says which device to do it on. Pressed on
  * the one that happens to be behind, the repair breaks the devices that were fine.
  *
- * **So both statements carry the same guard: this epoch must be at least the highest the group
- * has.** Behind, the claim still succeeds and still mints a grant — it is a legitimate press by a
- * paying reader — and simply leaves the group's key registration alone, which is the state that
- * was already correct.
+ * **So a group that has key rows is seeded only at the epoch it is standing on, and only with the
+ * auth already registered there.** Behind, the claim still succeeds and still mints a grant — it
+ * is a legitimate press by a paying reader — and simply leaves the group's key registration alone,
+ * which is the state that was already correct.
+ *
+ * ⚠️ **Ahead is refused for `/rotate`'s reason.** A claim at `max + 1` with its own auth would
+ * register a row there with an empty manifest, which every device reads as a higher epoch with no
+ * blob for itself — its own removal. `entitlement::claim` sends the device's own current epoch, so
+ * a caught-up device claims at the group's epoch exactly and nothing shipped sends one past it.
+ *
+ * ⚠️ **And at the group's own epoch the auth must match what is registered.** The insert
+ * conflicts there and is ignored, so the mirror `UPDATE` is the only write — and re-pointing it at
+ * a claimer's auth would let a removed device still logged into Patreon make its own auth current,
+ * lock the devices that stayed out of the group door and publish a rotation naming itself. A
+ * device that holds the key derives the same auth, so a genuine re-claim loses nothing.
+ *
+ * A group with **no** rows takes any epoch: that is the first claim, and the repair for a group
+ * claimed before `group_keys` existed.
  */
 export async function seedGroup(
   env: Env,
@@ -184,34 +198,34 @@ export async function seedGroup(
   epoch: number,
   auth: string,
 ): Promise<void> {
-  // `>=` and not `>`: a re-claim at the epoch the group is already on is the ordinary case, and
-  // it has to reach the `UPDATE` below — the insert is swallowed by `OR IGNORE`, and the mirror
-  // it re-points is the half a re-claim exists to change.
+  // `coalesce(…, ?)` bound to this epoch is what lets a group with no rows start anywhere; with
+  // rows, it is `epoch = max(epoch)`. A re-claim at the group's epoch is swallowed by `OR IGNORE`.
   await env.DB.prepare(
     `INSERT OR IGNORE INTO group_keys (group_id, epoch, auth, keys, created_at)
      SELECT ?, ?, ?, ?, ?
-      WHERE ? >= coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1)`,
+      WHERE ? = coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), ?)`,
   )
-    .bind(group, epoch, auth, "{}", Date.now(), epoch, group)
+    .bind(group, epoch, auth, "{}", Date.now(), epoch, group, epoch)
     .run();
 
-  // **Read after the insert, so `max(epoch)` includes the row just written.** Seeding at 5 leaves
-  // `5 >= 5`; arriving behind at 1 against a group at 5 leaves `1 >= 5`, and the mirror is left
-  // pointing where it already correctly pointed.
+  // **Read after the insert, so `max(epoch)` includes the row just written.** The mirror moves
+  // only to the newest epoch and only to the auth that epoch's row holds — which is this claim's
+  // own row on a first claim, and the row a genuine re-claim derives the same auth for.
   await env.DB.prepare(
     `UPDATE entitlements
         SET group_epoch = ?, group_auth = ?
       WHERE group_id = ?
-        AND ? >= coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1)`,
+        AND ? = (SELECT max(epoch) FROM group_keys WHERE group_id = ?)
+        AND (SELECT count(*) FROM group_keys WHERE group_id = ? AND epoch = ? AND auth = ?) > 0`,
   )
-    .bind(epoch, auth, group, epoch, group)
+    .bind(epoch, auth, group, epoch, group, group, epoch, auth)
     .run();
 }
 
 /**
  * Record a rotation: a new epoch, the auth derived from the new group key, and the key sealed for
- * every device that stays. `false` when `epoch` does not strictly advance the group, and nothing
- * is written in that case.
+ * every device that stays. `false` when `epoch` is not **exactly one past** the group's newest,
+ * and nothing is written in that case.
  *
  * **The monotonic check is one statement, and that is the whole guard.** D1 has no interactive
  * transaction — `handleClaim`'s `DELETE … RETURNING` says so for the claim code and the reasoning
@@ -220,7 +234,13 @@ export async function seedGroup(
  * What is on the other side of that window is not a tidiness problem: a device that was removed
  * still knows its old auth, and re-registering it at the epoch it remembers is exactly how it
  * would get back into a group that evicted it. `INSERT … SELECT … WHERE` is atomic by
- * construction, and the `WHERE` is the sentence "strictly higher than anything this group has".
+ * construction, and the `WHERE` is the sentence "the next epoch this group has not had".
+ *
+ * **Next, and not merely higher.** Every device plans `epoch + 1` from the epoch it stands on
+ * (`identity::plan_excluding`), and the group auth it presents is current only if that is the
+ * relay's epoch — so no shipped client sends anything else. "Strictly higher" let a caller holding
+ * a credential put the group on `1e9` with a manifest of its choosing, which every device reads
+ * its membership off: `{}` there is a removal notice to all of them at once.
  *
  * `coalesce(…, -1)` is what makes a rotation to epoch 0 possible on a group with no rows at
  * all. Reaching this function on an unknown group is not itself a hole: `/rotate` authenticates
@@ -236,7 +256,7 @@ export async function recordRotation(
   const written = await env.DB.prepare(
     `INSERT INTO group_keys (group_id, epoch, auth, keys, created_at)
      SELECT ?, ?, ?, ?, ?
-      WHERE ? > coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1)`,
+      WHERE ? = coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1) + 1`,
   )
     .bind(group, epoch, auth, JSON.stringify(keys), Date.now(), epoch, group)
     .run();
@@ -258,6 +278,24 @@ export async function recordRotation(
       .bind(epoch, auth, group),
   ]);
   return true;
+}
+
+/**
+ * The newest epoch this group has a key row for, or `null` for none.
+ *
+ * **For explaining a refusal and never for making one.** `recordRotation` decides in one
+ * statement; `/rotate` asks this only afterwards, to say whether a refused epoch was behind the
+ * group or ahead of it. Deciding off this read would reopen the window that statement closes.
+ * The manifest is deliberately not read — `currentManifest` throws on a corrupt one, and a
+ * refusal's sentence is not worth a 500.
+ */
+export async function groupEpoch(env: Env, group: string): Promise<number | null> {
+  const row = await env.DB.prepare(
+    `SELECT epoch FROM group_keys WHERE group_id = ? ORDER BY epoch DESC LIMIT 1`,
+  )
+    .bind(group)
+    .first<{ epoch: number }>();
+  return row === null ? null : row.epoch;
 }
 
 /**
@@ -337,8 +375,9 @@ export async function authIsRecent(env: Env, group: string, auth: string): Promi
  * failure the TTL exists to prevent — a wiped reinstall's abandoned id would go on occupying
  * storage after it had stopped occupying a slot, and nothing would ever remove it.
  *
- * The set comes back rather than the size because `admitDevice` needs both facts — how many, and
- * whether *this* one is among them — and asking twice would be two reads for one question.
+ * `admitDevice` no longer reads through here — it counts inside its own `INSERT`, for the race its
+ * doc describes — but it prunes with the same statement first, so the two cannot disagree about
+ * which rows are live. `roomFor` does read through here, as `/claim`'s early, non-binding ask.
  * `last_seen < cutoff` and not `<=`: a row seen exactly ninety days ago is still inside the
  * window, which is the reading that makes the constant a duration rather than an off-by-one.
  */
@@ -365,17 +404,46 @@ export async function liveDeviceCount(env: Env, group: string, nowMs: number): P
 }
 
 /**
+ * Whether [`admitDevice`] would let this device in right now — read only, and never the fence.
+ *
+ * **For `/claim`, which has to refuse a sixth device before it writes anything**: its write
+ * replaces the refresh secret, so a refusal decided afterwards would take the secret from the
+ * device using it. A read is not atomic with the admission that follows it, which is why
+ * `admitDevice` still decides in one statement and this only spares the ordinary case.
+ */
+export async function roomFor(
+  env: Env,
+  group: string,
+  device: string,
+  nowMs: number,
+): Promise<boolean> {
+  const live = await liveDevices(env, group, nowMs);
+  return live.includes(device) || live.length < MAX_GROUP_DEVICES;
+}
+
+/**
  * Register a device against its group, and answer whether it is allowed in.
  *
  * **`false` means *new device, full group*, and nothing else.** A device already on the roll is
  * always re-admitted, however full the group is — it is not asking for a slot, it is using the
  * one it has — and getting that wrong would lock a settled five-device household out of syncing
- * on the day the fifth device was admitted. That is what the `ON CONFLICT DO UPDATE` is for as
- * much as the membership test above it: the test is the decision, the clause is what makes the
- * write idempotent even if the two disagreed.
+ * on the day the fifth device was admitted. "However full" is literal: a group the old race below
+ * left at six re-admits all six, which is the first arm of the `WHERE`.
+ *
+ * **The count and the insert are one statement, and that is the fix rather than a style.** This
+ * used to count, then insert — two round trips — so N new devices calling at once each read four,
+ * each decided there was room, and all N were admitted. D1 has no interactive transaction, so the
+ * only atomic shape is the one `recordRotation` already uses: `INSERT … SELECT … WHERE`, with the
+ * count inside the `WHERE`. The TTL prune stays its own statement ahead of it: pruning is
+ * idempotent and every caller runs it, so the only row it can miss is one that crossed the
+ * ninety-day line in the moment between the two — and counting that one errs toward refusing.
+ *
+ * **`meta.changes` is the answer.** The `ON CONFLICT DO UPDATE` arm counts as a change in SQLite,
+ * so a returning device reads 1 through the same statement a refused newcomer reads 0 through.
  *
  * **Nothing is written when the answer is `false`.** A refused device must not move a `last_seen`
- * it does not own, and must not leave a row that the next call would then re-admit.
+ * it does not own, and must not leave a row that the next call would then re-admit — a `WHERE`
+ * that produces no row reaches neither the insert nor its conflict clause.
  *
  * **Call it on a token that would otherwise be issued, never before the entitlement has settled.**
  * A dead membership that consumed a slot on its way to a 401 would spend a reader's fifth device
@@ -387,16 +455,19 @@ export async function admitDevice(
   device: string,
   nowMs: number,
 ): Promise<boolean> {
-  const live = await liveDevices(env, group, nowMs);
-  if (!live.includes(device) && live.length >= MAX_GROUP_DEVICES) return false;
-  await env.DB.prepare(
+  await env.DB.prepare(`DELETE FROM group_devices WHERE group_id = ? AND last_seen < ?`)
+    .bind(group, nowMs - DEVICE_TTL_MS)
+    .run();
+  const admitted = await env.DB.prepare(
     `INSERT INTO group_devices (group_id, device_id, first_seen, last_seen)
-     VALUES (?, ?, ?, ?)
+     SELECT ?, ?, ?, ?
+      WHERE (SELECT count(*) FROM group_devices WHERE group_id = ? AND device_id = ?) > 0
+         OR (SELECT count(*) FROM group_devices WHERE group_id = ?) < ?
      ON CONFLICT (group_id, device_id) DO UPDATE SET last_seen = ?`,
   )
-    .bind(group, device, nowMs, nowMs, nowMs)
+    .bind(group, device, nowMs, nowMs, group, device, group, MAX_GROUP_DEVICES, nowMs)
     .run();
-  return true;
+  return admitted.meta.changes > 0;
 }
 
 /**

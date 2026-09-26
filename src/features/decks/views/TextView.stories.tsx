@@ -9,6 +9,7 @@ import {
 } from "../../../../.storybook/fake/fixtures";
 import { THEORY_MATCH_ATTR } from "../CardMarks";
 import { RAIL_ATTR } from "./columns";
+import { MARKER_WORDS } from "./GroupHeader";
 import { TextView } from "./TextView";
 
 /** The one card the fixture's finding is about, named off the corpus rather than pasted. */
@@ -66,9 +67,10 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // The Commander and the Sideboard; a category the reader named has no rules role.
-    expect(canvas.getAllByText("RULE")).toHaveLength(2);
-    expect(canvas.getByText("INACTIVE")).toBeInTheDocument();
+    // The Commander and the Sideboard; a category the reader named has no rules role. Both
+    // pile marks are icons, so each is found by its `sr-only` words.
+    expect(canvas.getAllByText(MARKER_WORDS.rule)).toHaveLength(2);
+    expect(canvas.getByText(MARKER_WORDS.inactive)).toBeInTheDocument();
     const broken = canvas.getByRole("button", { name: new RegExp(`^${BROKEN}`) });
     expect(broken.getAttribute("aria-label")).toContain("rule break");
   },
@@ -244,9 +246,9 @@ export const SwitchedOffPile: Story = {
       "Commander",
       "Ramp",
     ]);
-    // Both switched-off piles wear the chip, and both are in the rail: it travels with the group,
+    // Both switched-off piles wear the mark, and both are in the rail: it travels with the group,
     // so a rail holding a lighter definition of a pile would lose them.
-    expect(within(rail).getAllByText("INACTIVE")).toHaveLength(2);
+    expect(within(rail).getAllByText(MARKER_WORDS.inactive)).toHaveLength(2);
   },
 };
 

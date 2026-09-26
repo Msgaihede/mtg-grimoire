@@ -1029,6 +1029,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   today computed the way `collection_summary` computes the collection's value, so the graph's last
   figure is the Collection value widget's to the cent. **Not synced**, the table's own rule.
   [home-page.md](home-page.md) §14 has the rest.
+  **v51 adds `decks.token_rail_index`** (2026-09-26,
+  [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §3.4) — where
+  the Tokens & Emblems pile sits among the right-hand rail's piles, stored as the number of rail
+  piles drawn above it. **Written as v50 and renumbered before merging**: the v50 above landed on
+  `main` first, and a shipped number is spent. One `ALTER TABLE … ADD COLUMN`, v47's shape, so it
+  owes its `USER_SCHEMA_SQL` line and an `UNDO_V51`, and moves no table or index count: the head
+  is thirty tables and **forty-eight** indexes — v48's `idx_wishlist_folders_managed` moved the
+  second figure the v46 paragraph above states, and neither v50 nor this rung moves either — read
+  off `the_user_schema_is_byte_identical_to_what_the_ladder_builds`' own sentence rather than
+  added.
+  **`NOT NULL DEFAULT -1`, with `-1` meaning last**, where the spec asked for a nullable column
+  with `NULL` for last: `deck::update_deck` writes every field through `coalesce(?n, col)`, which
+  reads a bound `NULL` as *leave it*, so a nullable "last" could never be written back once the
+  reader had moved the pile. On the `decks` capture spec after `token_stack` and carried by
+  `duplicate_deck`, like it — **and unlike it, on a history row and on
+  `deck_undo::DECK_FIELDS`**, because it is an arrangement the reader drags rather than a setting.
+  [decks-storage.md](decks-storage.md) has the rest.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

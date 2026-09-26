@@ -15,6 +15,7 @@
 import { plural } from "@/lib/counts";
 import { finishLabel } from "@/lib/finish";
 import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
+import { TOKENS_HEADING } from "./DeckTokensPanel";
 import { listName } from "./listNames";
 import { MANAGED_WISHLIST_LABEL, managedWishlistMode } from "./managedWishlist";
 import { gameLabel } from "./useFormatSpecs";
@@ -813,6 +814,21 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         detail: null,
       };
     }
+    // `decks.token_rail_index` (user schema v51): the Tokens & Emblems pile moved in the rail.
+    // `deck.rs` records it as **`tokenRail`** — not the column's `tokenRailIndex` — and `xGroup`'s
+    // paragraph applies word for word: the `default` arm below never fails, so only
+    // `auditText.test.ts` holds the spelling.
+    //
+    // **No `detail`, because neither number is a place a reader could find.** `-1` is *last*, and
+    // any other value counts the rail piles above the pile and is clamped on read — so "was -1"
+    // would print a sentinel at somebody, and "was 2" a slot the rail may no longer have. What
+    // happened is that the pile moved, and the undo button beside this line moves it back.
+    //
+    // The pile's name is `TOKENS_HEADING`, imported rather than respelled: it is the one spelling
+    // of the area's name, and a history line that said *Tokens* would be the auto-category of
+    // cards that make them — the opposite meaning of the same word.
+    case "tokenRail":
+      return { text: `Moved ${TOKENS_HEADING}`, detail: null };
     // A field this build has never heard of, written by a newer one — or by an older one,
     // since a database outlives the app that wrote it. A plain line with a date and a delta
     // beats a blank one, and beats a throw by a good deal more.

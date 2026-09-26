@@ -435,12 +435,39 @@ pub fn create_group(conn: &Connection, me: &Identity) -> rusqlite::Result<Group>
         epoch: 0,
         group_key: crypto::random_bytes::<32>(),
     };
-    write_group(conn, &g)?;
-    add_device(conn, &me.device_id, &me.keypair.public, &me.name)?;
+    found_group(conn, &g, me)?;
     Ok(g)
 }
 
+/// Write a group this device has just minted — [`create_group`], and `pairing::confirm` on a
+/// device that had none, which computes the values itself because it may not write them before
+/// its post.
+///
+/// **It is the one place a device knows the whole of its group**, so it is the one place the view
+/// [`supersede`] reads is seeded: `[itself]`, the only holder of a key minted a moment ago.
+/// Without a view, the group's first rotation would forget epoch 0's key and step over whatever a
+/// joiner wrote under it.
+pub fn found_group(conn: &Connection, g: &Group, me: &Identity) -> rusqlite::Result<()> {
+    forget_superseded(conn)?;
+    write_group(conn, g)?;
+    add_device(conn, &me.device_id, &me.keypair.public, &me.name)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?1, ?2)",
+        params![LAST_MANIFEST, me.device_id],
+    )?;
+    Ok(())
+}
+
 /// Join a group somebody else minted, with the key they sealed to this device.
+///
+/// **The superseded keys survive only when this is the group, epoch and key already held** —
+/// which is `pairing::confirm` on the initiating device, re-writing its own group. Anything else
+/// is a fresh start, and a key of whatever this device held before is nothing it should keep.
+///
+/// **A joiner starts with no view of the group, deliberately.** The pairing blob carries the
+/// group id, the epoch and the key and names nobody but the initiator, while the group may already
+/// hold devices the joiner has never met — so [`supersede`] forgets across its first rotation and
+/// learns the roster from that rotation's manifest.
 pub fn join_group(
     conn: &Connection,
     group_id: &str,
@@ -448,6 +475,11 @@ pub fn join_group(
     key: &[u8; 32],
     me: &Identity,
 ) -> rusqlite::Result<()> {
+    let unchanged = group(conn)?
+        .is_some_and(|g| g.group_id == group_id && g.epoch == epoch && g.group_key == *key);
+    if !unchanged {
+        forget_superseded(conn)?;
+    }
     write_group(
         conn,
         &Group {
@@ -617,8 +649,9 @@ pub fn rename_device(conn: &Connection, device_id: &str, name: &str) -> rusqlite
 /// `keys` is `(device_id, sealed blob)` for every device that **stays**, this one included — the
 /// remover is on its own manifest, so a rotation the relay accepted and a local commit that then
 /// failed heals itself at the next `/keys` check rather than stranding the device that did the
-/// removing. Its device ids, taken together, are the manifest, which is the roster from the
-/// moment the relay stores them.
+/// removing — **because `client::check_keys` tries this device as a sealer too**; a blob addressed
+/// here that nothing tries is no blob at all. Its device ids, taken together, are the manifest,
+/// which is the roster from the moment the relay stores them.
 pub struct Rotation {
     pub group: Group,
     pub keys: Vec<(String, Vec<u8>)>,
@@ -866,22 +899,193 @@ pub fn roster_is_dirty(conn: &Connection) -> Result<bool, String> {
     .map(|v| v.as_deref() == Some("1"))
 }
 
+/// How many epochs of group key this device holds, **counting the current one** — the relay's
+/// `EPOCH_HISTORY` (`relay/src/groupauth.ts`), and for its reason: `/keys` answers an auth at
+/// most that far behind, so a device can never have been handed a key further back than this
+/// while the group went on without it.
+pub const KEY_HISTORY: i64 = 8;
+
+/// The `sync_state` key a superseded group key is filed under, followed by its epoch; the value
+/// is the key as lowercase hex. **`sync_state` and not a table of its own**: it never syncs, it
+/// is `None` in `mirror::watch::surface_of`, nothing reads it but by key, and it already holds
+/// this device's grant tokens — so it needs no schema rung and adds no new kind of secret to any
+/// place that holds one. Matched with `GLOB`, where `_` is literal.
+const SUPERSEDED: &str = "group_key@";
+
+/// The `sync_state` key holding the device ids of the last manifest this device adopted or
+/// published, comma-joined — the only record it has of a device paired by somebody else, because
+/// [`adopt_epoch`] never inserts a roster row. **Absent means no view at all**, and [`supersede`]
+/// reads it that way; only [`found_group`] seeds one without a rotation.
+const LAST_MANIFEST: &str = "last_manifest";
+
+/// The group as it stood at `epoch`, when this device still holds that epoch's key — what
+/// `client::pull` opens an envelope from before a rotation with.
+///
+/// `Some(current)` for the current epoch, `None` for a later one and for any earlier one this
+/// device never held or has forgotten — see [`supersede`] for which ones it keeps.
+pub fn group_at(conn: &Connection, current: &Group, epoch: i64) -> rusqlite::Result<Option<Group>> {
+    if epoch == current.epoch {
+        return Ok(Some(current.clone()));
+    }
+    if epoch > current.epoch {
+        return Ok(None);
+    }
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT value FROM sync_state WHERE key = ?1",
+            [format!("{SUPERSEDED}{epoch}")],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(stored
+        .and_then(|hex| key_from_hex(&hex))
+        .map(|group_key| Group {
+            group_id: current.group_id.clone(),
+            epoch,
+            group_key,
+        }))
+}
+
+/// Decide what a key change does to the key it replaces, **inside the transaction that writes
+/// the new one and before any roster row is deleted.**
+///
+/// ⚠️ **The replaced key is kept only across a rotation that, as far as this device can see,
+/// dropped nobody** — the next epoch is exactly one ahead, this device **has** a view of the
+/// group (the last manifest it adopted or published, seeded `[itself]` by [`found_group`]), and
+/// every device in that view or on its live roster is on the new manifest. **No view is not an
+/// empty view**: an install upgraded from before this history, and every device that joined by
+/// pairing, has none, and `adopt_epoch` never inserts — so a device paired by somebody else is on
+/// neither side of the comparison and its removal would look like nothing. Anything else — a
+/// removal, a departure, a jump across an epoch whose manifest this device never saw, or no view
+/// — forgets **every** superseded key. The group key is symmetric, so holding epoch *N*'s key is
+/// being able to seal an envelope at *N* under any device id, and the relay does not refuse a
+/// push at a stale epoch: a device that went on opening *N* after a removal would be taking
+/// writes from the removed device after it was removed. A join drops nobody, which is the case
+/// the backlog is lost in otherwise — every pairing rotates.
+///
+/// **The manifest's device list is the relay's word, and this trusts it.** Only the epoch is
+/// bound into the sealed blob; `devices` is `Object.keys` of the manifest as the relay reports it.
+/// Confidentiality does not rest on it — nothing here gives a removed device a key it lacks — but
+/// a relay that padded `devices` with a removed device, colluding with that device, could get its
+/// writes under the pre-removal epoch applied. An authenticated join/removal marker would close
+/// it and is not built: the rotation wrap seals a bare 32-byte key that builds in the field
+/// unwrap at exactly that length, and the layout-free marker — a removal advancing the epoch,
+/// which is bound into the wrap, by 2 — halves how many removals an offline device can catch up
+/// across, and needs a relay whose `/rotate` accepts more than current + 1.
+fn supersede(
+    tx: &Connection,
+    me: &str,
+    current: &Group,
+    next: &Group,
+    manifest: &[String],
+) -> rusqlite::Result<()> {
+    let stays: std::collections::HashSet<&str> = manifest
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(me))
+        .collect();
+    let mut known: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT device_id FROM sync_devices WHERE revoked_at IS NULL")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let last: Option<String> = tx
+        .query_row(
+            "SELECT value FROM sync_state WHERE key = ?1",
+            [LAST_MANIFEST],
+            |r| r.get(0),
+        )
+        .optional()?;
+    known.extend(
+        last.iter()
+            .flat_map(|ids| ids.split(','))
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned),
+    );
+    let clean = next.group_id == current.group_id
+        && next.epoch == current.epoch + 1
+        && last.is_some()
+        && known.iter().all(|id| stays.contains(id.as_str()));
+    if clean {
+        tx.execute(
+            "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?1, ?2)",
+            params![
+                format!("{SUPERSEDED}{}", current.epoch),
+                hex(&current.group_key)
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM sync_state
+              WHERE key GLOB ?1 || '*'
+                AND CAST(substr(key, length(?1) + 1) AS INTEGER) <= ?2",
+            params![SUPERSEDED, next.epoch - KEY_HISTORY],
+        )?;
+    } else {
+        forget_superseded(tx)?;
+    }
+    tx.execute(
+        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?1, ?2)",
+        params![LAST_MANIFEST, manifest.join(",")],
+    )?;
+    Ok(())
+}
+
+/// Forget every superseded key and the last manifest: what leaving a group, and joining one
+/// afresh, owe the group this device is no longer in.
+fn forget_superseded(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM sync_state WHERE key GLOB ?1 || '*' OR key = ?2",
+        params![SUPERSEDED, LAST_MANIFEST],
+    )?;
+    Ok(())
+}
+
+/// A key [`supersede`] filed, read back. `None` for anything that is not 64 hex digits, which
+/// only a hand-edited row can be — and a key that will not decode is a key not held.
+fn key_from_hex(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut key = [0u8; 32];
+    for (i, byte) in key.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hex.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(key)
+}
+
 /// Write the rotation the relay has already accepted. **Only on success**, and never before.
 ///
-/// One transaction, three statements, and the order of the first two is what the third depends
-/// on.
+/// One transaction, and the order of the roster delete and the re-arm is what the re-arm depends
+/// on. [`supersede`] runs first, because it reads the roster the delete is about to change.
 ///
-/// **A rotation re-arms the baseline for everybody who stays.** Spec §12.4: the new epoch makes
-/// every op written before it unreadable, and `client::pull` steps over a lower-epoch envelope
-/// rather than stalling on it — so a peer's last words can be lost at the boundary. Re-baselining
-/// under the new key carries them across as ordinary rows. Claims resolve by `max` and a horizon
-/// only filters, so this cannot double-count.
+/// **A rotation re-arms the baseline for everybody who stays.** Spec §12.4: a removal makes
+/// every op written before it unreadable — [`supersede`] forgets the old keys — and
+/// `client::pull` steps over such an envelope rather than stalling on it, so a peer's last words
+/// can be lost at the boundary. Re-baselining under the new key carries them across as ordinary
+/// rows. Claims resolve by `max` and a horizon only filters, so this cannot double-count. (A join
+/// keeps the key it replaces, so its backlog is opened rather than lost; the re-arm is what a
+/// joining device needs anyway.)
 pub fn commit_rotation(
     conn: &Connection,
     removing: &str,
     rotation: &Rotation,
 ) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let me = read(&tx).map_err(|e| e.to_string())?.map(|i| i.device_id);
+    match group(&tx).map_err(|e| e.to_string())? {
+        Some(current) => {
+            let manifest: Vec<String> = rotation.keys.iter().map(|(id, _)| id.clone()).collect();
+            supersede(
+                &tx,
+                me.as_deref().unwrap_or_default(),
+                &current,
+                &rotation.group,
+                &manifest,
+            )
+        }
+        None => forget_superseded(&tx),
+    }
+    .map_err(|e| e.to_string())?;
     // **Deleted, not stamped, and this reverses §7.6.** The relay's manifest is the roster now
     // (spec §2.3), so a device the manifest omits has no row on any *other* device — and a
     // remover that kept a tombstone would be the one machine in the group with a different
@@ -911,7 +1115,9 @@ pub fn commit_rotation(
 ///
 /// This is the other end of [`plan_rotation`] and the half that carries a removal to the devices
 /// that were not doing the removing. `blob` is what `GET /g/{group}/keys?device=<me>` answered and
-/// `manifest` is the `devices` beside it.
+/// `manifest` is the `devices` beside it. `from_device` is only the sealer to *try* —
+/// `client::check_keys` tries several — and may be this device itself, whose own rotation the
+/// relay accepted while the commit never happened.
 ///
 /// **The manifest is the roster, so every row it omits is deleted** — spec §2.3. It is
 /// deliberately not a synced table at all, and would be the fourteenth if it were (it read
@@ -928,6 +1134,10 @@ pub fn commit_rotation(
 ///
 /// **The epoch guard is checked here as well as by the caller**, for [`NOT_A_NEWER_EPOCH`]'s
 /// reason.
+///
+/// **The key it replaces is kept or forgotten by [`supersede`], before the sweep** — it reads the
+/// roster the sweep is about to prune. Kept, it is what opens the backlog a device offline across
+/// a join would otherwise step over for good.
 pub fn adopt_epoch(
     conn: &Connection,
     from_device: &str,
@@ -944,18 +1154,25 @@ pub fn adopt_epoch(
     if epoch <= current.epoch {
         return Err(NOT_A_NEWER_EPOCH.to_owned());
     }
-    // The remover's own public key, off this device's roster. Nothing about a rotation crosses
-    // in the clear that the target could not already authenticate.
-    let their_public = conn
-        .query_row(
-            "SELECT public_key FROM sync_devices WHERE device_id = ?1",
+    // The sealer's public key, off this device's roster — or this device's own, for a rotation it
+    // published and never committed. Nothing about a rotation crosses in the clear that the
+    // target could not already authenticate.
+    let own = from_device == me.device_id;
+    let their_public = if own {
+        me.keypair.public
+    } else {
+        // `revoked_at IS NULL`: a row an older build stamped is a device removed, and never a
+        // sealer this device trusts.
+        conn.query_row(
+            "SELECT public_key FROM sync_devices WHERE device_id = ?1 AND revoked_at IS NULL",
             params![from_device],
             |r| r.get::<_, Vec<u8>>(0),
         )
         .optional()
         .map_err(|e| e.to_string())?
         .map(bytes32)
-        .ok_or_else(|| NOT_ON_THE_ROSTER.to_owned())?;
+        .ok_or_else(|| NOT_ON_THE_ROSTER.to_owned())?
+    };
     let new_key = crypto::unwrap_group_key(
         &me.keypair.secret,
         &their_public,
@@ -966,18 +1183,16 @@ pub fn adopt_epoch(
     )
     .map_err(|e| e.to_string())?;
 
+    let next = Group {
+        // **The group id must not move.** A rotation replaces the key and the epoch and nothing
+        // else; a new id here would be this device silently founding a second group.
+        group_id: current.group_id.clone(),
+        epoch,
+        group_key: new_key,
+    };
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    write_group(
-        &tx,
-        &Group {
-            // **The group id must not move.** A rotation replaces the key and the epoch and
-            // nothing else; a new id here would be this device silently founding a second group.
-            group_id: current.group_id.clone(),
-            epoch,
-            group_key: new_key,
-        },
-    )
-    .map_err(|e| e.to_string())?;
+    supersede(&tx, &me.device_id, &current, &next, manifest).map_err(|e| e.to_string())?;
+    write_group(&tx, &next).map_err(|e| e.to_string())?;
 
     let mut stays: Vec<&str> = manifest.iter().map(String::as_str).collect();
     stays.push(&me.device_id);
@@ -990,6 +1205,15 @@ pub fn adopt_epoch(
         rusqlite::params_from_iter(stays),
     )
     .map_err(|e| e.to_string())?;
+    if own {
+        // **Its own rotation is the commit that was lost**, so it owes what [`commit_rotation`]
+        // would have done after the sweep: re-arm every peer that stays for a baseline (§12.4).
+        tx.execute(
+            "UPDATE sync_devices SET baselined_at = NULL WHERE revoked_at IS NULL",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -1021,6 +1245,7 @@ pub fn leave_group(conn: &Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM sync_group", [])
         .map_err(|e| e.to_string())?;
+    forget_superseded(&tx).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -1459,6 +1684,9 @@ mod tests {
     /// carries the bumped epoch and the new key. Those two changing **is** the removal. A skip
     /// list of "whatever happens to fail" would eventually grow to cover a real regression;
     /// naming these two is what makes every other table in the user database a hard assertion.
+    /// **`sync_state` is not skipped, only its two rows this module owns** — the superseded keys
+    /// a removal forgets and the manifest it publishes ([`supersede`]); every other row in it is
+    /// still compared.
     const CHANGED_BY_A_REMOVAL: [&str; 2] = ["sync_devices", "sync_group"];
 
     /// Every other table in the user database, every row rendered whole and sorted.
@@ -1484,8 +1712,13 @@ mod tests {
             if CHANGED_BY_A_REMOVAL.contains(&table.as_str()) {
                 continue;
             }
+            let owned = if table == "sync_state" {
+                format!(" WHERE NOT (key GLOB '{SUPERSEDED}*' OR key = '{LAST_MANIFEST}')")
+            } else {
+                String::new()
+            };
             let mut stmt = conn
-                .prepare(&format!("SELECT * FROM main.{table}"))
+                .prepare(&format!("SELECT * FROM main.{table}{owned}"))
                 .unwrap();
             let names: Vec<String> = stmt
                 .column_names()
@@ -2115,6 +2348,261 @@ mod tests {
         let still = ensure(&conn).unwrap();
         assert_eq!(still.device_id, me.device_id, "the identity was re-minted");
         assert_eq!(still.keypair.secret, me.keypair.secret);
+    }
+
+    // -------------------------------------------------------------------------------------
+    // Superseded keys — what opens the backlog behind a rotation
+    // -------------------------------------------------------------------------------------
+
+    /// How many superseded keys this device is holding.
+    fn superseded(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM sync_state WHERE key GLOB 'group_key@*'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// A join, planned and committed — the rotation that removes nobody.
+    fn join(conn: &Connection) -> Group {
+        let plan = plan_join(conn).unwrap();
+        commit_rotation(conn, "", &plan).unwrap();
+        plan.group
+    }
+
+    /// Epoch `epoch`'s key sealed to `me` by `by`, as `/keys` would carry it.
+    fn sealed_for(me: &Identity, by: &Keypair, group_id: &str, epoch: i64) -> Vec<u8> {
+        crypto::wrap_group_key(
+            &by.secret,
+            &me.keypair.public,
+            group_id,
+            &me.device_id,
+            epoch,
+            &[epoch as u8; 32],
+        )
+        .unwrap()
+    }
+
+    /// **The history is bounded at [`KEY_HISTORY`] epochs, counting the current one** — the
+    /// relay's `EPOCH_HISTORY`, the window `/keys` answers from. Ten joins leave the current
+    /// key and the seven before it, each the key that epoch really had, and nothing older.
+    ///
+    /// **What makes it red**: a prune that never runs (ten rows), one off by an epoch either
+    /// way, or a history that files the *new* key under the old epoch.
+    #[test]
+    fn superseded_keys_are_kept_for_eight_epochs_and_no_further() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &crypto::keypair().public, "Phone").unwrap();
+        let mut keys = vec![group(&conn).unwrap().unwrap().group_key];
+        for _ in 0..10 {
+            keys.push(join(&conn).group_key);
+        }
+        let current = group(&conn).unwrap().unwrap();
+        assert_eq!(current.epoch, 10);
+
+        assert_eq!(
+            superseded(&conn),
+            KEY_HISTORY - 1,
+            "the history is not bounded"
+        );
+        for epoch in 0..=10 {
+            let held = group_at(&conn, &current, epoch).unwrap();
+            if epoch > current.epoch - KEY_HISTORY {
+                let held = held.unwrap_or_else(|| panic!("epoch {epoch} was forgotten"));
+                assert_eq!(held.group_key, keys[epoch as usize], "epoch {epoch}'s key");
+                assert_eq!(held.epoch, epoch);
+                assert_eq!(held.group_id, current.group_id);
+            } else {
+                assert!(held.is_none(), "epoch {epoch} outlived the bound");
+            }
+        }
+    }
+
+    /// ⚠ **A removal forgets every superseded key, on the device that removed as well as on the
+    /// ones that adopt.** The removed device holds all of them, and the group key is symmetric:
+    /// holding epoch N's key is being able to write *as anyone* at epoch N.
+    ///
+    /// **What makes it red**: `commit_rotation` keeping the key it replaces when `removing` names
+    /// a device on the roster.
+    #[test]
+    fn a_removal_forgets_every_key_it_supersedes() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &crypto::keypair().public, "Phone").unwrap();
+        add_device(&conn, "tablet", &crypto::keypair().public, "Tablet").unwrap();
+        join(&conn);
+        let current = group(&conn).unwrap().unwrap();
+        assert!(
+            group_at(&conn, &current, 0).unwrap().is_some(),
+            "a join kept nothing, so this test proves nothing"
+        );
+
+        remove(&conn, "tablet").unwrap();
+
+        let current = group(&conn).unwrap().unwrap();
+        assert_eq!(current.epoch, 2);
+        assert!(group_at(&conn, &current, 1).unwrap().is_none());
+        assert!(group_at(&conn, &current, 0).unwrap().is_none());
+        assert_eq!(superseded(&conn), 0);
+    }
+
+    /// ⚠ **A device this one only ever read on a manifest still counts as dropped.** `adopt_epoch`
+    /// never inserts a roster row — a manifest carries no public key — so in any group of three a
+    /// device paired by somebody else is known here *only* as a manifest id. Its removal deletes
+    /// no row here, and a rule that looked only at the roster would keep a key the removed device
+    /// holds.
+    ///
+    /// **What makes it red**: dropping the last manifest from what counts as known.
+    #[test]
+    fn a_device_known_only_from_a_manifest_still_counts_as_dropped() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        let desk = crypto::keypair();
+        add_device(&conn, "desk", &desk.public, "Desk").unwrap();
+        let gid = group(&conn).unwrap().unwrap().group_id;
+        let with_x = [me.device_id.clone(), "desk".to_owned(), "x".to_owned()];
+        adopt_epoch(&conn, "desk", 1, &sealed_for(&me, &desk, &gid, 1), &with_x).unwrap();
+        let current = group(&conn).unwrap().unwrap();
+        assert!(
+            group_at(&conn, &current, 0).unwrap().is_some(),
+            "a join kept nothing, so this test proves nothing"
+        );
+        assert_eq!(roster(&conn).unwrap().len(), 2, "x was inserted after all");
+
+        let without_x = [me.device_id.clone(), "desk".to_owned()];
+        adopt_epoch(
+            &conn,
+            "desk",
+            2,
+            &sealed_for(&me, &desk, &gid, 2),
+            &without_x,
+        )
+        .unwrap();
+
+        let current = group(&conn).unwrap().unwrap();
+        assert!(
+            group_at(&conn, &current, 1).unwrap().is_none(),
+            "x holds epoch 1's key"
+        );
+        assert!(
+            group_at(&conn, &current, 0).unwrap().is_none(),
+            "and epoch 0's"
+        );
+    }
+
+    /// **Skipping an epoch forgets too**, because the manifest in between was never seen: a
+    /// device could have been paired and removed inside it, and would hold the key this one is
+    /// carrying.
+    ///
+    /// **What makes it red**: keeping the superseded key when the adopted epoch is not exactly
+    /// one ahead.
+    #[test]
+    fn adopting_across_a_skipped_epoch_forgets_the_superseded_keys() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        let desk = crypto::keypair();
+        add_device(&conn, "desk", &desk.public, "Desk").unwrap();
+        let gid = group(&conn).unwrap().unwrap().group_id;
+        let everyone = [me.device_id.clone(), "desk".to_owned()];
+
+        adopt_epoch(
+            &conn,
+            "desk",
+            2,
+            &sealed_for(&me, &desk, &gid, 2),
+            &everyone,
+        )
+        .unwrap();
+
+        let current = group(&conn).unwrap().unwrap();
+        assert_eq!(current.epoch, 2);
+        assert!(group_at(&conn, &current, 0).unwrap().is_none());
+        assert_eq!(superseded(&conn), 0);
+    }
+
+    /// ⚠ **A rotation that adds one device and drops another is a drop.** The manifest is no
+    /// smaller than the roster it replaces, and a rule that compared sizes — or asked only whether
+    /// anybody was added — would keep a key the dropped device holds.
+    ///
+    /// **What makes it red**: any test weaker than "every known device is still named".
+    #[test]
+    fn a_rotation_that_adds_one_and_drops_another_forgets() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        let desk = crypto::keypair();
+        add_device(&conn, "desk", &desk.public, "Desk").unwrap();
+        add_device(&conn, "tablet", &crypto::keypair().public, "Tablet").unwrap();
+        let gid = group(&conn).unwrap().unwrap().group_id;
+        let swapped = [
+            me.device_id.clone(),
+            "desk".to_owned(),
+            "newcomer".to_owned(),
+        ];
+
+        adopt_epoch(&conn, "desk", 1, &sealed_for(&me, &desk, &gid, 1), &swapped).unwrap();
+
+        let current = group(&conn).unwrap().unwrap();
+        assert!(
+            group_at(&conn, &current, 0).unwrap().is_none(),
+            "the tablet holds epoch 0's key"
+        );
+        assert_eq!(superseded(&conn), 0);
+    }
+
+    /// ⚠ **A re-pair into the same group at a newer epoch starts the history over.**
+    /// `pairing::complete` accepts it — "a device already in a group may only rejoin the one it is
+    /// in" — and a device re-paired after being removed has missed every rotation in between; the
+    /// keys it held from before could belong to devices those rotations removed.
+    ///
+    /// **What makes it red**: `join_group` not forgetting when the group, epoch or key moves.
+    #[test]
+    fn a_re_pair_at_a_newer_epoch_forgets_the_superseded_keys() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &crypto::keypair().public, "Phone").unwrap();
+        let joined = join(&conn);
+        assert_eq!(superseded(&conn), 1, "the fixture is wrong");
+
+        join_group(&conn, &joined.group_id, joined.epoch + 4, &[9u8; 32], &me).unwrap();
+
+        let current = group(&conn).unwrap().unwrap();
+        assert_eq!(current.epoch, joined.epoch + 4);
+        assert_eq!(superseded(&conn), 0);
+        assert!(group_at(&conn, &current, 0).unwrap().is_none());
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM sync_state WHERE key = 'last_manifest'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0,
+            "a re-paired device kept a view of a group it has not seen since"
+        );
+    }
+
+    /// **Leaving takes the superseded keys with it**, and so does joining a group afresh — a key
+    /// of the group this device left is nothing it should go on holding.
+    #[test]
+    fn leaving_forgets_the_superseded_keys() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &crypto::keypair().public, "Phone").unwrap();
+        join(&conn);
+        assert_eq!(superseded(&conn), 1, "the fixture is wrong");
+
+        leave_group(&conn).unwrap();
+
+        assert_eq!(superseded(&conn), 0);
     }
 
     // -------------------------------------------------------------------------------------

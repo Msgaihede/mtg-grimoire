@@ -24,8 +24,9 @@
 //! and nothing is distributed — opens the other. A device that has only ever paired mints its own
 //! token through the second, which is what makes *Supporting since …* appear on every device in
 //! the group rather than on whichever one happened to open a browser. **The refresh secret stops
-//! travelling in the pairing blob** in the same change, and that is not a tidy-up: a device
-//! holding it could re-register the group's auth and evict the devices that removed it.
+//! travelling in the pairing blob** in the same change, and that is not a tidy-up: the relay
+//! retires the secret with the one device `/claim` recorded as its holder, so a copy on another
+//! device would survive that device's removal and go on minting tokens for the group.
 //!
 //! **The two doors fail differently on the same status code**, which is the sharpest thing in
 //! this module: see [`STALE_GROUP_AUTH`].
@@ -39,8 +40,10 @@
 //! moving this line.
 //!
 //! **A 401 is a sentence, not an `error_log` row** (spec §10). When the relay refuses the refresh
-//! secret the membership has ended: the grant is cleared and the panel offers the connect button
-//! again. Routing it through `errors::record` like a network failure would tell the reader their
+//! secret **and then the group door as well**, the membership has ended: the grant is cleared and
+//! the panel offers the connect button again. The refresh door alone no longer proves it — every
+//! `/claim` mints a fresh secret, so another device's Connect press leaves this one holding a
+//! dead secret over a live membership (see [`refused_secret`]). Routing it through `errors::record` like a network failure would tell the reader their
 //! sync is broken when in fact their pledge lapsed, which is the wrong sentence and points at the
 //! wrong fix. **Nothing in this module writes to `error_log` at all**, and that is the same
 //! argument widened rather than a second one: every path in here is a press — Settings' connect
@@ -278,10 +281,10 @@ struct Grant {
 ///
 /// **A separate struct rather than an `Option<String>` on [`Grant`], and the omission is the
 /// point rather than an economy.** A device that reached `/token` by proving it is in the group
-/// has proved nothing about the Patreon account behind it; handing it the credential that can
-/// re-register the group auth would make every paired device able to evict every other one,
-/// which is the failure `pairing.rs` dropping the secret from its blob exists to prevent. So the
-/// field is not merely unread here — the relay never sends it.
+/// has proved nothing about the Patreon account behind it; handing it the Patreon-side credential
+/// would put a copy on a device the relay did not record as its holder — one that would survive
+/// that device's removal, which is the failure `pairing.rs` dropping the secret from its blob
+/// exists to prevent. So the field is not merely unread here — the relay never sends it.
 ///
 /// The second reason is local: [`store_grant`] refuses an empty refresh secret today and should
 /// keep refusing one, because an access token with no refresh secret beside it reads as
@@ -500,8 +503,8 @@ pub fn membership_ended(conn: &Connection) -> bool {
 /// membership**.
 ///
 /// [`clear`] plus one row, and the row is the whole point — see [`membership_ended`]. This is the
-/// call for a 401 on the **refresh** door, and [`clear`] is the call for everything that is not a
-/// lapse.
+/// call for a 401 on the **refresh** door that the group door then confirms (or that has no group
+/// door to ask), and [`clear`] is the call for everything that is not a lapse.
 ///
 /// **`client::lapsed` calls this and always has**, on a 401 from push, pull or ack — the same
 /// event through a different route. ⚠️ This paragraph used to say that it *should* and did not,
@@ -621,7 +624,8 @@ struct Refusal {
 /// `Ok(None)` is a **401 and nothing else**: the relay refused the credential. What that costs is
 /// the caller's decision, and no caller records it anywhere — and the three callers now disagree
 /// about that cost completely: `/claim`'s 401 is a refused press, `/token`'s refresh door is a
-/// lapse, and `/token`'s group door is [`STALE_GROUP_AUTH`], which is neither.
+/// dead secret that [`refused_secret`] takes to the group door, and `/token`'s group door is
+/// [`STALE_GROUP_AUTH`] — unless it is that second ask, where a refusal is the lapse.
 ///
 /// **A 403 is [`GROUP_IS_FULL`] and is answered here rather than by any caller**, which is the
 /// one place in this module where all three agree: the relay admits a device on every token it
@@ -699,9 +703,11 @@ async fn post_for_grant<T: DeserializeOwned>(
 ///
 /// * **`Ok(None)`, no refresh secret *and* no group** — sync is off. Not an error; it is where
 ///   every existing installation stands.
-/// * **`Ok(None)`, a 401 from the refresh door** — the membership has ended. The grant is
-///   [`revoke`]d, so the panel offers the connect button *and* can still say which of the two
-///   silences this is, and no `error_log` row is written (spec §10).
+/// * **`Ok(None)`, a 401 from the refresh door and then from the group door** — the membership has
+///   ended. The grant is [`revoke`]d, so the panel offers the connect button *and* can still say
+///   which of the two silences this is, and no `error_log` row is written (spec §10). A refresh
+///   door 401 that the group door answers is a superseded secret, not a lapse, and mints a token;
+///   see [`refused_secret`].
 /// * **`Err(STALE_GROUP_AUTH)`, a 401 from the group door** — which is *not* the same event, and
 ///   nothing is cleared. See that constant.
 /// * **`Err(GROUP_IS_FULL)`, a 403 from either door** — the account already holds five devices
@@ -738,10 +744,14 @@ pub async fn access_token(conn: &Connection) -> Result<Option<String>, String> {
     }
 }
 
-/// Trade the long-lived secret for the next access token. Today's path, unchanged.
+/// Trade the long-lived secret for the next access token.
 ///
-/// A 401 is a **lapse**: the relay deletes the refresh secret when a membership ends, so a
-/// refusal here is the relay saying there is nothing left to trade.
+/// **A 401 says the secret is dead, and that is no longer the same as the membership being
+/// dead.** The relay deletes the secret when a membership ends — but it also replaces it on every
+/// `/claim`, so a reader who pressed Connect on the phone after the desktop has left the desktop
+/// holding a secret nobody will ever accept again; and it retires one when a rotation's manifest
+/// omits the device that held it. So a refusal here is handed to [`refused_secret`], which asks
+/// the group door before anything is concluded.
 ///
 /// **`device` rides this door as well as the group one, and this is the door that makes the cap
 /// mean anything** (spec §4.2). The device that pressed Connect holds a refresh secret, so it
@@ -751,12 +761,56 @@ pub async fn access_token(conn: &Connection) -> Result<Option<String>, String> {
 async fn refresh_door(conn: &Connection, refresh: &str) -> Result<Option<String>, String> {
     let body = serde_json::json!({ "refresh": refresh, "device": this_device(conn)? }).to_string();
     let Some(grant) = post_for_grant::<Grant>(conn, "/token", body).await? else {
-        revoke(conn)?;
-        return Ok(None);
+        return refused_secret(conn).await;
     };
     store_grant(conn, &grant.access, &grant.refresh, grant.expires)?;
     store_status(conn, &grant.status, grant.since)?;
     Ok(Some(grant.access))
+}
+
+/// The refresh door answered 401: let the group door say whether the membership itself is gone,
+/// and only then forget the secret.
+///
+/// **The group door tells a superseded secret from a lapse.** A secret another Connect
+/// press replaced, or one a rotation retired while this device stayed in the group, belongs to a
+/// membership that is still `active` — the group door mints on it, and this device carries on as
+/// every paired device does. A **lapse** is refused there too: the relay's `revoke` sets the row
+/// `dead` and leaves its `group_auth` where it was, so this device's current auth reaches the row
+/// and `serveOrRevoke` answers 401 (as does a closed grace window, settled the same way on both
+/// doors). **Only both refusals together are [`revoke`]'d**, which keeps *Membership ended* for
+/// the one case that is one.
+///
+/// **The secret is forgotten only on an answer, never on a failure.** A 200 from the group door
+/// drops it — the relay has refused it once and will for ever, and keeping it would send every
+/// later refresh to a shut door and back here — and a 401 drops it through [`revoke`]. Anything
+/// else, a 403 [`GROUP_IS_FULL`] through [`post_for_grant`]'s own arm or a 5xx or no network, is
+/// an `Err` that leaves the secret where it was, so the next call asks both doors again. Dropping
+/// it first turned a real lapse met on a bad connection into a device that only ever asks the
+/// group door, where a lapse reads as [`STALE_GROUP_AUTH`] for ever and the panel goes on saying
+/// *Supporting since …* over a pledge that ended.
+///
+/// ⚠️ **The one residue: a device whose secret was superseded *and* whose auth is a rotation
+/// behind** is refused by both doors and reads as lapsed until its next trip. Through
+/// `client::round_trip` it cannot arise — `check_keys` runs first, adopts the rotation or finds the
+/// device removed and clears it. It is reachable from the callers that mint before checking keys:
+/// `sync_engine::live`'s `credentials`, and `share::publish`'s `credentials` and `list`, which call
+/// [`access_token`] with no `/keys` in front of it. The next round trip repairs it.
+///
+/// A device in **no** group has no second door, so the refresh door's refusal is the whole answer,
+/// as it always was.
+async fn refused_secret(conn: &Connection) -> Result<Option<String>, String> {
+    let Some(group) = identity::group(conn).map_err(|e| e.to_string())? else {
+        revoke(conn)?;
+        return Ok(None);
+    };
+    let Some(grant) = request_group_grant(conn, &group).await? else {
+        revoke(conn)?;
+        return Ok(None);
+    };
+    let access = keep_group_grant(conn, grant)?;
+    conn.execute("DELETE FROM sync_state WHERE key = ?1", [REFRESH_SECRET])
+        .map_err(|e| e.to_string())?;
+    Ok(access)
 }
 
 /// Mint a token by proving membership of the group, with no Patreon-side secret at all.
@@ -774,6 +828,21 @@ async fn refresh_door(conn: &Connection, refresh: &str) -> Result<Option<String>
 /// The grant is written through [`store_access`] and never [`store_grant`]: there is no refresh
 /// secret in this answer and this device must not appear to hold one.
 async fn group_door(conn: &Connection, group: &identity::Group) -> Result<Option<String>, String> {
+    let Some(grant) = request_group_grant(conn, group).await? else {
+        return Err(STALE_GROUP_AUTH.to_owned());
+    };
+    keep_group_grant(conn, grant)
+}
+
+/// The group door's request, answering `Ok(None)` for a 401 and deciding nothing about it.
+///
+/// **Split out because its two callers read that 401 differently**: [`group_door`] alone cannot
+/// tell a stale auth from a lapse and says [`STALE_GROUP_AUTH`], while [`refused_secret`] has
+/// already been refused by the refresh door and reads a second refusal as the lapse it is.
+async fn request_group_grant(
+    conn: &Connection,
+    group: &identity::Group,
+) -> Result<Option<GroupGrant>, String> {
     let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
     // **`device` is the only field here that names a machine.** The auth is derived from the
     // group key, so every device in the group sends the identical string and the relay could not
@@ -784,9 +853,11 @@ async fn group_door(conn: &Connection, group: &identity::Group) -> Result<Option
         "device": this_device(conn)?,
     })
     .to_string();
-    let Some(grant) = post_for_grant::<GroupGrant>(conn, "/token", body).await? else {
-        return Err(STALE_GROUP_AUTH.to_owned());
-    };
+    post_for_grant::<GroupGrant>(conn, "/token", body).await
+}
+
+/// Store what the group door minted — through [`store_access`], never [`store_grant`].
+fn keep_group_grant(conn: &Connection, grant: GroupGrant) -> Result<Option<String>, String> {
     store_access(conn, &grant.access, grant.expires)?;
     store_status(conn, &grant.status, grant.since)?;
     Ok(Some(grant.access))
@@ -816,8 +887,8 @@ pub async fn claim(conn: &Connection, code: &str) -> Result<(), String> {
     };
     // **The `group`, `epoch` and `auth` fields are what register the group's relay key** (spec
     // §2.1). A claim is the only moment the relay is ever told about a group, so it is the only
-    // place the first `relay_auth` can be seeded — and `recordRotation` will accept nothing but a
-    // *strictly higher* epoch afterwards, which means a claim that registered nothing leaves a
+    // place the first `relay_auth` can be seeded — and `recordRotation` will accept nothing but
+    // *exactly the next* epoch afterwards, which means a claim that registered nothing leaves a
     // group whose auth no device can ever match and whose rotations are all refused.
     //
     // **The relay refuses a body missing one of them with a 400**, so this is not belt and
@@ -1333,7 +1404,7 @@ mod tests {
         // **The epoch and the auth are the same argument one turn further on** (spec 2.1). They
         // register the group's relay key, and a claim is the only moment the relay is ever told
         // about a group - so a body without them leaves a group whose auth no device can match,
-        // and `recordRotation` refuses anything but a strictly higher epoch afterwards. The relay
+        // and `recordRotation` refuses anything but exactly the next epoch afterwards. The relay
         // answers 400 to a body missing either, so the failure is every Connect press.
         //
         // **The expected auth is DERIVED here rather than written down**, from the fixture's own
@@ -1433,15 +1504,44 @@ mod tests {
         );
     }
 
+    /// Whether the Sync panel draws *Membership ended*, asked the way the panel asks it:
+    /// `commands::supporter_status` reads `entitled` first and reaches [`membership_ended`] only
+    /// when that is false. **Alone, [`membership_ended`] over-claims** for every device entitled
+    /// through its group — no secret, a status row — which is every device the fallback below
+    /// leaves minting through the group door.
+    fn panel_says_membership_ended(conn: &rusqlite::Connection) -> bool {
+        !crate::sync_engine::commands::entitled(conn) && membership_ended(conn)
+    }
+
+    /// The refresh door's body for the `r1` secret `db_in_a_group` fixtures store.
+    fn refresh_body() -> serde_json::Value {
+        serde_json::json!({ "refresh": "r1", "device": DEVICE })
+    }
+
+    /// The group door's body for the group `db_in_a_group` seeds.
+    fn group_body() -> serde_json::Value {
+        serde_json::json!({ "group": "grp-1", "auth": seeded_group_auth(), "device": DEVICE })
+    }
+
     #[tokio::test]
-    async fn a_401_from_token_leaves_the_mark_that_says_the_membership_ended() {
+    async fn a_401_from_both_doors_leaves_the_mark_that_says_the_membership_ended() {
         // Spec 10: a lapse is a sentence and not an `error_log` row. It is also not the same
         // silence as a device that never connected - `clear` here rather than `revoke` reads to
         // the panel as "Not connected", and the reader never sees 7.1's reassurance that their
         // local data is untouched.
+        //
+        // **Both doors, because one no longer proves it.** A refresh-door 401 is also what a
+        // secret superseded by a later Connect press answers, so the group door is asked before
+        // anything is concluded. A lapsed membership refuses that one too: the relay's `revoke`
+        // sets the row `dead` and leaves `group_auth` alone, so a current auth reaches the row and
+        // `serveOrRevoke` answers 401.
         let server = MockServer::start_async().await;
-        let mock = server.mock(|when, then| {
-            when.method(POST).path("/token");
+        let refresh_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(refresh_body());
+            then.status(401).body("");
+        });
+        let group_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(group_body());
             then.status(401).body("");
         });
         let conn = db_in_a_group(&server);
@@ -1450,11 +1550,147 @@ mod tests {
 
         let token = access_token(&conn).await.expect("not an error");
 
-        mock.assert();
+        refresh_door.assert();
+        group_door.assert();
         assert_eq!(token, None, "a lapse is a state, not an Err");
         assert_eq!(refresh_secret(&conn), None);
         assert_eq!(client::get_state(&conn, ACCESS_TOKEN), None);
-        assert!(membership_ended(&conn));
+        assert!(panel_says_membership_ended(&conn));
+    }
+
+    #[tokio::test]
+    async fn a_superseded_secret_mints_through_the_group_door_and_is_not_a_lapse() {
+        // **Reachable in an ordinary flow since `/claim` mints a fresh secret per press**: the
+        // reader connected Patreon on the desktop, then pressed Connect again on the phone, and
+        // the desktop's secret is now one the relay has never heard of. Its refresh door answers
+        // 401 - but the membership is fine, and the desktop is still in the group, so its group
+        // auth mints a token. `revoke` here was a *Membership ended* over a live pledge.
+        let server = MockServer::start_async().await;
+        let refresh_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(refresh_body());
+            then.status(401).body("");
+        });
+        let group_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(group_body());
+            then.status(200).body(
+                r#"{"access":"a2","expires":1900000000,
+                    "status":"active","since":1740000000}"#,
+            );
+        });
+        let conn = db_in_a_group(&server);
+        store_grant(&conn, "a1", "r1", 0).expect("store");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+        let token = access_token(&conn).await.expect("minted through the group");
+
+        refresh_door.assert();
+        group_door.assert();
+        assert_eq!(token.as_deref(), Some("a2"));
+        assert!(
+            !panel_says_membership_ended(&conn),
+            "a secret another Connect press replaced is not a membership that ended"
+        );
+        assert_eq!(
+            supporter_state(&conn),
+            ("active".to_owned(), Some(1_740_000_000))
+        );
+        // **And the dead secret is gone**, so the next refresh goes straight to the group door
+        // rather than asking the relay about a value it has already refused once.
+        assert_eq!(refresh_secret(&conn), None);
+        assert_eq!(
+            client::get_state(&conn, ACCESS_TOKEN).as_deref(),
+            Some("a2")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_group_door_failure_after_a_refused_secret_keeps_the_secret_and_concludes_nothing() {
+        // **The refresh door's 401 alone does not say which it was**, and the group door is what
+        // would have said. When it answers neither yes nor no - a 5xx here, or no network - the
+        // secret has to stay, so the next call asks both doors again. Dropping it first turned a
+        // real lapse met on a bad connection into a device that only ever asks the group door,
+        // where a lapse reads as `STALE_GROUP_AUTH` for ever and the panel goes on saying
+        // *Supporting since ...* over a pledge that ended.
+        let server = MockServer::start_async().await;
+        let refresh_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(refresh_body());
+            then.status(401).body("");
+        });
+        let group_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(group_body());
+            then.status(503).body("");
+        });
+        let conn = db_in_a_group(&server);
+        store_grant(&conn, "a1", "r1", 0).expect("store");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+        let error = access_token(&conn)
+            .await
+            .expect_err("an answer that settles nothing");
+
+        refresh_door.assert();
+        group_door.assert();
+        assert_eq!(error, "the relay answered 503 to /token");
+        assert_eq!(
+            refresh_secret(&conn).as_deref(),
+            Some("r1"),
+            "the next call has to be able to ask the refresh door again"
+        );
+        assert!(!panel_says_membership_ended(&conn));
+        assert_eq!(
+            supporter_state(&conn),
+            ("active".to_owned(), Some(1_740_000_000))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_superseded_secret_in_a_full_group_is_the_cap_and_not_a_lapse() {
+        // The fallback asks the group door, so it inherits that door's 403. The cap is never the
+        // 401 path, whichever door it arrives through.
+        let server = MockServer::start_async().await;
+        let refresh_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(refresh_body());
+            then.status(401).body("");
+        });
+        let group_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(group_body());
+            then.status(403)
+                .body(r#"{"error":"five devices already","code":"device_limit"}"#);
+        });
+        let conn = db_in_a_group(&server);
+        store_grant(&conn, "a1", "r1", 0).expect("store");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+        let error = access_token(&conn).await.expect_err("the cap");
+
+        refresh_door.assert();
+        group_door.assert();
+        assert_eq!(error, GROUP_IS_FULL);
+        assert!(!panel_says_membership_ended(&conn));
+        assert_eq!(
+            supporter_state(&conn),
+            ("active".to_owned(), Some(1_740_000_000))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_secret_on_a_device_in_no_group_is_still_a_lapse() {
+        // With no group there is no second door to ask, so the refresh door's 401 is the whole
+        // answer, as it always was.
+        let server = MockServer::start_async().await;
+        let refresh_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(refresh_body());
+            then.status(401).body("");
+        });
+        let conn = db_with_no_group();
+        client::set_state(&conn, client::RELAY_URL, &server.base_url()).expect("override");
+        store_grant(&conn, "a1", "r1", 0).expect("store");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+        assert_eq!(access_token(&conn).await.expect("not an error"), None);
+
+        refresh_door.assert();
+        assert!(panel_says_membership_ended(&conn));
     }
 
     // -----------------------------------------------------------------------------------
@@ -1853,8 +2089,8 @@ mod tests {
         // Pinning the shape without a server, `Grant`'s test one struct over. **The absent field
         // is the point rather than an economy**: a device that reached `/token` by proving it is
         // in the group has proved nothing about the Patreon account, and handing it the
-        // credential that can re-register the group auth would let every paired device evict
-        // every other one.
+        // Patreon-side credential would leave a copy the relay cannot retire when that device is
+        // removed.
         let body = r#"{"access":"a1","expires":1900000000,"status":"active","since":1740000000}"#;
 
         let grant: GroupGrant = serde_json::from_str(body).expect("the four-field grant");

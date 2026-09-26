@@ -1374,12 +1374,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      */
     formats,
     /**
-     * **This is the surface `Any card` exists for**, and the only one of the four that offers it.
+     * **This is the surface `Any card` exists for**, and one of the two of the four hooks that
+     * offer it — the other is the deck search's Collection tab (`useCollectionSearch`), which
+     * since token stacks (2026-09-26) spells its format through this file's {@link formatParams}
+     * and so narrows its corpus the same way.
      *
      * Every other row of this picker rides `playableOnly` ({@link formatParams}), so the corpus
      * this search draws from *is* narrowed by default and `Any card` is the way back to the
-     * printings no format allows. A collection and a wishlist filter by nothing of the kind — see
-     * `FilterSurface.anyCard`, where the empty wall it caused is written down.
+     * printings no format allows. The collection page and the wishlist filter by nothing of the
+     * kind — see `FilterSurface.anyCard`, where the empty wall it caused is written down.
      */
     anyCard: true,
     colors,
@@ -1606,7 +1609,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       setColorFilter(NO_COLORS);
       // Cleared although it is not counted above, and the asymmetry is the point: Reset all
       // means "no filters", and a strict flag left standing over an empty colour row is exactly
-            setSets([]);
+      // the leftover that would turn the reader's next colour press into an exact match they
+      // never asked for. `NO_COLORS` clears the row and the flag together.
+      setSets([]);
       setTypes([]);
       setManaValues([]);
       setManaX(false);

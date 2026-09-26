@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { pickOption } from "@/test-dropdown";
 import { CategoriesDialog } from "./CategoriesDialog";
+import { MARKER_WORDS } from "./views/GroupHeader";
 
 /** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
  *  `initial` on it, so nothing inside is visible yet. `Decks/Dialog shell` has the whole reason
@@ -77,38 +78,40 @@ export const Closed: Story = {
 /**
  * The two markers, side by side, and the reading they exist to refuse.
  *
- * `RULE` is **not** "predefined and undeletable": it is about the ruleset, and the three kinds
- * the rules read a pile by are `commander`, `side` and `companion`. The Maybeboard is predefined
- * and carries `INACTIVE` alone; the reader's own "Cut list" carries exactly the same marker for
- * exactly the same reason, which is the whole of what makes a switched-off user pile behave like
- * the Maybeboard. Switch the Sideboard off and it carries **both** — the two answer different
- * questions and a pile can be both things at once.
+ * The rule mark is **not** "predefined and undeletable": it is about the ruleset, and the three
+ * kinds the rules read a pile by are `commander`, `side` and `companion`. The Maybeboard is
+ * predefined and carries the switched-off mark alone; the reader's own "Cut list" carries exactly
+ * the same mark for exactly the same reason, which is the whole of what makes a switched-off user
+ * pile behave like the Maybeboard. Switch the Sideboard off and it carries **both** — the two
+ * answer different questions and a pile can be both things at once. Both marks are icons, so the
+ * story finds each by its `sr-only` words, {@link MARKER_WORDS}.
  */
 export const RuleAndInactive: Story = {
   play: async ({ canvas }) => {
+    const { rule, inactive } = MARKER_WORDS;
     const row = async (name: string) =>
       (await canvas.findByText(name)).closest("li") as HTMLElement;
 
     const commander = await row("Commander");
-    await expect(within(commander).getByText("RULE")).toBeInTheDocument();
-    await expect(within(commander).queryByText("INACTIVE")).toBeNull();
+    await expect(within(commander).getByText(rule)).toBeInTheDocument();
+    await expect(within(commander).queryByText(inactive)).toBeNull();
 
-    // Predefined, and carrying no RULE: the rules have no role for a maybeboard.
+    // Predefined, and carrying no rule mark: the rules have no role for a maybeboard.
     const maybe = await row("Maybeboard");
-    await expect(within(maybe).queryByText("RULE")).toBeNull();
-    await expect(within(maybe).getByText("INACTIVE")).toBeInTheDocument();
+    await expect(within(maybe).queryByText(rule)).toBeNull();
+    await expect(within(maybe).getByText(inactive)).toBeInTheDocument();
 
     // The reader's own switched-off pile, marked identically.
     const cuts = await row("Cut list");
-    await expect(within(cuts).queryByText("RULE")).toBeNull();
-    await expect(within(cuts).getByText("INACTIVE")).toBeInTheDocument();
+    await expect(within(cuts).queryByText(rule)).toBeNull();
+    await expect(within(cuts).getByText(inactive)).toBeInTheDocument();
 
     const sideboard = await row("Sideboard");
     await userEvent.click(within(sideboard).getByRole("button", { name: /^Active/ }));
     await waitFor(async () => {
-      await expect(within(sideboard).getByText("INACTIVE")).toBeInTheDocument();
+      await expect(within(sideboard).getByText(inactive)).toBeInTheDocument();
     });
-    await expect(within(sideboard).getByText("RULE")).toBeInTheDocument();
+    await expect(within(sideboard).getByText(rule)).toBeInTheDocument();
   },
 };
 
@@ -127,7 +130,7 @@ export const PredefinedIsSwitchableOnly: Story = {
 
     await userEvent.click(within(commander).getByRole("button", { name: /^Active/ }));
     await waitFor(async () => {
-      await expect(within(commander).getByText("INACTIVE")).toBeInTheDocument();
+      await expect(within(commander).getByText(MARKER_WORDS.inactive)).toBeInTheDocument();
     });
   },
 };

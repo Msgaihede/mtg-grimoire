@@ -398,6 +398,25 @@ space-insensitively, so a header never drifts out of sync with a column:
 | `acquisitionSource` | Acquired from | | |
 | `serialNumber` | Serial number | | |
 
+**A `Purchase price` cell is read by `prices.ts`' `parsePurchasePrice`, the same function as both
+purchase-price boxes**, and never by a parser of the importer's own. **Text is stripped from the
+ends only** — a symbol, a code or a word before or after the number — and between its digits only
+a space or apostrophe before a group of three may stand; anything else there (`1e3`, `2 for 5`,
+`10 (paid 8)`) refuses the cell rather than gluing its digits into another number, and so does any
+dash or minus sign (`−4,50`). The separator rule is read off the digits rather than a locale: with
+both separators present the later one is the decimal point; a separator repeated in groups of three
+is grouping; a lone comma before exactly three digits is grouping; **a lone dot before exactly three
+digits is refused**; any other lone separator is a decimal point. So `4,50` from a Danish
+spreadsheet is 4.5 and `$1,500` is 1500. Refused cells (`1.500`, `1,2,3`) land without a price and
+the preview lists the line (`CollectionPlan.unreadablePrices`); the two boxes say why under the
+field (`unreadablePriceNote`).
+
+**The lone-dot refusal is the one refusal of a well-formed number, and it is deliberate**: `1.500`
+is fifteen hundred in a Danish hand and one and a half as a three-decimal price. **Both writers keep
+the app's own CSV out of it** — TypeScript's `priceText` and Rust's `price_text` give a price with
+exactly three decimals a fourth (`1.1250`), so it round-trips; the golden fence holds the two
+together. A file an older build wrote still says `1.125`, and that cell is listed, never read as 1125.
+
 ## The fold rule, and why the discriminator exists
 
 `export/fold.ts`'s `foldForFields(cards, fields, discriminator?)` merges rows the chosen field set

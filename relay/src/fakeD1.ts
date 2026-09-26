@@ -22,9 +22,9 @@ import type { Env } from "./index";
  * it, and the mutation is caught by the comparison actually being run.
  *
  * The dialect it covers is exactly the one this module writes and no more: five statement
- * shapes, `AND`, arithmetic, `coalesce`, and a `max()` subquery. Anything else throws by name,
- * so a later statement that this harness cannot honour fails loudly here rather than quietly
- * passing.
+ * shapes, `AND`, arithmetic, `coalesce`, and a `max()` or `count(*)` subquery. Anything else
+ * throws by name, so a later statement that this harness cannot honour fails loudly here rather
+ * than quietly passing.
  *
  * `@cloudflare/vitest-pool-workers` would run real D1 and is ruled out for the tree's reason
  * (`relay/README.md`): it drags wrangler and workerd into a suite pinned to vitest 4.1.10.
@@ -118,7 +118,8 @@ interface Reader {
 }
 
 function tokenize(text: string): string[] {
-  return text.match(/>=|<=|<>|[<>=]|[()?,+-]|\d+|[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+  // `*` is here for `count(*)` and nothing else — there is no multiplication in this dialect.
+  return text.match(/>=|<=|<>|[<>=]|[()?,+*-]|\d+|[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
 }
 
 function peek(r: Reader): string {
@@ -146,12 +147,22 @@ function order(a: Value, b: Value): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-/** `(SELECT max(col) FROM table WHERE …)`, with the opening paren already taken. */
+/**
+ * `(SELECT max(col) FROM table WHERE …)` or `(SELECT count(*) FROM table WHERE …)`, with the
+ * opening paren already taken.
+ *
+ * `count(*)` is `admitDevice`'s: the device cap is decided inside its `INSERT` so that two
+ * requests cannot both read "four" and both insert, and a fake that could not count would push
+ * that decision back out into JavaScript, where the race it closes cannot be seen.
+ */
 function subselect(r: Reader): Value {
   want(r, "select");
-  want(r, "max");
+  const aggregate = take(r).toLowerCase();
+  if (aggregate !== "max" && aggregate !== "count") {
+    throw new Error(`fake sql: ${aggregate} is not an aggregate this harness knows`);
+  }
   want(r, "(");
-  const column = take(r);
+  const column = aggregate === "count" ? (want(r, "*"), "") : take(r);
   want(r, ")");
   want(r, "from");
   const table = take(r);
@@ -162,6 +173,7 @@ function subselect(r: Reader): Value {
   const start = r.at;
   const startBound = r.bound;
   let best: Value = null;
+  let counted = 0;
   // **At least one pass, even over an empty table.** The condition's tokens and its bound
   // parameters have to be consumed exactly once whatever the rows say, or every `?` after this
   // point in the statement reads the wrong value — which for the monotonic guard would mean the
@@ -172,13 +184,14 @@ function subselect(r: Reader): Value {
     r.row = row;
     const matched = condition(r);
     if (matched && rows.length > 0) {
+      counted += 1;
       const value = row[column] ?? null;
       if (value !== null && (best === null || order(value, best) > 0)) best = value;
     }
   }
   r.row = outerRow;
   want(r, ")");
-  return best;
+  return aggregate === "count" ? counted : best;
 }
 
 function primary(r: Reader): Value {
@@ -270,9 +283,13 @@ function compare(r: Reader): boolean {
  * `(group_id IS NULL OR group_id = ?)` and nothing else. Before this existed the token went to
  * `primary`, which read it as a subquery and threw `expected select, found group_id` — so the
  * binding `UPDATE` in `handleClaim` could not be tested at all.
+ *
+ * **One exception, and the next token settles it**: `(SELECT count(*) …) < ?` opens a condition
+ * term with a subquery in the value position, which is `admitDevice`'s shape. A `(` followed by
+ * `SELECT` is a value and goes to `compare`; any other `(` is still a grouping.
  */
 function term(r: Reader): boolean {
-  if (peek(r) === "(") {
+  if (peek(r) === "(" && (r.tokens[r.at + 1] ?? "").toLowerCase() !== "select") {
     r.at += 1;
     const inner = condition(r);
     want(r, ")");
@@ -465,10 +482,18 @@ function execute(
   // `OR IGNORE` is optional here as it is on the VALUES form above. `seedGroup` needs both
   // halves at once: the `WHERE` refuses an epoch behind the group, and the `OR IGNORE` swallows
   // the duplicate when a re-claim arrives at the epoch the group is already on.
-  const insertSelect =
-    /^INSERT (OR IGNORE )?INTO (\w+) \(([^)]+)\) SELECT (.+?) WHERE (.+)$/i.exec(text);
+  //
+  // The `ON CONFLICT … DO UPDATE SET …` tail is `admitDevice`'s: one statement that both decides
+  // the cap and writes the row, so a returning device's `last_seen` moves through the same
+  // conflict a new device's insert is refused by.
+  const insertSelect = new RegExp(
+    String.raw`^INSERT (OR IGNORE )?INTO (\w+) \(([^)]+)\) SELECT (.+?) WHERE (.+?)` +
+      String.raw`(?: ON CONFLICT \(([^)]+)\) DO UPDATE SET (.+))?$`,
+    "i",
+  ).exec(text);
   if (insertSelect) {
-    const [, selectIgnore, table, columnList, selectList, where] = insertSelect;
+    const [, selectIgnore, table, columnList, selectList, where, conflictList, setList] =
+      insertSelect;
     const columns = columnList.split(",").map((c) => c.trim());
     const terms = selectList.split(",").map((v) => v.trim());
     if (terms.some((term) => term !== "?")) throw new Error(`fake sql: only ? in SELECT`);
@@ -481,7 +506,18 @@ function execute(
     if (matching(where, [{}], params, terms.length, tables).length === 0) {
       return { results: [], changes: 0 };
     }
-    return insertRow(tables, table, row, selectIgnore !== undefined);
+    // The `SET` list's holes come after the `SELECT` list's and the `WHERE`'s, which is the
+    // order D1 binds one flat list in.
+    const upsert =
+      conflictList === undefined || setList === undefined
+        ? undefined
+        : {
+            target: conflictList.split(",").map((c) => c.trim()),
+            assignments: setList.split(",").map((a) => a.trim()),
+            offset: terms.length + (where.match(/\?/g) ?? []).length,
+            params,
+          };
+    return insertRow(tables, table, row, selectIgnore !== undefined, upsert);
   }
 
   // **`RETURNING` is honoured, and it has to be.** `handleClaim`'s single-use guard is one
@@ -605,6 +641,8 @@ export function fakeEnv(...groups: string[]): Env {
       grace_until: null,
       group_id: group,
       refresh_secret: `secret-${index}`,
+      // No holder recorded: the shape of every row claimed before `refresh_device` existed.
+      refresh_device: null,
       patreon_refresh: null,
       created_at: 0,
       checked_at: 0,
@@ -638,6 +676,7 @@ export function fakeTables(options: { groups: string[]; bound?: boolean }): Tabl
       grace_until: null,
       group_id: bound ? group : null,
       refresh_secret: bound ? `secret-${index}` : null,
+      refresh_device: null,
       patreon_refresh: null,
       created_at: 0,
       checked_at: 0,

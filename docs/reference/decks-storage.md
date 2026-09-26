@@ -792,14 +792,63 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
     changes rather than toggling one.
   - **`undone_at` persists and the redo queue does not.** Undo therefore survives a restart and
     carries on below where it stopped; redo is a list of ids in the webview (`useDeckUndo`),
-    thrown away with the window and cleared by any other write to the deck. A database-backed
-    redo would offer to resurrect a fortnight-old branch of edits the reader had forgotten making.
+    thrown away with the window and cleared by any other write *that window* makes. A
+    database-backed redo would offer to resurrect a fortnight-old branch of edits the reader had
+    forgotten making.
   - **Three commands**: `deck_undo_state(deckId, redoId)` — the two `DeckAuditEntry`s the buttons
-    name themselves from, the redo half answered only for the id the caller hands in —
-    and `deck_undo_apply` / `deck_redo_apply`, which check the id against the cursor rather than
-    trusting it. **They ended with one `allocate_deck` run until schema v25 and now end with
-    nothing**: what a deck owns is where its collection rows sit, and putting a `deck_cards` row
-    back does not move a card.
+    name themselves from, the redo half answered only for the id the caller hands in, and only when
+    it is `next_redo` —
+    and `deck_undo_apply` / `deck_redo_apply`, which check the id against a cursor rather than
+    trusting it: `next_undo` for an undo, and for a redo `next_redo`, the undone step above the
+    undo cursor with the newest `undone_at`. **An undo stamps `max(now, newest + 1)` rather than
+    the wall clock**, because a change undone before a later edit is a dead branch and has to carry
+    an older stamp than anything undone after it — two presses in one second would otherwise tie,
+    and a tie broken by id picks the dead one. **They ended with one `allocate_deck` run until
+    schema v25 and now end with nothing**: what a deck owns is where its collection rows sit, and
+    putting a `deck_cards` row back does not move a card.
+  - **Then the deck itself is checked, because the cursor cannot see every write.** The cut and
+    the Collection tab's filing (`collection_alloc`), a copy another deck's filing takes, a sync
+    pull (`deck_cards` syncs, `deck_undo` does not) and Scryfall's reconcile all change
+    `deck_cards` **without** filing a step. Applied blindly, a step deletes its scope and inserts
+    its rows over them: Ctrl+Z after a cut brought the cut card back reading 0 owned, and undoing a
+    move or an import after a filing left copies in the deck's group that no row claimed. So an
+    undo needs the deck to hold the step's **redo** side and a redo its **undo** side, compared by
+    content (row ids and timestamps ignored): the rows in an `Op::Cards` scope or a whole
+    `Op::Variant` as a multiset; every `restore`/`patch` row of `categories`, `labels` and `notes`
+    with its recorded columns, a note's whole attachment set, and each carrier cell still wearing
+    its label; the `Op::Deck` columns the step moved. **`delete` lists are not checked there** —
+    every id is a rowid alias somebody else's insert may hold, and every restore already remaps a
+    taken id — and **the three view-state columns are never a reason to refuse** (a tab switch
+    files no step and is not an edit).
+  - **A delete on the side being *applied* is asked what it would take.** A pile delete CASCADEs
+    every card under it and a label delete SET-NULLs it in every deck, so undoing "New category",
+    or a quick add that invented its pile, took a card the Collection tab filed there since, and
+    undoing "New label" stripped it off a card another deck labelled since. Such a delete may take
+    only rows the same side's `cards`/`variant` ops rewrite anyway, or — for a label — cells the
+    other side records as its carriers. A labelling carrier being applied may only land on a bare
+    cell (or one already wearing it), which is the one check a label delete's undo gets: its redo
+    side records no carriers.
+  - **A refused undo retires its step; a refused redo writes nothing.** A redo refusal is
+    `MOVED_ON`, and the webview drops that id. A refused undo deletes its own `deck_undo` row (the
+    history row stays) and says **`RETIRED`** — "That change can no longer be undone…" — because a
+    cursor that refuses refuses at every press and nothing older could ever be undone again, and
+    because `MOVED_ON`'s "not the most recent change" would be false there: a reader believing it
+    presses again and undoes the older change. **A write that fails is a refusal too**: the undo
+    runs in a savepoint, and any error — a restored card naming a label deleted since, a restored
+    pile whose name was taken since — rolls back to it and retires the step rather than failing the
+    same way at every press.
+  - **`undone_at` is an ordinal, not a time**, and a schema rung that rewrites `deck_cards`,
+    `decks` or category, label or note contents without clearing `deck_undo` retires every step it
+    touched at the first Ctrl+Z.
+  - **`Op::Deck` writes only the columns whose two sides differ, and so does the category op's
+    `default_category_id`.** Every `deck_update` step records all of `DECK_FIELDS`
+    (`read_deck_row`), so a rename carries the folder, the archive flag and the view state on both
+    sides; writing them all back reverted a folder delete's SET NULL, a tab switch and columns
+    another device synced — and put a deleted folder's id into a real foreign key, which failed
+    and left the cursor on a step that could never succeed. The rule reads the step, so every step
+    already on disk keeps working. A `folder_id` the reversal *would* write that names a deleted
+    folder is refused (and retired, like any refused undo) rather than skipped: a skipped column
+    would report an undo that left the deck where it was.
   - **Three things are deliberately out of reach, and each has a reason rather than a gap** (it
     was four until 2026-08-31; the fourth is the last paragraph here).
     `deck_create`/`deck_duplicate`/`deck_delete` are gallery writes with no editor open, and
@@ -2981,7 +3030,7 @@ Bolt"* — neither suite caught it, because both names were **correct** and mere
 
 | command | what it does |
 | --- | --- |
-| `deck_tokens(deckId, variant)` | the derived list with the stored override joined on. Read-only connection on the blocking pool, `card_meld_parts`' shape. **No `marketplace`** — nothing in the answer is priced |
+| `deck_tokens(deckId, variant, marketplace)` | the derived list with the stored override joined on, and — since 2026-09-26 — each row's chin facts and a price for its effective printing (*The chin and the price*, below). Read-only connection on the blocking pool, `card_meld_parts`' shape. **`marketplace` is `Option<String>` through `Marketplace::from_opt`**, `card_printings`' shape, so an id this build does not know lands on TCGplayer. It had no `marketplace` until then, when nothing in the answer was priced |
 | `deck_token_set(deckId, oracleId, cardId, quantity, tokenState)` | upsert on the grain, or **delete** when the result would carry nothing. A full replace and not a patch: the page composes the whole override and sends all three fields, `null` included |
 | `deck_token_clear(deckId, oracleId)` | back to the derived defaults; the row goes. A grain that resolves to no row is a **success** |
 | `deck_token_add(deckId, cardId)` | resolves `oracle_id` from the printing and writes `state = 'manual'` with that printing as the art. **An existing quantity survives** — adding is *put this on the wall with this art*, and a reader who had set four Treasures, dismissed them and added them back must not find the four silently gone |
@@ -3006,6 +3055,54 @@ Bolt"* — neither suite caught it, because both names were **correct** and mere
   `playableOnly: false` either — **that flag belongs to `search_cards`**, which is what
   `DeckCoverPicker.tsx:148` passes it to, and reading the two as one command is how this picker
   would come back empty for every token in the game.
+
+### The chin and the price, since 2026-09-26
+
+The token-stacks work ([the spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §3.3)
+draws a token in a deck view's pile with the deck card's own `DeckCardFace` and `CardChin`, so a
+row has to say what a deck card's chin says. `DeckTokenRow` gained six fields, **every one of them
+about the effective printing** — `card_id` where the reader picked art, `default_card_id`
+otherwise, the precedence `image_uris` already followed:
+
+| field | what it is |
+| --- | --- |
+| `setCode` | the printing's set code |
+| `collectorNumber` | its collector number |
+| `setName` | the set's name — the chin's hover, since the code is what fits |
+| `rarity` | Scryfall's word (`common`, `rare`, …) |
+| `finishes` | the JSON **text** `cards.finishes` holds (`["nonfoil","foil"]`) — `src/lib/finish.ts`' `parseFinishes` input, not a second shape |
+| `unitPrice` | what one copy costs in the asked marketplace, or `null` |
+
+- **All six are `null` together when a pick has left the corpus**, which is the picture's own
+  answer for that case: a stored `card_id` whose `cards` row is gone draws no art and no chin
+  rather than borrowing the resolver's. Where the pick *is* the resolver's printing, the row's own
+  columns answer and only the price is an extra read.
+- **The price is a deck row's, not a default finish's.** It goes through
+  `sorting::printing_price_by_finish_expr` — `nonfoil → foil → etched`, first priced link wins —
+  which is exactly how a `deck_cards` row that names no finish is priced. The first cut priced a
+  token at one *default finish* (the printing's sole finish, else nonfoil), and the two differ in
+  exactly one case: a printing listed in several finishes whose nonfoil is unpriced read `—` on
+  the token while the same printing in the deck read its foil rate — one card priced two ways on
+  one screen, beside a pile drawn to look like the deck's. The chain is what the rest of the crate
+  already had to learn: **13 515 foil-only and 892 etched-only printings have no nonfoil price at
+  any marketplace** (that function's own record, measured 2026-08-15). **Which finish the chin
+  _marks_ is a separate question**, answered in TypeScript by `playedFinish(null, finishes)` —
+  nothing in Rust answers it.
+- **`None` where the marketplace has no figure — never `0`**, which the pile heading's sum would
+  count as a free card, and never another marketplace's. Cardmarket's etched hole is
+  `price_expr`'s and survives here unchanged.
+- **Token prices never reach a deck total.** The one reader that sums `unitPrice` is the pile's
+  own heading (`tokenPileHeading` in `views/TokenPile.tsx`); `deck_values`, the ledger and every
+  other pile's heading read `deck_cards` and cannot see a token.
+- **`DeckTokenRow` is `PartialEq` and no longer `Eq`**, because `unit_price` is an `f64`.
+- **`src/lib/ipc.ts` mirrors all six and `ipc.test.ts`'s struct table holds `DeckTokenRow`**, so
+  the two sides cannot drift field for field, and its `deck_tokens` case pins the three argument
+  names. **The web target's `deck_tokens` arm in `web/route.rs` takes `marketplace` the same way**,
+  and it is not optional work: `web` is compiled on every target, so an arm left calling
+  `deck_token_rows` with three arguments is a crate that does not build.
+- **The page puts the marketplace in the query key** (`["decks", "tokens", deckId, variant,
+  marketplace]`), which reverses the *no marketplace in the key, nothing this answers is priced*
+  that `features/decks/CLAUDE.md` carried — that file has the argument.
 
 ### `decks.tokens_open`, and the one thing it does not do
 
@@ -3067,7 +3164,8 @@ copying the line above it is the bug.
 
 User schema **v47** (2026-09-24, [issue #507](https://github.com/Msgaihede/mtg-grimoire/issues/507))
 is `decks.token_stack INTEGER NOT NULL DEFAULT 0` — whether the deck views draw the deck's tokens
-and emblems as a trailing **Tokens & Emblems** pile, read as `DeckRow.tokenStack` and written as
+and emblems as a **Tokens & Emblems** pile (a trailing one until v51, below, made its place the
+reader's), read as `DeckRow.tokenStack` and written as
 `DeckPatch.tokenStack` on the ordinary `deck_update`. It is on the `decks` capture `Spec`, appended
 after `notes_open` as the last named column of `DECK_SELECT` (read off `deck_row`, not off this
 page), with `update_deck`'s next `?` hole. Like the three disclosures it writes **no `deck_audit`
@@ -3080,6 +3178,51 @@ about how the list is read — `separate_x_group`'s footing — so a copy reads 
 did. Rust stores the bit and nothing more: the pile is drawn in the view layer from the same
 `deck_tokens` answer the band draws and never enters `deck.cards`, so it counts toward nothing.
 Not on `DeckInput` — a deck is born with it off.
+
+### `decks.token_rail_index`, the pile's place in the rail — and the one of these that is undoable
+
+User schema **v51** (2026-09-26, [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md)
+§3.4) is `decks.token_rail_index INTEGER NOT NULL DEFAULT -1` — where the Tokens & Emblems pile
+sits among the right-hand rail's piles, stored as **the number of rail piles drawn above it**, and
+**`-1` for last**, which is where every deck's pile was before the column existed. v47's shape,
+one `ALTER TABLE … ADD COLUMN`, on the `decks` capture `Spec` after `token_stack`, and owed its
+`USER_SCHEMA_SQL` line and an `UNDO_V51` (prepended to every rewind chain; `main`'s `UNDO_V50`
+sits between it and `UNDO_V49` once merged). **Written as v50 and renumbered before merging**,
+because `main` shipped its own v50 first — `price_snapshots.copies`. It rides
+`DeckPatch.tokenRailIndex` / `DeckRow.tokenRailIndex` and reaches `useDeck`'s
+`update` with no per-field arm.
+
+- **An index and never an anchor.** An anchor — "under the Sideboard" — would be a category id on
+  a synced row, which needs the sync's `sync_uid` translation, and switching that pile on would
+  take it out of the rail and send the tokens to the bottom for a reason the reader cannot see. A
+  count needs neither. **What a count costs is a rail that shrank**, and the page answers that
+  the only way that never loses the pile: anything not a whole number in `[0, rail length]` draws
+  last (`tokenRailSlot` in `views/tokenRail.tsx`). Rust stores the number it is handed and clamps
+  nothing, so a rail that shrinks and grows back puts the pile where it was.
+- **`NOT NULL DEFAULT -1`, where the spec said nullable with `NULL` for last.** `update_deck`
+  writes every field through `coalesce(?n, col)`, which reads a bound `NULL` as *leave it* — so a
+  nullable "last" could never be written back once the reader had moved the pile. `-1` is a value
+  and `coalesce` passes it through; the page stores last as `-1` and never as the rail's length,
+  so a pile put at the bottom stays there when a pile is switched on or off later.
+- **It is the one column of this family with a history row and an undo step**, and that is where
+  it parts company with `token_stack` above it. A disclosure is where the reader left a deck and
+  `token_stack` is a setting; this is an **arrangement the reader drags**, the footing a category
+  reorder is on. So it is on `deck_undo::DECK_FIELDS` — a move files one `Op::Deck
+  { token_rail_index }` step, the shape every other deck field's undo takes, and Ctrl+Z puts the
+  pile back — and `record_deck_edit` writes a `deck_audit` row with the field **`tokenRail`**
+  (`from` and `to` the stored numbers, `-1` meaning last), which `auditText.ts` reads as
+  *"Moved Tokens & Emblems"*. A re-send of the same index writes no row. `duplicate_deck` carries
+  it, as it carries `token_stack`.
+- **Positional reads moved, again.** `DECK_SELECT` appends `d.token_rail_index` after
+  `d.managed_wishlist_mode`; `deck_row` reads it at **29**, and `IMAGE_COL` moved **29 → 30**.
+  `DeckBefore` — the before-image `update_deck` audits against — reads it at **17**, and
+  `update_deck` binds it as `?23`. `token_rail_index_round_trips_audits_and_undoes` pins the
+  default, the read beside its neighbour, `IMAGE_COL`, the exact audit payload, the no-op re-send,
+  the duplicate and the undo; a mutation that took the column off `DECK_FIELDS` failed it at the
+  Ctrl+Z assertion.
+- **How the page spends it** — Stacks' drag and grip, Grid and Text inserting the pile at that
+  place, Table not spending it at all, and the optimistic move — is
+  [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md)'s *Tokens & Emblems*.
 
 ### A stale comment found on the way, and deliberately not fixed here
 
