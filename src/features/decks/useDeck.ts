@@ -637,6 +637,15 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * denormalize the printing onto the row it inserts, so it refuses a card the database does
    * not have.
    *
+   * **A token is never a deck card, and the routing is Rust's** (token stacks, spec §4.6):
+   * `deck_add_card` looks at the printing's layout, and a `token`, `double_faced_token` or
+   * `emblem` is filed as one of the deck's token entries on this hook's list rather than as a
+   * row in any pile — whichever pile it was dropped on, and whatever category or name this sends.
+   * It answers `EntryChange.id` **`0`** then, because no deck card was made: a caller that marks
+   * the row an add landed in (`DeckEditor`'s landed mark) must skip it. Nothing here branches on
+   * the layout — no add payload carries one, which is why the rule lives where the card's row is
+   * at hand — and the invalidation below already re-reads the token pile.
+   *
    * **`categoryId` is what a drop onto a column sends; a caller with none is filed by what the
    * card does, and by what it is where that is unknown.** Pointing at a column *is* naming a
    * category, so every drag overrides the rule by construction and nothing here has to know a
@@ -738,10 +747,14 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       return ipc.deckAddCard(deckId, cardId, categoryId, categoryName, variant, finish, quantity);
     },
     // **{@link invalidate} for every add, on success and on refusal alike.** This write touches
-    // `deck_cards` and nothing else, so the deck root is the whole of what moved — the wider
-    // `query.ts`'s `OWNED_WRITE_KEYS` set was the deleted `own` arm's, which took a row out of the
-    // binder as well, and firing it here would be three refetches per press that can only
-    // re-answer what is already on screen.
+    // `deck_cards` — **or, for a token, the deck's token entries and nothing in `deck_cards`**
+    // (token stacks, spec §4.6: Rust reroutes a `token` / `double_faced_token` / `emblem`
+    // printing to a token entry and answers `id: 0`) — and never the collection, so the deck root
+    // is the whole of what moved either way: the Tokens & Emblems read is keyed
+    // `["decks", "tokens", …]` under it, so a rerouted add re-reads the pile with no arm of its
+    // own. The wider `query.ts`'s `OWNED_WRITE_KEYS` set was the deleted `own` arm's, which took a
+    // row out of the binder as well, and firing it here would be three refetches per press that
+    // can only re-answer what is already on screen.
     onSuccess: invalidate,
     onError: invalidate,
   });

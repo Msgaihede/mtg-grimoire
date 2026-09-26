@@ -24,10 +24,11 @@ interface PileHostProps {
   drawing: Drawing;
   deckId: number;
   /**
-   * Hand the pile a plan's marks — the first token the plan makes exactly, every other one a
-   * token the plan does not make — so the two marks a token can wear are on one screen. The
+   * Hand the pile a plan's marks — the first entry the plan makes exactly, every other one an
+   * entry the plan does not make — so the two marks a token can wear are on one screen. The
    * editor's real answer is `tokenTheory.ts`' over the deck's theory list; this story is about
-   * the drawing, so it answers by position.
+   * the drawing, so it answers by position, and by **entry** rather than by token, since one
+   * token can be two cards here.
    */
   planMarks?: boolean;
 }
@@ -39,13 +40,15 @@ const UNPLANNED: TheoryMark = { tier: "unplanned", delta: 0 };
  * The pile as a view is handed it: **one `useDeckTokens` answer**, the same one the band draws,
  * driven end to end by `.storybook/fake/` rather than by a hand-built list — so every token
  * carries the fake's own set code, number, rarity, finishes and price for its printing, and the
- * chin and the heading's total are the fake's figures rather than a story's. The art press logs
- * nothing here — the picker is the editor's, mounted once beside the band.
+ * chin and the heading's total are the fake's figures rather than a story's. One card per
+ * **entry** — the fake's per-entry rows, so a token held in two printings or two finishes is two
+ * cards. The press logs nothing here — the printing picker is the editor's, mounted once beside
+ * the band — while the steppers write through the fake like the band's.
  */
 function PileHost({ drawing, deckId, planMarks = false }: PileHostProps): JSX.Element {
   const tokens = useDeckTokens(deckId, "live");
   const zoom = useAppStore((s) => s.cardZoom.deck);
-  const first = tokens.tokens[0]?.oracleId;
+  const first = tokens.tokens[0]?.entryKey;
   const pile: TokenPile = {
     tokens: tokens.tokens,
     setQuantity: tokens.setQuantity,
@@ -53,7 +56,7 @@ function PileHost({ drawing, deckId, planMarks = false }: PileHostProps): JSX.El
     // Last in the rail, every existing deck's position — where the pile is drawn is the view's.
     railIndex: -1,
     theoryMark: planMarks
-      ? (view: DeckTokenView) => (view.oracleId === first ? EXACT : UNPLANNED)
+      ? (view: DeckTokenView) => (view.entryKey === first ? EXACT : UNPLANNED)
       : undefined,
   };
   if (pile.tokens.length === 0) return <p className="text-xs text-dim">Loading tokens…</p>;

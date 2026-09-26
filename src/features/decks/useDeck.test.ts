@@ -1,6 +1,6 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
 import { MENU_CONDITION } from "@/lib/conditions";
 import type {
@@ -107,7 +107,7 @@ const DECK: DeckRow = {
   // asserted on.
   separateXGroup: false,
   tokensOpen: false,
-  tokenStack: false,
+  tokenMode: "managed",
   tokenRailIndex: -1,
   statsOpen: true,
   defaultCategoryId: 0,
@@ -1780,6 +1780,42 @@ describe("useDeck invalidation", () => {
     await result.current.addCard.mutateAsync({ cardId: "p1", categoryId: MAIN.id, quantity: 2 });
 
     await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+  });
+
+  /**
+   * **An add Rust filed as a token re-reads the tokens** (token stacks, spec §4.6). `deck::add_card`
+   * reroutes a `token` / `double_faced_token` / `emblem` printing to a token entry and answers
+   * `id: 0` — no deck card was made — so the one read that changed is the Tokens & Emblems read,
+   * and it has to refetch or the token the reader dropped on a pile appears nowhere.
+   *
+   * **An observed query, so the refetch is the assertion** rather than a stale flag: the key is
+   * `useDeckTokens`' own shape (`["decks", "tokens", deckId, variant, marketplace]`), which is
+   * under the `["decks"]` root `invalidate` fires — the whole of why no new arm was needed.
+   */
+  it("re-reads the deck's tokens after an add the backend filed as a token", async () => {
+    deckAddCard.mockResolvedValue({ id: 0, quantity: 1, removed: false });
+    const readTokens = vi.fn().mockResolvedValue([]);
+    const { result } = renderHook(
+      () => ({
+        deck: useDeck(4),
+        tokens: useQuery({
+          queryKey: ["decks", "tokens", 4, "live", "tcgplayer"],
+          queryFn: readTokens,
+        }),
+      }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.tokens.isSuccess).toBe(true));
+    expect(readTokens).toHaveBeenCalledTimes(1);
+
+    const change = await result.current.deck.addCard.mutateAsync({
+      cardId: "t-treasure",
+      categoryId: MAIN.id,
+      quantity: 1,
+    });
+
+    expect(change.id).toBe(0);
+    await waitFor(() => expect(readTokens).toHaveBeenCalledTimes(2));
   });
 
   /** The stepper, which is the one a reader presses over and over. */
