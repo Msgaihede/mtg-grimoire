@@ -628,6 +628,8 @@ pub fn run() {
             // The Deck completion widget: every deck's missing count and cost, on the read-only
             // connection, by the deck editor's own rules.
             deck_completion::deck_completion,
+            // To review's deck-card count — its own read, not `sync_relay_status`'s six-table sum.
+            deck_completion::deck_review_count,
             startview::start_view,
             startview::set_start_view,
             marketplace_feed::marketplace_feed_refresh,

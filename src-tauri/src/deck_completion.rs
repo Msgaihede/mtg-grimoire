@@ -1,5 +1,6 @@
 //! The home page's **Deck completion** read: for every deck, how many copies its measured list
-//! wants, how many the reader holds, and what the rest would cost.
+//! wants, how many the reader holds, and what the rest would cost — and, at the foot of the file,
+//! **To review**'s count of deck rows flagged for review ([`review_count`]).
 //!
 //! **Owned is exactly what the deck editor calls owned**, rule for rule — a widget reading
 //! *4 missing* over a deck that opens reading *6 missing* is a bug report (spec
@@ -220,6 +221,30 @@ pub async fn deck_completion(
     })
     .await
     .map_err(|e| format!("the deck completion could not be read: {e}"))?
+}
+
+/// How many `deck_cards` rows carry a `needs_review` sentence — any deck, either list.
+///
+/// **`sync_engine/commands.rs:111`'s count for this one table**, so To review's row and the Needs
+/// review panel it opens say one number. Not `sync_relay_status.reviewCount` itself: that sums six
+/// tables into one figure, is desktop-only and takes the write lock (spec §4.1).
+pub fn review_count(conn: &Connection) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT count(*) FROM deck_cards WHERE needs_review IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// To review's deck-card count. **Read-only** connection, blocking pool.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn deck_review_count(state: tauri::State<'_, Arc<AppState>>) -> Result<i64, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || review_count(&crate::sync::lock_db_read(&state)))
+        .await
+        .map_err(|e| format!("the deck cards to review could not be counted: {e}"))?
 }
 
 #[cfg(test)]
@@ -607,6 +632,52 @@ mod tests {
                 "deckId": 7, "list": "theory", "wanted": 100, "owned": 96, "missing": 4,
                 "missingCost": null, "unpricedMissing": 1
             })
+        );
+    }
+
+    /// **To review's deck row** (spec §4.1): every `deck_cards` row carrying a sentence, either
+    /// list, any deck — `sync_engine/commands.rs:111`'s per-table count for `deck_cards`, so the
+    /// widget and the Needs review panel it opens agree. A flagged binder row is the collection's
+    /// count and not this one.
+    #[test]
+    fn the_review_count_counts_flagged_deck_rows_and_nothing_else() {
+        let conn = seeded();
+        assert_eq!(review_count(&conn).unwrap(), 0, "an empty database");
+        let live = make_deck(&conn, "Live", false, false);
+        let plan = make_deck(&conn, "Plan", true, false);
+        let live_main = pile(&conn, live, "Main deck");
+        let plan_main = pile(&conn, plan, "Main deck");
+        put(&conn, live, live_main, LIVE, "bolt", None, 1);
+        put(&conn, live, live_main, LIVE, "ring", None, 1);
+        put(&conn, plan, plan_main, THEORY, "angel", None, 1);
+        assert_eq!(
+            review_count(&conn).unwrap(),
+            0,
+            "a row with no sentence is not flagged"
+        );
+
+        conn.execute(
+            "UPDATE deck_cards SET needs_review = 'That printing left the card database.'
+              WHERE card_id IN ('bolt', 'angel')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            review_count(&conn).unwrap(),
+            2,
+            "a flagged row in either list"
+        );
+
+        let entry = copies(&conn, "ring", "nonfoil", 1, None);
+        conn.execute(
+            "UPDATE collection_entries SET needs_review = 'Folded.' WHERE id = ?1",
+            params![entry],
+        )
+        .unwrap();
+        assert_eq!(
+            review_count(&conn).unwrap(),
+            2,
+            "a flagged binder row is not a deck row"
         );
     }
 }

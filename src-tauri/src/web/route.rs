@@ -303,6 +303,9 @@ pub const COMMANDS: &[&str] = &[
     // the decks and their piles plus the editor's own pool read per deck — so it is not a
     // download wearing a command's name.
     "deck_completion",
+    // **To review's deck-card count**, one `count(*)`. `sync_review_list` is not routed here, so
+    // the widget draws this row without a press on this target; the number itself still answers.
+    "deck_review_count",
     "start_view",
     "set_start_view",
     // **The three docked search columns' shared row**, and both halves for `deck_sort`'s reason.
@@ -2491,6 +2494,14 @@ pub fn call(
             )
         }
 
+        "deck_review_count" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_completion::review_count(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
         "start_view" => {
             let conn = crate::sync::lock_db_read(state);
             encode(command, crate::startview::stored(&conn))
@@ -3766,6 +3777,30 @@ mod tests {
         assert_eq!(call(&s, "deck_completion", &json!({})).unwrap(), out);
     }
 
+    /// **To review's deck-card count, routed.** It is its own read rather than
+    /// `sync_relay_status.reviewCount`, which sums six tables and is desktop-only, so a browser
+    /// that could not answer it would draw that row as an error.
+    #[test]
+    fn the_deck_review_count_is_routed() {
+        assert!(COMMANDS.contains(&"deck_review_count"));
+        let s = state("web-route-deck-review-count");
+        assert_eq!(call(&s, "deck_review_count", &json!({})).unwrap(), json!(0));
+
+        let id = make_deck(&s, "Web Deck");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            let main = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            crate::deck::add_card(&conn, id, "1", Some(main), None, "live", None, 1).unwrap();
+            crate::deck::add_card(&conn, id, "3", Some(main), None, "live", None, 1).unwrap();
+            conn.execute(
+                "UPDATE deck_cards SET needs_review = 'Flagged.' WHERE card_id = '1'",
+                [],
+            )
+            .unwrap();
+        }
+        assert_eq!(call(&s, "deck_review_count", &json!({})).unwrap(), json!(1));
+    }
+
     /// **The folder tree's width and collapse, round-tripped through the route** — the pair beside
     /// the one above, and written separately because the thing to pin here is the *shape* rather
     /// than only the survival: the read answers an object with both fields, `width` is `null`
@@ -4175,11 +4210,12 @@ mod tests {
         // array as it stands here — which answered 180 before it, not the 179 above, so the
         // literal had already moved once without this paragraph.
         //
-        // **182 since the home widgets' second round routed `deck_completion`**, counted with the
-        // same `awk`. If a later merge turns this red, take the number from `left`.
+        // **183 since the home widgets' second round routed `deck_completion` and
+        // `deck_review_count`**, counted with the same `awk`. If a later merge turns this red,
+        // take the number from `left`.
         assert_eq!(
             COMMANDS.len(),
-            182,
+            183,
             "update this number when a command is added"
         );
     }
