@@ -11,6 +11,7 @@ import { readWishDrag } from "./wishDrag";
 import type {
   CardSummary,
   ImportMatch,
+  ShelfCount,
   WishlistFolder,
   WishlistFolderSummary,
   WishlistQuery,
@@ -19,7 +20,6 @@ import type {
 } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
-import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import { boxed, pointerDrag, recordDrags, startPointerDrag } from "@/test-drag";
 import { openDropdown, pickOption } from "@/test-dropdown";
 
@@ -66,6 +66,11 @@ const listSets = vi.hoisted(() => vi.fn());
 const prefetchImages = vi.hoisted(() => vi.fn());
 const searchOpen = vi.hoisted(() => vi.fn());
 const setSearchOpen = vi.hoisted(() => vi.fn());
+// The shelves' two reads and their one write. Every one is a real `invoke`, so an unmocked member
+// is a `TypeError` on a page that reads the counts and the folds before it draws a shelf.
+const wishlistShelfCounts = vi.hoisted(() => vi.fn());
+const shelfFolds = vi.hoisted(() => vi.fn());
+const setShelfFolds = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -96,12 +101,17 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     prefetchImages,
     searchOpen,
     setSearchOpen,
+    wishlistShelfCounts,
+    shelfFolds,
+    setShelfFolds,
   },
 }));
 
 import { WishlistPage } from "./WishlistPage";
+import { NEW_FOLDER_SHELF } from "./wishShelfPlan";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
+import { SHELF_FOLDS_KEY } from "@/features/shelves/useShelfFolds";
 import { useAppStore } from "@/lib/store";
 
 /** The one printing `import_resolve` answers with for the import test below —
@@ -255,6 +265,61 @@ const SUMMARY: WishlistFolderSummary[] = [
 const page = (items: WishRow[], total = items.length) => ({ items, total });
 
 /**
+ * What `wishlist_shelf_counts` answers for a set of wishes — one row per non-empty shelf, `tiles`
+ * as rows and `value` as `unit × quantity`, `null` where nothing in the shelf is priced. Only the
+ * shelves asked about, as the command is scoped. `peek` is up to four card ids per shelf taken from
+ * `unfiltered` — the command's peek ignores the search, so a heading's thumbnails do not change
+ * with the box.
+ */
+function countsFor(
+  items: readonly WishRow[],
+  shelves?: readonly number[],
+  unfiltered: readonly WishRow[] = items,
+): ShelfCount[] {
+  const peekOf = (id: number) =>
+    unfiltered
+      .filter((w) => (w.folderId ?? 0) === id)
+      .map((w) => w.artCardId ?? w.cardId)
+      .filter((cardId): cardId is string => cardId !== null)
+      .slice(0, 4);
+  const by = new Map<number, ShelfCount>();
+  for (const w of items) {
+    const id = w.folderId ?? 0;
+    if (shelves !== undefined && !shelves.includes(id)) continue;
+    const c = by.get(id) ?? {
+      folderId: id,
+      tiles: 0,
+      copies: 0,
+      value: null,
+      unpriced: 0,
+      peek: peekOf(id),
+    };
+    c.tiles += 1;
+    c.copies += w.quantity;
+    if (w.unitPrice === null) c.unpriced += 1;
+    else c.value = (c.value ?? 0) + w.unitPrice * w.quantity;
+    by.set(id, c);
+  }
+  return [...by.values()];
+}
+
+/**
+ * A list mock that answers the way `wishlist_list` does since `shelves`: the pool's wishes on the
+ * shelves asked for, whose name contains the box's text. A fixture that ignored `shelves` would
+ * draw every wish on whatever shelf it names whether the page asked for it or not.
+ */
+const listByShelves = (pool: readonly WishRow[]) => async (q: WishlistQuery) => {
+  const text = q.text?.toLowerCase() ?? "";
+  return page(
+    pool.filter(
+      (w) =>
+        (q.shelves === undefined || q.shelves.includes(w.folderId ?? 0)) &&
+        w.name.toLowerCase().includes(text),
+    ),
+  );
+};
+
+/**
  * What the reconciler actually writes into `needs_review` — `reconcile::flag_deleted`'s
  * sentence at its real length. The wishlist is flagged by the same pass as the collection
  * (`reconcile::sweep_orphans` walks both tables), so the band has the same job here.
@@ -336,7 +401,11 @@ const total = async (currency: "USD" | "EUR" = "USD") =>
  */
 function wrap(
   ui: ReactElement,
-  { staleTime = 0, searchOpen: panelOpen = false }: { staleTime?: number; searchOpen?: boolean } = {},
+  {
+    staleTime = 0,
+    searchOpen: panelOpen = false,
+    folds = {},
+  }: { staleTime?: number; searchOpen?: boolean; folds?: Record<string, boolean> } = {},
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime } } });
   /**
@@ -357,6 +426,9 @@ function wrap(
    * query is `staleTime: Infinity` — a seeded entry is the answer, with no round trip to race.
    */
   client.setQueryData(SEARCH_OPEN_KEY, { wishlist: panelOpen });
+  // The stored folds, seeded for `useSearchOpen`'s reason one line up: `useShelfFolds` is
+  // `staleTime: Infinity`, so a seeded entry is the answer with no round trip to race.
+  client.setQueryData(SHELF_FOLDS_KEY, { collection: {}, wishlist: folds });
   return {
     client,
     ...render(
@@ -380,43 +452,11 @@ function rightClick(element: HTMLElement): void {
   element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 }
 
-/**
- * The **wish** drag sources on screen, in document order.
- *
- * A bare `[data-dnd-source]` used to mean "a table row or a wall tile" and stopped meaning it the
- * day folder cards became draggable: the cabinet is drawn *above* the list, so the first match on
- * a page with folders is a drawer. Filtering by the wall it sits in rather than by the element's
- * own shape, because both are `<li>`s and both are draggable — the difference is which list they
- * belong to.
- */
-const cardSources = (container: HTMLElement): HTMLElement[] =>
-  [...container.querySelectorAll<HTMLElement>(`[${DND_SOURCE_ATTR}]`)].filter(
-    (element) => element.closest('[aria-label="Folders"]') === null,
-  );
-
-/**
- * A folder card by name, and the inner box its **folder** drop target is registered on.
- *
- * Two boxes rather than one, and with both drags on `@dnd-kit/dom` the nesting is free: the wish
- * target keeps the `<li>` and the folder target takes the wrapper inside it, and each one's
- * `accept` refuses the other's payload before either box is measured, so the pointer never has to
- * choose. `WishFolderCard` carries the rest of the reason. {@link folderSlot} is the inner box,
- * and it is what a folder drag is measured against and aimed at.
- */
-const folderCard = (name: string): HTMLElement =>
-  screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
-const folderSlot = (name: string): HTMLElement =>
-  folderCard(name).firstElementChild as HTMLElement;
-
-/**
- * The **up one level** tile, by the level it leads to.
- *
- * One box rather than two, where a folder card has a `<li>` and a slot inside it: this tile has a
- * single landing — every part of it means "up there" — so both drop targets register on the `<li>`
- * and there is nothing for a second box to be measured for. `ParentFolderCard` carries the rest.
- */
-const upTile = (label: string): HTMLElement =>
-  screen.getByRole("button", { name: `Up one level to ${label}` }).closest("li")!;
+/** The **wish** drag sources on screen, in document order. A heading is picked up by
+ *  `folderDraggable`, which marks nothing, so every `[data-dnd-source]` is a wish row or tile. */
+const cardSources = (container: HTMLElement): HTMLElement[] => [
+  ...container.querySelectorAll<HTMLElement>(`[${DND_SOURCE_ATTR}]`),
+];
 
 /**
  * Whether a card on the wall is wearing either drop mark.
@@ -445,6 +485,71 @@ const wearsDropMark = (card: HTMLElement): boolean =>
   );
 
 /**
+ * A shelf's heading, by folder id — `0` is Not sorted, `NEW_FOLDER_SHELF` the folder being added.
+ *
+ * **Addressed by the row `ShelfHeading` stamps (`data-shelf-heading`), which is the one element its
+ * drop target and its drag source both attach to**, and that is the reason rather than a
+ * convenience: dnd-kit hit-tests that element's own rectangle and reads a press off it, and jsdom
+ * measures every rectangle as zero, so a test that boxed an ancestor of the chevron instead would
+ * drop onto nothing, or press nothing, for a reason that is not the page's.
+ */
+const queryHeading = (id: number) =>
+  document.querySelector<HTMLElement>(`[data-shelf-heading="${id}"]`);
+const heading = (id: number): HTMLElement => {
+  const found = queryHeading(id);
+  if (found === null) throw new Error(`no heading for shelf ${id}`);
+  return found;
+};
+const findHeading = (id: number) => waitFor(() => heading(id));
+/** The folder's own name on its heading — the press that opens it (spec §3.7). */
+const titleOf = (id: number, name: string) => within(heading(id)).getByRole("button", { name });
+/** The chevron, named "Collapse Binder" / "Expand Binder" (spec §3.2). */
+const chevronOf = (id: number, name: string) =>
+  within(heading(id)).getByRole("button", { name: new RegExp(`^(Collapse|Expand) ${name}$`) });
+/** The heading's `⋯` — found by what it declares rather than by a name, so the suite does not
+ *  pin Task 3's wording of it. */
+const menuOf = (id: number): HTMLElement => {
+  const found = within(heading(id))
+    .getAllByRole("button")
+    .find((button) => button.getAttribute("aria-haspopup") === "menu");
+  if (found === undefined) throw new Error(`no ⋯ on shelf ${id}`);
+  return found;
+};
+const renameOf = (id: number) => within(heading(id)).getByRole("button", { name: /^Rename/ });
+const addFolderOn = (id: number) =>
+  within(heading(id)).getByRole("button", { name: /^Add folder/ });
+/** The empty folders' dashed boxes on screen, in document order — `EmptyShelf` stamps
+ *  `data-shelf-empty` with no value, so a case that needs one box keeps the wall to one empty
+ *  folder rather than guessing which box follows which heading. */
+const emptyBoxes = () => [...document.querySelectorAll<HTMLElement>("[data-shelf-empty]")];
+/** The path row's Add folder — the one that is not on any heading. */
+const pathAddFolder = (): HTMLElement => {
+  const found = screen
+    .getAllByRole("button", { name: /^Add folder/ })
+    .find((button) => button.closest("[data-shelf-heading]") === null);
+  if (found === undefined) throw new Error("no Add folder on the path row");
+  return found;
+};
+/** The wall, in whichever view is on. */
+const wallOf = (): HTMLElement =>
+  screen.queryByRole("table", { name: "Your wishlist" }) ??
+  screen.getByRole("group", { name: "Your wishlist" });
+/** The naming field — the only text box on the wall; the filter box is a `searchbox`. */
+const nameField = () => within(wallOf()).findByRole("textbox");
+const follows = (a: Node, b: Node) =>
+  (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+/** A header figure's own value — a `<dd>` beside its `<dt>`. */
+const figure = (label: string) => screen.getByText(label).nextElementSibling as HTMLElement;
+/**
+ * Which level the last list read was for. The first shelf asked is the level's own headless shelf
+ * inside a folder, and Not sorted (`0`) at the root — so `null` is the root.
+ */
+const levelAsked = (): number | null => {
+  const first = lastQuery().shelves?.[0];
+  return first === undefined || first === 0 ? null : first;
+};
+
+/**
  * A wish carried out of the list and onto one of the two places it can be filed — a folder card,
  * or a segment of the breadcrumb.
  *
@@ -468,27 +573,33 @@ async function wishOnto(source: HTMLElement, target: HTMLElement): Promise<void>
  *
  * jsdom has no layout engine, so every real `getBoundingClientRect` is four zeroes and
  * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box, and
- * a pointer-driven library needs the pointer to be somewhere real as well. The card is read along
- * the **horizontal** axis, since the wall lays its drawers out as a grid; `EDGE_ZONE` is a
+ * a pointer-driven library needs the pointer to be somewhere real as well. `EDGE_ZONE` is a
  * quarter, so a tenth in from either end is unambiguously beside and the middle is unambiguously
  * inside. `CollectionPage.test.tsx`'s arrangement, for its reason.
  */
 const SOURCE_BOX = new DOMRect(0, 0, 100, 100);
 const CARD_BOX = new DOMRect(400, 400, 100, 100);
-const AT_START = { x: 0.1 };
-const AT_MIDDLE = { x: 0.5 };
-const AT_END = { x: 0.9 };
 
-/** Give a folder card's drop target somewhere to be. */
-const stand = (name: string) => {
-  folderSlot(name).getBoundingClientRect = () => CARD_BOX;
+/**
+ * One box and three landings along the **vertical** axis now: a heading is a row, so before and
+ * after are its top and bottom quarters (`EDGE_ZONE`), and the middle half is inside.
+ */
+const AT_TOP = { y: 0.1 };
+const AT_MIDDLE = { y: 0.5 };
+const AT_BOTTOM = { y: 0.9 };
+
+/** Give a heading's drop target somewhere to be. */
+const stand = (id: number) => {
+  heading(id).getBoundingClientRect = () => CARD_BOX;
 };
 
-/** Pick a folder card up. dnd-kit reads the press coordinate off the source's own box, so a
- *  source with no box presses the origin — and the drag then starts nowhere near the wall. */
-async function holdCard(name: string) {
-  folderCard(name).getBoundingClientRect = () => SOURCE_BOX;
-  return startPointerDrag(folderCard(name));
+/** Pick a heading up. The drag source is the heading's own row — `ShelfHeading` attaches `dragRef`
+ *  where it attaches `dropRef` — boxed here because dnd-kit reads the press off its rectangle. A
+ *  heading that is not a source (Not sorted, a deck's list) answers `started: false`. */
+async function holdHeading(id: number) {
+  const source = heading(id);
+  source.getBoundingClientRect = () => SOURCE_BOX;
+  return startPointerDrag(source);
 }
 
 /**
@@ -516,10 +627,10 @@ beforeEach(() => {
   wishlistImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   // **A wishlist nobody has filed, which is the case every block but the last one is about.** The
-  // cabinet draws no breadcrumb, no folder card and nothing above the wall without folders — all
-  // that is left of it is the `New folder` tile, which is drawn over an empty cabinet on purpose
-  // (see `the folders`' trap-door case) and reaches nothing unless a test presses it — so this
-  // default is what keeps the rest of this file a test of the list rather than of the tree.
+  // cabinet draws no breadcrumb, no folder heading and nothing above the wall without folders —
+  // all that is left of it is the path row's Add folder, which reaches nothing unless a test
+  // presses it — so this default is what keeps the rest of this file a test of the list rather
+  // than of the tree.
   wishlistFolderList.mockReset().mockResolvedValue([]);
   wishlistFolderSummary.mockReset().mockResolvedValue([]);
   wishlistFolderCreate.mockReset().mockResolvedValue(SOMEDAY);
@@ -540,6 +651,20 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ moves: [], considered: 1, alreadyCheapest: 1, skipped: 0 });
   wishlistOptimizeApply.mockReset().mockResolvedValue({ results: [] });
+  // **The counts follow the list mock, whatever a case sets it to.** Read off the list mock's own
+  // implementation rather than by calling it, so it records no call — `lastQuery()` and every
+  // `toHaveBeenCalledTimes` above stay about the list — and so a case that only sets the list gets
+  // headings and header figures that agree with it for free.
+  wishlistShelfCounts.mockReset().mockImplementation(async (q: WishlistQuery) => {
+    const list = wishlistList.getMockImplementation();
+    if (list === undefined) return [];
+    const answer = await list({ ...q, limit: 500, offset: 0 });
+    // The peek is unfiltered: the same shelves, with the box's text taken off.
+    const all = await list({ ...q, text: undefined, limit: 500, offset: 0 });
+    return countsFor(answer.items, q.shelves, all.items);
+  });
+  shelfFolds.mockReset().mockResolvedValue({ collection: {}, wishlist: {} });
+  setShelfFolds.mockReset().mockResolvedValue(undefined);
   searchCards.mockReset().mockResolvedValue({ items: [SEARCH_BOLT], total: 1, totalIsCapped: false });
   // Answered **cold** — `ready: false`, every map empty — so nothing in the panel's filter row
   // greys and every control keeps its name. `DeckSearchPanel.test.tsx`'s fixture.
@@ -565,18 +690,9 @@ beforeEach(() => {
     wishlistView: "table",
     selectedCardId: null,
     importDefaults: { condition: "NM", finish: null },
-    // **Flatten is a store field now, and a store field outlives `cleanup()`.** The wishlist's
-    // default did not move — this cabinet's root is still every unfiled wish and there is no
-    // v25 conversion behind it, so `store.ts` opens it on the tree exactly as it always did —
-    // but the *press* now leaks. It did: the two cases below that flatten the list left the
-    // switch on, and every folder case after them ran over a page with no folder cards in it.
-    // Written out rather than left to the default, so the leak cannot come back through a
-    // default that moves the way the collection's just did.
-    wishlistFlattened: false,
     // **The folder hand-off, which this page *consumes*** — so a case that left one written would
-    // open the next case inside a drawer nothing asked for. Store state outlives `cleanup()`,
-    // exactly as `wishlistFlattened` above does, and the block near the end writes one in every
-    // case.
+    // open the next case inside a drawer nothing asked for. Store state outlives `cleanup()`, and
+    // the block near the end writes one in every case.
     pendingFolder: null,
   });
 });
@@ -1799,7 +1915,13 @@ describe("which box scrolls the wishlist", () => {
     // Read bottom-up, because that is the order the chain fails in: the scrollport is the
     // `VirtualTable`'s, it has a height only while the desk row has one, and the desk row has one
     // only while the section is pinned to `main`.
-    expect(table).toHaveClass("overflow-auto");
+    //
+    // **The scrollport is the table's parent on shelves**: the table always draws the sticky bar
+    // now, and while it is live `VirtualTable` scrolls a plain box holding the bar's anchor and the
+    // `role="table"` element side by side — the bar may not live inside a table.
+    const scrollport = table.parentElement as HTMLElement;
+    expect(scrollport.querySelector(":scope > [data-sticky-band]")).not.toBeNull();
+    expect(scrollport).toHaveClass("overflow-auto");
     expect(deskOf(table)).toHaveClass("min-h-0", "flex-1");
     expect(sectionOf(table)).toHaveClass("h-full");
   });
@@ -1864,56 +1986,470 @@ describe("the walk it publishes for the printings modal", () => {
 });
 
 /**
- * The cabinet: the breadcrumb, the folder cards above whichever view is on, and the four writes
- * that shape a folder. Design spec §4 and §9.
- *
- * **The filing is the backend's and nothing here filters.** `wishlist_list` takes `folderId` and
- * `flatten`, so what these tests drive is which read the page asks for and what it draws around
- * the answer — which is why the list mock below answers *per query* rather than resolving once.
+ * **Shelves** (spec §3): every card at and below the level, one shelf per folder, nested, in tree
+ * order — the page a reader who files everything lands on instead of an empty one.
  */
-describe("the folders", () => {
-  /** The root's two wishes, `Ordered`'s one, and all three when the filing is ignored. */
-  const listByLevel = async (q: WishlistQuery) =>
-    q.flatten === true
-      ? page([BOLT, ANY, FILED])
-      : page(q.folderId === 1 ? [FILED] : q.folderId === undefined ? [BOLT, ANY] : []);
-
+describe("the shelves", () => {
   beforeEach(() => {
-    wishlistList.mockReset().mockImplementation(listByLevel);
+    wishlistList.mockReset().mockImplementation(listByShelves([BOLT, ANY, FILED]));
     wishlistFolderList.mockResolvedValue(FOLDERS);
     wishlistFolderSummary.mockResolvedValue(SUMMARY);
   });
 
-  /** The `Wishes` figure's own value, which is a `<dd>` beside the label rather than inside it. */
-  const wishes = () => screen.getByText("Wishes").nextElementSibling as HTMLElement;
+  /**
+   * **The headline bug** (spec §1): with everything filed the old root asked for the wishes filed
+   * nowhere, drew a folder band and nothing else, and the header read **Wishes 0** over a list of
+   * twenty-five. Every wish is on the wall now, under its folder's heading, and counted.
+   */
+  it("shows every wish when everything is filed, and counts all of them", async () => {
+    const filed = Array.from(
+      { length: 25 },
+      (_, i): WishRow => ({
+        ...BOLT,
+        id: 100 + i,
+        name: `Filed ${i + 1}`,
+        cardId: `f${i}`,
+        artCardId: `f${i}`,
+        folderId: i < 3 ? ORDERED.id : i < 5 ? BACKORDERED.id : SOMEDAY.id,
+        quantity: 1,
+        unitPrice: 2,
+      }),
+    );
+    wishlistList.mockImplementation(listByShelves(filed));
+    wrap(<WishlistPage />);
+
+    await waitFor(() => expect(figure("Wishes")).toHaveTextContent("25"));
+    expect(within(await total()).getByText("$50.00")).toBeInTheDocument();
+    expect(await screen.findByText("Filed 1")).toBeInTheDocument();
+    expect(screen.getByText("Filed 4")).toBeInTheDocument();
+    expect(follows(heading(ORDERED.id), screen.getByText("Filed 1"))).toBe(true);
+    expect(follows(heading(BACKORDERED.id), screen.getByText("Filed 4"))).toBe(true);
+    // Nothing is loose, so there is no Not sorted shelf — and no empty-page sentence either.
+    expect(queryHeading(0)).toBeNull();
+    expect(screen.queryByText(/Nothing on your wishlist yet/)).toBeNull();
+    expect(lastQuery().shelves).toEqual([0, ORDERED.id, BACKORDERED.id, SOMEDAY.id]);
+  });
+
+  /** Spec §3.6: `Total cost` stops being a sum over the rows that happen to be loaded, and the
+   *  "N of M counted" note that owned up to that has nothing left to own up to. */
+  it("prices the header from the counts, not from the page of rows that happens to be loaded", async () => {
+    wishlistList.mockReset().mockResolvedValue(page([BOLT], 2));
+    wishlistShelfCounts.mockResolvedValue([
+      { folderId: 0, tiles: 2, copies: 5, value: 1614, unpriced: 1, peek: [] },
+    ]);
+    wishlistFolderList.mockResolvedValue([]);
+    wrap(<WishlistPage />);
+
+    await screen.findByText("Lightning Bolt");
+    await waitFor(() => expect(figure("Wishes")).toHaveTextContent("2"));
+    const cost = await total();
+    expect(within(cost).getByText("$1,614.00")).toBeInTheDocument();
+    expect(within(cost).getByText("1 unpriced")).toBeInTheDocument();
+    expect(screen.queryByText(/counted/)).toBeNull();
+  });
+
+  /** Decision 3: cards in no folder come first, under Not sorted — which is not a folder, so its
+   *  title is plain text and it has no buttons but its chevron (spec §3.2). */
+  it("draws Not sorted first, as a heading with nothing on it but its chevron", async () => {
+    wrap(<WishlistPage />);
+    const loose = await findHeading(0);
+
+    expect(follows(loose, heading(ORDERED.id))).toBe(true);
+    expect(chevronOf(0, "Not sorted")).toHaveAttribute("aria-expanded", "true");
+    expect(within(loose).queryByRole("button", { name: "Not sorted" })).toBeNull();
+    expect(within(loose).queryByRole("button", { name: /^Add folder/ })).toBeNull();
+    expect(within(loose).queryByRole("button", { name: /^Rename/ })).toBeNull();
+    expect(
+      within(loose)
+        .queryAllByRole("button")
+        .some((b) => b.getAttribute("aria-haspopup") === "menu"),
+    ).toBe(false);
+  });
+
+  it("draws no Not sorted shelf when nothing is loose", async () => {
+    wishlistList.mockImplementation(listByShelves([FILED]));
+    wrap(<WishlistPage />);
+
+    await screen.findByText("Rhystic Study");
+    expect(queryHeading(0)).toBeNull();
+  });
+
+  /**
+   * **Review Focus 2**: a folder whose cards are all in its sub-folders is a container — its
+   * heading and its rail over theirs, its figures their sum, and no dashed "Empty" box under it
+   * contradicting the cards two headings down.
+   */
+  it("draws a folder whose cards are all in its sub-folders as a container, with no empty box", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    const MANA: WishlistFolder = {
+      id: 10,
+      parentId: null,
+      name: "Mana base",
+      sortOrder: 0,
+      managedDeckId: null,
+    };
+    const FETCH: WishlistFolder = {
+      id: 11,
+      parentId: 10,
+      name: "Fetchlands",
+      sortOrder: 0,
+      managedDeckId: null,
+    };
+    const SHOCK: WishlistFolder = {
+      id: 12,
+      parentId: 10,
+      name: "Shocks",
+      sortOrder: 1,
+      managedDeckId: null,
+    };
+    const land = (id: number, name: string, folderId: number): WishRow => ({
+      ...BOLT,
+      id,
+      name,
+      cardId: `l${id}`,
+      artCardId: `l${id}`,
+      folderId,
+      quantity: 1,
+      unitPrice: 20,
+    });
+    wishlistFolderList.mockResolvedValue([MANA, FETCH, SHOCK]);
+    wishlistFolderSummary.mockResolvedValue([
+      { folderId: 11, wishes: 2, copies: 2, cost: 40, unpriced: 0 },
+      { folderId: 12, wishes: 1, copies: 1, cost: 15, unpriced: 0 },
+    ]);
+    wishlistList.mockImplementation(
+      listByShelves([
+        land(201, "Scalding Tarn", 11),
+        land(202, "Misty Rainforest", 11),
+        land(203, "Steam Vents", 12),
+      ]),
+    );
+    wrap(<WishlistPage />);
+
+    await screen.findByAltText("Scalding Tarn");
+    await waitFor(() => expect(heading(MANA.id)).toHaveTextContent("3 wishes · $55.00"));
+    // No dashed box anywhere on this wall: Mana base holds folders, and both of those hold cards.
+    expect(emptyBoxes()).toEqual([]);
+    expect(follows(heading(MANA.id), heading(FETCH.id))).toBe(true);
+    expect(follows(heading(FETCH.id), screen.getByAltText("Scalding Tarn"))).toBe(true);
+    expect(heading(SHOCK.id)).toBeInTheDocument();
+  });
+
+  /**
+   * **Review Focus 3**: a shut parent takes its whole subtree with it — the nested heading and every
+   * card under either — none of it is asked for, and Expand all brings all of it back, the nested
+   * shelf included.
+   */
+  it("hides a collapsed folder's whole subtree, asks for none of it, and brings it back with Expand all", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Rhystic Study");
+    await findHeading(BACKORDERED.id);
+
+    await user.click(chevronOf(ORDERED.id, "Ordered"));
+
+    expect(setShelfFolds).toHaveBeenCalledWith("wishlist", { [ORDERED.id]: true });
+    await waitFor(() => expect(screen.queryByText("Rhystic Study")).toBeNull());
+    expect(queryHeading(BACKORDERED.id)).toBeNull();
+    expect(chevronOf(ORDERED.id, "Ordered")).toHaveAttribute("aria-expanded", "false");
+    await waitFor(() => expect(lastQuery().shelves).toEqual([0, SOMEDAY.id]));
+    // Still counted: the shut heading and the header both read the counts, which cover it.
+    expect(figure("Wishes")).toHaveTextContent("3");
+
+    await user.click(screen.getByRole("button", { name: "Expand all" }));
+
+    expect(setShelfFolds).toHaveBeenLastCalledWith("wishlist", {
+      "0": null,
+      [ORDERED.id]: null,
+      [BACKORDERED.id]: null,
+      [SOMEDAY.id]: null,
+    });
+    expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
+    expect(await findHeading(BACKORDERED.id)).toBeInTheDocument();
+  });
+
+  it("shuts every shelf below the level with Collapse all", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "Collapse all" }));
+
+    expect(setShelfFolds).toHaveBeenLastCalledWith("wishlist", {
+      "0": true,
+      [ORDERED.id]: true,
+      [BACKORDERED.id]: true,
+      [SOMEDAY.id]: true,
+    });
+    await waitFor(() => expect(screen.queryByText("Lightning Bolt")).toBeNull());
+    expect(chevronOf(0, "Not sorted")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  /**
+   * **Review Focus 4**: a search whose only match is two drawers down inside a shut parent opens
+   * the path to it — the parent drawn as a container reading `1 of 3` — hides every shelf with no
+   * match, and emptying the box puts the stored collapse back **without writing anything**.
+   */
+  it("opens a collapsed parent for a search whose only match is inside it, and shuts it again when the box empties", async () => {
+    const DEEP: WishRow = {
+      ...FILED,
+      id: 13,
+      folderId: BACKORDERED.id,
+      name: "Mystic Remora",
+      cardId: "c-remora",
+      artCardId: "c-remora",
+    };
+    wishlistList.mockImplementation(listByShelves([BOLT, ANY, DEEP]));
+    const user = userEvent.setup();
+    wrap(<WishlistPage />, { folds: { [ORDERED.id]: true } });
+    await screen.findByText("Lightning Bolt");
+    expect(screen.queryByText("Mystic Remora")).toBeNull();
+
+    await user.type(screen.getByLabelText("Search your wishlist"), "remora");
+
+    expect(await screen.findByText("Mystic Remora")).toBeInTheDocument();
+    expect(chevronOf(ORDERED.id, "Ordered")).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("1 of 3 wishes"));
+    expect(heading(BACKORDERED.id)).toHaveTextContent("1 of 2 wishes");
+    expect(queryHeading(0)).toBeNull();
+    expect(queryHeading(SOMEDAY.id)).toBeNull();
+
+    await user.clear(screen.getByLabelText("Search your wishlist"));
+
+    await waitFor(() => expect(screen.queryByText("Mystic Remora")).toBeNull());
+    expect(chevronOf(ORDERED.id, "Ordered")).toHaveAttribute("aria-expanded", "false");
+    expect(setShelfFolds).not.toHaveBeenCalled();
+  });
+
+  /** The heading's own Add folder makes a folder *inside* that folder, drawn last among its
+   *  children — after `Backordered`, before the next root folder. */
+  it("adds a folder inside the heading it is pressed on, drawn last among that folder's own", async () => {
+    wrap(<WishlistPage />);
+    await findHeading(SOMEDAY.id);
+
+    await userEvent.click(addFolderOn(ORDERED.id));
+
+    const field = await nameField();
+    expect(heading(NEW_FOLDER_SHELF)).toContainElement(field);
+    expect(follows(heading(BACKORDERED.id), heading(NEW_FOLDER_SHELF))).toBe(true);
+    expect(follows(heading(NEW_FOLDER_SHELF), heading(SOMEDAY.id))).toBe(true);
+    await userEvent.keyboard("Paid for{Enter}");
+    expect(wishlistFolderCreate).toHaveBeenCalledWith(ORDERED.id, "Paid for");
+  });
+
+  /** WCAG 2.5.7: the non-drag way to reorder, through the same `placeFolder` a before/after drop
+   *  writes through — greyed, with its reason, where there is nowhere to go. */
+  it("moves a folder up and down its own level from the heading's ⋯", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await findHeading(SOMEDAY.id);
+
+    await user.click(menuOf(ORDERED.id));
+    let menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: /^Move up/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.click(within(menu).getByRole("menuitem", { name: "Move down" }));
+    await waitFor(() =>
+      expect(wishlistFolderReorder).toHaveBeenNthCalledWith(1, null, [SOMEDAY.id, ORDERED.id]),
+    );
+
+    await user.click(menuOf(SOMEDAY.id));
+    menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: /^Move down/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.click(within(menu).getByRole("menuitem", { name: "Move up" }));
+    await waitFor(() =>
+      expect(wishlistFolderReorder).toHaveBeenNthCalledWith(2, null, [SOMEDAY.id, ORDERED.id]),
+    );
+
+    // An only child has neither.
+    await user.click(menuOf(BACKORDERED.id));
+    menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: /^Move up/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(within(menu).getByRole("menuitem", { name: /^Move down/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  /** Spec §6: a heading takes a card expanded **or collapsed** — a shut shelf is still a drawer. */
+  it("files a wish dropped on a collapsed heading", async () => {
+    const { container } = wrap(<WishlistPage />, { folds: { [SOMEDAY.id]: true } });
+    await screen.findByText("Lightning Bolt");
+    expect(chevronOf(SOMEDAY.id, "Someday")).toHaveAttribute("aria-expanded", "false");
+
+    await wishOnto(cardSources(container)[0], heading(SOMEDAY.id));
+
+    expect(wishlistSetFolder).toHaveBeenCalledWith(BOLT.id, SOMEDAY.id);
+  });
+
+  /** And an empty folder's dashed box — the container the box's own words promise. */
+  it("files a wish dropped on an empty folder's dashed box", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wishlistFolderList.mockResolvedValue([SOMEDAY]);
+    const { container } = wrap(<WishlistPage />);
+    await screen.findByAltText("Lightning Bolt");
+    // `Someday` is the only folder on this wall, so its box is the only one.
+    const box = await waitFor(() => {
+      const [only] = emptyBoxes();
+      if (only === undefined) throw new Error("no empty box for Someday");
+      return only;
+    });
+
+    await wishOnto(cardSources(container)[0], box);
+
+    expect(wishlistSetFolder).toHaveBeenCalledWith(BOLT.id, SOMEDAY.id);
+  });
+
+  /**
+   * Spec §3.2: a collapsed heading peeks at its shelf's first cards — from the **counts**, because a
+   * shut shelf's cards are never fetched (spec §4.1). An open shelf peeks at nothing, since its
+   * cards are right under it.
+   */
+  it("peeks at a collapsed shelf's first cards, which it never fetched, and at nothing while open", async () => {
+    const DRAIN: WishRow = {
+      ...FILED,
+      id: 15,
+      name: "Mana Drain",
+      cardId: "c-drain",
+      artCardId: "c-drain",
+    };
+    wishlistList.mockImplementation(listByShelves([BOLT, ANY, FILED, DRAIN]));
+    wrap(<WishlistPage />, { folds: { [ORDERED.id]: true } });
+    await screen.findByText("Lightning Bolt");
+
+    await waitFor(() =>
+      expect(heading(ORDERED.id).querySelector("[data-shelf-peek]")?.children).toHaveLength(2),
+    );
+    // Pictures of the shelf, not its rows: neither wish is on the wall.
+    expect(screen.queryByText("Mana Drain")).toBeNull();
+    expect(screen.queryByText("Rhystic Study")).toBeNull();
+    expect(heading(0).querySelector("[data-shelf-peek]")).toBeNull();
+  });
+
+  /**
+   * Spec §3.3 and §3.10, the same rails in the table as on the wall: one per level, on the band and
+   * on every row under it. A depth-2 shelf — `Signed`, under `Backordered`, under `Ordered` — has
+   * two, at the wall's own offsets. A depth-0 shelf has none.
+   */
+  it("draws a rail per level on a nested shelf's band and on every row under it, in the table", async () => {
+    const SIGNED: WishlistFolder = {
+      id: 4,
+      parentId: BACKORDERED.id,
+      name: "Signed",
+      sortOrder: 0,
+      managedDeckId: null,
+    };
+    const INSIDE: WishRow = {
+      ...FILED,
+      id: 14,
+      folderId: SIGNED.id,
+      name: "Force of Will",
+      cardId: "c-fow",
+      artCardId: "c-fow",
+    };
+    wishlistFolderList.mockResolvedValue([...FOLDERS, SIGNED]);
+    wishlistList.mockImplementation(listByShelves([BOLT, ANY, FILED, INSIDE]));
+    wrap(<WishlistPage />);
+
+    const rowOf = (el: Element) => el.closest('[role="row"]') as HTMLElement;
+    const rails = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>("[data-shelf-rail]")];
+    const deep = rowOf(await screen.findByText("Force of Will"));
+
+    expect(rails(deep)).toHaveLength(2);
+    expect(rails(deep).map((rail) => rail.style.left)).toEqual(["11px", "43px"]);
+    expect(rails(rowOf(heading(SIGNED.id)))).toHaveLength(2);
+    expect(rails(rowOf(heading(BACKORDERED.id)))).toHaveLength(1);
+    expect(rails(rowOf(screen.getByText("Rhystic Study")))).toHaveLength(0);
+    expect(rails(rowOf(screen.getByText("Lightning Bolt")))).toHaveLength(0);
+  });
+
+  /**
+   * Spec §5.3 in the table: scrolled into a shelf's rows, the sticky bar names that shelf, and its
+   * **Top** scrolls the table back up. While the bar is live `VirtualTable` scrolls a plain box
+   * around the `role="table"` element — the bar may not live inside a table — so that box is the
+   * scroller, and the table itself scrolls nothing. **Asserted on the scroller's own `scrollTop`**,
+   * never on a `scrollTo` spy, which would pass over a press aimed at the table that no longer
+   * moves.
+   */
+  it("pins the shelf the table is scrolled inside, and its Top scrolls the table's own scroller", async () => {
+    wrap(<WishlistPage />);
+    const table = await screen.findByRole("table", { name: "Your wishlist" });
+    await screen.findByText("Lightning Bolt");
+    const scroller = table.parentElement as HTMLElement;
+    // jsdom lays nothing out and keeps no scroll offset, so the scroller is given one: 50px down
+    // puts `Lightning Bolt`, Not sorted's first row, under the column header's bottom edge.
+    let top = 0;
+    Object.defineProperty(scroller, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        top = value;
+      },
+    });
+    top = 50;
+    fireEvent.scroll(scroller);
+
+    const bar = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[data-shelf-sticky]");
+      if (found === null) throw new Error("no sticky bar");
+      return found;
+    });
+    expect(bar).toHaveAttribute("data-shelf-sticky", "0");
+    // Not inside the table: a `role="table"` may own rows and row groups only.
+    expect(table).not.toContainElement(bar);
+
+    await userEvent.click(within(bar).getByRole("button", { name: "Top" }));
+
+    expect(top).toBe(0);
+  });
+});
+
+/**
+ * The cabinet on shelves: the breadcrumb, a heading per folder, and the writes that shape a folder.
+ * Design spec §3–§6.
+ *
+ * **The filing is the backend's and nothing here filters.** `wishlist_list` takes the shelves to
+ * return, so what these tests drive is which shelves the page asks for and what it draws around the
+ * answer — which is why the list mock answers *per query* rather than resolving once.
+ */
+describe("the folders", () => {
+  beforeEach(() => {
+    wishlistList.mockReset().mockImplementation(listByShelves([BOLT, ANY, FILED]));
+    wishlistFolderList.mockResolvedValue(FOLDERS);
+    wishlistFolderSummary.mockResolvedValue(SUMMARY);
+  });
 
   /** The trail, re-queried each time: every level change replaces the whole `<nav>`. */
   const crumbs = () => screen.getByRole("navigation", { name: "Wishlist folders" });
 
   /**
-   * Whether a folder layer is drawn **in the strip above the wall** rather than in the wall
-   * itself — the two facts the strip is, now that naming and renaming have left it for the tiles:
-   * outside the `<ul>` of folder cards, and before it in document order.
+   * Whether a folder question is drawn **in the strip above the wall** — outside the wall and
+   * before it in document order, which is the whole of what "above" means to a reader.
    *
    * Structural rather than a class assertion, which is the only form of this that can go red for
    * the right reason: `rounded-lg border bg-surface` matches a dozen boxes on this page, jsdom
    * paints none of them, and a panel that had wandered into the wall would still be wearing the
-   * classes. Containment and order are the whole of what "above the wall" means to a reader.
+   * classes.
    */
   const drawnAboveTheWall = (panel: HTMLElement): boolean => {
-    const wall = screen.getByRole("list", { name: "Folders" });
-    return (
-      !wall.contains(panel) &&
-      (panel.compareDocumentPosition(wall) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-    );
+    const wall = wallOf();
+    return !wall.contains(panel) && follows(panel, wall);
   };
 
   /**
    * A real Escape at `document.body`, reporting whether **anything consumed it** —
    * `useDismissOnEscape.test.tsx`'s own helper, here because `userEvent.keyboard` throws the
-   * answer away and the answer is the whole of what the three "does nothing" tests below assert.
-   * A rung that acted on a press it had no level to spend it on would swallow it from everything
-   * behind this page, and a no-op state write looks identical on screen.
+   * answer away and the answer is the whole of what "leaves Escape alone" asserts. A rung that
+   * acted on a press it had no level to spend it on would swallow it from everything behind this
+   * page, and a no-op state write looks identical on screen.
    */
   const pressEscape = () => {
     const e = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
@@ -1922,45 +2458,45 @@ describe("the folders", () => {
   };
 
   /**
-   * **A folder card's face is the recursive total, and the summary row it is drawn from is not.**
-   * `Ordered` holds one wish itself and a sub-folder holding two, so a card reading its own row
+   * **A folder's heading reads the recursive total, and the summary row it is drawn from is not.**
+   * `Ordered` holds one wish itself and a sub-folder holding two, so a heading reading its own row
    * raw would say `1 wish` over a drawer holding three — and `Someday`, which has no row at all
    * because the read groups the wishes, would draw nothing rather than the `0 wishes` that is the
    * whole point of seeding an empty folder.
    */
-  it("adds a folder's sub-folders into the count on its card", async () => {
+  it("adds a folder's sub-folders into the figures on its heading", async () => {
     wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
 
-    expect(
-      await screen.findByRole("button", { name: /^Ordered folder, 3 wishes/ }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Someday folder, 0 wishes" })).toBeInTheDocument();
-    // Direct children only: a card is a door into one drawer, not a picture of the cabinet.
-    expect(screen.queryByRole("button", { name: /^Backordered folder/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00"));
+    // `Someday` has no summary row at all — the read groups the wishes — and still says so.
+    expect(heading(SOMEDAY.id)).toHaveTextContent("0 wishes");
+    // Every level below is on the wall now, not behind a door one drawer down.
+    expect(heading(BACKORDERED.id)).toHaveTextContent("2 wishes · $20.00");
+    expect(follows(heading(ORDERED.id), heading(BACKORDERED.id))).toBe(true);
+    expect(follows(heading(BACKORDERED.id), heading(SOMEDAY.id))).toBe(true);
   });
 
   /**
-   * Drilling in **replaces the level**: the read is a different read, so the root's wishes are
+   * Opening a folder **replaces the level**: the read is a different read, so the root's wishes are
    * gone rather than filtered out of a list that still holds them.
    */
-  it("drills into a folder, and the breadcrumb says where the reader is", async () => {
+  it("opens a folder from its heading's title, and the breadcrumb says where the reader is", async () => {
     wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
 
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
 
+    await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
+    expect(lastQuery().shelves).toEqual([ORDERED.id, BACKORDERED.id]);
     expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
-    await waitFor(() => expect(lastQuery().folderId).toBe(1));
     await waitFor(() => expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument());
-
-    // The last segment is where the reader is standing, so it is neither a link nor a target.
-    const trail = screen.getByRole("navigation", { name: "Wishlist folders" });
-    expect(within(trail).getByText("Ordered")).toHaveAttribute("aria-current", "page");
-    // And the way back out is the segment before it.
-    expect(within(trail).getByRole("button", { name: "Wishlist" })).toBeInTheDocument();
-    // One level down, the folder inside is what is drawn.
-    expect(
-      await screen.findByRole("button", { name: /^Backordered folder, 2 wishes/ }),
-    ).toBeInTheDocument();
+    expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+    expect(within(crumbs()).getByRole("button", { name: "Wishlist" })).toBeInTheDocument();
+    // The opened folder's own cards have no heading of their own — the path row names them
+    // (spec §3.1) — and its sub-folder is the top shelf now.
+    expect(queryHeading(ORDERED.id)).toBeNull();
+    expect(await findHeading(BACKORDERED.id)).toHaveTextContent("2 wishes · $20.00");
   });
 
   /**
@@ -1971,21 +2507,21 @@ describe("the folders", () => {
    * one-level test and strand anyone who had drilled twice, which is exactly the failure the
    * trail-derived parent exists to prevent.
    */
-  it("walks up one folder per Escape", async () => {
+  it("walks up one folder per Escape, after opening two by their titles", async () => {
     wrap(<WishlistPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
-    await userEvent.click(await screen.findByRole("button", { name: /^Backordered folder/ }));
-    await waitFor(() => expect(lastQuery().folderId).toBe(2));
+    await findHeading(ORDERED.id);
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await findHeading(BACKORDERED.id);
+    await userEvent.click(titleOf(BACKORDERED.id, "Backordered"));
+    await waitFor(() => expect(levelAsked()).toBe(BACKORDERED.id));
 
     await userEvent.keyboard("{Escape}");
 
-    // Its parent, not the root.
     expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
     expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
 
     await userEvent.keyboard("{Escape}");
 
-    // And out of the cabinet altogether: the root's own wishes are back.
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
     expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
   });
@@ -2006,46 +2542,9 @@ describe("the folders", () => {
     expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
   });
 
-  /**
-   * **Flatten is not a rung, and that is a decision.** Escape walks folders; it does not switch
-   * the chip off. With the filing ignored there is no level on screen to leave — the breadcrumb
-   * says so in inert words — so the press stays unconsumed and the chip stays on.
-   */
-  it("does not switch Flatten off", async () => {
-    wrap(<WishlistPage />);
-    await screen.findByText("Lightning Bolt");
-    await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
-    await screen.findByText("Rhystic Study");
-
-    expect(pressEscape()).toBe(false);
-
-    expect(screen.getByRole("button", { name: "Flatten" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByText("Wishlist · all folders")).toBeInTheDocument();
-  });
-
-  /**
-   * The same decision from the side that can actually go wrong: a reader who flattens *while
-   * standing in a folder* still has a `folderId` under the flattened list, and walking it would
-   * move a level they cannot see — so that un-flattening later would drop them somewhere they
-   * never left. Nothing moves, and pressing Flatten back off returns them to `Ordered`.
-   */
-  it("moves nothing under a flattened list, even standing in a folder", async () => {
-    wrap(<WishlistPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
-    await waitFor(() => expect(lastQuery().folderId).toBe(1));
-    await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
-    await waitFor(() => expect(lastQuery().flatten).toBe(true));
-
-    expect(pressEscape()).toBe(false);
-
-    await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
-    await waitFor(() =>
-      expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page"),
-    );
-  });
+  // DELETED: "does not switch Flatten off" and "moves nothing under a flattened list, even
+  // standing in a folder" — Flatten is gone (spec §7), and with it the one state Escape had to
+  // leave alone standing inside a folder.
 
   /**
    * **The filter box owns the first press, and only while it has something to spend it on.**
@@ -2058,8 +2557,9 @@ describe("the folders", () => {
    */
   it("spends Escape on the filter box first, and on the folder next", async () => {
     wrap(<WishlistPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
-    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+    await findHeading(ORDERED.id);
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     const box = screen.getByLabelText("Search your wishlist");
     await userEvent.type(box, "rhystic");
@@ -2067,239 +2567,135 @@ describe("the folders", () => {
     await userEvent.keyboard("{Escape}");
 
     expect(box).toHaveValue("");
-    // The folder is exactly where it was — this is the press that used to do both.
     expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
 
-    // Empty now, so the box has nothing to undo and the press falls through to the folder rung.
     await userEvent.keyboard("{Escape}");
 
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
     expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
   });
 
-  /**
-   * **Both header figures describe what is on screen**, which is the level rather than the list.
-   * A header that always totalled the whole wishlist would contradict every folder card under it.
-   */
-  it("counts what is on screen, at the root and inside a folder", async () => {
+  /** Spec §3.6: the figures count everything the wall covers — this level and every shelf below
+   *  it — which is what turned **Wishes 0** into the reader's real count. */
+  it("counts everything at and below the level, at the root and inside a folder", async () => {
     wrap(<WishlistPage />);
-
     await screen.findByText("Lightning Bolt");
-    expect(wishes()).toHaveTextContent("2");
+    // BOLT and ANY loose, and FILED under Ordered — the wish the drill-down used to hide.
+    await waitFor(() => expect(figure("Wishes")).toHaveTextContent("3"));
 
-    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
 
-    await waitFor(() => expect(wishes()).toHaveTextContent("1"));
+    await waitFor(() => expect(figure("Wishes")).toHaveTextContent("1"));
   });
 
-  /**
-   * **This cabinet opens on its tree, and it is now the only one of the two that does.**
-   *
-   * The collection's default flipped to flattened when its root was narrowed to "filed nowhere":
-   * since schema v25 every card in a deck sits in that deck's group, so an unflattened first
-   * launch there draws an empty binder (275 of 275 entries filed in deck groups, measured on the
-   * maintainer's own database). Nothing files a wish behind the reader's back — there are no deck
-   * groups here and no v25 conversion — so this root is still every wish the reader has not filed,
-   * and the tree is what they should meet.
-   *
-   * Pinned because the two switches are one feature and a change to one is a two-line edit away
-   * from being a change to both: a default flipped here would put the whole wishlist on one
-   * captioned list and take the cabinet off the opening screen, with nothing else going red.
-   * `getInitialState`, because this file's `beforeEach` writes the field and a test that only
-   * asserted the page would be pinning its own setup — `the wall`'s "is what the wishlist opens
-   * on" reads `wishlistView` the same way, for the same reason.
-   */
-  it("opens on the tree rather than flattened, which is where it parts company with the collection", async () => {
-    expect(useAppStore.getInitialState().wishlistFlattened).toBe(false);
-    useAppStore.setState({ wishlistFlattened: false });
+  /** Replaces "opens on the tree rather than flattened…": there is no flattened list to open on,
+   *  and the read that goes out is the shelves, never a folder id or a flag. */
+  it("asks for shelves, never for a folder or a flattened list", async () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
-    expect(screen.getByRole("button", { name: "Flatten" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
-    // The field is absent rather than `false`: `flatten` is "widen past the level", so the read
-    // that goes out at the root is the root's own read.
-    expect(lastQuery().flatten).toBeUndefined();
-    expect(screen.getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
+    expect(lastQuery().shelves).toEqual([0, ORDERED.id, BACKORDERED.id, SOMEDAY.id]);
+    expect(lastQuery()).not.toHaveProperty("folderId");
+    expect(lastQuery()).not.toHaveProperty("flatten");
+    expect(screen.queryByRole("button", { name: "Flatten" })).toBeNull();
   });
 
-  /**
-   * Flatten is not a filter: it says how much of the tree is on screen. With the filing ignored
-   * there is no level to be standing in, so the whole wall goes — the folder cards, the
-   * drill-down **and** the `New folder` tile, which is now inside it and therefore covered by the
-   * same gate rather than by a condition of its own. The control that promises "here" goes with
-   * the level it was promising about.
-   *
-   * The press is made on the **filter bar's** chip, which is where Flatten lives since it moved
-   * past that row's second hairline. Nothing about what the press does changed.
-   */
-  it("shows every wish while flattened, and puts the cabinet away", async () => {
+  /** Replaces "shows every wish while flattened, and puts the cabinet away": every wish is on the
+   *  root's wall now, each under its folder's heading — which is what Flatten's caption was for. */
+  it("shows every wish at the root, each under its folder's heading", async () => {
     wrap(<WishlistPage />);
-    await screen.findByText("Lightning Bolt");
+    const filed = await screen.findByText("Rhystic Study");
 
-    await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
-
-    await waitFor(() => expect(lastQuery().flatten).toBe(true));
-    expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
-    expect(wishes()).toHaveTextContent("3");
-    expect(screen.queryByRole("button", { name: /^Ordered folder/ })).not.toBeInTheDocument();
-    // The list itself, not only the cards in it: the tile that makes a folder is an `<li>` of
-    // this `<ul>`, so a wall that survived a flatten would still offer it.
-    expect(screen.queryByRole("list", { name: "Folders" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "New folder" })).not.toBeInTheDocument();
-    // Each wish captioned with where it is filed — without it, flattened is just the old list.
-    expect(screen.getAllByText("Filed in").length).toBeGreaterThan(0);
+    expect(follows(heading(0), screen.getByText("Lightning Bolt"))).toBe(true);
+    expect(follows(screen.getByText("Lightning Bolt"), heading(ORDERED.id))).toBe(true);
+    expect(follows(heading(ORDERED.id), filed)).toBe(true);
+    expect(follows(filed, heading(BACKORDERED.id))).toBe(true);
+    // The band it replaced is gone, and so is the word the band's tile spent.
+    expect(screen.queryByRole("list", { name: "Folders" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New folder" })).toBeNull();
   });
 
   /**
-   * **Flatten rides the filter bar now, past its second hairline with the layout pair — and the
-   * breadcrumb deliberately did not follow it.**
-   *
-   * The fence this page has always kept is "not among the *filters*", because `resetAll` leaves
-   * `flatten` and `folderId` alone and a filter Reset all cannot undo is a control that lies. The
-   * far side of that hairline is where `FilterBar` already keeps the sort and the grid-or-table
-   * pair, none of which is counted or cleared either — so Flatten satisfies the fence there,
-   * where the breadcrumb, which is a *place* rather than a way of drawing, does not.
+   * Replaces "draws Flatten with the layout pair on the filter bar…": the fence is still "not
+   * among the filters" — the shelf controls ride the path row beside the breadcrumb.
    *
    * **Asserted as a containment fact rather than as a class string**, which is the only form of
-   * this that cannot go quietly green: a class assertion passes over a chip rendered anywhere at
-   * all, and jsdom applies no container query, so nothing about where the two *paint* is
-   * observable here. What is observable is that one box holds Flatten and both layout buttons and
-   * does not hold the trail.
+   * this that cannot go quietly green: jsdom applies no container query, so nothing about where
+   * the controls *paint* is observable here. What is observable is which box holds what.
    */
-  it("draws Flatten with the layout pair on the filter bar, not with the breadcrumb", async () => {
+  it("draws the shelf controls on the path row, beside the breadcrumb and off the filter bar", async () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
-    const flatten = screen.getByRole("button", { name: "Flatten" });
-    const cardView = screen.getByRole("button", { name: "Card view" });
-    const tableView = screen.getByRole("button", { name: "Table view" });
-
-    // The nearest box that holds Flatten and the pair — walked rather than named, so the test
-    // says "these are grouped" and not "this markup is shaped like that".
-    let group = flatten.parentElement;
-    while (group !== null && !group.contains(cardView)) group = group.parentElement;
-    expect(group).not.toBeNull();
-    expect(group).toContainElement(tableView);
-
-    // And the half that would go green on its own: the trail is *outside* that box. Flatten
-    // beside the breadcrumb, as it was drawn until this moved, puts the two in one wrapper and
-    // this is the line that catches it.
-    expect(group).not.toContainElement(
-      screen.getByRole("navigation", { name: "Wishlist folders" }),
-    );
+    const expand = screen.getByRole("button", { name: "Expand all" });
+    let row = expand.parentElement;
+    while (row !== null && !row.contains(crumbs())) row = row.parentElement;
+    expect(row).not.toBeNull();
+    expect(row).toContainElement(screen.getByRole("button", { name: "Collapse all" }));
+    expect(row).toContainElement(pathAddFolder());
+    // The smallest box holding the trail and the controls holds no filter — it is the path row.
+    expect(row).not.toContainElement(screen.getByLabelText("Search your wishlist"));
   });
 
-  /**
-   * **The tile that makes a folder is the wall's first card**, which is the whole of what moving
-   * it down from the controls row was for: a reader looking for a drawer is already looking at
-   * the wall, so the drawer that is not there yet belongs in the same place.
-   *
-   * Asserted by *position in the list* rather than by "is somewhere on screen": a tile appended
-   * after twelve drawers is a control a reader scrolls a `max-h-44` band to find, and the whole
-   * claim of the move is that they do not have to.
-   */
-  it("puts New folder first in the wall of folder cards", async () => {
+  /** Replaces "puts New folder first in the wall of folder cards". */
+  it("offers Add folder on the path row, and no wall of folder cards", async () => {
     wrap(<WishlistPage />);
-    // **The wall is on screen before the folder list answers**, which is new: it is gated on
-    // `!flatten` rather than on having folders, so the tile is drawn over a `<ul>` the drawers
-    // have not arrived in yet. Waiting on the *list* would therefore read the wall one card long
-    // and pass this test by measuring the wrong moment.
-    await screen.findByRole("button", { name: /^Ordered folder/ });
+    await findHeading(ORDERED.id);
 
-    const wall = screen.getByRole("list", { name: "Folders" });
-    const cards = within(wall).getAllByRole("listitem");
-
-    expect(within(cards[0]).getByRole("button", { name: "New folder" })).toBeInTheDocument();
-    // The two seeded root folders behind it, in the order the tree drew them.
-    expect(within(cards[1]).getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
-    expect(within(cards[2]).getByRole("button", { name: /^Someday folder/ })).toBeInTheDocument();
+    expect(pathAddFolder()).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Folders" })).toBeNull();
   });
 
   /**
-   * **The trap door, and the reason the wall has a gate of its own.**
-   *
-   * The wall used to be drawn on `filed` — "this level holds drawers" — which was free while
-   * `+ New folder` sat in a row beside the breadcrumb. With the tile *inside* the wall that gate
-   * becomes a wishlist nobody has filed having no folder card, therefore no wall, therefore no
-   * way to make a first folder: a cabinet that could only ever be opened by somebody who already
-   * had one. `cabinet` is `!flatten` for exactly this, and `filed` is left saying what it always
-   * said, because {@link statusOf} still asks it.
+   * Replaces the trap-door case: a reader with no folder still has Add folder — the path row is
+   * drawn over an empty cabinet — and the field it opens is a heading on the wall.
    *
    * The press at the end is the half that makes this a regression test rather than a note about
-   * markup: a wall drawn with a tile that reaches nothing would pass every line above it.
+   * markup: a button that reaches nothing would pass every line above it.
    */
-  it("draws the wall over an empty cabinet, holding only the New folder tile", async () => {
+  it("offers Add folder over an empty cabinet, and the field it opens is a heading on the wall", async () => {
     wishlistFolderList.mockResolvedValue([]);
     wishlistFolderSummary.mockResolvedValue([]);
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
+    expect(screen.queryByRole("navigation", { name: "Wishlist folders" })).toBeNull();
 
-    const wall = await screen.findByRole("list", { name: "Folders" });
-    expect(within(wall).getAllByRole("listitem")).toHaveLength(1);
-    expect(within(wall).getByRole("button", { name: "New folder" })).toBeInTheDocument();
-    // No trail to draw and nothing for it to lead to — which is precisely the state that used to
-    // take the button away with it.
-    expect(screen.queryByRole("navigation", { name: "Wishlist folders" })).not.toBeInTheDocument();
+    await userEvent.click(pathAddFolder());
 
-    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
-
-    // **The tile becomes the field**, which is what makes the empty cabinet the case worth
-    // pressing rather than a second copy of the case below: there is no folder card beside it to
-    // stretch against, so this one `<li>` is both the control and the answer to it.
-    const field = await screen.findByLabelText("New folder name");
-    expect(within(wall).getAllByRole("listitem")[0]).toContainElement(field);
-    // And nothing above the wall says which level this is, because the wall the field is standing
-    // in already does. The strip used to print `in Wishlist` here for a reader who could not see
-    // which level it was drawn over; there is no strip to be unsure about now.
-    expect(screen.queryByText("in Wishlist")).toBeNull();
+    const field = await nameField();
+    expect(heading(NEW_FOLDER_SHELF)).toContainElement(field);
+    expect(field).toHaveFocus();
   });
 
   /**
-   * **The tile hands the caret back, and it no longer does it the way the rest of this app
-   * does.** The page's `dismiss` still runs and still focuses the element `open(next, opener)`
-   * latched — but that element is the `New folder` button, and the button is what the field
-   * *replaced*, so by the time the page focuses it it is a detached node and the call is a silent
-   * no-op. The element that should take the caret is the one React has just rendered in its
-   * place, which only the tile knows: `useFolderFieldReturn` is that half, and it restores only
-   * where `document.activeElement` is `<body>` — the state a caret dropped by an unmounting
-   * element leaves behind, and the state an outside click that landed on something else does not.
+   * **Add folder takes the caret back**, by both ways out. The page's `dismiss` focuses the
+   * element `open(next, opener)` latched — the path row's Add folder, which stays mounted beside
+   * the breadcrumb while the field is open on the wall — so the caret has somewhere to land.
    *
    * **Both ways out, because they are two different mechanisms arriving at one place.** The ✕ is
    * the field's own button and unmounts under the caret; Escape is the page's `"inner"` rung,
    * fired at the input. A restore written for one of them and not the other would leave half the
    * gesture dropping focus to the top of the app, and nothing on screen would say so.
    *
-   * **Driven by a click, never by `el.focus()`.** A past session found that starting a keyboard
-   * flow from a programmatically focused element tests a caret a reader cannot produce — and the
-   * caret this asserts about is one a *pointer* creates, so the pointer is what has to make it.
+   * **Driven by a click, never by `el.focus()`.** Starting a keyboard flow from a programmatically
+   * focused element tests a caret a reader cannot produce — and the caret this asserts about is one
+   * a *pointer* creates, so the pointer is what has to make it.
    */
-  it("gives the caret back to the New folder tile, by the ✕ and by Escape", async () => {
+  it("gives the caret back to the path row's Add folder, by the ✕ and by Escape", async () => {
     wrap(<WishlistPage />);
-    const wall = await screen.findByRole("list", { name: "Folders" });
+    await findHeading(ORDERED.id);
 
-    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
-    // The field takes the caret as it mounts, which is what makes the return trip meaningful.
-    expect(await screen.findByLabelText("New folder name")).toHaveFocus();
+    await userEvent.click(pathAddFolder());
+    expect(await nameField()).toHaveFocus();
+    await userEvent.click(within(heading(NEW_FOLDER_SHELF)).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(queryHeading(NEW_FOLDER_SHELF)).toBeNull());
+    expect(pathAddFolder()).toHaveFocus();
 
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
-    await waitFor(() =>
-      expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument(),
-    );
-    expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
-
-    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
-    expect(await screen.findByLabelText("New folder name")).toHaveFocus();
-
+    await userEvent.click(pathAddFolder());
+    expect(await nameField()).toHaveFocus();
     await userEvent.keyboard("{Escape}");
-
-    await waitFor(() =>
-      expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument(),
-    );
-    expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
+    await waitFor(() => expect(queryHeading(NEW_FOLDER_SHELF)).toBeNull());
+    expect(pathAddFolder()).toHaveFocus();
   });
 
   /**
@@ -2313,47 +2709,32 @@ describe("the folders", () => {
    * the ✕ path exercises that, and a restore guarded on the wrong element would pass there and
    * fail here.
    */
-  it("gives the caret back to the tile when the create commits", async () => {
+  it("gives the caret back to Add folder when the create commits", async () => {
     wrap(<WishlistPage />);
-    const wall = await screen.findByRole("list", { name: "Folders" });
+    await findHeading(ORDERED.id);
 
-    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
-    await userEvent.type(await screen.findByLabelText("New folder name"), "Paid for");
-    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await userEvent.click(pathAddFolder());
+    await nameField();
+    await userEvent.keyboard("Paid for{Enter}");
 
     expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Paid for");
-    await waitFor(() =>
-      expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument(),
-    );
-    expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
+    await waitFor(() => expect(queryHeading(NEW_FOLDER_SHELF)).toBeNull());
+    expect(pathAddFolder()).toHaveFocus();
   });
 
-  /**
-   * **The field stands in the wall, in the tile's own place** — the whole claim of moving it off
-   * the strip, and the one a test that merely found the input would pass without.
-   *
-   * Three facts together, because any one of them alone is satisfied by an arrangement nobody
-   * wanted: the input is inside *this* `<li>` (a field in a strip above is not), the `New folder`
-   * button has left the tree (a field drawn *beside* the tile would leave it), and the wall is
-   * still three cards long with the drawers in their own positions (a field appended as a fourth
-   * `<li>` would pass the first two and reflow the row).
-   */
-  it("draws the naming field in the wall, in the tile's own place", async () => {
+  /** Replaces "draws the naming field in the wall, in the tile's own place": the field is a heading
+   *  where the new folder will live — last among the root's folders (spec §3.8). One open field
+   *  across the whole wall is what `openPanel` naming exactly one thing buys. */
+  it("draws the new folder's heading last among the level's folders", async () => {
     wrap(<WishlistPage />);
-    const wall = await screen.findByRole("list", { name: "Folders" });
-    await screen.findByRole("button", { name: /^Someday folder/ });
+    await findHeading(SOMEDAY.id);
 
-    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+    await userEvent.click(pathAddFolder());
 
-    const field = await screen.findByLabelText("New folder name");
-    const cards = within(wall).getAllByRole("listitem");
-    expect(cards).toHaveLength(3);
-    expect(cards[0]).toContainElement(field);
-    expect(within(wall).queryByRole("button", { name: "New folder" })).toBeNull();
-    // The drawers behind it are where they were, and are still drawers rather than fields: one
-    // open field across the whole wall is what `openPanel` naming exactly one thing buys.
-    expect(within(cards[1]).getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
-    expect(within(cards[2]).getByRole("button", { name: /^Someday folder/ })).toBeInTheDocument();
+    const field = await nameField();
+    expect(follows(heading(SOMEDAY.id), field)).toBe(true);
+    expect(titleOf(ORDERED.id, "Ordered")).toBeInTheDocument();
+    expect(within(wallOf()).getAllByRole("textbox")).toEqual([field]);
   });
 
   /**
@@ -2361,93 +2742,55 @@ describe("the folders", () => {
    *
    * This is the regression test for what the live pass of 2026-08-22 found: the write removed the
    * row from every cached page and then invalidated only the folder summary, so a filed wish was
-   * gone from the app until a reload — the destination folder's card counted it while the
-   * folder's own list said "Nothing filed here yet." Only the *merge* path re-read, so the common
-   * case was the uncovered one.
-   *
-   * The mock is a backend that really moves the wish, because that is the only thing that can put
-   * the row in the destination's list: it is sorted and paged by the backend, and this page knows
-   * neither the position nor the page.
+   * gone from the app until a reload. The mock is a backend that really moves the wish, because
+   * that is the only thing that can put the row under its new heading: it is sorted and paged by
+   * the backend, and this page knows neither the position nor the page. `staleTime: 30_000` is the
+   * app's own number, which leaves an invalidation as the only thing that can mark the list stale.
    */
-  it("re-reads the whole wishlist after a plain move, so the wish is where it was filed", async () => {
-    let filed = false;
-    wishlistList.mockImplementation(async (q: WishlistQuery) => {
-      const bolt = { ...BOLT, folderId: filed ? 1 : null };
-      if (q.flatten === true) return page([bolt, ANY, FILED]);
-      if (q.folderId === 1) return page(filed ? [FILED, bolt] : [FILED]);
-      return page(filed ? [ANY] : [bolt, ANY]);
-    });
-    wishlistSetFolder.mockImplementation(async (id: number) => {
-      filed = true;
-      // The **same** id, which is what makes this the plain path rather than the merge one.
-      return { id, quantity: 4, removed: false };
-    });
-
-    // **The app's own `staleTime`, which is what made the live bug persist rather than blink.**
-    // `src/lib/query.ts` keeps an answered query fresh for 30s, so the folder's list is served
-    // from cache when the reader drills back into it and an invalidation is the only thing that
-    // can mark it stale. At this file's default of 0 every navigation refetches and the whole
-    // defect is invisible — which is why the folder is visited *before* the move below.
-    const { client, container } = wrap(<WishlistPage />, { staleTime: 30_000 });
-    const invalidate = vi.spyOn(client, "invalidateQueries");
-    await screen.findByText("Lightning Bolt");
-
-    // Open the destination once, so its (wishless) page is in the cache and fresh.
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
-    await screen.findByText("Rhystic Study");
-    const trail = screen.getByRole("navigation", { name: "Wishlist folders" });
-    await userEvent.click(within(trail).getByRole("button", { name: "Wishlist" }));
-    await screen.findByText("Lightning Bolt");
-
-    const card = (await screen.findByRole("button", { name: /^Ordered folder/ })).closest("li")!;
-    await wishOnto(cardSources(container)[0], card);
-
-    expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
-    // The whole root, never the summary alone: the level being left, the level being joined and
-    // both folder subtotals have all moved, and the backend is the only thing that knows any of
-    // them.
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
-    // The root loses the row because the *answer* says so, and the header follows the answer.
-    await waitFor(() => expect(wishes()).toHaveTextContent("1"));
-
-    // And the wish really is in the folder — the half the optimistic removal lost outright.
-    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
-    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
-  });
-
-  /**
-   * **Flattened, a moved wish stays listed and changes its caption**, which is where the removal
-   * was wrong in a second way: with the filing ignored the list is not a level, so nothing about
-   * the move takes the row off it — and a wish blinking out of a list that has just promised to
-   * show every one of them is the switch contradicting itself.
-   *
-   * It is also the keyboard's whole route to `wishlist_set_folder`, which is why the panel keeps
-   * it: a drag-only affordance is half a feature, and it is the half a keyboard cannot use.
-   */
-  it("keeps a moved wish listed while flattened, and moves its caption", async () => {
+  it("re-reads the whole wishlist after a plain move, so the wish is under the heading it was filed to", async () => {
     let filed = false;
     wishlistList.mockImplementation(async (q: WishlistQuery) =>
-      q.flatten === true
-        ? page([{ ...BOLT, folderId: filed ? 1 : null }, ANY, FILED])
-        : page(q.folderId === 1 ? [FILED] : [BOLT, ANY]),
+      listByShelves([{ ...BOLT, folderId: filed ? ORDERED.id : null }, ANY, FILED])(q),
     );
     wishlistSetFolder.mockImplementation(async (id: number) => {
       filed = true;
       return { id, quantity: 4, removed: false };
     });
-    /** The Bolt's own row, re-queried each time: the re-read replaces the element. */
-    const boltRow = () => screen.getByText("Lightning Bolt").closest('[role="row"]') as HTMLElement;
+    const { client, container } = wrap(<WishlistPage />, { staleTime: 30_000 });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await screen.findByText("Lightning Bolt");
+    await findHeading(ORDERED.id);
 
+    await wishOnto(cardSources(container)[0], heading(ORDERED.id));
+
+    expect(wishlistSetFolder).toHaveBeenCalledWith(BOLT.id, ORDERED.id);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
+    // Moved, not removed: the wall covers every shelf, so the row changes shelf and the count holds.
+    await waitFor(() =>
+      expect(follows(heading(ORDERED.id), screen.getByText("Lightning Bolt"))).toBe(true),
+    );
+    expect(figure("Wishes")).toHaveTextContent("3");
+  });
+
+  /**
+   * Replaces "keeps a moved wish listed while flattened, and moves its caption". It is also the
+   * keyboard's whole route to `wishlist_set_folder`, which is why the panel keeps it: a drag-only
+   * affordance is half a feature, and it is the half a keyboard cannot use.
+   */
+  it("keeps a wish moved from its panel on the wall, under its new heading", async () => {
+    let filed = false;
+    wishlistList.mockImplementation(async (q: WishlistQuery) =>
+      listByShelves([{ ...BOLT, folderId: filed ? ORDERED.id : null }, ANY, FILED])(q),
+    );
+    wishlistSetFolder.mockImplementation(async (id: number) => {
+      filed = true;
+      return { id, quantity: 4, removed: false };
+    });
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
-    await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
-    await screen.findByText("Rhystic Study");
-    expect(within(boltRow()).getByText("Wishlist")).toBeInTheDocument();
 
     await userEvent.click(
-      screen.getByRole("button", {
-        name: "Edit Lightning Bolt (LEA 161, Foil) on your wishlist",
-      }),
+      screen.getByRole("button", { name: "Edit Lightning Bolt (LEA 161, Foil) on your wishlist" }),
     );
     await userEvent.click(
       screen.getByRole("button", { name: "Move to folder: Lightning Bolt (LEA 161, Foil)" }),
@@ -2457,75 +2800,65 @@ describe("the folders", () => {
     });
     await userEvent.click(within(destinations).getByRole("button", { name: /Ordered/ }));
 
-    expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
-    // The panel is shut first, and not for tidiness: it is drawn *inside this row*, and its own
-    // Folder line says the same word the caption is about to — so a query for it against an open
-    // panel matches two elements and cannot tell which one moved.
+    expect(wishlistSetFolder).toHaveBeenCalledWith(BOLT.id, ORDERED.id);
     await userEvent.keyboard("{Escape}");
-
-    // Listed throughout — and captioned with where it went, once the answer is in.
-    await waitFor(() => expect(within(boltRow()).getByText("Ordered")).toBeInTheDocument());
-    expect(wishes()).toHaveTextContent("3");
+    await waitFor(() =>
+      expect(follows(heading(ORDERED.id), screen.getByText("Lightning Bolt"))).toBe(true),
+    );
+    expect(figure("Wishes")).toHaveTextContent("3");
   });
 
   /**
-   * `New folder` promises "here", which is the whole reason it goes away with the wall while the
-   * list is flattened — so the parent it sends is the folder the reader is standing in and never
-   * the root by default. The tile is drawn **among the drawers of that level**, which is what
-   * makes the promise legible: it stands beside the folders it would be a sibling of.
-   *
-   * `"New folder"` and no longer `"+ New folder"` — the plus was a control's decoration and the
-   * tile draws a `FolderPlus` glyph instead, so the accessible name is the words alone.
-   *
-   * **The whole trip, from a tile inside a drawer.** The press turns that tile into the field, the
-   * name is typed on the line the folder's own name will occupy, and ✓ is what commits it — so
-   * this is also the case that would go red if the tile opened something that reached no write.
+   * Add folder promises "here", so the parent it sends is the folder the reader is standing in and
+   * never the root by default. **The whole trip**: the press opens the field on the wall, the name
+   * is typed on the line the folder's own name will occupy, and Enter commits it — so this is also
+   * the case that would go red if Add folder opened something that reached no write.
    */
-  it("creates a folder inside the one the reader is standing in", async () => {
+  it("creates a folder inside the one the reader is standing in, from the path row", async () => {
     wrap(<WishlistPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await findHeading(ORDERED.id);
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
     await screen.findByText("Rhystic Study");
 
-    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
-    await userEvent.type(await screen.findByLabelText("New folder name"), "Paid for");
-    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await userEvent.click(pathAddFolder());
+    await nameField();
+    await userEvent.keyboard("Paid for{Enter}");
 
-    expect(wishlistFolderCreate).toHaveBeenCalledWith(1, "Paid for");
+    expect(wishlistFolderCreate).toHaveBeenCalledWith(ORDERED.id, "Paid for");
   });
 
   /**
-   * The `⋯` trigger is the app's first click-opened menu, and it reaches the three things a
-   * folder can have done to it. The delete question is the one a reader guesses wrong: the two
-   * cascades point opposite ways, and the sentence says both with the reassuring half first.
+   * Spec §3.2: the ⋯ keeps the folder card's menu minus Rename, plus the keyboard's reorder;
+   * Rename is a button on the heading. The strip still answers Move and Delete, above the wall.
    *
-   * **The strip is what answers two of those three, and this is where that survives.** Naming and
-   * renaming left it for the tiles on 2026-09-03; moving and deleting could not follow, because
-   * the answer to "into which folder" is a list of the *other* folders and the answer to "delete
-   * this?" is a sentence about what happens to the wishes inside — neither of which is a name
-   * typed on a 62px card's own line. So the question is asserted to be drawn where it always was:
-   * outside the wall and above it. Emptying the strip entirely is the plausible next edit, and
-   * this line is what would go red for it.
+   * The delete question is the one a reader guesses wrong: the two cascades point opposite ways,
+   * and the sentence says both with the reassuring half first. The answer to "delete this?" is a
+   * sentence about what happens to the wishes inside, which is not a name typed on a heading's own
+   * line — so the question is asserted to be drawn where it always was: outside the wall and above
+   * it.
    */
-  it("reaches Rename, Move and Delete from a folder card, and says what a delete takes", async () => {
+  it("reaches Move to folder, Move up, Move down, Clear and Delete from a heading's ⋯ — Rename is on the heading", async () => {
     wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(menuOf(ORDERED.id));
 
     const menu = await screen.findByRole("menu");
-    expect(within(menu).getByRole("menuitem", { name: /Rename/ })).toBeInTheDocument();
-    expect(within(menu).getByRole("menuitem", { name: /Move to folder/ })).toBeInTheDocument();
+    for (const row of [/^Move to folder/, /^Move up/, /^Move down/, /^Clear…/, /^Delete…/]) {
+      expect(within(menu).getByRole("menuitem", { name: row })).toBeInTheDocument();
+    }
+    expect(within(menu).queryByRole("menuitem", { name: /Rename/ })).toBeNull();
+    expect(renameOf(ORDERED.id)).toBeInTheDocument();
 
-    await userEvent.click(within(menu).getByRole("menuitem", { name: /Delete/ }));
+    await userEvent.click(within(menu).getByRole("menuitem", { name: /^Delete…/ }));
 
     const question = await screen.findByText(
       "Its wishes can move back to your wishlist or be deleted with it; " +
         "folders inside it are deleted either way.",
     );
     expect(drawnAboveTheWall(question)).toBe(true);
-
     await userEvent.click(screen.getByRole("button", { name: "Delete folder" }));
-
-    expect(wishlistFolderDelete).toHaveBeenCalledWith(1);
+    expect(wishlistFolderDelete).toHaveBeenCalledWith(ORDERED.id);
     // The answer that keeps every wish reaches only the write that keeps them.
     expect(wishlistFolderDeleteWithWishes).not.toHaveBeenCalled();
   });
@@ -2538,18 +2871,18 @@ describe("the folders", () => {
    */
   it("deletes a folder and every wish in it from the second answer", async () => {
     wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(menuOf(ORDERED.id));
     await userEvent.click(
-      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Delete/ }),
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /^Delete…/ }),
     );
     const question = await screen.findByRole("group", { name: "Delete Ordered" });
-
     await userEvent.click(
       within(question).getByRole("button", { name: "Delete folder and wishes" }),
     );
 
-    expect(wishlistFolderDeleteWithWishes).toHaveBeenCalledWith(1);
+    expect(wishlistFolderDeleteWithWishes).toHaveBeenCalledWith(ORDERED.id);
     expect(wishlistFolderDelete).not.toHaveBeenCalled();
     // Answered, so the question goes — `dismiss` on success, as the plain delete does.
     await waitFor(() =>
@@ -2559,16 +2892,17 @@ describe("the folders", () => {
 
   /**
    * **`Clear…` empties a drawer and keeps it, and its question states the number** — the one
-   * figure the card cannot show. `Ordered`'s card reads `3 wishes`, its own recursive total, while
-   * a clear takes only the one filed directly in it; `Backordered`'s two are what the second
+   * figure the heading cannot show. `Ordered`'s heading reads `3 wishes`, its own recursive total,
+   * while a clear takes only the one filed directly in it; `Backordered`'s two are what the second
    * sentence promises are left alone.
    */
-  it("clears a folder of its own wishes from the card, and says which ones go", async () => {
+  it("clears a folder of its own wishes from its heading, and says which ones go", async () => {
     wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
     // The summary has answered, so the count in the question is a count and not a guess.
-    await screen.findByRole("button", { name: /^Ordered folder, 3 wishes/ });
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00"));
 
-    await userEvent.click(screen.getByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(menuOf(ORDERED.id));
     const row = within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Clear…" });
     expect(row).not.toHaveAttribute("aria-disabled");
     await userEvent.click(row);
@@ -2582,22 +2916,21 @@ describe("the folders", () => {
           "Folders inside it keep theirs.",
       ),
     ).toBeInTheDocument();
-
     await userEvent.click(within(question).getByRole("button", { name: "Clear folder" }));
-
-    expect(wishlistFolderClear).toHaveBeenCalledWith(1);
+    expect(wishlistFolderClear).toHaveBeenCalledWith(ORDERED.id);
     await waitFor(() =>
       expect(screen.queryByRole("group", { name: "Clear Ordered" })).not.toBeInTheDocument(),
     );
   });
 
-  /** The count agrees with its verb, and a drawer with no drawers of its own is not told its
+  /** `Backordered` is on the root's wall now, so the question is asked from its heading directly.
+   *  The count agrees with its verb, and a drawer with no drawers of its own is not told its
    *  sub-folders keep anything — there are none to keep it. */
   it("says a sub-folder's own count, and names no folders inside one that has none", async () => {
     wrap(<WishlistPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await findHeading(BACKORDERED.id);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Manage Backordered" }));
+    await userEvent.click(menuOf(BACKORDERED.id));
     await userEvent.click(
       within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Clear…" }),
     );
@@ -2618,9 +2951,11 @@ describe("the folders", () => {
   it("greys Clear… on a folder with nothing filed directly in it, and says why", async () => {
     const user = userEvent.setup();
     wrap(<WishlistPage />);
-    await screen.findByRole("button", { name: "Someday folder, 0 wishes" });
+    await findHeading(SOMEDAY.id);
+    // The summary has answered once the heading reads a count rather than a dash.
+    await waitFor(() => expect(heading(SOMEDAY.id)).toHaveTextContent("0 wishes"));
 
-    await user.click(screen.getByRole("button", { name: "Manage Someday" }));
+    await user.click(menuOf(SOMEDAY.id));
     const row = within(await screen.findByRole("menu")).getByRole("menuitem", { name: /^Clear…/ });
     expect(row).toHaveAttribute("aria-disabled", "true");
     expect(row).toHaveAccessibleName(/Nothing filed directly here/);
@@ -2638,8 +2973,9 @@ describe("the folders", () => {
   it("keeps Clear… live before the summary answers, and counts nothing it has not been told", async () => {
     wishlistFolderSummary.mockReturnValue(new Promise(() => {}));
     wrap(<WishlistPage />);
+    await findHeading(SOMEDAY.id);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Manage Someday" }));
+    await userEvent.click(menuOf(SOMEDAY.id));
     const row = within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Clear…" });
     expect(row).not.toHaveAttribute("aria-disabled");
     await userEvent.click(row);
@@ -2648,154 +2984,113 @@ describe("the folders", () => {
     expect(
       within(question).getByText("The wishes filed directly in it are removed from your wishlist."),
     ).toBeInTheDocument();
-
     await userEvent.click(within(question).getByRole("button", { name: "Clear folder" }));
-    expect(wishlistFolderClear).toHaveBeenCalledWith(3);
+    expect(wishlistFolderClear).toHaveBeenCalledWith(SOMEDAY.id);
   });
 
-  /**
-   * **A rename is answered on the card**, by the same `FolderNameField` the `New folder` tile
-   * becomes — its other job, and the one that keeps the dashed border because the thing being
-   * renamed is already a container.
-   */
-  it("renames a folder from the card's own field", async () => {
+  /** Spec §3.8: Rename turns the heading's name into `FolderNameField`, with the name selected, so
+   *  the keystrokes go to whatever holds the caret rather than being typed *at* the field. */
+  it("renames a folder from its heading", async () => {
     wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Manage Ordered" }));
-    await userEvent.click(
-      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Rename/ }),
-    );
+    await userEvent.click(renameOf(ORDERED.id));
 
-    // **The caret is already in the field with the name selected**, which is why the keystrokes
-    // are sent to whatever holds it rather than typed *at* the field: `userEvent.type` clicks
-    // first, and a click collapses the selection — so it would append to the old name and the
-    // test would pass over a field that had never selected anything.
-    const field = await screen.findByLabelText("Rename Ordered");
+    const field = await within(heading(ORDERED.id)).findByRole("textbox");
     expect(field).toHaveFocus();
     expect(field).toHaveValue("Ordered");
-    await userEvent.keyboard("On its way");
-    await userEvent.click(screen.getByRole("button", { name: "Rename folder" }));
-
-    expect(wishlistFolderRename).toHaveBeenCalledWith(1, "On its way");
+    await userEvent.keyboard("On its way{Enter}");
+    expect(wishlistFolderRename).toHaveBeenCalledWith(ORDERED.id, "On its way");
   });
 
   /**
    * **The field opens on the drawer it is about, and every other drawer goes on resting.**
    *
-   * This is the half a rename has that a create does not: there are twelve cards on a full wall
-   * and one of them is being renamed, so "the field is on screen" is not the claim — "the field
-   * is on *that* card" is. `openPanel` names exactly one folder and `WishFolderCard` compares
-   * against it, which is what keeps a wall from turning into a wall of fields; a card holding its
-   * own flag could not know another card's `Rename…` had been pressed.
+   * This is the half a rename has that a create does not: there are twelve headings on a full wall
+   * and one of them is being renamed, so "the field is on screen" is not the claim — "the field is
+   * on *that* heading" is. `openPanel` names exactly one folder and the page compares against it,
+   * which is what keeps a wall from turning into a wall of fields.
    *
-   * The figures line is asserted with it, because it is the whole reason a rename is not simply
-   * the `New folder` tile with a different label: a reader renaming a drawer is looking at what
-   * is in it, and a box that dropped the count would make them check they had the right one.
+   * The figures are asserted with it, because a reader renaming a drawer is looking at what is in
+   * it, and a heading that dropped the count would make them check they had the right one.
    */
-  it("renames on the card itself, and leaves every other drawer alone", async () => {
+  it("renames on the heading itself, keeps its figures, and leaves every other heading alone", async () => {
     wrap(<WishlistPage />);
-    await screen.findByRole("button", { name: /^Someday folder/ });
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00"));
 
-    await userEvent.click(screen.getByRole("button", { name: "Manage Ordered" }));
-    await userEvent.click(
-      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Rename/ }),
-    );
+    await userEvent.click(renameOf(ORDERED.id));
 
-    const field = await screen.findByLabelText("Rename Ordered");
-    const cards = within(screen.getByRole("list", { name: "Folders" })).getAllByRole("listitem");
-    // The tile, `Ordered`, `Someday` — and the field is on the second of them.
-    expect(cards[1]).toContainElement(field);
-    expect(within(cards[1]).getByText("3 wishes · $30.00")).toBeInTheDocument();
-    // The card's own door and its `⋯` are out of the tree while the field stands in their place:
-    // a drawer that could still be opened underneath its own name field is two controls for one
-    // press.
-    expect(screen.queryByRole("button", { name: /^Ordered folder/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Manage Ordered" })).toBeNull();
-    // Everything else on the wall is untouched — one field at a time, tile included.
-    expect(within(cards[0]).getByRole("button", { name: "New folder" })).toBeInTheDocument();
-    expect(within(cards[2]).getByRole("button", { name: /^Someday folder/ })).toBeInTheDocument();
-    expect(within(cards[2]).getByRole("button", { name: "Manage Someday" })).toBeInTheDocument();
+    const field = await within(heading(ORDERED.id)).findByRole("textbox");
+    // The figures stay beside the field, so the reader can see which drawer this is.
+    expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00");
+    // The title that opens the folder is out of the tree while its name is being typed.
+    expect(within(heading(ORDERED.id)).queryByRole("button", { name: "Ordered" })).toBeNull();
+    // One field on the whole wall.
+    expect(within(wallOf()).getAllByRole("textbox")).toEqual([field]);
+    expect(titleOf(SOMEDAY.id, "Someday")).toBeInTheDocument();
+    expect(menuOf(SOMEDAY.id)).toBeInTheDocument();
   });
 
   /**
-   * **And the card's `⋯` takes the caret back**, by both ways out and for
-   * `useFolderFieldReturn`'s reason: the trigger the page latched when the menu was opened is the
-   * `⋯` the field replaced, so it is a detached node by the time `dismiss` focuses it and the
-   * element that should have the caret is the one this render has just built.
+   * **And the heading's Rename takes the caret back**, by both ways out and for
+   * `useFolderFieldReturn`'s reason: the button the page latched as the opener is the Rename the
+   * field replaced, so it is a detached node by the time `dismiss` focuses it and the element that
+   * should have the caret is the one this render has just built.
    *
    * A committed rename as well as an abandoned one, because they leave the caret in different
    * places on the way: Escape fires at the input, and ✓ greys itself while the write is in flight
    * so the browser blurs it first.
    */
-  it("gives the caret back to the folder's ⋯, by Escape and by a committed rename", async () => {
+  it("gives the caret back to the heading's Rename, by Escape and by a committed rename", async () => {
     wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Manage Ordered" }));
-    await userEvent.click(
-      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Rename/ }),
-    );
-    expect(await screen.findByLabelText("Rename Ordered")).toHaveFocus();
-
+    await userEvent.click(renameOf(ORDERED.id));
+    expect(await within(heading(ORDERED.id)).findByRole("textbox")).toHaveFocus();
     await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(within(heading(ORDERED.id)).queryByRole("textbox")).toBeNull());
+    expect(renameOf(ORDERED.id)).toHaveFocus();
 
-    await waitFor(() => expect(screen.queryByLabelText("Rename Ordered")).toBeNull());
-    expect(screen.getByRole("button", { name: "Manage Ordered" })).toHaveFocus();
-
-    await userEvent.click(screen.getByRole("button", { name: "Manage Ordered" }));
-    await userEvent.click(
-      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Rename/ }),
-    );
-    await screen.findByLabelText("Rename Ordered");
-    await userEvent.keyboard("On its way");
-    await userEvent.click(screen.getByRole("button", { name: "Rename folder" }));
-
-    // The mock answers `Ordered` and the refetched list still holds that name, so the card the
-    // caret lands back on is the one that was renamed rather than a different drawer.
-    await waitFor(() => expect(screen.queryByLabelText("Rename Ordered")).toBeNull());
-    expect(screen.getByRole("button", { name: "Manage Ordered" })).toHaveFocus();
+    await userEvent.click(renameOf(ORDERED.id));
+    await within(heading(ORDERED.id)).findByRole("textbox");
+    await userEvent.keyboard("On its way{Enter}");
+    await waitFor(() => expect(within(heading(ORDERED.id)).queryByRole("textbox")).toBeNull());
+    expect(renameOf(ORDERED.id)).toHaveFocus();
   });
 
   /**
    * **Walking into another folder puts the naming field away**, and the clause that does it
-   * (`openPanel`'s `panel.parentId !== folderId`) is the one thing here a blur cannot cover.
+   * (`panelGone`) is the one thing here a blur cannot cover.
    *
-   * The ordinary pointer gesture never reaches it: clicking a folder card moves focus out of the
-   * field, and the field discards its draft on blur, so the panel is already gone before the
-   * level changes. The one state where that route is switched off is a **write in flight** — the
-   * field holds itself open through the round trip, precisely so a slow create cannot be
-   * cancelled by the browser blurring the tick it has just greyed — and a reader who gives up
-   * waiting and opens a drawer is exactly the reader this clause is for. So the create below
-   * never answers.
+   * The ordinary pointer gesture never reaches it: clicking a folder's title moves focus out of the
+   * field, and the field discards its draft on blur, so the panel is already gone before the level
+   * changes. The one state where that route is switched off is a **write in flight** — the field
+   * holds itself open through the round trip, precisely so a slow create cannot be cancelled by the
+   * browser blurring the tick it has just greyed — and a reader who gives up waiting and opens a
+   * drawer is exactly the reader this clause is for. So the create below never answers.
    *
    * What it would cost is asserted rather than described: without the clause the panel is still
    * open at the new level, which means `useDismissOnEscape`'s `"inner"` rung is still armed and
    * takes the press in the capture phase — so Escape stops walking the reader back out of the
-   * folder they have just opened, and nothing on screen says why. The field being gone and the
-   * press reaching the `"navigation"` rung are the two halves of the same fact.
+   * folder they have just opened, and nothing on screen says why.
    */
   it("closes the naming field when the reader walks into another folder", async () => {
-    // Never answers: the field stays open, which is what takes the blur discard out of the way.
+    // Never answers: the field is held open by the write rather than by the caret.
     wishlistFolderCreate.mockImplementation(() => new Promise(() => {}));
     wrap(<WishlistPage />);
-    const wall = await screen.findByRole("list", { name: "Folders" });
+    await findHeading(ORDERED.id);
 
-    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
-    await userEvent.type(await screen.findByLabelText("New folder name"), "Paid for");
-    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    await userEvent.click(pathAddFolder());
+    await nameField();
+    await userEvent.keyboard("Paid for{Enter}");
     expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Paid for");
-    // Held open by the write rather than by the caret, which is what puts the blur discard out of
-    // reach: the tick greyed itself on the press, so nothing inside the field holds focus and the
-    // click below fires no `focusout` the form could cancel on.
-    expect(screen.getByLabelText("New folder name")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
 
-    await waitFor(() => expect(lastQuery().folderId).toBe(1));
-    // Gone, and the tile is a tile again — naming *this* level, not the one that was left.
-    await waitFor(() => expect(screen.queryByLabelText("New folder name")).toBeNull());
-    expect(screen.getByRole("button", { name: "New folder" })).toBeInTheDocument();
+    await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
+    await waitFor(() => expect(queryHeading(NEW_FOLDER_SHELF)).toBeNull());
+    expect(pathAddFolder()).toBeInTheDocument();
 
-    // And the press the invisible layer would have eaten walks the reader back out.
     await userEvent.keyboard("{Escape}");
 
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
@@ -2809,106 +3104,89 @@ describe("the folders", () => {
    */
   it("offers a folder every destination but itself and what it holds", async () => {
     wrap(<WishlistPage />);
+    await findHeading(ORDERED.id);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(menuOf(ORDERED.id));
     await userEvent.click(
-      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Move to folder/ }),
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /^Move to folder/ }),
     );
 
     const list = await screen.findByRole("group", { name: "Move Ordered into a folder" });
-    // The other half of the strip that survived the naming forms moving into the wall: a list of
-    // every other drawer has nowhere to be drawn on a 62px card.
     expect(drawnAboveTheWall(list)).toBe(true);
-    // Its own row and its child's are inert; the third folder is a live destination.
     expect(within(list).getByRole("button", { name: /Ordered/ })).toBeDisabled();
     expect(within(list).getByRole("button", { name: /Backordered/ })).toBeDisabled();
     await userEvent.click(within(list).getByRole("button", { name: /Someday/ }));
 
-    expect(wishlistFolderMove).toHaveBeenCalledWith(1, 3);
+    expect(wishlistFolderMove).toHaveBeenCalledWith(ORDERED.id, SOMEDAY.id);
   });
 
   /**
    * The drag's write, and it is `wishlist_set_folder` — the same command `Move to folder…`
    * calls, so a drag and the keyboard's route merge on a taken grain identically.
    */
-  it("files a wish dropped on a folder card", async () => {
+  it("files a wish dropped on a folder's heading", async () => {
     const { container } = wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
-    const row = cardSources(container)[0];
-    const card = (await screen.findByRole("button", { name: /^Ordered folder/ })).closest("li")!;
+    await findHeading(ORDERED.id);
 
-    await wishOnto(row, card);
+    await wishOnto(cardSources(container)[0], heading(ORDERED.id));
 
-    expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
+    expect(wishlistSetFolder).toHaveBeenCalledWith(BOLT.id, ORDERED.id);
   });
 
   /**
-   * And the way back **out**, which is the half a folder card cannot do: a card only ever takes a
-   * wish deeper, so without the breadcrumb the gesture would be one-way.
+   * And the way back **out** from inside a folder: a heading only ever takes a wish deeper, so
+   * without the breadcrumb the gesture would be one-way.
    */
   it("un-files a wish dropped on the breadcrumb's root", async () => {
     const { container } = wrap(<WishlistPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await findHeading(ORDERED.id);
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
     await screen.findByText("Rhystic Study");
 
-    const row = cardSources(container)[0];
-    const trail = screen.getByRole("navigation", { name: "Wishlist folders" });
-    await wishOnto(row, within(trail).getByRole("button", { name: "Wishlist" }));
+    await wishOnto(
+      cardSources(container)[0],
+      within(crumbs()).getByRole("button", { name: "Wishlist" }),
+    );
 
-    expect(wishlistSetFolder).toHaveBeenCalledWith(12, null);
+    expect(wishlistSetFolder).toHaveBeenCalledWith(FILED.id, null);
   });
+
+  // DELETED: "names the level above, and draws nothing at the root" — the `ParentFolderCard` "Up
+  // one level" tile is gone (spec §7). Its two jobs survive and are pinned below: walking up is the
+  // breadcrumb's parent segment, and a card or a folder dropped *up* lands on a breadcrumb segment
+  // (and a card on the Not sorted heading).
 
   /**
-   * **The way back out at the size of the things it stands among** — issue #283, which was about
-   * exactly this: the breadcrumb above could always take a wish, and a segment is one word of
-   * `text-sm` in a bar the pointer has already left.
-   *
-   * The tile names its **destination**, because that is what a reader has to read before letting
-   * go, and it is drawn only where there is somewhere to go: at the root there is not.
-   *
-   * **Two levels deep on purpose.** A tile that always went to the root would pass a one-level
-   * test and strand anyone who had drilled twice — the same failure the trail-derived parent
-   * exists to prevent, and the reason it is read off the trail rather than off `parentId`.
+   * Replaces "walks up one level when the tile is pressed". **Two levels deep on purpose**: a
+   * segment that always went to the root would pass a one-level test and strand anyone who had
+   * drilled twice.
    */
-  it("names the level above, and draws nothing at the root", async () => {
+  it("walks up one level from the breadcrumb's parent segment", async () => {
     wrap(<WishlistPage />);
-    await screen.findByRole("button", { name: /^Ordered folder/ });
-    expect(screen.queryByRole("button", { name: /^Up one level/ })).toBeNull();
+    await findHeading(ORDERED.id);
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await findHeading(BACKORDERED.id);
+    await userEvent.click(titleOf(BACKORDERED.id, "Backordered"));
+    await waitFor(() => expect(levelAsked()).toBe(BACKORDERED.id));
 
-    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
-    expect(
-      await screen.findByRole("button", { name: "Up one level to Wishlist" }),
-    ).toBeInTheDocument();
+    await userEvent.click(within(crumbs()).getByRole("button", { name: "Ordered" }));
 
-    await userEvent.click(await screen.findByRole("button", { name: /^Backordered folder/ }));
-    expect(
-      await screen.findByRole("button", { name: "Up one level to Ordered" }),
-    ).toBeInTheDocument();
-  });
-
-  /** Pressed, it is the breadcrumb's parent segment — one level, not the root. */
-  it("walks up one level when the tile is pressed", async () => {
-    wrap(<WishlistPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
-    await userEvent.click(await screen.findByRole("button", { name: /^Backordered folder/ }));
-    await waitFor(() => expect(lastQuery().folderId).toBe(2));
-
-    await userEvent.click(await screen.findByRole("button", { name: "Up one level to Ordered" }));
-
-    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+    await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
     expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
   });
 
-  /** And the drop the tile exists for: a wish carried out of the drawer it is in, onto the
-   *  drawer-sized target that says where it is going. */
-  it("un-files a wish dropped on the up tile", async () => {
+  /** Replaces "un-files a wish dropped on the up tile": at the root the drawer-sized way out is the
+   *  Not sorted heading, which files to the root (spec §6). */
+  it("un-files a wish dropped on the Not sorted heading", async () => {
     const { container } = wrap(<WishlistPage />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
-    await screen.findByText("Rhystic Study");
+    const filed = await screen.findByText("Rhystic Study");
+    const source = cardSources(container).find((row) => row.contains(filed));
+    expect(source).toBeDefined();
 
-    await wishOnto(cardSources(container)[0], upTile("Wishlist"));
+    await wishOnto(source!, heading(0));
 
-    expect(wishlistSetFolder).toHaveBeenCalledWith(12, null);
+    expect(wishlistSetFolder).toHaveBeenCalledWith(FILED.id, null);
   });
 
   /**
@@ -2917,8 +3195,9 @@ describe("the folders", () => {
    */
   it("says a folder is empty without repeating the root's instruction", async () => {
     wrap(<WishlistPage />);
+    await findHeading(SOMEDAY.id);
 
-    await userEvent.click(await screen.findByRole("button", { name: /^Someday folder/ }));
+    await userEvent.click(titleOf(SOMEDAY.id, "Someday"));
 
     expect(await screen.findByText("Nothing filed here yet.")).toBeInTheDocument();
     expect(
@@ -2927,145 +3206,101 @@ describe("the folders", () => {
   });
 
   /**
-   * **A folder card counts a wish that is gone** — the first half of the settle that was missing
-   * from `remove` until 2026-08-22, and the reason both halves are pinned at the app's own
-   * `staleTime` rather than at this file's default of 0.
+   * The folder's figures are on its heading at the root now, so no drill-in is needed to see the
+   * re-read land — and `staleTime: 30_000` still makes the invalidation the only thing that can.
    *
-   * `remove` patched the row out of `["wishlist", "list"]` and then invalidated `["cards",
-   * "search"]` and nothing else, on the argument that the page already held the answer. It held
-   * the answer about the *row*. `wishlist_folder_summary` is a `GROUP BY` with an owned-copies
-   * subquery and a price expression behind it — arithmetic this page cannot redo — so the drawer
-   * the wish had been in went on advertising it: `Ordered folder, 3 wishes, $30.00` over a
-   * backend holding two at $20. On a shopping list that subtotal is the number somebody buys
-   * against.
-   *
-   * **What `staleTime: 30_000` buys, precisely.** The summary's observer is mounted for the life
-   * of this page — nothing here unmounts it, so there is no remount to refetch on — and at the
-   * app's own number the answer stays *fresh* as well as mounted, which leaves an invalidation as
-   * the only thing in the app that can move it. Drilling in and climbing back out is deliberate:
-   * at a `staleTime` of 0 that round trip repairs the **list** for free on the new observer's
-   * mount, and a reader watching only the row would conclude the write settles correctly.
+   * `wishlist_folder_summary` is a `GROUP BY` with a price expression behind it — arithmetic this
+   * page cannot redo — so a drawer whose wish was crossed off would go on advertising it without
+   * the re-read. On a shopping list that subtotal is the number somebody buys against.
    */
-  it("re-reads a folder's subtotal when a wish inside it is crossed off", async () => {
+  it("re-reads a folder's heading figures when a wish inside it is crossed off", async () => {
     let removed = false;
     wishlistList.mockImplementation(async (q: WishlistQuery) =>
-      removed && q.folderId === 1 ? page([]) : listByLevel(q),
+      listByShelves(removed ? [BOLT, ANY] : [BOLT, ANY, FILED])(q),
     );
-    // The backend after the delete: `Ordered`'s own row is gone from the `GROUP BY` entirely,
-    // because the read groups the wishes and there are none left directly in it. Its card is
-    // still the recursive total, so `Backordered`'s two survive underneath.
     wishlistFolderSummary.mockImplementation(async () =>
-      removed ? SUMMARY.filter((s) => s.folderId !== 1) : SUMMARY,
+      removed ? SUMMARY.filter((s) => s.folderId !== ORDERED.id) : SUMMARY,
     );
     wishlistRemove.mockImplementation(async (id: number) => {
       removed = true;
       return { id, quantity: 0, removed: true };
     });
-
     wrap(<WishlistPage />, { staleTime: 30_000 });
-    expect(
-      await screen.findByRole("button", { name: "Ordered folder, 3 wishes, $30.00" }),
-    ).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00"));
     await screen.findByText("Rhystic Study");
+
     await userEvent.click(
       screen.getByRole("button", { name: /^Remove Rhystic Study \(PCY 45\) from your wishlist/ }),
     );
-    expect(wishlistRemove).toHaveBeenCalledWith(12);
 
-    const trail = screen.getByRole("navigation", { name: "Wishlist folders" });
-    await userEvent.click(within(trail).getByRole("button", { name: "Wishlist" }));
-
-    expect(
-      await screen.findByRole("button", { name: "Ordered folder, 2 wishes, $20.00" }),
-    ).toBeInTheDocument();
+    expect(wishlistRemove).toHaveBeenCalledWith(FILED.id);
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("2 wishes · $20.00"));
   });
 
   /**
    * The same hole under the other writer: **a stepper press multiplies straight through into the
-   * subtotal**, and `setQuantity` was the second of the two that re-read only the search.
-   *
-   * A copy count is exactly what a folder's money is a function of, so this is the case where the
-   * card's figure and the backend's disagree by a number the reader chose themselves — the drawer
-   * kept saying `$30.00` while the wish inside it had just been doubled.
+   * subtotal**. A copy count is exactly what a folder's money is a function of, so this is the case
+   * where the heading's figure and the backend's would disagree by a number the reader chose
+   * themselves.
    */
-  it("re-reads a folder's subtotal when the stepper changes a wish inside it", async () => {
+  it("re-reads a folder's heading figures when the stepper changes a wish inside it", async () => {
     let quantity = 1;
     wishlistList.mockImplementation(async (q: WishlistQuery) =>
-      q.folderId === 1 ? page([{ ...FILED, quantity }]) : listByLevel(q),
+      listByShelves([BOLT, ANY, { ...FILED, quantity }])(q),
     );
     wishlistFolderSummary.mockImplementation(async () =>
       SUMMARY.map((s) =>
-        s.folderId === 1 ? { ...s, copies: quantity, cost: 10 * quantity } : s,
+        s.folderId === ORDERED.id ? { ...s, copies: quantity, cost: 10 * quantity } : s,
       ),
     );
     wishlistSetQuantity.mockImplementation(async (id: number, next: number) => {
       quantity = next;
       return { id, quantity: next, removed: false };
     });
-
     wrap(<WishlistPage />, { staleTime: 30_000 });
-    expect(
-      await screen.findByRole("button", { name: "Ordered folder, 3 wishes, $30.00" }),
-    ).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00"));
     await screen.findByText("Rhystic Study");
+
     await userEvent.click(
       screen.getByRole("button", { name: "Increase Copies wanted of Rhystic Study (PCY 45)" }),
     );
-    expect(wishlistSetQuantity).toHaveBeenCalledWith(12, 2);
 
-    const trail = screen.getByRole("navigation", { name: "Wishlist folders" });
-    await userEvent.click(within(trail).getByRole("button", { name: "Wishlist" }));
-
-    expect(
-      await screen.findByRole("button", { name: "Ordered folder, 3 wishes, $40.00" }),
-    ).toBeInTheDocument();
+    expect(wishlistSetQuantity).toHaveBeenCalledWith(FILED.id, 2);
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $40.00"));
   });
 
-  /**
-   * **The export dialog names the drawer, because the drawer is what is narrowing the sweep.**
-   *
-   * Nothing about the export was ever *wrong* — `folderId` and `flatten` ride in
-   * `wishlist.filters` and in the sweep's key, and the escape hatch sends `flatten: true` — but
-   * standing in `Ordered` with nothing typed and no chip pressed, the two sentences read
-   * "3 cards matching your filters" and "Export everything, ignoring the filters", and the only
-   * thing doing any narrowing was the one thing neither of them mentioned.
-   *
-   * The clause is on the checkbox at the **root** too, and that is not an oversight: an absent
-   * `folderId` asks for the wishes filed nowhere rather than for all of them, so a reader at the
-   * top of a cabinet is also looking at a sweep that leaves every drawer out.
-   */
-  it("names the folder the export is being taken from, and offers the whole cabinet", async () => {
+  /** The root's sweep is every shelf now, so there is no filing left for the checkbox to set aside
+   *  there; inside a folder the drawer is still what narrows it, and both sentences say so. */
+  it("names the folder the export is taken from, and offers to widen past the folders only inside one", async () => {
     const user = userEvent.setup();
     wrap(<WishlistPage />);
-    // At the root there is no drawer to name, but ticking the box still widens past the drawers.
-    await user.click(await screen.findByRole("button", { name: "Export wishlist" }));
+    await findHeading(ORDERED.id);
+
+    await user.click(screen.getByRole("button", { name: "Export wishlist" }));
     expect(
-      await screen.findByRole("checkbox", {
-        name: "Export everything, ignoring the filters and folders",
-      }),
+      await screen.findByRole("checkbox", { name: "Export everything, ignoring the filters" }),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Close export" }));
 
-    await user.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await user.click(titleOf(ORDERED.id, "Ordered"));
     await screen.findByText("Rhystic Study");
     await user.click(screen.getByRole("button", { name: "Export wishlist" }));
 
     expect(await screen.findByText("1 card in Ordered matching your filters")).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters and folders" }),
+    ).toBeInTheDocument();
   });
 
   /**
-   * And the root with drawers but nothing loose says **nothing**: the cards are the content, and
-   * a sentence over them would be the page contradicting itself.
+   * And the root with drawers but nothing in them says **nothing**: the headings are the content,
+   * and a sentence over them would be the page contradicting itself.
    */
-  it("leaves the status line empty where the folder cards are the content", async () => {
+  it("leaves the status line empty where the headings are the content", async () => {
     wishlistList.mockImplementation(async () => page([]));
     wrap(<WishlistPage />);
 
-    await screen.findByRole("button", { name: /^Ordered folder/ });
+    await findHeading(ORDERED.id);
     expect(screen.queryByText(/Nothing on your wishlist yet/)).not.toBeInTheDocument();
     expect(screen.queryByText("Nothing filed here yet.")).not.toBeInTheDocument();
   });
@@ -3080,14 +3315,15 @@ describe("the folders", () => {
    * it is read, remembered by nothing. Three of the four ways it could be quietly wrong look
    * identical on screen to the behaviour that was here before the door existed — the reader lands
    * on the right page, at the root — which is why each case asserts the *query* and the *field*
-   * rather than only what is drawn.
+   * rather than only what is drawn. Rewrite rule: `lastQuery().folderId` becomes
+   * {@link levelAsked}; nothing else moves.
    */
   describe("a folder another page asked for", () => {
     it("opens the drawer it names, and spends the hand-off doing it", async () => {
-      useAppStore.setState({ pendingFolder: { scope: "wishlist", id: 1 } });
+      useAppStore.setState({ pendingFolder: { scope: "wishlist", id: ORDERED.id } });
       wrap(<WishlistPage />);
 
-      await waitFor(() => expect(lastQuery().folderId).toBe(1));
+      await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
       expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
       expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
       await waitFor(() => expect(useAppStore.getState().pendingFolder).toBeNull());
@@ -3104,7 +3340,7 @@ describe("the folders", () => {
       wrap(<WishlistPage />);
 
       expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
-      expect(lastQuery().folderId).toBeUndefined();
+      expect(levelAsked()).toBeNull();
       await waitFor(() => expect(useAppStore.getState().pendingFolder).toBeNull());
     });
 
@@ -3115,15 +3351,15 @@ describe("the folders", () => {
      * through the back door.
      */
     it("does not survive to a second visit", async () => {
-      useAppStore.setState({ pendingFolder: { scope: "wishlist", id: 1 } });
+      useAppStore.setState({ pendingFolder: { scope: "wishlist", id: ORDERED.id } });
       const first = wrap(<WishlistPage />);
-      await waitFor(() => expect(lastQuery().folderId).toBe(1));
+      await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
       first.unmount();
       wrap(<WishlistPage />);
 
       expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
-      await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
+      await waitFor(() => expect(levelAsked()).toBeNull());
     });
 
     /**
@@ -3137,7 +3373,7 @@ describe("the folders", () => {
       wrap(<WishlistPage />);
 
       expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
-      expect(lastQuery().folderId).toBeUndefined();
+      expect(levelAsked()).toBeNull();
       expect(useAppStore.getState().pendingFolder).toEqual({ scope: "collection", id: 1 });
     });
   });
@@ -3154,9 +3390,13 @@ describe("the folders", () => {
  *
  * **The three landings are driven by stating the box.** jsdom has no layout engine, so every real
  * `getBoundingClientRect` is four zeroes and `folderEdge` would answer `inside` for every drop — a
- * test that hoped for a rect would pass over any threshold at all. {@link stand} states the card's
- * rect, and the pointer is then aimed at a fraction along it — `AT_START`, `AT_MIDDLE`, `AT_END` —
- * which is the gesture rather than a coordinate posted to a target.
+ * test that hoped for a rect would pass over any threshold at all. {@link stand} states the
+ * heading's rect, and the pointer is then aimed at a fraction down it — `AT_TOP`, `AT_MIDDLE`,
+ * `AT_BOTTOM` — which is the gesture rather than a coordinate posted to a target.
+ *
+ * **Table view, the file's default, and the table does not fold on a folder drag** (the page says
+ * why), so every rect set before `holdHeading` stays on the element it was set on. The fold is
+ * pinned by the one grid case at the end.
  */
 describe("rearranging the wishlist's cabinet", () => {
   beforeEach(() => {
@@ -3168,36 +3408,40 @@ describe("rearranging the wishlist's cabinet", () => {
   /** Both root drawers on screen, which every test here starts from. `Ordered` holds
    *  `Backordered`; `Someday` is empty and sorts after it. */
   const wall = async () => {
-    await screen.findByRole("button", { name: /^Ordered folder/ });
-    await screen.findByRole("button", { name: /^Someday folder/ });
+    await findHeading(ORDERED.id);
+    await findHeading(SOMEDAY.id);
   };
 
-  it("files a drawer inside the one it is dropped on the middle of", async () => {
+  it("files a folder inside the heading it is dropped on the middle of", async () => {
     wrap(<WishlistPage />);
     await wall();
-    stand("Ordered");
+    stand(ORDERED.id);
 
-    const held = await holdCard("Someday");
-    await held.over(folderSlot("Ordered"), AT_MIDDLE);
+    const held = await holdHeading(SOMEDAY.id);
+    await held.over(heading(ORDERED.id), AT_MIDDLE);
     await held.drop();
 
     // `Ordered`'s own child, then the folder that just arrived: `inside` says which drawer and
     // nothing about where in it, so there is no second position in the gesture to have meant.
-    await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(1, [2, 3]));
+    await waitFor(() =>
+      expect(wishlistFolderReorder).toHaveBeenCalledWith(ORDERED.id, [BACKORDERED.id, SOMEDAY.id]),
+    );
   });
 
-  it("places a drawer before the one it is dropped on the leading edge of", async () => {
+  it("places a folder before the heading it is dropped on the top of", async () => {
     wrap(<WishlistPage />);
     await wall();
-    stand("Ordered");
+    stand(ORDERED.id);
 
-    const held = await holdCard("Someday");
-    await held.over(folderSlot("Ordered"), AT_START);
+    const held = await holdHeading(SOMEDAY.id);
+    await held.over(heading(ORDERED.id), AT_TOP);
     await held.drop();
 
     // The root level, re-ordered — `null` is the destination parent and a real place rather than
     // an omission.
-    await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [3, 1]));
+    await waitFor(() =>
+      expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [SOMEDAY.id, ORDERED.id]),
+    );
   });
 
   /**
@@ -3211,142 +3455,163 @@ describe("rearranging the wishlist's cabinet", () => {
   it("draws no line and writes nothing for a drop that would change nothing", async () => {
     wrap(<WishlistPage />);
     await wall();
-    stand("Ordered");
+    stand(ORDERED.id);
 
-    const held = await holdCard("Someday");
-    await held.over(folderSlot("Ordered"), AT_END);
-    expect(folderCard("Ordered").querySelector("[data-folder-drop-line]")).toBeNull();
-
+    const held = await holdHeading(SOMEDAY.id);
+    await held.over(heading(ORDERED.id), AT_BOTTOM);
+    expect(heading(ORDERED.id).querySelector("[data-folder-drop-line]")).toBeNull();
     await held.drop();
+
     expect(wishlistFolderReorder).not.toHaveBeenCalled();
   });
 
   /** A folder dropped on itself is the gesture a reader makes most often by accident — the pointer
    *  is *on* the folder being dragged for the first few pixels of every drag. */
-  it("refuses a drawer dropped on itself, at every landing", async () => {
+  it("refuses a folder dropped on itself, at every landing", async () => {
     wrap(<WishlistPage />);
     await wall();
 
-    for (const at of [AT_START, AT_MIDDLE, AT_END]) {
-      // The card is both ends of this gesture, so it keeps the box it was picked up from rather
-      // than being moved out from under the pointer: the drop target measured is the inner slot.
-      folderSlot("Someday").getBoundingClientRect = () => SOURCE_BOX;
-      const held = await holdCard("Someday");
-      await held.over(folderSlot("Someday"), at);
+    for (const at of [AT_TOP, AT_MIDDLE, AT_BOTTOM]) {
+      heading(SOMEDAY.id).getBoundingClientRect = () => SOURCE_BOX;
+      const held = await holdHeading(SOMEDAY.id);
+      await held.over(heading(SOMEDAY.id), at);
       await held.drop();
     }
     expect(wishlistFolderReorder).not.toHaveBeenCalled();
   });
 
   /**
-   * **The cycle fence.** `wishlist_folders.parent_id` is `ON DELETE CASCADE` on itself, so a cycle
-   * is a graph SQLite's recursive cascade would walk forever the day the folder is deleted — and
-   * the backend refuses the move in words. Asked of the *destination parent*, which is what covers
-   * `inside` a descendant and `before` one with a single clause.
+   * **The cycle fence, and on shelves it is a gesture a reader can make**: `Backordered` is on the
+   * root's wall under `Ordered`, so `Ordered` dragged onto it is one move. Every landing is a cycle
+   * — inside its own child, or before/after it, which is inside `Ordered` itself — and no mark is
+   * drawn for a write that will be refused.
    *
-   * **No gesture on this page reaches it**: the wall draws exactly one level, so every card on it
-   * is a **sibling** of every other and a descendant is never on screen beside its ancestor.
-   * Standing inside `Ordered` puts its child `Backordered` on the wall and `Ordered` itself only
-   * in the breadcrumb — so the drag is built by hand, as the one a second surface drawing two
-   * levels at once would produce.
+   * `wishlist_folders.parent_id` is `ON DELETE CASCADE` on itself, so a cycle is a graph SQLite's
+   * recursive cascade would walk forever the day the folder is deleted — and the backend refuses
+   * the move in words. Asked of the *destination parent*, which is what covers `inside` a
+   * descendant and `before` one with a single clause.
    */
-  it("refuses a drawer dropped into something it holds", async () => {
-    const user = userEvent.setup();
-    const { container } = wrap(<WishlistPage />);
+  it("refuses a folder dropped onto a heading it holds, and marks nothing", async () => {
+    wrap(<WishlistPage />);
     await wall();
-    await user.click(screen.getByRole("button", { name: /^Ordered folder/ }));
-    await screen.findByRole("button", { name: /^Backordered folder/ });
 
-    const source = document.createElement("div");
-    source.textContent = "the parent";
-    source.getBoundingClientRect = () => SOURCE_BOX;
-    container.append(source);
-    const stop = folderDraggable({
-      element: source,
-      folder: (): FolderDrag => ({
-        folderId: ORDERED.id,
-        name: ORDERED.name,
-        parentId: null,
-        scope: "wishlist",
-      }),
-    });
-
-    // Every landing on the only card at this level is a cycle: `inside Backordered` files the
-    // parent under its own child, and `before`/`after Backordered` file it into `Ordered`, which
-    // is itself.
-    for (const at of [AT_START, AT_MIDDLE, AT_END]) {
-      stand("Backordered");
-      const held = await startPointerDrag(source);
-      expect(wearsDropMark(folderCard("Backordered"))).toBe(false);
-      await held.over(folderSlot("Backordered"), at);
+    for (const at of [AT_TOP, AT_MIDDLE, AT_BOTTOM]) {
+      stand(BACKORDERED.id);
+      const held = await holdHeading(ORDERED.id);
+      expect(wearsDropMark(heading(BACKORDERED.id))).toBe(false);
+      await held.over(heading(BACKORDERED.id), at);
+      expect(wearsDropMark(heading(BACKORDERED.id))).toBe(false);
       await held.drop();
     }
-    stop();
-    source.remove();
     expect(wishlistFolderReorder).not.toHaveBeenCalled();
   });
 
   /**
    * **The wish drag still files a wish**, which is the thing the folder gesture could have taken
-   * away without a single folder test noticing. Under pragmatic-dnd the danger was the registry —
-   * one element drop target per element, a second registration silently replacing the first — and
-   * under `@dnd-kit/dom` it is `accepts()`: the two targets now sit on nested boxes the pointer is
-   * inside at once, and only `readWishDrag` refusing a folder and `readFolderDrag` refusing a wish
-   * keeps the drop on the right one.
+   * away without a single folder test noticing. The two targets sit on one element the pointer is
+   * over, and only `readWishDrag` refusing a folder and `readFolderDrag` refusing a wish keeps the
+   * drop on the right one.
    */
-  it("still files a wish dropped on a drawer", async () => {
+  it("still files a wish dropped on a heading", async () => {
     const { container } = wrap(<WishlistPage />);
     await wall();
     await screen.findByText("Lightning Bolt");
 
-    await wishOnto(cardSources(container)[0], folderCard("Ordered"));
+    await wishOnto(cardSources(container)[0], heading(ORDERED.id));
 
-    expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
+    expect(wishlistSetFolder).toHaveBeenCalledWith(BOLT.id, ORDERED.id);
     expect(wishlistFolderReorder).not.toHaveBeenCalled();
   });
 
   /**
-   * **The other half of issue #283, and the half a folder card cannot do either.** A drawer could
-   * be pushed deeper by a drag from the day the wall learnt to reorder, and the only route back up
-   * was `Move to folder…` on its own `⋯`.
+   * Replaces "moves a drawer up a level when it is dropped on the up tile" (spec §6's last row).
    *
-   * `inside` is what the tile means, so the arriving drawer goes **last** in the level above —
+   * `inside` is what a segment means, so the arriving folder goes **last** in the level it names —
    * `Ordered` and `Someday` in the order the tree already draws them, then `Backordered`. There is
-   * no second position in the gesture for the reader to have meant: the tile is one landing wide,
-   * which is exactly the objection that keeps a breadcrumb segment from taking a folder at all.
+   * no second position in the gesture for the reader to have meant.
    */
-  it("moves a drawer up a level when it is dropped on the up tile", async () => {
+  it("moves a folder up a level when it is dropped on a breadcrumb segment", async () => {
     wrap(<WishlistPage />);
     await wall();
-    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
-    await screen.findByRole("button", { name: /^Backordered folder/ });
-    upTile("Wishlist").getBoundingClientRect = () => CARD_BOX;
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await findHeading(BACKORDERED.id);
+    const root = within(
+      screen.getByRole("navigation", { name: "Wishlist folders" }),
+    ).getByRole("button", { name: "Wishlist" });
+    root.getBoundingClientRect = () => CARD_BOX;
 
-    const held = await holdCard("Backordered");
-    await held.over(upTile("Wishlist"), AT_MIDDLE);
+    const held = await holdHeading(BACKORDERED.id);
+    await held.over(root, AT_MIDDLE);
     await held.drop();
 
-    await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
+    await waitFor(() =>
+      expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [
+        ORDERED.id,
+        SOMEDAY.id,
+        BACKORDERED.id,
+      ]),
+    );
   });
 
   /**
-   * **Every part of the tile is the same landing**, which is what makes it a target a reader can
-   * aim at while holding something: a folder card refuses its middle to a drawer that is already
-   * inside it and offers its edges instead, and this tile has no edges to offer. A drop a tenth of
-   * the way in writes exactly what a drop in the middle writes.
+   * **Every part of the segment is the same landing**, which is what makes it a target a reader can
+   * aim at while holding something: a heading offers its edges to a reorder, and a segment has no
+   * order to point into. A drop near its edge writes exactly what a drop in the middle writes.
    */
-  it("takes a drawer anywhere on the up tile, not only in its middle", async () => {
+  it("takes a folder anywhere on the segment, not only in its middle", async () => {
     wrap(<WishlistPage />);
     await wall();
-    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
-    await screen.findByRole("button", { name: /^Backordered folder/ });
-    upTile("Wishlist").getBoundingClientRect = () => CARD_BOX;
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await findHeading(BACKORDERED.id);
+    const root = within(
+      screen.getByRole("navigation", { name: "Wishlist folders" }),
+    ).getByRole("button", { name: "Wishlist" });
+    root.getBoundingClientRect = () => CARD_BOX;
 
-    const held = await holdCard("Backordered");
-    await held.over(upTile("Wishlist"), AT_END);
+    const held = await holdHeading(BACKORDERED.id);
+    await held.over(root, AT_BOTTOM);
     await held.drop();
 
-    await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
+    await waitFor(() =>
+      expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [
+        ORDERED.id,
+        SOMEDAY.id,
+        BACKORDERED.id,
+      ]),
+    );
+  });
+
+  /**
+   * **Spec §3.9 on the wall**: for the length of a folder drag every shelf folds to its heading —
+   * the nested one included — and nothing is written. `held.started` asked *during* the fold is the
+   * fence on A3: a heading row keyed by position remounts as the wall folds, its `Draggable` is
+   * destroyed with it, and the drag ends itself.
+   *
+   * **`Backordered` is what is picked up** — the nested heading, under a parent that folds with it,
+   * which is the harder of the two to keep a `Draggable` for. It is also what is on screen: the
+   * grid is virtualised to jsdom's 600px, and `Someday`, below two tiles and `Backordered`'s empty
+   * box, is not drawn until the wall folds — which is the fold's whole point, and is asserted.
+   */
+  it("folds every shelf to its heading while a folder is dragged, and unfolds when it ends", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wrap(<WishlistPage />);
+    await findHeading(BACKORDERED.id);
+    expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
+
+    const held = await holdHeading(BACKORDERED.id);
+
+    await waitFor(() => expect(screen.queryByAltText("Lightning Bolt")).toBeNull());
+    expect(held.started).toBe(true);
+    expect(heading(BACKORDERED.id)).toBeInTheDocument();
+    // The whole tree is a column of targets now, the heading below the fold included.
+    expect(await findHeading(SOMEDAY.id)).toBeInTheDocument();
+    expect(chevronOf(ORDERED.id, "Ordered")).toHaveAttribute("aria-expanded", "false");
+    expect(setShelfFolds).not.toHaveBeenCalled();
+
+    await held.cancel();
+
+    expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
+    expect(chevronOf(ORDERED.id, "Ordered")).toHaveAttribute("aria-expanded", "true");
   });
 });
 
@@ -3413,6 +3678,9 @@ describe("the price sweep", () => {
     // `limit`/`offset` are ignored by the command — the plan covers the whole query rather than
     // the page on screen, which is what makes its `considered` the header's own `Wishes` figure.
     expect(asked).toMatchObject({ limit: 0, offset: 0 });
+    // The sweep covers the whole wall — every shelf at and below the level, shut ones included —
+    // which is what makes its `considered` the header's own `Wishes` figure.
+    expect(asked.shelves).toEqual([0]);
   });
 
   it("draws the moves and sends only the rows left ticked", async () => {
@@ -3608,8 +3876,9 @@ describe("the search column", () => {
   /** And the whole point of the column: the drawer on screen is where a press files. */
   it("adds from the search into the folder on screen", async () => {
     wrap(<WishlistPage />, { searchOpen: true });
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
-    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+    await findHeading(ORDERED.id);
+    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     await add("Ordered");
 
@@ -3618,29 +3887,8 @@ describe("the search column", () => {
     );
   });
 
-  /**
-   * **Flatten means the root** (spec §5.3): the breadcrumb reads `Wishlist · all folders` and
-   * there is no folder on screen to be standing in, so the folder the reader last opened is not a
-   * destination the page may still file into behind their back.
-   *
-   * Driven by opening a folder *first* and then flattening, because the state this is about is a
-   * `folderId` that is still set underneath — flattening from the root would pass whether the page
-   * read the flag or not.
-   */
-  it("adds at the root while the cabinet is flattened", async () => {
-    wrap(<WishlistPage />, { searchOpen: true });
-    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
-    await waitFor(() => expect(lastQuery().folderId).toBe(1));
-
-    await userEvent.click(screen.getByRole("button", { name: /^Flatten/ }));
-    await waitFor(() => expect(lastQuery().flatten).toBe(true));
-
-    await add("Wishlist");
-
-    expect(wishlistAdd).toHaveBeenCalledWith(
-      expect.objectContaining({ cardId: "c1", folderId: null }),
-    );
-  });
+  // DELETED: "adds at the root while the cabinet is flattened" — Flatten is gone (spec §7). The
+  // other half of that call site, the root inside a deck's managed folder, is unchanged code.
 
   /**
    * **A wish for the printing the tile is of, not for the card.** `oracleId` is what an "any
@@ -3677,7 +3925,8 @@ describe("the search column", () => {
       return found;
     });
 
-    await wishOnto(tile, folderCard("Ordered"));
+    await findHeading(ORDERED.id);
+    await wishOnto(tile, heading(ORDERED.id));
 
     await waitFor(() =>
       expect(wishlistAdd).toHaveBeenCalledWith(
@@ -3717,13 +3966,8 @@ describe("a deck's managed wishlist", () => {
     quantity: 2,
     unitPrice: 3,
   };
-  const listByLevel = async (q: WishlistQuery) =>
-    q.flatten === true
-      ? page([BOLT, COPTER])
-      : page(q.folderId === MANAGED.id ? [COPTER] : q.folderId === undefined ? [BOLT] : []);
-
   beforeEach(() => {
-    wishlistList.mockReset().mockImplementation(listByLevel);
+    wishlistList.mockReset().mockImplementation(listByShelves([BOLT, COPTER]));
     wishlistFolderList.mockResolvedValue([...FOLDERS, MANAGED]);
     wishlistFolderSummary.mockResolvedValue([
       ...SUMMARY,
@@ -3732,33 +3976,49 @@ describe("a deck's managed wishlist", () => {
     useAppStore.setState({ activeView: "wishlist", openDeckId: null });
   });
 
+  /** Open the deck's list by its heading's title, and wait for its one wish to be drawn — the wall
+   *  names a tile by its art's `alt`, the table by a cell's text. */
   const openManaged = async () => {
-    await userEvent.click(
-      await screen.findByRole("button", { name: /^Rhystic Testbed managed wishlist/ }),
-    );
-    await waitFor(() => expect(lastQuery().folderId).toBe(MANAGED.id));
-    // The wall names a tile by its art's `alt`, the table by a cell's text.
+    await findHeading(MANAGED.id);
+    await userEvent.click(titleOf(MANAGED.id, "Rhystic Testbed"));
+    await waitFor(() => expect(levelAsked()).toBe(MANAGED.id));
     await (useAppStore.getState().wishlistView === "grid"
       ? screen.findByAltText("Smuggler's Copter")
       : screen.findByText("Smuggler's Copter"));
   };
 
-  it("draws the managed folder in a section of its own, with the deck glyph and no menu", async () => {
+  /**
+   * The section is a group label on the wall, and the managed folder is a shelf under it, **shut
+   * by default** (spec §3.4: a derived list, not a binder). Its title opens it, and nothing on its
+   * heading writes: no Add folder, no Rename, no `⋯`, and it is not picked up.
+   */
+  it("draws the managed folder as a shelf under Managed by decks, shut, with the deck glyph and nothing that writes", async () => {
     wrap(<WishlistPage />);
+    const shelf = await findHeading(MANAGED.id);
 
-    const section = await screen.findByRole("list", { name: "Managed by decks" });
-    const door = await within(section).findByRole("button", {
-      name: /^Rhystic Testbed managed wishlist, 1 wish/,
-    });
+    const label = screen.getByText("Managed by decks");
+    expect(follows(heading(SOMEDAY.id), label)).toBe(true);
+    expect(follows(label, shelf)).toBe(true);
+    expect(chevronOf(MANAGED.id, "Rhystic Testbed")).toHaveAccessibleName("Expand Rhystic Testbed");
+    expect(chevronOf(MANAGED.id, "Rhystic Testbed")).toHaveAttribute("aria-expanded", "false");
     // `Layers` — the collection's deck-group glyph, one fact wearing one picture.
-    expect(door.querySelector("svg.lucide-layers")).not.toBeNull();
-    expect(screen.getByRole("heading", { name: "Managed by decks" })).toBeInTheDocument();
-    // Not a drawer on the reader's wall, and nothing on it that writes.
-    const wall = screen.getByRole("list", { name: "Folders" });
-    expect(within(wall).queryByText("Rhystic Testbed")).not.toBeInTheDocument();
-    expect(within(wall).getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Manage Rhystic Testbed" })).not.toBeInTheDocument();
-    expect(door.closest(`[${DND_SOURCE_ATTR}]`)).toBeNull();
+    expect(shelf.querySelector("svg.lucide-layers")).not.toBeNull();
+    // Nothing on it writes, and it is not picked up.
+    expect(within(shelf).queryByRole("button", { name: /^Add folder/ })).toBeNull();
+    expect(within(shelf).queryByRole("button", { name: /^Rename/ })).toBeNull();
+    expect(
+      within(shelf)
+        .queryAllByRole("button")
+        .some((b) => b.getAttribute("aria-haspopup") === "menu"),
+    ).toBe(false);
+    // Not a drag source: a press on its row starts nothing (spec §3.9).
+    const held = await holdHeading(MANAGED.id);
+    expect(held.started).toBe(false);
+    await held.cancel();
+    // Shut, so none of its wishes is fetched — and the reader's own folders keep their controls.
+    expect(lastQuery().shelves).not.toContain(MANAGED.id);
+    expect(screen.queryByText("Smuggler's Copter")).toBeNull();
+    expect(addFolderOn(ORDERED.id)).toBeInTheDocument();
   });
 
   it("draws a managed wish with no stepper, no pencil, no removal and no drag", async () => {
@@ -3766,8 +4026,8 @@ describe("a deck's managed wishlist", () => {
     await openManaged();
 
     expect(screen.getByText(/Follows the deck “Rhystic Testbed”/)).toBeInTheDocument();
-    // Nothing can be made inside it, and nothing on the row writes.
-    expect(screen.queryByRole("button", { name: "New folder" })).not.toBeInTheDocument();
+    // Nothing can be made inside it — the path row's Add folder is absent, not greyed.
+    expect(screen.queryByRole("button", { name: /^Add folder/ })).toBeNull();
     expect(screen.queryByRole("spinbutton", { name: /Copies wanted of Smuggler/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Edit Smuggler's Copter/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Remove Smuggler's Copter/ })).toBeNull();
@@ -3776,7 +4036,11 @@ describe("a deck's managed wishlist", () => {
     // The count it wants is still said.
     expect(within(row).getByText("2")).toBeInTheDocument();
     // And the way up is still there — reading the folder is not a trap.
-    expect(upTile("Wishlist")).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("navigation", { name: "Wishlist folders" })).getByRole("button", {
+        name: "Wishlist",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("draws the managed wish's tile with no controls on the wall either", async () => {
@@ -3789,18 +4053,19 @@ describe("a deck's managed wishlist", () => {
     expect(cardSources(document.body)).toEqual([]);
   });
 
-  it("keeps the reader's own wishes editable beside a managed one when flattened", async () => {
+  /** Replaces "…when flattened": the managed shelf opened in place, beside the reader's wishes. */
+  it("keeps the reader's own wishes editable beside a managed shelf opened in place", async () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
-    await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
-    await screen.findByText("Smuggler's Copter");
 
+    await userEvent.click(chevronOf(MANAGED.id, "Rhystic Testbed"));
+
+    expect(setShelfFolds).toHaveBeenCalledWith("wishlist", { [MANAGED.id]: false });
+    await screen.findByText("Smuggler's Copter");
     expect(
       screen.getByRole("spinbutton", { name: /Copies wanted of Lightning Bolt/ }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("spinbutton", { name: /Copies wanted of Smuggler/ })).toBeNull();
-    // And the section goes with the rest of the cabinet: the filing is off screen.
-    expect(screen.queryByRole("list", { name: "Managed by decks" })).not.toBeInTheDocument();
   });
 
   it("never offers the managed folder as somewhere to move a wish", async () => {

@@ -1,9 +1,11 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { Trash2 } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
@@ -17,13 +19,16 @@ import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishlistSortKey, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
+import { SHELF_EMPTY_HEIGHT, SHELF_INDENT_PX, SHELF_RAIL_OFFSET_PX } from "@/lib/shelfLayout";
+import type { Shelf } from "@/lib/shelves";
 import type { SortSpec } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
 import { printingOf, wishLabel } from "./wish";
 import { wishDraggable } from "./wishDrag";
-import { ElsewhereMark, WishFolderCaption } from "./wishMarks";
+import { ElsewhereMark } from "./wishMarks";
+import { isBand, type WishTableRow } from "./wishShelfPlan";
 
 /** The band a flagged row grows by, to say what the reconciler found. */
 const REVIEW_HEIGHT = 20;
@@ -61,8 +66,6 @@ function columnsFor({
   onSetFolder,
   onChangePrinting,
   onAnyPrinting,
-  folderNameOf,
-  flattened,
   readOnly,
   marketplace,
   tip,
@@ -76,8 +79,6 @@ function columnsFor({
   onSetFolder: (row: WishRow, folderId: number | null) => void;
   onChangePrinting: (row: WishRow) => void;
   onAnyPrinting: (row: WishRow) => void;
-  folderNameOf: (folderId: number | null) => string | null;
-  flattened: boolean;
   marketplace: Marketplace;
   tip: TooltipBinder;
 }): TableColumn<WishRow>[] {
@@ -147,12 +148,12 @@ function columnsFor({
           <span className="min-w-0 truncate" {...tip(printingOf(row), { whenClipped: true })}>
             {printingOf(row)}
           </span>
-          {/* Spec §4's two marks and spec §5's editor, in the order and the place the wall's
-              caption strip draws them — this cell *is* that strip, and the whole reason the two
-              are one arrangement is that a reader who has learned one view has learned the other.
-              `wishMarks.tsx` is the one definition of the marks. */}
+          {/* Spec §4's mark and spec §5's editor, in the order and the place the wall's caption
+              strip draws them — this cell *is* that strip, and the whole reason the two are one
+              arrangement is that a reader who has learned one view has learned the other.
+              `wishMarks.tsx` is the one definition of the mark. (The folder caption Flatten drew
+              beside it went with Flatten: a shelf's band names the folder now.) */}
           <ElsewhereMark count={row.elsewhere} />
-          {flattened && <WishFolderCaption name={folderNameOf(row.folderId)} />}
           {/* **Spec §5: this is how the list reaches the two new writes, and it is the wall's own
               control rather than a second design for one job.** It goes in *this* column and not
               beside the remove button, and the reason is anchoring: `EditWishButton` opens its
@@ -331,6 +332,80 @@ function columnsFor({
   ];
 }
 
+/**
+ * The wish columns over a table that may carry heading bands. `VirtualTable` draws a band itself
+ * and never hands one to a cell (its rule 1), so the guard is for the type — `Row` is the union —
+ * rather than for a row that can arrive.
+ */
+function overBands(
+  columns: TableColumn<WishRow>[],
+  indentOf?: (row: WishRow) => number,
+): TableColumn<WishTableRow>[] {
+  return columns.map((column, at) => ({
+    ...column,
+    cell: (row: WishTableRow) => {
+      if (isBand(row)) return null;
+      // The first cell of a wish row carries its shelf's rails, and its content steps in by the
+      // same indent as the shelf's band, so no rail is drawn through the wish's name.
+      const indent = at === 0 && indentOf !== undefined ? indentOf(row) : 0;
+      if (indent === 0) return column.cell(row);
+      return (
+        <>
+          <ShelfRails count={indent} />
+          <span className="block min-w-0" style={{ paddingLeft: indent * SHELF_INDENT_PX }}>
+            {column.cell(row)}
+          </span>
+        </>
+      );
+    },
+  }));
+}
+
+/**
+ * Spec §3.3's rails, in the table: one 1px rail per indent level — the wall's own
+ * `SHELF_RAIL_OFFSET_PX + level × SHELF_INDENT_PX` — spanning the whole row, so a band and every
+ * wish row under it draw one continuous line down the table.
+ *
+ * **Two absolute boxes, and the outer one names neither `left` nor a width.** `left: auto`
+ * leaves it at its *static* position — the start of the cell it is the first child of — so the
+ * rails are measured from where the band's content and the first column begin, as the wall's are
+ * from the level's own column. `inset-y-0` measures it against the nearest *positioned* ancestor:
+ * the row, which `VirtualTable` positions in both of its modes. That is how it spans the full row,
+ * a flagged wish's review band included. **Nothing between the row and this box may be
+ * positioned**: the name cell's review sentence is `absolute` against the row too, and a
+ * `relative` cell would re-home both. jsdom lays nothing out, so the live pass is what checks
+ * the line is continuous. The suite counts the rails and reads their `left`.
+ */
+function ShelfRails({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <span aria-hidden="true" className="pointer-events-none absolute inset-y-0">
+      {Array.from({ length: count }, (_, level) => (
+        <span
+          key={level}
+          data-shelf-rail=""
+          className="absolute inset-y-0 border-l border-border"
+          style={{ left: SHELF_RAIL_OFFSET_PX + level * SHELF_INDENT_PX }}
+        />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The shelves' four drawings in the table (spec §3.10): the heading band, the dashed box an empty
+ * folder's band carries under its heading, the label over the decks' group, and the sticky bar —
+ * whose index is `VirtualTable`'s row under the header, answered `null` over a band.
+ */
+export interface WishTableBands {
+  heading: (shelf: Shelf) => ReactNode;
+  empty: (shelf: Shelf) => ReactNode;
+  label: (group: "decks" | "managed") => ReactNode;
+  sticky: (index: number) => ReactNode;
+  /** How many levels a wish's shelf is indented — its rails and its step-in. */
+  indentOf: (row: WishRow) => number;
+}
+
 /** The default `readOnly` — module scope so a caller passing none does not hand the column
  *  builder a fresh function every render. */
 const NOTHING_READ_ONLY = (): boolean => false;
@@ -412,8 +487,7 @@ export function WishlistTable({
   onSort,
   folders,
   nodes,
-  folderNameOf,
-  flattened,
+  bands,
   readOnly = NOTHING_READ_ONLY,
   onNeedNextPage,
   onSetQuantity,
@@ -425,9 +499,11 @@ export function WishlistTable({
   rowMenuKey,
   marketplace,
 }: {
-  rows: WishRow[];
+  rows: WishTableRow[];
   /** Wishes matching the filters, not wishes loaded — what assistive tech is told. */
   total: number;
+  /** The shelves' bands; `rows` carries {@link ShelfBandRow}s between the wishes when given. */
+  bands?: WishTableBands;
   /**
    * Whether a wish is the **deck's** — filed in a managed folder (issue #512), where the backend
    * refuses every edit. Such a row draws its count without a stepper, no pencil and no removal,
@@ -445,18 +521,6 @@ export function WishlistTable({
    *  {@link EditWishButton} — see its own doc for why it wants two shapes of one read. */
   folders: readonly WishlistFolder[];
   nodes: readonly FolderNode<WishlistFolder>[];
-  /**
-   * What to call the folder a wish is filed in — `Wishlist` for the root, and `null` for a folder
-   * this page cannot name, which draws nothing rather than a blank chip.
-   *
-   * The page's job rather than this component's: the page holds both the wishes and the folder
-   * list, and joining them per row here would be a lookup table rebuilt on every scrolled row.
-   */
-  folderNameOf: (folderId: number | null) => string | null;
-  /** Whether the list is showing every wish regardless of filing — spec §4's Flatten, and the
-   *  only state the folder caption is drawn in. The wall gates it on the same flag, so the two
-   *  drawings of one list cannot say different things about where a wish lives. */
-  flattened: boolean;
   onNeedNextPage: () => void;
   onSetQuantity: (row: WishRow, quantity: number) => void;
   onRemove: (row: WishRow) => void;
@@ -495,23 +559,54 @@ export function WishlistTable({
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   const tip = useTooltip();
 
+  /**
+   * A shelf's band, or `null` for a wish. Held still on `bands`, because `VirtualTable` asks it of
+   * every loaded row whenever its identity changes.
+   */
+  const band = useMemo(
+    () =>
+      bands &&
+      ((row: WishTableRow): ReactNode =>
+        !isBand(row) ? null : row.band === "label" ? (
+          bands.label(row.group)
+        ) : (
+          // Spec §3.3's indent, 32px a level and capped by `Shelf.indent`. `CardGrid` draws it on
+          // the wall; `VirtualTable` draws a band as one full-width cell and knows nothing of
+          // levels, so the table draws it here. An inline style, because the value is computed —
+          // a Tailwind class built from it would emit no rule. `flex-1`, because the band's cell
+          // is a flex row and the heading's hairline runs to the right edge only if this does.
+          <>
+            <ShelfRails count={row.shelf.indent} />
+            <div
+              className="min-w-0 flex-1"
+              style={{ paddingLeft: row.shelf.indent * SHELF_INDENT_PX }}
+            >
+              {bands.heading(row.shelf)}
+              {row.empty && bands.empty(row.shelf)}
+            </div>
+          </>
+        )),
+    [bands],
+  );
+
   return (
     <VirtualTable
       rows={rows}
-      columns={columnsFor({
-        folders,
-        nodes,
-        onSetQuantity,
-        onRemove,
-        onSetFolder,
-        onChangePrinting,
-        onAnyPrinting,
-        folderNameOf,
-        flattened,
-        readOnly,
-        marketplace,
-        tip,
-      })}
+      columns={overBands(
+        columnsFor({
+          folders,
+          nodes,
+          onSetQuantity,
+          onRemove,
+          onSetFolder,
+          onChangePrinting,
+          onAnyPrinting,
+          readOnly,
+          marketplace,
+          tip,
+        }),
+        bands?.indentOf,
+      )}
       label="Your wishlist"
       // A wishlist total is counted in full, so there is no unknown-count case here.
       total={total}
@@ -520,8 +615,21 @@ export function WishlistTable({
       onSort={onSort}
       // The reconciler walks `wishlist_entries` as well as `collection_entries`, so its
       // sentence is a band under the row it belongs to.
-      extraHeight={(row) => (row.needsReview ? REVIEW_HEIGHT : 0)}
-      isSelected={(row) => row.cardId !== null && row.cardId === selectedCardId}
+      //
+      // A band is `TABLE_BAND_HEIGHT` plus this (rule 2): an empty folder's band carries the dashed
+      // box under its heading and is that much taller.
+      extraHeight={(row) =>
+        isBand(row)
+          ? row.band === "heading" && row.empty
+            ? SHELF_EMPTY_HEIGHT
+            : 0
+          : row.needsReview
+            ? REVIEW_HEIGHT
+            : 0
+      }
+      isSelected={(row) => !isBand(row) && row.cardId !== null && row.cardId === selectedCardId}
+      band={band}
+      stickyBand={bands?.sticky}
       // **No `rowClassName` here, and the absence is the change rather than an omission.** A wish
       // the collection already covered used to recede to `text-dim` — a record rather than a
       // want, saying so without disappearing — and that dimming went on 2026-09-08 with the
@@ -539,7 +647,8 @@ export function WishlistTable({
       // carries is conditional — see {@link DraggableRow}. What still branches is opening the
       // pane, the caret and the menu, all three of which genuinely need a printing.
       renderRow={(props, row) =>
-        row.cardId ? (
+        // A band never reaches `renderRow` (rule 1); the first arm is for the type.
+        isBand(row) ? null : row.cardId ? (
           <DraggableRow
             {...props}
             wishId={row.id}

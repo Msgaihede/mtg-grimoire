@@ -105,7 +105,7 @@ const result = (wishId: number, status: WishOptimizeStatus): WishOptimizeResult 
 function draw(over: Partial<Parameters<typeof OptimizeWishlistDialog>[0]> = {}) {
   const props = {
     open: true,
-    scope: { folder: "Wishlist", flatten: false, filtered: false },
+    scope: { folder: "Wishlist", everyFolder: false, filtered: false },
     plan: planOf([move(1, { perCopy: 3 })]),
     loading: false,
     readError: null,
@@ -138,7 +138,7 @@ const body = () => footer().previousElementSibling as HTMLElement;
 
 describe("OptimizeWishlistDialog", () => {
   it("names the scope in its subtitle", () => {
-    draw({ scope: { folder: "Ordered", flatten: false, filtered: true } });
+    draw({ scope: { folder: "Ordered", everyFolder: false, filtered: true } });
     expect(screen.getByText("Ordered, matching your filters")).toBeInTheDocument();
   });
 
@@ -363,9 +363,9 @@ describe("OptimizeWishlistDialog", () => {
     ).toBeInTheDocument();
   });
 
-  it("captions each row with its drawer while the list is flattened", () => {
+  it("captions each row with its drawer while the sweep covers every folder", () => {
     draw({
-      scope: { folder: "Ordered", flatten: true, filtered: false },
+      scope: { folder: "Ordered", everyFolder: true, filtered: false },
       plan: planOf([move(1, { name: "Lightning Bolt", perCopy: 3, folderId: 4 })]),
       folderNameOf: (id) => (id === 4 ? "Backordered" : null),
     });

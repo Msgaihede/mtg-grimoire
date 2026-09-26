@@ -1,28 +1,23 @@
 /**
  * Where the reader is standing in the wishlist's filing cabinet, and the way back out of it.
- * Design spec §4 and §9.
+ * Design spec §4 and §9, and the shelves' §3.5 and §6.
  *
- * **Every segment except the last is a drop target, and that is the half of the drag the folder
- * cards cannot do.** A folder card only ever takes a wish *deeper*: drop on `Ordered` and the
- * wish goes into `Ordered`. Without somewhere to drop a wish that moves it *up*, the gesture is
- * one-way — a reader could file a wish three folders down by dragging and would then have to
- * reach for the panel's `Move to folder…` to undo it. The breadcrumb is that somewhere: dropping
- * on `Wishlist` un-files a wish to the root, dropping on an ancestor moves it there, and the two
- * directions are then the same gesture.
+ * **Every segment except the last is a drop target — for a wish, and since the shelves for a
+ * folder too.** A heading takes a card *into* a folder on the wall; without somewhere to drop one
+ * that moves it *up*, the gesture would be one-way. Dropping a wish on `Wishlist` un-files it, and
+ * on an ancestor moves it there. Dropping a **folder** on a segment files it last inside that
+ * level, which is what `ParentFolderCard`'s "Up one level" tile did before the tile went with the
+ * folder band (spec §7): `inside` already means "which drawer, and nothing about where in it", so
+ * the segment says "last" without having to draw it.
  *
  * The last segment is the folder the reader is already in, so it is neither a link nor a target:
- * it carries `aria-current="page"` and takes no drop, because "move this wish to where it already
- * is" is not an operation. At the root the trail is empty and `Wishlist` is itself that last
- * segment — the same rule, not a special case.
- *
- * **Flatten replaces the whole thing.** With no current folder there is no trail to draw and
- * nowhere for a drop to mean anything: the bar says `Wishlist · all folders` in plain inert words
- * and registers no target at all. A breadcrumb that stayed clickable while the list ignored
- * filing would be offering a place to stand that the view is not standing in.
+ * it carries `aria-current="page"` and takes no drop, because "move this where it already is" is
+ * not an operation. At the root the trail is empty and `Wishlist` is itself that last segment.
  */
 import { useRef } from "react";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
+import { useFolderDropTarget, type FolderDrag } from "@/lib/folderDrag";
 import type { WishlistFolder } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useWishDropTarget, type WishDrop } from "./wishDrag";
@@ -33,28 +28,23 @@ const ROOT = "Wishlist";
 
 export function WishlistBreadcrumb({
   trail,
-  flattened,
   onOpen,
   canDrop,
   onDropWish,
+  canDropFolder,
+  onDropFolder,
 }: {
   /** Root-most first, ending with the folder being shown. Empty at the root. */
   trail: readonly WishlistFolder[];
-  flattened: boolean;
   onOpen: (folderId: number | null) => void;
   /** Asked per segment rather than once for the bar — a wish already filed at the root refuses
    *  the root and still accepts an ancestor, so only the page can answer, and only per place. */
   canDrop: (drop: WishDrop, folderId: number | null) => boolean;
   onDropWish: (drop: WishDrop, folderId: number | null) => void;
+  /** A folder let go on a segment — filed last inside that level. Absent takes no folder. */
+  canDropFolder?: (drag: FolderDrag, folderId: number | null) => boolean;
+  onDropFolder?: (drag: FolderDrag, folderId: number | null) => void;
 }) {
-  if (flattened) {
-    return (
-      <nav aria-label="Wishlist folders" className="text-sm text-dim">
-        <span>{`${ROOT} · all folders`}</span>
-      </nav>
-    );
-  }
-
   const segments: { folderId: number | null; name: string }[] = [
     { folderId: null, name: ROOT },
     ...trail.map((folder) => ({ folderId: folder.id, name: folder.name })),
@@ -81,6 +71,8 @@ export function WishlistBreadcrumb({
                   onOpen={onOpen}
                   canDrop={canDrop}
                   onDropWish={onDropWish}
+                  canDropFolder={canDropFolder}
+                  onDropFolder={onDropFolder}
                 />
               )}
             </li>
@@ -92,12 +84,11 @@ export function WishlistBreadcrumb({
 }
 
 /**
- * One step of the trail a reader can go back to, and let go of a wish on.
+ * One step of the trail a reader can go back to, and let go of a wish or a folder on.
  *
- * Its own component because {@link useWishDropTarget} is a hook and a trail is a loop — the same
- * reason `FolderCard`'s `MemberArt` is one. It also keeps the target on the **button**: the ring
- * marks the thing that can be pressed, and a mark drawn on the `<li>` around it would sit over
- * the separator too.
+ * Its own component because the targets are hooks and a trail is a loop. Both register on the
+ * **button** — the ring marks the thing that can be pressed — and the folder half ignores the edge:
+ * a segment is one word with no order to point into, so every part of it means "last, in here".
  */
 function Segment({
   folderId,
@@ -105,18 +96,29 @@ function Segment({
   onOpen,
   canDrop,
   onDropWish,
+  canDropFolder,
+  onDropFolder,
 }: {
   folderId: number | null;
   name: string;
   onOpen: (folderId: number | null) => void;
   canDrop: (drop: WishDrop, folderId: number | null) => boolean;
   onDropWish: (drop: WishDrop, folderId: number | null) => void;
+  canDropFolder?: (drag: FolderDrag, folderId: number | null) => boolean;
+  onDropFolder?: (drag: FolderDrag, folderId: number | null) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const { armed, over } = useWishDropTarget({
     ref,
     canDrop: (drop) => canDrop(drop, folderId),
     onDrop: (drop) => onDropWish(drop, folderId),
+  });
+  const folder = useFolderDropTarget({
+    ref,
+    scope: "wishlist",
+    axis: "horizontal",
+    canDrop: (drag) => canDropFolder?.(drag, folderId) ?? false,
+    onDrop: (drag) => onDropFolder?.(drag, folderId),
   });
 
   return (
@@ -127,8 +129,8 @@ function Segment({
       className={cn(
         "min-w-0 truncate rounded-md px-1.5 py-0.5 text-dim",
         "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-        armed && DROP_RING,
-        over && cn("text-text", DROP_OVER),
+        (armed || folder.armed) && DROP_RING,
+        (over || folder.edge !== null) && cn("text-text", DROP_OVER),
         FOCUS,
       )}
     >

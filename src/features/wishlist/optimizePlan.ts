@@ -279,19 +279,18 @@ export function summariseOutcome(
   return { changed, merged, stale, missing, saved, unpriced, skipped };
 }
 
-/** What the subtitle calls a flattened list — every drawer at once, which is the one scope with
- *  no folder to name. */
+/** What the subtitle calls a sweep over every drawer at once — the one scope with no folder to name. */
 const EVERY_FOLDER = "Every folder";
 
 /**
  * Where the sweep is looking, as the dialog's subtitle says it.
  *
- * The plan is taken over **the query the list is currently drawn from** — the folder, the Flatten
- * switch and every active filter — so the reader has to be able to read the scope off the dialog
+ * The plan is taken over **the query the list is currently drawn from** — the folder, every shelf
+ * below it and every active filter — so the reader has to be able to read the scope off the dialog
  * without going back to the page behind the scrim. Three facts and three clauses:
  *
- * * **Flattened wins outright.** With the filing ignored there is no level to name, and the
- *   folder the reader last stood in is not what is being swept.
+ * * **Every folder wins outright.** At the root the sweep covers every shelf, so there is no one
+ *   level to name.
  * * **Otherwise it is the folder's own name**, and at the root that is whatever the page calls
  *   the root — the word is the caller's, because the page already owns it (`ROOT_LABEL`) and a
  *   second copy here is a second thing to keep in step. A folder id the page cannot name resolves
@@ -302,17 +301,17 @@ const EVERY_FOLDER = "Every folder";
  *   their whole wishlist would otherwise read the preview as the sweep having missed something.
  */
 export function optimizeScope({
-  flatten,
+  everyFolder,
   folder,
   filtered,
 }: {
-  flatten: boolean;
+  everyFolder: boolean;
   /** The level the list is drawn at, already named — `folderNameOf(folderId)` on the page, which
-   *  answers the root's own word for `null`. Ignored while `flatten` is on. */
+   *  answers the root's own word for `null`. Ignored while `everyFolder` is on. */
   folder: string;
   /** Whether any card filter is narrowing the list. */
   filtered: boolean;
 }): string {
-  const where = flatten ? EVERY_FOLDER : folder;
+  const where = everyFolder ? EVERY_FOLDER : folder;
   return filtered ? `${where}, matching your filters` : where;
 }

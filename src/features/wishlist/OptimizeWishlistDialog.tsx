@@ -147,9 +147,9 @@ export interface OptimizeWrite {
 /** Where the sweep is looking, in the three facts {@link optimizeScope} turns into a sentence. */
 export interface OptimizeScope {
   /** The level the list is drawn at, already named — the page's `folderNameOf(folderId)`, which
-   *  answers the root's own word for `null`. Ignored while flattened. */
+   *  answers the root's own word for `null`. Ignored while `everyFolder` is on. */
   folder: string;
-  flatten: boolean;
+  everyFolder: boolean;
   /** Whether any card filter is narrowing the list. */
   filtered: boolean;
 }
@@ -174,9 +174,9 @@ export interface OptimizeWishlistDialogProps {
   marketplace: Marketplace;
   apply: OptimizeWrite;
   /**
-   * What to call the folder a wish is filed in — used only while flattened, where a row can come
-   * from any drawer and the caption is the one thing telling two otherwise identical rows apart.
-   * Absent draws no folder at all.
+   * What to call the folder a wish is filed in — used only while the sweep covers every folder,
+   * where a row can come from any drawer and the caption is the one thing telling two otherwise
+   * identical rows apart. Absent draws no folder at all.
    */
   folderNameOf?: (id: number | null) => string | null;
   onClose: () => void;
@@ -225,7 +225,7 @@ export function OptimizeWishlistDialog({
         readError={readError}
         marketplace={marketplace}
         apply={apply}
-        flattened={scope.flatten}
+        captionFolders={scope.everyFolder}
         folderNameOf={folderNameOf}
         onClose={onClose}
       />
@@ -244,7 +244,7 @@ function OptimizeBody({
   readError,
   marketplace,
   apply,
-  flattened,
+  captionFolders,
   folderNameOf,
   onClose,
 }: {
@@ -253,7 +253,7 @@ function OptimizeBody({
   readError: string | null;
   marketplace: Marketplace;
   apply: OptimizeWrite;
-  flattened: boolean;
+  captionFolders: boolean;
   folderNameOf?: (id: number | null) => string | null;
   onClose: () => void;
 }) {
@@ -375,7 +375,7 @@ function OptimizeBody({
                   move={move}
                   on={ticked.has(move.wishId)}
                   currency={currency}
-                  folder={flattened ? (folderNameOf?.(move.folderId) ?? null) : null}
+                  folder={captionFolders ? (folderNameOf?.(move.folderId) ?? null) : null}
                   onToggle={(on) =>
                     setTouched((was) => toggleTicked(was ?? ticked, move.wishId, on))
                   }
@@ -529,7 +529,7 @@ function Row({
   move: WishOptimizeMove;
   on: boolean;
   currency: Marketplace["currency"];
-  /** The drawer this wish is filed in, drawn only while the list is flattened. */
+  /** The drawer this wish is filed in, drawn only while the sweep covers every folder. */
   folder: string | null;
   onToggle: (on: boolean) => void;
 }) {

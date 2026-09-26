@@ -12,6 +12,7 @@ import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
+import type { Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import { stubNarrowWindow } from "@/test-viewport";
@@ -22,9 +23,10 @@ import { WishlistTable } from "./WishlistTable";
 import { readWishDrag } from "./wishDrag";
 
 /**
- * What a wish says about itself in the two views that draw it — the drag it hands out, the folder
- * it is captioned with while the list is flattened, and the mark that catches the same card being
- * on the list twice. Design spec §4 and §9.
+ * What a wish says about itself in the two views that draw it — the drag it hands out, the copies
+ * it asks for, and the mark that catches the same card being on the list twice. Design spec §4
+ * and §9. (A fourth, the folder caption Flatten drew on every wish, went with Flatten: a shelf's
+ * heading says which folder a card is in now, once, above the cards it is about.)
  *
  * **One file for both views, because these are three contracts about one list rather than two
  * components' behaviour.** "The answer must not differ between two drawings of one list" is the
@@ -91,16 +93,10 @@ const NODES: FolderNode<WishlistFolder>[] = [
   { folder: EXPENSIVE, depth: 0, count: 0, children: [] },
 ];
 
-/** The page's join, as spec §4 describes it: the root reads `Wishlist`, a folder reads its name,
- *  and a folder the page cannot see answers `null`. */
-const folderNameOf = (folderId: number | null) =>
-  folderId === null ? "Wishlist" : folderId === EXPENSIVE.id ? EXPENSIVE.name : null;
-
 const noop = () => {};
 
 /** What either view may be handed instead of a `noop` — the two writes a case below drives. */
 interface Overrides {
-  flattened?: boolean;
   onSetQuantity?: (row: WishRow, quantity: number) => void;
 }
 
@@ -111,8 +107,6 @@ function wall(rows: WishRow[], over: Overrides = {}) {
       listKey="k"
       folders={[EXPENSIVE]}
       nodes={NODES}
-      folderNameOf={folderNameOf}
-      flattened={over.flattened ?? false}
       onNeedNextPage={noop}
       onSetQuantity={over.onSetQuantity ?? noop}
       onRemove={noop}
@@ -134,8 +128,6 @@ function list(rows: WishRow[], over: Overrides = {}) {
       onSort={noop}
       folders={[EXPENSIVE]}
       nodes={NODES}
-      folderNameOf={folderNameOf}
-      flattened={over.flattened ?? false}
       onNeedNextPage={noop}
       onSetQuantity={over.onSetQuantity ?? noop}
       onRemove={noop}
@@ -310,51 +302,6 @@ describe("a wish's drag", () => {
   });
 });
 
-describe("the folder caption", () => {
-  it("names each wish's folder while flattened, and reads Wishlist at the root", () => {
-    const rows = [{ ...BOLT, folderId: EXPENSIVE.id }, ANY];
-    const { unmount } = wall(rows, { flattened: true });
-    expect(screen.getByText("Expensive")).toBeInTheDocument();
-    expect(screen.getByText("Wishlist")).toBeInTheDocument();
-    // **Over the art, not in the chin** — it sat in the chin's caption beside the printing until
-    // 2026-09-08, between a truncating set code and a price at 10px. Anchored to the corner
-    // rather than merely found on the tile: a query that only asked whether the word was
-    // somewhere would have passed before the move and proves nothing about it.
-    expect(chinOf("LEA · 161")).not.toContainElement(screen.getByText("Expensive"));
-    expect(cornerOf("Expensive").classList.contains("bottom-[calc(0.25rem*var(--mark-scale,1))]"))
-      .toBe(true);
-    expect(cornerOf("Expensive").classList.contains("left-[calc(0.25rem*var(--mark-scale,1))]"))
-      .toBe(true);
-    unmount();
-
-    list(rows, { flattened: true });
-    expect(screen.getByText("Expensive")).toBeInTheDocument();
-    expect(screen.getByText("Wishlist")).toBeInTheDocument();
-  });
-
-  /**
-   * Inside a folder the caption would be the same word under every wish, said once already by the
-   * breadcrumb — so it is drawn on exactly one screen and both views agree about which.
-   */
-  it("draws nothing while the list is not flattened", () => {
-    const rows = [{ ...BOLT, folderId: EXPENSIVE.id }];
-    const { unmount } = wall(rows);
-    expect(screen.queryByText("Expensive")).toBeNull();
-    unmount();
-
-    list(rows);
-    expect(screen.queryByText("Expensive")).toBeNull();
-  });
-
-  /** A folder another window deleted between the two reads has no honest name, so the caption is
-   *  absent rather than blank. */
-  it("says nothing about a folder the page cannot name", () => {
-    wall([{ ...BOLT, folderId: 404 }], { flattened: true });
-    expect(screen.queryByText("Filed in")).toBeNull();
-    expect(screen.getByAltText("Lightning Bolt")).toBeInTheDocument();
-  });
-});
-
 /**
  * **The bottom-left corner: how many copies the reader wants, and nothing about the binder.**
  *
@@ -382,29 +329,8 @@ describe("the copies-wanted mark", () => {
     expect(screen.getByText("1 copy wanted")).toBeInTheDocument();
   });
 
-  /**
-   * **Two pills, each with its own backing** — the one corner on any wall in this app that asks
-   * `CardGrid` for `badgeChrome="bare"`.
-   *
-   * Sized to `Commander`, a single chip would leave `×4` alone on a row of empty backing half the
-   * tile wide. The two are asserted to be different elements *and* each to carry the felt, which
-   * is what tells this arrangement from one chip holding two lines.
-   */
-  it("gives the folder and the count a pill each", () => {
-    wall([{ ...BOLT, folderId: EXPENSIVE.id, quantity: 4 }], { flattened: true });
-
-    const folderPill = screen.getByText("Expensive").closest("span.bg-bg\\/85")!;
-    const countPill = screen.getByText("×4").closest("span.bg-bg\\/85")!;
-    expect(folderPill).not.toBeNull();
-    expect(countPill).not.toBeNull();
-    expect(folderPill).not.toBe(countPill);
-    // And the corner itself supplies none, or the two pills would sit on a third.
-    expect(cornerOf("×4").classList.contains("bg-bg/85")).toBe(false);
-  });
-
-  /** A wish at the root while the list is not flattened draws the count alone — one pill, no gap
-   *  above it, and nothing that could be mistaken for an unnamed folder. */
-  it("draws the count alone where there is no folder to name", () => {
+  /** One mark in the bottom-left corner since the folder pill went with Flatten — a pill of its own, because the corner is `bare`. */
+  it("draws the copies wanted alone, in a pill of its own", () => {
     wall([{ ...BOLT, quantity: 2 }]);
 
     expect(screen.getByText("×2")).toBeInTheDocument();
@@ -1008,5 +934,66 @@ describe("a wish's art", () => {
     const src = screen.getByAltText("Lightning Bolt").getAttribute("src");
     expect(src).toContain("mtgimg");
     expect(src).not.toContain("scryfall.io");
+  });
+});
+
+/**
+ * **On shelves the wall is the shelves' wall** — `CardGrid`'s `sections`, fed from the rows the
+ * page grouped by shelf. What this pins is the one thing `WishlistGrid` adds: each shelf's tiles are
+ * *its own* wishes, drawn after its heading and in shelf order, never the flat list re-cut.
+ */
+describe("on shelves", () => {
+  const shelf = (id: number, name: string): Shelf => ({
+    id,
+    kind: id === 0 ? "unfiled" : "folder",
+    group: "own",
+    name,
+    pathIds: [id],
+    path: [name],
+    depth: 0,
+    indent: 0,
+    lead: [],
+    leadIds: [],
+    headless: false,
+    collapsed: false,
+    locked: false,
+  });
+
+  it("draws each wish after its own shelf's heading, in shelf order", () => {
+    const filed = { ...ANY, folderId: EXPENSIVE.id };
+    render(
+      <WishlistGrid
+        rows={[BOLT, filed]}
+        shelves={{
+          sections: [
+            { shelf: shelf(0, "Not sorted"), tileCount: 1 },
+            { shelf: shelf(EXPENSIVE.id, "Expensive"), tileCount: 1 },
+          ],
+          rowsOf: (id) => (id === 0 ? [BOLT] : id === EXPENSIVE.id ? [filed] : []),
+          renderHeading: (s) => <h3>{s.name}</h3>,
+          renderEmpty: () => null,
+          renderLabel: () => null,
+          renderSticky: () => null,
+        }}
+        listKey="k"
+        folders={[EXPENSIVE]}
+        nodes={NODES}
+        onNeedNextPage={noop}
+        onSetQuantity={noop}
+        onRemove={noop}
+        onSetFolder={noop}
+        onChangePrinting={noop}
+        onAnyPrinting={noop}
+        marketplace={MARKETPLACES.tcgplayer}
+      />,
+    );
+
+    const follows = (a: Node, b: Node) =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    const loose = screen.getByRole("heading", { name: "Not sorted" });
+    const expensive = screen.getByRole("heading", { name: "Expensive" });
+    expect(follows(loose, screen.getByAltText("Lightning Bolt"))).toBe(true);
+    expect(follows(screen.getByAltText("Lightning Bolt"), expensive)).toBe(true);
+    expect(follows(expensive, screen.getByAltText("Ancestral Recall"))).toBe(true);
   });
 });
