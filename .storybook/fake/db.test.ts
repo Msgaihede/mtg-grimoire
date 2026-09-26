@@ -14462,10 +14462,10 @@ describe("deck tokens", () => {
 
   /**
    * **The chin's facts are the effective printing's** — `cardId ?? defaultCardId`, the same
-   * printing the picture above is — which is `deck_tokens.rs` resolving them off the row
-   * `picture_for` already chose. The Treasure is the fixture that can tell the two printings
-   * apart: deck 1 picked `tafr` while the resolver names `thob`, so a row reading the resolver's
-   * would print the wrong set code under the art the reader chose.
+   * printing the picture above is — which is `drawn_for` in `deck_tokens.rs` reading the
+   * picture and the chin off that one printing. The Treasure is the fixture that can tell the
+   * two printings apart: deck 1 picked `tafr` while the resolver names `thob`, so a row reading
+   * the resolver's would print the wrong set code under the art the reader chose.
    *
    * Read back off `CARDS` rather than written out, for the picture test's reason: they are a
    * generated file's contents.

@@ -85,7 +85,7 @@ export interface TokenPile {
   setQuantity: (oracleId: string, quantity: number) => void;
   /** Open the one art picker the editor mounts, on this token. */
   pickArt: (oracleId: string) => void;
-  /** The deck's stored rail index — `decks.token_rail_index`; `-1` is last. */
+  /** The drawn index: the in-flight move, else the stored column (`-1` is last). */
   railIndex: number;
   /** Move the pile to rail slot `index` (`-1` = last). Absent: the pile draws no grip. */
   moveTo?: (index: number) => void;

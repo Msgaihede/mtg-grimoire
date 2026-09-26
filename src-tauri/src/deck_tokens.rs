@@ -169,7 +169,7 @@ pub struct DeckTokenRow {
     /// every token nobody has picked art for and different for exactly the ones somebody has —
     /// so taking the resolver's would draw the deck's default Treasure on a tile the reader
     /// chose the other Treasure for, on the web and on the phone only, which is a wrong
-    /// picture rather than a missing one. [`picture_for`] is where that precedence lives.
+    /// picture rather than a missing one. [`drawn_for`] is where that precedence lives.
     ///
     /// Built by [`crate::image_uri::front_face_map`] rather than read off `image_uris`
     /// directly, because a `double_faced_token` carries **no** top-level blob — all 120 such

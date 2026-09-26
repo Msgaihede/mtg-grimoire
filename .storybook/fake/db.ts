@@ -5764,7 +5764,7 @@ function toDeckTokenRow(
     // **The printing the tile addresses**, which is `cardId ?? defaultCardId` and deliberately
     // not the row the resolver named: those two differ for exactly the tokens somebody has
     // picked art for, and taking the resolver's would draw the deck's default Treasure on the
-    // tile the reader chose the other Treasure for. `picture_for` in `deck_tokens.rs` is the
+    // tile the reader chose the other Treasure for. `drawn_for` in `deck_tokens.rs` is the
     // same precedence, and `over` is already in hand here so it costs no second lookup.
     imageUris: frontFaceImageUris(db, over?.cardId ?? defaultCardId),
     // User schema v51's token pile: the chin of that same printing, so the set code under the

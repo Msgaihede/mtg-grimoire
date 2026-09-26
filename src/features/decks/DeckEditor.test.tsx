@@ -8244,4 +8244,21 @@ describe("DeckEditor — the token pile (issue #507)", () => {
 
     expect(pile()!.querySelector("[data-theory-match]")).toBeNull();
   });
+
+  /**
+   * **And no read of the plan's tokens at all while the pile is off** — the marks are drawn on
+   * the pile and nowhere else, so a deck that keeps a plan with the pile switched off would
+   * otherwise pay a second `deck_tokens` on every Live open and after every deck write, for marks
+   * nothing draws. The cards' own plan read landing is what makes the absence a claim: it is
+   * enabled by the same render that would enable this one, so its effects have run by then.
+   */
+  it("never reads the plan's tokens on a deck with a plan and the pile off", async () => {
+    deckWith({ tokenStack: false, theoryEnabled: true });
+    await open();
+
+    await within(band()).findByRole("button", { name: TOKENS_HEADING });
+    await waitFor(() => expect(deckTheorySlots).toHaveBeenCalled());
+    expect(pile()).toBeNull();
+    expect(askedForTheory()).toBe(false);
+  });
 });

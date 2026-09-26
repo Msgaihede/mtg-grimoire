@@ -3976,12 +3976,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * write observer — this is a read.
    *
    * **A `null` deck id unless the question is being asked**, which is `theoryPlan`'s pair one
-   * read over: a deck that keeps a plan, read on its Live list. `null` disables the query (the
-   * hook gates on it) *and* moves its key off this deck's, so a disabled read cannot serve a
-   * cached answer the way issue #159's did — though the gate that means it is still on the
-   * derivation below, where the question is asked.
+   * read over — a deck that keeps a plan, read on its Live list — **and the pile drawn**
+   * (`tokenStack`): the marks are drawn on the pile and nowhere else, so with the pile off a read
+   * here would be a second `deck_tokens` on every Live open and after every deck write, answering
+   * marks nothing draws. `null` disables the query (the hook gates on it) *and* moves its key off
+   * this deck's, so a disabled read cannot serve a cached answer the way issue #159's did —
+   * though the gate that means it is still on the derivation below, where the question is asked.
    */
-  const planTokens = useDeckTokens(theoryEnabled && variant === "live" ? deckId : null, "theory");
+  const planTokens = useDeckTokens(
+    tokenStack && theoryEnabled && variant === "live" ? deckId : null,
+    "theory",
+  );
   const planTokenRows = planTokens.tokens;
   const planTokensLoaded = planTokens.query.isSuccess;
 
@@ -4100,8 +4105,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *   which is the same statement `theoryPlan` being `undefined` makes about the deck's cards.
    *
    * Memoised on the tokens, a `setQuantity` that `useDeckTokens` keeps stable while the rows are,
-   * the stored index, a stable move and the plan, so a keystroke anywhere in the editor does not
-   * hand four views a new pile.
+   * the drawn index (the in-flight move, else the stored column), a stable move and the plan, so a
+   * keystroke anywhere in the editor does not hand four views a new pile.
    */
   const tokenRailIndex = localTokenRail?.index ?? row?.tokenRailIndex ?? -1;
   const tokenPile = useMemo<TokenPile | undefined>(

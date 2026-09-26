@@ -114,8 +114,10 @@ drawings and take the new heading.
 
 `DeckTokenRow` gains, for the **effective** printing (the override, else the default — the one
 `image_uris` already describes): `set_code`, `collector_number`, `set_name`, `rarity`, `finishes`
-and `unit_price`. `deck_tokens` (the command) takes a `marketplace` and prices the printing with
-`sorting::price_expr`, nonfoil unless the printing only exists in another finish. The query key
+and `unit_price`. `deck_tokens` (the command) takes a `marketplace` and prices the printing
+through `sorting::printing_price_by_finish_expr`'s `nonfoil → foil → etched` chain, exactly as a
+deck row that names no finish is priced, because one card must not be priced two ways on one
+screen. The query key
 gains `marketplace`, and `src/features/decks/CLAUDE.md`'s "no marketplace in the key — nothing this
 answers is priced" is rewritten. `ipc.ts` mirrors the fields and `ipc.test.ts`'s struct table gains
 `DeckTokenRow` if it is not already on it. **Token prices never reach the deck's own totals**:
@@ -157,8 +159,10 @@ When the deck keeps a plan and the reader is on **Live**, `DeckEditor` reads the
 tokens too (a second `useDeckTokens(deckId, "theory")` — a separate query key, no second picker,
 no second write observer) and builds a token `TheoryPlan` with the existing `theoryMatchPlan`: each
 theory token's effective printing is a slot keyed by `theorySlot({ cardId, finish: null })` with
-its name. Each live token's mark is `theoryMatchMark(plan, { cardId: printingId, finish: null,
-name })`, honouring the deck's three mark switches. **Until PR 2** art and quantity are shared by
+its `oracleId` as the name key, and each live token's mark is `theoryMatchMark(plan, { cardId:
+printingId, finish: null, name: oracleId })`, honouring the deck's three mark switches — keyed on
+the oracle id and never the name, because a token's name does not identify it (Wurmcoil Engine's
+two tokens are both called `Wurm`). **Until PR 2** art and quantity are shared by
 both lists, so a token reads ✓ (the plan makes it too) or ✗ (only a substitute makes it) and never
 ±N — that is the data, not a limitation of the mark.
 
@@ -184,7 +188,7 @@ the debounce, and the request carries no format and no `playableOnly`.
 
 ## 4. PR 2 — printings and modes
 
-User schema **v51**. Rust-heavy; the UI changes are the band and the mode control.
+User schema **v52**. Rust-heavy; the UI changes are the band and the mode control.
 
 ### 4.1 Storage
 
@@ -250,7 +254,7 @@ entry** (`printingId`, `finish`, `quantity`, the token's `oracleId`, `name`, `su
 collector number and finish (nonfoil, foil, etched), so a token's printings sit together. The
 entry's `finish` is what the chin names, what `FoilOverlay` sheens and what the price is read at.
 
-### 4.3 Migration (v51)
+### 4.3 Migration (v52)
 
 - Every `deck_tokens` row with a non-null `card_id` becomes one entry **per list** (`live` and
   `theory`) at `coalesce(quantity, 1)`; its `card_id` and `quantity` are then cleared. Both lists,
@@ -327,7 +331,7 @@ nothing". A token write is a deck write, so it goes where every deck write goes:
   *"Added 1 × Treasure (foil)"*, *"Treasure 1 → 3"*, *"Swapped Treasure's art"*, *"Dismissed
   Soldier"*. A new kind rather than reusing `add` / `quantity`, because every existing reader of
   those kinds reads them as **deck cards**, and a Treasure in them is a card that is not in the
-  deck. Widening the kind `CHECK` is part of v51's rung; whether `deck_audit` is rebuilt or needs
+  deck. Widening the kind `CHECK` is part of v52's rung; whether `deck_audit` is rebuilt or needs
   anything in sync is the plan's to measure.
 - **The undo button's label** is the audit row's text, as for every step, so the button reads
   *"Undo — Treasure 1 → 3"*.
@@ -351,7 +355,7 @@ code — only the data changed.
 
 ## 5. PR 3 — Collection tokens
 
-User schema **v52**. Rust-heavy, and the one PR that moves the reader's cardboard.
+User schema **v53**. Rust-heavy, and the one PR that moves the reader's cardboard.
 
 ### 5.1 The folders
 
@@ -445,7 +449,7 @@ User schema **v52**. Rust-heavy, and the one PR that moves the reader's cardboar
   ordering; the mode control's three states; search-column routing of token layouts.
 - **cargo test**: each rung on a fresh file and on the ladder
   (`the_user_schema_is_byte_identical_to_what_the_ladder_builds`), and its undo constant; the
-  v51 migration's arms, finish included; every entry rule; rule 7's reconcile from every card-write
+  v52 migration's arms, finish included; every entry rule; rule 7's reconcile from every card-write
   call site in the census, with its undo restoring the token entries; each pull and return path against the
   collection's merge rule, at the finish grain; entering, leaving, deleting, clearing and importing
   over in Collection mode; every door refusing or redirecting a token out of a binder, and the

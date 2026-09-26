@@ -4268,7 +4268,8 @@ one edit and not four components disagreeing.
     that asks for nothing. `isSuccess` rather than a length, because a plan that genuinely makes no
     tokens is an answer, and its marks are the X. The same gate means **a marketplace switch
     briefly clears the marks** while the new key loads — they vanish rather than turn red, which
-    is the safe direction. A deck with no plan, or the Theory tab, makes no second read at all.
+    is the safe direction. A deck with no plan, the Theory tab, or a deck whose token pile is
+    switched off (nothing would draw the marks) makes no second read at all.
 - **A marked token's art button carries the plan's words in its name.** `TheoryMatchMark` is
   `aria-hidden`, so a pile drawn with the mark and without the words would be a fact that reaches
   sighted readers only; the button appends `theoryMatchLabel(tier, delta).toLowerCase()` after
