@@ -25,6 +25,7 @@ import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
 import { useHiddenTags } from "@/features/settings/useHiddenTags";
 import { SettingsSection } from "@/features/settings/panelChrome";
 import { count } from "@/lib/counts";
+import { holdInView } from "@/lib/holdInView";
 import { ipc } from "@/lib/ipc";
 import { REVIEW_KEY } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
@@ -160,13 +161,22 @@ export function SettingsPage({ update }: { update: Update }) {
    * on that group**: a query outranks the group, so a panel arriving under one would be a press that
    * visibly did nothing.
    *
-   * **The effect then brings the panel to the top of the pane**, `pickGroup`'s scroll aimed at the
-   * panel instead of the page, and for the same reason: the group alone was not enough. Needs
-   * review is the second panel under `Sync`, below a Sync panel tall enough to hold it off the
-   * screen — the live pass (2026-09-26, 1920×1080) found its heading at y=976 and its rows below
-   * the fold. It runs after the commit that drew the group, and it finds the panel by its heading's
-   * id, which `nav.ts` guarantees is the panel's own `SettingsSection` stem. `?.()` for
-   * `pickGroup`'s jsdom reason.
+   * **The effect then brings the panel to the top of the pane and holds it there while the page
+   * settles** — `holdInView`, `pickGroup`'s scroll aimed at the panel and repeated. The group alone
+   * was not enough: Needs review is the second panel under `Sync`, below a Sync panel tall enough to
+   * hold it off the screen, and the first pass (2026-09-26, 1920×1080) found its heading at y=976
+   * and its rows below the fold. **One scroll was not enough either**, which the re-check found the
+   * same day: on a first visit the Sync panel's reads have not answered when the group is drawn,
+   * the page is too short to scroll at all, and the panel grew 437 → 824px afterwards and pushed
+   * Needs review back down to y=976. So the hold re-aligns on every size change of the page root or
+   * the panel, and lets go at the reader's first key, press, wheel or touch, or after its window.
+   * The panel is found by its heading's id, which `nav.ts` guarantees is the panel's own
+   * `SettingsSection` stem.
+   *
+   * **The release is kept in a ref and never returned as the effect's cleanup**: spending the
+   * hand-off re-runs this effect with `pendingPanel` null, and a returned cleanup would end the hold
+   * on the very next commit. It ends on the reader, the window, a second hand-off, a group picked on
+   * the rail, or the page unmounting (the effect below).
    */
   const pendingPanel = useAppStore((s) => s.pendingSettingsPanel);
   const clearPendingPanel = useAppStore((s) => s.clearPendingSettingsPanel);
@@ -176,16 +186,24 @@ export function SettingsPage({ update }: { update: Update }) {
     setGroup(askedGroup);
     if (query !== "") setQuery("");
   }
+  const releaseHold = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (pendingPanel === null) return;
     clearPendingPanel();
     const panel = asPanelId(pendingPanel);
     if (panel === null) return;
-    root.current
-      ?.querySelector(`#${panel}-heading`)
-      ?.closest("section")
-      ?.scrollIntoView?.({ block: "start" });
+    const section = root.current?.querySelector(`#${panel}-heading`)?.closest("section");
+    if (section === null || section === undefined || root.current === null) return;
+    releaseHold.current?.();
+    releaseHold.current = holdInView(section, [root.current]);
   }, [pendingPanel, clearPendingPanel]);
+  useEffect(
+    () => () => {
+      releaseHold.current?.();
+      releaseHold.current = null;
+    },
+    [],
+  );
 
   const log = useErrorLog();
   const marketplace = useMarketplace();
@@ -254,6 +272,10 @@ export function SettingsPage({ update }: { update: Update }) {
    * a lie about the environment into shipped code to keep a test quiet.
    */
   const pickGroup = (id: GroupId) => {
+    // A reader's own press lands them somewhere else, so a panel still held from a hand-off is
+    // let go — the press already did that through the window listener; this says so here too.
+    releaseHold.current?.();
+    releaseHold.current = null;
     setGroup(id);
     setQuery("");
     root.current?.scrollIntoView?.({ block: "start" });

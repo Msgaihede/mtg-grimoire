@@ -565,6 +565,112 @@ describe("a panel another page asked for", () => {
   });
 
   /**
+   * **And it keeps the panel there while the page above it settles** (round 2 of the final fix
+   * wave). The live re-check (2026-09-26, debug build, 1920×1080) landed on a first visit with
+   * nothing to scroll yet: the Sync panel's reads then answered, it grew 437 → 824px, and the Needs
+   * review heading was pushed to y=976 with its rows below the fold. So the page watches its own
+   * root and the panel, and every size change puts the panel back at the top — until the reader
+   * does anything. jsdom lays nothing out, so the observer here is a stand-in the test fires; the
+   * real window is the live pass's to confirm.
+   */
+  describe("holding the panel in view while the page settles", () => {
+    class FakeResizeObserver {
+      static all: FakeResizeObserver[] = [];
+      observed: Element[] = [];
+      disconnected = false;
+      constructor(private readonly callback: ResizeObserverCallback) {
+        FakeResizeObserver.all.push(this);
+      }
+      observe(el: Element) {
+        this.observed.push(el);
+      }
+      unobserve() {}
+      disconnect() {
+        this.disconnected = true;
+      }
+      fire() {
+        this.callback([], this as unknown as ResizeObserver);
+      }
+    }
+    /** Every observer watching the Needs review panel — the page's hold, and nothing else here. */
+    const holding = () =>
+      FakeResizeObserver.all.filter((o) =>
+        o.observed.includes(screen.getByRole("region", { name: "Needs review" })),
+      );
+    /** The browser noticing the page change size: every observer on the panel hears it. */
+    const settle = () => act(() => holding().forEach((o) => o.fire()));
+    const panelScrolls = () =>
+      scroll.mock.contexts.filter(
+        (el) => el === screen.queryByRole("region", { name: "Needs review" }),
+      ).length;
+
+    beforeEach(() => {
+      FakeResizeObserver.all = [];
+      vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("puts the panel back at the top each time the page above it grows", async () => {
+      useAppStore.setState({ pendingSettingsPanel: "review" });
+      render(wrap(<SettingsPage update={NO_UPDATE} />));
+      // Spent first: the hold has to outlive the hand-off that started it.
+      await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+      expect(panelScrolls()).toBe(1);
+      expect(holding()).toHaveLength(1);
+
+      settle();
+      settle();
+
+      expect(panelScrolls()).toBe(3);
+    });
+
+    /** **Never fight the reader**: their first key, press or wheel ends the hold for good. */
+    it.each(["keydown", "pointerdown", "wheel"])(
+      "lets the reader have the page back from their first %s",
+      async (type) => {
+        useAppStore.setState({ pendingSettingsPanel: "review" });
+        render(wrap(<SettingsPage update={NO_UPDATE} />));
+        await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+        // Not vacuous: there is a hold to end.
+        expect(holding()).toHaveLength(1);
+
+        act(() => void window.dispatchEvent(new Event(type)));
+        settle();
+
+        expect(panelScrolls()).toBe(1);
+        expect(holding().every((o) => o.disconnected)).toBe(true);
+      },
+    );
+
+    it("lets go when the page goes away", async () => {
+      useAppStore.setState({ pendingSettingsPanel: "review" });
+      const page = render(wrap(<SettingsPage update={NO_UPDATE} />));
+      await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+      const observers = holding();
+      expect(observers).toHaveLength(1);
+
+      page.unmount();
+
+      expect(observers.every((o) => o.disconnected)).toBe(true);
+    });
+
+    /** Picking a group on the rail is the reader's own press, and it lands them somewhere else. */
+    it("lets go when the reader picks a group", async () => {
+      useAppStore.setState({ pendingSettingsPanel: "review" });
+      render(wrap(<SettingsPage update={NO_UPDATE} />));
+      await waitFor(() => expect(useAppStore.getState().pendingSettingsPanel).toBeNull());
+      const observers = holding();
+      expect(observers).toHaveLength(1);
+
+      await pickGroup("Updates");
+
+      expect(observers.every((o) => o.disconnected)).toBe(true);
+    });
+  });
+
+  /**
    * **A word this page has no panel for is dropped, and still spent** — scrolling nothing. The
    * store holds a plain string so it needs nothing from this feature; the narrowing is the page's.
    * A group's name is not a panel's (`carddata`), and a prototype key is neither.

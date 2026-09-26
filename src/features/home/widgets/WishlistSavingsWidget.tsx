@@ -55,6 +55,11 @@
  * 2026-09-26 found the skipped sentence on two lines at every two-cell width and three at a 1024px
  * window, against a reservation of one 22px line, and the body scrolling under it.
  *
+ * **And no row or line is drawn that the body cannot hold** ({@link savingsLayout}): the re-check
+ * the same day found a 2×2 at a 1024px window still drawing one wish row it had no room for, because
+ * the rows were cut with `rowsFit`'s floor of one. Where no row fits, the card is the figure and as
+ * many of the unpriced and skipped lines as fit — never a cut line restating the figure.
+ *
  * ## A press opens the dialog
  *
  * A row or the figure writes `setActiveView("wishlist")` and then `setPendingOptimize()` — the view
@@ -76,7 +81,7 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 
-import { footerLinePx } from "../fit";
+import { bodyGapPx, footerLinePx, type WidgetFit } from "../fit";
 import { wishlistSavingsKey } from "../keys";
 import {
   WidgetFigures,
@@ -185,6 +190,52 @@ export function unpricedOnly(n: number, marketplace: Marketplace): string {
   } no price at ${marketplace.label} — so there is no saving to count.`;
 }
 
+/** What a body this size draws of a card with moves to show. */
+export interface SavingsLayout {
+  /** Wish rows, the biggest savings first. */
+  rows: number;
+  /** Whether the cut line is drawn — only under rows, and only when some were cut. */
+  cut: boolean;
+  /** How many of the other lines are drawn: the unpriced line, then the skipped one. */
+  lines: number;
+}
+
+/**
+ * How much of the card a box holds: the figure always, then rows, the cut line and the other
+ * lines — **never a row or a line the body cannot hold, at any footprint down to `CELL_MIN`.**
+ *
+ * The furniture is reserved before the rows are laid in — the figure line, the unpriced and the
+ * skipped line when there is one of each, and the cut line **only when rows are cut**, which is
+ * known only once the rows without it are counted. The second count can only shrink, so the cut
+ * line is never drawn into space nothing reserved. **Rows are counted with `fitCount`, whose zero
+ * is a real answer, and never with `rowsFit`, which floors at one** — that floor drew a wish row
+ * into a 2×2 at the smallest window the app allows (1024px, a 181px card) and the body scrolled:
+ * 3px under the cut line alone, 27px comfortable and 16px compact under two lines (the live
+ * re-check, 2026-09-26, debug build). `ComingSoonWidget`'s `layoutFor` is the same rule.
+ *
+ * **Where no row fits under its lines, the card is the figure and as many of the other lines as
+ * fit under it**, in their drawing order, then the figure alone. No cut line there: with no row
+ * drawn it would restate the figure, which already counts every wish (`on N wishes`), so what is
+ * not drawn is still said truthfully. The figure's reservation less the gap nothing follows is what
+ * a figure with no row under it costs; at `CELL_MIN` that is 66px comfortable and 57 compact, inside
+ * a 96px and a 98px body.
+ */
+export function savingsLayout(
+  fit: WidgetFit,
+  { priced, lines, rowPx }: { priced: number; lines: number; rowPx: number },
+): SavingsLayout {
+  const figure = fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX;
+  const line = footerLinePx(fit);
+  const rows = (reserved: number) => fit.fitCount(rowPx, reserved) * fit.listColumns;
+  const all = rows(figure + lines * line);
+  if (priced <= all) return { rows: priced, cut: false, lines };
+  const room = rows(figure + (lines + 1) * line);
+  if (room > 0) return { rows: room, cut: true, lines };
+  const alone = figure - bodyGapPx(fit.h, fit.compact);
+  const fitting = Math.max(0, Math.floor((fit.bodyHeightPx - alone) / line));
+  return { rows: 0, cut: false, lines: Math.min(lines, fitting) };
+}
+
 export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactElement {
   const { marketplace, currency } = useMarketplace();
   const setActiveView = useAppStore((s) => s.setActiveView);
@@ -228,24 +279,20 @@ export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactEle
     );
   }
 
-  /**
-   * The furniture is reserved before the rows are laid in — the figure line, the unpriced and the
-   * skipped line when there is one of each, and the cut line **only when rows are cut**, which is
-   * known only once the rows without it are counted. The second count can only shrink, so the cut
-   * line is never drawn into space nothing reserved.
-   */
   const tile = fit.tier === 0;
   const captioned = tile || !fit.compact;
-  const rowH = captioned ? ROW_CAPTIONED : ROW_BARE;
-  const footer = footerLinePx(fit);
-  const base =
-    (fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX) +
-    (unpriced > 0 ? footer : 0) +
-    (skipped > 0 ? footer : 0);
-  const all = fit.rowsFit(rowH, base);
-  const room = priced.length > all ? fit.rowsFit(rowH, base + footer) : all;
-  const shown = priced.slice(0, room);
-  const cutWords = cutFooter(priced.slice(room), currency);
+  const layout = savingsLayout(fit, {
+    priced: priced.length,
+    lines: (unpriced > 0 ? 1 : 0) + (skipped > 0 ? 1 : 0),
+    rowPx: captioned ? ROW_CAPTIONED : ROW_BARE,
+  });
+  const shown = priced.slice(0, layout.rows);
+  const cutWords = layout.cut ? cutFooter(priced.slice(layout.rows), currency) : null;
+  // The other lines in their drawing order, as many as the box holds.
+  const lines: FooterWords[] = [
+    ...(unpriced > 0 ? [unpricedFooter(unpriced)] : []),
+    ...(skipped > 0 ? [skippedFooter(skipped, marketplace)] : []),
+  ].slice(0, layout.lines);
 
   const openOptimise = still
     ? undefined
@@ -258,9 +305,10 @@ export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactEle
 
   return (
     <>
+      {/* The rule under the figure divides it from rows, so it is drawn only above some. */}
       <WidgetFigures
         fit={fit}
-        divided
+        divided={shown.length > 0}
         figures={[
           {
             key: "saved",
@@ -277,37 +325,41 @@ export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactEle
           },
         ]}
       />
-      <WidgetRowList fit={fit} label="Wishes that could cost less">
-        {shown.map((move) => {
-          const saved = formatPrice(move.saved, currency);
-          const caption = moveCaption(move, currency);
-          // The whole row in one string (`DecksWidget.tsx`'s rule), saying what the figure is.
-          const pressLabel =
-            openOptimise === undefined ? undefined : `${move.name} · ${caption} · saves ${saved}`;
-          return tile ? (
-            <WidgetRow
-              key={move.wishId}
-              name={move.name}
-              caption={saved}
-              captionStrong
-              onPress={openOptimise}
-              pressLabel={pressLabel}
-            />
-          ) : (
-            <WidgetRow
-              key={move.wishId}
-              name={move.name}
-              caption={captioned ? caption : undefined}
-              value={saved}
-              onPress={openOptimise}
-              pressLabel={pressLabel}
-            />
-          );
-        })}
-      </WidgetRowList>
+      {/* No list at all when no row fits: an empty one would still take the body's gap. */}
+      {shown.length > 0 && (
+        <WidgetRowList fit={fit} label="Wishes that could cost less">
+          {shown.map((move) => {
+            const saved = formatPrice(move.saved, currency);
+            const caption = moveCaption(move, currency);
+            // The whole row in one string (`DecksWidget.tsx`'s rule), saying what the figure is.
+            const pressLabel =
+              openOptimise === undefined ? undefined : `${move.name} · ${caption} · saves ${saved}`;
+            return tile ? (
+              <WidgetRow
+                key={move.wishId}
+                name={move.name}
+                caption={saved}
+                captionStrong
+                onPress={openOptimise}
+                pressLabel={pressLabel}
+              />
+            ) : (
+              <WidgetRow
+                key={move.wishId}
+                name={move.name}
+                caption={captioned ? caption : undefined}
+                value={saved}
+                onPress={openOptimise}
+                pressLabel={pressLabel}
+              />
+            );
+          })}
+        </WidgetRowList>
+      )}
       {cutWords !== null && <WidgetFooterLine {...cutWords} />}
-      {unpriced > 0 && <WidgetFooterLine {...unpricedFooter(unpriced)} />}
-      {skippedLine}
+      {lines.map((words) => (
+        <WidgetFooterLine key={words.line} {...words} />
+      ))}
     </>
   );
 }

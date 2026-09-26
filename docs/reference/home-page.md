@@ -1851,6 +1851,26 @@ said — `1 more: no Cardmarket price` over `1 more has no price at Cardmarket t
 The skipped sentence is the one the live pass found on two and three lines; a test at 92px cells
 fails if the three reservations go back to 22.
 
+**And it never draws a row or a line the body cannot hold, down to `CELL_MIN`.** The re-check the
+same afternoon (debug build) found the one-line footers right everywhere but one box: a 2×2 at the
+smallest window the app allows, **1024px**, where the card is **181px** and its body 129. It drew the
+figure, **one wish row** and its lines, and scrolled — **3px** under the cut line alone, **27px**
+comfortable and **16px** compact under two lines — because the rows were cut with `rowsFit`, whose
+floor of one draws a row the arithmetic had just said did not fit. `savingsLayout(fit, …)` counts
+with `fitCount` instead (Coming soon's `layoutFor` is the same rule) and answers three faces:
+**every row with the lines under it**; **the rows that fit, the cut line and the lines**; and, where
+no row fits under its lines, **the figure and as many of the unpriced and skipped lines as fit**, in
+their order, then the figure alone. **No cut line on that last face** — with no row drawn it would
+restate the figure, which already counts every wish (`on N wishes`), so what is not drawn is still
+said truthfully. With no row there is no list and no rule under the figure. At the 1024px cell a 2×2
+therefore draws the figure alone, or the figure and both lines; at `CELL_MIN` (a 96px body
+comfortable, 98 compact) the figure and one line. The cost is the figure's reservation: 74px
+comfortable and 62 compact against the 52px the live pass measured it drawing, so a 2×2 at 1024
+compact with no other lines — which the re-check measured drawing a row and a cut line with no
+scroll — now draws the figure alone. `WishlistSavingsWidget.test.tsx` pins each face at the 1024px cell (derived
+from `fit.ts`: eight columns, `spanPx(2, 84.5) = 181`) and at `CELL_MIN`, in both densities, with a
+guard that `rowsFit` would have drawn a row in every one.
+
 **What it inherits from the plan and does not paper over**: wishes in a deck's managed wishlist and
 digital printings are skipped, and the cheaper printing may be in another language, because the
 plan has no language filter (§8). The card says what the dialog will offer.
@@ -2012,9 +2032,24 @@ section, found by its heading's id, which `nav.ts` guarantees is the `SettingsSe
 take `"constructor"` for a panel) and **drops** a word it has no panel for, which a newer build's word
 or a renamed panel would otherwise turn into a refusal nobody can see. It clears the Settings search
 as well — even where the rail already stands on the right group — because a query outranks the group
-and a panel arriving under one would be a press that visibly did nothing. jsdom lays nothing out, so
-`SettingsPage.test.tsx` pins the scroll *call* on the panel's section; where it lands on screen is
-the next live pass's to confirm.
+and a panel arriving under one would be a press that visibly did nothing.
+
+**One scroll was not enough, and the re-check found why the same afternoon.** With the Sync panel's
+reads already cached the landing was right — `scrollTop` 472, the heading at y=504, the first
+`Looks fine` row's bottom at 703. **On a first visit it was not**: at +26ms the Sync section was 437px
+and the page too short to scroll at all (`scrollTop` 0); the reads then answered, the section grew
+**437 → 754 → 824px**, and the heading was pushed to **y=976** with the first row at **1175**, below
+the fold, with nothing to re-scroll it — browser scroll anchoring holds a position already scrolled
+to, and from 0 there is none. So the landing **holds** the panel: `src/lib/holdInView.ts` aligns it
+at once and again on every size change of the page root or the panel (a `ResizeObserver`), and
+**lets go for good at the reader's first wheel, touch, press or key** — listened for on the window's
+capture phase, so no handler on the way can keep it alive — or after `HOLD_IN_VIEW_MS` (3s), or when
+the reader picks a group or the page unmounts. It never listens for `scroll`, because its own
+alignment fires those. The release lives in a ref rather than in the effect's cleanup, because
+spending the hand-off re-runs that effect on the next commit and a returned cleanup would end the
+hold there. jsdom lays nothing out, so `holdInView.test.ts` and `SettingsPage.test.tsx` pin the
+mechanism with a stand-in observer the tests fire; where the panel lands in the real window is the
+next live pass's to confirm.
 
 **`pendingOptimize: boolean`** — Wishlist savings' press, answered by `WishlistPage`, which opens
 `OptimizeWishlistDialog` with a **scope override**, `sweepOver: "whole"`, planning

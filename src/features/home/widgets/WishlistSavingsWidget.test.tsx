@@ -30,7 +30,16 @@ import { DEFAULT_MARKETPLACE, MARKETPLACES, type MarketplaceId } from "@/lib/mar
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
-import { makeFit, spanPx, type WidgetFit } from "../fit";
+import {
+  CELL_MIN,
+  cellFor,
+  columnsFor,
+  GRID_MIN_COLUMNS,
+  makeFit,
+  spanPx,
+  type WidgetFit,
+} from "../fit";
+import type { Density } from "../widgetSettings";
 import { wishlistSavingsKey } from "../keys";
 import {
   ALL_CHEAPEST,
@@ -102,8 +111,8 @@ function widget(): HomeWidget {
   return { id: "wishlistSavings", kind: "wishlistSavings", x: 0, y: 0, w: 3, h: 3, config: null };
 }
 
-function fitFor(w: number, h: number, cell = 104): WidgetFit {
-  return makeFit({ w, h, widthPx: spanPx(w, cell), heightPx: spanPx(h, cell), density: "comfortable" });
+function fitFor(w: number, h: number, cell = 104, density: Density = "comfortable"): WidgetFit {
+  return makeFit({ w, h, widthPx: spanPx(w, cell), heightPx: spanPx(h, cell), density });
 }
 
 const ROOMY = fitFor(3, 6);
@@ -346,6 +355,101 @@ describe("WishlistSavingsWidget", () => {
         "sr-only",
       );
       expect(screen.queryByText(ALL_CHEAPEST)).toBeNull();
+    });
+
+    /**
+     * **Never a row or a footer line the body cannot hold, down to `CELL_MIN`** (round 2 of the
+     * final fix wave). The live re-check (2026-09-26, debug build) measured a 2×2 at the smallest
+     * window the app allows, 1024px: the card was **181px**, the body drew the figure, one wish row
+     * and its footers, and scrolled — 3px under the cut line alone, 27px comfortable and 16px
+     * compact under two lines. `rowsFit` floors at one row, so the arithmetic that had answered
+     * *no row fits* drew one anyway. Rows are counted with `fitCount` now, and a box with room
+     * for none draws the figure and as many of its other lines as fit.
+     */
+    describe("a two-cell tile at the smallest boxes", () => {
+      /**
+       * The 1024px window's cell, derived the way the live pass read it: a two-cell card there
+       * measured 181px, so the grid is at its eight-column floor and a cell is `(181 − 12) / 2`.
+       * The canvas that gives is 760px, and `fit.ts` is asked to agree rather than trusted to.
+       */
+      const CANVAS_1024 = 760;
+      const CELL_1024 = cellFor(CANVAS_1024, columnsFor(CANVAS_1024));
+      it("measures the 1024px window's two-cell card at the 181px the live pass read", () => {
+        expect(columnsFor(CANVAS_1024)).toBe(GRID_MIN_COLUMNS);
+        expect(spanPx(2, CELL_1024)).toBe(181);
+      });
+
+      const eight = Array.from({ length: 8 }, (_, i) =>
+        move({ wishId: 10 + i, name: `Wish ${i}`, saved: 1, savedPerCopy: 1 }),
+      );
+      /** Eight priced moves; with `lines`, the unpriced FROG and then a skipped wish as well. */
+      function seedLines(lines: 0 | 1 | 2) {
+        seed(
+          plan(lines === 0 ? eight : [...eight, FROG], {
+            considered: 12,
+            alreadyCheapest: 2,
+            skipped: lines === 2 ? 1 : 0,
+          }),
+        );
+      }
+      const UNPRICED = "1 more: no current price";
+      const SKIPPED = "1 more: no TCGplayer price";
+      /** What the figure line reserves and one footer line costs, by density — the widget's own
+       *  two numbers (74 and 62) and `footerLinePx`'s 24 and 21. */
+      const FIG = { comfortable: 74, compact: 62 } as const;
+      const LINE = { comfortable: 24, compact: 21 } as const;
+
+      it.each([
+        ["1024px", CELL_1024, "comfortable", 0, []],
+        ["1024px", CELL_1024, "comfortable", 1, [UNPRICED]],
+        ["1024px", CELL_1024, "comfortable", 2, [UNPRICED, SKIPPED]],
+        ["1024px", CELL_1024, "compact", 0, []],
+        ["1024px", CELL_1024, "compact", 2, [UNPRICED, SKIPPED]],
+        ["CELL_MIN", CELL_MIN, "comfortable", 2, [UNPRICED]],
+        ["CELL_MIN", CELL_MIN, "compact", 2, [UNPRICED]],
+      ] as const)(
+        "at the %s cell (%spx), %s, with %i more line(s): the figure and the lines that fit, no row",
+        (_, cell, density, lines, drawn) => {
+          seedLines(lines);
+          const fit = fitFor(2, 2, cell, density);
+          // The guard: the old floor would have drawn a wish row here, under every line it had.
+          const cut = FIG[density] + (lines + 1) * LINE[density];
+          expect(fit.rowsFit(51, cut)).toBe(1);
+          expect(fit.fitCount(51, cut)).toBe(0);
+
+          draw({ fit });
+
+          expect(screen.queryByRole("listitem")).toBeNull();
+          expect(screen.queryByRole("list")).toBeNull();
+          // The figure still counts every wish, so a cut line would only say it again.
+          expect(
+            screen.getByRole("button", { name: "Could save $8.00 on 8 wishes · Optimise prices" }),
+          ).toBeInTheDocument();
+          expect(screen.queryByText(/more (wishes )?save/)).toBeNull();
+          const lineTexts = [UNPRICED, SKIPPED].filter((t) => screen.queryByText(t) !== null);
+          expect(lineTexts).toEqual(drawn);
+          // And what is drawn fits: the figure less the gap nothing follows, then each line.
+          const gap = density === "compact" ? 5 : 8;
+          expect(FIG[density] - gap + drawn.length * LINE[density]).toBeLessThanOrEqual(
+            fit.bodyHeightPx,
+          );
+        },
+      );
+
+      /** Where a row does fit under the cut line, the tile is rows and a cut line as before. */
+      it("draws the rows that fit and a cut line where there is room for both", () => {
+        seedLines(0);
+        const fit = fitFor(2, 3, CELL_1024, "comfortable");
+        const shown = fit.fitCount(51, 74 + 24);
+        expect(shown).toBeGreaterThan(0);
+
+        draw({ fit });
+
+        expect(screen.getAllByRole("listitem")).toHaveLength(shown);
+        expect(screen.getByText(`${8 - shown} more wishes save $${8 - shown}.00`)).toHaveClass(
+          "sr-only",
+        );
+      });
     });
 
     it("moves the saving under the name on a two-cell tile", () => {
