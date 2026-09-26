@@ -17,6 +17,8 @@ import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { CollectionSearchTab } from "./CollectionSearchTab";
+import { isTokenPrinting } from "./deckTokens";
+import { TOKENS_HEADING } from "./DeckTokensPanel";
 import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
 
@@ -848,8 +850,13 @@ function OpenPanel({
         // whole reason the rule reads the type line and nothing else: it is the only kind of
         // answer a button can promise in advance and a reader can predict from the card in
         // their hand. Found or created on the way in, so a deck with no Artifact pile grows
-        // one and the button said so.
-        const landsIn = targetName ?? autoCategoryFor(card);
+        // one and the button said so. **A token lands in Tokens & Emblems whatever pile is
+        // picked** (user schema v52): `deck::add_card` reroutes it into a token entry, so a
+        // button naming a pile would promise a place the press never goes — the live pass's
+        // `Add Dinosaur // Treasure to Creature`. `isTokenPrinting` is Rust's router's twin.
+        const landsIn = isTokenPrinting(card.layout, card.typeLine)
+          ? TOKENS_HEADING
+          : (targetName ?? autoCategoryFor(card));
         return (
           <button
             type="button"
