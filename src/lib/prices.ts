@@ -29,8 +29,14 @@ export function formatPrice(value: number | null, currency: Currency): string {
 }
 
 /**
- * What a reader typed into a **purchase price** box, as an amount — or `undefined` for "nothing
+ * A purchase price written as text — what a reader typed into a **purchase price** box, or what a
+ * spreadsheet put in a CSV's `Purchase price` cell — as an amount, or `undefined` for "nothing
  * to send".
+ *
+ * **Both of those read through this one function**, and they used to read through two that
+ * misread in opposite directions: the importer stripped every comma (`4,50` from a Danish or
+ * German spreadsheet stored as 450) and the box read any lone comma as a decimal point (`$1,500`
+ * stored as 1.5).
  *
  * **Here rather than in either box, because it has to read back what {@link formatPrice} writes.**
  * The add popup shows the marketplace's figure as its placeholder and the edit dialog seeds its
@@ -53,24 +59,158 @@ export function formatPrice(value: number | null, currency: Currency): string {
  * copy — a prize, a gift, a card out of somebody's spare box — and the reader had to press a key
  * to say it.
  *
- * The two separators are read the way both of this app's formatters write them: a lone comma is a
- * decimal point (`2,50`), a comma before a dot is grouping (`$1,234.56`, and `en-IE` writes
- * `€1,234.56` the same way). **The reverse arrangement is refused rather than guessed** —
- * stripping the dots out of a German `1.234,56` would record `1.23456`, a fifth of a cent, and a
- * number silently wrong is worse than a field that took nothing.
+ * **Text is stripped from the ends and never from between the digits** ({@link numeral}): a
+ * currency symbol, a code or a word before or after the number goes (`USD 4.50`, `4,50 kr`), and
+ * between its digits only a space or apostrophe used as a thousands mark may stand, and only
+ * before a group of three (`1 234,50`, `1'234.50`). Anything else there refuses the whole text —
+ * stripping it would glue the digits into another number (`1e3` → 13, `2 for 5` → 25,
+ * `10 (paid 8)` → 108). **Any dash or minus sign refuses it too** (`-4`, `−4,50`): a negative is
+ * no price anybody paid.
+ *
+ * **The separators are read off the digits rather than off a locale**, because no real price has
+ * three decimals:
+ *
+ * - **both `.` and `,` present — the later one is the decimal point** and the other is grouping
+ *   (`$1,234.50`, `1.234,50`);
+ * - **one separator that appears more than once is grouping** (`1,234,567`, `1.234.567`);
+ * - **a lone comma before exactly three digits is grouping** (`$1,500`, `12,000`);
+ * - **a lone dot before exactly three digits is refused** (`1.500`, `1.125`) — a thousands figure
+ *   in a Danish hand, and a three-decimal price in this app's own CSV, which writes `String(n)`.
+ *   Either reading is a silent thousand-fold error for somebody, and a refusal is one the reader
+ *   is told about ({@link unreadablePriceNote}, and the import preview's list);
+ * - **a lone separator before any other number of digits is a decimal point** (`4,50`, `0,99`,
+ *   `12.5`, `1.2345`) — which is the form this app's own CSV writes, so it round-trips.
+ *
+ * Grouping has to be well-formed to be read at all — a first group of one to three digits with no
+ * leading zero, then groups of exactly three — and **anything else is refused rather than
+ * guessed**: `1,2,3`, `1234,567`, and `0,500`, where reading five hundred would be the thousand-fold
+ * error this rule exists to stop. A number silently wrong is worse than a field that took nothing.
+ * Both of this app's formatters write `$1,234.56` and `€1,234.56`, which is the first arm.
  *
  * `PriceRange`'s `parsePrice` is the same shape over a different question — a *filter bound*,
  * where an empty end means "open" rather than "unstated" and no currency symbol ever appears
  * because that control has no hint to retype. Two meanings, two functions, deliberately.
  */
 export function parsePurchasePrice(draft: string): number | undefined {
-  const cleaned = draft.replace(/[^\d.,-]/g, "");
-  if (cleaned === "") return undefined;
-  const dot = cleaned.lastIndexOf(".");
-  const comma = cleaned.lastIndexOf(",");
-  if (dot !== -1 && comma > dot) return undefined;
-  const value = Number(dot === -1 ? cleaned.replace(",", ".") : cleaned.replace(/,/g, ""));
-  return Number.isFinite(value) && value >= 0 ? value : undefined;
+  const read = readSeparators(draft);
+  if (read.kind !== "plain") return undefined;
+  const value = Number(read.text);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * The sentence a purchase-price box draws under what it has just refused, or `null` when there is
+ * nothing to say — a blank box, or one that reads.
+ *
+ * **Beside the parser so the two cannot disagree about which texts are refused**, and one
+ * wording for both boxes. The ambiguous lone dot names both of its readings in spellings the
+ * parser takes without a second thought, and **without rounding** — `12.125` is offered back as
+ * `12.1250`, never a nearby `12.13`. Everything else gets the ordinary sentence, including `0.125`
+ * and `1000.125`, which cannot be thousands figures and so have only one reading to offer.
+ */
+export function unreadablePriceNote(draft: string): string | null {
+  if (draft.trim() === "" || parsePurchasePrice(draft) !== undefined) return null;
+  const read = readSeparators(draft);
+  return read.kind === "ambiguous"
+    ? `Write ${read.thousands} or ${read.decimal} — "${draft.trim()}" could mean either.`
+    : "That is not a price — try 12.50.";
+}
+
+/**
+ * A recorded price as text {@link parsePurchasePrice} reads back as exactly that number — what the
+ * edit box is seeded with and what a CSV's `Purchase price` cell holds.
+ *
+ * `String(n)` with one exception: a value with exactly three decimals gets a fourth, because
+ * `1.125` is the ambiguous lone dot the parser refuses and `1.1250` is not. Without it a row priced
+ * `1.125` — by an older build, a sync, or `1.1250` typed into the add popup — opened in its own
+ * edit box as unreadable.
+ */
+export function priceText(value: number): string {
+  const text = String(value);
+  return /\.\d{3}$/.test(text) ? `${text}0` : text;
+}
+
+/** Any dash or minus sign — hyphen-minus, the Unicode dashes, U+2212. */
+const DASH = /[-‐-―−]/;
+
+/** A space of any kind (NBSP and U+202F included) or an apostrophe used as a thousands mark:
+ *  after a digit and before a group of exactly three. */
+const GROUP_GAP = /(?<=\d)[\s'’](?=\d{3}(?!\d))/gu;
+
+/**
+ * The number in a text — digits and separators only, from its first digit to its last — or
+ * `undefined` when anything else stands between them.
+ *
+ * What is outside the first and last digit goes: a currency symbol, a code, a word. The one
+ * character kept from outside is a separator directly before the first digit (`.99`), unless it
+ * closes an abbreviation (`kr.4,50`). Between the digits only {@link GROUP_GAP} is removed; any
+ * other character there — a letter, a bracket, a stray space — is a text this cannot read.
+ */
+function numeral(draft: string): string | undefined {
+  if (DASH.test(draft)) return undefined;
+  const first = draft.search(/\d/);
+  if (first === -1) return undefined;
+  let last = draft.length - 1;
+  while (!/\d/.test(draft[last])) last -= 1;
+  const leading =
+    first > 0 && /[.,]/.test(draft[first - 1]) && !(first > 1 && /\p{L}/u.test(draft[first - 2]));
+  const body = draft.slice(leading ? first - 1 : first, last + 1).replace(GROUP_GAP, "");
+  return /^[\d.,]+$/.test(body) ? body : undefined;
+}
+
+/** Well-formed grouping by one separator: one to three digits with no leading zero, then one or
+ *  more groups of exactly three. */
+const GROUPED: Record<"." | ",", RegExp> = {
+  ".": /^[1-9]\d{0,2}(?:\.\d{3})+$/,
+  ",": /^[1-9]\d{0,2}(?:,\d{3})+$/,
+};
+
+/** What {@link readSeparators} made of a text: digits `Number` can read, the one refusal that
+ *  has two readings, or a refusal. */
+type Separated =
+  | { kind: "plain"; text: string }
+  | { kind: "ambiguous"; thousands: string; decimal: string }
+  | { kind: "refused" };
+
+/**
+ * {@link parsePurchasePrice}'s rule, as a reading: grouping gone and the decimal point spelt `.`
+ * when the text follows one of its arms. `ambiguous` is the lone dot before three digits when the
+ * thousands reading is well-formed grouping, carrying both readings for
+ * {@link unreadablePriceNote}.
+ */
+function readSeparators(draft: string): Separated {
+  const text = numeral(draft);
+  if (text === undefined) return { kind: "refused" };
+  const cut = Math.max(text.lastIndexOf("."), text.lastIndexOf(","));
+  if (cut === -1) return { kind: "plain", text };
+  const mark = text[cut] as "." | ",";
+  const other = mark === "." ? "," : ".";
+  const whole = text.slice(0, cut);
+  const tail = text.slice(cut + 1);
+  if (whole.includes(other)) {
+    // Both separators: `mark` is the decimal point, so it may appear once, and `other` groups.
+    if (whole.includes(mark) || !GROUPED[other].test(whole)) return { kind: "refused" };
+    return { kind: "plain", text: `${whole.split(other).join("")}.${tail}` };
+  }
+  if (whole.includes(mark) || (mark === "," && tail.length === 3)) {
+    // Repeated, or a lone comma before exactly three digits: grouping, and nothing else.
+    return GROUPED[mark].test(text)
+      ? { kind: "plain", text: text.split(mark).join("") }
+      : { kind: "refused" };
+  }
+  if (tail.length === 3) {
+    // A lone dot before exactly three digits: a thousand and a decimal are both honest readings.
+    // The decimal one is offered in a spelling that reads back exactly — a trailing zero dropped
+    // (`1.500` → `1.50`) or one added (`1.125` → `1.1250`) — and never rounded.
+    return GROUPED["."].test(text)
+      ? {
+          kind: "ambiguous",
+          thousands: `${whole}${tail}`,
+          decimal: tail.endsWith("0") ? `${whole}.${tail.slice(0, 2)}` : `${whole}.${tail}0`,
+        }
+      : { kind: "refused" };
+  }
+  return { kind: "plain", text: `${whole}.${tail}` };
 }
 
 /**

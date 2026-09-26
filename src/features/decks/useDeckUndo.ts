@@ -8,8 +8,11 @@
  * they have just undone, held here, thrown away with the window. A database-backed redo would
  * offer to resurrect a fortnight-old branch of edits they had forgotten making.
  *
- * The queue is a stack and **any other write to the deck clears it**, which is the ordinary
- * undo contract: once you have edited past a branch, the branch is gone.
+ * The queue is a stack and **any other write this window makes clears it**, which is the ordinary
+ * undo contract: once you have edited past a branch, the branch is gone. Another window's writes
+ * cannot reach this stack, so the backend is what enforces the contract across windows: a redo is
+ * taken only when it is `deck_undo::next_redo` and the deck still holds what the undo left, and
+ * the state query answers no redo otherwise — see `onError` below for what a refusal does here.
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -108,8 +111,10 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
     },
     onError: (e: unknown) => {
       // A redo that is refused is a redo that can never work — the change is not undone any
-      // more, or the window is looking at a deck somebody else edited. Drop it rather than
-      // leave a button that fails every time it is pressed.
+      // more, another window has undone or filed something since, or the rows it would
+      // overwrite changed without a step (`MOVED_ON`). Drop it rather than leave a button that
+      // fails every time it is pressed. An undo's refusal needs no twin of this: its id is the
+      // backend's cursor, and Rust retires a step it refuses, so the re-read names the next one.
       setUndoneIds((ids) => ids.slice(0, -1));
       setError(String(e));
       invalidate();

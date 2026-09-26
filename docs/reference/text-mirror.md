@@ -354,6 +354,35 @@ re-cased file was claimed by the first test, missed by the second, and **dropped
 that had just written it**, because `put` runs before `prune`. Fixed 2026-08-25 by lowercasing both
 sides of that one lookup.
 
+**`prune`'s manifest arm deletes a line that differs from a planned path by case alone only when
+the disk says they are two files** (`run::alias_of`). A deck renamed `azula` → `Azula` is that
+line: on NTFS `put` confirms `Decks/azula/azula.txt` through the new spelling, and an exact-case
+`wanted` then deleted the whole deck and its directory in the same pass. **Lowercasing is not the
+fix** — on a case-sensitive filesystem the old spelling is another directory and must be pruned
+like any rename, which `a_case_only_rename_leaves_the_deck_under_its_new_spelling` asserts on both.
+
+- **The question is file identity, never spelling** (`same-file`: device and inode, or volume and
+  file index). Comparing `canonicalize` answers was the first fix and was wrong off Windows: glibc's
+  `realpath` keeps the spelling it is handed on a case-folding FAT/exFAT stick, a CIFS share or a
+  casefold directory, so the two spellings of one file read as two and the delete came back.
+- **Not knowing keeps the file.** A `NotFound` for the planned spelling while the old one exists is
+  an answer (two entries); any other failure to establish identity is `Alias::Unsettled`, and the
+  old file stays. Deleting on a guess can cost the deck; keeping costs an orphan that deleting the
+  folder clears.
+- **A kept file that is the planned one is re-spelt** (`run::respell`), because nothing else ever
+  would: `put` writes through the old name. Only the segments the rename changed — where the old
+  manifest line and the plan disagree — are touched; an ancestor the reader re-cased (`decks`) keeps
+  their spelling. It finds the disk's own entry by listing the parent, is best effort and uncounted,
+  and **is never retried**: the new manifest names only the new spelling, so a refused re-spelling
+  stays until the deck is next renamed.
+- **A kept entry's digest is forgotten**, or renaming back would find it vouching for a file
+  overwritten under the other name. `sweep_empty`'s keep set stays exact-case, since `remove_dir`
+  cannot take a directory with anything in it.
+- **Two decks one letter-case apart** (`Azula`, then `azula` → `azula (2)`) meet this arm when the
+  first goes and the second inherits `azula`: its planned path is the deleted deck's old one by case
+  alone. `two_decks_one_case_apart_hand_the_name_over_when_the_first_goes` pins that what is left is
+  one `azula` holding the survivor's list.
+
 ### What a reader loses if they delete `.mirror-manifest`
 
 **Stale files in directories the current plan no longer names are orphaned permanently, not for one

@@ -14,7 +14,7 @@ import { FOCUS } from "@/lib/focus";
 import type { FolderNode } from "@/lib/folderTree";
 import { ipc, ipcError } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
-import { formatPrice, parsePurchasePrice } from "@/lib/prices";
+import { formatPrice, parsePurchasePrice, unreadablePriceNote } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 
@@ -288,6 +288,13 @@ function AddForm({
    */
   const quoted = detail.data?.finishPrices[finish] ?? null;
   const priceHint = quoted === null ? undefined : formatPrice(quoted, marketplace.currency);
+  /**
+   * What the box cannot read, said under it — `EditCopy`'s note, in the same words. **The add is
+   * not held back by it**: a half-typed word still adds the copy with no price, which is this
+   * popup's rule for a box it cannot read. What changed is that the reader is told first, rather
+   * than finding a `1.500` they typed recorded as nothing.
+   */
+  const priceNote = unreadablePriceNote(priceDraft);
 
   const add = useMutation({
     mutationFn: () => {
@@ -580,11 +587,18 @@ function AddForm({
               // The Dropdown above it at `size="md"`, to the pixel — one row of two controls
               // that are the same height, the same corner and the same border, because they
               // are two answers to one question about one copy.
+              aria-invalid={priceNote !== null || undefined}
+              aria-describedby={priceNote === null ? undefined : `${id}-price-note`}
               className={cn(
                 "h-9 w-full rounded-md border border-border bg-bg px-2.5 text-sm text-text",
                 "tabular-nums placeholder:text-dim focus:border-accent focus:outline-none",
               )}
             />
+            {priceNote !== null && (
+              <p id={`${id}-price-note`} className="text-[0.7rem] leading-relaxed text-dim">
+                {priceNote}
+              </p>
+            )}
           </div>
         </>
       ) : (

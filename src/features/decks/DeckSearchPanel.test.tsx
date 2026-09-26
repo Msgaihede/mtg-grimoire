@@ -8,7 +8,7 @@ import {
   TOOLTIP_PANEL_ID,
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
-import type { FormatFilterOption } from "@/features/search/useCardSearch";
+import { DEBOUNCE_MS, type FormatFilterOption } from "@/features/search/useCardSearch";
 import type { CardSummary, CollectionRow, DeckCategory, SearchResponse } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
@@ -1478,6 +1478,42 @@ describe("DeckSearchPanel tabs", () => {
     ).toBeInTheDocument();
     expect(searchCards.mock.calls.length).toBe(asked);
   });
+
+  /**
+   * **`Any card` is one ladder on both tabs** (token stacks spec §3.6), and the collection tab is
+   * the half that was reported: *I can't select Any card*. The panel opens there, seeded with the
+   * deck's format, and the row was not offered at all — so a reader's own tokens, legal in no
+   * format, had no row that brought them back.
+   *
+   * One case per tab, each through the same press: pick the row, wait out the text debounce so a
+   * late re-seed would have had its chance to land, and read the trigger and the last request.
+   * The deck is a Commander deck on purpose, which is also what keeps the payload assertion from
+   * being vacuous: the first request of both tabs carried `format: "commander"`, so a last request
+   * with no format is the press's and nothing earlier.
+   */
+  it.each([
+    [COLLECTION, collectionList],
+    [ALL_CARDS, searchCards],
+  ])(
+    "picks Any card on the %s tab, keeps it, and sends no format and no playableOnly",
+    async (which, command) => {
+      const user = userEvent.setup();
+      panel({ defaultFormat: COMMANDER });
+      await screen.findByRole("group", { name: "Search in" });
+      if (which === ALL_CARDS) await user.click(tab(ALL_CARDS));
+      await waitFor(() => expect(command).toHaveBeenCalled());
+      const toggle = await screen.findByRole("button", { name: /^(Show|Hide) filters/ });
+      if (toggle.getAttribute("aria-expanded") !== "true") await user.click(toggle);
+      expect(formatSelect()).toHaveTextContent(COMMANDER.label);
+
+      await pickOption(user, "Format", "Any card");
+      await act(() => new Promise((resolve) => setTimeout(resolve, DEBOUNCE_MS + 50)));
+
+      expect(formatSelect()).toHaveTextContent("Any card");
+      await waitFor(() => expect(command.mock.lastCall?.[0].format).toBeUndefined());
+      expect(command.mock.lastCall?.[0].playableOnly).toBeUndefined();
+    },
+  );
 
   /**
    * **The choice outlives the deck**, which is what makes a default defensible at all.

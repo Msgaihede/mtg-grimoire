@@ -876,6 +876,35 @@ describe("auditSentence", () => {
   });
 
   /**
+   * `decks.token_rail_index` (user schema v51) — the Tokens & Emblems pile moved in the rail.
+   * **The word is `deck.rs`'s**, `tokenRail`, and it is the X-split test's trap again: the column
+   * suggests `tokenRailIndex`, an unrecognised field is "Changed the deck", and that sentence is
+   * true of every deck edit and therefore never fails.
+   *
+   * **No detail, and the numbers are why.** `-1` is *last* and any other value is a count of
+   * rail piles above the pile, clamped on read — so `from: -1, to: 1` is a position no reader
+   * could place from the history, and "was -1" would print a sentinel at somebody. The line says
+   * what happened: the pile moved, and Ctrl+Z moves it back.
+   */
+  it("names the token pile's move by the word `deck.rs` writes, with no position", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(deck({ field: "tokenRail", from: -1, to: 1 })).toEqual({
+      text: "Moved Tokens & Emblems",
+      detail: null,
+    });
+    // Back to last is the same move, and `-1` is never printed.
+    expect(deck({ field: "tokenRail", from: 2, to: -1 })).toEqual({
+      text: "Moved Tokens & Emblems",
+      detail: null,
+    });
+    // The wrong-but-plausible spellings: the camelCased column, and the column itself.
+    expect(deck({ field: "tokenRailIndex", from: -1, to: 1 }).text).toBe("Changed the deck");
+    expect(deck({ field: "token_rail_index", from: -1, to: 1 }).text).toBe("Changed the deck");
+  });
+
+  /**
    * **Two different rows wear `field: "theory"`.** The copy row carries `copied` and no
    * `from`/`to` at all; the toggle carries `to` and no `copied`. Reading only the toggle
    * answers a copy as `flag(undefined)` — "Turned the theory list off" — which is a sentence

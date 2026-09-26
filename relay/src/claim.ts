@@ -4,6 +4,7 @@ import {
   authIsCurrent,
   forgetGroup,
   MAX_GROUP_DEVICES,
+  roomFor,
   seedGroup,
 } from "./groupauth";
 import { hex } from "./md5";
@@ -208,9 +209,9 @@ interface Grant extends GroupGrant {
  * omission is the point rather than an economy.
  *
  * A device that reached `/token` by proving it is in the group has proved nothing about the
- * Patreon account behind it. Handing that device the credential which can revoke, rebind and
- * re-register the group would make every paired device able to evict every other one, which is
- * precisely the failure `pairing.rs` dropping the secret from its blob exists to prevent
+ * Patreon account behind it. Handing that device the Patreon-side credential would put a copy on
+ * a device `refresh_device` does not name — one a rotation removing it could not retire — which
+ * is precisely the failure `pairing.rs` dropping the secret from its blob exists to prevent
  * (spec §2.2). `sync_engine::entitlement::GroupGrant` deserialises this four-field shape.
  *
  * It is the *base* of `Grant` rather than an `Omit<Grant, "refresh">` so that `grantFor` can
@@ -376,9 +377,12 @@ async function grantFor(
  * reader's ciphertext sitting on the relay.
  */
 async function revoke(env: Env, subject: string, groupId: string | null): Promise<void> {
+  // `refresh_device` with it: a holder recorded beside a NULL secret names a device holding
+  // nothing, and the next reader of the row would have to know to ignore it.
   await env.DB.prepare(
     `UPDATE entitlements
-        SET status = 'dead', grace_until = NULL, refresh_secret = NULL, checked_at = ?
+        SET status = 'dead', grace_until = NULL, refresh_secret = NULL, refresh_device = NULL,
+            checked_at = ?
       WHERE subject = ?`,
   )
     .bind(Date.now(), subject)
@@ -621,7 +625,7 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   //
   // `isSafeInteger` rather than `isInteger`, because `1e300` passes the latter and is the one
   // value a claim could carry that permanently bricks its own group: `epoch + 1 === epoch` up
-  // there, so `recordRotation`'s `WHERE ? > max(epoch)` could never again be satisfied and no
+  // there, so `recordRotation`'s `WHERE ? = max(epoch) + 1` could never again be satisfied and no
   // removal would ever publish. An epoch is a removal counter starting at zero, so 2^53 is not
   // a ceiling any group reaches by living.
   if (typeof body.epoch !== "number" || !Number.isSafeInteger(body.epoch) || body.epoch < 0) {
@@ -689,21 +693,47 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // by accident, so `SyncPanel` says so beside the claim-code field before the press.
   const previous = row.group_id;
 
+  // **The cap is asked before anything is written, because the write below replaces the secret.**
+  // A sixth device refused after it would have taken the refresh secret from the device that was
+  // using it and handed the new one to nobody. `roomFor` only reads; `admitDevice` at the end is
+  // still the fence, one statement, for the claim that races another device to the last slot.
+  //
+  // **A group this subject is already bound to is still seeded on the way out**, which only
+  // matters on the one path that reaches this refusal: re-claiming a full group from a wiped
+  // reinstall. Seeding leaves that group able to rotate, which is how the reader frees a slot and
+  // gets out; a group this claim does not own is not written to at all.
+  if (!(await roomFor(env, group, device, now))) {
+    if (previous === group) await seedGroup(env, group, epoch, auth);
+    return json({ error: GROUP_FULL, code: DEVICE_LIMIT }, 403);
+  }
+
   // **The `WHERE` is a compare-and-swap on the binding this request read**, which is what the
   // trust-on-first-use clause becomes once a binding is allowed to move: `previous` rather than
   // `group`, so a second claim racing this one — onto any group, this one included — finds the
   // row already moved, changes nothing and is refused instead of overwriting the first's work.
   // Spelled `(group_id IS NULL OR group_id = ?)` because SQL's `=` is never true against a NULL,
   // and a first claim is exactly the case where `previous` is one.
-  const refresh = row.refresh_secret ?? randomSecret();
+  //
+  // **A fresh secret on every claim, and the device it was handed to beside it** (the group-wide
+  // design's §4: reconnecting mints a fresh secret). This read `row.refresh_secret ??
+  // randomSecret()`, so a re-claim handed back the secret already stored — and that secret opened
+  // `/rotate` then and opens `/token` still. A phone that pressed Connect and was then removed kept
+  // a working one through every later Connect press, on any device and onto any group the binding
+  // moved to. Minting here is what lets a re-claim shed a secret a removed device holds, and
+  // `refresh_device` is what lets `/rotate` retire one when the manifest it adopts omits that
+  // device. The app stores whatever
+  // this answers (`entitlement::claim` → `store_grant`), so the device pressing Connect is never
+  // left holding the secret this press replaced; a *different* device that held it meets a 401 on
+  // the refresh door and continues through the group door.
+  const refresh = randomSecret();
   let bound: D1Result;
   try {
     bound = await env.DB.prepare(
       `UPDATE entitlements
-          SET group_id = ?, refresh_secret = ?, status = ?, checked_at = ?
+          SET group_id = ?, refresh_secret = ?, refresh_device = ?, status = ?, checked_at = ?
         WHERE subject = ? AND (group_id IS NULL OR group_id = ?)`,
     )
-      .bind(group, refresh, status, now, row.subject, previous)
+      .bind(group, refresh, device, status, now, row.subject, previous)
       .run();
   } catch {
     // `entitlements_group` is unique, so this is another *subject* holding that group id — a
@@ -723,11 +753,10 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // **After the binding and never before.** Every refusal above leaves this group's key alone,
   // which is what a 409 has to mean: a claim that registered an auth for a group it did not bind
   // would hand the *next* device to claim that group a `group_auth` it cannot match, and no
-  // amount of re-claiming would clear it — `seedGroup` guards both of its statements on *this
-  // epoch being at least the highest the group has*, precisely so that a re-claim does not
-  // overwrite a live manifest or re-point the mirror backwards. `INSERT OR IGNORE` alone did not
-  // do that, because `group_keys` is keyed `(group_id, epoch)` and a device claiming from behind
-  // conflicts with nothing; see that function's doc.
+  // amount of re-claiming would clear it — `seedGroup` writes to a group with key rows only at the
+  // epoch it stands on and only with the auth registered there, precisely so that a re-claim does
+  // not overwrite a live manifest, re-point the mirror backwards, skip it ahead, or swap in an
+  // auth of the claimer's own making; see that function's doc.
   //
   // Allowed to throw. The alternative is answering a grant while the group's first auth was
   // never registered, which is a device that syncs today and cannot rotate ever; a 500 is the
@@ -738,13 +767,11 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // **Last, because a claim issues a token and the cap is a fence around tokens (spec §4.2).**
   // A claim that registered nothing would hand a sixth device a grant here and 403 it at its
   // next `/token` a day later — a Connect that reported success and a sync that never worked.
-  //
-  // **And after `seedGroup` rather than before it**, which only matters on the one path that
-  // reaches this refusal with the binding unchanged: re-claiming a group already holding five
-  // devices from a wiped reinstall. Seeding first leaves that group able to rotate, which is how
-  // the reader frees a slot and gets out; refusing ahead of it would leave a bound group with no
-  // registered auth, and every retry would refuse in the same place for ever.
-  if (!(await admitDevice(env, group, device, now))) return json({ error: GROUP_FULL, code: DEVICE_LIMIT }, 403);
+  // `roomFor` above has already refused the ordinary sixth device; this refuses only one that lost
+  // a race for the last slot, after its secret was written — the one case the early check leaves.
+  if (!(await admitDevice(env, group, device, now))) {
+    return json({ error: GROUP_FULL, code: DEVICE_LIMIT }, 403);
+  }
 
   // Annotated rather than inferred, so a mis-spelled field is a type error here instead of a
   // serde failure in `sync_engine::entitlement` that no test on either side can see.

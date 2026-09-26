@@ -1906,6 +1906,26 @@ describe("undo and redo", () => {
     expect(() => h.deck_undo_apply({ deckId: 1, auditId: stale })).toThrow(/edited since/);
   });
 
+  /** `deck_undo::next_redo`'s order: of two undone changes, only the one undone last may come
+   *  back, and the state command offers no redo for the other. */
+  it("redoes only the change undone last", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const made = h.deck_category_create({ deckId: 1, name: "Ramp" });
+    const first = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_category_rename({ id: made.id, name: "Acceleration" });
+    const second = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_undo_apply({ deckId: 1, auditId: second });
+    h.deck_undo_apply({ deckId: 1, auditId: first });
+
+    expect(h.deck_undo_state({ deckId: 1, redoId: second }).redo).toBeNull();
+    expect(() => h.deck_redo_apply({ deckId: 1, auditId: second })).toThrow(/edited since/);
+
+    h.deck_redo_apply({ deckId: 1, auditId: first });
+    h.deck_redo_apply({ deckId: 1, auditId: second });
+    expect(db.deckCategories.find((c) => c.id === made.id)?.name).toBe("Acceleration");
+  });
+
   /** A write that changed nothing wrote no history row, so it files no step — a Ctrl+Z that
    *  appears to do nothing is worse than one that says there is nothing left. */
   it("files no step for a write that recorded no history", () => {
@@ -4681,6 +4701,28 @@ describe("the collection's folders", () => {
     w.collection_folder_delete({ id: 2 });
     expect(db.collectionFolders.map((f) => f.id)).toEqual([1]);
     expect(db.collectionEntries.map((e) => e.folderId)).toEqual([1, null]);
+  });
+
+  /** `collection_folders::FOLDER_HOLDS_LOCKED` — the same refusal read **downward**. Deleting
+   *  `Binder` re-files everything under it, so a locked `Trade binder` inside it is scattered by
+   *  that press as surely as by its own. */
+  it("refuses to delete a folder with a locked folder inside it", () => {
+    const db = filed({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, folderId: 2 })],
+    });
+    const w = writeHandlers(db);
+    w.collection_folder_set_locked({ id: 2, locked: true });
+
+    expect(() => w.collection_folder_delete({ id: 1 })).toThrow(
+      /A folder inside that one is locked\. Unlock it before deleting this one\./,
+    );
+    expect(db.collectionFolders).toHaveLength(2);
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([2]);
+
+    w.collection_folder_set_locked({ id: 2, locked: false });
+    w.collection_folder_delete({ id: 1 });
+    expect(db.collectionFolders).toEqual([]);
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([null]);
   });
 
   /**
@@ -8195,6 +8237,74 @@ describe("the deck row itself", () => {
       tokenStack: true,
     });
     expect(writeHandlers(db).deck_duplicate({ id: 1 })).toMatchObject({ tokenStack: true });
+  });
+
+  /**
+   * `decks.token_rail_index` (user schema v51): where the Tokens & Emblems pile sits in the rail,
+   * as the number of rail piles drawn above it — and **`-1` is last**, which is the column's
+   * `NOT NULL DEFAULT -1` and every existing deck's place.
+   *
+   * Three things the crate does that a patch-shaped guess would not. **It is audited**, under
+   * `deck.rs`'s word `tokenRail`, because moving the pile is an arrangement the reader made and
+   * Ctrl+Z puts back — `token_stack` beside it is a view setting and writes no row. **`0` is a
+   * value**, the top of the rail, so a `||` coalesce would read the move to the top as no change.
+   * And **a duplicate carries it**, because an arrangement is part of the deck being copied.
+   */
+  it("keeps the token pile last by default, moves it, audits the move and copies it", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    // A seed written before the column is the DDL's `-1`, not an `undefined` the app must think
+    // about — and so is a deck made here.
+    expect(readHandlers(db).deck_list()[0]).toMatchObject({ tokenRailIndex: -1 });
+    expect(w.deck_create({ deck: { name: "Burn", formatKey: "modern" } })).toMatchObject({
+      tokenRailIndex: -1,
+    });
+
+    const history = () =>
+      db.deckAudit
+        .filter((a) => a.deckId === 1)
+        .map((a) => JSON.parse(a.payload) as Record<string, unknown>);
+
+    expect(w.deck_update({ id: 1, patch: { tokenRailIndex: 2 } })).toMatchObject({
+      tokenRailIndex: 2,
+    });
+    expect(history()).toContainEqual({ field: "tokenRail", from: -1, to: 2 });
+    // An absent key leaves it, and a patch naming the index it already has writes no row.
+    const rows = db.deckAudit.length;
+    expect(w.deck_update({ id: 1, patch: {} })).toMatchObject({ tokenRailIndex: 2 });
+    expect(w.deck_update({ id: 1, patch: { tokenRailIndex: 2 } })).toMatchObject({
+      tokenRailIndex: 2,
+    });
+    expect(db.deckAudit).toHaveLength(rows);
+    // The top of the rail is `0`, a value rather than an absence.
+    expect(w.deck_update({ id: 1, patch: { tokenRailIndex: 0 } })).toMatchObject({
+      tokenRailIndex: 0,
+    });
+    expect(history()).toContainEqual({ field: "tokenRail", from: 2, to: 0 });
+
+    expect(w.deck_update({ id: 1, patch: { tokenRailIndex: 3 } })).toMatchObject({
+      tokenRailIndex: 3,
+    });
+    expect(w.deck_duplicate({ id: 1 })).toMatchObject({ tokenRailIndex: 3 });
+    // Back to last is written as `-1` and read back as `-1`.
+    expect(w.deck_update({ id: 1, patch: { tokenRailIndex: -1 } })).toMatchObject({
+      tokenRailIndex: -1,
+    });
+  });
+
+  /** **Ctrl+Z moves it back**, which is the audit row earning its keep: the undo step is keyed on
+   *  the history row a write produced, so a move that recorded nothing would be a move no press
+   *  could take back — `token_stack`'s arrangement, and the wrong one for an arrangement. */
+  it("puts a moved token pile back on undo", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { tokenRailIndex: 1 } });
+
+    const state = h.deck_undo_state({ deckId: 1, redoId: null });
+    expect(state.undo).not.toBeNull();
+    h.deck_undo_apply({ deckId: 1, auditId: state.undo!.id });
+
+    expect(readHandlers(db).deck_list()[0]).toMatchObject({ tokenRailIndex: -1 });
   });
 
   /**
@@ -14239,8 +14349,8 @@ describe("the combos one card is in", () => {
  * stored the list would agree with itself whatever the walk did.
  */
 describe("deck tokens", () => {
-  const tokensOf = (db: FakeDb, deckId: number) =>
-    readHandlers(db).deck_tokens({ deckId, variant: "live" });
+  const tokensOf = (db: FakeDb, deckId: number, marketplace: MarketplaceId = "tcgplayer") =>
+    readHandlers(db).deck_tokens({ deckId, variant: "live", marketplace });
 
   /**
    * **The fence under `TOKEN_ORACLE`/`TOKEN_PRINTING`, and the reason those ids stopped being
@@ -14394,6 +14504,154 @@ describe("deck tokens", () => {
     const construct = rows.find((r) => r.name === "Construct")!;
     expect(construct.cardId).toBeNull();
     expect(construct.imageUris).toEqual(picture(construct.defaultCardId));
+  });
+
+  /**
+   * **The chin's facts are the effective printing's** — `cardId ?? defaultCardId`, the same
+   * printing the picture above is — which is `drawn_for` in `deck_tokens.rs` reading the
+   * picture and the chin off that one printing. The Treasure is the fixture that can tell the
+   * two printings apart: deck 1 picked `tafr` while the resolver names `thob`, so a row reading
+   * the resolver's would print the wrong set code under the art the reader chose.
+   *
+   * Read back off `CARDS` rather than written out, for the picture test's reason: they are a
+   * generated file's contents.
+   */
+  it("carries the chin facts of the printing the tile addresses", () => {
+    const byId = new Map(CARDS.map((c) => [c.id, c]));
+    const chin = (id: string) => {
+      const card = byId.get(id)!;
+      return {
+        setCode: card.setCode,
+        collectorNumber: card.collectorNumber,
+        setName: card.setName,
+        rarity: card.rarity,
+        finishes: card.finishes,
+      };
+    };
+    const rows = tokensOf(seed("starter"), 1);
+
+    const treasure = rows.find((r) => r.name === "Treasure")!;
+    expect(treasure.cardId).not.toBe(treasure.defaultCardId);
+    expect(treasure).toMatchObject(chin(treasure.cardId!));
+    // Not vacuous: the two printings really do differ in the fields asserted.
+    expect(chin(treasure.cardId!).setCode).not.toBe(chin(treasure.defaultCardId).setCode);
+
+    const construct = rows.find((r) => r.name === "Construct")!;
+    expect(construct).toMatchObject(chin(construct.defaultCardId));
+  });
+
+  /**
+   * **One price per row, drawn from `card_printings`' own figures for that printing at that
+   * marketplace** — the art picker's grid and the pile's chin quote one piece of cardboard, or
+   * the reader would watch a Treasure change price between the tile and the dialog it opens. The
+   * row is priced the way a deck card naming no finish is: the grid's `nonfoil → foil → etched`,
+   * first quoted wins — `printing_price_by_finish_expr` in the crate.
+   *
+   * All four marketplaces, because the argument is the point: a handler that ignored it would
+   * quote dollars under every heading and pass any single-marketplace assertion.
+   */
+  it("prices the effective printing the way card_printings does, at the marketplace asked", () => {
+    const db = seed("starter");
+    const prices = new Map<MarketplaceId, number | null>();
+    for (const marketplace of ["tcgplayer", "cardmarket", "cardkingdom", "manapool"] as const) {
+      const treasure = tokensOf(db, 1, marketplace).find((r) => r.name === "Treasure")!;
+      const { finishPrices } = readHandlers(db)
+        .card_printings({ oracleId: treasure.oracleId, marketplace })
+        .items.find((p) => p.id === treasure.cardId)!;
+      expect(treasure.unitPrice, marketplace).toBe(
+        finishPrices.nonfoil ?? finishPrices.foil ?? finishPrices.etched,
+      );
+      prices.set(marketplace, treasure.unitPrice);
+    }
+    // The Treasure is priced in dollars, and a feed quotes it at a different figure — which is
+    // what makes the loop above more than four readings of one number.
+    expect(prices.get("tcgplayer")).toEqual(expect.any(Number));
+    expect(prices.get("cardkingdom")).toEqual(expect.any(Number));
+    expect(prices.get("cardkingdom")).not.toBe(prices.get("tcgplayer"));
+  });
+
+  /** A printing nobody quotes is `null`, the em dash, and never `0` — a free Construct would be
+   *  a price nobody published, summed into the pile's heading as though it were one. */
+  it("answers an unpriced printing with null rather than zero", () => {
+    const construct = tokensOf(seed("starter"), 1).find((r) => r.name === "Construct")!;
+    expect(construct.unitPrice).toBeNull();
+  });
+
+  /**
+   * **A printing sold only in foil is priced at its foil price** — the deck card's unsaid arm,
+   * `printing_price_by_finish_expr`'s `nonfoil → foil → etched`, which `deck_tokens.rs` prices a
+   * token with. Without the chain a foil-only token reads unpriced on every marketplace, the
+   * exact defect that chain was written to close for deck cards.
+   *
+   * The world's `cards` is **replaced** rather than edited in place, because `seeds.ts` shares the
+   * array between worlds by reference and a column changed on it would change for every story.
+   */
+  it("prices a foil-only printing at its foil price", () => {
+    const db = seed("starter");
+    db.cards = db.cards.map((c) =>
+      c.id === TOKEN_PRINTING.treasureTafr
+        ? {
+            ...c,
+            finishes: '["foil"]',
+            prices: '{"usd":null,"usd_foil":"3.10","usd_etched":null,"eur":null,"eur_foil":null}',
+          }
+        : c,
+    );
+
+    const treasure = tokensOf(db, 1).find((r) => r.name === "Treasure")!;
+
+    expect(treasure.cardId).toBe(TOKEN_PRINTING.treasureTafr);
+    expect(treasure.finishes).toBe('["foil"]');
+    expect(treasure.unitPrice).toBe(3.1);
+  });
+
+  /**
+   * **The case a sole-finish rule gets wrong, and the reason the chain replaced it.** A printing
+   * sold in both finishes whose nonfoil nobody quotes has no *sole* finish to fall back to, so a
+   * rule reading `soleFinish(finishes) ?? "nonfoil"` prices it at a key with no value and draws an
+   * em dash — while the art picker beside it quotes the foil, and a deck card of the same printing
+   * naming no finish is priced at the foil too. The chain falls through to the first finish this
+   * marketplace quotes, whatever the printing is sold in.
+   */
+  it("prices a printing sold in both finishes at its foil price when only the foil is quoted", () => {
+    const db = seed("starter");
+    db.cards = db.cards.map((c) =>
+      c.id === TOKEN_PRINTING.treasureTafr
+        ? {
+            ...c,
+            finishes: '["nonfoil","foil"]',
+            prices: '{"usd":null,"usd_foil":"1.75","usd_etched":null,"eur":null,"eur_foil":null}',
+          }
+        : c,
+    );
+
+    const treasure = tokensOf(db, 1).find((r) => r.name === "Treasure")!;
+
+    expect(treasure.cardId).toBe(TOKEN_PRINTING.treasureTafr);
+    expect(treasure.finishes).toBe('["nonfoil","foil"]');
+    expect(treasure.unitPrice).toBe(1.75);
+  });
+
+  /** **An effective printing gone from the corpus answers `null` for all six**, which is the
+   *  crate's `row_of` over a `Printing` it could not load: a stored override outlives the
+   *  printing it names, and a chin with a stale set code would be worse than an empty one. */
+  it("answers no chin and no price for a picked printing the corpus no longer has", () => {
+    const db = seed("starter");
+    const treasureOracle = tokensOf(db, 1).find((r) => r.name === "Treasure")!.oracleId;
+    db.deckTokens = db.deckTokens.map((t) =>
+      t.deckId === 1 && t.oracleId === treasureOracle
+        ? { ...t, cardId: "00000000-0000-0000-0000-000000000000" }
+        : t,
+    );
+
+    expect(tokensOf(db, 1).find((r) => r.name === "Treasure")).toMatchObject({
+      setCode: null,
+      collectorNumber: null,
+      setName: null,
+      rarity: null,
+      finishes: null,
+      unitPrice: null,
+    });
   });
 
   /** The `imageUrisMissing` fault is the whole corpus with both URL columns empty, so every

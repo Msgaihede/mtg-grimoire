@@ -14,6 +14,7 @@ import { THEORY_MATCH_ATTR, THEORY_MATCH_NAME_LABEL } from "../CardMarks";
 import { buildGroups } from "../grouping";
 import { theoryMatchPlan, type TheoryMarkSwitches, type TheoryPlan } from "../theoryMatch";
 import { GridView } from "./GridView";
+import { MARKER_WORDS } from "./GroupHeader";
 
 const meta = {
   title: "Decks/Views/GridView",
@@ -57,9 +58,10 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // The Commander and the Sideboard; a category the reader named has no rules role.
-    expect(canvas.getAllByText("RULE")).toHaveLength(2);
-    expect(canvas.getByText("INACTIVE")).toBeInTheDocument();
+    // The Commander and the Sideboard; a category the reader named has no rules role. Both
+    // pile marks are icons, so each is found by its `sr-only` words.
+    expect(canvas.getAllByText(MARKER_WORDS.rule)).toHaveLength(2);
+    expect(canvas.getByText(MARKER_WORDS.inactive)).toBeInTheDocument();
     // The two marks, in the two corners they never share.
     expect(canvas.getByText("RULE BREAK")).toBeInTheDocument();
     // **The game changer is a crown printed on the copy count, and it is the same mark the

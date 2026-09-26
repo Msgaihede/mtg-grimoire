@@ -190,8 +190,38 @@ const FRAME_NAME_INSET = "calc(34px * var(--mark-scale, 1))";
  */
 const FRAME_BAR = "color-mix(in oklab, var(--color-border) 35%, var(--color-surface))";
 
+/**
+ * **The fields of a deck card this face reads, and nothing else** — so a caller that is not a
+ * deck row can hand it one without faking the other forty.
+ *
+ * That caller is the Tokens & Emblems pile (`views/TokenPile.tsx`'s `tokenFaceFacts`): a token is
+ * **not** a `deck_cards` row and must never be passed around as one, yet it is drawn as the same
+ * object a deck card is — the printed frame, the picture, the grey quantity tag, the plan's tick.
+ * Narrowing the prop is what lets both be true. Both deck callers still pass a whole `DeckCard`,
+ * which satisfies this by construction.
+ *
+ * **A field read below that is not in this list is a red build**, which is the point of spelling
+ * it as a `Pick` rather than a hand-written interface: a new mark reading `card.cmc` has to add it
+ * here, and the token adapter is then the one other place that has to answer for it.
+ */
+export type DeckCardFaceFacts = Pick<
+  DeckCard,
+  | "cardId"
+  | "needsReview"
+  | "imageUris"
+  | "finish"
+  | "finishes"
+  | "name"
+  | "manaCost"
+  | "typeLine"
+  | "quantity"
+  | "labelName"
+  | "labelColor"
+  | "gameChanger"
+>;
+
 export interface DeckCardFaceProps {
-  card: DeckCard;
+  card: DeckCardFaceFacts;
   /**
    * How wide the card is drawn, in px — the stack's `stackCardWidth(zoom)` and the Grid tile's
    * `scaled(TILE_WIDTH, zoom)`. The height follows by {@link cardFaceHeight} and nothing else here

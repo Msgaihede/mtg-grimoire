@@ -42,6 +42,7 @@ import type { ValidationIssue } from "../validation/types";
 import { packColumns, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
 import { hasTokenPile, TokenTextPile, type TokenPile } from "./TokenPile";
+import { TOKEN_ITEM, tokenRailSlot, withTokenPile } from "./tokenRail";
 
 /** Row pitch and header height, for the packer. Read off the classes below. */
 const ROW_HEIGHT = 22;
@@ -170,9 +171,10 @@ export function TextView({
    * a prop because a story is allowed to ask for narrow columns to show what packing does.
    */
   columnHeight?: number;
-  /** The deck's tokens and emblems, drawn as the last group of the rail (issue #507) — the
-   *  Stacks view's place for them, so the two column views agree. Absent, or with no tokens, the
-   *  view is exactly what it was. See `TokenPile.tsx`. */
+  /** The deck's tokens and emblems, drawn as a group of the rail at the slot the reader put them
+   *  in — last until they move them (issue #507, spec §3.4) — the Stacks view's place for them,
+   *  so the two column views agree. Absent, or with no tokens, the view is exactly what it was.
+   *  See `TokenPile.tsx`. */
   tokenPile?: TokenPile;
   className?: string;
 }) {
@@ -194,6 +196,12 @@ export function TextView({
   // has to know that those two piles are special.
   const { command, flow, rail } = splitRail(groups);
   const columns = packColumns([...command, ...flow], groupHeight, columnHeight);
+  // The rail as drawn: its groups with the tokens inserted at the reader's slot among them —
+  // `tokenRail.tsx`' `tokenRailSlot`, which reads a slot the rail has lost as last.
+  const drawsTokens = hasTokenPile(tokenPile);
+  const railItems = drawsTokens
+    ? withTokenPile(rail, tokenRailSlot(tokenPile.railIndex, rail.length), TOKEN_ITEM)
+    : rail;
 
   return (
     // Grows **down**, and scrolls sideways only when a single 300px column will not fit the desk
@@ -292,7 +300,7 @@ export function TextView({
           (added 2026-08-17): those piles arrive dimmed by the same route, and switching one back on
           returns it to the pack at its own `sortOrder`, because `splitRail` is derived per render
           and nothing here remembers where a pile was drawn last. */}
-      {(rail.length > 0 || hasTokenPile(tokenPile)) && (
+      {(rail.length > 0 || drawsTokens) && (
         <div
           {...{ [RAIL_ATTR]: "" }}
           style={{ width: COLUMN_WIDTH, flex: `0 0 ${COLUMN_WIDTH}` }}
@@ -306,23 +314,30 @@ export function TextView({
           // argument at its own rail.
           className="ml-auto flex flex-col gap-4"
         >
-          {rail.map((group) => (
-            <TextGroup
-              key={group.key}
-              group={group}
-              marketplace={marketplace}
-              violations={violations}
-              theoryPlan={theoryPlan}
-              noted={noted}
-              tracksCollection={tracksCollection}
-              onSelect={onSelect}
-              actions={actions}
-              selectedSlot={selectedSlot}
-              landed={landed}
-            />
-          ))}
-          {/* The tokens, last in the rail as they are in `StackView`'s — see `TokenPile.tsx`. */}
-          {hasTokenPile(tokenPile) && <TokenTextPile pile={tokenPile} />}
+          {/* The tokens among the rail's groups, at the slot `StackView` draws them at in its own
+              rail — last until the reader moves them there (spec §3.4). The index is spent as
+              order and nothing more: no grip, since the gesture is the stacked rail's. See
+              `TokenPile.tsx` and `tokenRail.tsx`. */}
+          {railItems.map((item) =>
+            item === TOKEN_ITEM ? (
+              // Always true here — the item is inserted only then — and asked so the type narrows.
+              drawsTokens && <TokenTextPile key="token-pile" pile={tokenPile} />
+            ) : (
+              <TextGroup
+                key={item.key}
+                group={item}
+                marketplace={marketplace}
+                violations={violations}
+                theoryPlan={theoryPlan}
+                noted={noted}
+                tracksCollection={tracksCollection}
+                onSelect={onSelect}
+                actions={actions}
+                selectedSlot={selectedSlot}
+                landed={landed}
+              />
+            ),
+          )}
         </div>
       )}
     </div>

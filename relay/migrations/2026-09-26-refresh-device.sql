@@ -1,0 +1,17 @@
+-- Run as its OWN --command, never through --file:
+--
+--   npx wrangler d1 execute mtg-grimoire-relay --remote \
+--     --command "ALTER TABLE entitlements ADD COLUMN refresh_device TEXT"
+--
+-- D1 has no `ADD COLUMN IF NOT EXISTS`, so a second run answers "duplicate column name" — the
+-- correct answer on a database that already has it, and harmless only when nothing else is in the
+-- same execute. Additive: existing rows read NULL, which `/rotate` treats as "holder unknown" —
+-- the group's next accepted rotation retires that secret whatever its manifest says.
+--
+-- Apply it BEFORE the deploy that ships `refresh_device`, and check it landed with
+-- `--command "SELECT refresh_device FROM entitlements LIMIT 0"`. A Worker on a database without
+-- the column fails quietly rather than loudly: `/claim`'s binding `UPDATE` throws, is caught as
+-- the unique-violation case, and answers a misleading 409 after the claim code is spent; `/rotate`
+-- records the epoch and then 500s, skipping `keepOnly`. The reverse order costs nothing — a column
+-- nothing reads yet is inert.
+ALTER TABLE entitlements ADD COLUMN refresh_device TEXT;

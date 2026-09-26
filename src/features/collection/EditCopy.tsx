@@ -46,7 +46,7 @@ import { FINISH_LABEL, isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type EntryPatch } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
-import { formatPrice, parsePurchasePrice } from "@/lib/prices";
+import { formatPrice, parsePurchasePrice, priceText, unreadablePriceNote } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 
 /**
@@ -114,9 +114,11 @@ export function readPrice(draft: string): PriceDraft {
 }
 
 /** A recorded price in a box: the bare number, because the currency is beside the field.
- *  `PriceRange.draftOf`'s rule, and `null` is an empty box rather than a `0`. */
+ *  `PriceRange.draftOf`'s rule, and `null` is an empty box rather than a `0`. Written by
+ *  {@link priceText}, so a price with exactly three decimals opens as `1.1250` — text the parser
+ *  reads back as itself — rather than the `1.125` it refuses as ambiguous. */
 function draftOf(value: number | null): string {
-  return value === null ? "" : String(value);
+  return value === null ? "" : priceText(value);
 }
 
 /**
@@ -338,7 +340,14 @@ function EditCopyForm({
    */
   const [priceDraft, setPriceDraft] = useState(() => draftOf(target.purchasePrice));
 
-  const price = readPrice(priceDraft);
+  /** **An untouched box is the stored number, whatever its text would read as.** The seed is
+   *  already exact for any price this build writes, but a row can hold one no parser should
+   *  accept from a reader — a negative the old CSV importer stored — and a box the reader never
+   *  touched must not grey Save over an edit to the grade. */
+  const untouched = target.purchasePrice !== null && priceDraft === draftOf(target.purchasePrice);
+  const price: PriceDraft = untouched
+    ? { kind: "number", value: target.purchasePrice as number }
+    : readPrice(priceDraft);
   const paidIn = currencyOf(target.purchaseCurrency, currency);
 
   const patch = editPatch(target, condition, price, paidIn);
@@ -404,7 +413,7 @@ function EditCopyForm({
    */
   const priceNote =
     price.kind === "unreadable"
-      ? "That is not a price — try 12.50."
+      ? unreadablePriceNote(priceDraft)
       : target.purchasePrice === null
         ? null
         : `Emptying this box leaves ${formatPrice(target.purchasePrice, paidIn)} recorded. ` +

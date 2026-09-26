@@ -690,6 +690,18 @@ export interface FakeDeck {
    */
   tokenStack?: boolean;
   /**
+   * `decks.token_rail_index` (user schema v51): where the Tokens & Emblems pile sits in the rail,
+   * as the number of rail piles drawn above it. `NOT NULL DEFAULT -1`, and **`-1` is last** — so
+   * {@link toDeckRow} resolves the absence to `-1`, never to `0`, which would put every seed's
+   * pile at the top of the rail.
+   *
+   * **An arrangement rather than a setting, and that is the one way it is not
+   * {@link tokenStack}**: `deck_update` records it as `tokenRail` when it moves, so it takes an
+   * undo step, where the switch above writes no history at all. `duplicate_deck` carries it like
+   * the switch, through the spread.
+   */
+  tokenRailIndex?: number;
+  /**
    * `decks.default_category_id` (schema v16): which of this deck's categories an add that names
    * no pile lands in, and `AUTO_CATEGORY` (`0`) for "by what the card does".
    *
@@ -5750,8 +5762,13 @@ function toDeckTokenRow(
   defaultCardId: string,
   sources: TokenSource[],
   derived: boolean,
+  mp: MarketplaceId,
 ): DeckTokenRow {
   const over = storedToken(db, deckId, token.oracleId);
+  // **The printing the tile addresses** — `cardId ?? defaultCardId`, the precedence the picture
+  // below takes — and `null` for a picked printing the corpus no longer has, which answers
+  // `null` for every chin fact and the price rather than borrowing another printing's.
+  const effective = cardById(db, over?.cardId ?? defaultCardId);
   return {
     oracleId: token.oracleId,
     name: token.name,
@@ -5772,9 +5789,25 @@ function toDeckTokenRow(
     // **The printing the tile addresses**, which is `cardId ?? defaultCardId` and deliberately
     // not the row the resolver named: those two differ for exactly the tokens somebody has
     // picked art for, and taking the resolver's would draw the deck's default Treasure on the
-    // tile the reader chose the other Treasure for. `picture_for` in `deck_tokens.rs` is the
+    // tile the reader chose the other Treasure for. `drawn_for` in `deck_tokens.rs` is the
     // same precedence, and `over` is already in hand here so it costs no second lookup.
     imageUris: frontFaceImageUris(db, over?.cardId ?? defaultCardId),
+    // User schema v51's token pile: the chin of that same printing, so the set code under the
+    // art is the art's — the Treasure in `starter` is the case, picked `tafr` over the
+    // resolver's `thob`.
+    setCode: effective?.setCode ?? null,
+    collectorNumber: effective?.collectorNumber ?? null,
+    setName: effective?.setName ?? null,
+    rarity: effective?.rarity ?? null,
+    finishes: effective?.finishes ?? null,
+    // **A deck card that names no finish, priced the same way** — {@link deckPriceAt}, which is
+    // `printing_price_by_finish_expr(marketplace)`: `nonfoil → foil → etched`, the first finish
+    // this marketplace quotes. A token row stores no finish, so it is always the unsaid arm of
+    // `deck_card_price_expr`, and `deck_tokens.rs` prices it with that one expression rather than
+    // a rule of its own. Each link is {@link finishPriceAt}, the per-finish figure the art
+    // picker's grid shows, so a feed's holes and Cardmarket's missing `eur_etched` travel with
+    // it; `null` is the em dash and never `0`.
+    unitPrice: deckPriceAt(db, effective, mp),
   };
 }
 
@@ -7261,6 +7294,11 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // v47's, `?? false` for `token_stack INTEGER NOT NULL DEFAULT 0` — the pile is new, so a
     // deck nobody has asked draws none.
     tokenStack: d.tokenStack ?? false,
+    // v51's, `?? -1` for `token_rail_index INTEGER NOT NULL DEFAULT -1` — **and never `?? 0`**,
+    // which is the neighbour's shape read one column over and the bug: `0` is the *top* of the
+    // rail, a place the reader has to drag the pile to, while `-1` is last, where it has always
+    // been drawn.
+    tokenRailIndex: d.tokenRailIndex ?? -1,
     // v16's, and the same shape of answer: absent is `AUTO_CATEGORY`, which is what the column's
     // `DEFAULT 0` says about a deck nobody has asked.
     defaultCategoryId: d.defaultCategoryId ?? 0,
@@ -10027,13 +10065,31 @@ export function readHandlers(db: FakeDb) {
      * The order within each half is by name then oracle id, which is a *stable* order and not
      * the panel's: emblems-last and the `localeCompare` are `deckTokenViews`' conclusion, in
      * `features/decks/deckTokens.ts`. Rust supplies facts; TypeScript draws the order.
+     *
+     * **`marketplace` prices each row's effective printing** (user schema v51's token pile) and
+     * is read through {@link marketplaceOf} exactly as {@link card_printings} reads it — absent
+     * or unknown is TCGplayer — so the pile's chin and the art picker's grid quote one number
+     * for one printing.
      */
-    deck_tokens: (args: { deckId: number; variant: DeckVariant }): DeckTokenRow[] => {
+    deck_tokens: (args: {
+      deckId: number;
+      variant: DeckVariant;
+      marketplace?: string;
+    }): DeckTokenRow[] => {
       const variant = validVariant(args.variant);
+      const mp = marketplaceOf(args.marketplace);
       const derived = derivedTokens(db, args.deckId, variant);
       const rows = derived
         .map((d) =>
-          toDeckTokenRow(db, args.deckId, d.token, defaultTokenPrinting(db, d), d.sources, true),
+          toDeckTokenRow(
+            db,
+            args.deckId,
+            d.token,
+            defaultTokenPrinting(db, d),
+            d.sources,
+            true,
+            mp,
+          ),
         )
         .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
       const derivedIds = new Set(derived.map((d) => d.token.oracleId));
@@ -10059,6 +10115,7 @@ export function readHandlers(db: FakeDb) {
                   t.cardId ?? printings[0].id,
                   [],
                   false,
+                  mp,
                 ),
               ];
         })
@@ -12350,6 +12407,11 @@ const FOLDER_NOT_YOURS = "That folder is the app's own and is not yours to chang
  * nothing they could not have been shown by its absence.
  */
 const FOLDER_IS_LOCKED = "That folder is locked. Unlock it before deleting it.";
+/**
+ * `collection_folders::FOLDER_HOLDS_LOCKED` — {@link FOLDER_IS_LOCKED} read downward: an unlocked
+ * folder whose sub-tree holds a locked one, which the same delete would scatter.
+ */
+const FOLDER_HOLDS_LOCKED = "A folder inside that one is locked. Unlock it before deleting this one.";
 /**
  * `collection_folders::ENTRY_IN_A_DECK` — what {@link collection_set_folder} says about the row
  * it was **given**, when that row is sitting in a deck's group.
@@ -15188,6 +15250,11 @@ export function writeHandlers(db: FakeDb) {
           }
         }
       }
+      // {@link FOLDER_HOLDS_LOCKED}: the same press re-files every folder beneath this one, so a
+      // lock anywhere in the sub-tree refuses it too — before anything below moves.
+      if ([...doomed].some((id) => collectionFolderLocked(db, id))) {
+        throw refuse(FOLDER_HOLDS_LOCKED);
+      }
       // Ids rather than rows, taken before anything moves: a merge replaces
       // `db.collectionEntries` with a filtered copy, so a held reference is a row that is no
       // longer in the store.
@@ -16622,6 +16689,9 @@ export function writeHandlers(db: FakeDb) {
         // `token_stack INTEGER NOT NULL DEFAULT 0`: a deck being born draws no token pile, and
         // `DeckInput` does not ask.
         tokenStack: false,
+        // `token_rail_index INTEGER NOT NULL DEFAULT -1`: where that pile would go is *last*,
+        // and `DeckInput` does not ask this either.
+        tokenRailIndex: -1,
         updatedAt: stamp(db),
       };
       db.decks.push(row);
@@ -16828,6 +16898,21 @@ export function writeHandlers(db: FakeDb) {
       if (patch.managedWishlist !== undefined && patch.managedWishlist !== managedWas) {
         field("managedWishlist", managedWas, patch.managedWishlist);
       }
+      // v51's, and **the one column on this patch beside `tokenStack` that does get an arm** —
+      // the paragraph above rules out a reading preference, and this is not one: the reader
+      // dragged the Tokens & Emblems pile to a new slot, which is an arrangement like a
+      // category's `sortOrder`, and `deck_undo`'s `DECK_FIELDS` names the column so Ctrl+Z puts
+      // it back. The row is what gives {@link journalled} a step to key on.
+      //
+      // The word is `deck.rs`'s, `"tokenRail"`, and not the column's `tokenRailIndex` — `xGroup`'s
+      // trap once more, with the same silent `Changed the deck` waiting behind a misspelling.
+      // `?? -1` on the `from` side for {@link FakeDeck.tokenRailIndex}'s reason: an absent column
+      // is the DDL's `-1`, so a seed that never moved the pile and a pile moved back to last are
+      // one state.
+      const tokenRailWas = before.tokenRailIndex ?? -1;
+      if (patch.tokenRailIndex !== undefined && patch.tokenRailIndex !== tokenRailWas) {
+        field("tokenRail", tokenRailWas, patch.tokenRailIndex);
+      }
       // v16's, and the second multi-word field name in that switch — `deck.rs` writes
       // `"defaultCategory"`, and the paragraph above applies word for word.
       //
@@ -16976,6 +17061,11 @@ export function writeHandlers(db: FakeDb) {
       // `coalesce(?21, token_stack)`, and **nothing else happens**: the pile is drawn in the
       // view layer from the tokens answer on every read, so the switch writes one column.
       deck.tokenStack = patch.tokenStack ?? deck.tokenStack;
+      // `coalesce(?23, token_rail_index)` — and **`0` and `-1` are both values**, the top of the
+      // rail and the end of it, which is why this is `??`: a truthiness test would read a pile
+      // dragged to the top as no change at all. The number is stored as sent; where it lands
+      // when the rail has fewer piles than it counts is the view layer's clamp on read.
+      deck.tokenRailIndex = patch.tokenRailIndex ?? deck.tokenRailIndex;
       // `coalesce(?16, ?17, ?18, …)` — three reading preferences, and **nothing else happens**
       // for `separateXGroup`'s reason: which of the three tiers a deck marks changes what is
       // drawn over its live rows and moves not one `deck_cards` row. `??` against the *stored*
@@ -17127,7 +17217,9 @@ export function writeHandlers(db: FakeDb) {
      * `separateXGroup` comes across in the spread below with the rest of the row, and belongs
      * with the theory list rather than with the two exceptions: it is how the reader reads a
      * curve, and a copy opened onto a differently grouped curve than the deck it was made from
-     * would be a copy that lost something nobody chose to change.
+     * would be a copy that lost something nobody chose to change. `tokenRailIndex` (v51) comes
+     * across the same way and for the same reason — `duplicate_deck` names the column, because
+     * where the reader put the Tokens & Emblems pile is part of the deck being copied.
      *
      * **Categories and labels are new rows with new ids, and the cards are remapped onto them.**
      * This is the part a "copy the cards" implementation gets wrong invisibly: a card row
@@ -21987,15 +22079,13 @@ function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
  */
 function undoHandlers(db: FakeDb) {
   return {
-    /** The newest step of this deck still applied, and — for the id the caller hands in — the
-     *  one it could put back. */
+    /** The newest step of this deck still applied, and — for the id the caller hands in, and
+     *  only when it is {@link nextRedo} — the one it could put back. */
     deck_undo_state: (args: { deckId: number; redoId: number | null }) => {
       const undo = nextUndo(db, args.deckId);
       const redoStep =
-        typeof args.redoId === "number"
-          ? db.deckUndo.find(
-              (s) => s.auditId === args.redoId && s.deckId === args.deckId && s.undoneAt !== null,
-            )
+        typeof args.redoId === "number" && nextRedo(db, args.deckId)?.auditId === args.redoId
+          ? nextRedo(db, args.deckId)
           : undefined;
       return {
         undo: undo ? (auditById(db, undo.auditId) ?? null) : null,
@@ -22014,7 +22104,13 @@ function undoHandlers(db: FakeDb) {
         );
       }
       restoreDeck(db, args.deckId, cursor.before);
-      cursor.undoneAt = stamp(db);
+      // Strictly increasing within the deck, `deck_undo::apply_reversal`'s rule: `nextRedo` reads
+      // it as an ordinal, and two undos inside one tick of `stamp` would otherwise tie.
+      const newest = Math.max(
+        0,
+        ...db.deckUndo.filter((s) => s.deckId === args.deckId).map((s) => s.undoneAt ?? 0),
+      );
+      cursor.undoneAt = Math.max(stamp(db), newest + 1);
       recordReversal(db, args.deckId, "undo", cursor.auditId);
     },
 
@@ -22025,6 +22121,14 @@ function undoHandlers(db: FakeDb) {
       );
       if (!step || step.undoneAt === null) {
         throw refuse("That change has not been undone, so there is nothing to redo.");
+      }
+      // Only the change undone last — `deck_undo::next_redo`. The fake keeps whole-deck
+      // snapshots and makes no content check; the order is the half a story can reach.
+      if (nextRedo(db, args.deckId)?.auditId !== args.auditId) {
+        throw refuse(
+          "That is not the most recent change any more — the deck has been edited since. " +
+            "Open the history to see what happened.",
+        );
       }
       restoreDeck(db, args.deckId, step.after);
       step.undoneAt = null;
@@ -22038,6 +22142,15 @@ function nextUndo(db: FakeDb, deckId: number): FakeDeckUndo | undefined {
   return [...db.deckUndo]
     .filter((s) => s.deckId === deckId && s.undoneAt === null)
     .sort((a, b) => b.auditId - a.auditId)[0];
+}
+
+/** The one step a redo may take — `deck_undo::next_redo`: undone, above the undo cursor, and
+ *  undone last (`undone_at DESC`, then `audit_id ASC`). */
+function nextRedo(db: FakeDb, deckId: number): FakeDeckUndo | undefined {
+  const cursor = nextUndo(db, deckId)?.auditId ?? 0;
+  return [...db.deckUndo]
+    .filter((s) => s.deckId === deckId && s.undoneAt !== null && s.auditId > cursor)
+    .sort((a, b) => (b.undoneAt ?? 0) - (a.undoneAt ?? 0) || a.auditId - b.auditId)[0];
 }
 
 function auditById(db: FakeDb, id: number): DeckAuditEntry | undefined {
