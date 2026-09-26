@@ -1,6 +1,6 @@
 /**
  * The prop shapes the home page is built from — **its own file because the page, the card chrome
- * and nine widget bodies are written independently**, and each needs these contracts from
+ * and every widget body are written independently**, and each needs these contracts from
  * somewhere none of them owns.
  *
  * The split is the grid redesign's: **the page draws every card's chrome and a widget draws only
