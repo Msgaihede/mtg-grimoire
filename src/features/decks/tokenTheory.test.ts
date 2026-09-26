@@ -70,6 +70,28 @@ describe("tokenTheoryPlan", () => {
     });
   });
 
+  /**
+   * **The number is 0 at both grains until PR 2, and these two are what say so.** The override is
+   * shared by both lists, so a token's quantity is one number on each side — but `DIFFERENCE_FLOOR`
+   * turns `planned − live` into `0` whenever neither side is above one, so every case above, at one
+   * copy, would pass over a live side keyed differently from the plan's. At four copies a live
+   * side the plan's slot never finds reads `0` against `4` and prints `+4` on a token that
+   * matches, which is exactly the number the ruling rules out.
+   */
+  it("ticks a four-copy token the plan makes in the same printing, with no number", () => {
+    const t = view({ printingId: "p1", quantity: 4 });
+    expect(tokenTheoryMark(tokenTheoryPlan([t], [t], ON), t)).toEqual({ tier: "exact", delta: 0 });
+  });
+
+  it("names a four-copy token the plan makes in another printing, with no number", () => {
+    const live = view({ printingId: "p-a", quantity: 4 });
+    const planned = view({ printingId: "p-b", quantity: 4 });
+    expect(tokenTheoryMark(tokenTheoryPlan([planned], [live], ON), live)).toEqual({
+      tier: "name",
+      delta: 0,
+    });
+  });
+
   it("honours a switched-off tier", () => {
     const live = view({ oracleId: "o-goblin", name: "Goblin", printingId: "p-g" });
     expect(

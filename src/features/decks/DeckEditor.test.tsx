@@ -8217,6 +8217,13 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     await waitFor(() =>
       expect(pile()!.querySelector('[data-theory-match="exact"]')).not.toBeNull(),
     );
+    // **The tick, and never a number.** The Treasure is five copies on both lists, so a live side
+    // keyed differently from the plan's would still find the exact tier through the mark's own
+    // lookup and draw `+5` in the same box — the tier alone cannot tell the two apart. The tick
+    // is a glyph with no text; a delta is the text and no glyph.
+    const mark = pile()!.querySelector<HTMLElement>('[data-theory-match="exact"]')!;
+    expect(mark.textContent).toBe("");
+    expect(mark.querySelector("svg")).not.toBeNull();
   });
 
   /**
