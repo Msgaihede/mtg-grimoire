@@ -103,8 +103,12 @@ Every one of these has its measurement and its story in
   no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
   search's, the collection's, the wishlist's and the three docked search columns — all of them
   `features/search/CardGrid`, which is the one wall. Grep `from "@/components/CardArt"` for the
-  census rather than trusting a list here; the two callers that are **not** that wall are the deck's
-  own `DeckTokensPanel` and `TokenArtPicker`, which draw tokens rather than deck rows. A surface
+  census rather than trusting a list here. **This sentence named two callers that are not that
+  wall — the deck's own `DeckTokensPanel` and `TokenArtPicker`, which draw tokens rather than deck
+  rows — and that was never the whole census**: the views' token pile was a third until
+  2026-09-26, and the home page's widgets, `CombosDialog` and the shared binder draw `CardArt`
+  outside the wall too. The two it named are still the **deck's** only ones; the token pile left
+  for the second list below (token stacks, spec §3.2). A surface
   that draws its own frame instead says why at its own site, and each
   reason is that it is not a 5:7 box with an aspect-driven height — the stack's card (a computed
   pixel height its whole geometry rests on), the open card's main art in `CardModalArt` (a flip
@@ -124,6 +128,13 @@ Every one of these has its measurement and its story in
   shared — and its reason for not being `CardArt` is the stack's own, because it **is** the
   stack's: a computed pixel height that the stack's whole geometry rests on, with the printed
   frame under the picture having to fill exactly it. One card, two boxes to put it in.
+  **The views' token pile followed it on 2026-09-26** (token stacks, spec §3.2), for the reason
+  the reader gave in one sentence — the token stack should "look and function like the other
+  stack". It was a `CardArt` with a `CountTag` laid on it and geometry of its own, a parallel
+  drawing of a card; it is `DeckCardFace` fed a token through `tokenFaceFacts`, with `CardChin`
+  under it, in Stacks and in Grid — the same grey quantity tag, the same plan's tick, the printed
+  frame and the foil sheen. A token card with a chin is exactly a deck card's height, so the pile
+  needs no sums of its own. `features/decks/CLAUDE.md`'s *Tokens & Emblems* has the rest.
 - **Four layouts are not printed the way up they are stored, and turning one to read it is not
   "distorting a card image"** — it is the card at its own proportions, which is what a reader
   does with the cardboard and what Scryfall's own card pages offer. `split` (347 live printings,
@@ -512,7 +523,14 @@ Every one of these has its measurement and its story in
     *no* format allows, and it only means something where the corpus is narrowed to begin with —
     the card search pairs `playableOnly` with every other row of that picker. Drawn on a
     collection, it sets `format` to a sentinel the backend reads as a legalities key nothing
-    matches, and the wall goes empty. Only `useCardSearch` sets it.
+    matches, and the wall goes empty. **Two hooks set it: `useCardSearch`, and since 2026-09-26
+    (token stacks, spec §3.6) the deck search's Collection tab, `useCollectionSearch`** — which
+    now sends its format through the same `formatParams`, so there too `Any card` sends neither
+    field, **`Any format` sends `playableOnly` and means _legal somewhere_** (a token or an orphan
+    copy is hidden under it), and a named format sends both. That tab narrowed nothing until then,
+    and with the deck's format seeded and no widening row a reader's own tokens — legal nowhere —
+    had no way back onto it. The collection **page** (`useCollection`) and the wishlist still
+    narrow nothing and still do not set it.
   - **`labels` keeps each surface's box its own name.** `Search cards` over the reader's own
     binder is the control lying about which list it narrows, and a `getByLabelText` cannot tell
     two boxes with one name apart. The `idStem` is what stops two mounted rows sharing an `id`.

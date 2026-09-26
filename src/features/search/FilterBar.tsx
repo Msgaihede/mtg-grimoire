@@ -259,13 +259,18 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
    *
    * **A capability and not a state**, which is the distinction that makes it worth a field. `Any
    * card` is not a format — it is the row that puts back the printings *no* format allows, and it
-   * only means something on a surface whose default corpus leaves them out. The card search is
-   * that surface: every row of its picker but this one rides `playableOnly` (see `formatParams`).
-   * A collection and a wishlist are lists of cardboard the reader already owns or wants, filtered
-   * by nothing of the kind — so on them the row would set `format` to a sentinel their backend
-   * reads as a legalities key nothing matches, and answer an empty list.
+   * only means something on a surface whose default corpus leaves them out. **Two of the four
+   * hooks answer about such a corpus, and they are the two that set it.** `useCardSearch`: every
+   * row of its picker but this one rides `playableOnly` (see `formatParams`). And since token
+   * stacks (2026-09-26, spec §3.6) the deck search's Collection tab, `useCollectionSearch`, which
+   * spells its format through that same `formatParams` — so its `Any format` means *legal
+   * somewhere*, the reader's own tokens and orphan copies are left out under it, and this row is
+   * the only way back to them on a tab that opens on the deck's format. The collection page and
+   * the wishlist (`useCollection`, `useWishlist`) are lists of cardboard the reader already owns or
+   * wants, filtered by nothing of the kind — so on them the row would set `format` to a sentinel
+   * their backend reads as a legalities key nothing matches, and answer an empty list.
    *
-   * Absent is therefore the safe default and the one three of the four surfaces take.
+   * Absent is therefore the safe default, and the one those two take.
    */
   anyCard?: boolean;
   /** The Owned/Missing pair. Absent on a surface where every row is a copy the reader has. */
@@ -1712,9 +1717,11 @@ function FilterTray<SortKey extends string>({
    * sentence beyond its own label, not because the platform would swallow it.
    */
   const formatDropdownOptions: readonly DropdownOption[] = [
-    // **`Any card` only where the surface narrows the corpus.** Three of the four surfaces this
-    // row is drawn on already answer about a fixed set of cards — a deck, the collection, the
-    // wishlist — so "every card, art cards included" is not a widening they can offer, and a row
+    // **`Any card` only where the surface narrows the corpus.** The card search and, since token
+    // stacks (2026-09-26), the deck search's Collection tab send `playableOnly` under every other
+    // row, so this is the widening back to what no format allows. The collection page and the
+    // wishlist answer about cardboard the reader already has or wants and narrow by nothing of
+    // the kind, so "every card, art cards included" is not a widening they can offer, and a row
     // that set `format` to a value the caller cannot honour would be a destination that goes
     // nowhere. `FilterSurface.anyCard` is what says which surface this is.
     //

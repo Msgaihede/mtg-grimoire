@@ -1166,7 +1166,8 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   direction's rule about chrome never being the loudest thing on the screen bites hardest. What
   the line was actually carrying was the active/inactive distinction, so that
   moves onto three signals that were mostly there already: the wash, `GroupHeader`'s dimmed name
-  beside its `INACTIVE` marker, and the pile's own `CardStack` at `opacity-60`. An active pile is
+  beside its switched-off marker (the word `INACTIVE` then, a `PowerOff` icon chip since
+  2026-09-26), and the pile's own `CardStack` at `opacity-60`. An active pile is
   drawn with no chrome whatever. Two things did **not** have to change and each is a rule worth
   keeping: `DROP_RING`/`DROP_OVER` are `ring-2 ring-accent` and `bg-accent/10`, and a ring is a box
   shadow **outside** the border box, so the drag highlight never read the border it appears to sit
@@ -1203,7 +1204,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   `CardStack` returns null for a group with no cards, so a switched-off empty pile has no `<ul>` in
   the DOM at all and a probe reports _absent_ rather than 0.6. The Maybeboard read exactly that way
   on the first pass and the figure above needed a card moved into it first. The wash and
-  `GroupHeader`'s `INACTIVE` marker are the two signals an empty pile does still carry — which is
+  `GroupHeader`'s switched-off marker are the two signals an empty pile does still carry — which is
   the argument for having three.
 - **The sideboard, the maybeboard and every switched-off pile are a rail, not part of the flow —
   and the rail is a plain

@@ -999,6 +999,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   capture spec; on no history row and no `deck_undo::DECK_FIELDS`; **carried by `duplicate_deck`**,
   unlike the `*_open` disclosures beside it, because it is a setting.
   [decks-storage.md](decks-storage.md) has the rest.
+  (**v48 and v49 have no paragraph on this page** — the managed wishlist, a switch at v48 and a
+  mode replacing it under a new column name at v49; [wishlist-folders.md](wishlist-folders.md) is
+  their record. Named so nobody reads the gap as a claim.)
+  **v50 adds `decks.token_rail_index`** (2026-09-26,
+  [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §3.4) — where
+  the Tokens & Emblems pile sits among the right-hand rail's piles, stored as the number of rail
+  piles drawn above it. One `ALTER TABLE … ADD COLUMN`, v47's shape, so it owes its
+  `USER_SCHEMA_SQL` line and an `UNDO_V50`, and moves no table or index count: the head is thirty
+  tables and **forty-eight** indexes — v48's `idx_wishlist_folders_managed` moved the second
+  figure the v46 paragraph above states, and this rung moves neither — read off
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds`' own sentence rather than added.
+  **`NOT NULL DEFAULT -1`, with `-1` meaning last**, where the spec asked for a nullable column
+  with `NULL` for last: `deck::update_deck` writes every field through `coalesce(?n, col)`, which
+  reads a bound `NULL` as *leave it*, so a nullable "last" could never be written back once the
+  reader had moved the pile. On the `decks` capture spec after `token_stack` and carried by
+  `duplicate_deck`, like it — **and unlike it, on a history row and on
+  `deck_undo::DECK_FIELDS`**, because it is an arrangement the reader drags rather than a setting.
+  [decks-storage.md](decks-storage.md) has the rest.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

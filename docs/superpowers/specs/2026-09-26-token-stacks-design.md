@@ -122,10 +122,13 @@ they are summed only in the token pile's heading.
 
 ### 3.4 The token pile reorders in the rail
 
-- **Storage**: `decks.token_rail_index INTEGER` (nullable), user schema v50, `ADD COLUMN` like
-  `token_stack` at v47. It is **the number of rail piles drawn above the token pile**; `NULL` is
-  last, today's position and every existing deck's. It is clamped to `[0, rail.length]` on read, so
-  a rail that shrank draws the pile last rather than nowhere. Synced with `decks` (the capture
+- **Storage**: `decks.token_rail_index INTEGER NOT NULL DEFAULT -1`, user schema v50, `ADD COLUMN`
+  like `token_stack` at v47. It is **the number of rail piles drawn above the token pile**; `-1` is
+  last, today's position and every existing deck's. **Not nullable**, because `deck::update_deck`
+  writes every field through `coalesce(?n, col)`, which reads a bound NULL as *leave it* — a NULL
+  "last" could never be written back once the reader had moved the pile. A value outside
+  `[0, rail.length]` also draws last, so a rail that shrank draws the pile last rather than
+  nowhere, and moving the pile to the last slot writes `-1` so piles added later stay above it. Synced with `decks` (the capture
   field list gains it). `DeckRow` and `DeckPatch` mirror it; `useDeck`'s `update` takes it with no
   new arm.
 - **Why an index and not an anchor category**: an anchor is a category id on a synced row, which
@@ -168,9 +171,10 @@ looks for. On **All cards**, `Any card` picks and sticks (probed in jsdom on the
 full editor, and in Storybook in a real browser).
 
 **Fix — the same ladder on both tabs** (the reader's pick): `useCollectionSearch` sets
-`anyCard: true`; `ANY_CARD` sends neither `format` nor `playableOnly`; `Any format` sends
-`playableOnly: true` (the All cards meaning — legal somewhere); a named format sends only the
-format. The collection query already carries `crate::filters::CardFilters`, whose
+`anyCard: true`; the request is built by `useCardSearch`'s own `formatParams`, so the three rows
+mean what they mean on All cards — `ANY_CARD` sends neither `format` nor `playableOnly`; `Any
+format` sends `playableOnly: true` (legal somewhere); a named format sends the format **and**
+`playableOnly`, which cannot narrow it further and keeps one expression answering all three rows. The collection query already carries `crate::filters::CardFilters`, whose
 `playable_only` is `legal_mask != 0`, so the Rust side needs at most a field on the wire. The
 facet read and `activeFilterCount` follow the same three arms. The collection **page**
 (`useCollection`) is untouched — it does not narrow the corpus, so it offers no `Any card`.

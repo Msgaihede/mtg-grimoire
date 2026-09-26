@@ -813,7 +813,9 @@ describe("FilterBar, its format options in order", () => {
    * (`formatParams`). The collection and the wishlist filter by nothing of the kind, and drawing
    * it there set `format` to the `any-card` sentinel, which their backends read as a legalities
    * key nothing matches: the list went empty and the control said `Any card`. So the row is
-   * gated on `FilterSurface.anyCard`, which only `useCardSearch` sets.
+   * gated on `FilterSurface.anyCard`, which `useCardSearch` sets and — since token stacks
+   * (2026-09-26), when its format started riding `formatParams` too — the deck search's
+   * Collection tab (`useCollectionSearch`); the collection page and the wishlist never do.
    *
    * Asserted as an absence *and* as the first row, because "not in the list" alone would pass on
    * a build that drew it somewhere further down.
