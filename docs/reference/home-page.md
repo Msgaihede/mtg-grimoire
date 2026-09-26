@@ -114,7 +114,7 @@ to say so.
 
 This is the read rule's one edge and the one a `unwrap_or_default` gets wrong. "No widgets" and
 "no row" are the same value to a defaulting parse, so a reader who cleared their home page would
-be handed the six defaults back on every launch, for ever, with nothing on screen to show they had
+be handed the default layout back on every launch, for ever, with nothing on screen to show they had
 ever chosen. **Only an absent row and an unparseable one are the default**;
 `{"version":1,"widgets":[]}` is an answer and is kept.
 
@@ -122,17 +122,20 @@ ever chosen. **Only an absent row and an unparseable one are the default**;
 `layout.test.ts`'s *"keeps an empty widget list rather than restoring the default"* pins the
 webview's, because both sides have a fallback and either alone would undo the reader's choice.
 
-## 3. The ten widgets
+## 3. The widgets
 
 ⚠️ **The catalogue and the default layout are two different lists, and the heading above counts
-the first.** `WIDGET_META` is what the Add-widget catalogue offers; `DEFAULT_LAYOUT` is what a
-first launch is handed. A kind may be in the catalogue and not in the layout, and three now are:
-`wishlistValue`, which has never been on a first launch, and `newPrintings` and `stickyNotes`,
-which landed within a day of each other and joined the catalogue alone because either one would
-break the rectangle. So the sentence below still names **eight** widgets in an eight-by-seven
-rectangle and is correct as written, and `DEFAULT_LAYOUT`'s three copies — `widgets.ts`,
-`home.rs` and the Storybook fake — did not move. Counting the table above and editing that literal
-to match is the mistake this note exists to stop.
+neither.** It read *The ten widgets* until 2026-09-26 and had already fallen behind the table
+under it — `newPrintings` and `stickyNotes` landed within a day of each other, and a prose-only
+edit routes to neither CI job. `WIDGET_META` is what the Add-widget catalogue offers and is its
+own census; `DEFAULT_LAYOUT` is what a first launch is handed. A kind may be in the catalogue and not in the layout, and several are:
+`wishlistValue`, which has never been on a first launch; `newPrintings` and `stickyNotes`, which
+joined the catalogue alone because either one would break the rectangle; and `valueHistory`
+(§14), which stayed out for `newPrintings`' reason — a widget in the seed rearranges the page of
+every reader who never asked for it. So the sentence below still names **eight** widgets in an
+eight-by-seven rectangle and is correct as written, and `DEFAULT_LAYOUT`'s three copies —
+`widgets.ts`, `home.rs` and the Storybook fake — did not move. Counting the table below and
+editing that literal to match is the mistake this note exists to stop.
 
 The default layout fills an eight-by-seven rectangle exactly, so a first launch shows no hole:
 `summary` 0,0 4×2 · `recentCards` 4,0 4×2 · `decks` 0,2 3×3 · `activity` 3,2 3×3 ·
@@ -156,6 +159,7 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `decks` | deck shortcuts — cover, format, card count, value | `{ scope: recent·pinned·archived, deckIds, art }` |
 | `folders` | collection and wishlist folder shortcuts with counts and value | `{ cabinets: both·collection·wishlist, collectionFolderIds, wishlistFolderIds, captions }` |
 | `collectionValue` | the collection's total and its split along one dimension, as bars or a list | `{ dimension, chart: bars·list, figures }` |
+| `valueHistory` | the same money over time — one line per bucket with one lit, the buckets beside or under it, and a readout of the hovered day (§14) | `{ split: total·type·color·set, window: 30d·90d·1y·all, measure: value·change, figures, markers }` |
 | `wishlistValue` | the same over the wishlist — a separate component, because the two lists' empty states and notes differ | `{ dimension, chart, figures }` |
 | `activity` | recent actions grouped by local calendar day, each day headed by its `+7 / −6` roll-up | `{ limit: 25·50·100, times }` |
 | `recentCards` | the cards this device opened last, as a strip of card faces that open the card | `{ count: 4·6·8, names }` |
@@ -527,6 +531,7 @@ connection-only query, which is exactly what `web::route` answers.
 | `set_completion` | `set_completion.rs` | `[{ setCode, name, releasedAt, owned, size }]` (§11) |
 | `price_movers` | `price_history.rs` | `{ movers, since, days }` (§11) |
 | `price_history` | `price_history.rs` | `{ points, now, today }` — one copy's kept snapshots, for the mover popup (§11) |
+| `collection_value_history` | `value_history.rs` | `{ buckets, points, today }` — the collection's value per kept period plus a live point for today, split one way, each point carrying its price-only part (§14) |
 | `sticky_notes` and its four writes | `sticky_notes.rs` | every note by `sort_order`, then create, update, delete and reorder (§12) |
 
 Registration is three places, and a command missing from one of them answers `unknown command` at
@@ -647,8 +652,9 @@ From the design's §9, plus two the build itself turned up:
   back all zeros. ⚠️ **This said nothing on the dashboard was on that path, and one widget is now**:
   `StickyNotesWidget` mounts `StickyNoteDialog` inside the zoomed grid, so it is the widget that has
   to be checked in a real window. The tooltip panel is `fixed` at the app root outside the zoom,
-  `AnchoredPopup` says in its own doc that it is anchored and not portalled, and the Price movers
-  popup (§11) is mounted at `App` level precisely so it stays off this path.
+  `AnchoredPopup` says in its own doc that it is anchored and not portalled, the Price movers
+  popup (§11) is mounted at `App` level precisely so it stays off this path, and the value
+  graph's readout (§14) borrows the tooltip's root mount for the same reason.
 * **Six refusal sentences are unreachable from Storybook**, and this is a gap in the workbench
   rather than in the feature — each is covered by its widget's own unit test. Measured while
   writing the stories: `.storybook/fake/db.ts`'s `gone` fault is checked in exactly one place
@@ -770,7 +776,7 @@ document (the app has `app_meta`).
 
 **The page draws the chrome and a widget draws its body.** `WidgetCard` owns the title and its
 rename field, the chip, the settings popover (`WidgetSettingsPanel`, built from the kind's registry
-row), the remove question and the resize corner, identically for every kind; each of the ten
+row), the remove question and the resize corner, identically for every kind; each
 `widgets/*Widget.tsx` renders content only, from `WidgetParts.tsx`'s figures, bars and bordered
 rows, and a body can be tested knowing nothing about Customize. `AnchoredPopup` grew one
 backwards-compatible shape for it — children may be a function of `close` — so Keep, Remove and the
@@ -1052,7 +1058,7 @@ one: `widgets.ts` gives the `window` pick `dflt: 90`, `pickValue` falls back to 
 always answers a number and the `defaultWindow` arm never ran. Making it run is easy — read the raw
 config — but the title chip is `chipLabel(widget)`, which takes no `fit`, so a fresh 6 × 4 card
 would have **read a year while its own chip said 90 days**. Threading `fit` through `chipLabel`
-touches shared chrome all ten kinds draw, for one kind's nicety. Every card opens on 90 days and
+touches shared chrome every kind draws, for one kind's nicety. Every card opens on 90 days and
 the chip never lies; the reader changes it in one press.
 
 ### What height adds, and the cursor that makes the dots mean something
@@ -1087,8 +1093,9 @@ with reprints.
 `new_printings` and `mark_new_printings_seen` are registered in `desktop.rs`'s `invoke_handler`
 **and** named in `web/route.rs`'s `COMMANDS` with a match arm each — a command missing there is
 dead on the web and Android builds, as `price_movers` and `set_completion` already are not.
-`COMMANDS.len()` is **174**, counted off the merged array with that comment's own `awk` rather than
-by adding two to 172.
+`COMMANDS.len()` was **174** at that merge, counted off the merged array with that comment's own
+`awk` rather than by adding two to 172 — a figure for that day, which every later route has moved;
+the build answers today's.
 
 `src/lib/ipc.test.ts` carries three mirror rows (`NewPrintingDeck`, `NewPrinting`, `NewPrintings` —
 nested two deep, `PriceMovers`' reason: a field renamed inside the deck entry leaves both structs
@@ -1183,3 +1190,354 @@ instance whatever the list is doing. **And a row pressed during the 180ms close 
 fading panel** rather than mounting one, leaving the caret on the row outside an `aria-modal`
 dialog; the dialog is keyed on a per-press `opening`. Each has a case that goes red when the fix is
 taken out, checked by taking it out.
+
+---
+
+## 14. The collection value graph — user schema v50, `price_snapshots.copies`
+
+The collection's value over time, drawn as one line per bucket with one line *lit* and the rest as
+faint context, a list of the buckets beside or under it, and a readout of every figure the hovered
+day holds. Kind `valueHistory`, labelled **Collection value graph**, 2026-09-26. The design is
+[the spec](../superpowers/specs/2026-09-26-collection-value-graph-design.md), drawn on the design
+canvas's `ValueGraph` board (<https://claude.ai/artifact/FqJsY5YXr8KdA21sbgvFJc>), and
+[the plan](../superpowers/plans/2026-09-26-collection-value-graph.md) is the contract the Rust
+read, the TypeScript model and the widget were built against in parallel. **This section was
+written while that build was in flight, from the design and the contract**: every reason below is
+the design's, and no figure in it was taken off the shipped window. The live pass at 1× and 1.5×
+home zoom is owed, and the readout's placement is the thing it has to settle.
+
+It answers the one question `collectionValue` cannot. That widget is a snapshot of the money split
+four ways; this is the same money **over time**. They are two kinds and neither replaces the other,
+which is why the registry row sits beside `collectionValue`'s and the catalogue shows the two
+together.
+
+⚠️ **The kind is `valueHistory` and never `priceHistory`.** `HomePage.stories.tsx` spells its
+unknown-kind fixture `priceHistory` — the story that proves §1's round trip, a kind from a newer
+build surviving this one — and a kind of that name would quietly turn the proof into a story about
+a widget this build draws.
+
+### The table had prices and not holdings
+
+§11's `price_snapshots` kept one owned printing's price per marketplace per day and said nothing
+about how many copies were held that day, so a past total could not be rebuilt from it: `Σ copies ×
+price` needs the copies *on that day*, and the only copies the database knows are today's.
+**User schema v50 adds `price_snapshots.copies INTEGER`**, nullable, no default, and the snapshot
+writes it in the same statement as the price. `snapshot_sql` already builds
+`owned(card_id, finish, copies)` from `collection_source::copies_by_printing_and_finish` to decide
+what is owned, so the column records a number the statement was already holding: no second query,
+and no second statement of *what does the reader own*. It is **not synced**, because the table is
+not (§11).
+
+**v50 also makes a row mean *held* rather than *priced*, and that half is why the rung is a table
+rebuild.** Every printing the reader holds gets its row. Where the marketplace does not quote that
+finish, `price` is **NULL**, and never 0. Before, an unquoted finish wrote no row at all. SQLite
+cannot drop a `NOT NULL`, so the rung is v35's five statements: build `price_snapshots_v50`, copy
+every row, drop, rename, and recreate `idx_price_snapshots_printing` as a frozen literal. The
+rename quotes the stored name, so `USER_SCHEMA_SQL` carries `"price_snapshots"` the way it carries
+`"collection_entries"`, and `UNDO_V50` rebuilds back to v45's `NOT NULL` shape, dropping the
+unpriced rows first. The rung was written as a bare `ADD COLUMN` and rebuilt in place on
+2026-09-26, before it shipped. A development database that ran the first version is at 50 with a
+`NOT NULL` price, so it refuses every unpriced row, and no rung will ever reach it again.
+§11's readers are unchanged by the NULLs. `price_movers` takes a baseline, `price_history` a point,
+and `days` counts a day only from a priced row, so a NULL row is skipped exactly as an absent one
+was. The prune keeps two survivors per bucket rather than one: its newest row, which this graph
+reads, and its newest *priced* row, which the movers read. Otherwise a week that ended unquoted
+would take the bucket's last price with it.
+
+**Two refinements on the writing side, each found by the review.** First, **a marketplace that
+prices none of the held printings writes nothing that day.** That is a feed the reader never
+selected. Its rows would carry no price and double the table past §11's measured size, and the
+first day its feed arrived would read as the whole collection's value appearing as one price move.
+A day with no rows is a gap in that marketplace's line and never a step, because a period is only
+ever made from rows. Second, **each snapshot replaces its marketplace's whole day**: delete, then
+insert, with the day read once and bound into both. So the day holds its *last* snapshot's
+holding. Under the old insert-or-replace, a printing sold between the launch's snapshot and an
+afternoon feed store kept the morning's row, and the graph counted it held that day. Thinning
+still runs only on a day's first snapshot, and that is decided before the delete empties the day.
+
+**Rows written before the upgrade carry NULL `copies` and are never read** — the read filters on
+`copies IS NOT NULL` rather than guessing. There is **no backfill**, and not for want of a number
+to write: the only one to hand is today's quantity, and written into last month's rows it would
+draw cards bought last week as owned all along. That is a line wrong in exactly the direction a
+reader cannot check, because the history it contradicts is stored nowhere. So the graph starts on
+the upgrade day, and what every existing reader meets first is the first-day state — today's
+figure, and *Prices are kept once a day, so the line starts tomorrow.* where the chart would be.
+The read is held to answering the live point alone over a v49-shaped history, never a line built
+from NULL counts, and the widget to drawing that state over it.
+
+### One read, and the thinning applied twice
+
+`collection_value_history(split, marketplace)` lives in `src-tauri/src/value_history.rs` and
+answers `{ buckets, points, today }`: every kept period before today, oldest first, plus a live
+point for today, each carrying its total, one value per bucket and `moved`. `today` is
+`unixepoch(date('now'))`, SQLite's UTC midnight, so the page reads no clock — `price_history`'s
+rule, since `SystemTime::now()` panics on the web target.
+
+**A period is a day inside `DAILY_DAYS` and a seven-day bucket beyond it**, the prune's own bucket:
+`CAST(julianday(day) AS INTEGER) / 7`, fixed windows that do not split at New Year.
+`price_history` makes `DAILY_DAYS` and that expression `pub(crate)` so the read borrows both rather
+than respelling them — two spellings of the boundary would part the first time either moved, and
+the read would group a band the table keeps daily or draw daily a band it has thinned.
+
+**Within a bucket the read keeps one row per `(card_id, finish)` — its latest — which is the
+prune's survivor rule applied a second time, and a printing sold mid-week is the reason.** The
+prune keeps each printing's newest row per bucket (and, since the rebuild above, its newest priced
+row beside it, which this read never selects). For a printing still held that is the bucket's
+last snapshot day; for one sold on a Wednesday it is that Wednesday. A read that grouped the thinned
+band by `day` would make that Wednesday a period of its own holding one printing, and the line
+would dip to a stray low point that is nothing but that card set against the absence of everything
+else. Grouped by bucket, the Wednesday row joins its week, and the week's `day` is the latest day
+among its rows.
+
+**The week the 35-day horizon falls in is read from the horizon on and never before it**, which is
+the same stray point arriving by a second road. Rows on the daily side of the line are each their
+own day's period; the rows *before* the line in that same week have been thinned to one per
+printing, and after a prune the only ones left there are printings that were sold before the
+horizon — a week of one or two cards, plotted as a point, on six days in seven. So the read skips
+them: a printing held across the line is already counted on the daily side, and one sold before
+it is simply not on the line, which is what the line already says about it. A mutation that drops
+the fence reproduces the stray point only once a prune has run, which is why
+`value_history.rs`'s test prunes before it reads. **Rows older than `KEEP_DAYS` are ignored for the
+same reason in the other direction**: a table the prune has not reached yet reads the same as one
+it has.
+
+**Re-applying the rule rather than trusting the prune is what makes the read independent of
+whether the prune has run**, and there are two ordinary ways it has not. Thinning runs only on a
+day's first snapshot, so between UTC midnight and whatever next takes one — a launch, an ingest, a
+feed store — the rows that crossed the 35-day line overnight are un-thinned in every database; an
+app left open across midnight reads them. And the snapshot is best-effort everywhere it is called
+(`price_history`'s module doc), so a failed one leaves its band as it found it until the next
+succeeds. An un-thinned band, a partly thinned one and a thinned one read the same. **A row dated
+today or later is ignored** — the live point replaces it.
+
+### The live point, and why it must equal `collection_summary`
+
+**The last point is computed at read time from `collection_entries`, not read from today's
+snapshot.** It is `Σ quantity × sorting::price_expr(marketplace, finish)` over the rows that hold a
+copy — the sum `collection::summarise` takes — bucketed with the same expressions as the history,
+marked `live: true`, and read by the readout as *Today*. Two reasons, and either would do:
+
+* **The snapshot is not written when the collection changes.** It runs at launch, after a card
+  ingest and after a feed store (§11), so a reader who adds a card at noon would watch the graph's
+  last point sit under the old total until something next took one. `valueHistoryKey` is
+  `["collection", "valueHistory", split, marketplace]` — §3's rule, under the root every collection
+  write already invalidates — so the live point refreshes after every add, move and removal with no
+  mutation learning a new key.
+* **Two widgets on one page must not print two numbers for one question.** The Collection value
+  widget's figure is `collection_summary`'s, and this graph's last point is the same money on the
+  same day. §9's live pass checked the breakdown against the total for exactly this reason (*two
+  commands, one `price_expr`*), and the read is held to it **to the cent** for the same collection
+  and marketplace.
+
+A collection holding nothing answers no points at all rather than one point at zero. The body reads
+emptiness off `collection_summary`'s card count, as the Collection value widget does, and the
+*N unpriced* note beside the figure comes from the same read.
+
+### `moved`, and the collection change it leaves behind
+
+**Each point after the first carries `moved` — the part of the step that came from prices alone.**
+Over every `(card_id, finish)` **held** at both ends of the step it is
+`copies_before × (price_now − price_before)`, a NULL price counted as 0. Held means a row in the
+period, priced or not. For the step into the live point, held means a collection entry with a
+copy, priced or not, and the later price is the live `price_expr`. A NULL still adds nothing to a
+*total*, which is `collection_summary`'s arithmetic. The first point's `moved` is `null`.
+
+**What is left is what the reader did**: `total − previous total − moved`, the cards added or
+removed. TypeScript derives it (`collectionChange` in `valueHistory/model.ts`) rather than Rust
+shipping it, and that is the repo's boundary rather than a convenience: the price part needs both
+rows of every printing and only the SQL holds them, so it is Rust's fact; the remainder is one
+subtraction over three numbers already on the wire, so it is TypeScript's conclusion, and a fourth
+field could only ever disagree with them.
+
+**`copies_before` is what makes the split honest.** A printing held at two and bought up to three
+while its price rose from `a` to `b`: the step's change is `3b − 2a`, `moved` is `2(b − a)`, and
+what is left is `b` — the one copy added, at the price it came in at. Taken over the copies after,
+the same step would credit the market with a rise on a copy the reader did not hold while it rose,
+and read the added copy at yesterday's price.
+
+**A printing held at only one end of a step contributes wholly to the collection change**, which
+is what makes a card bought or sold read as one. **A price that appears or vanishes on a card the
+reader kept is a price move**, because the card is held at both ends: `2 × (0 − 10)` is `moved`,
+and the remainder is 0. That is the reason a row means *held*. The review found the old failure
+while the build was in flight, before any reader met it. An unquoted finish wrote no row, and the
+live point asked for a live price. So a printing whose price disappeared was absent from the later
+end, its value left the total, and the remainder called it *removed*. A card whose price first
+appeared was misread the same way as a purchase. **A card no marketplace quotes, bought or sold, is
+no change at all**: it holds no money, so nothing moves and no marker is drawn.
+
+**Markers** are a small accent diamond on the baseline at each step whose collection change is not
+zero — `|x| ≥ 0.005`, half a cent, so float residue from a subtraction of sums does not mark every
+step — when *Mark collection changes* is on. **The readout's note** says the same in words:
+*+$74.60 of cards added that day*, *−$20.00 of cards removed that week*, or *… since 4 Jul* when the
+two points are neither a day nor a week apart, the money through `formatPrice` and the minus
+U+2212.
+
+### The four splits, and why a card is in exactly one bucket
+
+**A card is in exactly one bucket, so the buckets always sum to the total** — which is what lets the
+readout list every bucket under the total with no remainder row, and what makes the list beside the
+chart a partition rather than a set of overlapping tags.
+
+* **`type` is `deckBuckets.ts`' `typeBucket`, exactly.** The front face — the type line before the
+  first `//`, the whole line when there is none — filed under the first of `TYPE_BUCKETS`
+  (Creature, Planeswalker, Instant, Sorcery, Artifact, Enchantment, Battle, Land) it contains,
+  case-sensitively, else Other. So an Artifact Creature is a creature, an Artifact Land an artifact,
+  Dryad Arbor a creature, Urza's Saga an enchantment and a `Sorcery // Land` modal double-faced card
+  a sorcery. The reason is one answer to *what type is this card* across the deck editor and the
+  home page. **The cost is that the answer now lives in two languages** — `instr` in the Rust read's
+  SQL and `includes` in TypeScript — which is the second spelling `deckBuckets.ts`' own header warns
+  about, paid knowingly: the sum is Rust's, so the classification has to happen per row before it.
+  Nothing compiles one against the other, so a Rust test runs real type lines through the SQL and
+  pins each answer to `typeBucket`'s, a Token Creature and a Scheme included. A snapshot whose card
+  has left the corpus files as Other.
+* **`color` is `collection_breakdown`'s key expression, reused from `breakdown_columns("color")`
+  rather than respelled.** §6's `color_identity` rule — a string of letters keyed on `length()`,
+  where a `json_array_length` files everything into one bucket *and still sums* — is exactly the
+  trap a respelling walks back into. W, U, B, R, G, `c`, `multi`, in that fixed order and never
+  ranked, keeping only the buckets non-zero at some point; labelled White through Green,
+  `MANA_LABEL.C` and *Multicolour*, the Collection value widget's own words.
+* **`set` is `coalesce(c.set_code, 'other')`, with `c.set_name` as its name.** ⚠️ This parts from
+  the breakdown's set rule, which falls back to the entry's own `set_code` for a printing that has
+  left the corpus. A snapshot row carries `card_id` and `finish` and nothing printed on the card, so
+  there is no set to fall back to — and the live point takes the same expression though it has an
+  entry to hand, so no copy can change bucket between yesterday and today. The cost is confined to
+  orphans: one can sit under *Every other set* here while the value widget's set bars name its set.
+* **`total`** has no buckets: one series, drawn in the accent.
+
+**Two caps, and they are two different limits.** For `type` and `set` Rust ranks the buckets by the
+live point's value, descending, ties by key, `other` always last, and answers **at most eight named
+buckets** — every one past the eighth is summed into `other`, which it creates if it has to. That
+is a limit on the wire: every point carries one value per bucket, and a reader holding cards from
+many sets would otherwise ship a value per set per point. In practice the fold is the set split's,
+since a reader holds cards from far more sets than there are card types. **TypeScript then keeps
+the first five** and folds the rest, with Rust's `other`, into one grey *Other types* or *Every
+other set*, summed per point. That is a limit on the palette, which has five categorical slots that
+passed the check below, and a sixth line would have to repeat a colour. The room between the two
+caps is room the presentation can change into without a Rust change.
+
+### Two palettes, and the one that was measured and refused
+
+The fills are constants in `valueHistory/model.ts` and reach the chart as inline values, never as a
+class name built by interpolation — Tailwind scans source text, and a built class emits no rule.
+
+* **Categorical**, for `type` and `set`, in fixed slot order: `#4c88d3`, `#d5753a`, `#009b8f`,
+  `#9460b7`, `#819f47`, and the folded Other `#55585f`.
+* **Colour identity**, for `color`, WUBRG then colourless then multicolour: `#dfd19d`, `#1f86cd`,
+  `#725195`, `#cc3f2f`, `#53be70`, `#5c6b7a`, `#deb459`.
+* **Total** is `var(--color-accent)`: money is gold everywhere on this page.
+
+**Both were checked pair by pair against `--color-bg` (`#0c0d12`) on 2026-09-26, while the design
+was drawn.** The categorical set's worst adjacent pair under a colour-vision deficiency is ΔE
+**9.4** (**22.4** for normal vision), and the identity set's worst is ΔE **10.4**. White, colourless
+and multicolour sit **outside** the validator's lightness and chroma band on purpose — they have to
+read as white, grey and gold — so identity is carried by the list's words and the readout, never by
+colour alone.
+
+⚠️ **The Collection value widget's `--color-mana-*` pastels were measured the same day and fail**:
+Black against Colourless is ΔE **2.0**. The source says why without a validator — in
+`src/index.css`, `--color-mana-b` is `#cbc2bf` and `--color-mana-c` is `#c8c4bf`. So they are not
+reused here, where two crossing lines in those colours could not be told apart; the value widget
+itself is untouched.
+
+### Measure, range, and a bucket with no base
+
+**`split` is in the query key, and `window` and `measure` are not.** The split changes what Rust
+classifies, so switching it re-reads; the range is a slice of the points already fetched and the
+measure is arithmetic on them, so neither touches the wire. The range is 30 days, 90 days, a year,
+or All — every kept point, which `KEEP_DAYS` bounds.
+
+**Change is the default measure**: every line is plotted as percent change since the first point in
+range, so all of them start at 0% and the one that grew most is on top. *Value* puts money on one
+shared axis, where the largest bucket sets the scale and a small bucket that doubled draws as a flat
+line along the floor — the right view for *how much*, the wrong one for *what moved*.
+⚠️ **A bucket whose first value in range is zero has no base** — a set first bought inside the
+window — and `v / 0 − 1` is an infinity no path can draw. So the base is the series' **first
+non-zero** value, the points before it draw at 0%, and a series that is zero throughout is zeros:
+no `Infinity` and no `NaN` reaches a coordinate.
+
+The *Value* scale is `PriceChart.tsx`'s — `priceScale`'s padded domain, copied with its reasons
+rather than imported, since it is private. The *Change* scale is a domain that always includes 0,
+padded by 12% of the span (at least one percentage point), with ticks from the same clean-step
+search (1, 2, 2.5 or 5 × 10ⁿ, at most four) normalised so no tick reads −0%. Change ticks read
+`+10%`, `0%` and `−5%`, with U+2212.
+
+### What fits, by tier and then by pixels
+
+§4's rule holds: **the tier is decided by cells, and what fits by pixels.** The registry row is
+default 6 × 3, minimum 2 × 2, maximum 8 × 6, and its chip is the split.
+
+| Width | Layout |
+| --- | --- |
+| 2 cells (tile) | the figure line (value and change) and the chart, no scale; the figure line doubles as the readout |
+| 3 cells (panel) | the figure line with the lit bucket beside the total; the chart; a strip of bucket names at 3+ tall |
+| 4–5 cells (band) | the figure line; the in-card chips; the chart; the strip, or a two-column list at 4+ tall |
+| 6+ cells (row) | the in-card chips across the top; the chart on the left; a rail on the right holding the total and the bucket list — or, on Total, Change, Price moves, Collection changes, High and Low |
+
+Inside a tier the gates are pixels of the body, and they live in one place, `layoutFor` in
+`valueHistory/model.ts`: the chips only at 3+ cells tall, the range chips once the body is 400px
+wide and the measure chips at 520 — about four and five cells at the grid's target cell, stated in
+pixels because a cell is not a fixed number of them. The rail is 214px wide at six cells and 236 at
+seven or eight. Rows are whole, 24px on a 27px pitch, and a list that does not fit folds its tail
+into one *N more* row; compact density tightens padding and gaps as every widget's does.
+`layoutFor` answers a rectangle per region and is held to every one lying inside the body, over
+every footprint from 2 × 2 to 8 × 6 in both densities.
+
+**The in-card chips write the same config keys the settings popover writes** — `split`, `window`,
+`measure`, through the body's `onConfig` — so the card and its popover can never disagree about
+what the widget is showing. The followed bucket and the hovered point are session state and are
+never stored: hovering a list row previews its line, pressing it pins the line for as long as the
+widget is mounted, and neither is a setting. A `still` body (the catalogue's previews) and an
+`editing` one draw everything and take no input — no chip press, no scrub, no readout.
+
+### The readout, and why it is mounted where the tooltip is
+
+On hover, and on the arrow keys — the plot is a `role="slider"`, with Home, End, PageUp, PageDown
+and Escape as well — the readout shows the date (*Today* on the live point), the total and its
+change since the start of the range, then every bucket's value and change with the lit one in bold,
+and the note above wherever the step added or removed cards. On Total it is the value, the change
+since the start, the change since the previous point, the collection changes in that step and the
+price moves in that step. The drawing itself is `aria-hidden` with one `sr-only` sentence,
+`PriceChart.tsx`'s rule, and time rather than index is on x, so a weekly stretch reads as the gap
+it is.
+
+**It must not be clipped by the card and must land at the pointer under the grid's zoom, and both
+are problems this page has already met.** The body is the scroller — §13's issue #514 finding,
+where a 248px popover `absolute` inside the body reached past the scroller's edge on a 2 × 2 tile —
+so a panel drawn inside the body is cut off however the card is styled. And the grid box carries
+the reader's Ctrl+scroll as a CSS `zoom` (§4), inherited by everything drawn inside it. So the
+readout takes `components/tooltip`'s mount rather than a third mechanism: a `fixed` panel at the app
+root at `LAYER.tooltip`, placed from the scrub target's `getBoundingClientRect()`. §4 measured that
+arrangement for the tooltip at 150% — **0px** off the anchor's centre — because a rect read off a
+zoomed element is in painted viewport pixels, which is what a root-mounted `fixed` panel is laid out
+in. Mounted there, it is drawn at the app's scale rather than the dashboard's, the tooltip's ruling
+(*a tooltip is chrome*), and it clamps to `document.documentElement.clientWidth`, never
+`innerWidth`, which includes the scrollbar (`src/CLAUDE.md`).
+
+⚠️ **The trap one step inside is choosing the point.** A pointer's `clientX` is in viewport pixels;
+a chart width measured with `clientWidth` or a `ResizeObserver` inside the zoom is in the grid's
+own. The hovered index has to be computed painted against painted — the target's measured rect —
+or local against local, never one against the other: mixed, a scrub at 150% lands half again as far
+along the line as the pointer, which is §4's drag trap one element over. jsdom lays out neither the
+zoom nor the panel, so this belongs to the live pass, at 1× and 1.5×.
+
+### States
+
+Loading (*Reading your price history…*); failed (*Your price history could not be read.* with the
+error, destructive); nothing owned (*Nothing in your collection yet.*); the first day, above; and a
+history shorter than the range, which draws what exists and labels its first date tick *History
+starts <date>* rather than stretching a week across a quarter's axis. The marketplace is
+`useMarketplace()`'s — the currency, and the *N unpriced* note beside the figure.
+
+### Registered where §6 says, on both targets
+
+`value_history.rs` sits in `lib.rs`'s every-target block, and the command in `desktop.rs`'s
+`generate_handler!` and in `web::route`'s `COMMANDS` with a match arm — the three places where a
+missing registration answers `unknown command` with nothing red. `src/lib/ipc.test.ts` carries
+mirror rows for `ValueBucket`, `ValuePoint` and `ValueHistory` against the crate's source and a
+`declares` case for both argument names. The Storybook fake stores `copies` beside each fake
+snapshot, holds unpriced holdings as NULL prices, and derives the answer by the same rules rather
+than aliasing a DTO. No route count or test
+count is written here; the build answers both.
+
+**Out of scope, deliberately:** dragging the card is the page's, Customize gains nothing beyond the
+registry row, and there is no backfill.

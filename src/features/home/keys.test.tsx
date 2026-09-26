@@ -32,6 +32,7 @@ import {
   recentCardsKey,
   setCompletionKey,
   stickyNotesKey,
+  valueHistoryKey,
   wishlistBreakdownKey,
   wishlistTotalKey,
 } from "./keys";
@@ -114,6 +115,19 @@ describe("shape", () => {
     expect(priceHistoryKey("bolt-lea", "foil", "manapool")).not.toEqual(
       priceHistoryKey("bolt-lea", "nonfoil", "manapool"),
     );
+  });
+
+  // Under the collection root so an add, a removal and a feed landing each reach it with no
+  // mutation learning a new key. Four segments and no more: the range and the measure are the
+  // widget's own arithmetic over one answer, so a fifth segment here would be a re-read per chip
+  // press — and a key that no longer starts with `["collection"]` is a graph that stops moving.
+  it("files the value graph under the collection root, carrying the split and the marketplace only", () => {
+    const key = valueHistoryKey("type", "cardmarket");
+    expect(key).toEqual(["collection", "valueHistory", "type", "cardmarket"]);
+    expect(key.slice(0, 1)).toEqual(["collection"]);
+    // Each of the two arguments is part of the question, so each has to change the key.
+    expect(valueHistoryKey("set", "cardmarket")).not.toEqual(key);
+    expect(valueHistoryKey("type", "tcgplayer")).not.toEqual(key);
   });
 
   // The second exception: a root with one writer, the card modal's recorder, which invalidates

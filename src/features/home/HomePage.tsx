@@ -130,6 +130,7 @@ import { RecentCardsWidget } from "./widgets/RecentCardsWidget";
 import { SetCompletionWidget } from "./widgets/SetCompletionWidget";
 import { StickyNotesWidget } from "./widgets/StickyNotesWidget";
 import { SummaryWidget, SummaryWidgetSettings } from "./widgets/SummaryWidget";
+import { ValueHistoryWidget } from "./widgets/ValueHistoryWidget";
 import { WishlistValueWidget } from "./widgets/WishlistValueWidget";
 
 /**
@@ -222,6 +223,8 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <FoldersWidget {...props} />;
     case "collectionValue":
       return <CollectionValueWidget {...props} />;
+    case "valueHistory":
+      return <ValueHistoryWidget {...props} />;
     case "wishlistValue":
       return <WishlistValueWidget {...props} />;
     case "activity":

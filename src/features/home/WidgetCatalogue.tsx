@@ -193,8 +193,8 @@ function CatalogueEntry({
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          // The visible word is "Add" on nine entries; the name carries the kind so each is one
-          // addressable control rather than nine buttons called Add.
+          // The visible word is "Add" on every entry; the name carries the kind so each is one
+          // addressable control rather than a row of buttons all called Add.
           aria-label={`Add ${meta.label}`}
           onClick={() => onAdd(meta.kind)}
           className={cn(

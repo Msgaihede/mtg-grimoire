@@ -20,6 +20,7 @@ import { tileKeyOf } from "@/lib/tileKey";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { foldCopies, type CopyTile } from "./collectionTiles";
+import type { DragPayload } from "./dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
 import { useCollectionSearch, type PlayState } from "./useCollectionSearch";
 
@@ -352,6 +353,39 @@ export function CollectionSearchTab({
    */
   const tileFinish = useCallback((tile: CopyTile) => tile.finish, []);
 
+  /**
+   * What a tile carries when it is picked up — **the card-search tab's own payload**, so a drop onto
+   * a deck column means on this tab exactly what it means one press away: `deck_add_card`, one copy
+   * on the list, no copy moved.
+   *
+   * **The wall registered no drag at all until this**, while the Add button's comment called the
+   * tile draggable and #358's closing note described dragging from this tab — so a reader who
+   * dragged a card from their binder into a pile got nothing, on the one tab the panel opens on.
+   *
+   * Three decisions, each the smaller claim:
+   *
+   * - **Not `collection_to_deck`.** Moving a copy is the Add button's write, and it comes with a
+   *   confirmation that names the deck a spoken-for copy leaves; a drop cannot stop to ask. So the
+   *   drag stays the list write, and filing the copy is the button's second press.
+   * - **A tile the button refuses is still draggable.** The assign-only fence (#358) is about
+   *   putting cardboard in a deck folder, which this write never does — and a card the deck does not
+   *   play is exactly the one the refusal sends to the list first.
+   * - **No finish.** A `"search-card"` has no slot for one, so a foil tile lands as a plain card —
+   *   the collection page's wall carries the same limitation (`CollectionPage.tsx`'s `tileDrag`).
+   *
+   * Through `CardGrid`'s `dragPayload` rather than a `tileRef`, so a drag from a picked tile carries
+   * the whole set (`selectionScope` below). No dependencies, for {@link tileFinish}'s reason.
+   */
+  const tileDrag = useCallback(
+    (tile: CopyTile): DragPayload => ({
+      kind: "search-card",
+      cardId: tile.id,
+      name: tile.name,
+      typeLine: tile.typeLine,
+    }),
+    [],
+  );
+
   return (
     // A fragment, so these stay flex children of the panel's own column — `OpenPanel`'s rule, and
     // the reason the two tab bodies are interchangeable at that call site at all.
@@ -482,6 +516,7 @@ export function CollectionSearchTab({
           // tile here is a printing *and* a finish; the wall itself knows nothing about finishes.
           onSelect={(cardId, tile) => selectCard(cardId, tile.finish)}
           finish={tileFinish}
+          dragPayload={tileDrag}
           // What one copy of this printing **in this finish** costs — the tile's own figure, so a
           // foil tile and the nonfoil beside it quote different money, which is the whole reason
           // they are two tiles. `CollectionRow.unitPrice` is already per copy, per finish, at the

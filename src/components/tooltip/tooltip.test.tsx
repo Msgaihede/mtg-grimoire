@@ -111,6 +111,14 @@ describe("the tooltip", () => {
     expect(tooltip()).toHaveTextContent("Newest first");
   });
 
+  it("opens at once when the caller asks for an immediate panel", () => {
+    // The value graph's readout: the reader is scrubbing, so the delay would only make the panel
+    // trail the crosshair. The ordinary hint beside it still waits — the option is per call.
+    mount(<Trigger words="26 Sept 2026" options={{ immediate: true }} />);
+    fireEvent.pointerEnter(screen.getByRole("button"));
+    expect(tooltip()).toHaveTextContent("26 Sept 2026");
+  });
+
   it("does not open at all when the pointer only passes over", () => {
     mount(<Trigger words="Newest first" />);
     const button = screen.getByRole("button");
