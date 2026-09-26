@@ -1,0 +1,219 @@
+/**
+ * Sets whose cards are previewed and not yet released — a row per set, soonest first — with how
+ * many of their cards are out and how many of those the reader's decks already play.
+ *
+ * **A body, not a card.** `WidgetCard` draws the title, the `Window` chip, the popover and the
+ * Customize tray; this draws two figures and the rows, cut to the box `fit` describes.
+ *
+ * ## Over the corpus's own dates, counted in UTC
+ *
+ * `upcoming_sets` reads `cards` rather than `sets` — the browser build never fills `sets` — and
+ * "today" is SQLite's `date('now')`, which is UTC and **travels back beside the list**
+ * (`UpcomingSets.today`). Days are counted from that date and never from this machine's clock
+ * ({@link daysUntil}): a reader west of Greenwich in the evening would otherwise read a set as a
+ * day nearer than the read that found it, and one list would disagree with itself. Both dates are
+ * parsed as `T00:00:00Z` and the release day in a row's hint is formatted with `timeZone: "UTC"`,
+ * `NewPrintingsWidget`'s day formatters' rule and their reason: `releasedAt` is a calendar date,
+ * and a formatter left on the local zone prints the day before it for everyone west of Greenwich.
+ *
+ * **A fold, never a sort**: the read answers soonest first, then by code, and re-ordering here would
+ * be a second opinion about a question SQL has answered.
+ *
+ * ## Counts are body ink
+ *
+ * `Previewed so far` and `Reprints of your deck cards` are counts, so neither is gold —
+ * `WidgetParts.tsx`'s rule that the accent is money. The second is the sum of `in_decks`, which is
+ * `new_printings`' rule for "your decks": not virtual, live and theory rows, basics left out.
+ *
+ * ## A press shows the set
+ *
+ * `showSetInSearch(code)` is the view change and the hand-off in one store action, so no caller can
+ * write them in the order that wipes the second — and the Search page answers it with
+ * `useCardSearch`'s `showOnlySet`, which puts the format picker on `Any card`, so legality does not
+ * hide a card that is not legal anywhere yet.
+ *
+ * ## The face is its own component
+ *
+ * {@link ComingSoonFace} draws an answer and {@link ComingSoonWidget} reads one. The workbench's
+ * `waiting` world answers three invented sets, one per window, so the body's own stories read
+ * through the fake; the face is split out so a story can also draw an answer no world holds — five
+ * sets across a whole row — without growing the fake's corpus for one picture.
+ *
+ * **No `@container` here or on the page that draws this**, and no z-index that is not from
+ * `LAYER` — `fit.ts`'s module doc has the argument.
+ */
+import { useQuery } from "@tanstack/react-query";
+import type { ReactElement } from "react";
+
+import { count } from "@/lib/counts";
+import { ipc, ipcError, type UpcomingSet, type UpcomingSets } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
+
+import type { WidgetFit } from "../fit";
+import { upcomingSetsKey } from "../keys";
+import { WidgetFigures, WidgetMessage, WidgetRow, WidgetRowList } from "../WidgetParts";
+import type { WidgetBodyProps } from "../widgetProps";
+import { pickOf } from "../widgetSettings";
+
+const DAY_MS = 86_400_000;
+
+/**
+ * The window a card reads when its stored one is not a number — the registry's `dflt`, which
+ * `pickOf` already answers for everything but a kind whose pick is not numeric. Restated only so
+ * the type narrows, `NewPrintingsWidget`'s `WINDOW_FALLBACK`.
+ */
+const WINDOW_FALLBACK = 90;
+
+/** A row is a name over a caption, 51px — `SetCompletionWidget`'s `rowPx` sum. */
+const ROW_PX = 51;
+/** The figure line, comfortable and compact — `CollectionValueWidget`'s two numbers. */
+const FIGURES_PX = 74;
+const FIGURES_COMPACT_PX = 62;
+
+const PENDING = "Looking for announced sets…";
+
+/** A release day in words, in UTC — see the module doc. */
+const RELEASE_DAY = new Intl.DateTimeFormat("en-GB", {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+/** Whole days from the read's own `today` to a set's release — both UTC midnights, so a clock
+ *  change is never an hour short of a day. */
+export function daysUntil(today: string, releasedAt: string): number {
+  return Math.round(
+    (Date.parse(`${releasedAt}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / DAY_MS,
+  );
+}
+
+/** `tomorrow`, `in 12 days`. `today` and `date unknown` are the read's contract failing, said
+ *  plainly rather than as `in 0 days` or `in NaN days`. */
+export function whenLabel(days: number): string {
+  if (!Number.isFinite(days)) return "date unknown";
+  if (days <= 0) return "today";
+  if (days === 1) return "tomorrow";
+  return `in ${days} days`;
+}
+
+/** `TRK · in 12 days · 79 seen · 3 in your decks` — the last clause only when there is one. */
+export function setCaption(set: UpcomingSet, today: string): string {
+  const parts = [
+    set.code.toUpperCase(),
+    whenLabel(daysUntil(today, set.releasedAt)),
+    `${count(set.previewed)} seen`,
+  ];
+  if (set.inDecks > 0) parts.push(`${count(set.inDecks)} in your decks`);
+  return parts.join(" · ");
+}
+
+/** The window as the empty sentence says it: `90 days`, or `year` for the widest. */
+export function windowWords(days: number): string {
+  return days === 365 ? "year" : `${days} days`;
+}
+
+/** `Nothing announced for the next 90 days.` — the window's own words (spec §6.2). */
+export function emptySentence(days: number): string {
+  return `Nothing announced for the next ${windowWords(days)}.`;
+}
+
+/** The release day in words for a row's hint, or nothing for a date that does not parse. */
+function releaseHint(set: UpcomingSet): string | undefined {
+  const at = Date.parse(`${set.releasedAt}T00:00:00Z`);
+  return Number.isFinite(at) ? `Releases ${RELEASE_DAY.format(new Date(at))}` : undefined;
+}
+
+/**
+ * One answer, drawn: the empty sentence, or the two figures over the rows.
+ *
+ * **Rows flow into `fit.listColumns` columns** (`WidgetRowList`), and are cut to whole rows after
+ * the figure line is reserved. On a two-cell tile the caption keeps the two clauses that tell sets
+ * apart — the code and the day — and drops the counts the figures already sum.
+ */
+export function ComingSoonFace({
+  answer,
+  days,
+  fit,
+  still,
+}: {
+  answer: UpcomingSets;
+  days: number;
+  fit: WidgetFit;
+  still: boolean;
+}): ReactElement {
+  const showSetInSearch = useAppStore((s) => s.showSetInSearch);
+
+  if (answer.sets.length === 0) return <WidgetMessage>{emptySentence(days)}</WidgetMessage>;
+
+  const previewed = answer.sets.reduce((sum, set) => sum + set.previewed, 0);
+  const inDecks = answer.sets.reduce((sum, set) => sum + set.inDecks, 0);
+  const tile = fit.tier === 0;
+  const shown = answer.sets.slice(
+    0,
+    fit.rowsFit(ROW_PX, fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX),
+  );
+
+  return (
+    <>
+      <WidgetFigures
+        fit={fit}
+        divided
+        figures={[
+          {
+            key: "previewed",
+            label: "Previewed so far",
+            value: count(previewed),
+            note: "cards",
+            tone: "text",
+          },
+          { key: "reprints", label: "Reprints of your deck cards", value: count(inDecks), tone: "text" },
+        ]}
+      />
+      <WidgetRowList fit={fit} label="Announced sets">
+        {shown.map((set) => {
+          const caption = setCaption(set, answer.today);
+          return (
+            <WidgetRow
+              key={set.code}
+              name={set.name}
+              caption={
+                tile
+                  ? `${set.code.toUpperCase()} · ${whenLabel(daysUntil(answer.today, set.releasedAt))}`
+                  : caption
+              }
+              hint={releaseHint(set)}
+              onPress={still ? undefined : () => showSetInSearch(set.code)}
+              // The whole row in one string — a `gap` between the name and the caption computes to
+              // "Horizon TrekTRK · in 12 days" (`DecksWidget`'s row press, and the same reason).
+              pressLabel={still ? undefined : `${set.name} · ${caption}`}
+            />
+          );
+        })}
+      </WidgetRowList>
+    </>
+  );
+}
+
+export function ComingSoonWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
+  // The pick only ever answers one of its own options or its `dflt`, so a stored `"90"` or `9999`
+  // reads as ninety here and never reaches the backend's clamp.
+  const picked = pickOf(widget, "window");
+  const days = typeof picked === "number" ? picked : WINDOW_FALLBACK;
+
+  const query = useQuery({
+    queryKey: upcomingSetsKey(days),
+    queryFn: () => ipc.upcomingSets(days),
+  });
+
+  if (query.isError) {
+    return (
+      <WidgetMessage tone="destructive">
+        Could not read what is announced — {ipcError(query.error)}
+      </WidgetMessage>
+    );
+  }
+  if (query.isPending) return <WidgetMessage>{PENDING}</WidgetMessage>;
+  return <ComingSoonFace answer={query.data} days={days} fit={fit} still={still} />;
+}
