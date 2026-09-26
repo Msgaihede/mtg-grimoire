@@ -4,9 +4,11 @@ import {
   SHELF_EMPTY_HEIGHT,
   SHELF_HEADING_HEIGHT,
   SHELF_LABEL_HEIGHT,
+  anchorPlan,
   layoutShelves,
   rowHeight,
   rowOfTile,
+  rowStartOf,
   shelfAtRow,
   type LayoutRow,
   type ShelfLayout,
@@ -137,6 +139,24 @@ describe("layoutShelves", () => {
       "a collapsed empty folder is its heading alone",
       [section(shelf(1, { collapsed: true }), 0)],
       ["heading:1"],
+    ],
+    [
+      // Live-pass FAIL 13 (2026-09-26): an open managed shelf with nothing in it drew nothing
+      // under its heading in the grid, while the table said its mode's sentence. The box is the
+      // row both views draw that sentence in; the page decides it takes no drops.
+      "an open, empty managed shelf gets the box",
+      [section(shelf(10, { kind: "managed", group: "managed" }), 0)],
+      ["label:managed", "heading:10", "empty:10"],
+    ],
+    [
+      "a collapsed empty managed shelf is its heading alone",
+      [section(shelf(10, { kind: "managed", group: "managed", collapsed: true }), 0)],
+      ["label:managed", "heading:10"],
+    ],
+    [
+      "an empty Recently removed gets no box",
+      [section(shelf(30, { kind: "removed", group: "decks" }), 0)],
+      ["label:decks", "heading:30"],
     ],
     [
       "an opened folder with nothing in it is the box alone",
@@ -311,5 +331,91 @@ describe("rowOfTile and shelfAtRow", () => {
 
   it("names no shelf for a row the layout does not have", () => {
     for (const row of [-1, 9, Number.NaN]) expect(shelfAtRow(layout, row)).toBeNull();
+  });
+});
+
+describe("rowStartOf", () => {
+  /** A label, a heading, two tile rows, an empty box and a heading — every row kind once. */
+  const DECK = shelf(40, { kind: "deck", group: "decks" });
+  const layout = layoutShelves(
+    [section(BINDER, 3), section(shelf(2), 0), section(DECK, 0)],
+    2,
+  );
+
+  it("adds up every row above it at its own height, tiles at the pitch it is given", () => {
+    expect(spell(layout)).toEqual([
+      "heading:1",
+      "tiles:1:0-2",
+      "tiles:1:2-3",
+      "heading:2",
+      "empty:2",
+      "label:decks",
+      "heading:40",
+    ]);
+    const pitch = 250;
+    expect([0, 1, 2, 3, 4, 5, 6].map((i) => rowStartOf(layout, i, pitch))).toEqual([
+      0,
+      SHELF_HEADING_HEIGHT,
+      SHELF_HEADING_HEIGHT + pitch,
+      SHELF_HEADING_HEIGHT + 2 * pitch,
+      2 * SHELF_HEADING_HEIGHT + 2 * pitch,
+      2 * SHELF_HEADING_HEIGHT + 2 * pitch + SHELF_EMPTY_HEIGHT,
+      2 * SHELF_HEADING_HEIGHT + 2 * pitch + SHELF_EMPTY_HEIGHT + SHELF_LABEL_HEIGHT,
+    ]);
+  });
+
+  it("has no start for a row the layout does not have", () => {
+    for (const row of [-1, 7, 1.5, Number.NaN]) expect(rowStartOf(layout, row, 250)).toBe(-1);
+  });
+});
+
+/**
+ * **The fold anchor's arithmetic** (spec §3.9) — which scroll offset puts a row's top at a given
+ * point of the scrollport, and how much temporary room above or below makes that offset reachable.
+ * `rowTop` and `content` are measured without any room already added.
+ */
+describe("anchorPlan", () => {
+  const VIEW = 600;
+
+  it("scrolls by the difference when the offset it needs is reachable", () => {
+    expect(anchorPlan({ rowTop: 900, target: 300, viewport: VIEW, content: 3000, room: true }))
+      .toEqual({ scrollTop: 600, padStart: 0, padEnd: 0 });
+  });
+
+  /** The live pass's collection case: 126 was needed and 222 was set. */
+  it("stops where it is needed, not at the wall's end", () => {
+    const content = 222 + VIEW;
+    expect(anchorPlan({ rowTop: 400, target: 274, viewport: VIEW, content, room: true }))
+      .toEqual({ scrollTop: 126, padStart: 0, padEnd: 0 });
+  });
+
+  it("adds room above when the row would have to sit lower than the top of the page allows", () => {
+    // Heading 196px down a folded wall, the pointer at 598: 402px of room above it.
+    expect(anchorPlan({ rowTop: 196, target: 598, viewport: VIEW, content: 1210, room: true }))
+      .toEqual({ scrollTop: 0, padStart: 402, padEnd: 0 });
+  });
+
+  it("adds room below when the wall ends before the row can rise that far", () => {
+    // 1210px of folded wall: the most it scrolls is 610, and the row needs 900.
+    expect(anchorPlan({ rowTop: 1150, target: 250, viewport: VIEW, content: 1210, room: true }))
+      .toEqual({ scrollTop: 900, padStart: 0, padEnd: 290 });
+  });
+
+  /** An unfolded wall is the real page: the anchor gets as close as the page allows. */
+  it("clamps instead, at both ends, when no room may be added", () => {
+    expect(anchorPlan({ rowTop: 196, target: 598, viewport: VIEW, content: 1210, room: false }))
+      .toEqual({ scrollTop: 0, padStart: 0, padEnd: 0 });
+    expect(anchorPlan({ rowTop: 1150, target: 250, viewport: VIEW, content: 1210, room: false }))
+      .toEqual({ scrollTop: 610, padStart: 0, padEnd: 0 });
+  });
+
+  it("never scrolls a page shorter than its window", () => {
+    expect(anchorPlan({ rowTop: 300, target: 100, viewport: VIEW, content: 400, room: false }))
+      .toEqual({ scrollTop: 0, padStart: 0, padEnd: 0 });
+  });
+
+  it("rounds room up to whole pixels, so the offset it needs is always inside the page", () => {
+    expect(anchorPlan({ rowTop: 100.4, target: 300, viewport: VIEW, content: 1000, room: true }))
+      .toEqual({ scrollTop: 0, padStart: 200, padEnd: 0 });
   });
 });

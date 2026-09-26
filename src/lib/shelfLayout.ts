@@ -30,7 +30,7 @@ export type LayoutRow =
   | { kind: "heading"; shelf: Shelf }
   // [start, end) in the flat tile order
   | { kind: "tiles"; shelf: Shelf; start: number; end: number }
-  | { kind: "empty"; shelf: Shelf }; // a folder with no cards and no subfolders
+  | { kind: "empty"; shelf: Shelf }; // an open folder or managed folder with no cards or subfolders
 
 export interface ShelfLayout {
   rows: LayoutRow[];
@@ -67,10 +67,13 @@ function holdsNext(sections: readonly ShelfSection[], index: number): boolean {
  * - A **label** (`Decks`, `Managed by decks`) before the first shelf of each app-owned group.
  * - Each shelf's **heading** — except the headless shelf, whose folder the path row names.
  * - Its **tiles**, `columns` to a row, from that shelf only; the last row may be short.
- * - An **empty** row — the dashed drop box — for a reader's folder with no cards and nothing drawn
- *   inside it. A container whose cards are all in its subfolders gets no box, and neither does Not
- *   sorted, a deck group, Recently removed or a managed folder: none of them is a thing the reader
- *   files into by dropping on an empty shelf.
+ * - An **empty** row for an open shelf with no cards and nothing drawn inside it — a reader's
+ *   folder, where it is the dashed drop box, or a deck's **managed** wishlist folder, where it is
+ *   the box that says the folder's mode sentence (live-pass FAIL 13, 2026-09-26: the grid drew
+ *   nothing there while the table said it). **The row is a place, not a target**: what it draws,
+ *   and whether it takes a drop, is the page's `renderEmpty` — a managed folder is app-owned and
+ *   takes none. A container whose cards are all in its subfolders gets no box, and neither does
+ *   Not sorted, a deck group or Recently removed.
  * - A **collapsed** shelf is its heading alone. Its `tileCount` is ignored, because its cards are
  *   never fetched; it still gets a `tileStart`, at the running index, so every section has one.
  *
@@ -99,7 +102,11 @@ export function layoutShelves(sections: readonly ShelfSection[], columns: number
       const end = Math.min(offset + perRow, count);
       rows.push({ kind: "tiles", shelf, start: total + offset, end: total + end });
     }
-    if (count === 0 && shelf.kind === "folder" && !holdsNext(sections, index)) {
+    if (
+      count === 0 &&
+      (shelf.kind === "folder" || shelf.kind === "managed") &&
+      !holdsNext(sections, index)
+    ) {
       rows.push({ kind: "empty", shelf });
     }
     total += count;
@@ -121,6 +128,73 @@ export function rowHeight(row: LayoutRow, tileRowHeight: number): number {
     case "tiles":
       return tileRowHeight;
   }
+}
+
+/**
+ * Where row `index` starts, in px below the wall's first row: every row above it at its own
+ * {@link rowHeight}, tile rows at `tileRowHeight`. `-1` for a row the layout does not have.
+ *
+ * The same sum the virtualiser makes from the same heights, so a caller can place a row — the
+ * fold anchor's carried heading (spec §3.9) — without it being drawn, which during a drag it very
+ * often is not, and without reading the DOM, where a carried heading is a floating copy at the
+ * pointer rather than its slot in the wall.
+ */
+export function rowStartOf(layout: ShelfLayout, index: number, tileRowHeight: number): number {
+  if (!Number.isInteger(index) || index < 0 || index >= layout.rows.length) return -1;
+  let start = 0;
+  for (let at = 0; at < index; at++) start += rowHeight(layout.rows[at], tileRowHeight);
+  return start;
+}
+
+/** What {@link anchorPlan} is given — all in px, in the scroller's own coordinates. */
+export interface AnchorInput {
+  /** The row's top in the scroll content, measured without any room this plan adds. */
+  rowTop: number;
+  /** Where the row's top must appear, measured down from the top of the scrollport. */
+  target: number;
+  /** The scrollport's height. */
+  viewport: number;
+  /** The scroll content's height, measured without any room this plan adds. */
+  content: number;
+  /** Whether temporary room may be added — a folded wall's, never the real page's. */
+  room: boolean;
+}
+
+/** The scroll offset, and the room above (`padStart`) and below (`padEnd`) it needs. */
+export interface AnchorPlan {
+  scrollTop: number;
+  padStart: number;
+  padEnd: number;
+}
+
+/**
+ * **Where to scroll so a row's top lands at `target`** — the fold anchor's arithmetic (spec §3.9).
+ *
+ * The offset it takes is `rowTop − target`. A page cannot scroll above its top or past its end,
+ * and a folded wall is short, so that offset is often out of reach: the live pass measured a
+ * collection wall of 1210px with its clamp at 222, a heading that needed the page *above* the top
+ * (the pointer 402px below where the heading could reach), and one that needed 126 while the clamp
+ * set 222. **With `room`, the gap is added as temporary space instead** — above the wall when the
+ * row must sit lower than the page's top allows, below it when the wall ends too soon — so the row
+ * lands exactly where it is wanted; the unfold asks again without room and the space goes. Without
+ * `room` (the real page) the offset is clamped, which is as close as the page allows.
+ *
+ * Room is rounded **up** to whole pixels, so the offset it was added for is always inside the page.
+ */
+export function anchorPlan({ rowTop, target, viewport, content, room }: AnchorInput): AnchorPlan {
+  const wanted = rowTop - target;
+  const most = Math.max(0, content - viewport);
+  if (wanted < 0) {
+    return room
+      ? { scrollTop: 0, padStart: Math.ceil(-wanted), padEnd: 0 }
+      : { scrollTop: 0, padStart: 0, padEnd: 0 };
+  }
+  if (wanted > most) {
+    return room
+      ? { scrollTop: wanted, padStart: 0, padEnd: Math.ceil(wanted - most) }
+      : { scrollTop: most, padStart: 0, padEnd: 0 };
+  }
+  return { scrollTop: wanted, padStart: 0, padEnd: 0 };
 }
 
 /** The row index of every tile row, in order — built once per layout, on first ask. */

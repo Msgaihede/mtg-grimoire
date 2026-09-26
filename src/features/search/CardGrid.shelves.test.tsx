@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useMemo } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useFoldAnchor } from "@/features/shelves/useFoldAnchor";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import { LAYER } from "@/lib/layers";
 import {
@@ -9,11 +11,18 @@ import {
   SHELF_RAIL_OFFSET_PX,
   layoutShelves,
   rowHeight,
+  rowStartOf,
   type ShelfLayout,
 } from "@/lib/shelfLayout";
 import { MAX_SHELF_INDENT, type Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
-import { CardGrid, stickyShelfAt, type GridCard, type GridSections } from "./CardGrid";
+import {
+  CardGrid,
+  shelfCarry,
+  stickyShelfAt,
+  type GridCard,
+  type GridSections,
+} from "./CardGrid";
 import { nextShelfTileIndex } from "./gridNav";
 
 /**
@@ -807,5 +816,532 @@ describe("CardGrid shelves across two columns", () => {
 
     expect(useAppStore.getState().cardSelection?.keys).toEqual(["a1", "a2", "a3", "b1", "b2"]);
     expect(document.querySelectorAll("[data-grid-index].ring-accent")).toHaveLength(5);
+  });
+});
+
+/**
+ * **The caret survives a re-layout** — live-pass FAIL 6 (2026-09-26): one Ctrl+wheel step that
+ * changed the column count re-keyed the rows, the focused tile's element unmounted, and
+ * `document.activeElement` became `<body>`. The caret belongs to a *tile*, so it is put back on the
+ * same tile — by its tile key — wherever the new layout draws it.
+ *
+ * `clientWidth` 400 is two 170px columns; zoom 0.5 draws 85px tiles, which is four.
+ */
+describe("CardGrid keeps the caret on its tile through a re-layout", () => {
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, value: 400 });
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
+  });
+
+  const zoomOut = () =>
+    act(() => {
+      useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, collection: 0.5 } });
+    });
+  const tileCount = (row: Element) => row.querySelectorAll("[data-grid-index]").length;
+
+  const TWO = () =>
+    shelves([
+      {
+        shelf: BINDER,
+        tiles: [tile("a1", "Card A1"), tile("a2", "Card A2"), tile("a3", "Card A3")],
+      },
+      { shelf: TRADE, tiles: [tile("b1", "Card B1"), tile("b2", "Card B2")] },
+    ]);
+
+  /** The live pass's own case: the focused tile's row is re-keyed and unmounts. */
+  it("puts the caret back on the same tile when a column change remounts it", () => {
+    wall(TWO());
+    const before = art("Card A3");
+    expect(tileCount(rowOf(before))).toBe(1); // A3 alone on Binder's short row, at two columns
+    before.focus();
+
+    zoomOut();
+
+    // Four columns: Binder is one row now, so A3's old row — and A3's old element — is gone.
+    expect(tileCount(rowOf(art("Card A3")))).toBe(3);
+    expect(before.isConnected).toBe(false);
+    expect(document.activeElement).toBe(art("Card A3"));
+  });
+
+  /**
+   * **The flat wall's form of the same fault**: its rows and slots are keyed by position, so the
+   * focused element is *reused* for another card — the caret stays on a button, on the wrong card.
+   */
+  it("moves the caret back to its own card when a flat wall reuses the element for another", () => {
+    const six = ["A", "B", "C", "D", "E", "F"].map((n) => tile(n.toLowerCase(), `Card ${n}`));
+    wall(undefined, { rows: six });
+    const focused = art("Card C");
+    focused.focus();
+
+    zoomOut();
+
+    // Slot "1-0" held C at two columns and holds E at four: the same element, another card.
+    expect(focused.isConnected).toBe(true);
+    expect(focused).toHaveAccessibleName("Card E");
+    expect(document.activeElement).toBe(art("Card C"));
+  });
+
+  /** A caret the reader has taken elsewhere is theirs — a re-layout does not pull it back. */
+  it("leaves a caret alone once it has left the wall", () => {
+    const { container } = wall(TWO());
+    art("Card A3").focus();
+    const outside = document.createElement("button");
+    container.appendChild(outside);
+    outside.focus();
+
+    zoomOut();
+
+    expect(document.activeElement).toBe(outside);
+  });
+
+  /**
+   * **A tile the reader scrolled away from is not a caret to keep** (fix round 1, Important 1).
+   * Scrolling a focused tile out of the virtualiser's window unmounts it and the caret falls to
+   * `<body>` with no focus event to say so. A later column change must not scroll the page back to
+   * that tile and focus it — minutes later, mid-zoom — on any wall.
+   */
+  it("forgets a tile scrolled out of the window, so a later column change does not pull the page back", () => {
+    const forty = Array.from({ length: 40 }, (_, i) => tile(`t${i}`, `Card ${i}`));
+    wall(undefined, { rows: forty });
+    const group = screen.getByRole("group", { name: "Your collection" });
+    const first = art("Card 0");
+    first.focus();
+
+    // Twenty rows at two across: scrolled far down, row 0 leaves the window and unmounts.
+    group.scrollTop = 4000;
+    fireEvent.scroll(group);
+    expect(first.isConnected).toBe(false);
+    expect(document.activeElement).toBe(document.body);
+
+    const scrollTo = vi.mocked(HTMLElement.prototype.scrollTo);
+    scrollTo.mockClear();
+    zoomOut();
+
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  /** Keyed on the tile, not the slot: the art keeps the caret on the art, the tile on the tile. */
+  it("puts a caret that was on the tile itself back on the tile, not on its art", () => {
+    wall(TWO());
+    const tileBefore = art("Card A3").closest<HTMLElement>("[data-grid-index]")!;
+    tileBefore.focus();
+
+    zoomOut();
+
+    expect(tileBefore.isConnected).toBe(false);
+    expect(document.activeElement).toBe(art("Card A3").closest("[data-grid-index]"));
+  });
+});
+
+/**
+ * **The fold anchor** — spec §3.9 ("the page stays anchored on the dragged heading as it folds and
+ * unfolds") and live-pass FAIL 4 (2026-09-26). Driven the way the app drives it: a page that calls
+ * `useFoldAnchor(folding)` and hands the wall its shelves folded while `folding`, with real
+ * `pointerdown`/`pointermove`/`pointerup`/`keydown` on `window`.
+ *
+ * jsdom lays nothing out, so the scroll geometry is the browser's, stated: a 600px window at the
+ * top of the viewport, a scroll height of the sizer plus the wall's `p-3` either side (so the room
+ * the anchor adds counts), and each pressed row's box where the case says it is. **Every expected
+ * offset is computed from `rowStartOf` at the pitch the wall really draws**, so these assert where
+ * the wall scrolls *to*, and `shelfLayout.test.ts` owns the arithmetic.
+ */
+describe("CardGrid keeps a carried heading under the pointer through a fold", () => {
+  /** Thirty shelves of three cards: folded, 30 × 48 = 1440px, taller than the window. */
+  const MANY: Entry[] = Array.from({ length: 30 }, (_, i) => ({
+    shelf: shelf(100 + i, `Shelf ${i}`),
+    tiles: ["a", "b", "c"].map((n) => tile(`c${i}${n}`, `Card ${i}${n}`)),
+  }));
+  const folded = (entries: Entry[]): Entry[] =>
+    entries.map((e) => ({ shelf: { ...e.shelf, collapsed: true }, tiles: [], count: 0 }));
+  const noop = () => undefined;
+
+  /**
+   * A page as the app draws one: `useFoldAnchor(folding)`, and the wall handed its shelves folded
+   * while `folding`. `foldedAs` is the folded wall when it is not simply `entries` folded — the
+   * pages' `foldedForDrag` opens every collapsed shelf first, so the folded wall can draw a child
+   * the real page hides.
+   */
+  function Page({
+    folding,
+    entries,
+    foldedAs,
+    grow = false,
+  }: {
+    folding: boolean;
+    entries: Entry[];
+    foldedAs?: Entry[];
+    grow?: boolean;
+  }) {
+    useFoldAnchor(folding);
+    const sections = useMemo(
+      () => shelves(folding ? (foldedAs ?? folded(entries)) : entries),
+      [folding, entries, foldedAs],
+    );
+    return (
+      <CardGrid
+        rows={NO_ROWS}
+        sections={sections}
+        onSelect={noop}
+        onNeedNextPage={noop}
+        listKey="k"
+        label="Your collection"
+        zoomSection="collection"
+        grow={grow}
+      />
+    );
+  }
+  /** One animation frame — the carry is let go on the frame after the drag ends. */
+  const nextFrame = () =>
+    act(async () => {
+      await new Promise<void>((done) => requestAnimationFrame(() => done()));
+    });
+
+  beforeEach(() => {
+    shelfCarry.reset();
+  });
+
+  /** The page, with the browser's scroll geometry stated on the wall (see the block's doc). */
+  function mount(entries: Entry[] = MANY) {
+    const view = render(<Page folding={false} entries={entries} />);
+    const group = screen.getByRole("group", { name: "Your collection" });
+    const sizer = group.lastElementChild as HTMLElement;
+    Object.defineProperty(group, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(group, "scrollHeight", {
+      configurable: true,
+      get: () => parseFloat(sizer.style.height) + 24,
+    });
+    const scrollTo = vi.mocked(HTMLElement.prototype.scrollTo);
+    const scrolledTo = () => (scrollTo.mock.lastCall?.[0] as ScrollToOptions | undefined)?.top;
+    /** What the browser does with the last scroll asked for — `scrollTo` is a stub here. */
+    const scrollLands = () => {
+      group.scrollTop = scrolledTo() ?? group.scrollTop;
+      fireEvent.scroll(group);
+    };
+    /** Bring a shelf's heading into the drawn window, as a reader scrolling there would. */
+    const scrollToShelf = (entriesNow: Entry[], index: number) => {
+      const layout = layoutShelves(shelves(entriesNow).sections, 1);
+      const row = layout.rows.findIndex(
+        (r) => r.kind === "heading" && r.shelf.id === entriesNow[index].shelf.id,
+      );
+      group.scrollTop = Math.max(0, rowStartOf(layout, row, pitch()) - 200);
+      fireEvent.scroll(group);
+    };
+    const pitch = () => {
+      const rows = [...group.querySelectorAll<HTMLElement>('[data-shelf-row="tiles"]')];
+      return offsetOf(rows[1]) - offsetOf(rows[0]);
+    };
+    const rowOfShelf = (name: string) => rowOf(heading(name));
+    /** Press a heading at `clientY`, its row's top at `rowTop` on screen. */
+    const pressHeading = (name: string, rowTop: number, clientY: number) => {
+      const row = rowOfShelf(name);
+      row.getBoundingClientRect = () => new DOMRect(0, rowTop, 400, SHELF_HEADING_HEIGHT);
+      fireEvent.pointerDown(heading(name), { clientX: 100, clientY });
+      return row;
+    };
+    const fold = (next: Entry[] = entries) => view.rerender(<Page folding entries={next} />);
+    const unfold = (next: Entry[] = entries) =>
+      view.rerender(<Page folding={false} entries={next} />);
+    /** Where a shelf's heading row starts in `entriesNow`'s layout (folded or not), at the wall's
+     *  real pitch, plus the wall's `p-3` — its top in the scroll content. */
+    const contentTop = (entriesNow: Entry[], shelfId: number, tilePitch: number) => {
+      const layout = layoutShelves(shelves(entriesNow).sections, 1);
+      const row = layout.rows.findIndex((r) => r.kind === "heading" && r.shelf.id === shelfId);
+      return 12 + rowStartOf(layout, row, tilePitch);
+    };
+    return {
+      view,
+      group,
+      sizer,
+      scrollTo,
+      scrolledTo,
+      scrollLands,
+      scrollToShelf,
+      pitch,
+      rowOfShelf,
+      pressHeading,
+      fold,
+      unfold,
+      contentTop,
+    };
+  }
+
+  /**
+   * **The live pass's collection case**: the heading dragged from deep in the wall, where the
+   * fold's own render still used the unfolded offset. Its row was unmounted for that frame — and
+   * dnd-kit's feedback element with it — and the page landed at the folded wall's clamp.
+   */
+  it("keeps the carried heading's row mounted, and scrolls the folded wall to put it at the pointer", () => {
+    const { group, scrolledTo, scrollToShelf, pitch, pressHeading, fold, rowOfShelf, contentTop } =
+      mount();
+    scrollToShelf(MANY, 15);
+    const tilePitch = pitch();
+    const carried = pressHeading("Shelf 15", 300, 320); // grabbed 20px into its row
+    fireEvent.pointerMove(window, { clientX: 100, clientY: 330 });
+    const staleOffset = group.scrollTop;
+
+    fold();
+
+    // The same element, though the fold's window (at the stale offset, far past the folded
+    // wall's end) would not have held it.
+    expect(staleOffset).toBeGreaterThan(30 * SHELF_HEADING_HEIGHT);
+    expect(rowOfShelf("Shelf 15")).toBe(carried);
+    expect(carried.isConnected).toBe(true);
+    // Its top at the pointer less the grab: 330 − 20 = 310, reachable, so no room.
+    expect(scrolledTo()).toBe(contentTop(folded(MANY), 115, tilePitch) - 310);
+    expect(parseFloat(group.lastElementChild!.getAttribute("style")!.match(/height: ([\d.]+)px/)![1]))
+      .toBe(30 * SHELF_HEADING_HEIGHT);
+  });
+
+  /** The live pass's other shape: the heading near the folded wall's top and the pointer low —
+   *  402px the page could not reach. The anchor holds by adding room above, and the unfold on
+   *  Escape takes the room away and puts the heading back at the pointer. */
+  it("adds room when the folded wall is too short, and on Escape returns to the pointer without it", () => {
+    const { group, scrolledTo, scrollToShelf, pitch, pressHeading, fold, unfold, rowOfShelf, contentTop } =
+      mount();
+    scrollToShelf(MANY, 1);
+    const tilePitch = pitch();
+    const carried = pressHeading("Shelf 1", 500, 520);
+
+    fold();
+
+    // Folded, Shelf 1 starts 48px down (60 with the wall's `p-3`); the pointer wants its top at
+    // 500, so 440px of room above it and the page at 0.
+    const room = 500 - contentTop(folded(MANY), 101, tilePitch);
+    expect(room).toBe(440);
+    expect(offsetOf(rowOfShelf("Shelf 1"))).toBe(room + SHELF_HEADING_HEIGHT);
+    expect(scrolledTo()).toBe(0);
+    expect(rowOfShelf("Shelf 1")).toBe(carried);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    unfold();
+
+    // The room is gone and the heading's top is back at the pointer (still 500) on the real page.
+    const start = contentTop(MANY, 101, tilePitch) - 12;
+    expect(offsetOf(rowOfShelf("Shelf 1"))).toBe(start);
+    expect(scrolledTo()).toBe(12 + start - 500);
+    expect(rowOfShelf("Shelf 1")).toBe(carried);
+    void group;
+  });
+
+  /**
+   * **A drop**: the unfold keeps the heading the pointer was over where it was — so the page does
+   * not flash some other stretch of the wall — and when the move lands (a refetch later), the moved
+   * heading goes to the pointer.
+   */
+  it("holds the drop target on the unfold, then puts the moved heading at the pointer", () => {
+    const {
+      scrolledTo,
+      scrollLands,
+      scrollToShelf,
+      pitch,
+      pressHeading,
+      fold,
+      unfold,
+      view,
+      rowOfShelf,
+      contentTop,
+    } = mount();
+    scrollToShelf(MANY, 15);
+    const tilePitch = pitch();
+    pressHeading("Shelf 15", 300, 320);
+    fold();
+    scrollLands();
+
+    // Let go over Shelf 20's heading, whose row is at 450 on screen.
+    const target = rowOfShelf("Shelf 20");
+    target.getBoundingClientRect = () => new DOMRect(0, 450, 400, SHELF_HEADING_HEIGHT);
+    const elementsFromPoint = vi.fn(() => [target]);
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: elementsFromPoint,
+    });
+    try {
+      fireEvent.pointerUp(window, { clientX: 100, clientY: 460 });
+      unfold();
+      expect(elementsFromPoint).toHaveBeenCalledWith(100, 460);
+      expect(scrolledTo()).toBe(contentTop(MANY, 120, tilePitch) - 450);
+
+      // The move lands: Shelf 15 now sits after Shelf 20.
+      const moved = [...MANY.slice(0, 15), ...MANY.slice(16, 21), MANY[15], ...MANY.slice(21)];
+      view.rerender(<Page folding={false} entries={moved} />);
+
+      // Its top at the release point less the grab: 460 − 20.
+      expect(scrolledTo()).toBe(contentTop(moved, 115, tilePitch) - 440);
+    } finally {
+      Reflect.deleteProperty(document, "elementsFromPoint");
+    }
+  });
+
+  /** The reader's wheel ends the settling: a move that lands afterwards scrolls nothing. */
+  it("leaves the page alone once the reader has scrolled after the drop", () => {
+    const { scrollTo, scrollToShelf, pressHeading, fold, unfold, view } = mount();
+    scrollToShelf(MANY, 15);
+    pressHeading("Shelf 15", 300, 320);
+    fold();
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 460 });
+    unfold();
+
+    fireEvent.wheel(window, { deltaY: 100 });
+    scrollTo.mockClear();
+    const moved = [...MANY.slice(0, 15), ...MANY.slice(16, 21), MANY[15], ...MANY.slice(21)];
+    view.rerender(<Page folding={false} entries={moved} />);
+
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  /** A press that never became a drag carries nothing: a later fold (another drag, begun
+   *  elsewhere) moves nothing on its account. */
+  it("forgets a press that was not a drag", () => {
+    const { scrollTo, scrollToShelf, pressHeading, fold } = mount();
+    scrollToShelf(MANY, 15);
+    pressHeading("Shelf 15", 300, 320);
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 320 });
+    expect(shelfCarry.carried()).toBeNull();
+
+    scrollTo.mockClear();
+    fold();
+
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A drop on a shelf only the folded wall drew** (fix round 1, Important 2). The fold opens every
+   * collapsed shelf before folding it, so the child of a collapsed parent is a heading on the
+   * folded wall and nowhere on the real page. Dropped onto, it must still leave the page anchored —
+   * on its nearest drawn ancestor, where the child was — and the room the fold added must go.
+   */
+  it("anchors on the nearest drawn ancestor of a shelf only the fold drew, and takes the room away", () => {
+    const PARENT: Entry = {
+      shelf: { ...MANY[20].shelf, collapsed: true },
+      tiles: [],
+      count: 0,
+    };
+    const CHILD = shelf(500, "Child of 20", {
+      depth: 1,
+      pathIds: [MANY[20].shelf.id, 500],
+      path: ["Shelf 20", "Child of 20"],
+      lead: ["Shelf 20"],
+      leadIds: [MANY[20].shelf.id],
+    });
+    const page = [...MANY.slice(0, 20), PARENT, ...MANY.slice(21)];
+    const foldedPage = folded([...MANY.slice(0, 21), { shelf: CHILD, tiles: [] }, ...MANY.slice(21)]);
+    const { view, group, scrolledTo, scrollToShelf, pitch, pressHeading, rowOfShelf, contentTop } =
+      mount(page);
+    scrollToShelf(page, 1);
+    const tilePitch = pitch();
+    pressHeading("Shelf 1", 500, 520);
+
+    view.rerender(<Page folding entries={page} foldedAs={foldedPage} />);
+    // Shelf 1 near the folded wall's top and the pointer low: 440px of room above it.
+    expect(offsetOf(rowOfShelf("Shelf 1"))).toBe(440 + SHELF_HEADING_HEIGHT);
+
+    // The reader carries it down to the child, which only this folded wall draws.
+    const childTop = contentTop(foldedPage, 500, tilePitch) + 440;
+    group.scrollTop = childTop - 300;
+    fireEvent.scroll(group);
+    const child = rowOfShelf("Child of 20");
+    child.getBoundingClientRect = () => new DOMRect(0, 300, 400, SHELF_HEADING_HEIGHT);
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      value: vi.fn(() => [child]),
+    });
+    try {
+      fireEvent.pointerUp(window, { clientX: 100, clientY: 310 });
+      view.rerender(<Page folding={false} entries={page} />);
+
+      // No room: Shelf 1 is back at its own start on the real page.
+      expect(offsetOf(rowOfShelf("Shelf 1"))).toBe(contentTop(page, 101, tilePitch) - 12);
+      // And the page is anchored — Shelf 20, the child's parent, where the child was let go.
+      expect(scrolledTo()).toBe(contentTop(page, MANY[20].shelf.id, tilePitch) - 300);
+    } finally {
+      Reflect.deleteProperty(document, "elementsFromPoint");
+    }
+  });
+
+  /**
+   * **The carry ends with the drag** (fix round 1, Minor 4). A carried heading's row is drawn
+   * outside the virtualiser's window for as long as there is a carry; one that outlived its drag
+   * stayed mounted wherever the reader scrolled — in the tab order, and the last drawn row the
+   * paging rule reads. After Escape it goes on the next frame; after a drop, when the settling ends.
+   */
+  it("lets the carried heading go once the drag is over", async () => {
+    const { group, scrollToShelf, pressHeading, fold, unfold } = mount();
+    scrollToShelf(MANY, 15);
+    pressHeading("Shelf 15", 300, 320);
+    fold();
+    fireEvent.keyDown(window, { key: "Escape" });
+    unfold();
+    await nextFrame();
+
+    expect(shelfCarry.carried()).toBeNull();
+    group.scrollTop = 0;
+    fireEvent.scroll(group);
+    expect(screen.queryByRole("heading", { name: "Shelf 15" })).toBeNull();
+
+    // A drop: the carry lasts through the settling, and ends when the reader takes the page.
+    scrollToShelf(MANY, 15);
+    pressHeading("Shelf 15", 300, 320);
+    fold();
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 320 });
+    unfold();
+    await nextFrame();
+    expect(shelfCarry.carried()).toBe(MANY[15].shelf.id);
+
+    fireEvent.wheel(window, { deltaY: 40 });
+    await nextFrame();
+    expect(shelfCarry.carried()).toBeNull();
+  });
+
+  /**
+   * **Under `grow`, the scroller is `main`** — both shipped pages grow — so a row's top in the
+   * scroll content is the measured `scrollMargin` (everything above the wall) plus its start, and
+   * the scroll is `main`'s. jsdom lays nothing out: `main` is found through its inline
+   * `overflow-y`, and the wall's rows box is stated 150px below `main`'s top.
+   */
+  it("anchors in main's coordinates when the wall grows and the page scrolls it", () => {
+    const boxes = vi
+      .spyOn(HTMLDivElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => new DOMRect(0, 150 - main.scrollTop, 400, 0));
+    const main = document.createElement("main");
+    main.style.overflowY = "auto";
+    document.body.appendChild(main);
+    try {
+      const view = render(<Page folding={false} entries={MANY} grow />, { container: main });
+      const sizer = screen.getByRole("group", { name: "Your collection" }).lastElementChild!;
+      Object.defineProperty(main, "clientHeight", { configurable: true, value: 600 });
+      Object.defineProperty(main, "scrollHeight", {
+        configurable: true,
+        get: () => parseFloat((sizer as HTMLElement).style.height) + 150,
+      });
+      const layout = layoutShelves(shelves(MANY).sections, 1);
+      const tileRows = [...main.querySelectorAll<HTMLElement>('[data-shelf-row="tiles"]')];
+      const tilePitch = offsetOf(tileRows[1]) - offsetOf(tileRows[0]);
+      const at = layout.rows.findIndex((r) => r.kind === "heading" && r.shelf.id === 115);
+      main.scrollTop = 150 + rowStartOf(layout, at, tilePitch) - 200;
+      fireEvent.scroll(main);
+
+      const row = rowOf(heading("Shelf 15"));
+      row.getBoundingClientRect = () => new DOMRect(0, 300, 400, SHELF_HEADING_HEIGHT);
+      fireEvent.pointerDown(heading("Shelf 15"), { clientX: 100, clientY: 320 });
+      fireEvent.pointerMove(window, { clientX: 100, clientY: 330 });
+      const scrollTo = vi.mocked(HTMLElement.prototype.scrollTo);
+      scrollTo.mockClear();
+
+      view.rerender(<Page folding entries={MANY} grow />);
+
+      // 150px of page above the wall, Shelf 15 at 15 × 48 down the folded wall, its top wanted at
+      // 330 − 20 = 310 — on `main`, not on the wall.
+      expect(scrollTo.mock.lastCall?.[0]).toEqual(
+        expect.objectContaining({ top: 150 + 15 * SHELF_HEADING_HEIGHT - 310 }),
+      );
+      expect(scrollTo.mock.contexts[scrollTo.mock.contexts.length - 1]).toBe(main);
+      view.unmount();
+    } finally {
+      boxes.mockRestore();
+      main.remove();
+    }
   });
 });

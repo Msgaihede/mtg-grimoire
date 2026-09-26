@@ -1,46 +1,66 @@
 /**
- * **Keep the carried heading under the pointer while the wall folds around it** — spec §3.9's
- * other half. `useFoldOnFolderDrag` folds every shelf to its heading the moment a folder heading is
- * picked up, which shortens the wall above the heading by however many rows of cards it held; left
- * alone, the heading the reader is holding would jump up the screen out from under their hand, and
- * jump back down again on the drop. Task 3 answers *whether* to fold and says in words that keeping
- * the page anchored is the page's job; this is that job.
+ * **Keep the carried heading under the pointer while the wall folds and unfolds around it** — spec
+ * §3.9: "the page stays anchored on the dragged heading as it folds and unfolds".
+ * `useFoldOnFolderDrag` folds every shelf to its heading the moment a folder heading is picked up,
+ * which shortens the wall above the heading by however many rows of cards it held; left alone, the
+ * heading the reader is holding would jump out from under their hand, and the page would jump again
+ * on the drop.
  *
- * **Which heading, and where the pointer is, are both read off the pointer rather than the drag.**
- * A capture-phase `pointerdown` on `window` records the heading the press landed in
- * (`SHELF_HEADING_ATTR`, whose value is the shelf id — the attribute's own doc names this use) and
- * `pointermove` keeps the pointer's `clientY`. A press anywhere else forgets the heading, so a card
- * drag never moves the page. Passive listeners: nothing here may change what the gesture does.
+ * **This hook is the page's half and `CardGrid`'s `shelfCarry` is the wall's.** The page knows the
+ * pointer and when it folds; only the wall knows where a row *is* — during a drag the heading's own
+ * element is dnd-kit's floating copy at the pointer, and its row is often not even drawn — so this
+ * hook feeds `shelfCarry` and the sectioned wall answers from its layout. The whole argument, and
+ * the live pass (2026-09-26) that measured the page-side version failing, is on `shelfCarry`.
  *
- * **On every change of `folding`, in a layout effect** — the fold and the unfold alike, before the
- * browser paints the frame that moved the heading — the heading's centre is put back at the
- * pointer's `y` by scrolling its scroller by the difference. The scroller is `AppShell`'s `main`,
- * which is what scrolls a growing wall, with the document as the fallback. A heading the virtualiser
- * has not drawn is left alone: there is nothing to measure, and the drag carries on.
+ * - **The press**: a capture-phase `pointerdown` on `window` records the heading row the press
+ *   landed in (`SHELF_HEADING_ROW`) and how far into it — a press anywhere else forgets it, so a
+ *   card drag never moves the page. `pointermove` and `pointerup` keep the pointer. Passive
+ *   listeners: nothing here may change what the gesture does.
+ * - **The fold and the unfold**: on every change of `folding`, in a layout effect — after the wall
+ *   has drawn the new layout and before the browser paints it.
+ * - **The ending**: Escape (capture phase, so ahead of dnd-kit's own) is a cancelled drag; a
+ *   `pointerup` mid-fold is a drop. A wheel or any other key afterwards is the reader taking the
+ *   page back, and nothing re-anchors after it.
  *
  * **The table does not fold, so the page hands this `false` there** — `VirtualTable` keys its rows
  * by position, and folding under a carried heading would remount it and end the drag.
  */
 import { useEffect, useLayoutEffect, useRef } from "react";
-import { SHELF_HEADING_ATTR } from "@/features/shelves/ShelfHeading";
+import { SHELF_HEADING_ROW, SHELF_ID_ATTR, shelfCarry } from "@/features/search/CardGrid";
 
 export function useFoldAnchor(folding: boolean): void {
-  const pointer = useRef<{ y: number; heading: string | null }>({ y: 0, heading: null });
-
   useEffect(() => {
-    const down = (e: PointerEvent | MouseEvent) => {
-      const heading =
-        e.target instanceof Element ? e.target.closest(`[${SHELF_HEADING_ATTR}]`) : null;
-      pointer.current = { y: e.clientY, heading: heading?.getAttribute(SHELF_HEADING_ATTR) ?? null };
+    const down = (e: MouseEvent) => {
+      const row = e.target instanceof Element ? e.target.closest(SHELF_HEADING_ROW) : null;
+      const shelfId = row ? Number(row.getAttribute(SHELF_ID_ATTR)) : Number.NaN;
+      shelfCarry.press(
+        row && Number.isInteger(shelfId)
+          ? { shelfId, rowTop: row.getBoundingClientRect().top }
+          : null,
+        e.clientX,
+        e.clientY,
+      );
     };
-    const move = (e: PointerEvent | MouseEvent) => {
-      pointer.current = { ...pointer.current, y: e.clientY };
+    const move = (e: MouseEvent) => shelfCarry.move(e.clientX, e.clientY);
+    const up = (e: MouseEvent) => shelfCarry.up(e.clientX, e.clientY);
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") shelfCarry.escape();
+      else shelfCarry.interrupt();
     };
-    window.addEventListener("pointerdown", down, { capture: true, passive: true });
-    window.addEventListener("pointermove", move, { capture: true, passive: true });
+    const wheel = () => shelfCarry.interrupt();
+    const options = { capture: true, passive: true } as const;
+    window.addEventListener("pointerdown", down, options);
+    window.addEventListener("pointermove", move, options);
+    window.addEventListener("pointerup", up, options);
+    window.addEventListener("keydown", key, options);
+    window.addEventListener("wheel", wheel, options);
     return () => {
       window.removeEventListener("pointerdown", down, { capture: true });
       window.removeEventListener("pointermove", move, { capture: true });
+      window.removeEventListener("pointerup", up, { capture: true });
+      window.removeEventListener("keydown", key, { capture: true });
+      window.removeEventListener("wheel", wheel, { capture: true });
+      shelfCarry.reset();
     };
   }, []);
 
@@ -48,15 +68,6 @@ export function useFoldAnchor(folding: boolean): void {
   useLayoutEffect(() => {
     if (was.current === folding) return;
     was.current = folding;
-    const { y, heading } = pointer.current;
-    if (heading === null) return;
-    // A shelf id — digits, or `-1` for a folder still being named — so it needs no escaping inside
-    // the quoted attribute value.
-    const element = document.querySelector<HTMLElement>(`[${SHELF_HEADING_ATTR}="${heading}"]`);
-    if (element === null) return;
-    const scroller = element.closest("main") ?? document.scrollingElement;
-    if (!(scroller instanceof HTMLElement)) return;
-    const box = element.getBoundingClientRect();
-    scroller.scrollTop += box.top + box.height / 2 - y;
+    shelfCarry.fold(folding);
   }, [folding]);
 }

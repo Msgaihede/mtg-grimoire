@@ -5,11 +5,13 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
+  type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import { CardArt } from "@/components/CardArt";
 import { CardChin } from "@/components/CardChin";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
@@ -31,9 +33,11 @@ import { LAYER } from "@/lib/layers";
 import {
   SHELF_INDENT_PX,
   SHELF_RAIL_OFFSET_PX,
+  anchorPlan,
   layoutShelves,
   rowHeight,
   rowOfTile,
+  rowStartOf,
   shelfAtRow,
   type ShelfLayout,
   type ShelfSection,
@@ -473,6 +477,259 @@ function shelfRowKey(layout: ShelfLayout, index: number): string {
 type ShelfArrow = Parameters<typeof nextShelfTileIndex>[2];
 function isShelfArrow(key: string): key is ShelfArrow {
   return key === "ArrowLeft" || key === "ArrowRight" || key === "ArrowUp" || key === "ArrowDown";
+}
+
+/**
+ * The attribute every sectioned row carries naming its shelf — a heading's, a run of tiles', an
+ * empty box's (a label has none). `useFoldAnchor` finds the heading a press landed in by it, and a
+ * drop's landing place is read off it.
+ */
+export const SHELF_ID_ATTR = "data-shelf-id";
+
+/** A heading row of a sectioned wall — the element a folder drag is picked up from. */
+export const SHELF_HEADING_ROW = `[data-shelf-row="heading"][${SHELF_ID_ATTR}]`;
+
+/** What the fold anchor asks a sectioned wall: put one shelf's heading row's top at a point. */
+export interface ShelfAnchorRequest {
+  shelfId: number;
+  /** Where the heading row's top must be, as a viewport `clientY`. */
+  top: number;
+  /** Whether temporary room may be added to get it there — a folded wall's, see `anchorPlan`. */
+  room: boolean;
+}
+
+/**
+ * How long after a drop the wall keeps re-anchoring the moved heading as the new order arrives,
+ * in ms. A folder move is not optimistic — the write, then a refetch of the folders — so the
+ * moved heading reaches the wall a beat after the unfold. Any wheel, key or press ends it sooner.
+ */
+const SETTLE_MS = 2000;
+
+/**
+ * **The carried heading, for spec §3.9's anchor** — "the page stays anchored on the dragged
+ * heading as it folds and unfolds". Module state, because there is one pointer: `useFoldAnchor`
+ * (the page) feeds it the press, the pointer and the fold, and the sectioned wall does the
+ * geometry, because only the wall knows where a row *is*.
+ *
+ * **Why the wall and not the page, measured in the live pass (2026-09-26).** The anchor used to be
+ * a page-side scroll by the heading element's measured box, and it failed three ways at once:
+ * during a drag dnd-kit promotes the source to a `position: fixed` popover, so its box is the
+ * floating copy at the pointer and never its slot in the wall; the fold's own render still used
+ * the old scroll offset (5664 against a folded wall of 1210), so the heading's row was outside the
+ * virtualiser's window and **unmounted** in that very commit, which also lost dnd-kit's feedback
+ * element; and the page's layout effect runs after the wall's, too late for either. So the wall
+ * keeps the carried heading's row drawn whatever its window says, and places it from the layout's
+ * own arithmetic (`rowStartOf`, `anchorPlan`) rather than from a box.
+ *
+ * **What lands where**, each a {@link ShelfAnchorRequest} to every attached wall:
+ * - **Fold**: the carried heading at the pointer, less where in its row it was grabbed — with
+ *   temporary room above or below when the folded wall is too short to get it there.
+ * - **Escape**: the carried heading at the pointer, on the real (unfolded) page.
+ * - **Drop**: the heading row the pointer was over stays where it was (so the unfold does not
+ *   flash some other part of the wall), and when the new order arrives the **moved** heading goes
+ *   to the pointer — inside {@link SETTLE_MS}.
+ */
+interface CarryState {
+  /** The shelf whose heading row the press landed in, or `null`. */
+  shelfId: number | null;
+  /** The pointer's distance below that row's top, at the press. */
+  grab: number;
+  x: number;
+  y: number;
+  folding: boolean;
+  /** How the fold ended: a drop over another heading row, a drop anywhere else, or Escape. */
+  ended: { shelfId: number; top: number } | "drop" | "escape" | null;
+  /** A drop is settling: the moved heading goes to the pointer when the new order arrives. */
+  settling: boolean;
+}
+
+const carry: CarryState = {
+  shelfId: null,
+  grab: 0,
+  x: 0,
+  y: 0,
+  folding: false,
+  ended: null,
+  settling: false,
+};
+const carryListeners = new Set<() => void>();
+const carryWalls = new Set<(request: ShelfAnchorRequest) => void>();
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function setCarried(shelfId: number | null) {
+  if (carry.shelfId === shelfId) return;
+  carry.shelfId = shelfId;
+  for (const listener of carryListeners) listener();
+}
+
+/**
+ * **The settling is over, and so is the carry** (fix round 1, Minor 4). The carried heading's row is
+ * kept drawn outside the virtualiser's window for as long as there is a carry, so a carry that
+ * outlived its drag left the moved heading mounted wherever the reader scrolled — in the DOM, in
+ * the tab order (a Tab from above the wall landed on it and the browser scrolled there), and as
+ * the last drawn row the sectioned paging rule reads. So the carry ends with the drag it belongs
+ * to: here, when a drop's settling ends — by timeout, by the reader taking the page, or by the
+ * moved heading having been placed. Mid-fold the carry stays: it is the drag.
+ */
+function endSettling() {
+  if (settleTimer !== null) clearTimeout(settleTimer);
+  settleTimer = null;
+  carry.settling = false;
+  if (!carry.folding) releaseCarryNextFrame();
+}
+
+/**
+ * Let the carry go on the next animation frame rather than now. The anchor that ended the drag has
+ * just scrolled, and the virtualiser only draws the rows at the new offset when that scroll's event
+ * arrives — which the browser dispatches before the next frame's callbacks. Dropping the forced row
+ * sooner would re-render at the old offset without it, unmounting the heading the drag just
+ * returned to its slot. A press in between keeps its own carry.
+ */
+let releaseFrame: number | null = null;
+function releaseCarryNextFrame() {
+  if (releaseFrame !== null) cancelAnimationFrame(releaseFrame);
+  const shelfId = carry.shelfId;
+  releaseFrame = requestAnimationFrame(() => {
+    releaseFrame = null;
+    if (!carry.folding && !carry.settling && carry.shelfId === shelfId) setCarried(null);
+  });
+}
+
+function requestAnchor(request: ShelfAnchorRequest) {
+  for (const wall of carryWalls) wall(request);
+}
+
+/** The shelf row under a viewport point other than the carried one — where a drop was let go. */
+function rowUnderPointer(x: number, y: number): { shelfId: number; top: number } | null {
+  if (typeof document.elementsFromPoint !== "function") return null;
+  for (const element of document.elementsFromPoint(x, y)) {
+    const row = element.closest<HTMLElement>(`[data-shelf-row][${SHELF_ID_ATTR}]`);
+    const shelfId = row ? Number(row.getAttribute(SHELF_ID_ATTR)) : Number.NaN;
+    if (row && Number.isInteger(shelfId) && shelfId !== carry.shelfId) {
+      return { shelfId, top: row.getBoundingClientRect().top };
+    }
+  }
+  return null;
+}
+
+/** The fold anchor's controller — driven by `useFoldAnchor`, read by the sectioned wall. */
+export const shelfCarry = {
+  /** A press — on a heading row (its shelf and the row's top), or anywhere else (`null`). */
+  press(on: { shelfId: number; rowTop: number } | null, x: number, y: number) {
+    if (settleTimer !== null) clearTimeout(settleTimer);
+    settleTimer = null;
+    if (releaseFrame !== null) cancelAnimationFrame(releaseFrame);
+    releaseFrame = null;
+    carry.grab = on ? y - on.rowTop : 0;
+    carry.x = x;
+    carry.y = y;
+    carry.ended = null;
+    carry.settling = false;
+    setCarried(on ? on.shelfId : null);
+  },
+  move(x: number, y: number) {
+    carry.x = x;
+    carry.y = y;
+  },
+  /** The pointer came up. Mid-fold that is a drop; otherwise it was a press, and the carry ends. */
+  up(x: number, y: number) {
+    carry.x = x;
+    carry.y = y;
+    if (!carry.folding) {
+      setCarried(null);
+      return;
+    }
+    carry.ended = rowUnderPointer(x, y) ?? "drop";
+  },
+  /** Escape mid-fold: the drag is cancelled, and the heading goes back to the pointer. Any other
+   *  Escape is the reader's own, like any other key. */
+  escape() {
+    if (carry.folding) carry.ended = "escape";
+    else shelfCarry.interrupt();
+  },
+  /** The reader took the page (a wheel, a key): a settling drop ends here. A wheel mid-drag is
+   *  part of the drag and ends nothing. */
+  interrupt() {
+    if (carry.settling) endSettling();
+  },
+  /** The page's fold flag changed — `useFoldAnchor`'s layout effect, after the wall has drawn it. */
+  fold(folding: boolean) {
+    if (carry.folding === folding) return;
+    carry.folding = folding;
+    const shelfId = carry.shelfId;
+    if (shelfId === null) return;
+    if (releaseFrame !== null) cancelAnimationFrame(releaseFrame);
+    releaseFrame = null;
+    const atPointer = { shelfId, top: carry.y - carry.grab };
+    if (folding) {
+      carry.ended = null;
+      requestAnchor({ ...atPointer, room: true });
+      return;
+    }
+    const ended = carry.ended;
+    carry.ended = null;
+    requestAnchor(
+      typeof ended === "object" && ended !== null
+        ? { ...ended, room: false }
+        : { ...atPointer, room: false },
+    );
+    if (ended === "escape") {
+      // A cancelled drag moved nothing: nothing to settle, and the carry is over.
+      releaseCarryNextFrame();
+      return;
+    }
+    // **The settling starts here, after the wall has committed the unfold** (fix round 1, Minor
+    // 6): this runs in `useFoldAnchor`'s layout effect, which is after the wall's own `[shelved]`
+    // effect in the same commit — so the settling can only catch an order that arrives in a
+    // *later* commit. It does, because a folder move is written and then refetched; an optimistic
+    // move, whose new order arrived in the unfold commit itself, would never be settled. The
+    // other end of this is `carriedPlace` in `CardGrid`.
+    carry.settling = true;
+    if (settleTimer !== null) clearTimeout(settleTimer);
+    settleTimer = setTimeout(endSettling, SETTLE_MS);
+  },
+  /** While a drop settles: the carried heading, at the pointer. */
+  settling(): ShelfAnchorRequest | null {
+    if (carry.shelfId === null || !carry.settling) return null;
+    return { shelfId: carry.shelfId, top: carry.y - carry.grab, room: false };
+  },
+  /** Forget everything, anchoring nothing — the page that drove the carry has gone. */
+  reset() {
+    if (settleTimer !== null) clearTimeout(settleTimer);
+    settleTimer = null;
+    if (releaseFrame !== null) cancelAnimationFrame(releaseFrame);
+    releaseFrame = null;
+    carry.folding = false;
+    carry.ended = null;
+    carry.settling = false;
+    setCarried(null);
+  },
+  carried: (): number | null => carry.shelfId,
+  subscribe(listener: () => void) {
+    carryListeners.add(listener);
+    return () => {
+      carryListeners.delete(listener);
+    };
+  },
+  /** A sectioned wall listening for anchor requests; the return detaches it. */
+  attach(wall: (request: ShelfAnchorRequest) => void) {
+    carryWalls.add(wall);
+    return () => {
+      carryWalls.delete(wall);
+    };
+  },
+};
+
+/** Where a shelf's heading sits among the headings, and under which folders — its place in the
+ *  wall's order, which a folder move changes and a page of cards landing does not. */
+function headingPlace(layout: ShelfLayout, shelfId: number): string | null {
+  let ordinal = 0;
+  for (const row of layout.rows) {
+    if (row.kind !== "heading") continue;
+    if (row.shelf.id === shelfId) return `${row.shelf.pathIds.join("/")}#${ordinal}`;
+    ordinal++;
+  }
+  return null;
 }
 
 /**
@@ -1282,6 +1539,48 @@ export function CardGrid<T extends GridCard>({
     [shelved],
   );
 
+  /**
+   * **The heading being carried stays drawn** — spec §3.9, and live-pass FAIL 4 (2026-09-26).
+   *
+   * A folder drag folds the wall, and the fold's own render reads the scroll offset the unfolded
+   * wall had — 5664 against a folded wall 1210 tall — so the virtualiser's window lands at the end
+   * of the wall and the carried heading's row, somewhere near its top, is not in it. It unmounted
+   * for that frame, and dnd-kit's feedback element went with it: nothing followed the pointer. So
+   * the carried heading's row joins whatever window the virtualiser picks, from the press to the
+   * next one, and its `heading:<id>` key keeps it the same element through the fold, the unfold and
+   * a move. `null` on a flat wall, which never subscribes to anything that changes.
+   */
+  const carriedId = useSyncExternalStore(shelfCarry.subscribe, () =>
+    sectioned ? shelfCarry.carried() : null,
+  );
+  const carriedIndex = useMemo(
+    () =>
+      shelved && carriedId !== null
+        ? shelved.layout.rows.findIndex((row) => row.kind === "heading" && row.shelf.id === carriedId)
+        : -1,
+    [shelved, carriedId],
+  );
+  const rangeExtractor = useMemo(
+    () =>
+      carriedIndex < 0
+        ? undefined
+        : (range: Range) => {
+            const drawn = defaultRangeExtractor(range);
+            return drawn.includes(carriedIndex)
+              ? drawn
+              : [...drawn, carriedIndex].sort((a, b) => a - b);
+          },
+    [carriedIndex],
+  );
+
+  /**
+   * **Temporary room above and below the wall**, which the fold anchor adds when the folded wall
+   * is too short to put the carried heading under the pointer (`anchorPlan`) and the unfold takes
+   * away. The virtualiser's own `paddingStart`/`paddingEnd`, so every row, the window it draws and
+   * the total all move together. Always `0` on a flat wall.
+   */
+  const [room, setRoom] = useState({ start: 0, end: 0 });
+
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scroller,
@@ -1293,11 +1592,125 @@ export function CardGrid<T extends GridCard>({
       ? (index) => rowHeight(shelved.layout.rows[index], tileHeight + GAP)
       : () => tileHeight + GAP,
     getItemKey: rowKey,
+    rangeExtractor,
+    paddingStart: room.start,
+    paddingEnd: room.end,
     scrollMargin,
     // Two rows of tiles beyond the viewport, which is the prefetch: their `<img>`s mount
     // and the protocol fills the cache before the reader scrolls onto them.
     overscan: 2,
   });
+
+  /**
+   * **Where the fold anchor puts a shelf's heading** — a {@link ShelfAnchorRequest}, answered from
+   * the layout rather than from the DOM (see `shelfCarry` for why a box cannot answer it).
+   *
+   * The row's top in the scroll content is `rowStartOf` plus where the wall's first row sits in
+   * it: the measured `scrollMargin` under `grow`, the wall's own `p-3` on a bounded wall. The
+   * target is the request's `clientY` less the scroller's top. `anchorPlan` answers the offset and
+   * any room; room changes need a render before the offset can be reached, so the offset waits in
+   * {@link pendingOffset} for the commit that draws the room. Held in a ref and refreshed every
+   * commit, so a request answers against the layout on screen.
+   */
+  const pendingOffset = useRef<number | null>(null);
+  /**
+   * Every shelf's folder path this wall has laid out, so a request naming a shelf the *current*
+   * layout does not draw can still find its nearest drawn ancestor — see the fallback below.
+   */
+  const knownPaths = useRef<Map<number, readonly number[]> | null>(null);
+  useLayoutEffect(() => {
+    if (!shelved) return;
+    const paths = (knownPaths.current ??= new Map());
+    for (const row of shelved.layout.rows) {
+      if (row.kind !== "label") paths.set(row.shelf.id, row.shelf.pathIds);
+    }
+  }, [shelved]);
+  const anchorShelf = useRef<(request: ShelfAnchorRequest) => void>(() => undefined);
+  useLayoutEffect(() => {
+    anchorShelf.current = (request) => {
+      if (!shelved || !scroller) return;
+      const headingAt = (id: number) =>
+        shelved.layout.rows.findIndex((row) => row.kind === "heading" && row.shelf.id === id);
+      let index = headingAt(request.shelfId);
+      // **A shelf only the folded wall drew** — fix round 1, Important 2. The fold opens every
+      // collapsed shelf before folding it (`foldedForDrag`), so a drop can land on the heading of a
+      // child whose parent is collapsed on the real page; after the unfold that heading is not in
+      // the layout. The nearest ancestor that is drawn stands in for it, then the carried heading,
+      // so the page is still anchored where the reader let go.
+      const path = knownPaths.current?.get(request.shelfId) ?? [];
+      for (let at = path.length - 2; index < 0 && at >= 0; at--) index = headingAt(path[at]);
+      const carried = shelfCarry.carried();
+      if (index < 0 && carried !== null) index = headingAt(carried);
+      if (index < 0) {
+        // Nothing to anchor on, but the room the fold added still goes: on the real page it is
+        // blank space above or below the wall. The rows keep their place on screen as it does.
+        if (!request.room && (room.start !== 0 || room.end !== 0)) {
+          pendingOffset.current = Math.max(0, scroller.scrollTop - room.start);
+          setRoom({ start: 0, end: 0 });
+        }
+        return;
+      }
+      const box = scroller.getBoundingClientRect();
+      const plan = anchorPlan({
+        rowTop:
+          (grow ? scrollMargin : WALL_INSET_PX) +
+          rowStartOf(shelved.layout, index, tileHeight + GAP),
+        target: request.top - box.top - scroller.clientTop,
+        viewport: scroller.clientHeight,
+        content: scroller.scrollHeight - room.start - room.end,
+        room: request.room,
+      });
+      if (plan.padStart !== room.start || plan.padEnd !== room.end) {
+        // **A state update reached from a layout effect, on purpose** (fix round 1, Minor 5) — this
+        // runs inside `useFoldAnchor`'s layout effect. The room has to be *in the DOM* before the
+        // offset it was added for is reachable (the browser clamps a scroll to the content it
+        // has), so it commits first — synchronously, before paint, which is what an update
+        // scheduled from a layout effect does — and the offset follows in the effect below. Not a
+        // pattern to copy for derived state: this is a measurement that needs a commit between its
+        // two halves.
+        pendingOffset.current = plan.scrollTop;
+        setRoom({ start: plan.padStart, end: plan.padEnd });
+        return;
+      }
+      virtualizer.scrollToOffset(plan.scrollTop);
+    };
+  });
+  useLayoutEffect(() => {
+    if (!sectioned) return;
+    return shelfCarry.attach((request) => anchorShelf.current(request));
+  }, [sectioned]);
+  useLayoutEffect(() => {
+    const offset = pendingOffset.current;
+    if (offset === null) return;
+    pendingOffset.current = null;
+    virtualizer.scrollToOffset(offset);
+  }, [room, virtualizer]);
+
+  /**
+   * **A drop settles on the moved heading.** A folder move is written and then refetched, so the
+   * new order reaches the wall after the unfold; when it does, and the carried heading's place in
+   * the order has changed, it goes to the pointer (`shelfCarry.settling`). Once, and only while
+   * the drop is settling — a page of cards landing does not move a heading's place, and a reader
+   * who has scrolled, pressed a key or clicked has ended the settling.
+   *
+   * **This depends on the move not being optimistic** (fix round 1, Minor 6). The settling starts
+   * in `shelfCarry.fold(false)`, in `useFoldAnchor`'s layout effect — *after* this effect in the
+   * same commit — so an order that arrived in the unfold commit itself would be recorded here as
+   * the starting place and never settled. Both pages' folder moves are write-then-refetch today;
+   * one that became optimistic would need the settling to start before this effect runs.
+   */
+  const carriedPlace = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const id = shelfCarry.carried();
+    const place = shelved && id !== null ? headingPlace(shelved.layout, id) : null;
+    const moved = place !== carriedPlace.current;
+    carriedPlace.current = place;
+    if (!moved || place === null) return;
+    const settle = shelfCarry.settling();
+    if (settle === null) return;
+    anchorShelf.current(settle);
+    shelfCarry.interrupt();
+  }, [shelved]);
 
   // Row heights are cached from the first `estimateSize` call, so a resize that changes
   // the column count — and with it every tile's height — has to say so, or the rows keep
@@ -1601,6 +2014,122 @@ export function CardGrid<T extends GridCard>({
   }, [pendingIndex, virtualRows, columns, rows.length, virtualizer, shelved]);
 
   /**
+   * **The tile holding the caret, by its tile key** — and whether the caret is on its art (the
+   * button every press lands on) or on the tile itself (where a closed menu hands it back).
+   *
+   * Live-pass FAIL 6 (2026-09-26) is why this exists. One Ctrl+wheel step that changed the column
+   * count re-keyed the rows — a shelf's rows are keyed by their offset in it, and at five across
+   * the row that started at slot 4 is gone — so the focused tile's element unmounted and the caret
+   * fell to `<body>`, on both pages. **No key can prevent that**: a tile is the child of its row,
+   * and a tile that changes row is a new element. The flat wall has the same fault in a quieter
+   * form, since its rows and slots are keyed by position: the element survives and is simply
+   * handed another card, so the caret sits on a card the reader never chose. So the caret is
+   * remembered as *which tile*, and put back on it — see the effect below.
+   *
+   * Written by the wall's own focus events, never during render: a caret that moves to anything
+   * that is not a tile's art or the tile itself — a popup in a tile, a heading's button, anything
+   * outside the wall — is not this wall's to keep.
+   */
+  const caretTile = useRef<{ key: string; onArt: boolean } | null>(null);
+  /** The card drawn at a `data-grid-index`, in the layout this wall last committed. */
+  const cardAtIndex = useCallback(
+    (index: number): T | undefined =>
+      Number.isInteger(index) ? (shelved ? shelved.slots[index] : rows[index]) : undefined,
+    [shelved, rows],
+  );
+  const cardAtRef = useRef(cardAtIndex);
+  const onWallFocus = (e: ReactFocusEvent<HTMLDivElement>) => {
+    // React types a focus event's `target` as the listening element; it is whatever took focus.
+    const target: Element = e.target;
+    const tileEl = target.closest<HTMLElement>(TILE_SELECTOR);
+    const art = tileEl?.querySelector(CARET_SELECTOR) ?? null;
+    if (!tileEl || !e.currentTarget.contains(tileEl) || (target !== tileEl && target !== art)) {
+      caretTile.current = null;
+      return;
+    }
+    const card = cardAtRef.current(Number(tileEl.getAttribute(GRID_INDEX_ATTR)));
+    caretTile.current = card ? { key: tileKey(card), onArt: target === art } : null;
+  };
+  const onWallBlur = (e: ReactFocusEvent<HTMLDivElement>) => {
+    // A caret the reader took elsewhere is theirs. `relatedTarget` is `null` when focus goes to
+    // nothing at all — which is also what an unmounted element leaves behind — so only a caret
+    // that landed *somewhere outside* forgets the tile.
+    if (e.relatedTarget instanceof Node && !e.currentTarget.contains(e.relatedTarget)) {
+      caretTile.current = null;
+    }
+  };
+
+  /**
+   * **Put the caret back on its tile after a re-layout** — the other half of {@link caretTile}.
+   *
+   * After every commit that changed the layout (the column count, the shelves, or the rows), if the
+   * caret was on a tile of this wall and is now on `<body>` or on a *different* tile, it is put
+   * back on the same tile — its art or itself, as it was — wherever the new layout draws it. A
+   * layout effect, so the reader never sees a frame without it.
+   *
+   * **Only a re-layout moves a caret back.** A reader who scrolls the focused tile out of the
+   * virtualiser's window loses the caret to `<body>` exactly as before — the wall does not scroll
+   * them back to it. And only a **column change** may scroll to a tile the new layout did not
+   * draw: the tile has not left the wall, only its row moved, so bringing the row on screen is
+   * the one way to keep the caret the reader had. A tile that has left the wall is forgotten.
+   */
+  const laidOut = useRef({ columns, shelved, rows });
+  const caretRetry = useRef(false);
+  useLayoutEffect(() => {
+    cardAtRef.current = cardAtIndex;
+    const was = laidOut.current;
+    const relaid = was.columns !== columns || was.shelved !== shelved || was.rows !== rows;
+    const columnsMoved = was.columns !== columns;
+    laidOut.current = { columns, shelved, rows };
+    const want = caretTile.current;
+    const wall = wallRef.current;
+    const retry = caretRetry.current;
+    caretRetry.current = false;
+    if (!want || !wall) return;
+    const active = document.activeElement;
+    const activeTile =
+      active instanceof Element && wall.contains(active) ? active.closest(TILE_SELECTOR) : null;
+    const keyAt = (at: number) => {
+      const card = cardAtIndex(at);
+      return card ? tileKey(card) : null;
+    };
+    const onWanted =
+      activeTile !== null && keyAt(Number(activeTile.getAttribute(GRID_INDEX_ATTR))) === want.key;
+    if (!relaid && !retry) {
+      // **Not a re-layout, so whatever happened to the caret was the reader's** — fix round 1,
+      // Important 1. Scrolling a focused tile out of the window unmounts it and drops the caret on
+      // `<body>` with no focus event to say so; remembered, that tile would be scrolled back to and
+      // focused by the next column change (a Ctrl+wheel, a window resize, a docked panel's drag),
+      // minutes later. So a caret that is no longer on its tile here is forgotten.
+      if (!onWanted) caretTile.current = null;
+      return;
+    }
+    if (active !== null && active !== document.body && activeTile === null) return;
+    if (onWanted) return;
+    const order = shelved ? shelved.slots : rows;
+    const index = order.findIndex((card) => card !== undefined && tileKey(card) === want.key);
+    if (index < 0) {
+      caretTile.current = null;
+      return;
+    }
+    const tile = wall.querySelector<HTMLElement>(`[${GRID_INDEX_ATTR}="${index}"]`);
+    if (tile) {
+      const target = want.onArt ? (tile.querySelector<HTMLElement>(CARET_SELECTOR) ?? tile) : tile;
+      target.focus({ preventScroll: true });
+      return;
+    }
+    if (!columnsMoved && !retry) {
+      caretTile.current = null;
+      return;
+    }
+    // Not drawn: bring its row on screen, and try once more on the commit that draws it.
+    caretRetry.current = !retry;
+    virtualizer.scrollToIndex(
+      shelved ? rowOfTile(shelved.layout, index) : Math.floor(index / columns),
+    );
+  });
+
+  /**
    * One arrow press: move the selection, and take the caret with it.
    *
    * **One handler on the scroller rather than one per tile**, which is the same economy every
@@ -1782,6 +2311,8 @@ export function CardGrid<T extends GridCard>({
       // box holds no caret of its own, it holds every tile, and one listener is one closure
       // instead of 117 k. The handler bails on a wall that was not given `arrowNav`.
       onKeyDown={onArrowKey}
+      onFocus={onWallFocus}
+      onBlur={onWallBlur}
       className={cn(
         // `p-3` is both shapes' and is not decoration: `overflow` clips at the padding box, so on
         // a bounded wall it is the room a tile's focus ring and drop mark are drawn in
@@ -1857,6 +2388,7 @@ export function CardGrid<T extends GridCard>({
                   <div
                     key={v.key}
                     data-shelf-row="tiles"
+                    {...{ [SHELF_ID_ATTR]: row.shelf.id }}
                     // Raised when a popup is open in it, exactly as a flat row is — see below.
                     className={cn(
                       "absolute inset-x-0 top-0 flex gap-3",
@@ -1890,6 +2422,7 @@ export function CardGrid<T extends GridCard>({
                 <div
                   key={v.key}
                   data-shelf-row={row.kind}
+                  {...(row.kind === "label" ? {} : { [SHELF_ID_ATTR]: row.shelf.id })}
                   className="absolute inset-x-0 top-0"
                   style={{ height: v.size, ...place }}
                 >

@@ -1,73 +1,169 @@
-import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
-import { SHELF_HEADING_ATTR } from "@/features/shelves/ShelfHeading";
+import { fireEvent, render } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  SHELF_ID_ATTR,
+  shelfCarry,
+  type ShelfAnchorRequest,
+} from "@/features/search/CardGrid";
 import { useFoldAnchor } from "./useFoldAnchor";
 
-function Wall({ folding }: { folding: boolean }) {
+/**
+ * **The page's half of the fold anchor** — what `useFoldAnchor` turns the pointer, the keys and
+ * the page's fold flag into. The wall's half (where a row is, the room, the scroll) is
+ * `CardGrid.shelves.test.tsx`'s; here a spy stands in for the wall and every request is read off
+ * it, so these cases say *which* heading goes *where*, and nothing about pixels in a wall.
+ *
+ * jsdom lays nothing out: each pressed row states its own box.
+ */
+function Page({ folding }: { folding: boolean }) {
   useFoldAnchor(folding);
   return (
-    <main>
-      <div {...{ [SHELF_HEADING_ATTR]: "3" }}>Trade binder</div>
+    <div>
+      <div data-shelf-row="heading" {...{ [SHELF_ID_ATTR]: "3" }}>
+        <button type="button">Trade binder</button>
+      </div>
+      <div data-shelf-row="heading" {...{ [SHELF_ID_ATTR]: "9" }}>
+        <button type="button">Binder</button>
+      </div>
       <p>Not a heading</p>
-    </main>
+    </div>
   );
 }
 
-/** jsdom lays nothing out: the scroller's `scrollTop` is a plain property here, and each case
- *  says where the heading's box is. */
+let wall: ReturnType<typeof vi.fn<(request: ShelfAnchorRequest) => void>>;
+let detach: () => void;
+beforeEach(() => {
+  shelfCarry.reset();
+  wall = vi.fn();
+  detach = shelfCarry.attach(wall);
+});
+afterEach(() => {
+  detach();
+  Reflect.deleteProperty(document, "elementsFromPoint");
+});
+
 function mount() {
-  const view = render(<Wall folding={false} />);
-  const main = view.container.querySelector("main")!;
-  let top = 1000;
-  Object.defineProperty(main, "scrollTop", {
-    configurable: true,
-    get: () => top,
-    set: (next: number) => {
-      top = next;
-    },
-  });
-  const heading = view.container.querySelector<HTMLElement>(`[${SHELF_HEADING_ATTR}]`)!;
-  const at = (y: number) => {
-    heading.getBoundingClientRect = () => new DOMRect(0, y, 200, 40);
+  const view = render(<Page folding={false} />);
+  const row = (id: string) =>
+    view.container.querySelector<HTMLElement>(`[${SHELF_ID_ATTR}="${id}"]`)!;
+  /** Press inside a heading row whose top is at `top`. */
+  const press = (id: string, top: number, clientY: number) => {
+    row(id).getBoundingClientRect = () => new DOMRect(0, top, 400, 40);
+    fireEvent.pointerDown(row(id).querySelector("button")!, { clientX: 50, clientY });
   };
-  const press = (target: Element, clientY: number) =>
-    target.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientY }));
-  return { view, heading, at, press, scrollTop: () => top };
+  const fold = () => view.rerender(<Page folding />);
+  const unfold = () => view.rerender(<Page folding={false} />);
+  return { view, row, press, fold, unfold };
 }
 
 describe("useFoldAnchor", () => {
-  it("scrolls the folded wall so the carried heading is back under the pointer", () => {
-    const { view, heading, at, press, scrollTop } = mount();
-    press(heading, 300);
-    at(500);
+  it("anchors the pressed heading at the pointer, less where it was grabbed, when the wall folds", () => {
+    const { press, fold } = mount();
+    press("3", 280, 300);
+    fireEvent.pointerMove(window, { clientX: 50, clientY: 330 });
 
-    view.rerender(<Wall folding />);
+    fold();
 
-    // The heading's centre (500 + 20) moves to the pointer's 300.
-    expect(scrollTop()).toBe(1000 + 520 - 300);
+    expect(wall).toHaveBeenCalledTimes(1);
+    expect(wall).toHaveBeenLastCalledWith({ shelfId: 3, top: 310, room: true });
   });
 
-  it("anchors again when the wall unfolds, at wherever the pointer let go", () => {
-    const { view, heading, at, press, scrollTop } = mount();
-    press(heading, 300);
-    at(300 - 20);
-    view.rerender(<Wall folding />);
-    expect(scrollTop()).toBe(1000);
+  it("brings the heading back to the pointer on Escape, with no room on the real page", () => {
+    const { press, fold, unfold } = mount();
+    press("3", 280, 300);
+    fold();
+    fireEvent.pointerMove(window, { clientX: 50, clientY: 120 });
 
-    window.dispatchEvent(new MouseEvent("pointermove", { clientY: 120 }));
-    at(900);
-    view.rerender(<Wall folding={false} />);
+    fireEvent.keyDown(window, { key: "Escape" });
+    unfold();
 
-    expect(scrollTop()).toBe(1000 + 920 - 120);
+    expect(wall).toHaveBeenLastCalledWith({ shelfId: 3, top: 100, room: false });
+    // A cancelled drag moved nothing, so there is nothing to settle on.
+    expect(shelfCarry.settling()).toBeNull();
   });
 
-  it("moves nothing when the press that started the drag was not on a heading", () => {
-    const { view, at, press, scrollTop } = mount();
-    press(view.container.querySelector("p")!, 300);
-    at(500);
+  it("holds the heading the drop was let go over, then settles the moved heading at the pointer", () => {
+    const { row, press, fold, unfold } = mount();
+    press("3", 280, 300);
+    fold();
+    row("9").getBoundingClientRect = () => new DOMRect(0, 450, 400, 40);
+    Object.defineProperty(document, "elementsFromPoint", {
+      configurable: true,
+      // The carried heading's own floating copy is on top under the pointer, and is passed over.
+      value: vi.fn(() => [row("3"), row("9")]),
+    });
 
-    view.rerender(<Wall folding />);
+    fireEvent.pointerUp(window, { clientX: 50, clientY: 460 });
+    unfold();
 
-    expect(scrollTop()).toBe(1000);
+    expect(wall).toHaveBeenLastCalledWith({ shelfId: 9, top: 450, room: false });
+    expect(shelfCarry.settling()).toEqual({ shelfId: 3, top: 440, room: false });
+  });
+
+  it("ends the settling when the reader takes the page — a wheel, or a key", () => {
+    const { press, fold, unfold } = mount();
+    for (const takeOver of [
+      () => fireEvent.wheel(window, { deltaY: 40 }),
+      () => fireEvent.keyDown(window, { key: "ArrowDown" }),
+    ]) {
+      press("3", 280, 300);
+      fold();
+      fireEvent.pointerUp(window, { clientX: 50, clientY: 460 });
+      unfold();
+      expect(shelfCarry.settling()).not.toBeNull();
+
+      takeOver();
+
+      expect(shelfCarry.settling()).toBeNull();
+    }
+  });
+
+  /** Fix round 1, Minor 4: a carry that outlived its drag kept the moved heading force-mounted.
+   *  A drop's settling runs out after two seconds, and the carry goes on the frame after. */
+  it("lets the carry go when a drop's settling runs out", () => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"],
+    });
+    try {
+      const { press, fold, unfold } = mount();
+      press("3", 280, 300);
+      fold();
+      fireEvent.pointerUp(window, { clientX: 50, clientY: 460 });
+      unfold();
+      expect(shelfCarry.settling()).not.toBeNull();
+
+      vi.advanceTimersByTime(1999);
+      expect(shelfCarry.carried()).toBe(3);
+
+      vi.advanceTimersByTime(1 + 32);
+      expect(shelfCarry.settling()).toBeNull();
+      expect(shelfCarry.carried()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries nothing when the press was not on a heading", () => {
+    const { view, fold, unfold } = mount();
+    fireEvent.pointerDown(view.container.querySelector("p")!, { clientY: 300 });
+
+    fold();
+    unfold();
+
+    expect(shelfCarry.carried()).toBeNull();
+    expect(wall).not.toHaveBeenCalled();
+  });
+
+  it("forgets a press that came up before any fold, and everything when the page goes", () => {
+    const { view, press } = mount();
+    press("3", 280, 300);
+    expect(shelfCarry.carried()).toBe(3);
+    fireEvent.pointerUp(window, { clientX: 50, clientY: 300 });
+    expect(shelfCarry.carried()).toBeNull();
+
+    press("9", 100, 110);
+    view.unmount();
+
+    expect(shelfCarry.carried()).toBeNull();
   });
 });
