@@ -331,7 +331,7 @@ on mount, and the sticky bar is a permanent target.
 | a heading | a folder | before / inside / after by edge zone (`useFolderDropTarget`, vertical) |
 | an empty shelf's dashed box | a card | files it there |
 | the sticky bar | a card | files it into the shelf the reader is inside |
-| a path segment (path row, heading, sticky bar) | a card, **and now a folder** | files / moves it there — the folder half is what `ParentFolderCard`'s "Up one level" did |
+| a segment of the path row | a card, **and now a folder** | files / moves it there — the folder half is what `ParentFolderCard`'s "Up one level" did. A heading's lead segments and the sticky bar's segments are buttons only: the heading and the bar are each one target, for their own folder |
 
 Headings of the reader's folders are drag sources for folders (`folderDraggable`), and dragging one
 folds the wall to headings (§3.9). A card drag folds nothing.
@@ -344,6 +344,8 @@ folds the wall to headings (§3.9). A card drag folds nothing.
 **Managed by decks**), and Flatten: `FilterBar`'s `flatten` prop, the stores' `collectionFlattened`
 and the wishlist's flag, and the `flatten_state` read. The Rust `root_only` and `flatten` fields stay —
 other callers use them.
+
+**One behaviour moves rather than survives:** standing *inside* Recently removed, the band used to show the reader's top-level folders so a card could be dragged straight back into a binder (issue #209). Shelves has no band; the same drag now happens at the root, where Recently removed is a shelf on the same wall as the binders' headings.
 
 **Survives:** `folderFace` and the totals type in `CollectionFolderCard.tsx`, which
 `features/home/widgets/FoldersWidget.tsx:70` imports; `ParentFolderCard` itself, whose words the Decks
