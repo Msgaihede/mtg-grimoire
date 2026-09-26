@@ -4955,6 +4955,11 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     // Here rather than in `db::open_write` because this is the one door all three targets go
     // through: the browser's pair is opened by `db::open_pooled_pair` and migrated by
     // `web::glue`, which calls exactly this function.
+    //
+    // **The stale apply guard first, and fatal for the same reason**: a kill inside a
+    // `capture::suppressed` window leaves `sync_state.applying` on disk, and every trigger
+    // installed below reads it and records nothing.
+    crate::sync_engine::capture::clear_stale_guard(conn)?;
     crate::sync_engine::capture::install(conn)?;
     if let Err(e) = crate::maintenance::rebuild_fts_if_pending(conn) {
         eprintln!(

@@ -1296,7 +1296,25 @@ with the arithmetic behind the 105-character code and the crate pins, is
 - **`sync_identity`, `sync_group` and `sync_devices` never sync.** They are this device's
   secrets. They are `None` in `watch::surface_of` for the sharpest reason on that list: a
   mirrored file quoting any of them would write a key into a folder the reader syncs with
-  Dropbox. PR 7's synced-table list must not name them either.
+  Dropbox. PR 7's synced-table list must not name them either. **The superseded group keys live
+  in `sync_state`** (`group_key@<epoch>`), which is under the same two rules and needed no rung.
+- **⚠️ A superseded group key is kept only across a rotation that, as far as this device can see,
+  dropped nobody** — `identity::supersede`, run by `adopt_epoch` and `commit_rotation` before
+  either touches the roster. Exactly one epoch ahead, a view of the group **exists**, and every
+  device in it (the live roster **and the last manifest's ids**, because `adopt_epoch` never
+  inserts) is still on the new manifest; anything else forgets them all. **An absent
+  `last_manifest` is no view, never an empty one**: only `identity::found_group` seeds it, with
+  `[itself]`, because only a device minting its group knows all of it — a joiner's pairing blob
+  names nobody but the initiator, and an upgraded install has never read a manifest. It is what
+  lets `client::pull` open the backlog behind a join, which every device offline across a pairing
+  used to step over for good. **Never relax it to "keep them all"**: the group key is symmetric
+  and the relay does not refuse a push at a stale epoch, so a device still opening *N* after a
+  removal takes writes from the removed device. **Its one trust in the relay**: the manifest's
+  device list is the relay's report and only the epoch is sealed, so a malicious relay colluding
+  with a removed device could get pre-removal-epoch writes applied (confidentiality still holds).
+  An authenticated join/removal marker would close it and is not built — its trade-offs are in
+  [sync.md](../docs/reference/sync.md). Bounded at `identity::KEY_HISTORY` epochs, current included — the relay's
+  `EPOCH_HISTORY`.
 - **No key crosses the IPC boundary.** `identity::Device.public_key` is `#[serde(skip)]` — a key
   on a list of devices is a key in a screenshot — and every field of `pairing::Pending` is
   private and none is `Serialize`. What crosses is the six digits, as a **string**, and two
@@ -1402,6 +1420,14 @@ with the arithmetic behind the 105-character code and the crate pins, is
   was written, tested and deleted on the argument that with no relay a rotation A performs cannot
   reach B — which is exactly what the rewrap hop now builds. The press is missing rather than
   refused; **re-open it as a decision rather than by citing the old argument.**
+- **⚠️ `check_keys` tries every sealer this device can name — the manifest's devices, its own
+  whole roster, and itself — and must never narrow back to the manifest.** A departure is sealed
+  by the leaver, which is on no manifest it publishes; a rotation this device published and never
+  committed (a lost 2xx, a failed `commit_rotation`) is sealed by this device, which
+  `plan_excluding` seals a blob for. Narrowed, the first stalled every device that stayed after a
+  *Leave group* and the second stalled the publisher for good. **It trusts nothing new**: a
+  candidate is a public key from this device's own roster, taken at pairing, and the AEAD decides.
+  Adopting its own rotation re-arms the baselines the lost commit would have.
 - **⚠️ A device with no blob at a higher epoch has been removed, and the epoch comparison is
   load-bearing.** A group that has claimed and never rotated holds one `group_keys` row with an
   *empty* manifest, so every device in it reads `blob: null, devices: []`. `client::check_keys`
@@ -1471,6 +1497,9 @@ record, with every measurement, is
   at every open.** Not `update_hook` (no values), not `preupdate_hook` (fires before commit, so a
   crash loses an op silently). Never `CREATE TRIGGER IF NOT EXISTS`: a trigger is stored SQL, and
   a build that changed the generator would leave every existing database running the old rules.
+  **`capture::clear_stale_guard` runs just before them**: `suppressed` writes `applying` ahead of
+  its work and no `Drop` runs through a kill, so a row left by one switches capture off until
+  something clears it — and before this, with no deck, nothing at launch did.
 - **`PRAGMA recursive_triggers` being OFF does not mean a trigger's statements fire no triggers**
   — it stops a trigger firing *itself*. The uid mint is an `UPDATE`, so an update trigger without
   both its guards (`AFTER UPDATE OF <captured columns>` **and** a `WHEN` that compares values)

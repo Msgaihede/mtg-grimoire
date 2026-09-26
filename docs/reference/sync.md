@@ -440,7 +440,10 @@ The remover does four things and **the order is the fix**
 
 1. **Refuse a group with no membership**, before anything moves — the fourth refusal below.
 2. **A round trip that emits no baseline**, so the departing device's last push is absorbed.
-   `run_once` would hand thousands of ops to the very device this is about to remove.
+   `run_once` would hand thousands of ops to the very device this is about to remove. It also
+   pays any join paired here and not yet published; **a debt it could not pay refuses the
+   removal** (`pairing::JOIN_NOT_PUBLISHED`), because the others would not know the device being
+   dropped and would keep the old keys it holds.
 3. **Plan the rotation, which writes nothing**, and publish it to `POST /g/{group}/rotate`. The
    plan is the new key rewrapped once per device that stays:
    `kek = HKDF-SHA256(X25519(remover_secret, target_public), salt = group_id, info = "mtg-grimoire/rotate/v1|" || epoch)`,
@@ -453,9 +456,24 @@ The remover does four things and **the order is the fix**
 
 A device that stays asks `GET /g/{group}/keys?device=<id>` on every round trip before push and
 pull. Equal epoch: nothing happens, one cheap D1 read. Higher epoch with a blob: unwrap, write the
-new group, drop the roster rows the manifest omits, carry on — and the pull cursor `behind = true`
-was holding advances on its own, which is the stall above resolving itself. Higher epoch with
-**no** blob: this device was the one removed.
+new group, keep or forget the key it replaced (*One correction to the plan*, below), drop the
+roster rows the manifest omits, carry on — and the pull cursor `behind = true` was holding
+advances on its own, which is the stall above resolving itself. Higher epoch with **no** blob:
+this device was the one removed.
+
+**The blob does not say who sealed it, so `check_keys` tries every sealer this device can name**:
+the manifest's devices, every device on its own roster — a departure is sealed by the leaver,
+which is on no manifest it publishes — and itself, because `plan_excluding` seals a blob for the
+planner too, so a rotation whose 2xx was lost, or whose commit failed, is adopted from its own
+blob instead of failing `check_keys` on every trip for ever. **Trying more candidates trusts
+nothing new.** A candidate is only a public key to try, taken from this device's own roster at
+pairing, behind the six digits, and never off the wire — the relay supplies ids alone — and the
+blob opens only under the X25519 secret of whoever sealed it, bound to the group, this device and
+the epoch. A device removed earlier is off the roster already, and anybody able to publish to
+`/rotate` could always have named itself on its own manifest. Adopting this device's own rotation
+is the commit that was lost, so it also re-arms every baseline, as `commit_rotation` would. (A
+relay that replayed a rotation this device posted and was *refused* would move it to a key nobody
+else holds — confusion rather than injection: the blob is this device's own and hands it nothing.)
 
 ### The manifest is the roster
 
@@ -476,7 +494,7 @@ than an inference from a refusal.** It is why `/keys` accepts an auth up to eigh
 (`groupauth::EPOCH_HISTORY`): "behind a rotation" and "removed" otherwise produce an identical
 stale-auth 401, and a device that guessed wrong would either leave a group it is still in or sit
 for ever in one it is not. A removed device leaves fully — `identity::leave_group` clears
-`sync_group` and `sync_devices`, and the caller clears the grant beside it — and the panel returns
+`sync_group`, `sync_devices` and the superseded keys, and the caller clears the grant beside it — and the panel returns
 to *not paired with anything yet*. Its own collection is untouched, which is what the dialog
 already promises.
 
@@ -576,8 +594,12 @@ whatever the second answered is the whole of the guarantee:
 
 1. `identity::plan_departure` — `plan_rotation`'s body with the self-check **inverted rather than
    relaxed**, so the manifest is everyone *except* this device and the group closes behind the
-   leaver on every device that adopts, exactly as a removal does. Both entrances call one private
-   `plan`. **The guard stays on `plan_rotation`** because removing somebody else and leaving
+   leaver on every device that adopts, exactly as a removal does. **The leaver seals every blob and
+   is on no manifest it publishes**, so a device that stays can adopt only because `check_keys`
+   tries its whole roster as sealers, not the manifest alone — it did not, and until it did every
+   device that stayed failed the AEAD on every trip after a press of *Leave group*. Both
+   entrances call one private `plan`. **The guard stays on `plan_rotation`** because removing
+   somebody else and leaving
    yourself are different acts: a single entrance that took either would let a mis-click on a
    roster row throw this device's own key away.
 2. `client::post_rotation` — **best effort**. A 500, a timeout or a plane is not a reason a reader
@@ -1201,7 +1223,12 @@ catches up.
 takes `&Connection` and `reconcile::apply` needs `&mut` for its `Transaction`, which the borrow
 checker will not let a caller hold at once. It owns the `&mut` and lends it back, and its `Drop`
 is the whole point — a sticky `applying` row is a device that silently stops syncing, and it
-survives a restart because the row is in the database.
+survives a restart because the row is in the database. **No `Drop` runs through a kill**, and
+both shapes write the row as a statement of its own ahead of their work, so
+`schema::prepare_database` clears it at every open (`capture::clear_stale_guard`) before the
+triggers go in. Until it did, the only thing that cleared one at launch was
+`managed_wishlist::settle_all` opening a window per deck — so a database with no deck kept the row,
+and captured nothing, across any number of relaunches (measured 2026-09-26, debug).
 
 ---
 
@@ -1369,9 +1396,10 @@ those six keys.
 
 The AAD is `group\0device\0epoch`, and **binding the epoch is what makes revocation mean
 something on the wire**: rotating the group key already stops a removed device reading anything
-new, and the epoch stops the reverse — a blob written before the rotation replayed at a device
-that has moved on, which the key alone cannot refuse because the ciphertext predates it. Removing
-any one of the three terms turns a test red.
+new, and the epoch binds a blob to its own epoch's key, so it opens under that key or not at all.
+Whether a device that has moved on still opens a blob from before the rotation is then a question
+of which superseded keys it keeps — across a join it does, across a removal it keeps none (*One
+correction to the plan*, below). Removing any one of the three terms turns a test red.
 
 **`BATCH = 200`, derived from the write limit and checked against the row cap**, not the other
 way round. Measured 2026-08-28 with 200 realistic `collection_entries` ops — every field
@@ -1911,10 +1939,43 @@ of the two ways it happens:
   put" meant the page was re-delivered for ever and one removal bricked any group of three. The
   hold was the right call against a hop that had not been built yet, and it is now what makes the
   stall temporary rather than permanent — `check_keys` runs before pull on every round trip.
-- `envelope.epoch < group.epoch`, or a failed AEAD — written before a rotation, or altered. No key
-  this device will ever hold opens it, so refusing to advance would stall the stream for the
-  thirty days the relay keeps a tail, for nothing. It is counted, written to `error_log` and
-  stepped over.
+- `envelope.epoch < group.epoch` — written before a rotation. **It is opened with its own epoch's
+  key when this device still holds it** (`identity::group_at`), because `check_keys` adopts before
+  the pull: without that key, a device offline across any pairing — and every pairing rotates —
+  stepped over everything the group wrote before it, deletes included, and no baseline can carry a
+  delete back. ⚠️ **The superseded key is kept only across a rotation that, as far as this device
+  can see, dropped nobody** (`identity::supersede`): exactly one epoch ahead, this device holds a
+  view of the group, and every device in it — its roster *and* the last manifest it adopted or
+  published, since `adopt_epoch` never inserts — is still on the new manifest. **No view is not an
+  empty view**: only `identity::found_group` seeds one (`[itself]`, when this device mints the
+  group), so an install upgraded from before this history and a device that joined by pairing
+  forget across their first rotation and learn the roster from it — one lost backlog, which is
+  what every rotation cost before. A removal, a departure or a skipped epoch forgets every
+  superseded key too. The group key is symmetric and the relay does not refuse a push at a stale
+  epoch, so a device that went on opening *N* after a removal would take writes from the removed
+  device, which holds *N*'s key and a token for up to a day. At most `identity::KEY_HISTORY`
+  epochs are held, current included — the relay's `EPOCH_HISTORY` — in `sync_state`, never synced
+  and `None` to the mirror.
+- ⚠️ **That "dropped nobody" is the relay's word.** Only the epoch is bound into the sealed blob;
+  `devices` is `Object.keys(manifest.keys)` as the relay reports it. Confidentiality holds against
+  the relay regardless — nothing here hands anybody a key — but keeping the backlog across a join
+  relies on the relay reporting the manifest honestly: a malicious relay colluding with a removed
+  device could pad `devices` with it and get that device's writes under the pre-removal epoch
+  applied. Before the key history, the same lie only kept a stale roster row.
+- An old epoch whose key this device never held or has forgotten, or a failed AEAD — altered —
+  opens nothing, so refusing to advance would stall the stream for the thirty days the relay keeps
+  a tail, for nothing. It is counted, written to `error_log` and stepped over.
+- **What the client cannot do on its own**, and three follow-ups, none built: a device that skips
+  *N → N+2* never gets *N+1*'s key, because `/keys` answers only the newest manifest though the
+  relay keeps eight — serving `/keys?epoch=` lifts it; a removal still costs the backlog behind it
+  — refusing a push below the group's epoch lifts it; and the trust above — **an authenticated
+  join/removal marker** would lift it, and is not built. The rotation wrap seals a bare 32-byte
+  key, which builds in the field unwrap at exactly that length, so a field there is a
+  mixed-version break. The layout-free candidate is the epoch itself, which is bound into every
+  wrap and chosen by the rotator: a removal could advance it by 2 and a join by 1. It costs two
+  things — an offline device could catch up across half as many removals inside `/keys`'s
+  eight-epoch window, and the relay would have to accept `+2`, where the relay change in flight
+  makes `/rotate` accept exactly current + 1.
 
 ---
 
@@ -1927,7 +1988,7 @@ of the two ways it happens:
 | `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
 | `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |
 | `sync_clock` | one row: the hybrid logical clock, **seeded** |
-| `sync_state` | key/value: `pull_cursor`, `last_sync_at`, the `applying` guard, the entitlement tokens the hosted relay design §10 adds, and `relay_url` — which is **a test/dev override with no UI**, not something a reader types |
+| `sync_state` | key/value: `pull_cursor`, `last_sync_at`, the `applying` guard, the entitlement tokens the hosted relay design §10 adds, the superseded group keys (`group_key@<epoch>`) and the last manifest's ids that `identity::supersede` keeps, and `relay_url` — which is **a test/dev override with no UI**, not something a reader types |
 | `sync_peers` | per-device watermarks — what makes a counter idempotent |
 | `error_log` rebuilt | `source` gains `'relay'`, which is a table rebuild because the vocabulary is inside a `CHECK` |
 | `sync_devices.baselined_at INTEGER` (v30) | when this peer was last handed a baseline. NULL is "never", which is the trigger. **`sync_peers` is deliberately not consulted** — see the pairing-baseline design §10 |

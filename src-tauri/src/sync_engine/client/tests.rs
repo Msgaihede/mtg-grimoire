@@ -241,44 +241,6 @@ async fn an_envelope_from_a_newer_epoch_holds_the_cursor() {
     assert_eq!(rows[0].0, "pull");
 }
 
-/// ...and an envelope from **before** a rotation is stepped over, because no key this device
-/// will ever hold opens it and refusing to advance would stall the stream for the thirty days
-/// the relay keeps a tail.
-#[tokio::test]
-async fn an_envelope_from_an_older_epoch_is_stepped_over() {
-    let a = paired("dev-a", 0);
-    add_copy(&a, "c1", 1);
-    let sql = format!("{} ORDER BY seq", capture::OPS_SELECT);
-    let ops: Vec<Op> = {
-        let mut stmt = a.prepare(&sql).unwrap();
-        stmt.query_map([], capture::op_from_row)
-            .unwrap()
-            .map(|r| r.unwrap().1)
-            .collect()
-    };
-    let old = identity::group(&a).unwrap().unwrap();
-    let envelope = wire::seal_batch(&old, "dev-a", &ops).unwrap();
-
-    let server = MockServer::start_async().await;
-    server.mock(|when, then| {
-        when.method(GET).path(format!("/g/{GROUP}/pull"));
-        then.status(200).json_body(serde_json::json!({
-            "envelopes": [serde_json::to_value(&envelope).unwrap()],
-            "cursor": 11,
-        }));
-    });
-
-    // `b` has rotated past it.
-    let b = paired("dev-b", 1);
-    let (unreadable, _) = pull(&b, &server.base_url(), "access-1").await.unwrap();
-    assert_eq!(unreadable, 1);
-    assert_eq!(
-        get_state(&b, PULL_CURSOR).as_deref(),
-        Some("11"),
-        "a blob nothing can ever open must not stall the stream"
-    );
-}
-
 /// A pull that fails leaves the cursor where it was and writes one row.
 #[tokio::test]
 async fn a_failed_pull_leaves_the_cursor_alone() {
@@ -966,6 +928,11 @@ async fn a_401_on_any_sync_route_ends_the_membership_and_logs_nothing() {
 /// — so a test can seal a blob exactly as `plan_rotation` on the other machine would — and the
 /// group id, which is minted rather than fixed here. The `tablet` is the third device, the one a
 /// rotation is about to drop.
+///
+/// **This device founded the group**, so `create_group` has seeded its view (`last_manifest` =
+/// `[itself]`) and its roster names everybody — the state in which a join may keep the key it
+/// replaces. A test about a device with no view deletes that row, as
+/// `a_device_with_no_view_of_the_group_forgets_across_a_removal_it_cannot_see` does.
 fn keyed_group() -> (Connection, identity::Identity, crypto::Keypair, String) {
     let conn = crate::schema::memory_pair();
     capture::install(&conn).unwrap();
@@ -1272,6 +1239,504 @@ async fn a_401_on_a_key_check_costs_the_grant_nothing() {
     let rows = error_rows(&conn);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!((rows[0].0.as_str(), rows[0].1.as_str()), ("keys", "http"));
+}
+
+// ---------------------------------------------------------------------------------------
+// The backlog behind a rotation
+//
+// **`check_keys` runs before `pull` on every trip, so a device that was offline across a
+// rotation adopts the new key first and only then sees what the group wrote under the old
+// one.** Those envelopes are opened with the key of their own epoch when this device still holds
+// it — `identity::group_at` — and stepped over when it does not.
+// ---------------------------------------------------------------------------------------
+
+/// The desk's own database in `group` — the device the backlog was really written on, holding
+/// the key of `group.epoch`. It plays `keyed_group`'s `dev-remover`, whose keypair is the one
+/// that seals the rotation, so one device is both the writer and the rotator.
+fn desk_at(group: &Group) -> Connection {
+    let conn = crate::schema::memory_pair();
+    capture::install(&conn).unwrap();
+    conn.execute(
+        "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+         VALUES (1, 'dev-remover', x'00', x'01', 'Desk', 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+         VALUES (1, ?1, ?2, ?3, 0)",
+        rusqlite::params![group.group_id, group.epoch, group.group_key.to_vec()],
+    )
+    .unwrap();
+    conn
+}
+
+/// What the desk writes from here on, sealed under `group` — the ops after the first `skip`.
+fn sealed_since(desk: &Connection, skip: usize, group: &Group) -> Envelope {
+    wire::seal_batch(group, "dev-remover", &outbox(desk)[skip..]).unwrap()
+}
+
+/// `/keys` answering `epoch` with a blob the desk sealed to `me`, naming `devices`.
+fn rotated_to(
+    server: &MockServer,
+    group: &str,
+    desk: &crypto::Keypair,
+    me: &identity::Identity,
+    epoch: i64,
+    devices: &[&str],
+) {
+    let blob = crypto::wrap_group_key(
+        &desk.secret,
+        &me.keypair.public,
+        group,
+        &me.device_id,
+        epoch,
+        &[40u8 + epoch as u8; 32],
+    )
+    .unwrap();
+    keys_answering(
+        server,
+        group,
+        serde_json::json!({
+            "epoch": epoch,
+            "blob": URL_SAFE_NO_PAD.encode(&blob),
+            "devices": devices,
+        }),
+    );
+}
+
+fn copies_of(conn: &Connection, card: &str) -> i64 {
+    conn.query_row(
+        "SELECT count(*) FROM collection_entries WHERE card_id = ?1",
+        [card],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// ⚠ **The bug this section exists for: a delete sealed before a JOIN rotation reaches a device
+/// that was offline across it.** The phone holds a card; the desk deletes it at epoch 0 and then
+/// pairs a new tablet, which rotates the group to epoch 1. The phone comes back, adopts epoch 1,
+/// and pulls the delete. Until the superseded key was kept, `pull` stepped over every envelope
+/// below the current epoch — so the delete was lost for good, and nothing repairs it: a baseline
+/// carries values, and a value cannot say "this row is gone".
+///
+/// Driven through `run_once`, because the order inside the trip — `check_keys` first, `pull`
+/// after — is the whole of how the bug happened.
+///
+/// **What makes it red**: `pull` opening every envelope with the current group only, or
+/// `adopt_epoch` not keeping the key it replaces — the delete is then counted unreadable and the
+/// card is still there.
+#[tokio::test]
+async fn a_delete_sealed_before_a_join_rotation_still_applies() {
+    let server = MockServer::start_async().await;
+    let (phone, me, desk_keys, group_id) = keyed_group();
+    let epoch0 = identity::group(&phone).unwrap().unwrap();
+    let desk = desk_at(&epoch0);
+    add_copy(&desk, "c1", 2);
+    apply::apply(&phone, &outbox(&desk)).unwrap();
+    assert_eq!(copies_of(&phone, "c1"), 1, "the fixture is wrong");
+    let before = outbox(&desk).len();
+    desk.execute("DELETE FROM collection_entries WHERE card_id = 'c1'", [])
+        .unwrap();
+    let delete = sealed_since(&desk, before, &epoch0);
+
+    // The desk paired a new tablet: epoch 1 names everyone the phone knows, and one more.
+    rotated_to(
+        &server,
+        &group_id,
+        &desk_keys,
+        &me,
+        1,
+        &[&me.device_id, "dev-remover", "tablet", "new-tablet"],
+    );
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group_id}/pull"));
+        then.status(200).json_body(serde_json::json!({
+            "envelopes": [serde_json::to_value(&delete).unwrap()],
+            "cursor": 5,
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group_id}/push"));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 6 }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group_id}/ack"));
+        then.status(204);
+    });
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+    grant(&phone);
+
+    let outcome = run_once(&phone).await.unwrap().unwrap();
+
+    assert_eq!(identity::group(&phone).unwrap().unwrap().epoch, 1);
+    assert_eq!(
+        outcome.unreadable, 0,
+        "the delete sealed before the join was stepped over"
+    );
+    assert_eq!(copies_of(&phone, "c1"), 0, "the desk's delete never landed");
+    assert_eq!(get_state(&phone, PULL_CURSOR).as_deref(), Some("5"));
+}
+
+/// ...and what still cannot be opened is still stepped over: **an envelope from an epoch this
+/// device never held a key for, and one that was altered**, while a sound envelope beside them
+/// in the same page applies. Neither may stall the stream — refusing to advance would hold it
+/// for the thirty days the relay keeps a tail, for nothing.
+///
+/// The phone paired in at epoch 1, so epoch 0's key was never its to hold; it then adopts
+/// epoch 2 cleanly and keeps epoch 1's.
+///
+/// **What makes it red**: a sound epoch-1 envelope counted unreadable (no key kept), or the
+/// epoch-0 or altered one applied or holding the cursor.
+#[tokio::test]
+async fn an_old_envelope_never_held_or_altered_is_still_stepped_over() {
+    let server = MockServer::start_async().await;
+    let (phone, me, desk_keys, group_id) = keyed_group();
+    let epoch0 = identity::group(&phone).unwrap().unwrap();
+    let epoch1 = Group {
+        epoch: 1,
+        group_key: [11u8; 32],
+        ..epoch0.clone()
+    };
+    phone
+        .execute(
+            "UPDATE sync_group SET epoch = 1, group_key = ?1",
+            [epoch1.group_key.to_vec()],
+        )
+        .unwrap();
+
+    let desk0 = desk_at(&epoch0);
+    add_copy(&desk0, "before-this-phone", 1);
+    let never_held = sealed_since(&desk0, 0, &epoch0);
+    let desk1 = desk_at(&epoch1);
+    add_copy(&desk1, "altered", 1);
+    let mut altered = sealed_since(&desk1, 0, &epoch1);
+    let middle = altered.sealed.len() / 2;
+    let flipped = if &altered.sealed[middle..=middle] == "A" {
+        "B"
+    } else {
+        "A"
+    };
+    altered.sealed.replace_range(middle..=middle, flipped);
+    let desk1b = desk_at(&epoch1);
+    add_copy(&desk1b, "sound", 1);
+    let sound = sealed_since(&desk1b, 0, &epoch1);
+
+    rotated_to(
+        &server,
+        &group_id,
+        &desk_keys,
+        &me,
+        2,
+        &[&me.device_id, "dev-remover", "tablet"],
+    );
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group_id}/pull"));
+        then.status(200).json_body(serde_json::json!({
+            "envelopes": [
+                serde_json::to_value(&never_held).unwrap(),
+                serde_json::to_value(&altered).unwrap(),
+                serde_json::to_value(&sound).unwrap(),
+            ],
+            "cursor": 8,
+        }));
+    });
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+
+    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+    let (unreadable, report) = pull(&phone, &server.base_url(), "access-1").await.unwrap();
+
+    assert_eq!(unreadable, 2, "{report:?}");
+    assert_eq!(
+        copies_of(&phone, "sound"),
+        1,
+        "a sound epoch-1 envelope was lost"
+    );
+    assert_eq!(copies_of(&phone, "before-this-phone"), 0);
+    assert_eq!(copies_of(&phone, "altered"), 0);
+    assert_eq!(
+        get_state(&phone, PULL_CURSOR).as_deref(),
+        Some("8"),
+        "an envelope nothing here can open stalled the stream"
+    );
+}
+
+/// ⚠ **A REMOVAL forgets the keys it supersedes, so the backlog behind one is stepped over as it
+/// always was — and that is the security property, not a gap.** The group key is symmetric: any
+/// device holding epoch 0's key can seal an envelope at epoch 0 under *any* device id, and the
+/// relay does not refuse a push at a stale epoch. A removed device keeps a token for up to a
+/// day, and indefinitely if it holds the refresh secret — so a remaining device that went on
+/// opening epoch 0 after the tablet's removal would be accepting writes from the tablet after it
+/// was removed.
+///
+/// **What makes it red**: keeping the superseded key across a rotation whose manifest drops a
+/// device this one knew — the tablet's backlog then applies.
+#[tokio::test]
+async fn a_backlog_sealed_before_a_removal_is_still_stepped_over() {
+    let server = MockServer::start_async().await;
+    let (phone, me, desk_keys, group_id) = keyed_group();
+    let epoch0 = identity::group(&phone).unwrap().unwrap();
+    let desk = desk_at(&epoch0);
+    add_copy(&desk, "after-the-removal", 1);
+    let forged = sealed_since(&desk, 0, &epoch0);
+
+    // The tablet is removed: epoch 1's manifest no longer names it.
+    rotated_to(
+        &server,
+        &group_id,
+        &desk_keys,
+        &me,
+        1,
+        &[&me.device_id, "dev-remover"],
+    );
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group_id}/pull"));
+        then.status(200).json_body(serde_json::json!({
+            "envelopes": [serde_json::to_value(&forged).unwrap()],
+            "cursor": 3,
+        }));
+    });
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+
+    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+    let (unreadable, _) = pull(&phone, &server.base_url(), "access-1").await.unwrap();
+
+    assert_eq!(
+        unreadable, 1,
+        "an epoch the removed tablet holds was opened"
+    );
+    assert_eq!(copies_of(&phone, "after-the-removal"), 0);
+    assert_eq!(get_state(&phone, PULL_CURSOR).as_deref(), Some("3"));
+}
+
+/// ⚠ **A device with no view of the whole group forgets across ANY rotation — the removal it
+/// cannot see is the case this exists for.** An install upgraded from before the key history,
+/// and a device that joined by pairing, hold no last manifest; and `adopt_epoch` never inserts,
+/// so a device paired by somebody else is on neither side of the comparison. Here the desk paired
+/// the tablet, the phone never heard of it, and the desk removes it: to the phone the manifest
+/// drops nobody it knows. Reading "no record" as "knew everybody" kept epoch 0's key — which the
+/// removed tablet holds — and opened what the tablet pushed after its removal.
+///
+/// **What makes it red**: treating an absent last manifest as a view of the whole group.
+#[tokio::test]
+async fn a_device_with_no_view_of_the_group_forgets_across_a_removal_it_cannot_see() {
+    let server = MockServer::start_async().await;
+    let (phone, me, desk_keys, group_id) = keyed_group();
+    // What an upgraded install holds: no last manifest, and no row for a device it never paired.
+    phone
+        .execute("DELETE FROM sync_state WHERE key = 'last_manifest'", [])
+        .unwrap();
+    phone
+        .execute("DELETE FROM sync_devices WHERE device_id = 'tablet'", [])
+        .unwrap();
+    let epoch0 = identity::group(&phone).unwrap().unwrap();
+    let desk = desk_at(&epoch0);
+    add_copy(&desk, "from-the-removed-tablet", 1);
+    let forged = sealed_since(&desk, 0, &epoch0);
+
+    rotated_to(
+        &server,
+        &group_id,
+        &desk_keys,
+        &me,
+        1,
+        &[&me.device_id, "dev-remover"],
+    );
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group_id}/pull"));
+        then.status(200).json_body(serde_json::json!({
+            "envelopes": [serde_json::to_value(&forged).unwrap()],
+            "cursor": 4,
+        }));
+    });
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+
+    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+    let at_one = identity::group(&phone).unwrap().unwrap();
+    assert!(
+        identity::group_at(&phone, &at_one, 0).unwrap().is_none(),
+        "epoch 0's key was kept on a view that could not see the removal"
+    );
+    let (unreadable, _) = pull(&phone, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(unreadable, 1);
+    assert_eq!(copies_of(&phone, "from-the-removed-tablet"), 0);
+    assert_eq!(get_state(&phone, PULL_CURSOR).as_deref(), Some("4"));
+}
+
+// ---------------------------------------------------------------------------------------
+// Who sealed it
+//
+// **`/keys` does not say who rotated**, so `check_keys` tries sealers in turn — and the one
+// that sealed is not always on the manifest it published. A departure is sealed by the device
+// that left it; a rotation this device published and never committed is sealed by this device.
+// ---------------------------------------------------------------------------------------
+
+/// A group's `/keys` answer for `rotation`, as seen by `me`: the blob it sealed for `me`, and its
+/// manifest.
+fn answering_own(
+    server: &MockServer,
+    group: &str,
+    me: &identity::Identity,
+    rotation: &identity::Rotation,
+) {
+    let blob = rotation
+        .keys
+        .iter()
+        .find(|(id, _)| id == &me.device_id)
+        .map(|(_, blob)| blob.clone())
+        .expect("the planner is on its own manifest");
+    let devices: Vec<&str> = rotation.keys.iter().map(|(id, _)| id.as_str()).collect();
+    keys_answering(
+        server,
+        group,
+        serde_json::json!({
+            "epoch": rotation.group.epoch,
+            "blob": URL_SAFE_NO_PAD.encode(&blob),
+            "devices": devices,
+        }),
+    );
+}
+
+/// ⚠ **A device that stays adopts the rotation a DEPARTURE published**, although the device that
+/// sealed it is not on its manifest: `plan_departure` names everyone *but* the leaver, and the
+/// leaver seals every blob. Trying only the manifest's devices, every device that stayed failed
+/// the AEAD on every sync after anybody pressed *Leave group* — and, holding a stale auth, could
+/// not mint a token either.
+///
+/// It also pins what the departure costs the key history: the leaver holds every key before it,
+/// so the key the desk's earlier join let this device keep is forgotten.
+///
+/// **What makes it red**: trying only the manifest's devices as sealers — `Err`, epoch 1 stays —
+/// or keeping the superseded keys across a manifest that drops the leaver.
+#[tokio::test]
+async fn a_device_that_stays_adopts_a_departures_rotation() {
+    let (phone, me, desk_keys, group_id) = keyed_group();
+    let leaver = crypto::keypair();
+    identity::add_device(&phone, "leaver", &leaver.public, "Leaver").unwrap();
+
+    // A clean join first, so there is a superseded key for the departure to forget.
+    let joined = MockServer::start_async().await;
+    set_state(&phone, RELAY_URL, &joined.base_url()).unwrap();
+    rotated_to(
+        &joined,
+        &group_id,
+        &desk_keys,
+        &me,
+        1,
+        &[&me.device_id, "dev-remover", "tablet", "leaver"],
+    );
+    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+    let at_one = identity::group(&phone).unwrap().unwrap();
+    assert!(
+        identity::group_at(&phone, &at_one, 0).unwrap().is_some(),
+        "the join kept nothing, so the forgetting below proves nothing"
+    );
+
+    // The leaver seals epoch 2 for everyone but itself.
+    let left = MockServer::start_async().await;
+    set_state(&phone, RELAY_URL, &left.base_url()).unwrap();
+    rotated_to(
+        &left,
+        &group_id,
+        &leaver,
+        &me,
+        2,
+        &[&me.device_id, "dev-remover", "tablet"],
+    );
+
+    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+
+    let at_two = identity::group(&phone).unwrap().unwrap();
+    assert_eq!(at_two.epoch, 2);
+    assert_eq!(
+        at_two.group_key, [42u8; 32],
+        "the leaver's key was not taken"
+    );
+    assert!(
+        !identity::roster(&phone)
+            .unwrap()
+            .iter()
+            .any(|d| d.device_id == "leaver"),
+        "the group never closed behind the leaver"
+    );
+    assert!(identity::group_at(&phone, &at_two, 1).unwrap().is_none());
+    assert!(identity::group_at(&phone, &at_two, 0).unwrap().is_none());
+}
+
+/// ⚠ **A removal this device published, whose 2xx never arrived, is adopted from its own blob.**
+/// `plan_rotation` seals one for every device on the roster, this one included, so the relay holds
+/// a blob addressed here at *N+1* while this device still stands at *N* — a lost response or a
+/// failed `commit_rotation`. Excluding itself from the sealers, the device failed `check_keys` on
+/// every trip after that and never pushed again: spec §4's "self-healing" was false.
+///
+/// Adopting its own rotation is the commit that was lost, so it does what the commit would have
+/// done: the removed device leaves the roster, the superseded keys go, and every peer that stays
+/// is re-armed for a baseline (§12.4).
+///
+/// **What makes it red**: excluding this device from the sealers (`Err`), or not re-arming the
+/// baselines when the sealer is this device.
+#[tokio::test]
+async fn a_removal_whose_answer_was_lost_is_adopted_from_this_devices_own_blob() {
+    let server = MockServer::start_async().await;
+    let (phone, me, _desk, group_id) = keyed_group();
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+    phone
+        .execute("UPDATE sync_devices SET baselined_at = 1000", [])
+        .unwrap();
+    let removal = identity::plan_rotation(&phone, "tablet").unwrap();
+    answering_own(&server, &group_id, &me, &removal);
+
+    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+
+    let after = identity::group(&phone).unwrap().unwrap();
+    assert_eq!(
+        after, removal.group,
+        "this device did not reach its own epoch"
+    );
+    assert!(
+        !identity::roster(&phone)
+            .unwrap()
+            .iter()
+            .any(|d| d.device_id == "tablet"),
+        "the removal this device published did not reach its own roster"
+    );
+    assert!(identity::group_at(&phone, &after, 0).unwrap().is_none());
+    assert_eq!(
+        baselined_at(&phone, "dev-remover"),
+        None,
+        "the lost commit's baseline re-arm was lost with it"
+    );
+}
+
+/// ...and the same for the join rotation `publish_join` published after a pairing: adopted from
+/// this device's own blob, and — a join drops nobody — the key it replaces is kept.
+///
+/// **What makes it red**: excluding this device from the sealers.
+#[tokio::test]
+async fn a_join_whose_answer_was_lost_is_adopted_from_this_devices_own_blob() {
+    let server = MockServer::start_async().await;
+    let (phone, me, _desk, group_id) = keyed_group();
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+    let before = identity::group(&phone).unwrap().unwrap();
+    let join = identity::plan_join(&phone).unwrap();
+    answering_own(&server, &group_id, &me, &join);
+
+    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+
+    let after = identity::group(&phone).unwrap().unwrap();
+    assert_eq!(after, join.group);
+    assert_eq!(
+        identity::group_at(&phone, &after, 0).unwrap(),
+        Some(before),
+        "a join this device published cost it the backlog before it"
+    );
+    assert_eq!(
+        identity::roster(&phone).unwrap().len(),
+        3,
+        "a join swept somebody"
+    );
 }
 
 // ---------------------------------------------------------------------------------------

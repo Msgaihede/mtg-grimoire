@@ -958,11 +958,31 @@ impl Drop for Suppressed<'_> {
     }
 }
 
+/// Clear an `applying` row a killed process left behind — [`crate::schema::prepare_database`],
+/// at every open, before [`install`].
+///
+/// **No `Drop` runs through power loss or *End task*.** [`suppressed`] and [`Suppressed::begin`]
+/// write the row as a statement of its own ahead of the work they guard (a caller outside a
+/// transaction commits it at once), so a kill inside that window leaves it on disk and every
+/// capture trigger reads it: the device goes on working and records nothing. Until this ran at
+/// launch, what cleared it was an accident — `managed_wishlist::settle_all`'s per-deck window,
+/// so a database with no deck kept the row across any number of relaunches.
+///
+/// **Safe at open because the flag cannot be live then.** It belongs to the one write connection
+/// a process holds, and nothing writes before `prepare_database` returns: more windows share that
+/// process and its connection, a second launch opens a window in the running app, and the
+/// browser refuses a second tab.
+pub fn clear_stale_guard(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM sync_state WHERE key = ?1", [APPLYING])?;
+    Ok(())
+}
+
 /// Run `f` with capture switched off — what [`super::apply`] wraps every write in.
 ///
 /// **The guard is cleared even on a panic**, through a guard struct rather than a bare pair of
 /// statements: a sticky `applying` row is a device that silently stops syncing, and it would
-/// survive a restart because the row is in the database.
+/// survive a restart because the row is in the database. A kill is the one exit no guard sees,
+/// and [`clear_stale_guard`] is what answers it.
 pub fn suppressed<T>(conn: &Connection, f: impl FnOnce() -> T) -> T {
     struct Guard<'a>(&'a Connection);
     impl Drop for Guard<'_> {
@@ -1706,6 +1726,59 @@ mod tests {
             )
             .unwrap();
         assert_eq!(stuck, 0);
+    }
+
+    /// ⚠ **...but no `Drop` runs through a kill, and a launch is what clears what one left.** The
+    /// guard's row is written as its own statement before the work it guards, so power loss or
+    /// *End task* inside a [`suppressed`] window leaves it on disk, and every capture trigger
+    /// reads it. A reader with no deck at all had nothing at launch that happened to clear it —
+    /// `managed_wishlist::settle_all`'s per-deck window was the only thing that ever did — so
+    /// their edits after the relaunch reached no other device until some later apply lifted it.
+    ///
+    /// **What makes it red**: `prepare_database` not clearing the row — the first assertion
+    /// fails, and the edit below it records no op.
+    #[test]
+    fn a_launch_clears_an_apply_guard_a_kill_left_behind() {
+        let conn = db();
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_state (key, value) VALUES ('applying', '1')",
+            [],
+        )
+        .unwrap();
+        let decks: i64 = conn
+            .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            decks, 0,
+            "a deck would clear it by accident and prove nothing"
+        );
+
+        crate::schema::prepare_database(&conn).unwrap();
+
+        let stuck: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sync_state WHERE key = 'applying'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stuck, 0, "the applying row outlived the relaunch");
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES ('c1','lea','1','en','nonfoil','NM',1,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+        assert!(
+            ops(&conn)
+                .iter()
+                .any(|(tbl, kind, ..)| tbl == "collection_entries" && kind == "put"),
+            "an ordinary edit after the relaunch was not captured: {:?}",
+            ops(&conn)
+        );
     }
 
     /// A delete writes a tombstone.
