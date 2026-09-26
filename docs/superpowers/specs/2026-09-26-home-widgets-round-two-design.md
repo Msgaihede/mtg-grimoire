@@ -111,8 +111,12 @@ belongs to, so To review drops the row without waiting for a restart.
 
 ### 3.1 The read: `deck_completion(marketplace)`
 
-In `deck.rs` beside `deck_values` (`:6469-6504`), built on the same join — filters in the `ON`, so
-a deck with no matching cards still answers a row. One row per deck:
+In a new module `deck_completion.rs` (with `deck_review_count`, §4.1), its wanted copies and prices
+read in one statement built on `deck_values`' join (`deck.rs:6469-6504`) — filters in the `ON`, so
+a deck with no matching cards still answers a row — and each deck's pool read through `deck.rs`'s
+own `owned_by_printing` / `available_by_printing`, made `pub(crate)`: 2 + N statements, because a
+single statement would need a second copy of the `ForDeck` scope that `collection_source` exists to
+keep in one place. One row per deck:
 
 ```rust
 pub struct DeckCompletion {
@@ -121,7 +125,8 @@ pub struct DeckCompletion {
     pub wanted: i64,         // copies the measured list asks for, active piles only
     pub owned: i64,          // of those, copies the pool covers
     pub missing: i64,        // wanted − owned
-    pub missing_cost: Option<f64>, // priced missing copies at `marketplace`; None when none priced
+    pub missing_cost: Option<f64>, // priced missing copies at `marketplace`; None only when nothing
+                                   // on the measured list is priced (DeckStats.tsx:509's rule)
     pub unpriced_missing: i64,
 }
 ```
@@ -163,6 +168,8 @@ test + the `COMMANDS.len()` literal).
 
 ### 3.2 The body
 
+* **Complete means `missing === 0`, never a cost of zero** — a deck whose only missing copies are
+  unpriced also answers `Some(0.0)`, the editor's own rule.
 * **Rows** — `WidgetRow` with a `track`: the deck's name, caption `96 of 100 · 4 missing`, value
   the missing cost through `formatPrice`, an em dash when `missing_cost` is `None`. A hint names the
   unpriced count when it is above zero. A press opens the deck: `setActiveView("decks")`, then
@@ -259,15 +266,17 @@ pub struct UpcomingSet {
 ```
 
 * **Which cards**: `is_paper = 1`; `released_at > date('now')` and
-  `<= date('now', '+N days')` with `N` clamped to `1..=365`; layouts `token`,
-  `double_faced_token`, `emblem` and `art_series` left out. "Today" is SQLite's UTC date, as in
-  `new_printings.rs:278-282` and `price_history.rs`.
+  `<= date('now', '+N days')` with `N` clamped to `1..=365`; `search.rs`' `NON_CARD_LAYOUTS`
+  (tokens, emblems, art series, front cards) left out — shared, not copied. "Today" is SQLite's UTC
+  date, as in `new_printings.rs:278-282` and `price_history.rs`, read once and returned as `today`.
 * **Which sets, where `sets` has rows**: a `LEFT JOIN sets` drops `set_type` `token`, `promo`,
   `memorabilia` and `minigame`. Where it has none — the browser build — the layout filter is the
   whole rule.
 * **`in_decks`** uses `new_printings`' defaults: decks that are not virtual, live and theory rows,
   basic lands left out (`BASIC_LAND_LIKE`).
-* Cheap: `idx_cards_set_cn (set_code, collector_number)` (`schema.rs:4709`).
+* **Not index-assisted**: no index on `cards` leads with `released_at`, so the window is a scan of
+  `cards`. The live pass times it on the real corpus; an index is a follow-up only if that number
+  says so.
 
 Routed on both targets.
 
