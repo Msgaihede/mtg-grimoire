@@ -376,6 +376,24 @@ describe("CollectionSearchTab", () => {
   });
 
   /**
+   * **A plain copy wears no sheen.** A collection row spells the regular copy `nonfoil` where
+   * `CardArt` reads `null` as the regular copy and any other word as a finish to draw — so the raw
+   * word handed through put a holo sheen over every plain copy on this tab. Found in the shipped
+   * window 2026-09-26: three nonfoil rows of four drew `data-foil-sheen`. The collection page's
+   * `finishMarkOf` has always mapped the word away; this tab now does the same.
+   */
+  it("draws the foil sheen on a foil copy and on no plain one", async () => {
+    collectionList.mockResolvedValue({
+      items: [row({ id: 1 }), row({ id: 2, finish: "foil" })],
+      total: 2,
+    });
+    const { container } = tab();
+
+    expect(await screen.findAllByText("3 in your collection")).toHaveLength(2);
+    expect(container.querySelectorAll("[data-foil-sheen]")).toHaveLength(1);
+  });
+
+  /**
    * A printing this marketplace does not quote draws an em dash — never another marketplace's
    * number wearing this one's currency sign, and never the printing's own fallback chain, which
    * would price a plain copy at foil rates.

@@ -345,13 +345,19 @@ export function CollectionSearchTab({
   };
 
   /**
-   * Every tile's finish, as `CardArt`'s chip reads it.
+   * Every tile's finish, as `CardArt`'s chip reads it — **`null` for the regular copy**, which a
+   * collection row spells `nonfoil` and `CardArt` reads as a finish to sheen. Handed through raw
+   * it put a holo sheen over every plain copy on this tab (found in the shipped window,
+   * 2026-09-26); `CollectionPage`'s `finishMarkOf` is the same rule on the collection's own wall.
    *
    * Module-scope-stable through `useCallback` with no dependencies, which `CardGrid` asks for at
    * this prop: a fresh arrow per render tears down and rebuilds every tile's drag registration on
    * every scrolled row.
    */
-  const tileFinish = useCallback((tile: CopyTile) => tile.finish, []);
+  const tileFinish = useCallback(
+    (tile: CopyTile) => (tile.finish === "nonfoil" ? null : tile.finish),
+    [],
+  );
 
   /**
    * What a tile carries when it is picked up — **the card-search tab's own payload**, so a drop onto
