@@ -186,18 +186,28 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **51** since the Tokens & Emblems pile learned where
-  it sits in the rail — `decks.token_rail_index`, `NOT NULL DEFAULT -1` for *last*, an
-  arrangement with a history row and a `deck_undo::DECK_FIELDS` entry where `token_stack` has
-  neither, written as v50 and renumbered before merging because `main` shipped its own v50 first;
-  which is one above the price history recording how many copies the reader held on each day it
-  priced (`price_snapshots.copies`, v50), itself one above a theory deck's managed wishlist becoming a
-  choice of Compare view
-  (`decks.managed_wishlist_mode`, v49), itself one above that wishlist arriving as a switch (v48),
-  one above the deck views learning to draw the tokens as a pile (`decks.token_stack`, v47), and
-  one above the home page's sticky notes (`sticky_notes`, v46, the thirtieth user table), which
-  is one above the home page's price movers getting a
-  memory — `price_snapshots`, the twenty-ninth user table, one owned printing's price per
+  numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v51**
+  added `decks.token_rail_index`, where the Tokens & Emblems pile sits in the rail — `NOT NULL
+  DEFAULT -1` for *last*, an arrangement with a history row and a `deck_undo::DECK_FIELDS` entry
+  where `token_stack` has neither. It was written as v50 and renumbered before merging, because
+  the rung below it landed on `main` first. That is one above **v50**, which
+  rebuilt `price_snapshots` into a record of **holdings**, v35's five statements, because SQLite
+  cannot drop a `NOT NULL`. It added a `copies` column, the copies of each printing and finish held
+  on the day its price was recorded, so the home page's collection value graph can rebuild a past
+  total. It also made `price` nullable, so a held printing the marketplace does not quote is a row
+  with a NULL price rather than no row. Without that, a price appearing or vanishing read as the
+  reader buying or selling. ⚠️ **Every movers and history read skips a NULL-price row exactly as
+  it skipped an absent one, and the prune keeps a bucket's newest priced row beside its newest
+  row.** ⚠️ **A row written before the upgrade carries NULL `copies` and is never read.** There is
+  no backfill, because the only number to hand is today's quantity and it would draw cards bought
+  last week as owned all along, so the graph starts on the upgrade day
+  ([home-page.md](../docs/reference/home-page.md) §14). That is one above a theory deck's managed
+  wishlist becoming a choice of Compare view (v49, `decks.managed_wishlist_mode`, `off` by
+  default), one above that wishlist arriving as a switch (v48), one above decks learning to stack
+  their tokens (v47, `decks.token_stack`), one above sticky notes (v46, `sticky_notes`, synced
+  where the two rungs below it are not), which is one above the home page's price movers getting a
+  memory — `price_snapshots` at v45, the twenty-ninth user table, one owned printing's price per
   marketplace per day, thinned past 35 days and **not** synced, for `activity`'s reason; which is
   one above the collection and the wishlist getting a
   history — `activity`, the twenty-eighth user table and the first with a pruner, **not** synced
@@ -378,7 +388,11 @@ both plus the frontend.
   line at all and only the rungs underneath it collided. `grep USER_SCHEMA_VERSION
   src-tauri/src/schema.rs` settles it in one command and nothing else does. It is the strongest
   form of the rule above: **take the next free number at the moment you land, never at the moment
-  you start**, and never assume the number you wrote is the one you ship.)
+  you start**, and never assume the number you wrote is the one you ship.
+  **And this bullet's user head read 45 through v46, v47, v48 and v49** — four rungs, each a
+  shape change with its own `USER_SCHEMA_SQL` line, none of which went red here. So since v50 it
+  names rungs and no head: a line that states the head goes stale at the next rung and says
+  nothing when it does.)
 - **v35 is the user ladder's third table rebuild, and a CHECK is why.** SQLite cannot alter one,
   so widening the grade list means building `collection_entries_v35`, copying every column
   **including `id`**, dropping, renaming and replaying all five indexes as frozen literals — the

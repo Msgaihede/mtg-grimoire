@@ -121,7 +121,7 @@ export function TooltipProvider({ children }: { children: ReactNode }) {
         } else {
           clearCloseTimer();
         }
-        if (Date.now() - timers.current.lastHiddenAt < TOOLTIP_WARM_MS) {
+        if (options.immediate || Date.now() - timers.current.lastHiddenAt < TOOLTIP_WARM_MS) {
           show(anchor, content, options);
           return;
         }

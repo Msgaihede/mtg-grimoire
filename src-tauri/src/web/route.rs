@@ -291,6 +291,11 @@ pub const COMMANDS: &[&str] = &[
     // the same `date('now')`. A browser that routed the widget and not this would answer the
     // reader's click on a mover with an error.
     "price_history",
+    // **The Collection value graph's read** — the same snapshots multiplied by the `copies` they
+    // carry since user schema v50, plus the live collection at today's price. Connection-only,
+    // no clock beyond SQLite's `date('now')`, so it is a query and not a download wearing a
+    // command's name.
+    "collection_value_history",
     // **The New printings widget's read and its cursor.** Both are connection-only: the read is
     // two `SELECT`s over `deck_cards` and the corpus whose only clock is SQLite's `date('now')`,
     // and the write takes `at` from the caller for `record_recent_card`'s reason. A browser that
@@ -2444,6 +2449,21 @@ pub fn call(
             )
         }
 
+        // `price_movers`' two choices for the marketplace once more. `split` is `field`: an
+        // absent split is an argument error, and a word outside the four is the module's own
+        // refusal, in words.
+        "collection_value_history" => {
+            let split: String = field(command, args, "split")?;
+            let marketplace: Option<crate::sorting::Marketplace> =
+                optional(command, args, "marketplace")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::value_history::history(&conn, &split, marketplace.unwrap_or_default())
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
         // The New printings pair. **`langs` is `field` and not `optional`**, because an absent
         // language list and an empty one mean different things on the way in and only the empty
         // one is a legal answer — empty is *every language*, so a caller that forgot the argument
@@ -3769,6 +3789,74 @@ mod tests {
         ));
     }
 
+    /// **The Collection value graph through the route**, under `ipc.ts`'s names. An empty
+    /// collection answers no points rather than an error; one owned, priced card answers today's
+    /// live point; an absent marketplace quotes TCGplayer as `price_movers` does; and a split
+    /// outside the four is the module's refusal, in its own words, while a missing one is an
+    /// argument error.
+    #[test]
+    fn the_collection_value_history_answers_through_the_route() {
+        assert!(COMMANDS.contains(&"collection_value_history"));
+        let s = state("web-route-value-history");
+        let today: i64 = crate::db::lock_blocking(&s.db)
+            .query_row("SELECT unixepoch(date('now'))", [], |r| r.get(0))
+            .unwrap();
+
+        let args = json!({ "split": "total", "marketplace": "tcgplayer" });
+        assert_eq!(
+            call(&s, "collection_value_history", &args).unwrap(),
+            json!({ "buckets": [], "points": [], "today": today })
+        );
+
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.execute_batch(r#"UPDATE cards SET prices = '{"usd":"2.50"}' WHERE id = '1';"#)
+                .unwrap();
+            crate::index::fixtures::own(&conn, "1", 2);
+        }
+        let out = call(&s, "collection_value_history", &args).unwrap();
+        assert_eq!(
+            out,
+            json!({
+                "buckets": [],
+                "points": [{
+                    "day": today, "total": 5.0, "values": [], "moved": null, "live": true
+                }],
+                "today": today
+            })
+        );
+        let absent = json!({ "split": "total" });
+        assert_eq!(call(&s, "collection_value_history", &absent).unwrap(), out);
+
+        let by_set = call(
+            &s,
+            "collection_value_history",
+            &json!({ "split": "set", "marketplace": "tcgplayer" }),
+        )
+        .unwrap();
+        assert_eq!(by_set["buckets"], json!([{ "key": "lea", "name": null }]));
+        assert_eq!(by_set["points"][0]["values"], json!([5.0]));
+
+        match call(
+            &s,
+            "collection_value_history",
+            &json!({ "split": "rarity", "marketplace": "tcgplayer" }),
+        ) {
+            Err(RouteError::Failed(message)) => {
+                assert_eq!(message, crate::value_history::NOT_A_SPLIT)
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            call(
+                &s,
+                "collection_value_history",
+                &json!({ "marketplace": "tcgplayer" })
+            ),
+            Err(RouteError::Args { .. })
+        ));
+    }
+
     /// **The new printings feed and its cursor, both routed.** A browser that could read the feed
     /// and not move the cursor would draw a widget whose gold dots never go out; one that could
     /// read neither would draw the tenth widget as an error on two of the three targets. Neither
@@ -4223,9 +4311,12 @@ mod tests {
         // **181 since a mover's detail routed `price_history`**, counted with that `awk` over the
         // array as it stands here — which answered 180 before it, not the 179 above, so the
         // literal had already moved once without this paragraph.
+        //
+        // **182 since the Collection value graph routed `collection_value_history`**, counted
+        // with the same `awk` over the array as it stands here, not by adding one to 181.
         assert_eq!(
             COMMANDS.len(),
-            181,
+            182,
             "update this number when a command is added"
         );
     }

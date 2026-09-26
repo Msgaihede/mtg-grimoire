@@ -536,12 +536,22 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// **49 (2026-09-24) turns that switch into a choice** — `decks.managed_wishlist_mode`, one of the
 /// Compare dialog's three views or `off`, `DEFAULT 'off'`, replacing v48's `managed_wishlist`.
 ///
+/// **50 (2026-09-26) makes `price_snapshots` a record of holdings**: `copies`, how many copies
+/// of the printing, at that finish, the reader held on the day the price was recorded, written by
+/// the snapshot in the same statement as the price — and a `price` that may be NULL, for a
+/// printing held that day which the marketplace does not quote. v45 kept prices and not holdings,
+/// so a past *total* could not be rebuilt from it; this is what the home page's Collection value
+/// graph ([`crate::value_history`]) multiplies, and the NULL is what lets it tell a price that
+/// appeared or vanished from a card that did. **A table rebuild**, v35's shape, because SQLite
+/// cannot drop a `NOT NULL`. **`copies` is nullable, with no default and no backfill**: a row
+/// written before the upgrade carries NULL and is never read, because the only quantity there is
+/// to backfill with is today's, and that would draw a card bought last week as owned all along.
+///
 /// **51 (2026-09-26, the token-stacks spec §3.4) is `decks.token_rail_index`** — where the Tokens &
 /// Emblems pile sits among the rail's piles, `NOT NULL DEFAULT -1` for *last*. v47's shape, one
 /// `ADD COLUMN`; unlike v47's setting it is an arrangement the reader drags, so it has a history
 /// row and a place on `deck_undo::DECK_FIELDS`. **Written as 50 and renumbered before merging**:
-/// `main` shipped its own v50 first (`price_snapshots.copies`, how many copies the reader held on
-/// the day each price was recorded), and a shipped number is spent.
+/// the price-holdings rung above shipped on `main` first, and a shipped number is spent.
 pub const USER_SCHEMA_VERSION: i64 = 51;
 
 /// `corpus.db`'s version, on a number line of its own.
@@ -4415,7 +4425,7 @@ CREATE UNIQUE INDEX {schema}.idx_sticky_notes_uid ON sticky_notes (sync_uid);
 
 CREATE INDEX {schema}.idx_activity_recent ON activity (at DESC, id DESC);
 
-CREATE TABLE {schema}.price_snapshots (
+CREATE TABLE {schema}."price_snapshots" (
                  -- **Not in `SYNCED_TABLES`, and no `sync_uid` column, on purpose**: every
                  -- device takes its own snapshot of the same public prices.
                  -- `YYYY-MM-DD`, UTC, from SQLite's own `date('now')` — never a Rust clock.
@@ -4426,8 +4436,14 @@ CREATE TABLE {schema}.price_snapshots (
                  -- Soft, like every card id in a user table: `cards` is dropped on every sync.
                  card_id TEXT NOT NULL,
                  finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
-                 -- In the marketplace's own currency. An unpriced finish has no row, never 0.
-                 price REAL NOT NULL,
+                 -- In the marketplace's own currency, and never 0 for a finish it does not
+                 -- quote. A row is a HOLDING: NULL is a printing the reader held that day which
+                 -- this marketplace quotes no price for, so a price that appears or vanishes on
+                 -- a card the reader kept is never read as the card arriving or leaving.
+                 price REAL,
+                 -- Copies of the printing at that finish held that day, every folder at once.
+                 -- NULL only on a row written before v50, which no total is ever built from.
+                 copies INTEGER,
                  PRIMARY KEY (day, marketplace, card_id, finish)
              ) WITHOUT ROWID;
 
@@ -6663,8 +6679,80 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v50 (2026-09-26): `price_snapshots` becomes a record of what the reader HELD each day —
+    // `copies`, how many copies of the printing at that finish, and a `price` that may be NULL.
+    //
+    // **`copies` is why the rung exists.** v45 kept the price and not the holding, so the home
+    // page's Collection value graph could not rebuild a past total from it; the snapshot writes
+    // this beside the price in the same statement, from the same `owned(card_id, finish, copies)`
+    // it already computes to decide what is owned. **Nullable, no `DEFAULT` and no backfill**:
+    // every row already in the table is NULL there, and [`crate::value_history`] never reads one —
+    // the only quantity there is to backfill with is today's, and that would draw a card bought
+    // last week as owned all along. So the graph starts on the upgrade day.
+    //
+    // **`price` loses its `NOT NULL`, and that is why this is a rebuild and not an `ADD
+    // COLUMN`.** A row is a *holding* now: NULL is a printing the reader held that day which this
+    // marketplace quotes no price for. While only priced rows were written, a held card whose
+    // price started or stopped being quoted entered or left the table, and the graph read that as
+    // the reader adding or removing cards; with the row there either way, only a printing
+    // entering or leaving the held set is the reader's doing. [`crate::price_history`]'s movers
+    // and history skip a NULL row exactly as they skipped an absent one.
+    //
+    // **SQLite cannot drop a `NOT NULL`**, so this is v35's five statements: build, copy every
+    // row (`copies` NULL on all of them), drop, rename, and recreate the one index as a frozen
+    // literal. `ALTER TABLE … RENAME TO` quotes the stored name, so [`USER_SCHEMA_SQL`] carries
+    // `"price_snapshots"` as it carries `"collection_entries"`. The table has no capture triggers
+    // to lose (it is not synced) and no foreign key reaches it. It owes [`tests::UNDO_V50`], which
+    // rebuilds back to v45's shape.
+    //
+    // (Written first as a bare `ADD COLUMN copies` and rebuilt in place the same day, before it
+    // shipped. A development database that ran that version is at 50 with a `NOT NULL` price,
+    // refuses every unpriced row the snapshot writes, and is the one file this rung cannot reach.)
+    if v < 50 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE price_snapshots_v50 (
+                 -- **Not in `SYNCED_TABLES`, and no `sync_uid` column, on purpose**: every
+                 -- device takes its own snapshot of the same public prices.
+                 -- `YYYY-MM-DD`, UTC, from SQLite's own `date('now')` — never a Rust clock.
+                 day TEXT NOT NULL,
+                 -- The *priced* marketplace: one of the four `sorting::Marketplace` arms, so
+                 -- `cardtrader` (which quotes TCGplayer) is never a key of its own.
+                 marketplace TEXT NOT NULL,
+                 -- Soft, like every card id in a user table: `cards` is dropped on every sync.
+                 card_id TEXT NOT NULL,
+                 finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                 -- In the marketplace's own currency, and never 0 for a finish it does not
+                 -- quote. A row is a HOLDING: NULL is a printing the reader held that day which
+                 -- this marketplace quotes no price for, so a price that appears or vanishes on
+                 -- a card the reader kept is never read as the card arriving or leaving.
+                 price REAL,
+                 -- Copies of the printing at that finish held that day, every folder at once.
+                 -- NULL only on a row written before v50, which no total is ever built from.
+                 copies INTEGER,
+                 PRIMARY KEY (day, marketplace, card_id, finish)
+             ) WITHOUT ROWID;
+
+             -- Every row, and `copies` NULL on each: the rung knows the price a row recorded
+             -- and not how many copies stood behind it.
+             INSERT INTO price_snapshots_v50 (day, marketplace, card_id, finish, price, copies)
+                 SELECT day, marketplace, card_id, finish, price, NULL FROM price_snapshots;
+
+             DROP TABLE price_snapshots;
+             ALTER TABLE price_snapshots_v50 RENAME TO price_snapshots;
+
+             -- Frozen, v35's rule: `DROP TABLE` took it, and this step is history the day it
+             -- ships.
+             CREATE INDEX idx_price_snapshots_printing
+                 ON price_snapshots (marketplace, card_id, finish, day);",
+        )?;
+        // Literal `50`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA main.user_version = 50;")?;
+        tx.commit()?;
+    }
+
     // (Written as v50 and renumbered to 51 before merging: `main` shipped its own v50 first —
-    // `price_snapshots.copies` — and a shipped number is spent.)
+    // the price-holdings rebuild directly above — and a shipped number is spent.)
     // v51 (2026-09-26, the token-stacks spec §3.4): `decks.token_rail_index` — where the Tokens &
     // Emblems pile sits in the rail, as the number of rail piles drawn above it. `-1` is last,
     // today's place and every existing deck's; a value the rail no longer reaches also draws last
@@ -8425,14 +8513,43 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v51's token rail index — the newest rewind on the user ladder. It was written as
-    /// `UNDO_V50` and renumbered with its rung, because `main` shipped its own v50 first; once
-    /// that lands, v50's rewind sits between this one and [`UNDO_V49`] in every chain.
+    /// v51's token rail index — the newest rewind on the user ladder, directly above
+    /// [`UNDO_V50`]. It was written as `UNDO_V50` and renumbered with its rung, because `main`
+    /// shipped the price-holdings v50 first.
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V47`]'s exactly: `ALTER TABLE decks ADD
     /// COLUMN` is not idempotent, so a fixture that kept the column dies at `duplicate column
     /// name` on the way back up. **It runs first**, because a rewind walks the ladder backwards.
     const UNDO_V51: &str = "ALTER TABLE decks DROP COLUMN token_rail_index;";
+
+    /// v50's holdings table — the rewind directly under [`UNDO_V51`] and directly above
+    /// [`UNDO_V49`].
+    ///
+    /// **A rebuild back to v45's shape, because the rung was one**: `DROP COLUMN` could take
+    /// `copies` away but nothing can put `price`'s `NOT NULL` back, and a v49 fixture whose price
+    /// accepts NULL is head wearing a v49 label — it would pass a snapshot the real v49 file
+    /// refuses. So the unpriced rows go first (v45 had no way to record one), the v50 table is
+    /// renamed aside, v45's table is created under its own unquoted name, the priced rows are
+    /// copied back, and the index the rename carried off is put back. Owed for [`UNDO_V14`]'s
+    /// **quiet** reason, not [`UNDO_V13`]'s loud one: the rung's rebuild succeeds just as well
+    /// over a table that is already v50's, so a fixture that skipped this would climb green while
+    /// claiming a v49 file that never existed. A chain that rewinds below 45 rebuilds the table
+    /// and then [`UNDO_V45`] drops it, which costs a few statements and nothing else.
+    const UNDO_V50: &str = "DELETE FROM price_snapshots WHERE price IS NULL;
+         ALTER TABLE price_snapshots RENAME TO price_snapshots_v50;
+         CREATE TABLE price_snapshots (
+             day TEXT NOT NULL,
+             marketplace TEXT NOT NULL,
+             card_id TEXT NOT NULL,
+             finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+             price REAL NOT NULL,
+             PRIMARY KEY (day, marketplace, card_id, finish)
+         ) WITHOUT ROWID;
+         INSERT INTO price_snapshots (day, marketplace, card_id, finish, price)
+             SELECT day, marketplace, card_id, finish, price FROM price_snapshots_v50;
+         DROP TABLE price_snapshots_v50;
+         CREATE INDEX idx_price_snapshots_printing
+             ON price_snapshots (marketplace, card_id, finish, day);";
 
     /// v49's managed-wishlist mode — the rewind directly above [`UNDO_V48`], and the second on
     /// this ladder (after [`UNDO_V43`]) that has to *put a column back*: v48's switch, so that
@@ -8875,7 +8992,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -8907,7 +9024,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -8934,7 +9051,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -8961,7 +9078,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -8985,7 +9102,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -9006,7 +9123,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -9027,7 +9144,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
         ))
         .unwrap();
         conn
@@ -9048,7 +9165,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
         ))
         .unwrap();
         conn
@@ -9079,7 +9196,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
         ))
         .unwrap();
         conn
@@ -9100,7 +9217,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
         ))
         .unwrap();
         conn
@@ -9115,7 +9232,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
         ))
         .unwrap();
         conn
@@ -9127,7 +9244,23 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// A user file at 49 — the shape every machine carries the day before a price snapshot
+    /// recorded how many copies it was of, and the only population the v50 rung is *for*.
+    ///
+    /// Head rewound past **both** rungs above it, newest first — [`UNDO_V51`] and then
+    /// [`UNDO_V50`]. Without the first, the file would keep `decks.token_rail_index` and the v51
+    /// rung would die at `duplicate column name` on the climb this fixture exists for.
+    fn user_file_at_49() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
         ))
         .unwrap();
         conn
@@ -9136,12 +9269,9 @@ pub(crate) mod tests {
     /// A user file at 50 — the shape every machine carries the day before the token pile could
     /// be moved in the rail, and the only population the v51 rung is *for*.
     ///
-    /// Head rewound past v51 alone, so it is exactly as honest as [`USER_SCHEMA_SQL`] is: once
-    /// `main`'s v50 (`price_snapshots.copies`) is merged it carries that column as a real v50
-    /// file does. **Until then this tree has no v50 rung at all**, so the file is v49's shape
-    /// stamped 50 — which is also all a v50 file is on this branch. (Written as
-    /// `user_file_at_49`; renamed with the rung, which also keeps it clear of `main`'s own
-    /// `user_file_at_49`.)
+    /// Head rewound past v51 alone, so it carries v50's holdings table exactly as a real v50 file
+    /// does. (Written as `user_file_at_49`, before the rung was renumbered to v51; renamed with
+    /// it, which also keeps it clear of the v50 rung's own `user_file_at_49` above.)
     fn user_file_at_50() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
@@ -9194,7 +9324,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -9351,7 +9481,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -9408,7 +9538,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -10766,7 +10896,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -12237,17 +12367,20 @@ pub(crate) mod tests {
         // One row per day per printing per marketplace — a second write on the same key is the
         // same row, which is what makes a snapshot idempotent per day.
         conn.execute_batch(
-            "INSERT INTO price_snapshots VALUES ('2026-09-15', 'tcgplayer', 'bolt', 'nonfoil', 1.5);",
+            "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price)
+             VALUES ('2026-09-15', 'tcgplayer', 'bolt', 'nonfoil', 1.5);",
         )
         .unwrap();
         assert!(conn
             .execute_batch(
-                "INSERT INTO price_snapshots VALUES ('2026-09-15', 'tcgplayer', 'bolt', 'nonfoil', 2.0);",
+                "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price)
+                 VALUES ('2026-09-15', 'tcgplayer', 'bolt', 'nonfoil', 2.0);",
             )
             .is_err());
         assert!(
             conn.execute_batch(
-                "INSERT INTO price_snapshots VALUES ('2026-09-15', 'tcgplayer', 'bolt', 'gilded', 2.0);",
+                "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price)
+                 VALUES ('2026-09-15', 'tcgplayer', 'bolt', 'gilded', 2.0);",
             )
             .is_err(),
             "the finish CHECK is the three and nothing else"
@@ -12357,6 +12490,172 @@ pub(crate) mod tests {
         assert_eq!(sticky, 1, "a v46 file still has v46's own table");
     }
 
+    /// Whether `price_snapshots.price` refuses a NULL — v45's `NOT NULL`, which v50 takes away.
+    fn price_is_required(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT \"notnull\" FROM pragma_table_info('price_snapshots') WHERE name = 'price'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **v50's rebuild, over the price history that was already there.** Seeded before the
+    /// climb, v47's argument: a row inserted at head would be written against the frozen
+    /// [`USER_SCHEMA_SQL`] and pass whatever the rung did. Every row survives with its price, and
+    /// every one of them reads `copies IS NULL` — the rung backfills nothing, because the only
+    /// quantity it could backfill with is today's. And `price` takes a NULL afterwards, which is
+    /// the half an `ADD COLUMN` could never have done: a held printing no marketplace quotes is a
+    /// row now, not an absence.
+    #[test]
+    fn v50_rebuilds_the_price_history_as_holdings_and_keeps_every_row() {
+        let conn = user_file_at_49();
+        conn.execute_batch(
+            "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price) VALUES
+                 ('2026-09-20', 'tcgplayer', 'bolt', 'nonfoil', 1.5),
+                 ('2026-09-21', 'tcgplayer', 'bolt', 'nonfoil', 1.75),
+                 ('2026-09-21', 'cardmarket', 'ring', 'foil', 90.0);",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        // Head, not v50 — `migrate_user` climbs the whole ladder, and v51 sits above this rung.
+        assert_eq!(version, 51);
+        assert_eq!(has_column(&conn, "price_snapshots", "copies"), 1);
+        assert_eq!(price_is_required(&conn), 0, "an unpriced holding is a row");
+        let (rows, null_copies, price_sum): (i64, i64, f64) = conn
+            .query_row(
+                "SELECT count(*), sum(copies IS NULL), sum(price) FROM price_snapshots",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(rows, 3, "the rung takes no row away");
+        assert_eq!(null_copies, 3, "and writes no copies it cannot know");
+        assert_eq!(price_sum, 93.25, "nor touches a price");
+
+        // Still `WITHOUT ROWID`, and the one index the movers read seeks is back.
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'price_snapshots'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sql.ends_with("WITHOUT ROWID"), "{sql}");
+        let index: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master
+                  WHERE type = 'index' AND name = 'idx_price_snapshots_printing'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            index.contains("(marketplace, card_id, finish, day)"),
+            "{index}"
+        );
+
+        // A row written after the rung carries a count, and may carry no price.
+        conn.execute_batch(
+            "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price, copies)
+             VALUES ('2026-09-22', 'tcgplayer', 'bolt', 'nonfoil', 2.0, 3),
+                    ('2026-09-22', 'tcgplayer', 'free', 'nonfoil', NULL, 2);",
+        )
+        .unwrap();
+        // The key and the finish CHECK came across the rebuild.
+        assert!(conn
+            .execute_batch(
+                "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price, copies)
+                 VALUES ('2026-09-22', 'tcgplayer', 'bolt', 'nonfoil', 9.0, 1);",
+            )
+            .is_err());
+        assert!(conn
+            .execute_batch(
+                "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price, copies)
+                 VALUES ('2026-09-22', 'tcgplayer', 'bolt', 'gilded', 9.0, 1);",
+            )
+            .is_err());
+
+        // Twice is the same as once: the stamp is the only thing that makes a second launch
+        // survive a rung that renames a table over the one it read.
+        migrate_user(&conn).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM price_snapshots", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 5);
+    }
+
+    /// The fixture is a real v49 file and not head wearing a v49 label: `copies` is gone, `price`
+    /// refuses a NULL again, and `decks.managed_wishlist_mode` — v49's own column — is still
+    /// there, so a chain that also ran [`UNDO_V49`] is caught too. **And v51's
+    /// `decks.token_rail_index` is gone as well** — the fixture rewinds both rungs above it, and a
+    /// file that kept that column would fail the climb at `duplicate column name`.
+    #[test]
+    fn the_v49_fixture_carries_none_of_v50() {
+        let conn = user_file_at_49();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 49);
+        assert_eq!(has_column(&conn, "price_snapshots", "copies"), 0);
+        assert_eq!(has_column(&conn, "decks", "token_rail_index"), 0);
+        assert_eq!(price_is_required(&conn), 1, "v45's price is NOT NULL");
+        assert!(conn
+            .execute_batch(
+                "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price)
+                 VALUES ('2026-09-22', 'tcgplayer', 'free', 'nonfoil', NULL);",
+            )
+            .is_err());
+        let index: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                  WHERE type = 'index' AND name = 'idx_price_snapshots_printing'
+                    AND tbl_name = 'price_snapshots'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 1, "the rewind put the index back on the table");
+        assert_eq!(
+            has_column(&conn, "decks", "managed_wishlist_mode"),
+            1,
+            "a v49 file still has v49's own column"
+        );
+    }
+
+    /// **The rewind loses no priced row and keeps no unpriced one.** v45 had no way to record a
+    /// held printing without a price, so [`UNDO_V50`] drops exactly those and carries every
+    /// priced row back with its price — which is what lets a chain below it believe its fixture.
+    #[test]
+    fn the_v50_rewind_keeps_every_priced_row_and_drops_the_unpriced() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(
+            "INSERT INTO price_snapshots (day, marketplace, card_id, finish, price, copies) VALUES
+                 ('2026-09-21', 'tcgplayer', 'bolt', 'nonfoil', 1.5, 2),
+                 ('2026-09-21', 'tcgplayer', 'free', 'nonfoil', NULL, 3),
+                 ('2026-09-22', 'cardmarket', 'ring', 'foil', 90.0, 1);",
+        )
+        .unwrap();
+
+        conn.execute_batch(&format!("{UNDO_V50} PRAGMA main.user_version = 49;"))
+            .unwrap();
+
+        let (rows, price_sum): (i64, f64) = conn
+            .query_row(
+                "SELECT count(*), sum(price) FROM price_snapshots",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((rows, price_sum), (2, 91.5));
+    }
+
     /// **v51's column, and the deck that already existed when the rung ran** — v47's test one
     /// column along, seeded before the climb for the same reason: a row inserted at head takes
     /// its default from the frozen [`USER_SCHEMA_SQL`] and would pass whatever the rung wrote.
@@ -12397,12 +12696,8 @@ pub(crate) mod tests {
     }
 
     /// The fixture is a real v50 file and not head wearing a v50 label: the column is gone and
-    /// `managed_wishlist_mode` — v49's, which every v50 file still carries — is still there, so
-    /// a chain that also ran [`UNDO_V49`] is caught too.
-    ///
-    /// **Once `main`'s v50 is merged, `price_snapshots.copies` is the sharper probe** — present
-    /// on a real v50 file, so asserting it here would also catch a chain that ran `main`'s
-    /// `UNDO_V50`. It is not asserted yet because this tree has no such column to find.
+    /// v50's own `price_snapshots.copies` is still there, so a chain that also ran [`UNDO_V50`]
+    /// is caught — as is one that also ran [`UNDO_V49`], through `managed_wishlist_mode`.
     #[test]
     fn the_v50_fixture_carries_none_of_v51() {
         let conn = user_file_at_50();
@@ -12412,9 +12707,14 @@ pub(crate) mod tests {
         assert_eq!(version, 50);
         assert_eq!(has_column(&conn, "decks", "token_rail_index"), 0);
         assert_eq!(
+            has_column(&conn, "price_snapshots", "copies"),
+            1,
+            "a v50 file still has v50's own column"
+        );
+        assert_eq!(
             has_column(&conn, "decks", "managed_wishlist_mode"),
             1,
-            "a v50 file still has v49's column"
+            "and v49's"
         );
     }
 
@@ -12508,7 +12808,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V51} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
