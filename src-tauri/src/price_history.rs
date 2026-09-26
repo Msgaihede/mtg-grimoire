@@ -2,10 +2,11 @@
 //!
 //! **The home page's Price movers widget, both halves, and the detail a mover opens**:
 //! [`snapshot`] records today's price for every printing the collection owns, in every priced
-//! marketplace, into `price_snapshots` (user schema v45); [`movers`] compares today's live price
-//! against the snapshot a window ago; [`history`] answers one printing's every kept snapshot, for
-//! the chart in that detail. The third only reads what the first wrote, so the rules below are
-//! its too.
+//! marketplace, into `price_snapshots` (user schema v45) — and, since v50, how many copies of it
+//! were held that day; [`movers`] compares today's live price against the snapshot a window ago;
+//! [`history`] answers one printing's every kept snapshot, for the chart in that detail. The
+//! third only reads what the first wrote, so the rules below are its too, and so are they
+//! [`crate::value_history`]'s, which reads the same table for the Collection value graph.
 //!
 //! # The rules
 //!
@@ -164,12 +165,18 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
 /// under [`Availability::Everything`], named — the crate's one statement of "which printings does
 /// the reader own, per finish". The price is filtered in an outer `SELECT` so the expression is
 /// written once: a correlated subquery repeated in a `WHERE` is a second evaluation per row.
+///
+/// **`copies` rides beside the price** (user schema v50): the same sum `owned` already computes
+/// to decide what is owned, every folder at once, so a day's row says what the reader's holding
+/// of that printing was worth and not only what one copy cost. [`crate::value_history`] is the
+/// reader. The day's latest snapshot wins it, copies included, for the price's own reason.
 fn snapshot_sql(conn: &Connection, market: Marketplace) -> String {
     format!(
         "WITH owned(card_id, finish, copies) AS ({owned})
-         INSERT OR REPLACE INTO price_snapshots (day, marketplace, card_id, finish, price)
-         SELECT date('now'), ?1, card_id, finish, price
-           FROM (SELECT o.card_id AS card_id, o.finish AS finish, {price} AS price
+         INSERT OR REPLACE INTO price_snapshots (day, marketplace, card_id, finish, price, copies)
+         SELECT date('now'), ?1, card_id, finish, price, copies
+           FROM (SELECT o.card_id AS card_id, o.finish AS finish, {price} AS price,
+                        o.copies AS copies
                    FROM owned o
                    JOIN cards c ON c.id = o.card_id
                   WHERE o.copies > 0)
@@ -196,27 +203,41 @@ fn snapshot_sql(conn: &Connection, market: Marketplace) -> String {
 /// row and a newer one can only arrive inside the daily band — so [`snapshot`] passes the previous
 /// snapshot day minus the band, and a daily reader weighs one day's rows: ~2 000, tens of
 /// milliseconds. `None` weighs the whole band, which is the first day ever (nothing to weigh) and
-/// the tests.
-fn prune(conn: &Connection, floor: Option<&str>) -> rusqlite::Result<usize> {
+/// the tests — `pub(crate)` for [`crate::value_history`]'s, which prove that a thinned table
+/// reads exactly as the un-thinned one did.
+pub(crate) fn prune(conn: &Connection, floor: Option<&str>) -> rusqlite::Result<usize> {
     let old = conn.execute(
         "DELETE FROM price_snapshots WHERE day < date('now', '-' || ?1 || ' days')",
         params![KEEP_DAYS],
     )?;
     let thinned = conn.execute(
-        "DELETE FROM price_snapshots
-          WHERE day < date('now', '-' || ?1 || ' days')
-            AND day >= coalesce(?2, '')
-            AND EXISTS (
-                SELECT 1 FROM price_snapshots later
-                 WHERE later.marketplace = price_snapshots.marketplace
-                   AND later.card_id = price_snapshots.card_id
-                   AND later.finish = price_snapshots.finish
-                   AND later.day > price_snapshots.day
-                   AND CAST(julianday(later.day) AS INTEGER) / 7
-                     = CAST(julianday(price_snapshots.day) AS INTEGER) / 7)",
+        &format!(
+            "DELETE FROM price_snapshots
+              WHERE day < date('now', '-' || ?1 || ' days')
+                AND day >= coalesce(?2, '')
+                AND EXISTS (
+                    SELECT 1 FROM price_snapshots later
+                     WHERE later.marketplace = price_snapshots.marketplace
+                       AND later.card_id = price_snapshots.card_id
+                       AND later.finish = price_snapshots.finish
+                       AND later.day > price_snapshots.day
+                       AND {later} = {this})",
+            later = week_bucket("later.day"),
+            this = week_bucket("price_snapshots.day"),
+        ),
         params![DAILY_DAYS, floor],
     )?;
     Ok(old + thinned)
+}
+
+/// The seven-day bucket a `YYYY-MM-DD` day falls in, as SQL over `day` — [`prune`]'s thinning
+/// key, and the one [`crate::value_history`] applies again at read time.
+///
+/// **One spelling for both**, because the read's whole promise is that an un-thinned table and a
+/// thinned one draw the same line: a bucket boundary that moved by a day between the two would
+/// split one of the prune's buckets in two at read time and invent a point.
+pub(crate) fn week_bucket(day: &str) -> String {
+    format!("CAST(julianday({day}) AS INTEGER) / 7")
 }
 
 /// One owned printing whose price moved.
@@ -720,6 +741,51 @@ mod tests {
         let got = rows(&conn);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].0, "cardkingdom");
+    }
+
+    /// **`copies` is the holding, every folder at once** (user schema v50): two copies at the
+    /// root and one in a folder are one printing held three times, and the row says 3 — while a
+    /// printing held at another finish is its own row with its own count.
+    #[test]
+    fn a_snapshot_records_the_copies_held_across_every_folder() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil"); // two, at the root
+        own(&conn, "bolt", "foil"); // two foil, their own row
+        conn.execute_batch(
+            "INSERT INTO collection_folders (id, name, sort_order, created_at, updated_at)
+                 VALUES (7, 'Binder', 0, 0, 0);
+             INSERT INTO collection_entries (card_id, set_code, collector_number, lang, finish,
+                                             condition, quantity, folder_id, created_at,
+                                             updated_at)
+                 VALUES ('bolt', 'lea', '0', 'en', 'nonfoil', 'NM', 1, 7, 0, 0);",
+        )
+        .unwrap();
+
+        snapshot(&conn).unwrap();
+
+        let copies = |finish: &str| -> Option<i64> {
+            conn.query_row(
+                "SELECT copies FROM price_snapshots
+                  WHERE day = date('now') AND marketplace = 'tcgplayer'
+                    AND card_id = 'bolt' AND finish = ?1",
+                [finish],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(copies("nonfoil"), Some(3), "two at the root and one filed");
+        assert_eq!(copies("foil"), Some(2), "a finish is its own holding");
+        let unrecorded: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM price_snapshots WHERE copies IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unrecorded, 0,
+            "every row a snapshot writes carries its count"
+        );
     }
 
     /// The fence the module doc leans on: inside somebody else's transaction a snapshot refuses
