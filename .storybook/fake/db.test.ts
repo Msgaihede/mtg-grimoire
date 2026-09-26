@@ -1902,6 +1902,26 @@ describe("undo and redo", () => {
     expect(() => h.deck_undo_apply({ deckId: 1, auditId: stale })).toThrow(/edited since/);
   });
 
+  /** `deck_undo::next_redo`'s order: of two undone changes, only the one undone last may come
+   *  back, and the state command offers no redo for the other. */
+  it("redoes only the change undone last", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const made = h.deck_category_create({ deckId: 1, name: "Ramp" });
+    const first = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_category_rename({ id: made.id, name: "Acceleration" });
+    const second = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_undo_apply({ deckId: 1, auditId: second });
+    h.deck_undo_apply({ deckId: 1, auditId: first });
+
+    expect(h.deck_undo_state({ deckId: 1, redoId: second }).redo).toBeNull();
+    expect(() => h.deck_redo_apply({ deckId: 1, auditId: second })).toThrow(/edited since/);
+
+    h.deck_redo_apply({ deckId: 1, auditId: first });
+    h.deck_redo_apply({ deckId: 1, auditId: second });
+    expect(db.deckCategories.find((c) => c.id === made.id)?.name).toBe("Acceleration");
+  });
+
   /** A write that changed nothing wrote no history row, so it files no step — a Ctrl+Z that
    *  appears to do nothing is worse than one that says there is nothing left. */
   it("files no step for a write that recorded no history", () => {
