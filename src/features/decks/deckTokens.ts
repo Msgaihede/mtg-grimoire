@@ -21,71 +21,18 @@
  */
 
 import { WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
-
-/* ------------------------------------------------------------------------------------------
- * The wire shape, mirrored locally.
- *
- * **To be replaced at fan-in** with `import type { DeckTokenRow, DeckTokenState, TokenSource }
- * from "@/lib/ipc";` plus a re-export of the same three names, so that every importer of this
- * module — the test beside it included — keeps working unchanged. It is declared here because
- * `ipc.ts` is being written in parallel by another task and blocking on it would have bought
- * nothing: these three shapes are pinned in the plan and in the spec, and `ipc.test.ts` is the
- * fence that keeps the Rust side honest about them either way.
- * ---------------------------------------------------------------------------------------- */
-
-/** Whether a stored token row is a plain override, a dismissal, or a hand-added extra. */
-export type DeckTokenState = "auto" | "hidden" | "manual";
-
-/** A deck card that makes a token — the answer to "why is this here". */
-export interface TokenSource {
-  cardId: string;
-  name: string;
-}
+import type { DeckTokenRow, DeckTokenState, TokenSource } from "@/lib/ipc";
 
 /**
- * One token or emblem a deck needs, with the reader's stored override joined on.
+ * The wire shape, re-exported from its one home.
  *
- * `cardId`, `quantity` and `state` are all `null` when the reader has not deviated — the table
- * stores only deviations. The effective values are this module's conclusion; this is the fact.
+ * It was mirrored here while `ipc.ts` was being written in parallel, under a banner asking for
+ * exactly this at fan-in: `ipc.ts` is the hand-written mirror of the crate and `ipc.test.ts` is
+ * the fence on it, so a second copy in this file was a second thing that could drift and a
+ * thing the fence could not see. Re-exported rather than re-pointed at every importer, so the
+ * panel, the hook, the picker and the test beside this file keep importing from here.
  */
-export interface DeckTokenRow {
-  oracleId: string;
-  name: string;
-  typeLine: string | null;
-  layout: string;
-  defaultCardId: string;
-  sources: TokenSource[];
-  derived: boolean;
-  cardId: string | null;
-  quantity: number | null;
-  state: DeckTokenState | null;
-  /**
-   * The four fields a token needs to be told apart from another token of the same name.
-   *
-   * **`power` and `toughness` are strings and must never be parsed as numbers.** Scryfall
-   * writes `*`, `1+*` and `∞`, and the corpus holds a real `*`-over-`*` Elemental — a token whose
-   * size is an expression rather than a number is not a defect to normalise away.
-   *
-   * `colors` is Scryfall's letters (`""` is genuinely colourless; `null` is *not known*, which
-   * is a different sentence and is why the type is nullable rather than defaulted).
-   */
-  power: string | null;
-  toughness: string | null;
-  colors: string | null;
-  oracleText: string | null;
-  /**
-   * Where the **resolved printing's** picture is, per variant — the web build's and the
-   * phone's only way to draw one, since neither has `mtgimg://` to ask.
-   *
-   * Optional and nullable both, which is `CardSummary.imageUris`' shape and for its reason: a
-   * printing whose only URL is Scryfall's `soon.jpg`, or one on a host this app will not fetch
-   * from, carries **nothing** rather than a URL. {@link deckTokenViews} folds it to the single
-   * string a tile draws, so nothing downstream of this file indexes it again.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
-}
-
-/* ---------------------------------- end of the mirror ------------------------------------- */
+export type { DeckTokenRow, DeckTokenState, TokenSource };
 
 /**
  * How many copies a token the reader has never touched shows.
@@ -119,21 +66,51 @@ export interface DeckTokenView {
   /** {@link tokenSubtitle}'s line, or `null` where there is nothing to say. */
   subtitle: string | null;
   /**
-   * The one URL the tile needs, or `null` for the no-art frame.
+   * The one URL the band's tile needs, or `null` for the no-art frame.
    *
-   * **Resolved here rather than passed as a map**, so the panel does no lookup and cannot pick
-   * a different variant from the walls beside it: {@link WALL_CARD_VARIANT} is what every wall
-   * of card faces in this app draws, and a second call site choosing for itself is the pairing
-   * failure `images.ts` records — each variant is its own URL and its own cache directory, so a
-   * surface asking for one nothing pre-warms fetches cold for ever with nothing on screen to
-   * say so.
+   * **Resolved here for the band**, so its wall does no lookup and cannot pick a different
+   * variant from the walls beside it: {@link WALL_CARD_VARIANT} is what every wall of card faces
+   * in this app draws, and a second call site choosing for itself is the pairing failure
+   * `images.ts` records — each variant is its own URL and its own cache directory, so a surface
+   * asking for one nothing pre-warms fetches cold for ever with nothing on screen to say so.
    *
    * **It is the whole of what this module concludes about the picture.** `CardArt` ignores it
    * on the desktop, where `mtgimg://` reaches the local cache; on the web target and on
    * Android it is the picture. `null` is the honest answer for a printing the backend refused
-   * a URI for, and never a reason for a caller to build one.
+   * a URI for, and never a reason for a caller to build one. The token *pile* is the one
+   * surface that does not read it — see {@link DeckTokenView.imageUris}.
    */
   imageUrl: string | null;
+  /**
+   * The row's whole picture map, passed through beside {@link DeckTokenView.imageUrl} and
+   * **not a second conclusion about it**.
+   *
+   * The token pile draws the deck's own `DeckCardFace`, and that component picks its own
+   * variant — `DECK_CARD_VARIANT`, the whole printed card the stacked view draws — off the map,
+   * which is what keeps a token and a deck card in one pile on one variant and one pre-warm.
+   * Narrowing to {@link WALL_CARD_VARIANT} here would hand it the wrong picture; choosing
+   * `DECK_CARD_VARIANT` here would be this module deciding a view's variant. `null` for a row
+   * with none, and for a row from a build that predates the field.
+   */
+  imageUris: Partial<Record<ImageVariant, string>> | null;
+  /**
+   * The effective printing's chin facts and price — {@link DeckTokenRow.setCode} and its five
+   * neighbours, resolved by Rust off the printing {@link DeckTokenView.printingId} names and
+   * **passed through untouched**. What the chin prints from them (the finish word, the em dash,
+   * the currency) is the drawing's conclusion and not this module's: a view keyed on a stored
+   * fact can be tested against the fact, and a second decision here would be a second place a
+   * Treasure's price could come to disagree with the picker's.
+   *
+   * `unitPrice` is one copy at the marketplace the read was asked for, `null` where it quotes
+   * none; the pile's heading multiplies it by {@link DeckTokenView.quantity}, and nothing sums it
+   * into the deck's own totals.
+   */
+  setCode: string | null;
+  collectorNumber: string | null;
+  setName: string | null;
+  rarity: string | null;
+  finishes: string | null;
+  unitPrice: number | null;
 }
 
 /**
@@ -252,6 +229,16 @@ function viewOf(row: DeckTokenRow): DeckTokenView {
     // `??` for the absent key as well as for the null: `imageUris` is `Partial`, so a printing
     // that publishes only some variants has no entry at all for the rest.
     imageUrl: row.imageUris?.[WALL_CARD_VARIANT] ?? null,
+    // The map itself, folded only from *absent* to `null`: the field is optional on the wire,
+    // and one spelling of "no picture" is all a surface downstream should have to handle.
+    imageUris: row.imageUris ?? null,
+    // Facts about the effective printing, copied as they came — see `DeckTokenView.setCode`.
+    setCode: row.setCode,
+    collectorNumber: row.collectorNumber,
+    setName: row.setName,
+    rarity: row.rarity,
+    finishes: row.finishes,
+    unitPrice: row.unitPrice,
   };
 }
 

@@ -2503,3 +2503,70 @@ alignment: a short mark sitting low beside a `+` whose bar is centred on the dig
 the mark's two states were two different heights on the same card. The mark draws `−8` now, in one
 vocabulary with the ledger's own `−{missing}`. Three story plays (`GridView`, `StackView`,
 `TextView`) and two tests caught the glyph change, which is the fence working.
+
+## The token stack on the deck's own parts, and one-row pile headings — 2026-09-26, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+Token stacks PR 1 ([the spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §3), driven
+over `scripts/cdp.mjs` on the reader's 100-card Commander deck **Bruna** (a plan kept, 14 piles,
+8 tokens), after switching its token pile on through Deck settings the way a reader does. The
+copied `user.db` climbed to **v50** on launch and every deck read `token_rail_index = -1` — the
+migration proved on real data rather than on a fixture, which a worktree cannot otherwise show.
+(**v50 was this rung's number on that build**; it is **v51** since it was renumbered against
+`main`'s own v50, `price_snapshots.copies`. The measurement is left as taken.)
+
+### A token card is a deck card's size, read off the same frame
+
+At `cardZoom.deck` 1.1, the first card of the Draw pile against the first token card:
+
+| | Deck card | Token card |
+| --- | --- | --- |
+| `<li>` | 231 × 351 | 231 × 351 |
+| face (the button's `DeckCardFace`) | 229 × 322 | 229 × 322 |
+| chin | 231 × 31 | 231 × 31 |
+
+Identical, which is what drawing the token with `DeckCardFace` and `CardChin` rather than a
+parallel `CardArt` tile was for.
+
+### Every heading one row from 0.8× up, and nothing overlapping at any stop
+
+`GroupHeader`'s one-row layout with the icon markers, over all 14 headings — ten flowing piles,
+the Commander, a Sideboard (`Gavel`), a Maybeboard (`PowerOff`) and the token pile — with the zoom
+stepped through the store (`useAppStore.setState`, restored after) and each heading's name and
+price compared by vertical centre:
+
+| Zoom | One row | Chip over the pill | Past the heading's box | `document` X overflow |
+| --- | --- | --- | --- | --- |
+| 0.5× | none — every heading wraps the figures under the name | none | none | 0 |
+| 0.8×, 0.9×, 1×, 1.1×, 2× | all 14 | none | none | 0 |
+
+At 1.1× every name is whole — the widest is `Tokens & Emblems` at 114px beside its pill and
+`$8.41`. Screenshots of Stacks, Grid and Text on the same deck show the pill and the price on the
+heading's own line in all three.
+
+### The rail: a real pointer drag, two arrow presses and the journal
+
+- **Drag.** `cdp.mjs drag` answers *"the browser never started a drag"* — it drives an HTML5
+  drag, and this app's drags are dnd-kit pointer gestures. `pull "<grip>" 105 -136 --steps 20`
+  from the token pile's grip onto the Sideboard moved the pile above it, stored `0`, and wrote
+  `{"field":"tokenRail","from":-1,"to":0}` to `deck_audit`.
+- **Arrows, and the caret.** With the grip clicked, two presses of ArrowRight moved the pile to
+  slot 2 of 3 and then last (stored `-1`), and **the caret stayed on the grip after both** —
+  `document.activeElement` was the grip, named `… 2 of 3` then `… 3 of 3`. Two reviewers had
+  predicted a rightward step would drop it, because React re-inserts the moved node; the shipped
+  window says it does not.
+- **Undo and redo.** The toolbar's button read `Undo — Moved Tokens & Emblems`; pressing it put
+  the pile back one place and offered `Redo — Moved Tokens & Emblems`, which moved it again.
+
+### Theory marks and chins on the tokens
+
+On the Actual list, six tokens wore the exact tick and two — `Angel of Sanctions` and `Treasure` —
+wore the art-mismatch mark: the plan's own cards make the same tokens, and the resolver lands the
+two lists on different default printings because each list resolves from its own cards. Every
+token's chin read its set and number, and `—` where the printing has no price
+(`SLD · 2820 $8.41` for the Treasure, the heading's whole total).
+
+### `Any card` on the Collection tab
+
+The search column's Collection tab listed `Any card`, `Any format`, `Commander`, … in its Format
+picker; picking `Any card` held (`Showing: Any card`) where the tab had opened on the deck's own
+format.

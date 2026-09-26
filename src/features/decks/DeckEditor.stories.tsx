@@ -6,6 +6,7 @@ import { CardDetailModal } from "@/features/card/CardDetailModal";
 import { ipc } from "@/lib/ipc";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { DeckEditor } from "./DeckEditor";
+import { MARKER_WORDS } from "./views/GroupHeader";
 
 /**
  * One deck, open — and, for the one story that needs it, the card pane docked beside it.
@@ -363,7 +364,7 @@ export const Modern60: Story = {
  * The command zone, the companion, and the one issue this deck exists to produce.
  *
  * (The command *zone* is the rules' word; the group drawing it is a category named "Commander",
- * of kind `commander`, which is why its heading carries a `RULE` marker.)
+ * of kind `commander`, which is why its heading carries the rule mark.)
  *
  * The Sideboard group is drawn even though every singleton commander format has
  * `sideboardMax: 0`, and that is the point of the v8 model: the format judges the deck (the chip
@@ -387,9 +388,10 @@ export const CommanderDeck: Story = {
     const canvas = within(canvasElement);
     const commander = await canvas.findByRole("region", { name: "Commander" });
     await expect(within(commander).getByText("1 card")).toBeInTheDocument();
-    // `RULE` means "the ruleset reads this pile by name", which is why it is on the commander
-    // and the sideboard and never on the Maybeboard.
-    await expect(within(commander).getByText("RULE")).toBeInTheDocument();
+    // The rule mark means "the ruleset reads this pile by name", which is why it is on the
+    // commander and the sideboard and never on the Maybeboard. It is an icon, so it is found by
+    // its `sr-only` words.
+    await expect(within(commander).getByText(MARKER_WORDS.rule)).toBeInTheDocument();
     await expect(canvas.getByRole("region", { name: "Companion" })).toBeInTheDocument();
     await expect(canvas.getByRole("region", { name: "Main deck" })).toBeInTheDocument();
 
@@ -606,7 +608,7 @@ export const MaybePile: Story = {
     // rides the right-hand rail under the Sideboard, which is its own `sortOrder` (last, for a
     // deck that came through the v8 migration) and never a sort by kind.
     const pile = await canvas.findByRole("region", { name: "Maybeboard" });
-    await expect(within(pile).getByText("INACTIVE")).toBeInTheDocument();
+    await expect(within(pile).getByText(MARKER_WORDS.inactive)).toBeInTheDocument();
     const tomb = within(pile).getByRole("button", { name: /^Ancient Tomb/ });
     await expect(tomb).toBeInTheDocument();
     // No shortage, and not in the name either — the one place in the editor where owning

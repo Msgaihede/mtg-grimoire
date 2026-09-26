@@ -402,6 +402,11 @@ pub const TABLES: [Spec; 16] = [
             // — how *this* list is read — and `DEFAULT 0` makes the old-peer direction safe the
             // way it is for `virtual_only` above.
             "token_stack",
+            // And where that pile sits in the rail (user schema v51) — an arrangement of the
+            // deck the reader dragged, so it travels with the deck the way the order of its
+            // categories does. `DEFAULT -1` (*last*) makes the old-peer direction safe: a device
+            // on v50 or older names no such field and the pile stays where every deck drew it.
+            "token_rail_index",
             "bracket",
             // **Schema v38's two theory marks and v39's third, and they travel for `bracket`'s
             // reason** — which
@@ -1204,6 +1209,33 @@ mod tests {
             fields.get("token_stack"),
             Some(&serde_json::json!(1)),
             "the setting must reach the reader's other devices, in {fields}"
+        );
+    }
+
+    /// **Where a deck's token pile sits in the rail travels** (user schema v51) — the same
+    /// missing-fence argument, for a column that would otherwise put the pile the reader dragged
+    /// back at the bottom of the rail on every other device, with nothing on screen saying why.
+    #[test]
+    fn a_decks_token_rail_index_is_captured() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute("UPDATE decks SET token_rail_index = 2 WHERE id = 1", [])
+            .unwrap();
+
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 1, "one write, one op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(
+            fields.get("token_rail_index"),
+            Some(&serde_json::json!(2)),
+            "the pile's place must reach the reader's other devices, in {fields}"
         );
     }
 

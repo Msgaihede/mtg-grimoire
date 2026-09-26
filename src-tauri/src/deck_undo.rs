@@ -186,6 +186,10 @@ const DECK_FIELDS: &[&str] = &[
     "theory_mark_unplanned",
     // Schema v49's managed-wishlist mode — an ordinary `deck_update` answer with a history row.
     "managed_wishlist_mode",
+    // User schema v51's rail index — an arrangement, like a category's `sort_order`: the reader
+    // moved the pile and Ctrl+Z moves it back. **Unlike `token_stack`**, which is a view setting
+    // with no history row and so no step (see the note under `description` above).
+    "token_rail_index",
     "last_variant",
     "last_group_by",
     "last_sort_by",

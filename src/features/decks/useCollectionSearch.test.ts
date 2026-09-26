@@ -30,6 +30,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
+import { ANY_CARD } from "@/features/search/useCardSearch";
 import {
   copySource,
   DEFAULT_EXCLUDE_LOCKED,
@@ -263,6 +264,75 @@ describe("useCollectionSearch", () => {
 
     await waitFor(() => expect(collectionList).toHaveBeenCalled());
     expect(lastQuery().format).toBe("commander");
+  });
+
+  /**
+   * **The card search's format ladder, on this tab too** (token stacks spec §3.6). The deck's
+   * search column opens on this tab, and a tab that seeded the deck's format and never offered
+   * `Any card` had no row that brought back a card no format allows — the reader's own tokens
+   * first of all, which is the report this answers: *I can't select Any card*.
+   *
+   * Three rows, three payloads, read off the wire for `allocation`'s reason. `Any card` sends
+   * neither field. `Any format` is *legal somewhere* — the All cards tab's meaning — so an orphan
+   * copy, whose printing has left the corpus, is hidden under it and shown under `Any card`. A
+   * named format sends the flag as well, which cannot narrow it any further.
+   *
+   * Waited on a **new request** rather than on the payload: `{}` matches every object, so a wait
+   * on it alone would read the deck's own `commander` request the press had not replaced yet.
+   */
+  it.each([
+    [ANY_CARD, {}],
+    ["", { playableOnly: true }],
+    ["modern", { format: "modern", playableOnly: true }],
+  ])("the %s row sends %o", async (row, expected) => {
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    const asked = collectionList.mock.calls.length;
+
+    act(() => result.current.setFormat(row));
+
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    const q = lastQuery();
+    expect(q).toMatchObject(expected);
+    if (!("format" in expected)) expect(q.format).toBeUndefined();
+    if (!("playableOnly" in expected)) expect(q.playableOnly).toBeUndefined();
+  });
+
+  /** The capability `FilterBar` draws the row on — `FilterSurface.anyCard`. */
+  it("offers Any card", () => {
+    expect(mount().result.current.anyCard).toBe(true);
+  });
+
+  /**
+   * **The badge and the button keep `useCardSearch`'s rules to the letter**, because both tabs
+   * of one panel draw one `FilterBar` over one ladder and a reader who switches tabs must not
+   * meet two meanings of `Reset all 1`.
+   *
+   * `Any card` counts: it is the row that *widens*, and pressing Reset all really would change
+   * the wall. `Any format` counts nothing, since it is where Reset all goes. And Reset all goes
+   * **there, not back to the deck's format** — "no filters", which now means *legal somewhere*
+   * on this tab, so the request after it carries the flag and no format.
+   */
+  it("counts Any card on the Reset all badge and clears it to Any format", async () => {
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    // The deck's own format is one thing the button would clear.
+    expect(result.current.activeCount).toBe(1);
+
+    act(() => result.current.setFormat(ANY_CARD));
+    expect(result.current.activeCount).toBe(1);
+    await waitFor(() => expect(lastQuery().format).toBeUndefined());
+    const asked = collectionList.mock.calls.length;
+
+    act(() => result.current.resetAll());
+
+    expect(result.current.format).toBe("");
+    expect(result.current.activeCount).toBe(0);
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    expect(lastQuery().playableOnly).toBe(true);
+    expect(lastQuery().format).toBeUndefined();
+    // Still there after the request has come back: the deck's default did not bounce in.
+    expect(result.current.format).toBe("");
   });
 
   /**

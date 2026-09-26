@@ -83,7 +83,7 @@ both plus the frontend.
   **orphan row fails a predicate**, which is `push_card_filters`' documented rule inherited
   rather than a new one.
 - **The data folder holds two databases, and which one is `main` is the whole design**
-  (schema 27). `data/user.db` is the reader's — the twenty-nine tables in `schema::TABLES` marked
+  (schema 27). `data/user.db` is the reader's — the thirty tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
@@ -187,7 +187,11 @@ both plus the frontend.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v50**
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v51**
+  added `decks.token_rail_index`, where the Tokens & Emblems pile sits in the rail — `NOT NULL
+  DEFAULT -1` for *last*, an arrangement with a history row and a `deck_undo::DECK_FIELDS` entry
+  where `token_stack` has neither. It was written as v50 and renumbered before merging, because
+  the rung below it landed on `main` first. That is one above **v50**, which
   rebuilt `price_snapshots` into a record of **holdings**, v35's five statements, because SQLite
   cannot drop a `NOT NULL`. It added a `copies` column, the copies of each printing and finish held
   on the day its price was recorded, so the home page's collection value graph can rebuild a past
@@ -404,12 +408,11 @@ both plus the frontend.
   rebuild emits no sync ops**: `DROP TABLE` takes the three capture triggers with it,
   `prepare_database` reinstalls them on the next line, and the copy lands in a table that has none
   while it is being written.
-- **`UNDO_V35` maps rather than deletes, and it runs fourth — behind `UNDO_V39`, `UNDO_V38` and
-  `UNDO_V37`, ahead of
+- **`UNDO_V35` maps rather than deletes, and it runs behind every rewind above it and ahead of
   everything else.** It read "and it runs first" for as long as v35 was head, which the theory
-  rung made false the same day, and "third" for the one rung between that and the third tier;
-  the chains themselves are
-  `{UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} …`
+  rung made false the same day, then "third", then "fourth" — and every rung since has made the
+  ordinal wrong again, which is why this no longer carries one. The chains themselves read
+  `… {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} …`
   — **there is no `UNDO_V36`, because v36 writes no shape** — and they were
   right throughout, because they are code. The rewind carries an ungraded row
   back as `'NM'` — precisely what the old `DEFAULT` would have recorded for the same press —
@@ -420,9 +423,8 @@ both plus the frontend.
   holds in the list**: `UNDO_V29` does
   `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
   index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before
-  `UNDO_V29` takes it away. `UNDO_V38` and `UNDO_V39` sitting above it change nothing about
-  that: between them they drop three
-  `decks` columns and touch no index anywhere.
+  `UNDO_V29` takes it away. The rewinds sitting above it change nothing about that: none of
+  them names `collection_entries` or its indexes.
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
   unique indexes included — and files nothing into it. **v25 inserts the single `removed` folder
@@ -2084,7 +2086,7 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   because `deck_cards.label_id` is a real foreign key and `insert_cards` writes the restored rows'
   labels through `remap.label`.
 - **`deck_tokens.rs` is `card::meld_parts`' sibling and the one place a *missing* rule is the
-  rule** (schema v35, [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388)). Same
+  rule** (user schema v37, [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388)). Same
   inflate of `cards.raw`, same walk over `all_parts`, same *every failure is an empty vec* —
   pointed at a different `component`, over the deck's own cards rather than over one opened card.
   Three things bind it, and the third is the one to read twice:
@@ -2125,9 +2127,12 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   case.** `decks.tokens_open` is the panel's disclosure, on the `decks` capture `Spec` beside
   `separate_x_group`, the last **named** column of `DECK_SELECT` when it landed for `deck_row`'s
   positional reason — which moved its `IMAGE_COL` from 21 to 22 — and on no history row and no
-  `deck_undo::DECK_FIELDS`. **It is not the last named column any more** (v43's `notes_open` is,
-  at 26, with `IMAGE_COL` at 27), and it is not the only disclosure either: read both numbers off
-  `deck_row` and never off this page.
+  `deck_undo::DECK_FIELDS`. **It is not the last named column any more** (user schema v51's
+  `token_rail_index` is, at 29, with `deck_row`'s `IMAGE_COL` at 30), and it is not the only
+  disclosure either: read both numbers off `deck_row` and never off this page. **`deck_tokens.rs`
+  has offsets of its own and they are a different list** — `printing_from`'s `IMAGE_COL` counts
+  `PRINTING_COLUMNS` and `picked_printing`'s counts that function's own `SELECT`, so neither moves
+  with a `decks` rung and neither is `deck_row`'s.
   ⚠️ **v43 is why this page insists on that**, and it is the sharpest case the ladder has produced:
   the rung removed `decks.notes` at column 12 *and* appended `notes_open`, so fourteen reads in
   `deck_row` and nine in the before-image mapper each shifted down by one — and `IMAGE_COL` came

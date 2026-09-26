@@ -3446,6 +3446,20 @@ export interface DeckPatch {
    */
   tokenStack?: boolean;
   /**
+   * Where the **Tokens & Emblems** pile sits in the rail. See {@link DeckRow.tokenRailIndex} —
+   * `decks.token_rail_index`, user schema v51.
+   *
+   * **`-1` is a value and not an absence**, which is `defaultCategoryId`'s footing and the reason
+   * the column is `NOT NULL DEFAULT -1` rather than nullable: this patch reads an absent key as
+   * *leave it* (`coalesce(?n, column)`), so a nullable "last" could never be written back once
+   * the reader had moved the pile. Moving it to the last slot sends `-1`; the top is `0`.
+   *
+   * **Unlike {@link tokenStack} one field up, it writes a history row and an undo step** — Rust
+   * records `field: "tokenRail"` when the index moves — because a pile dragged to a new slot is
+   * an arrangement the reader made, like a category's `sortOrder`, and Ctrl+Z puts it back.
+   */
+  tokenRailIndex?: number;
+  /**
    * Which of this deck's categories an add that names none lands in. See
    * {@link DeckRow.defaultCategoryId} — `0` is `AUTO_CATEGORY` and is a **value**, not an
    * absence: sending it puts the deck back on "by what the card does".
@@ -3872,6 +3886,23 @@ export interface DeckRow {
    * never enters `deck.cards`, so it counts toward nothing — size, piles, stats or validation.
    */
   tokenStack: boolean;
+  /**
+   * Where the **Tokens & Emblems** pile sits in the rail — `decks.token_rail_index INTEGER NOT
+   * NULL DEFAULT -1`, user schema v51 — as **the number of rail piles drawn above it**.
+   *
+   * **`-1` is last**, which is where the pile has always been drawn and where every deck that
+   * predates the column keeps it. So is any value the rail no longer reaches: a count stored when
+   * the rail held four piles means nothing once two of them are switched back on, and the pile
+   * draws last rather than nowhere or at a stale slot. That clamp is the view layer's conclusion
+   * on read and never a write — the stored number is a fact, not a promise about today's rail.
+   *
+   * **A count rather than an anchor pile**, because an anchor would be a category id on a synced
+   * row (needing the sync's `sync_uid` translation), and switching the anchor pile on would move
+   * the tokens somewhere the reader cannot account for. Carried by `deck_duplicate`, synced with
+   * the rest of the row, audited as `tokenRail` and undoable — see
+   * {@link DeckPatch.tokenRailIndex}.
+   */
+  tokenRailIndex: number;
   /**
    * Which of this deck's categories an add that names no pile lands in — `decks.default_category_id`,
    * schema v16, and **`AUTO_CATEGORY` (`0`) for "let the card's own text decide"**.
@@ -4437,8 +4468,8 @@ export interface TokenSource {
  * One token or emblem a deck needs, with the reader's stored override joined on.
  *
  * **The list is derived on every deck open and stored nowhere** — Rust inflates the `raw` blob
- * of each distinct card in the deck's *active* categories and reads `all_parts`. So the first
- * seven fields are facts about the corpus and the deck, and the last three are the only thing
+ * of each distinct card in the deck's *active* categories and reads `all_parts`. So every
+ * field is a fact about the corpus and the deck except three, which are the only thing
  * `deck_tokens` holds: `cardId`, `quantity` and `state` are all `null` together when the reader
  * has never deviated, because the table stores deviations and nothing else.
  *
@@ -4446,7 +4477,11 @@ export interface TokenSource {
  * `@/features/decks/deckTokens` resolves the printing (`cardId ?? defaultCardId`) and the
  * quantity (`quantity ?? 1`), and this is the fact it draws them from. Read `quantity` with
  * `??` and never `||` — a stored `0` is a token the reader deliberately zeroed while keeping
- * the art they picked, which is information, and `||` reads it as absent.
+ * the art they picked, which is information, and `||` reads it as absent. **The one place Rust
+ * applies the printing rule itself is to describe that printing** —
+ * {@link DeckTokenRow.imageUris} and the six chin fields below are the effective printing's,
+ * because a second round trip per token to ask about the printing TypeScript chose would buy
+ * nothing but a flash of the wrong one.
  *
  * `defaultCardId` is never null for a derived row and is **deterministic**: the printing the
  * most deck cards point at, ties broken by the same `released_at DESC, set_code ASC,
@@ -4519,6 +4554,40 @@ export interface DeckTokenRow {
    * field-name pin is the only fence.
    */
   imageUris?: Partial<Record<ImageVariant, string>> | null;
+  /**
+   * The **effective printing's** chin — `cardId ?? defaultCardId`, the same printing
+   * {@link DeckTokenRow.imageUris} is the picture of — so the token pile can draw the deck
+   * card's own foot: set · `#number` · finish · price (user schema v51's token pile,
+   * `deck_tokens.rs`).
+   *
+   * **All six are `null` together for a printing gone from the corpus**, which a stored override
+   * can outlive: the row still names its oracle card, and a chin with nothing to say is the
+   * honest drawing of that. Facts only — which finish the token is *drawn* at is
+   * `playedFinish(null, finishes)`'s conclusion at the surface, never this row's.
+   */
+  setCode: string | null;
+  collectorNumber: string | null;
+  setName: string | null;
+  rarity: string | null;
+  /** The printing's finishes as **the JSON text `cards.finishes` stores** —
+   *  `'["nonfoil","foil"]'` — for {@link DeckTokenRow.colors}' reason: it is what the column
+   *  holds, and `parseFinishes` in `@/lib/finish` is the one reader of it on this side. */
+  finishes: string | null;
+  /**
+   * What one copy of the effective printing costs at the marketplace {@link ipc.deckTokens} was
+   * asked for, **priced the way a deck card that names no finish is**:
+   * `sorting::printing_price_by_finish_expr`'s chain, `nonfoil → foil → etched`, the first finish
+   * that marketplace quotes. A token row stores no finish (`deck_tokens` holds an art, a count
+   * and a state), so it is always the unsaid arm of {@link DeckCard.unitPrice}'s rule — and a
+   * foil-only token, or one sold in both whose nonfoil is simply unlisted, is priced at its foil
+   * price rather than read as unpriced. That chain is what closed the same defect for deck cards,
+   * where 13 515 foil-only printings have no nonfoil price at any marketplace.
+   *
+   * `null` is **the em dash** — this marketplace does not quote this printing — and never `0`.
+   * **Token prices never reach the deck's own totals**: a token is not a `deck_cards` row, so the
+   * only sum this enters is the token pile's own heading.
+   */
+  unitPrice: number | null;
 }
 
 /**
@@ -7937,9 +8006,14 @@ export const ipc = {
    * nothing, a deck with no cards, and every failure shape behind the blob — an unknown id, a
    * `raw` that will not inflate or parse, a missing or non-array `all_parts`. A deck must not
    * fail to open over an area most decks use lightly.
+   *
+   * `marketplace` prices each row's effective printing — {@link DeckTokenRow.unitPrice} — so it
+   * is part of the question, and it belongs in the caller's query key for {@link deckGet}'s
+   * reason. It is `card_printings`' argument under the same name, so the art picker's grid and
+   * the pile's chin quote one number for one printing.
    */
-  deckTokens: (deckId: number, variant: DeckVariant) =>
-    invoke<DeckTokenRow[]>("deck_tokens", { deckId, variant }),
+  deckTokens: (deckId: number, variant: DeckVariant, marketplace: MarketplaceId) =>
+    invoke<DeckTokenRow[]>("deck_tokens", { deckId, variant, marketplace }),
   /**
    * Write one token's override — the art, the count, or the dismissal.
    *
