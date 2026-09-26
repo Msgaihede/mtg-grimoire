@@ -1564,10 +1564,13 @@ record, with every measurement, is
   why the group door answers `GroupGrant` rather than `Grant` and writes through `store_access`
   rather than `store_grant`.
 - **`pairing.rs` must never carry the refresh secret again.** It sealed one into the blob for a
-  day and the field was taken back out: a device holding that secret can re-register the group's
-  auth through `/rotate`'s second door and therefore evict the devices that removed it, which
-  makes a removal something any paired device can reverse. Restricting the Patreon-side secret to
-  the device that pressed Connect is what makes a removal stick. The sealed plaintext is
+  day and the field was taken back out. The relay retires a refresh secret together with the one
+  device `/claim` recorded as its holder, when a rotation's manifest omits that device — so a copy
+  on any other paired device would survive that device's removal and go on minting tokens for the
+  group that removed it. (The original reason was `/rotate`'s second door, which let the secret
+  re-register the group's auth; that door has since been removed, and the rule stands on this
+  one.) Restricting the Patreon-side secret to the device that pressed Connect is what makes a
+  removal stick. The sealed plaintext is
   `<group_id>\0<epoch>\0<32-byte key>` and **anything ever added goes before the key**, which is
   the only field that can hold a zero byte of its own.
 - **A 401 on the group door is NOT a lapse**, and copying the sync routes' handling would be the

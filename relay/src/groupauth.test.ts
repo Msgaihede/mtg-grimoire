@@ -47,6 +47,32 @@ describe("recordRotation", () => {
     expect(await authIsRecent(env, "g1", "auth-1b")).toBe(false);
   });
 
+  it("refuses a rotation that skips past the next epoch", async () => {
+    const env = fakeEnv("g1");
+    await seedGroup(env, "g1", 0, "auth-0");
+
+    // Strictly higher is not the rule; one higher is. A group moved to `1e9` stands on an epoch
+    // no device will ever plan from, and its manifest — whatever the caller chose — is the one
+    // every device then reads its membership off.
+    expect(await recordRotation(env, "g1", 2, "auth-2", {})).toBe(false);
+    expect(await recordRotation(env, "g1", 1_000_000_000, "auth-far", {})).toBe(false);
+
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 0, keys: {} });
+    expect(await authIsCurrent(env, "g1", "auth-0")).toBe(true);
+    expect(await authIsRecent(env, "g1", "auth-far")).toBe(false);
+    expect(await recordRotation(env, "g1", 1, "auth-1", { d1: "blob" })).toBe(true);
+  });
+
+  it("takes a group with no key rows at all to epoch 0 and nothing else", async () => {
+    // `coalesce(…, -1) + 1` is what makes a first rotation possible on a group with no rows, and
+    // it has to stay exactly that: `/rotate` authenticates first, so no caller reaches here on
+    // an unknown group, but the rule should not depend on the caller to be the rule.
+    const env = fakeEnv("g1");
+
+    expect(await recordRotation(env, "g1", 1, "auth-1", {})).toBe(false);
+    expect(await recordRotation(env, "g1", 0, "auth-0", {})).toBe(true);
+  });
+
   it("keeps a manifest per epoch and answers the newest", async () => {
     const env = fakeEnv("g1");
     await seedGroup(env, "g1", 0, "auth-0");
@@ -151,8 +177,8 @@ describe("seedGroup", () => {
     // claimed before `group_keys` existed has to do, and nothing tells the reader which device to
     // do it on; pressed on the one that is behind, the repair breaks the devices that were fine.
     const env = fakeEnv("g1");
-    await seedGroup(env, "g1", 0, "auth-0");
-    await recordRotation(env, "g1", 3, "auth-3", { desk: "blob" });
+    await seedGroup(env, "g1", 2, "auth-2");
+    expect(await recordRotation(env, "g1", 3, "auth-3", { desk: "blob" })).toBe(true);
 
     await seedGroup(env, "g1", 1, "auth-1-stale");
 
@@ -165,6 +191,53 @@ describe("seedGroup", () => {
     // Without this line the test passes against an implementation that guards only the UPDATE,
     // which would leave a device that should have stopped able to reach `/keys`.
     expect(await authIsRecent(env, "g1", "auth-1-stale")).toBe(false);
+  });
+
+  it("leaves the group alone when the claim names an epoch the group has not reached", async () => {
+    // **The skip-ahead `/rotate` refuses, arriving through the other door that writes a key.**
+    // A claim at `max + 1` with its own auth would register a row there with an empty manifest,
+    // which every device in the group reads as a higher epoch with no blob for itself — its own
+    // removal. `entitlement::claim` sends the device's own current epoch, so a caught-up device
+    // claims at the group's epoch exactly and nothing shipped sends one past it.
+    const env = fakeEnv("g1");
+    await seedGroup(env, "g1", 0, "auth-0");
+    expect(await recordRotation(env, "g1", 1, "auth-1", { desk: "blob" })).toBe(true);
+
+    await seedGroup(env, "g1", 2, "auth-2-ahead");
+    await seedGroup(env, "g1", 1_000_000_000, "auth-far");
+
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 1, keys: { desk: "blob" } });
+    expect(await authIsCurrent(env, "g1", "auth-1")).toBe(true);
+    expect(await authIsRecent(env, "g1", "auth-2-ahead")).toBe(false);
+    expect(await authIsRecent(env, "g1", "auth-far")).toBe(false);
+  });
+
+  it("does not let a claim at the group's own epoch replace the auth registered there", async () => {
+    // **The door `/rotate` closed, reopened one route over.** Without this, a removed phone still
+    // logged into Patreon claims at the group's epoch with an auth of its own making: the insert
+    // conflicts and is ignored, but the mirror moves — its auth becomes current, the devices that
+    // stayed start failing the group door, and it can publish a rotation naming itself. A
+    // re-claim by a device that holds the key sends the same auth, which is the only one kept.
+    const env = fakeEnv("g1");
+    await seedGroup(env, "g1", 0, "auth-0");
+    expect(await recordRotation(env, "g1", 1, "auth-1", { desk: "blob" })).toBe(true);
+
+    await seedGroup(env, "g1", 1, "auth-forged");
+
+    expect(await authIsCurrent(env, "g1", "auth-1")).toBe(true);
+    expect(await authIsCurrent(env, "g1", "auth-forged")).toBe(false);
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 1, keys: { desk: "blob" } });
+  });
+
+  it("still takes any epoch for a group with no key rows at all", async () => {
+    // The first claim, and the repair for a group claimed before `group_keys` existed: there is
+    // no epoch to be equal to, so the claiming device's own is the one the group starts on.
+    const env = fakeEnv("g1");
+
+    await seedGroup(env, "g1", 4, "auth-4");
+
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 4, keys: {} });
+    expect(await authIsCurrent(env, "g1", "auth-4")).toBe(true);
   });
 });
 
@@ -277,6 +350,36 @@ describe("the device cap", () => {
     // `first_seen` is the one column an upsert must not touch: it is what says when this device
     // joined, and a `SET` list that rewrote it would answer "just now" for every device.
     expect(row?.first_seen).toBe(JOINED);
+  });
+
+  it("admits exactly one of several new devices racing for the last slot", async () => {
+    // **The race the count-then-insert shape lost.** Each call read four live rows, each decided
+    // there was room, and each then inserted — so N devices arriving at once were all admitted
+    // and the group ended at 4 + N. The fake interleaves the awaits of calls made together the
+    // way concurrent requests interleave on D1, which is what lets this go red at all.
+    const tables = fakeTables({ groups: ["g1"] });
+    const env = fakeEnvOver(tables);
+    for (const device of ["d1", "d2", "d3", "d4"]) seat(tables, "g1", device, FRESH);
+
+    const admitted = await Promise.all(
+      ["n1", "n2", "n3"].map((device) => admitDevice(env, "g1", device, NOW)),
+    );
+
+    expect(admitted.filter(Boolean)).toHaveLength(1);
+    expect(idsIn(tables, "g1")).toHaveLength(5);
+  });
+
+  it("re-admits a device on the roll of a group already over the cap", async () => {
+    // A group the race above left at six is a state the live D1 can already be in. Every device
+    // in it is on the roll, so every one of them is re-admitted — refusing on the count alone
+    // would lock the whole household out of the group the relay itself over-filled.
+    const tables = fakeTables({ groups: ["g1"] });
+    const env = fakeEnvOver(tables);
+    for (const device of ["d1", "d2", "d3", "d4", "d5", "d6"]) seat(tables, "g1", device, FRESH);
+
+    expect(await admitDevice(env, "g1", "d6", NOW)).toBe(true);
+    expect(await admitDevice(env, "g1", "d7", NOW)).toBe(false);
+    expect(idsIn(tables, "g1")).toEqual(["d1", "d2", "d3", "d4", "d5", "d6"]);
   });
 
   it("counts what the ninety-day window holds, and deletes what it does not", async () => {
