@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
-import type { WishlistFolder, WishlistQuery } from "@/lib/ipc";
+import type { ShelfCount, WishlistFolder, WishlistQuery, WishRow } from "@/lib/ipc";
 
 const wishlistList = vi.hoisted(() => vi.fn());
 /** `useMarketplace()` reads this too. An unmocked command is a rejected query that silently
@@ -163,8 +163,10 @@ describe("the shelves it asks for", () => {
 
     act(() => result.current.openFolder(1));
 
-    expect(result.current.folderId).toBe(1);
+    // Asked at once; drawn once the level has answered (see "walking to a level").
+    expect(result.current.requestedFolderId).toBe(1);
     await waitFor(() => expect(lastQuery().shelves).toEqual([1, 2]));
+    await waitFor(() => expect(result.current.folderId).toBe(1));
 
     act(() => result.current.openFolder(null));
     await waitFor(() => expect(lastQuery().shelves).toEqual([0, 1, 2, 3]));
@@ -201,6 +203,167 @@ describe("the shelves it asks for", () => {
     const { result } = renderHook(() => useWishlist(), { wrapper });
     act(() => result.current.toggleRarity("rare"));
     await waitFor(() => expect(result.current.filtering).toBe(true));
+  });
+});
+
+/**
+ * **Walking to a level the cache does not hold** (live pass §14). Both reads keep the previous
+ * key's answer as a placeholder, so drawn as it arrived the wall was the new level's shelves over the
+ * old level's rows and figures for 36–106 ms, then the level's own wishes popped in. The rule — the
+ * collection's too — is that the page keeps drawing the level being left **whole** until the new
+ * level's list and counts have both answered, then switches in one render.
+ */
+describe("walking to a level", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    return { promise, resolve, reject };
+  }
+  const LOOSE = { id: 11, folderId: null, name: "Lightning Bolt" } as WishRow;
+  const IN_ORDERED = { id: 12, folderId: 1, name: "Rhystic Study" } as WishRow;
+  const ROOT_COUNTS: ShelfCount[] = [
+    { folderId: 0, tiles: 1, copies: 1, value: 2, unpriced: 0, peek: [] },
+  ];
+  const ORDERED_COUNTS: ShelfCount[] = [
+    { folderId: 1, tiles: 1, copies: 1, value: 30, unpriced: 0, peek: [] },
+  ];
+  /** Ordered's level asks for `[1, 2]`; the root's starts with Not sorted's `0`. */
+  const atOrdered = (q: WishlistQuery) => q.shelves?.[0] === ORDERED.id;
+
+  it("draws the level being left, whole, until the new level's list and counts have both answered", async () => {
+    const list = deferred<{ items: WishRow[]; total: number }>();
+    const counted = deferred<ShelfCount[]>();
+    wishlistList.mockImplementation(async (q: WishlistQuery) =>
+      atOrdered(q) ? list.promise : { items: [LOOSE], total: 1 },
+    );
+    wishlistShelfCounts.mockImplementation(async (q: WishlistQuery) =>
+      atOrdered(q) ? counted.promise : ROOT_COUNTS,
+    );
+    const { result } = renderHook(() => useWishlist(), { wrapper });
+    await waitFor(() => expect(result.current.rows).toEqual([LOOSE]));
+    const rootIdentity = result.current.queryKeyString;
+
+    act(() => result.current.openFolder(ORDERED.id));
+
+    // Asked at once — the reads go out for Ordered — and drawn not at all yet.
+    expect(result.current.requestedFolderId).toBe(ORDERED.id);
+    await waitFor(() => expect(lastQuery().shelves).toEqual([1, 2]));
+    const drawsTheRoot = () => {
+      expect(result.current.levelHeld).toBe(true);
+      expect(result.current.folderId).toBeNull();
+      expect(result.current.shelves.map((s) => s.id)).toContain(0);
+      expect(result.current.rows).toEqual([LOOSE]);
+      expect(result.current.counts).toEqual(ROOT_COUNTS);
+      expect(result.current.queryKeyString).toBe(rootIdentity);
+    };
+    drawsTheRoot();
+
+    // The counts land first: still the root, figures and wall — never Ordered's figures over the
+    // root's wall.
+    await act(async () => counted.resolve(ORDERED_COUNTS));
+    drawsTheRoot();
+
+    // Then the list: the whole page switches, in one render.
+    await act(async () => list.resolve({ items: [IN_ORDERED], total: 1 }));
+    await waitFor(() => expect(result.current.folderId).toBe(ORDERED.id));
+    expect(result.current.levelHeld).toBe(false);
+    expect(result.current.rows).toEqual([IN_ORDERED]);
+    expect(result.current.counts).toEqual(ORDERED_COUNTS);
+    expect(result.current.shelves.map((s) => s.id)).not.toContain(0);
+    expect(result.current.queryKeyString).not.toBe(rootIdentity);
+  });
+
+  /**
+   * **The held frame is drawn whole from the frame** (review Minors 2 and 3). A filter typed or a
+   * shelf folded while the level being left is still drawn is a question about the *next* wall: the
+   * held one keeps the filtering and the folds its rows were fetched under (a shut `Someday` stays
+   * shut, where the current filter would suspend collapse and the current fold would open it), its
+   * scroll identity (so the keystroke does not jump the held wall to the top), and its sweep scope —
+   * an Export or an Optimise pressed during the hold covers the wall on screen, not the level still
+   * arriving.
+   */
+  it("draws the held level from its own frame — filtering, folds, scroll identity and sweep scope", async () => {
+    shelfFolds.mockResolvedValue({ collection: {}, wishlist: { [String(SOMEDAY.id)]: true } });
+    const list = deferred<{ items: WishRow[]; total: number }>();
+    wishlistList.mockImplementation(async (q: WishlistQuery) =>
+      atOrdered(q) ? list.promise : { items: [LOOSE], total: 1 },
+    );
+    wishlistShelfCounts.mockImplementation(async (q: WishlistQuery) =>
+      atOrdered(q) ? ORDERED_COUNTS : ROOT_COUNTS,
+    );
+    const { result } = renderHook(() => useWishlist(), { wrapper });
+    await waitFor(() => expect(result.current.rows).toEqual([LOOSE]));
+    const rootIdentity = result.current.queryKeyString;
+    const rootFilters = result.current.filters;
+    const someday = () => result.current.shelves.find((s) => s.id === SOMEDAY.id);
+    expect(someday()?.collapsed).toBe(true);
+
+    act(() => result.current.openFolder(ORDERED.id));
+    await waitFor(() => expect(lastQuery().shelves).toEqual([1, 2]));
+    // During the hold: Someday's fold put back to its default (open), and a chip pressed.
+    act(() => result.current.setFold(SOMEDAY.id, null));
+    act(() => result.current.toggleRarity("rare"));
+    await waitFor(() => expect(lastQuery().rarities).toEqual(["rare"]));
+
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.folderId).toBeNull();
+    expect(result.current.filtering).toBe(false);
+    expect(result.current.folds).toEqual({ [String(SOMEDAY.id)]: true });
+    expect(someday()?.collapsed).toBe(true);
+    expect(result.current.queryKeyString).toBe(rootIdentity);
+    expect(result.current.filters).toEqual(rootFilters);
+    expect(result.current.filters.rarities).toBeUndefined();
+
+    // And once the level answers, all of it is the level asked for, under the filter now on.
+    await act(async () => list.resolve({ items: [IN_ORDERED], total: 1 }));
+    await waitFor(() => expect(result.current.levelHeld).toBe(false));
+    expect(result.current.filtering).toBe(true);
+    expect(result.current.filters.rarities).toEqual(["rare"]);
+    expect(result.current.queryKeyString).not.toBe(rootIdentity);
+  });
+
+  /** The half the live pass measured as right, kept: a level already in the cache answers in the
+   *  render that asks for it, so there is nothing to hold. */
+  it("switches to a level the cache holds in the render that asks for it", async () => {
+    wishlistList.mockImplementation(async (q: WishlistQuery) =>
+      atOrdered(q) ? { items: [IN_ORDERED], total: 1 } : { items: [LOOSE], total: 1 },
+    );
+    wishlistShelfCounts.mockImplementation(async (q: WishlistQuery) =>
+      atOrdered(q) ? ORDERED_COUNTS : ROOT_COUNTS,
+    );
+    const { result } = renderHook(() => useWishlist(), { wrapper });
+    await waitFor(() => expect(result.current.rows).toEqual([LOOSE]));
+    act(() => result.current.openFolder(ORDERED.id));
+    await waitFor(() => expect(result.current.rows).toEqual([IN_ORDERED]));
+
+    act(() => result.current.openFolder(null));
+
+    expect(result.current.levelHeld).toBe(false);
+    expect(result.current.folderId).toBeNull();
+    expect(result.current.rows).toEqual([LOOSE]);
+    expect(result.current.counts).toEqual(ROOT_COUNTS);
+  });
+
+  /** A refused level is switched to, so its failure is said where the reader asked to go — held,
+   *  the old level would stand for ever over an error nobody could place. */
+  it("switches to a level whose read was refused rather than holding the old one", async () => {
+    wishlistList.mockImplementation(async (q: WishlistQuery) => {
+      if (atOrdered(q)) throw new Error("refused");
+      return { items: [LOOSE], total: 1 };
+    });
+    const { result } = renderHook(() => useWishlist(), { wrapper });
+    await waitFor(() => expect(result.current.rows).toEqual([LOOSE]));
+
+    act(() => result.current.openFolder(ORDERED.id));
+
+    await waitFor(() => expect(result.current.query.isError).toBe(true));
+    await waitFor(() => expect(result.current.folderId).toBe(ORDERED.id));
+    expect(result.current.levelHeld).toBe(false);
+    expect(result.current.rows).toEqual([]);
   });
 });
 

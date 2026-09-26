@@ -206,10 +206,14 @@ export function useWishDropTarget({
   ref,
   canDrop,
   onDrop,
+  pointerOnly = false,
 }: {
   ref: RefObject<HTMLElement | null>;
   canDrop: (drop: WishDrop) => boolean;
   onDrop: (drop: WishDrop) => void;
+  /** A collision only while the pointer is inside the target — `useDndDropTarget`'s option, for a
+   *  thin target a carried card overlaps while the pointer is elsewhere. Off by default. */
+  pointerOnly?: boolean;
 }): { armed: boolean; over: boolean } {
-  return useDndDropTarget({ ref, read: readWishDrop, canDrop, onDrop });
+  return useDndDropTarget({ ref, read: readWishDrop, canDrop, onDrop, pointerOnly });
 }

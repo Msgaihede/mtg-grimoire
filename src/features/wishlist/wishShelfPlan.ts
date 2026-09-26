@@ -12,7 +12,7 @@ import { plural } from "@/lib/counts";
 import type { ShelfCount, WishlistFolder, WishRow } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
-import type { ShelfSection } from "@/lib/shelfLayout";
+import { layoutShelves, type ShelfSection } from "@/lib/shelfLayout";
 import {
   defaultCollapsed,
   UNFILED_SHELF,
@@ -306,16 +306,22 @@ export function shelfStat({
   return subtotal === null ? "—" : face(subtotal, currency);
 }
 
-/** A row of the table that is not a wish: a shelf's heading, or the label over the decks' group. */
+/**
+ * A row of the table that is not a wish: a shelf's heading, the label over the decks' group, or an
+ * empty shelf's box with no heading of its own to hang under.
+ */
 export type ShelfBandRow =
   | {
       band: "heading";
       shelf: Shelf;
-      /** Open, holding no rows and nothing nested — the band draws the dashed box under its
-       *  heading, and is `SHELF_EMPTY_HEIGHT` taller for it (the table's rule 2). */
+      /** The wall draws this shelf's empty box under its heading — `layoutShelves`' `empty` row —
+       *  so the band draws it too, and is `SHELF_EMPTY_HEIGHT` taller for it (the table's rule 2). */
       empty: boolean;
     }
-  | { band: "label"; group: "decks" | "managed" };
+  | { band: "label"; group: "decks" | "managed" }
+  /** The box alone: the opened folder's own **headless** shelf, empty — the folder the reader is
+   *  standing in, which the path row names and no heading does. `SHELF_EMPTY_HEIGHT` tall. */
+  | { band: "empty"; shelf: Shelf };
 export type WishTableRow = WishRow | ShelfBandRow;
 /** `WishRow` has no `band` field, so its presence is the whole discriminator. */
 export const isBand = (row: WishTableRow): row is ShelfBandRow => "band" in row;
@@ -331,7 +337,16 @@ export interface ShelfTable {
 
 /**
  * The table's rows (spec §3.10): each shelf's heading band, then that shelf's wishes — with a label
- * band before the decks' group, and no band for the opened folder's own headless shelf.
+ * band before the decks' group, and no heading band for the opened folder's own headless shelf.
+ *
+ * **Read off `layoutShelves` at one column — the wall's own layout — and never decided twice.**
+ * Which shelf gets a label, a heading and an empty box is `layoutShelves`' answer, and the grid
+ * draws exactly those rows; the table used to carry a second copy of the empty-box rule, and the two
+ * drifted (the live pass, §13): an opened empty folder drew the dashed box on the wall and nothing
+ * in the table — so no drop target — and a deck's empty managed folder drew words in the table and
+ * nothing on the wall. One layout is one story. An `empty` row under its own shelf's heading folds
+ * into that heading's band (`empty: true`); one with no heading above it — the headless level — is
+ * a band of its own.
  *
  * **It stops at the first shelf still loading** while pages remain. The list is paged in shelf
  * order, so a shelf partly loaded is the edge of what has arrived, and drawing the bands after it
@@ -346,34 +361,40 @@ export function shelfTable(
 ): ShelfTable {
   const rows: WishTableRow[] = [];
   const owners: (Shelf | null)[] = [];
-  let total = 0;
-  let group: Shelf["group"] = "own";
-  let open = true;
-  sections.forEach(({ shelf, tileCount }, at) => {
-    const label = shelf.group !== "own" && shelf.group !== group ? shelf.group : null;
-    group = shelf.group;
-    total += tileCount;
-    if (!open) return;
-    if (label !== null) {
-      rows.push({ band: "label", group: label });
+  const total = sections.reduce((sum, { tileCount }) => sum + tileCount, 0);
+  const expected = new Map(sections.map(({ shelf, tileCount }) => [shelf.id, tileCount]));
+  const drawn = new Set<number>();
+  for (const row of layoutShelves(sections, 1).rows) {
+    if (row.kind === "label") {
+      rows.push({ band: "label", group: row.group });
       owners.push(null);
+    } else if (row.kind === "heading") {
+      rows.push({ band: "heading", shelf: row.shelf, empty: false });
+      owners.push(row.shelf);
+    } else if (row.kind === "empty") {
+      const above = rows[rows.length - 1];
+      const ownHeading =
+        above !== undefined &&
+        isBand(above) &&
+        above.band === "heading" &&
+        above.shelf.id === row.shelf.id;
+      if (ownHeading) {
+        rows[rows.length - 1] = { ...above, empty: true };
+      } else {
+        rows.push({ band: "empty", shelf: row.shelf });
+        owners.push(row.shelf);
+      }
+    } else if (!drawn.has(row.shelf.id)) {
+      // One column: a shelf is one `tiles` row per tile, all consecutive. Its loaded wishes are
+      // drawn once, where its first one is.
+      drawn.add(row.shelf.id);
+      const loaded = rowsOf(row.shelf.id);
+      for (const wish of loaded) {
+        rows.push(wish);
+        owners.push(row.shelf);
+      }
+      if (!complete && loaded.length < (expected.get(row.shelf.id) ?? 0)) break;
     }
-    if (!shelf.headless) {
-      const next = sections[at + 1];
-      const nested = next !== undefined && next.shelf.pathIds.includes(shelf.id);
-      rows.push({
-        band: "heading",
-        shelf,
-        empty: !shelf.collapsed && tileCount === 0 && !nested && shelf.kind !== "unfiled",
-      });
-      owners.push(shelf);
-    }
-    const loaded = tileCount === 0 ? [] : rowsOf(shelf.id);
-    for (const row of loaded) {
-      rows.push(row);
-      owners.push(shelf);
-    }
-    if (!complete && loaded.length < tileCount) open = false;
-  });
+  }
   return { rows, owners, total };
 }

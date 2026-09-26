@@ -250,4 +250,42 @@ describe("WishlistBreadcrumb", () => {
     expect(onDropFolder).toHaveBeenCalledWith(LOOSE_FOLDER, null);
     expect(onDropWish).not.toHaveBeenCalled();
   });
+
+  /**
+   * **A segment takes a drop only while the pointer is inside it** (`pointerOnly`) — the stray drop
+   * the shelf headings were fenced against, one row up. dnd-kit's default detector falls back to the
+   * carried card's *rectangle* when the pointer is in no target, so a card released over the first
+   * row of tiles inside an opened folder, overlapping the path row above it, was filed into a
+   * segment the reader never pointed at.
+   *
+   * Staged as `useShelfDrag.test.tsx`'s pair is: jsdom measures the carried thing once, off its
+   * source's own box, so a source at 230–270 reaches 10px into the root segment at 200–240, and the
+   * pointer is then walked off to where no segment is. The ring still rises — the segment would take
+   * it — and the release files nothing.
+   */
+  it.each([
+    ["a wish", "the wish"],
+    ["a folder", "the folder"],
+  ] as const)(
+    "files %s only while the pointer is inside a segment, however near what is carried",
+    async (_what, source) => {
+      mount({
+        withSource: source === "the wish",
+        withFolder: source === "the folder",
+        canDropFolder: () => true,
+      });
+      const root = screen.getByRole("button", { name: "Wishlist" });
+      boxed(root, 200);
+      boxed(screen.getByRole("button", { name: "Expensive" }), 600);
+      const carried = boxed(screen.getByText(source), 230);
+
+      const held = await startPointerDrag(carried);
+      expect(marked(root, DROP_RING)).toBe(true);
+      await held.moveTo(100, 400);
+      await held.drop();
+
+      expect(onDropWish).not.toHaveBeenCalled();
+      expect(onDropFolder).not.toHaveBeenCalled();
+    },
+  );
 });

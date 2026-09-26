@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShelfCount, WishlistFolder, WishRow } from "@/lib/ipc";
+import { layoutShelves } from "@/lib/shelfLayout";
 import type { Shelf } from "@/lib/shelves";
 import {
   countTotals,
@@ -296,7 +297,7 @@ describe("shelfTable", () => {
     const table = shelfTable(sections, (id) => rows.get(id) ?? [], true);
     expect(
       table.rows.map((row) =>
-        isBand(row) ? `${row.band}:${row.band === "heading" ? row.shelf.id : row.group}` : row.id,
+        isBand(row) ? `${row.band}:${row.band === "label" ? row.group : row.shelf.id}` : row.id,
       ),
     ).toEqual([1, "heading:5", 2, "label:managed", "heading:9"]);
     expect(table.owners.map((owner) => owner?.id ?? null)).toEqual([4, 5, 5, null, 9]);
@@ -320,6 +321,51 @@ describe("shelfTable", () => {
       [2, true],
       [3, false],
     ]);
+  });
+
+  /**
+   * **The opened folder, empty, draws its box in the table too** (live pass §13). The level's own
+   * shelf is headless — the path row names it — so there is no heading band for the box to hang
+   * under, and the table drew nothing at all: an empty bordered table with no drop target, where
+   * the wall drew the dashed box. It is a band of its own now, owned by the level's shelf.
+   */
+  it("draws the headless level's empty box as a band of its own", () => {
+    const level = shelf({ id: 4, headless: true });
+    const table = shelfTable([{ shelf: level, tileCount: 0 }], () => [], true);
+    expect(table.rows).toEqual([{ band: "empty", shelf: level }]);
+    expect(table.owners).toEqual([level]);
+  });
+
+  /**
+   * **One layout, one story.** Every shelf the wall gives an empty box — `layoutShelves`' `empty`
+   * rows — gets one in the table, and no other shelf does: asked over a spread of shelves (a
+   * headless level, an empty folder, a container, a shut one, Not sorted and a deck's managed
+   * folder), so whichever way `layoutShelves` rules on a kind, the two views rule the same way. The
+   * old second copy of the rule said yes to an empty managed folder where the wall said no.
+   */
+  it("gives a box to exactly the shelves the wall's own layout does", () => {
+    const sections = [
+      { shelf: shelf({ id: 4, headless: true }), tileCount: 0 },
+      { shelf: shelf({ id: 0 }), tileCount: 0 },
+      { shelf: shelf({ id: 1, pathIds: [4, 1] }), tileCount: 0 },
+      { shelf: shelf({ id: 2, pathIds: [4, 2] }), tileCount: 0 },
+      { shelf: shelf({ id: 3, depth: 1, pathIds: [4, 2, 3] }), tileCount: 0 },
+      { shelf: shelf({ id: 5, collapsed: true }), tileCount: 0 },
+      { shelf: { ...managed, collapsed: false }, tileCount: 0 },
+    ];
+    const boxed = (ids: number[]) => [...ids].sort((a, b) => a - b);
+    const wall = layoutShelves(sections, 1)
+      .rows.flatMap((row) => (row.kind === "empty" ? [row.shelf.id] : []));
+    const table = shelfTable(sections, () => [], true).rows.flatMap((row) =>
+      isBand(row) && (row.band === "empty" || (row.band === "heading" && row.empty))
+        ? [row.shelf.id]
+        : [],
+    );
+    expect(boxed(table)).toEqual(boxed(wall));
+    // The spread is not vacuous: the wall boxes the empty leaves and nothing that holds a folder.
+    expect(boxed(wall)).toEqual(expect.arrayContaining([1, 3]));
+    expect(wall).not.toContain(2);
+    expect(wall).not.toContain(5);
   });
 
   it("stops at the first shelf still loading, so no band promises rows that have not arrived", () => {

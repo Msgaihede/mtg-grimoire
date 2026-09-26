@@ -89,6 +89,12 @@ export function WishlistBreadcrumb({
  * Its own component because the targets are hooks and a trail is a loop. Both register on the
  * **button** — the ring marks the thing that can be pressed — and the folder half ignores the edge:
  * a segment is one word with no order to point into, so every part of it means "last, in here".
+ *
+ * **Both take a drop only while the pointer is inside the segment** (`pointerOnly`) — the stray
+ * drop the shelf headings were fenced against, one row up. A segment is a one-line word over the
+ * wall, and dnd-kit's default detector falls back to the carried card's *rectangle* when the pointer
+ * is in no target: a card released over the first row of tiles inside an opened folder overlapped
+ * the path row above it and was filed into a segment the reader never pointed at.
  */
 function Segment({
   folderId,
@@ -112,6 +118,7 @@ function Segment({
     ref,
     canDrop: (drop) => canDrop(drop, folderId),
     onDrop: (drop) => onDropWish(drop, folderId),
+    pointerOnly: true,
   });
   const folder = useFolderDropTarget({
     ref,
@@ -119,6 +126,7 @@ function Segment({
     axis: "horizontal",
     canDrop: (drag) => canDropFolder?.(drag, folderId) ?? false,
     onDrop: (drag) => onDropFolder?.(drag, folderId),
+    pointerOnly: true,
   });
 
   return (

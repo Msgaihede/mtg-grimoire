@@ -12,7 +12,7 @@ import { Trash2 } from "lucide-react";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
-import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
+import { TABLE_BAND_HEIGHT, VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { FOCUS } from "@/lib/focus";
@@ -33,6 +33,22 @@ import { isBand, type ShelfBandRow, type WishTableRow } from "./wishShelfPlan";
 
 /** The band a flagged row grows by, to say what the reconciler found. */
 const REVIEW_HEIGHT = 20;
+
+/**
+ * What a row adds to its base height — `VirtualTable`'s `extraHeight` (rule 2), module scope so the
+ * table is handed one function for its life.
+ *
+ * - A **wish** grows by the reconciler's sentence when it is flagged: that sentence is a band under
+ *   the row it belongs to, since the reconciler walks `wishlist_entries` too.
+ * - A **heading** band carrying its shelf's empty box is `SHELF_EMPTY_HEIGHT` taller than a heading.
+ * - An **empty** band is the box alone, so it is `SHELF_EMPTY_HEIGHT` tall in all — the collection
+ *   table's empty band, and for the same reason: a band's base is `TABLE_BAND_HEIGHT`.
+ */
+function extraHeightOf(row: WishTableRow): number {
+  if (!isBand(row)) return row.needsReview ? REVIEW_HEIGHT : 0;
+  if (row.band === "empty") return SHELF_EMPTY_HEIGHT - TABLE_BAND_HEIGHT;
+  return row.band === "heading" && row.empty ? SHELF_EMPTY_HEIGHT : 0;
+}
 
 /**
  * The six columns. The same grammar as the collection table's — name flexes, everything
@@ -423,11 +439,27 @@ export interface WishTableBands {
  */
 const BandsContext = createContext<WishTableBands | null>(null);
 
-/** `VirtualTable`'s `band`: a shelf's band for a band row, `null` for a wish. Module scope, so its
- *  identity never changes — see {@link BandsContext}. Whether a row is a band depends on the row
- *  alone, which is the table's other condition on this callback. */
+/**
+ * `VirtualTable`'s `band`: a shelf's band for a band row, `null` for a wish. Module scope, so its
+ * identity never changes — see {@link BandsContext}. Whether a row is a band depends on the row
+ * alone, which is the table's other condition on this callback.
+ *
+ * **Keyed by shelf** (`band:<shelf.id>`), because the table keys its rows by **position**: unkeyed,
+ * a Move up / Move down re-used the heading at the old place for the folder that took it — `⋯` and
+ * all — so a `⋯` the reader had pressed stayed mounted, and focused, under *another* folder's name
+ * whenever the moved heading went past the loaded edge. Keyed, the old heading goes with its folder:
+ * the caret falls to `<body>` and the moved heading takes it back where it lands (`WishShelfHeading`'s
+ * `caret`). `CollectionTable` keys its bands the same way, for the same reason.
+ */
 function bandOf(row: WishTableRow): ReactNode {
-  return isBand(row) ? <ShelfBand row={row} /> : null;
+  return isBand(row) ? <ShelfBand key={bandKey(row)} row={row} /> : null;
+}
+
+/** Which shelf's band a row is — its folder's id for a heading or an empty box, the group for a
+ *  label, which belongs to no shelf. */
+function bandKey(row: ShelfBandRow): string {
+  if (row.band === "label") return `label:${row.group}`;
+  return row.band === "heading" ? `band:${row.shelf.id}` : `empty:${row.shelf.id}`;
 }
 
 /** One band, drawn from the bands of the table it sits in. */
@@ -435,6 +467,15 @@ function ShelfBand({ row }: { row: ShelfBandRow }) {
   const bands = useContext(BandsContext);
   if (bands === null) return null;
   if (row.band === "label") return bands.label(row.group);
+  // The box with no heading over it — the opened folder's own, empty. The same box and the same
+  // target the wall draws in that place, at the shelf's own indent (0 for the level itself).
+  if (row.band === "empty") {
+    return (
+      <div className="min-w-0 flex-1" style={{ paddingLeft: row.shelf.indent * SHELF_INDENT_PX }}>
+        {bands.empty(row.shelf)}
+      </div>
+    );
+  }
   // Spec §3.3's indent, 32px a level and capped by `Shelf.indent`. `CardGrid` draws it on the wall;
   // `VirtualTable` draws a band as one full-width cell and knows nothing of levels, so the table
   // draws it here. An inline style, because the value is computed — a Tailwind class built from it
@@ -533,6 +574,7 @@ export function WishlistTable({
   folders,
   nodes,
   bands,
+  revealIndex,
   readOnly = NOTHING_READ_ONLY,
   onNeedNextPage,
   onSetQuantity,
@@ -549,6 +591,9 @@ export function WishlistTable({
   total: number;
   /** The shelves' bands; `rows` carries {@link ShelfBandRow}s between the wishes when given. */
   bands?: WishTableBands;
+  /** A row to scroll into view — `VirtualTable`'s `revealIndex`, passed straight through: the page
+   *  names the heading band it owes the caret to, or the band of the folder being added. */
+  revealIndex?: number | null;
   /**
    * Whether a wish is the **deck's** — filed in a managed folder (issue #512), where the backend
    * refuses every edit. Such a row draws its count without a stepper, no pencil and no removal,
@@ -628,24 +673,12 @@ export function WishlistTable({
       listKey={listKey}
       sort={sort}
       onSort={onSort}
-      // The reconciler walks `wishlist_entries` as well as `collection_entries`, so its
-      // sentence is a band under the row it belongs to.
-      //
-      // A band is `TABLE_BAND_HEIGHT` plus this (rule 2): an empty folder's band carries the dashed
-      // box under its heading and is that much taller.
-      extraHeight={(row) =>
-        isBand(row)
-          ? row.band === "heading" && row.empty
-            ? SHELF_EMPTY_HEIGHT
-            : 0
-          : row.needsReview
-            ? REVIEW_HEIGHT
-            : 0
-      }
+      extraHeight={extraHeightOf}
       isSelected={(row) => !isBand(row) && row.cardId !== null && row.cardId === selectedCardId}
       // One module-scope callback for the life of the table — see {@link bandOf}.
       band={bands === undefined ? undefined : bandOf}
       stickyBand={bands?.sticky}
+      revealIndex={revealIndex}
       // **No `rowClassName` here, and the absence is the change rather than an omission.** A wish
       // the collection already covered used to recede to `text-dim` — a record rather than a
       // want, saying so without disappearing — and that dimming went on 2026-09-08 with the

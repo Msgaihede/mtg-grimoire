@@ -14,7 +14,10 @@
  * (`data-shelf-heading`), `EmptyShelf` and `ShelfStickyBar` already mark the element each registers
  * on, and that element is what the suites box.
  */
+import { useCallback, useLayoutEffect, useRef } from "react";
+import { Layers } from "lucide-react";
 import { EmptyShelf } from "@/features/shelves/EmptyShelf";
+import { HEADING_CARET_CONTROL, type HeadingCaret } from "@/features/shelves/headingCaret";
 import { ShelfHeading, type ShelfHeadingProps } from "@/features/shelves/ShelfHeading";
 import { ShelfStickyBar } from "@/features/shelves/ShelfStickyBar";
 import { useShelfDragSource, useShelfDropTarget } from "@/features/shelves/useShelfDrag";
@@ -50,19 +53,63 @@ export function WishShelfHeading({
   cards,
   folders,
   source,
+  caret,
   ...heading
 }: Omit<ShelfHeadingProps, "dropRef" | "dropMark" | "dragRef"> & {
   cards?: CardDrops;
   folders?: FolderDrops;
   source: WishlistFolder | null;
+  /** Absent: nothing is handing this heading the caret. */
+  caret?: HeadingCaret;
 }) {
   const drop = useShelfDropTarget(
     { read: readWishDrop, ...(cards ?? NO_CARDS) },
     folders === undefined ? undefined : { scope: "wishlist", ...folders },
   );
   const drag = useShelfDragSource(source, "wishlist");
-  return <ShelfHeading {...heading} dropRef={drop.attach} dropMark={drop.mark} dragRef={drag} />;
+  // The heading's own element — `ShelfHeading` hands the drop target its row, the element that
+  // carries `data-shelf-heading` — kept beside the registration so the caret can be put inside it.
+  const row = useRef<HTMLElement | null>(null);
+  const attach = drop.attach;
+  const dropRef = useCallback(
+    (element: HTMLElement | null) => {
+      row.current = element;
+      attach(element);
+    },
+    [attach],
+  );
+  /**
+   * Take the caret when drawn with a request on it — **only while nothing else has it**: it is on
+   * `<body>`, where a detached opener or a closed field leaves it, or still on the element the reader
+   * pressed (`from`). And only once per request, so a heading scrolled back into view later never
+   * pulls the caret off whatever the reader has moved on to. A layout effect, so the caret is placed
+   * in the commit that draws the heading rather than a frame after it. A control not drawn (a field
+   * is open over the heading) is not a claim: the request waits for it.
+   *
+   * **`claim` sets the page's state from this effect, and that is a deliberate exception** to the
+   * house rule against a `setState` in an effect. The rule is about *derived* state synced after the
+   * fact; this is an **event** — the heading reached the screen and the caret was handed over — and
+   * the page cannot see it happen, because only this commit knows the control is drawn. It is
+   * guarded and loop-free: `claim` answers `true` once per id (the page's ref, which also stops
+   * StrictMode's second run from taking twice), the state it clears is the request itself, and the
+   * render that follows hands this heading no `caret`, so the effect has nothing left to do.
+   */
+  useLayoutEffect(() => {
+    if (caret === undefined) return;
+    const control = row.current?.querySelector<HTMLElement>(HEADING_CARET_CONTROL[caret.control]);
+    if (control == null || !caret.claim(caret.id)) return;
+    const active = document.activeElement;
+    if (active === null || active === document.body || active === caret.from) control.focus();
+  }, [caret]);
+  return <ShelfHeading {...heading} dropRef={dropRef} dropMark={drop.mark} dragRef={drag} />;
 }
+
+/**
+ * **The caret the page is handing back to this heading** — `WishlistPage`'s `caretBack`. One type
+ * for both cabinets, declared once in `features/shelves/headingCaret.ts` and re-exported here for
+ * the page that already imports it from this file.
+ */
+export type { HeadingCaret };
 
 /**
  * The sticky bar — a **permanent** card target (spec §5.3, §6), filing into whichever shelf the
@@ -98,4 +145,28 @@ export function WishShelfSticky({
 export function WishEmptyShelf({ cards }: { cards?: CardDrops }) {
   const drop = useShelfDropTarget({ read: readWishDrop, ...(cards ?? NO_CARDS) });
   return <EmptyShelf dropRef={drop.attach} dropMark={drop.mark} />;
+}
+
+/** How a test or a live probe finds a managed folder's empty box. */
+export const MANAGED_EMPTY_ATTR = "data-shelf-managed-empty";
+
+/**
+ * A deck's **managed** folder, empty — the same 96px place the dashed box takes, holding the
+ * sentence for the Compare view the deck follows (`managed.ts`' `managedEmptySentence`).
+ *
+ * **Words and not a target, so no dash and no registration.** The folder is app-owned and refuses
+ * every hand write, and the dash is this wall's vocabulary for *a drawer you can drop into* — a
+ * dashed box here would light up under a drag it can only refuse. The deck glyph is the one
+ * `ManagedFolderNote` draws, so the box reads as the deck's.
+ */
+export function WishManagedEmpty({ sentence }: { sentence: string }) {
+  return (
+    <p
+      {...{ [MANAGED_EMPTY_ATTR]: "" }}
+      className="flex h-24 w-full items-center justify-center gap-2 rounded-xl bg-surface/40 px-4 text-center text-[0.8125rem] text-dim"
+    >
+      <Layers className="size-4 flex-none" aria-hidden="true" />
+      <span>{sentence}</span>
+    </p>
+  );
 }

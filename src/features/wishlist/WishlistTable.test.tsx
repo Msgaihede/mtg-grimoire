@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
@@ -157,5 +157,52 @@ describe("the table's shelf bands", () => {
     expect(handed.bands.length).toBeGreaterThanOrEqual(2);
     expect(typeof handed.bands[0]).toBe("function");
     expect(new Set(handed.bands).size).toBe(1);
+  });
+
+  /**
+   * **A band is keyed by its shelf, so a pressed control leaves with its folder** (review, check 8).
+   * The table keys its rows by position, so an unkeyed band was re-used at its old place for
+   * whichever folder took that place after a Move up / Move down — the `⋯` the reader had pressed
+   * stayed mounted, and focused, under the other folder's name. Keyed, the element the caret was on
+   * goes with its folder and still names it, and nothing on screen is now focused under the wrong
+   * name.
+   */
+  it("keys each band by its shelf, so a pressed control is never relabelled for another folder", () => {
+    const CHEAP = shelf(4, "Cheap");
+    const pair = (...order: Shelf[]): WishTableRow[] =>
+      order.map((s) => ({ band: "heading", shelf: s, empty: false }));
+    const withManage: WishTableBands = {
+      ...bandsSaying(""),
+      heading: (s) => <button type="button">{`Manage ${s.name}`}</button>,
+    };
+    const table = (rows: WishTableRow[]) => (
+      <WishlistTable
+        rows={rows}
+        total={0}
+        bands={withManage}
+        listKey="k"
+        sort={[{ key: "name", dir: "asc" }]}
+        onSort={noop}
+        folders={[EXPENSIVE]}
+        nodes={[]}
+        onNeedNextPage={noop}
+        onSetQuantity={noop}
+        onRemove={noop}
+        onSetFolder={noop}
+        onChangePrinting={noop}
+        onAnyPrinting={noop}
+        marketplace={MARKETPLACES.tcgplayer}
+      />
+    );
+    const expensive = shelf(EXPENSIVE.id, "Expensive");
+    const { rerender } = render(table(pair(expensive, CHEAP)));
+    const pressed = screen.getByRole("button", { name: "Manage Expensive" });
+    act(() => pressed.focus());
+
+    rerender(table(pair(CHEAP, expensive)));
+
+    expect(pressed).toHaveAccessibleName("Manage Expensive");
+    expect(document.activeElement).not.toHaveAccessibleName("Manage Cheap");
+    expect(screen.getByRole("button", { name: "Manage Cheap" })).not.toBe(pressed);
   });
 });
