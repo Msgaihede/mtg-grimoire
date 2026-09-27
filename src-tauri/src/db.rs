@@ -419,6 +419,51 @@ pub fn checkpoint_truncate(conn: &Connection) -> rusqlite::Result<()> {
     conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
 }
 
+/// Run `f` inside a `SAVEPOINT` named `name`: released when it succeeds, rolled back to when it
+/// fails, so its writes land together or not at all.
+///
+/// **A savepoint rather than a transaction because it nests.** Outside any transaction it behaves
+/// as `BEGIN … COMMIT`; inside a caller's it is a step that caller can still roll back. So a
+/// write whose several statements must agree — a change and the `activity` row describing it
+/// (issue #550) — can be made atomic here without changing what it does when a bulk caller has
+/// already opened a transaction around it.
+///
+/// A rollback that itself fails leaves the error `f` raised as the answer, and if this call was
+/// the one that opened the transaction, a plain `ROLLBACK` follows: a savepoint left open on an
+/// autocommit connection would quietly swallow every later write into a transaction nothing
+/// commits.
+pub fn in_savepoint<T>(
+    conn: &Connection,
+    name: &str,
+    f: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let outermost = conn.is_autocommit();
+    conn.execute_batch(&format!("SAVEPOINT {name}"))
+        .map_err(|e| e.to_string())?;
+    match f() {
+        Ok(value) => match conn.execute_batch(&format!("RELEASE {name}")) {
+            Ok(()) => Ok(value),
+            Err(e) => {
+                abandon(conn, name, outermost);
+                Err(e.to_string())
+            }
+        },
+        Err(e) => {
+            abandon(conn, name, outermost);
+            Err(e)
+        }
+    }
+}
+
+/// Undo an [`in_savepoint`] whose body or release failed, and make sure it leaves no transaction
+/// open that it opened itself.
+fn abandon(conn: &Connection, name: &str, outermost: bool) {
+    let _ = conn.execute_batch(&format!("ROLLBACK TO {name}; RELEASE {name}"));
+    if outermost && !conn.is_autocommit() {
+        let _ = conn.execute_batch("ROLLBACK");
+    }
+}
+
 /// The VFS name the pool registers under. Named rather than inline so that a future second
 /// VFS cannot be confused with this one by a typo.
 #[cfg(target_family = "wasm")]
@@ -956,5 +1001,46 @@ mod tests {
             after, 0,
             "the -wal file must be emptied, not just checkpointed"
         );
+    }
+
+    fn saved(conn: &Connection) -> Vec<i64> {
+        let mut stmt = conn.prepare("SELECT v FROM t ORDER BY v").unwrap();
+        let out = stmt.query_map([], |r| r.get(0)).unwrap();
+        out.map(Result::unwrap).collect()
+    }
+
+    /// Issue #550: a write and the row describing it land together or not at all, whether or
+    /// not a caller already holds a transaction — and a failure never leaves one open.
+    #[test]
+    fn a_savepoint_keeps_its_writes_together_and_nests_inside_a_callers_transaction() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (v INTEGER)").unwrap();
+
+        let failed: Result<(), String> = in_savepoint(&conn, "sp", || {
+            conn.execute("INSERT INTO t VALUES (1)", []).unwrap();
+            Err("the second statement failed".into())
+        });
+        assert!(failed.is_err());
+        assert!(saved(&conn).is_empty(), "the first write rolled back with the second");
+        assert!(conn.is_autocommit(), "no transaction was left open");
+
+        in_savepoint(&conn, "sp", || {
+            conn.execute("INSERT INTO t VALUES (2)", [])
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
+        assert_eq!(saved(&conn), vec![2]);
+        assert!(conn.is_autocommit(), "an outermost savepoint commits on release");
+
+        // Inside a caller's transaction the savepoint is a step: its failure undoes only itself,
+        // and the caller still decides the rest.
+        conn.execute_batch("BEGIN; INSERT INTO t VALUES (3);").unwrap();
+        let _ = in_savepoint(&conn, "sp", || -> Result<(), String> {
+            conn.execute("INSERT INTO t VALUES (4)", []).unwrap();
+            Err("no".into())
+        });
+        assert!(!conn.is_autocommit(), "the caller's transaction is still the caller's");
+        conn.execute_batch("ROLLBACK").unwrap();
+        assert_eq!(saved(&conn), vec![2]);
     }
 }

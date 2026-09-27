@@ -1267,15 +1267,23 @@ fn init_state(app: &tauri::AppHandle) -> Result<AppState, String> {
             data_dir.display()
         )
     })?;
-    let user_path = data_dir.join(db::USER_DB);
     let conn =
         db::open_write(&data_dir).map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
+    // **Never "move it aside"** (issue #550). That sentence told the reader the app would rebuild
+    // `user.db` from Scryfall, which has been false since schema 27 made it the one file in the
+    // folder nothing can rebuild. A corpus that will not migrate no longer reaches here at all —
+    // `prepare_database` replaces it — so what does is the collection from a newer build, or a
+    // folder that is full or read-only, and the error itself now names which file it was.
     schema::prepare_database(&conn).map_err(|e| {
         format!(
-            "MTG Grimoire could not prepare its database at {}: {e}\n\
-             The file may be from a newer version of the app, or damaged. Moving it \
-             aside will let the app rebuild it from Scryfall.",
-            user_path.display()
+            "MTG Grimoire could not prepare its databases in {}: {e}\n\
+             If this says the collection is from a newer version, run that version of the app. \
+             Otherwise the folder may be full or read-only. Do not delete {}: it holds your \
+             collection, decks and wishlist and cannot be rebuilt. Copies taken before each \
+             upgrade are in the {} folder beside it.",
+            data_dir.display(),
+            db::USER_DB,
+            schema::USER_BACKUPS_DIR,
         )
     })?;
     // Opened after `prepare_database`, and only after: a read-only connection to a file
