@@ -152,7 +152,7 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
     sortOrder: 1,
     cardCount: 0,
     totalPrice: null,
-    cardCountAllVariants: over.cardCount ?? 0,
+    variant: "live",
     // A pile the reader made, unless a fixture says otherwise — and the default matters here in
     // a way it does not in most files: `buildGroups` drops an **empty** `origin: "auto"` pile,
     // so a fixture that drifted to `"auto"` would silently take a group out of every column
@@ -270,7 +270,10 @@ const BANNED: ValidationIssue = {
   cardIds: ["c-Sol Ring"],
 };
 
-const VIOLATIONS = new Map<string, ValidationIssue[]>([["c-Sol Ring", [BANNED]]]);
+/** Keyed by the Sol Ring row's slot, which is how `violationsBySlot` files a mark (issue #554). */
+const VIOLATIONS = new Map<string, ValidationIssue[]>([
+  [deckCardSlot(CARDS[0].categoryId, CARDS[0].cardId, CARDS[0].finish), [BANNED]],
+]);
 
 const GROUPS: CardGroup[] = buildGroups(
   CARDS,

@@ -274,6 +274,13 @@ pub fn extract_user_file(conn: &Connection, data_dir: &Path) -> rusqlite::Result
     // time the reader edited one of those rows on a paired device their own write would fail.
     // This is the third of the three creation paths [`schema::mint_missing_uids`] names.
     schema::mint_missing_uids(&tx, SCRATCH)?;
+    // **The same stamp is why a legacy file's theory decks are split here, too.** A pre-27 file
+    // can hold a theory list — `theory_enabled` is v8's — and every one of its piles is shared by
+    // both lists, which user schema v53 is the rung that ends. A converted file never climbs to
+    // it, so without this line its plan would go on sharing the live list's piles on the one
+    // path into v53 that no rung touches. After the mint, so every clone's uid is derived from a
+    // real one rather than left for a second mint to invent.
+    schema::split_theory_piles(&tx, SCRATCH)?;
     tx.execute_batch(&format!(
         "PRAGMA {SCRATCH}.user_version = {};",
         schema::USER_SCHEMA_VERSION
@@ -558,6 +565,68 @@ mod tests {
             "the payload key moved and the value did not"
         );
         assert_eq!(stale, 0, "`deck_tags` must survive in neither file");
+    }
+
+    /// **A legacy file's theory deck comes across with piles of its own for the plan** — user
+    /// schema v53's split, run by [`extract_user_file`] because a converted file is stamped head
+    /// and never climbs to the rung that does it everywhere else. The fixture's one pile already
+    /// holds a live card; here the plan is switched on and a theory card filed in that same pile,
+    /// which is the shape every pre-27 theory deck has.
+    #[test]
+    fn converting_a_legacy_theory_deck_gives_its_plan_piles_of_its_own() {
+        let dir = scratch("legacy-theory");
+        legacy(&dir);
+        {
+            let conn = crate::db::open(&dir.join(crate::db::LEGACY_DB)).unwrap();
+            conn.execute_batch(
+                "UPDATE decks SET theory_enabled = 1 WHERE id = 1;
+                 INSERT INTO deck_cards
+                   (deck_id, category_id, variant, card_id, set_code, collector_number, name,
+                    quantity, created_at, updated_at)
+                 VALUES (1,1,'theory','abc','m21','139','Goblin Matron',3,100,100);",
+            )
+            .unwrap();
+            crate::db::checkpoint_truncate(&conn).unwrap();
+        }
+
+        assert!(convert(&dir).unwrap());
+        let conn = crate::db::open_write(&dir).unwrap();
+        let filed: Vec<(String, String, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT dc.variant, c.variant, c.name
+                       FROM deck_cards dc JOIN deck_categories c ON c.id = dc.category_id
+                      ORDER BY dc.variant",
+                )
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            rows
+        };
+        let (live_uid, theory_uid): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT (SELECT sync_uid FROM deck_categories WHERE variant = 'live'),
+                        (SELECT sync_uid FROM deck_categories WHERE variant = 'theory')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let pair = |a: &str, b: &str| (a.to_owned(), b.to_owned(), "Creatures".to_owned());
+        assert_eq!(
+            filed,
+            vec![pair("live", "live"), pair("theory", "theory")],
+            "each list's card is in its own list's pile of the same name"
+        );
+        assert!(live_uid.is_some(), "the mint named the live pile");
+        assert!(theory_uid.is_some(), "and the clone was named after it");
+        assert_ne!(live_uid, theory_uid, "two piles, two names");
     }
 
     /// The four states the file system can be in, and the one that must not read as "done".

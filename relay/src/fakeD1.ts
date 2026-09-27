@@ -27,7 +27,7 @@ import type { Env } from "./index";
  * than quietly passing.
  *
  * `@cloudflare/vitest-pool-workers` would run real D1 and is ruled out for the tree's reason
- * (`relay/README.md`): it drags wrangler and workerd into a suite pinned to vitest 4.1.10.
+ * (`relay/README.md`): it drags wrangler and workerd into the tree and peers on an older vitest.
  * `node:sqlite` would too, and is ruled out for a sharper one — it is behind
  * `--experimental-sqlite` on the Node 22 CI runs on, so it would pass here and fail there.
  */

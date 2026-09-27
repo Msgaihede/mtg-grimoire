@@ -5,7 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 // the rewrite and its `id` filter live under `src/` so the test suite covers them; see
 // `src/lib/iconFont.ts` for why, and `iconFont.test.ts` for the guarantee that it leaves
 // every glyph class alone.
-import { woff2IconFonts } from "./src/lib/iconFont";
+import { woff2IconFonts } from "./src/lib/iconFont.ts";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -77,7 +77,8 @@ export default defineConfig({
     // reach `relay/src/`. **The rule is that every pure decision in `relay/` is testable this
     // way and the I/O is not**, which is by design rather than a limit: the Durable Object and
     // the fetch handlers would need `@cloudflare/vitest-pool-workers`, which drags wrangler and
-    // workerd into a tree pinned to vitest 4.1.10 - so compaction, ordering, retention, token
+    // workerd into the tree and peers on `vitest ^4.1.0` (0.22.0, checked 2026-09-27), which the
+    // vitest 5 here is outside of - so compaction, ordering, retention, token
     // minting, the entitlement decision, claim-code normalisation and the HMAC-MD5 a Patreon
     // signature is checked against all live in pure modules this suite already knows how to run.
     // This comment read "only `log.ts` is testable this way", which was true when `log.ts` was

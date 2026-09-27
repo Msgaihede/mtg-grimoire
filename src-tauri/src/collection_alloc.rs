@@ -586,13 +586,17 @@ pub fn collection_to_deck(
     // [`crate::deck::set_card_quantity`]'s discipline, which [`deck_to_collection`] copies one
     // function down. The name arm trims the caller's string the way `category_for_name` did
     // before storing it, so the two arms record the same word for the same pile.
+    //
+    // **And a third sentence since user schema v53**: the pile must be one of the **live** list's
+    // (`CATEGORY_WRONG_LIST`), because this write files a live row and a pile belongs to one
+    // list; the name arm finds or makes the pile among the live list's piles for the same reason.
     let (category_id, category): (i64, String) = match pile {
         Pile::Id(category_id) => {
-            let (owner, name): (i64, String) = tx
+            let (owner, list, name): (i64, String, String) = tx
                 .query_row(
-                    "SELECT deck_id, name FROM deck_categories WHERE id = ?1",
+                    "SELECT deck_id, variant, name FROM deck_categories WHERE id = ?1",
                     params![category_id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()
                 .map_err(|e| e.to_string())?
@@ -600,10 +604,13 @@ pub fn collection_to_deck(
             if owner != deck_id {
                 return Err(crate::deck_meta::CATEGORY_WRONG_DECK.to_owned());
             }
+            if list != LIVE {
+                return Err(crate::deck_meta::CATEGORY_WRONG_LIST.to_owned());
+            }
             (category_id, name)
         }
         Pile::Name(name) => (
-            crate::deck_meta::category_for_name(&tx, deck_id, name)?,
+            crate::deck_meta::category_for_name(&tx, deck_id, LIVE, name)?,
             name.trim().to_owned(),
         ),
     };
@@ -1156,9 +1163,12 @@ mod tests {
         add_variant_card(conn, deck, category, LIVE, card_id, q)
     }
 
-    /// A theory row, which is a plan and holds nothing.
+    /// A theory row, which is a plan and holds nothing — filed under the **theory list's** pile
+    /// standing for `category`, since a pile belongs to one list (user schema v53) and a theory
+    /// row under a live pile is a state no write can reach any more.
     fn add_theory_card(conn: &Connection, deck: i64, category: i64, card_id: &str, q: i64) -> i64 {
-        add_variant_card(conn, deck, category, THEORY, card_id, q)
+        let plan_pile = crate::deck_meta::counterpart_in(conn, deck, THEORY, category).unwrap();
+        add_variant_card(conn, deck, plan_pile, THEORY, card_id, q)
     }
 
     /// Turn a deck into one the reader tracks without owning — `decks.virtual_only`, schema v40.
@@ -2029,7 +2039,7 @@ mod tests {
         // own "Ramp" drawing for as long as it exists even once the app files cards into it.
         let (conn, deck, cat) = fixture();
         plays(&conn, deck, cat);
-        let mine = crate::deck_meta::create_category(&conn, deck, "Ramp").unwrap();
+        let mine = crate::deck_meta::create_category(&conn, deck, LIVE, "Ramp").unwrap();
         let entry = seed_entry(&conn, "bolt", 1, None);
 
         collection_to_deck(&conn, entry, deck, Pile::Name("Ramp"), 1).unwrap();

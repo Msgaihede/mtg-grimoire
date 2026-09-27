@@ -2498,6 +2498,70 @@ mod tests {
         );
     }
 
+    /// Issue #580: a name printed on one printing finds the card **by that printing**. The
+    /// deck editor's quick add runs exactly this request — collapsed, `limit` 1 on Enter — and
+    /// adds the row's `id`, so the representative here is the printing that lands in the deck.
+    ///
+    /// The `search_text` is the parser's own rather than a literal, so this fails if the name
+    /// ever stops reaching the haystack. The other printing is newer *and* cheaper, which is
+    /// what the representative rule would pick if the reprint name did not narrow the group.
+    #[test]
+    fn a_reprint_name_finds_the_card_by_the_printing_that_bears_it() {
+        let conn = bare();
+        for line in [
+            r#"{"object":"card","id":"tle44","oracle_id":"o-wild","name":"Return of the Wildspeaker","flavor_name":"Earth Rumble Triumph","lang":"en","layout":"normal","set":"tle","collector_number":"44","released_at":"2025-11-21","oracle_text":"Choose one","games":["paper"],"prices":{"usd":"9.00"}}"#,
+            r#"{"object":"card","id":"new","oracle_id":"o-wild","name":"Return of the Wildspeaker","lang":"en","layout":"normal","set":"zzz","collector_number":"1","released_at":"2026-06-01","oracle_text":"Choose one","games":["paper"],"prices":{"usd":"0.50"}}"#,
+        ] {
+            let c =
+                crate::card_row::CardRow::from_json(&serde_json::from_str(line).unwrap()).unwrap();
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,released_at,
+                                    price_usd,is_paper,oracle_id,search_text,raw)
+                 VALUES (?1,?2,?3,?4,'en','normal',?5,?6,1,?7,?8,'{}')",
+                rusqlite::params![
+                    c.id,
+                    c.name,
+                    c.set_code,
+                    c.collector_number,
+                    c.released_at,
+                    c.price_usd,
+                    c.oracle_id,
+                    c.search_text
+                ],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        let quick_add = |text: &str| {
+            run_search(
+                &conn,
+                &SearchRequest {
+                    text: Some(text.into()),
+                    collapse: Some(true),
+                    limit: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+        };
+
+        let found = quick_add("Earth Rumble triumph");
+        assert_eq!(found.len(), 1, "the reprint name finds the card");
+        assert_eq!(found[0].name, "Return of the Wildspeaker");
+        assert_eq!(
+            found[0].id, "tle44",
+            "and offers the printing that bears it"
+        );
+
+        assert_eq!(
+            quick_add("Return of the Wildspeaker")[0].id,
+            "new",
+            "the Oracle name still offers the card's usual representative"
+        );
+    }
+
     /// `printf('%012d', …)` pads to twelve characters but never *truncates*: a value below
     /// `-99999999999` is thirteen (measured in this build's SQLite by the test below). A
     /// wider segment would move the id, `substr(…, 23)` would slice into the middle of a

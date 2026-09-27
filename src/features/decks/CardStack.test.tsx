@@ -38,7 +38,7 @@ import {
 import { LANDED_ATTR, SELECTED_ATTR, type DeckCardActions } from "./cardControl";
 import { deckCardSlot } from "./dnd";
 import type { TheoryPlan } from "./theoryMatch";
-import { card } from "./validation/fixtures";
+import { card, CATEGORIES } from "./validation/fixtures";
 import type { ValidationIssue } from "./validation/types";
 
 /**
@@ -95,6 +95,10 @@ const CARDS: DeckCard[] = [
 const SOL_RING = "Sol Ring, 2 copies, you own 1 of 2";
 const SIGNET = "Arcane Signet";
 const HENGE = "The Great Henge, game changer";
+
+/** The slot of a `card()` fixture row in the main pile, which is what a violations map is keyed
+ *  by — a row, never a printing (issue #554). */
+const mainSlot = (name: string) => deckCardSlot(CATEGORIES.main.id, `c-${name}`, null);
 
 const list = () => screen.getByRole("list", { name: "Ramp" });
 const items = () => screen.getAllByRole("listitem");
@@ -1294,7 +1298,7 @@ describe("CardStack cards", () => {
         violations={
           new Map([
             [
-              "c-Mana Crypt",
+              mainSlot("Mana Crypt"),
               [
                 {
                   severity: "error" as const,
@@ -1386,7 +1390,7 @@ describe("CardStack tooltips", () => {
           violations={
             new Map([
               [
-                "c-Mana Crypt",
+                mainSlot("Mana Crypt"),
                 [
                   {
                     severity: "error" as const,
@@ -1577,7 +1581,7 @@ describe("CardStack marks", () => {
         ]}
         label="Ramp"
         currency="usd"
-        violations={new Map([["c-Mana Crypt", [banned]]])}
+        violations={new Map([[mainSlot("Mana Crypt"), [banned]]])}
       />,
     );
 
@@ -1597,7 +1601,7 @@ describe("CardStack marks", () => {
           cards={[planned, card({ name: "Sol Ring" })]}
           label="Ramp"
           currency="usd"
-          violations={new Map([["c-Mana Crypt", [banned]]])}
+          violations={new Map([[mainSlot("Mana Crypt"), [banned]]])}
           // The wire format `deck_theory_slots` answers with — `${cardId}|${finish ?? ""}`, which
           // is `deck_theory.rs`'s `group_key`. Spelled out rather than built with `theorySlot`, so
           // this notices the grain changing under it instead of agreeing with it by construction.
@@ -1948,7 +1952,7 @@ describe("CardStack marks", () => {
         violations={
           new Map([
             [
-              "c-Sword of the Meek",
+              mainSlot("Sword of the Meek"),
               [
                 {
                   severity: "warning" as const,

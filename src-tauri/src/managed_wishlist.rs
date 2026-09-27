@@ -484,7 +484,7 @@ mod tests {
 
     /// Add `qty` more copies to one list, through `deck::add_card`.
     fn put(conn: &Connection, deck_id: i64, variant: &str, card: &str, qty: i64) {
-        let cat = crate::deck_meta::category_for_name(conn, deck_id, "Main deck").unwrap();
+        let cat = crate::deck_meta::category_for_name(conn, deck_id, variant, "Main deck").unwrap();
         crate::deck::add_card(conn, deck_id, card, Some(cat), None, variant, None, qty).unwrap();
     }
 

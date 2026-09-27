@@ -46,3 +46,61 @@ export function writeFailure(writes: readonly [Write, ...Write[]]): string | nul
   const last = newestWrite(writes);
   return last.isError ? ipcError(last.error) : null;
 }
+
+/**
+ * A batch of writes fired together — a multi-card drop, or Delete over a picked set — as the
+ * one {@link Write} the banner reads (issue #553).
+ *
+ * **Why a batch needs a record of its own.** Every card in the batch is a separate call on the
+ * *same* `useMutation` observer, and an observer's state is its newest call's. So the banner,
+ * which reads that state, could only ever say how the **last** card went: drop four cards on the
+ * remove tray, have the second one refused, and the fourth's success was all the screen had to
+ * report — the second row rolled back with no sentence anywhere. The batch's own promises still
+ * know every outcome, and this is where they are gathered.
+ *
+ * **Which moment it is stamped with depends on how it went, and the refusal's is the one that
+ * matters.** TanStack stamps a call's `submittedAt` only after the mutation's `onMutate` has been
+ * awaited, so a stamp taken as the batch is fired is *older* than its own members — and a
+ * refusal stamped that way loses the banner to the last card's success, which is the bug this
+ * exists to fix, reproduced. So a batch that was refused anywhere is stamped `settledAt`: the
+ * refusal is news when it arrives, and a write the reader makes after it is newer again and
+ * takes the banner back. A batch that went through everywhere keeps `firedAt` instead, so that a
+ * write refused *while the batch was out* is not wiped by a success that has nothing to say.
+ */
+export function batchWrite(
+  results: readonly PromiseSettledResult<unknown>[],
+  firedAt: number,
+  settledAt: number,
+): Write {
+  const refusals = results.flatMap((r) => (r.status === "rejected" ? [ipcError(r.reason)] : []));
+  if (refusals.length === 0) {
+    return { submittedAt: firedAt, isError: false, error: null, isSuccess: true };
+  }
+  // Said once however many cards it refused — four copies of "The deck was deleted." is one fact
+  // read four times — and in the order the cards were pressed.
+  const said = [...new Set(refusals)].join(" ");
+  const of = `${refusals.length} of ${results.length}`;
+  const error =
+    refusals.length === results.length
+      ? said
+      : `${of} cards ${refusals.length === 1 ? "was" : "were"} not changed — ${said}`;
+  return { submittedAt: settledAt, isError: true, error, isSuccess: false };
+}
+
+/** The record before any batch has run: never submitted, so every real write is newer. */
+export const NO_BATCH: Write = { submittedAt: 0, isError: false, error: null, isSuccess: false };
+
+/**
+ * A write's promise, handed back **with a handler already attached** — so a caller that ignores
+ * the answer leaves no unhandled rejection, and a caller that awaits it still sees the refusal.
+ *
+ * The attached `catch` is on a *branch* of the promise, not in its chain: the promise returned is
+ * the one passed in, still rejecting. What the branch buys is only that the runtime has seen a
+ * handler, which is the whole of what "unhandled" means. The refusal is not lost by being
+ * swallowed here — `mutateAsync` has already recorded it on the observer, where the banner reads
+ * it exactly as it read a `mutate`'s.
+ */
+export function handled<T>(press: Promise<T>): Promise<T> {
+  press.catch(() => {});
+  return press;
+}

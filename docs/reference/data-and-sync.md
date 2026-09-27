@@ -1062,6 +1062,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `duplicate_deck`, like it — **and unlike it, on a history row and on
   `deck_undo::DECK_FIELDS`**, because it is an arrangement the reader drags rather than a setting.
   [decks-storage.md](decks-storage.md) has the rest.
+  **v53 gives `deck_categories` a `variant`, so a deck's Theory and Actual lists stop sharing one
+  pile set** (2026-09-27, issue [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561)). One
+  transaction: the six capture triggers on `deck_categories` and `deck_cards` dropped first (v43's
+  move), `variant TEXT NOT NULL DEFAULT 'live'` added with no `CHECK`, both unique indexes rebuilt
+  as `(deck_id, variant, name)` and `(deck_id, variant, kind) WHERE kind <> 'main'`, and
+  `schema::split_theory_piles` — every pile of every deck with a plan cloned into the theory list
+  under a uid derived from the original's, the deck's theory cards repointed, and those decks'
+  undo journals cleared. `split::convert` runs the same function. The net for a group that did not
+  climb together, and the rule that it should: `src-tauri/CLAUDE.md`'s v53 entry and
+  [sync.md](sync.md) *A pile's list is on the wire since user schema v53*.
   **v52 makes a token's printings _entries_, and replaces `decks.token_stack` with
   `decks.token_mode`** (2026-09-26,
   [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §4). One
@@ -1437,7 +1447,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `deck_meta::create_category` → `'user'`, `deck_meta::ensure_predefined_categories` → `'user'`,
   and `deck::duplicate_deck`, which **copies** the source pile's answer rather than re-deciding
   it) and no command parameter reaches it. **The point of storing it is that `category_for_name`
-  finds before it creates**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so a reader's own "Ramp"
+  finds before it creates**: `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)`, so a reader's own "Ramp"
   is found rather than re-made and keeps `'user'` forever, which is exactly the case a rule driven
   off the _name_ — "Ramp", "Draw", "Removal", "Land" are what people call their own piles — gets
   wrong. The backfill is a **one-time frozen guess**: `kind = 'main'` plus one of the 22 names

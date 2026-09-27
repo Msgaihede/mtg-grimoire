@@ -168,16 +168,20 @@ export const FixedHeightFromTheCardCount: Story = {
  * words against a mark with none. The other three — the colour, the place and the card's own
  * edge — are unchanged, and this is where all four are looked at at once.
  */
+/** The row the story below marks — a violations map is keyed by row slot, never by printing
+ *  (issue #554), so the story needs the row itself to name the key. */
+const TWO_ISLANDS = deckCard(printing("lea", "288"), { quantity: 2 });
+
 export const RuleBreakAndGameChanger: Story = {
   args: {
     cards: [
-      deckCard(printing("lea", "288"), { quantity: 2 }),
+      TWO_ISLANDS,
       deckCard(printing("mh2", "138"), { gameChanger: true }),
       deckCard(printing("lea", "161"), { gameChanger: true }),
     ],
     violations: new Map<string, ValidationIssue[]>([
       [
-        printing("lea", "288").id,
+        deckCardSlot(TWO_ISLANDS.categoryId, TWO_ISLANDS.cardId, TWO_ISLANDS.finish),
         [
           {
             severity: "error",

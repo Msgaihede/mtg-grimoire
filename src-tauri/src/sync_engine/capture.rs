@@ -233,7 +233,19 @@ pub const TABLES: [Spec; 17] = [
     Spec {
         table: "deck_categories",
         keys: &["id"],
-        fields: &["name", "kind", "is_active", "sort_order", "origin"],
+        // **`variant` since user schema v53**, first as it is on `deck_cards`: a pile belongs to
+        // one list of its deck, and a theory `Ramp` and a live one are two rows that must stay
+        // two on the far device. `apply`'s grains name it for that reason. An older sender's op
+        // carries none, and its insert lands in the column's `'live'` default — which is what
+        // every pile was before the rung.
+        fields: &[
+            "variant",
+            "name",
+            "kind",
+            "is_active",
+            "sort_order",
+            "origin",
+        ],
         counters: &[],
         parents: &[Parent {
             key: "deck",

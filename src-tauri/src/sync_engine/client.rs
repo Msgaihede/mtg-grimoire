@@ -1264,6 +1264,16 @@ pub async fn pull(
                  {e}\nThey are tried again behind the next pull."
             );
         }
+        // **User schema v53's net, behind the same pulls and for the same reasons**: a v52
+        // peer's theory card arrives filed in a live pile, and this refiles it into the plan's
+        // pile of that name, captured, on the pull that brings it
+        // (`deck_meta::refile_stray_theory_cards`).
+        if let Err(e) = crate::deck_meta::refile_stray_theory_cards_after_pull(conn) {
+            eprintln!(
+                "the plans' cards filed in the actual list's categories could not be refiled \
+                 after a pull: {e}\nThey are tried again behind the next pull."
+            );
+        }
     }
     Ok((unreadable, report))
 }

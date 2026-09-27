@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, ipcError, type DeckVariant } from "@/lib/ipc";
+import { useMarketplace } from "@/lib/useMarketplace";
 import { writeFailure } from "@/lib/writes";
 import { Dialog } from "@/components/Dialog";
 import { ClearDeck } from "./ClearDeck";
@@ -251,29 +252,49 @@ function Settings({ deckId }: { deckId: number }) {
   }, [confirming]);
 
   /**
-   * How many copies each list holds — **both answers off the read this dialog already makes**.
+   * The plan's piles — **the one read this dialog makes about the theory list**, and only on a
+   * deck that keeps one.
    *
-   * `Settings` mounts `useDeck(deckId)`, which is the **live** list, and a {@link DeckCategory}
-   * carries two counts rather than one: `cardCount` is the copies filed in that pile *in the
-   * variant that was asked for* — so, here, live — and `cardCountAllVariants` is the copies
-   * across both lists at once, the same answer whichever variant did the asking. The plan's
-   * total is therefore a subtraction, and that is the whole reason there is no second query on
-   * this screen: a later reader who "fixes" this by mounting `useDeck(deckId, "theory")` beside
-   * it would be buying a second `deck_get` for a number already in hand.
+   * `Settings` mounts `useDeck(deckId)`, which is the **live** list, and since user schema v53
+   * (issue #561) that read carries the live list's piles and no other: each list has piles of
+   * its own. The plan's total used to come free off the same rows as an all-lists count less the
+   * live one; a pile holds one list's cards now, so there is nothing left to subtract from and
+   * the theory list has to be asked about directly.
    *
-   * Read both fields' own docs in `src/lib/ipc.ts` before touching either. They are one word
-   * apart, and a destructive control quoting the wrong one mis-states the press being confirmed
-   * — which is the one direction a confirmation must never be wrong in.
+   * `deck_category_list` rather than a second `useDeck(deckId, "theory")`: the confirmation wants
+   * a number, and a whole `deck_get` would price and ship every card of the plan to sum a column
+   * the pile rows already carry. **The key is `useDeckMeta`'s own**, so the Categories dialog and
+   * this one share an answer, and every write's `["decks"]` invalidation reaches it. **Gated on
+   * `theoryEnabled`**, which is the theory button's own gate said one render earlier: a deck
+   * with no plan draws no theory clear, so nothing here would read the answer.
    */
-  const { liveCount, theoryCount } = useMemo(() => {
-    let live = 0;
-    let both = 0;
-    for (const category of deck.categories) {
-      live += category.cardCount;
-      both += category.cardCountAllVariants;
-    }
-    return { liveCount: live, theoryCount: both - live };
-  }, [deck.categories]);
+  const { marketplace } = useMarketplace();
+  const theoryEnabled = row?.theoryEnabled === true;
+  const planPiles = useQuery({
+    queryKey: ["decks", "categories", deckId, "theory", marketplace.id],
+    queryFn: () => ipc.deckCategoryList(deckId, "theory", marketplace.id),
+    enabled: theoryEnabled,
+  });
+  /** The plan's total is not known yet. The theory button waits it out greyed rather than
+   *  claiming `(already empty)` about a list it has not read. */
+  const planReading = theoryEnabled && planPiles.isPending;
+
+  /**
+   * How many copies each list holds — `cardCount` summed over **that list's own piles**, which is
+   * every copy in it, because a pile belongs to one list.
+   *
+   * Read `DeckCategory.cardCount`'s doc in `src/lib/ipc.ts` before touching this. A destructive
+   * control quoting the wrong list's number mis-states the press being confirmed — which is the
+   * one direction a confirmation must never be wrong in.
+   */
+  const liveCount = useMemo(
+    () => deck.categories.reduce((sum, category) => sum + category.cardCount, 0),
+    [deck.categories],
+  );
+  const theoryCount = useMemo(
+    () => (planPiles.data ?? []).reduce((sum, category) => sum + category.cardCount, 0),
+    [planPiles.data],
+  );
 
   /** The most recently *started* of the writes this dialog speaks for — the one whose refusal
    *  is still news. `lib/writes.ts`, the one definition of that rule: a refused move must not
@@ -631,11 +652,11 @@ function Settings({ deckId }: { deckId: number }) {
                   <RowAction
                     ref={theoryTrigger}
                     destructive
-                    disabled={theoryCount === 0 || deck.clearDeck.isPending}
+                    disabled={planReading || theoryCount === 0 || deck.clearDeck.isPending}
                     onClick={() => setConfirming("theory")}
                   >
                     {`Clear ${listName("theory")}…` +
-                      (theoryCount === 0 ? " (already empty)" : "")}
+                      (!planReading && theoryCount === 0 ? " (already empty)" : "")}
                   </RowAction>
                 )}
               </div>

@@ -353,7 +353,7 @@ const MAIN: DeckCategory = {
   sortOrder: 0,
   cardCount: 0,
   totalPrice: null,
-  cardCountAllVariants: 0,
+  variant: "live",
 };
 
 /** One `deck_get` answer: this deck, the rows asked for, and the categories the editor draws

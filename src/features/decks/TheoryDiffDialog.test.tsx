@@ -88,7 +88,7 @@ vi.mock("@/features/wishlist/WishDestination", () => ({
     folderId === null ? null : (FOLDER_NAMES[folderId] ?? null),
 }));
 
-import { diffTotals, TheoryDiffDialog } from "./TheoryDiffDialog";
+import { diffTotals, TheoryDiffDialog, wishesSentNote } from "./TheoryDiffDialog";
 
 /**
  * A row as `deck_theory_diff` answers one: one **exact card** — a printing in a finish — already
@@ -179,7 +179,7 @@ function wrap(ui: ReactElement) {
   return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
 }
 
-const props = { deckId: 4, open: true, onDismiss: vi.fn(), onClose: vi.fn() };
+const props = { deckId: 4, open: true, onDismiss: vi.fn(), onClose: vi.fn(), onSent: vi.fn() };
 
 beforeEach(() => {
   deckTheoryDiff.mockReset().mockResolvedValue([row(), SOL_RING, UNPRICED]);
@@ -188,6 +188,7 @@ beforeEach(() => {
   cardDetail.mockReset();
   props.onDismiss = vi.fn();
   props.onClose = vi.fn();
+  props.onSent = vi.fn();
 });
 
 /** The one row every press below is aimed at. */
@@ -633,6 +634,13 @@ describe("the theory difference dialog", () => {
     const done = await within(sol).findByRole("button", { name: /Wishlist 3 more Sol Ring/ });
     expect(done).toHaveTextContent("Wishlisted");
     expect(done).toBeDisabled();
+
+    // **And the dialog stays open** (issue #553). Only the footer's press closes it: a reader
+    // pressing row buttons is working down a list, and each one answers on its own button.
+    expect(props.onDismiss).not.toHaveBeenCalled();
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(props.onSent).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   /**
@@ -652,21 +660,35 @@ describe("the theory difference dialog", () => {
   });
 
   /**
-   * The bulk press is one backend call and one sentence back — and it takes the wishlist and the
-   * search with it, because `CardSummary.wishlisted` is an `EXISTS` against `c.oracle_id`: one
-   * press turns the heart on for every printing of every card sent, whatever printing each wish
-   * was pinned to. It does **not** take `["decks"]`: nothing about the deck moved.
+   * The bulk press is one backend call — and it takes the wishlist and the search with it,
+   * because `CardSummary.wishlisted` is an `EXISTS` against `c.oracle_id`: one press turns the
+   * heart on for every printing of every card sent, whatever printing each wish was pinned to.
+   * It does **not** take `["decks"]`: nothing about the deck moved.
+   *
+   * **And a success closes the dialog** (issue #553): what it touched goes to the host through
+   * `onSent` first, then `onDismiss` — the door that hands the caret back, because the button the
+   * reader pressed disabled itself for the write and left the caret on `<body>`. Never `onClose`,
+   * which is the scrim's and moves nothing.
    */
-  it("sends the whole difference in one call and reports what it touched", async () => {
+  it("sends the whole difference in one call, reports what it touched and closes", async () => {
     const user = userEvent.setup();
     wrap(<TheoryDiffDialog {...props} />);
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     await user.click(await screen.findByRole("button", { name: "Send 3 selected to wishlist" }));
 
-    // No clause about where, because nobody chose a destination — see the destination block
-    // below for the folder's sentence and for why the root's is deliberately unchanged.
-    await screen.findByText("Sent. 3 wishes updated.");
+    await waitFor(() => expect(props.onDismiss).toHaveBeenCalledTimes(1));
+    // No destination named, because nobody chose one — see the destination block below.
+    expect(props.onSent).toHaveBeenCalledTimes(1);
+    expect(props.onSent).toHaveBeenCalledWith({ wishes: 3, destination: null });
+    // Told before it is closed, so a host can put its sentence up in the same commit that takes
+    // the dialog down.
+    expect(props.onSent.mock.invocationCallOrder[0]).toBeLessThan(
+      props.onDismiss.mock.invocationCallOrder[0],
+    );
+    expect(props.onClose).not.toHaveBeenCalled();
+    // Nothing is said in the footer on the way out — the sentence is the host's now.
+    expect(screen.queryByText(/wishes updated/)).not.toBeInTheDocument();
     expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(
       4,
       ["bolt-lea|", "ring-c21|", "angel-lea|"],
@@ -678,15 +700,63 @@ describe("the theory difference dialog", () => {
     expect(keys).not.toContain('["decks"]');
   });
 
-  /** A refusal is the backend's own sentence, in the dialog, not a silent no-op. */
-  it("reports a refused write in words", async () => {
+  /**
+   * A refusal is the backend's own sentence, in the dialog, not a silent no-op — **and the dialog
+   * stays open to say it** (issue #553). Only a success closes it; a closed dialog could not tell
+   * the reader why nothing happened, and the press is there to be tried again.
+   */
+  it("reports a refused write in words, and stays open", async () => {
     const user = userEvent.setup();
     deckTheoryMissingToWishlist.mockRejectedValue("the database is busy; try again");
     wrap(<TheoryDiffDialog {...props} />);
 
     await user.click(await screen.findByRole("button", { name: "Send 3 selected to wishlist" }));
 
-    await screen.findByText("the database is busy; try again");
+    expect(await screen.findByRole("status")).toHaveTextContent("the database is busy; try again");
+    expect(props.onDismiss).not.toHaveBeenCalled();
+    expect(props.onClose).not.toHaveBeenCalled();
+    expect(props.onSent).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Send 3 selected to wishlist" })).toBeEnabled();
+  });
+
+  /**
+   * The sentence the host says for the footer's press, now that the dialog is gone by the time
+   * anyone could read it. It names **where from** as well as where to, because out on the editor
+   * a bare "Sent." is about nothing on screen; the folder clause is `filedIn`'s, so the root adds
+   * nothing. Zero is not "already wished for" — the fold never skips a wish that is already there
+   * — so it says the two things a zero can actually mean.
+   */
+  it("words the footer's answer for the host, at the root, in a folder and at zero", () => {
+    expect(wishesSentNote({ wishes: 3, destination: null })).toBe(
+      "Sent from the plan to your wishlist — 3 wishes updated.",
+    );
+    expect(wishesSentNote({ wishes: 1, destination: "Ordered" })).toBe(
+      "Sent from the plan to your wishlist — 1 wish updated in Ordered.",
+    );
+    const zero = wishesSentNote({ wishes: 0, destination: "Ordered" });
+    expect(zero).toBe(
+      "Nothing sent from the plan — those cards are no longer missing, or have left the card " +
+        "database.",
+    );
+    // Nothing was filed, so no drawer is named as having received it.
+    expect(zero).not.toMatch(/Ordered/);
+    expect(zero).not.toMatch(/already/i);
+  });
+
+  /**
+   * **Zero is a success, so it closes too** — the user's rule is that the write succeeding is
+   * what closes, not the write finding something to do. What the reader is told is the host's
+   * sentence for zero, which says why.
+   */
+  it("closes on a press that touched nothing, and says so to the host", async () => {
+    const user = userEvent.setup();
+    deckTheoryMissingToWishlist.mockResolvedValue(0);
+    wrap(<TheoryDiffDialog {...props} />);
+
+    await user.click(await screen.findByRole("button", { name: "Send 3 selected to wishlist" }));
+
+    await waitFor(() => expect(props.onDismiss).toHaveBeenCalledTimes(1));
+    expect(props.onSent).toHaveBeenCalledWith({ wishes: 0, destination: null });
   });
 
   /** The read's own refusal, in the same voice — and the rows it could not fetch are not faked. */
@@ -775,7 +845,10 @@ describe("the theory difference dialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Send 3 selected to wishlist" }));
 
-    await screen.findByText("Sent. 3 wishes updated.");
+    // The host is handed no name for the root, so its sentence adds no clause either.
+    await waitFor(() =>
+      expect(props.onSent).toHaveBeenCalledWith({ wishes: 3, destination: null }),
+    );
     // `null` on the wire and never an absent argument: the root is a destination the backend is
     // told about, which is what makes "the reader chose nothing" and "the reader chose the
     // root" the same write rather than two.
@@ -787,7 +860,7 @@ describe("the theory difference dialog", () => {
   });
 
   /**
-   * The footer's press carries the folder, and the live region says which one.
+   * The footer's press carries the folder, and the answer it hands the host says which one.
    *
    * The id asserted here is the stub's own `Ordered` (7) — a number unlike every other argument
    * on this call, so a folder id crossed with a deck id or a quantity could not read as right.
@@ -805,10 +878,12 @@ describe("the theory difference dialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Send 3 selected to wishlist" }));
 
-    await screen.findByText("Sent. 3 wishes updated in Ordered.");
-    // A clause appended to the one sentence, rather than a second sentence beside it — so the
-    // root's wording is what it always was and this one cannot be read as a different answer.
-    expect(screen.queryByText("Sent. 3 wishes updated.")).not.toBeInTheDocument();
+    // The folder's **name**, the same lookup the trigger and the row buttons read — so the host's
+    // sentence and the control the reader picked it with cannot disagree about where.
+    await waitFor(() =>
+      expect(props.onSent).toHaveBeenCalledWith({ wishes: 3, destination: "Ordered" }),
+    );
+    expect(props.onDismiss).toHaveBeenCalledTimes(1);
     expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(
       4,
       ["bolt-lea|", "ring-c21|", "angel-lea|"],
@@ -906,23 +981,25 @@ describe("the theory difference dialog", () => {
   });
 
   /**
-   * The standing answer goes with the marks, for the same reason and one sentence over.
-   *
-   * `wishAll.isSuccess` outlives its press and the region words itself with the destination
-   * selected **now**, so without the reset, sending to the root and then picking a folder
-   * re-words a sentence into a claim about a press nobody made.
+   * The standing answer goes with the marks, for the same reason and one sentence over — and
+   * since issue #553 the only answer that can be left standing is a refusal, because a success
+   * closes the dialog. `That folder is not there any more.` is a fact about the folder the reader
+   * has just moved off, so it must not outlive the move.
    */
-  it("takes the standing answer down with the destination", async () => {
+  it("takes a standing refusal down with the destination", async () => {
     const user = userEvent.setup();
+    deckTheoryMissingToWishlist.mockRejectedValueOnce("That folder is not there any more.");
     wrap(<TheoryDiffDialog {...props} />);
     await screen.findByText("Lightning Bolt");
 
-    await user.click(screen.getByRole("button", { name: "Send 3 selected to wishlist" }));
-    await screen.findByText("Sent. 3 wishes updated.");
-
     await user.click(choose("Ordered"));
+    await user.click(screen.getByRole("button", { name: "Send 3 selected to wishlist" }));
+    await screen.findByText("That folder is not there any more.");
 
-    expect(screen.queryByText(/^Sent\./)).not.toBeInTheDocument();
+    await user.click(choose("Someday"));
+
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    expect(props.onDismiss).not.toHaveBeenCalled();
   });
 
   /**
