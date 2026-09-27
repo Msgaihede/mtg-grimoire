@@ -1693,7 +1693,7 @@ export interface FakeDb {
    * A **stored string** and `null` for the row not being there, for {@link FakeDb.marketplace}'s
    * reason and it is the same reason twice: a fresh install has never written it, and a value
    * written by a different build may name a grouping this one has never heard of. Both read as
-   * `artist`, and only a *write* refuses — so storing it narrowed would put the two states this
+   * `released`, and only a *write* refuses — so storing it narrowed would put the two states this
    * setting actually has out of a story's reach.
    */
   printingGroupBy: string | null;
@@ -3206,7 +3206,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // The row a fresh install has never written. `get_marketplace` answers the default for it,
     // which is what every story that says nothing about prices is standing in.
     marketplace: null,
-    // The same, one row over: `printing_group_by` answers `artist` for a card pane nobody has
+    // The same, one row over: `printing_group_by` answers `released` for a card pane nobody has
     // told, which is the grouping every story that says nothing about it is standing in.
     printingGroupBy: null,
     // The third row, and the only one of the three no command sets on purpose: `deck_create`
@@ -19978,7 +19978,7 @@ export function writeHandlers(db: FakeDb) {
      * **The refusal is the half a fake is easiest to get wrong by leaving out**, and the one
      * this file's job description is about: the read side falls back on a mode it does not
      * know, so a fake that accepted any string would let a story save `"rarity"`, read back
-     * `"artist"`, and look like it worked — the exact bug the backend's validation exists to
+     * `"released"`, and look like it worked — the exact bug the backend's validation exists to
      * make impossible. `card::store_group_by`'s sentence, verbatim.
      *
      * It honours `busy` like every other ordinary write here — the command takes the write
