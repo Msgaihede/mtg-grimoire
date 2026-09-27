@@ -16416,6 +16416,48 @@ describe("Compare's token rows", () => {
       ),
     ).toBe(true);
   });
+
+  /**
+   * **An orphan feeds no pool** — `Tally::hold` leaves a live entry with no oracle card out of
+   * `live_by_oracle`, and `Tally::settle` adds to `matched_by_oracle` only for a line that names
+   * one. A live Treasure whose printing has left the corpus is not *another printing of* the
+   * Treasure the plan names, so it excuses none of it (the final review's deferred 5: the fake
+   * counted it into both sums).
+   */
+  it("pays no held-as-another-printing out of a live entry whose printing left the corpus", () => {
+    const GONE = "gone-token-printing";
+    const db = world(
+      [{ cardId: TOKEN_PRINTING.treasureThob, finish: "nonfoil", quantity: 2 }],
+      [{ cardId: GONE, finish: "nonfoil", quantity: 1 }],
+    );
+    expect(diffOf(db).filter((row) => row.isToken)).toEqual([
+      expect.objectContaining({
+        cardId: TOKEN_PRINTING.treasureThob,
+        quantity: 2,
+        heldAsOtherPrinting: 0,
+      }),
+    ]);
+
+    // And beside a real other printing, only that one pays: the orphan on both sides moves
+    // nothing, however its two counts compare.
+    const mixed = world(
+      [
+        { cardId: TOKEN_PRINTING.treasureThob, finish: "nonfoil", quantity: 2 },
+        { cardId: GONE, finish: "nonfoil", quantity: 1 },
+      ],
+      [
+        { cardId: GONE, finish: "nonfoil", quantity: 3 },
+        { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil", quantity: 1 },
+      ],
+    );
+    expect(diffOf(mixed).filter((row) => row.isToken)).toEqual([
+      expect.objectContaining({
+        cardId: TOKEN_PRINTING.treasureThob,
+        quantity: 2,
+        heldAsOtherPrinting: 1,
+      }),
+    ]);
+  });
 });
 
 /**

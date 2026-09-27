@@ -15619,10 +15619,18 @@ function tokenDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[]
   const liveByToken = new Map<string, number>();
   for (const row of deckTokenRows(db, deckId, "live", mp)) {
     live.set(key(row), (live.get(key(row)) ?? 0) + row.quantity);
-    liveByToken.set(row.oracleId, (liveByToken.get(row.oracleId) ?? 0) + row.quantity);
+    // **An orphan feeds no pool** — `Tally::hold`'s rule: an entry whose printing has left the
+    // corpus answers no set code, which is the crate's `oracle: None`, so it is not another
+    // printing *of* anything and excuses no row. It still counts toward its own exact key above.
+    if (row.setCode !== null) {
+      liveByToken.set(row.oracleId, (liveByToken.get(row.oracleId) ?? 0) + row.quantity);
+    }
   }
   const matched = new Map<string, number>();
   for (const [k, { row, quantity }] of planned) {
+    // Nor does an orphan plan row speak for any of the pool — `Tally::settle` adds to
+    // `matched_by_oracle` only for a line that names its oracle card.
+    if (row.setCode === null) continue;
     const exact = Math.min(quantity, live.get(k) ?? 0);
     matched.set(row.oracleId, (matched.get(row.oracleId) ?? 0) + exact);
   }
