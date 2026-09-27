@@ -106,6 +106,11 @@ departure accepted, now paid in the other direction.
 - `keyword<op>value`, where `<op>` is one of `:` `=` `!=` `>=` `<=` `>` `<`, **longest match
   first** so `>=` is never read as `>` followed by a value beginning `=`.
 - `"…"` or `'…'` around a value with a space in it. An unterminated quote runs to the end.
+  **A quote opens only where a value can begin** — at the start of a chunk, after a lone `-`,
+  or straight after `keyword<op>` — and a `'` closes only at the end of a word (issue #552).
+  Until 2026-09-27 any `'` opened one, so the apostrophe in `sensei's -t:artifact` swallowed the
+  type exclusion into free text and `o:can't t:creature` swallowed the type filter into the
+  rules-text value. `Urza's`, `can't` and `o:'can't block'` are now what they look like.
 - A leading `-` excludes: `-t:goblin`, `-atag:dragon`.
 - Everything unrecognised is free text for FTS. `bolt t:creature` searches the index for `bolt`
   alone and filters by the type line beside it.
