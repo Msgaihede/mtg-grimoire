@@ -107,6 +107,35 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   even once ramp spells are filed into it — and "Ramp", "Draw", "Removal" and "Land" are exactly
   what a person names their own piles. The one-time backfill and why it is frozen:
   [data-and-sync.md](data-and-sync.md).
+- **A pile belongs to one list** — `deck_categories.variant`, user schema v53, issue
+  [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561). Until then a deck's Theory and
+  Actual lists shared one pile set, because `deck_cards` carried the variant and
+  `deck_categories` did not: a pile made on one tab drew on the other (empty, since `user` piles
+  always draw), and one Sideboard switch answered for both lists. Now:
+  - **Each list has its own four zones** — `ensure_predefined_categories(conn, deck, variant)`,
+    run for `theory` by `create_deck` on a deck born with a plan and by `update_deck` on every
+    switch-on — and its own names, order and switches; `CATEGORY_NAME_TAKEN` reads *This list
+    already has a category with that name.*
+  - **Every write that files a card checks the pile's list**: `deck::category_of_deck` takes the
+    variant and answers `CATEGORY_WRONG_LIST` (*That category belongs to the other list.*) for the
+    other list's pile, and `add_card`, `set_card_quantity`, `clear_category`, `move_card`,
+    `swap_printing`, `set_card_finish`, the import commit and `collection_to_deck` all go through
+    it or through the variant-scoped `category_for_name`. `reorder_categories` refuses a list that
+    mixes the two (`CATEGORY_MIXED_LISTS`); a delete's move target must be in the same list;
+    `decks.default_category_id` must name a **live** pile.
+  - **Two writes carry piles across, and both pour one list into the other.** The theory switch
+    moves the live cards into the plan and **clones** each live pile for them —
+    `deck_meta::counterpart_in`, by kind for a zone and by name otherwise — leaving the live piles
+    standing, empty; `copy_from_live` files each copied card into the plan's pile of the same name,
+    making it if absent. Both record the piles they made in their undo step
+    (`deck_undo::push_made_categories`), so an undo takes them away again.
+  - **`DeckCategoryRow.card_count_all_variants` is gone** — a pile's copies are all in one list, so
+    it always equalled `card_count`, and every confirmation quotes `card_count` now.
+  - **A pile's history rows stay at `DECK_LEVEL`**: the history drawer does not filter by list, and
+    no category sentence names one.
+  - **The comparison is the only link between the lists**, and it matches cards, never piles
+    (`deck_theory::theory_diff`). The rung, the derived clone uids and the net for a group that
+    climbed unevenly: `src-tauri/CLAUDE.md`'s v53 entry.
 - **The grain is `deck_id, variant, category_id, card_id, coalesce(finish, '')`**
   (`schema::DECK_CARD_GRAIN`) — the
   same printing in two categories is two rows, added twice in one is one row with the sum, and

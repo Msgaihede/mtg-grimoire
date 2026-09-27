@@ -1016,7 +1016,7 @@ pub(crate) fn split_theory_piles(conn: &Connection, schema: &str) -> rusqlite::R
 /// characters, the shape `lower(hex(randomblob(16)))` mints, so nothing that reads a uid can
 /// tell the two kinds apart. A pile with no uid gives a clone with none, and the mint names
 /// both later like any other row.
-fn theory_pile_uid(live_uid: &str) -> String {
+pub(crate) fn theory_pile_uid(live_uid: &str) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(format!("deck_categories/theory/{live_uid}").as_bytes())[..16]
         .iter()
@@ -5239,6 +5239,19 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
         eprintln!(
             "the finishes of the decks' token printings could not be checked at launch: \
              {e}\nThey are checked again at the next launch."
+        );
+    }
+    // Logged and left owing, the same reason once more: a theory card a v52 peer filed into a
+    // live pile draws on neither tab until it is refiled, and nothing a reader could act on is
+    // gained by refusing to start over one. **After `capture::install`**, for the conversion's
+    // reason: the plan pile it makes and the card it moves must reach the peers that never made
+    // them. **Gated** the conversion's way — a paired device repairs behind a pull at v53 instead
+    // (`deck_meta::refile_stray_theory_cards`' doc says why). Idempotent: one read at a launch
+    // with nothing stray, which is every launch on a device whose group all climbed together.
+    if let Err(e) = crate::deck_meta::refile_stray_theory_cards_at_launch(conn) {
+        eprintln!(
+            "the plans' cards filed in the actual list's categories could not be refiled at \
+             launch: {e}\nThey are tried again at the next launch."
         );
     }
     Ok(())

@@ -195,8 +195,31 @@ both plus the frontend.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v52**
-  (2026-09-26, the token-stacks spec §4) makes a token's printings **entries** —
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v53**
+  (2026-09-27, [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561)) gives
+  `deck_categories` a **`variant`**, so a deck's Theory and Actual lists stop sharing one pile set
+  — `NOT NULL DEFAULT 'live'` and no `CHECK` (`origin`'s precedent; `deck_meta::valid_variant` is
+  the fence), both unique indexes widened to `(deck_id, variant, …)`, and `variant` on the capture
+  spec and in both apply grains. The rung drops the six capture triggers on `deck_categories` and
+  `deck_cards` first, then `schema::split_theory_piles` clones **every** pile of every deck with a
+  plan (`theory_enabled`, or any theory row) into the theory list with the original's fields and
+  **stamps**, repoints the deck's theory cards, and deletes those decks' `deck_undo` rows (every
+  step names a theory card by the pile it has just left). `split::convert` runs the same function,
+  because a converted legacy file stamps head and never climbs. **The clone's uid is derived** —
+  `schema::theory_pile_uid`, SHA-256 of `deck_categories/theory/<original uid>` cut to 32 hex — so
+  every device that climbs names the same clone the same way, and `deck_meta::counterpart_in`
+  names a plan pile it makes at runtime the same way when the name is free. ⚠️ **What the rung
+  cannot reach is a v52 peer's writes after this device climbed**, v52's lesson one table over:
+  such a peer files its plan's cards into the one pile set it knows, so they arrive here in a
+  *live* pile, where neither tab draws them. `deck_meta::refile_stray_theory_cards` is the net —
+  captured, after `capture::install`, gated like `convert_legacy_picks` (a paired device waits for
+  `THEORY_PILES_READY`, set behind the first advancing pull; `client::pull` runs it behind every
+  such pull), moving each stray into the plan's pile of that name and **folding** it into a row
+  already there. A v52 peer still misreads what this device sends — it ignores `variant`, so a
+  theory pile's insert lands on its `(deck_id, name)` grain and merges into the live pile of that
+  name — **so every device in a group is updated before it syncs across v53**, the rule v52 set.
+  That is one above **v52**
+  (2026-09-26, the token-stacks spec §4), which makes a token's printings **entries** —
   `deck_token_printings`, the thirty-first user table and the **seventeenth synced** one, one
   printing in one finish in one list with a quantity, grained on `DECK_TOKEN_PRINTING_GRAIN`
   (`deck_id, variant, card_id, finish`, `finish` NOT NULL so the unique index cannot hold one

@@ -617,12 +617,22 @@ pub(crate) fn counterpart_in(
     source: i64,
 ) -> Result<i64, String> {
     let variant = valid_variant(variant)?;
-    let (name, kind, is_active, sort_order, origin): (String, String, bool, i64, String) = conn
+    type Source = (String, String, bool, i64, String, Option<String>);
+    let (name, kind, is_active, sort_order, origin, source_uid): Source = conn
         .query_row(
-            "SELECT name, kind, is_active, sort_order, origin FROM deck_categories
+            "SELECT name, kind, is_active, sort_order, origin, sync_uid FROM deck_categories
               WHERE id = ?1 AND deck_id = ?2",
             params![source, deck_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
         )
         .optional()
         .map_err(|e| e.to_string())?
@@ -652,15 +662,185 @@ pub(crate) fn counterpart_in(
     {
         return Ok(id);
     }
+    // **A plan pile made here is named after its original** —
+    // [`crate::schema::theory_pile_uid`], the v53 rung's derivation — unless a pile already holds
+    // that name (the one this made before and the reader has since renamed out of the name match
+    // above). Two devices that each carry the same live pile across then make the same row, and
+    // [`refile_stray_theory_cards`] finds it by that name. A NULL leaves the capture trigger's
+    // mint to name it, as for any other insert.
+    let derived = match (variant, &source_uid) {
+        (THEORY_VARIANT, Some(uid)) => Some(crate::schema::theory_pile_uid(uid)),
+        _ => None,
+    };
     conn.query_row(
         "INSERT INTO deck_categories (deck_id, variant, name, kind, is_active, sort_order,
-                                       origin, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), unixepoch())
+                                       origin, created_at, updated_at, sync_uid)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), unixepoch(),
+                 CASE WHEN EXISTS (SELECT 1 FROM deck_categories WHERE sync_uid = ?8)
+                      THEN NULL ELSE ?8 END)
          RETURNING id",
-        params![deck_id, variant, name, kind, is_active, sort_order, origin],
+        params![deck_id, variant, name, kind, is_active, sort_order, origin, derived],
         |r| r.get(0),
     )
     .map_err(|e| e.to_string())
+}
+
+/// The `sync_state` key that opens [`refile_stray_theory_cards_at_launch`] on a paired device:
+/// set by [`refile_stray_theory_cards_after_pull`] behind the first pull at v53 that read
+/// everything. A device in no group never reads it. Its own key rather than v52's
+/// [`crate::deck_tokens::PICKS_READY`], which a device already set on v52 — before it had heard
+/// anything its group wrote at v53.
+pub const THEORY_PILES_READY: &str = "theory_piles_ready";
+
+/// The plan's list — `DECK_VARIANTS[1]` by index, [`crate::deck`]'s discipline.
+const THEORY_VARIANT: &str = crate::schema::DECK_VARIANTS[1];
+
+/// **Every theory card sitting in a live pile is refiled into the plan's pile of that name**,
+/// captured — user schema v53's net for a group whose devices did not all climb at once
+/// (issue #561).
+///
+/// The v53 rung splits the piles every device already held, uncaptured and under a uid derived
+/// from the original's ([`crate::schema::split_theory_piles`]). What it cannot reach is a
+/// **laggard's writes after this device climbed**: a peer still on v52 files its plan's cards
+/// into the one pile set it knows, so a theory card arrives here pointing at a live pile, and a
+/// pile the laggard made arrives live with no clone at all. Nothing here would ever show that
+/// card on the Theory tab, which lists the plan's piles only. This finds each such card and moves
+/// it into [`counterpart_in`]'s pile — by the derived uid first, so every device that repairs
+/// the same stray lands it in the same row — and **announces both writes**, the pile's insert
+/// whole and the card's move, so a peer that derived the same pile merges on the uid and one that
+/// did not builds it. v52's lesson (`convert_legacy_picks`' doc): a conversion kept to the rung
+/// cannot reach what arrives after it.
+///
+/// **A card already filed in the target pile is folded into it** rather than refused by the
+/// unique index — the stray row's copies are added to it, then the stray is deleted. That is the
+/// one arm that is not idempotent across devices, and it is why a paired device waits for a pull
+/// before repairing at launch: behind a pull it has heard a peer's fold of the same stray, and
+/// finds nothing left to fold.
+///
+/// Records no undo step and no history row, like every other backstop: nothing the reader did
+/// asked for it, and an undo that put a card back into the other list's pile would restore the
+/// one filing every write refuses. Answers the number of card rows it moved or folded.
+pub fn refile_stray_theory_cards(conn: &Connection) -> Result<usize, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let piles: Vec<(i64, i64, Option<String>)> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT DISTINCT cat.id, cat.deck_id, cat.sync_uid
+                   FROM deck_cards dc JOIN deck_categories cat ON cat.id = dc.category_id
+                  WHERE dc.variant = 'theory' AND cat.variant = 'live'
+                  ORDER BY cat.id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+    let mut moved = 0;
+    for (live, deck_id, uid) in piles {
+        let derived = uid.as_deref().map(crate::schema::theory_pile_uid);
+        let named: Option<i64> = match &derived {
+            Some(d) => tx
+                .query_row(
+                    "SELECT id FROM deck_categories
+                      WHERE sync_uid = ?1 AND deck_id = ?2 AND variant = 'theory'",
+                    params![d, deck_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?,
+            None => None,
+        };
+        let target = match named {
+            Some(id) => id,
+            // Found by kind or name, or made under the derived uid (`counterpart_in`'s insert).
+            None => counterpart_in(&tx, deck_id, THEORY_VARIANT, live)?,
+        };
+        let strays: Vec<(i64, String, Option<String>, i64)> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, card_id, finish, quantity FROM deck_cards
+                      WHERE category_id = ?1 AND variant = 'theory' ORDER BY id",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![live], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| e.to_string())?;
+            rows
+        };
+        for (row, card_id, finish, quantity) in strays {
+            let filed: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM deck_cards
+                      WHERE deck_id = ?1 AND variant = 'theory' AND category_id = ?2
+                        AND card_id = ?3 AND coalesce(finish, '') = coalesce(?4, '')",
+                    params![deck_id, target, card_id, finish],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            match filed {
+                Some(into) => {
+                    tx.execute(
+                        "UPDATE deck_cards SET quantity = quantity + ?2, updated_at = unixepoch()
+                          WHERE id = ?1",
+                        params![into, quantity],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    tx.execute("DELETE FROM deck_cards WHERE id = ?1", params![row])
+                        .map_err(|e| e.to_string())?;
+                }
+                None => {
+                    tx.execute(
+                        "UPDATE deck_cards SET category_id = ?2, updated_at = unixepoch()
+                          WHERE id = ?1",
+                        params![row, target],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
+            moved += 1;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(moved)
+}
+
+/// The launch half of [`refile_stray_theory_cards`]' gate, `convert_legacy_picks_at_launch`'s
+/// shape: a device in no group repairs here, and a device in one only once
+/// [`THEORY_PILES_READY`] says a pull at v53 has landed — until then the pull repairs instead.
+/// Idempotent, so a launch with nothing stray costs one read.
+pub fn refile_stray_theory_cards_at_launch(conn: &Connection) -> Result<usize, String> {
+    let waits: bool = conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM sync_group)
+                    AND NOT EXISTS (SELECT 1 FROM sync_state WHERE key = ?1)",
+            [THEORY_PILES_READY],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if waits {
+        return Ok(0);
+    }
+    refile_stray_theory_cards(conn)
+}
+
+/// The pull half: what `sync_engine::client::pull` runs behind every pull that read everything
+/// and advanced its cursor, which is where a laggard's theory card first arrives. Sets
+/// [`THEORY_PILES_READY`] and repairs, **captured** — `apply` has returned.
+pub fn refile_stray_theory_cards_after_pull(conn: &Connection) -> Result<usize, String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO sync_state (key, value) VALUES (?1, '1')",
+        [THEORY_PILES_READY],
+    )
+    .map_err(|e| e.to_string())?;
+    refile_stray_theory_cards(conn)
 }
 
 /// Make a new `kind = 'main'` category in one list. Refuses a name that list already has —
@@ -4959,6 +5139,140 @@ mod tests {
         assert_eq!(
             unchanged.sort_order, 1,
             "the row written before the stale id must have rolled back"
+        );
+    }
+
+    // ── v53's net: a theory card left in a live pile ──────────────────────────────────
+
+    /// A live pile under a uid the caller names, with one theory card filed in it — what a v52
+    /// peer's write leaves on a device that has already climbed v53. Answers `(deck, pile)`.
+    fn stray(conn: &Connection, uid: &str, quantity: i64) -> (i64, i64) {
+        let d = deck(conn, "Plan");
+        let pile = category(conn, d, "main", "Ramp");
+        conn.execute(
+            "UPDATE deck_categories SET sync_uid = ?2 WHERE id = ?1",
+            params![pile, uid],
+        )
+        .unwrap();
+        deck_card_variant(conn, d, "bolt", pile, "theory", quantity);
+        (d, pile)
+    }
+
+    /// Where each theory card of a deck is filed: `(pile name, pile variant, quantity)`.
+    fn theory_filing(conn: &Connection, deck_id: i64) -> Vec<(String, String, i64)> {
+        conn.prepare(
+            "SELECT cat.name, cat.variant, dc.quantity
+               FROM deck_cards dc JOIN deck_categories cat ON cat.id = dc.category_id
+              WHERE dc.deck_id = ?1 AND dc.variant = 'theory' ORDER BY dc.id",
+        )
+        .unwrap()
+        .query_map([deck_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    #[test]
+    fn a_theory_card_in_a_live_pile_is_refiled_into_a_plan_pile_named_after_it() {
+        let conn = conn();
+        let (d, live) = stray(&conn, "u-ramp", 3);
+
+        assert_eq!(refile_stray_theory_cards_at_launch(&conn).unwrap(), 1);
+        assert_eq!(
+            theory_filing(&conn, d),
+            [("Ramp".to_owned(), "theory".to_owned(), 3)]
+        );
+        let uid: String = conn
+            .query_row(
+                "SELECT sync_uid FROM deck_categories WHERE deck_id = ?1 AND variant = 'theory'",
+                [d],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            uid,
+            crate::schema::theory_pile_uid("u-ramp"),
+            "the pile a repair makes is named the way the rung names its clones"
+        );
+        let still: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM deck_categories WHERE id = ?1 AND variant = 'live')",
+                [live],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(still, "the actual list keeps its own pile");
+        assert_eq!(
+            refile_stray_theory_cards_at_launch(&conn).unwrap(),
+            0,
+            "idempotent: nothing is stray the second time"
+        );
+    }
+
+    #[test]
+    fn a_stray_the_plans_pile_already_holds_is_folded_into_it() {
+        let conn = conn();
+        let (d, _) = stray(&conn, "u-ramp", 3);
+        let plan = theory_category(&conn, d, "main", "Ramp");
+        deck_card_variant(&conn, d, "bolt", plan, "theory", 2);
+
+        assert_eq!(refile_stray_theory_cards(&conn).unwrap(), 1);
+        assert_eq!(
+            theory_filing(&conn, d),
+            [("Ramp".to_owned(), "theory".to_owned(), 5)],
+            "one row, the copies of both"
+        );
+    }
+
+    /// **A paired device waits for a pull**, `convert_legacy_picks_at_launch`'s gate: behind a
+    /// pull it has heard a peer's repair of the same stray, which is what keeps the fold from
+    /// adding the copies twice. And the repair is **captured**, so the pile it made reaches the
+    /// peers under the derived name.
+    #[test]
+    fn a_paired_device_refiles_behind_a_pull_and_announces_the_pile() {
+        let conn = conn();
+        crate::sync_engine::capture::install(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'dev-a', x'00', x'01', 'dev-a', 0);
+             INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+             VALUES (1, 'g', 0, x'02', 0);",
+        )
+        .unwrap();
+        let (d, _) = stray(&conn, "u-ramp", 3);
+        let before: i64 = conn
+            .query_row("SELECT coalesce(max(seq), 0) FROM sync_ops", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(refile_stray_theory_cards_at_launch(&conn).unwrap(), 0);
+        assert_eq!(
+            theory_filing(&conn, d),
+            [("Ramp".to_owned(), "live".to_owned(), 3)],
+            "a paired launch leaves it for the pull"
+        );
+        assert_eq!(refile_stray_theory_cards_after_pull(&conn).unwrap(), 1);
+        assert_eq!(
+            theory_filing(&conn, d),
+            [("Ramp".to_owned(), "theory".to_owned(), 3)]
+        );
+        let announced: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sync_ops
+                                WHERE seq > ?1 AND tbl = 'deck_categories' AND uid = ?2)",
+                params![before, crate::schema::theory_pile_uid("u-ramp")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            announced,
+            "the plan pile is announced under the derived name"
+        );
+        assert_eq!(
+            refile_stray_theory_cards_at_launch(&conn).unwrap(),
+            0,
+            "the pull opened the launch gate, and there is nothing left"
         );
     }
 }

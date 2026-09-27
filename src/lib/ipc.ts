@@ -2113,8 +2113,8 @@ export type CategoryKind = "main" | "side" | "commander" | "companion" | "maybe"
  *
  * That last sentence is the entire reason this is a column and not a name list. "Ramp", "Draw",
  * "Removal" and "Lands" are exactly what a person calls their own piles, and
- * `DECK_CATEGORY_GRAIN` is `(deck_id, name)` — one pile per name per deck — so a rule reading
- * the *name* would quietly take over the pile a reader made deliberately. **The name is the
+ * `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)` — one pile per name per list — so a rule
+ * reading the *name* would quietly take over the pile a reader made deliberately. **The name is the
  * user's; the kind is what the rules read**, and provenance is the same kind of fact as the
  * kind.
  *

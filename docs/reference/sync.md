@@ -1940,6 +1940,35 @@ or the token stacks spec and plan say before 2026-09-27 that an op or a stream "
 for good" or is "held" for the next pull, read *dropped, with the sender's later ops in that page* —
 which is still exactly what a v51 client does. From this build on, the table above decides.
 
+### A pile's list is on the wire since user schema v53
+
+Issue [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561) gave `deck_categories` a
+`variant`, so a deck's Theory and Actual lists each hold their own piles. `variant` is on the
+capture spec, and it is the second term of **both** apply grains —
+`deck_id = ? AND variant = ? AND name = ?` and `deck_id = ? AND variant = ? AND kind = ? AND
+kind <> 'main'` — so a live "Ramp" and a theory "Ramp" of one deck are two rows on every device,
+while two devices that each make a theory Sideboard still merge on the kind grain.
+`apply/tests.rs`' `a_plans_pile_never_folds_into_the_decks_pile_of_the_same_name` holds both.
+
+**An op that carries no `variant` binds neither grain**, because `grain_values` answers `None` for a
+missing field, and that is deliberate rather than an oversight: an update op carries only the
+fields that moved, so a rename op names a pile's new `name` and not its list, and defaulting the
+missing term to `'live'` would match a renamed *theory* pile to the live pile of that name. So an
+older sender's insert is placed by uid alone and lands on `'live'`, the column's default.
+
+**The rung's clones are named, not minted.** Every device climbs v53 on its own with capture off, so
+`schema::theory_pile_uid` derives each clone's uid from its original's, and every device names the
+same theory pile the same way without announcing it. **A device still on v52 is the case that
+breaks, both ways.** Its writes after a peer climbed file theory cards into the one pile set it
+knows, so they reach the climber in a *live* pile — which `deck_meta::refile_stray_theory_cards`
+repairs, captured, behind every advancing pull (and at launch on an unpaired device or once a pull
+at v53 has landed), making the plan pile under the derived uid so every device that repairs the
+same stray converges on one row. What the climber sends, the v52 device misreads: it ignores
+`variant`, so a theory pile's insert matches the live pile of that name on its `(deck_id, name)`
+grain and the two merge under one uid there. Nothing a v53 build ships can reach a v52 applier,
+**so every device in a group is updated before it syncs across v53**, the rule v52 set for its own
+table.
+
 ### The two `CHECK`s differ and the applier knows it
 
 `collection_entries.quantity` is `CHECK (quantity >= 0)` and clamps: a stepper taken to zero is a
