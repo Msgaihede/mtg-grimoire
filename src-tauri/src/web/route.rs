@@ -148,6 +148,7 @@ pub const COMMANDS: &[&str] = &[
     "collection_add",
     "collection_set_quantity",
     "collection_update",
+    "collection_set_printing",
     "collection_remove",
     "collection_import_commit",
     "collection_folder_list",
@@ -1492,6 +1493,21 @@ pub fn call(
                 command,
                 crate::collection_source::with_write_owned(state, |c| {
                     crate::collection::update_entry(c, id, &patch)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The card pane's "Use this printing" on a collection row. `with_write_owned` for
+        // `collection_update`'s reason and not `wishlist_set_printing`'s plain `with_write`: the
+        // facet index's `owned` dimension is keyed by printing, and this moves copies between two.
+        "collection_set_printing" => {
+            let id: i64 = field(command, args, "id")?;
+            let card_id: String = field(command, args, "cardId")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::collection::set_entry_printing(c, id, &card_id)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -4727,9 +4743,13 @@ mod tests {
         //
         // **189 when token stacks met the shelves branch** — `awk` over the merged array, not
         // 187 plus or minus either side's change.
+        //
+        // **190 since issue #564 routed `collection_set_printing`** — the card pane's printing
+        // change on a collection row. `awk` over the array as it stands on this branch; if a
+        // merge turns this red, take the number from `left` rather than adding one to it.
         assert_eq!(
             COMMANDS.len(),
-            189,
+            190,
             "update this number when a command is added"
         );
     }
