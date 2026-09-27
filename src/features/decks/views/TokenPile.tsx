@@ -54,8 +54,9 @@
  * and the band is where a token at 0 is found and counted. **A token nothing in the deck makes is
  * drawn as a rule-break card is** (spec §3.5): the card's edge and its chin in the destructive
  * colour and `NOT MADE BY DECK` in the rule-break mark's corner on the two card drawings, and the
- * same words as a small destructive tag after the name on the two compact ones. And every card
- * carries **Remove printing** (spec §3.4), the one way to take a hand-added token off the deck.
+ * same words as a small destructive tag after the name on the two compact ones. And every stored
+ * entry, in all four views, carries **Remove printing** (spec §3.4), the one way to take a
+ * hand-added token off the deck.
  *
  * ## One name per control, and the subtitle is in every one
  *
@@ -125,9 +126,10 @@ export interface TokenPile {
    *  a token with two entries would share between them. */
   setQuantity: (entry: TokenEntryRef, quantity: number) => void;
   /**
-   * **Remove printing** — one stored entry, deleted (managed tokens spec §3.4). Drawn on the two
-   * card drawings' controls, on every card that is a stored entry. Absent draws no button, which is
-   * a host that has not wired the write — never a statement about the token.
+   * **Remove printing** — one stored entry, deleted (managed tokens spec §3.4). Drawn in all four
+   * views on every entry that is stored — the two card drawings' controls column and the two compact
+   * drawings' lines alike. Absent draws no button, which is a host that has not wired the write —
+   * never a statement about the token.
    */
   remove?: (entry: TokenEntryRef) => void;
   /** Open the one printing picker the editor mounts, to swap this entry. The whole view, so the
@@ -242,6 +244,46 @@ function CardRemove({ view, pile }: { view: DeckTokenView; pile: TokenPile }) {
       )}
     >
       <Trash2 aria-hidden="true" className={QUANTITY_STEPPER_CARD_ICON} />
+    </button>
+  );
+}
+
+/**
+ * **Remove printing on a line of the two compact drawings** (managed tokens spec §3.4: every tile,
+ * band and pile) — {@link CardRemove}'s press at the compact scale: the `xs` stepper's own 20px box
+ * beside it (the band's tile button, character for character), so the stepper and the trash read as
+ * one set of controls. The same write and the same name — `tokenEntryName("Remove", …)`, one entry,
+ * one name on every surface — and the same two gates: a stored entry only, and only where the host
+ * wired the write. `size` picks the box: the Text line's 20px, the Table row's 28px beside its art
+ * button.
+ */
+function LineRemove({
+  view,
+  pile,
+  size,
+}: {
+  view: DeckTokenView;
+  pile: TokenPile;
+  size: "line" | "row";
+}) {
+  const tip = useTooltip();
+  const remove = pile.remove;
+  if (remove === undefined || view.implicit) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => remove(entryRef(view))}
+      aria-label={tokenEntryName("Remove", view)}
+      {...tip("Remove printing", { describes: false })}
+      className={cn(
+        "grid shrink-0 place-items-center rounded-md border border-border text-dim",
+        size === "line" ? "size-5" : "size-7",
+        "hover:text-destructive",
+        PRESS,
+        FOCUS,
+      )}
+    >
+      <Trash2 aria-hidden="true" className="size-3.5" />
     </button>
   );
 }
@@ -619,8 +661,9 @@ export function TokenGridPile({
  * The Text view's pile — a trailing group of lines in `TextRow`'s grammar: a 22px line per entry
  * with the quantity in the data face and the name, the subtitle dim after it and the entry's finish
  * mark in the tail. The line itself is the press that opens the printing picker on that entry; the
- * stepper rides over its tail on hover, as a deck line's does. A token nothing in the deck makes
- * carries `NOT MADE BY DECK` as a tag right after its name ({@link NotMadeByDeckTag}).
+ * stepper rides over its tail on hover, as a deck line's does, with **Remove printing** beside it
+ * ({@link LineRemove}). A token nothing in the deck makes carries `NOT MADE BY DECK` as a tag right
+ * after its name ({@link NotMadeByDeckTag}).
  */
 export function TokenTextPile({ pile }: { pile: TokenPile }) {
   const headingId = useId();
@@ -672,7 +715,7 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
             </button>
             <span
               className={cn(
-                "absolute inset-y-0 right-1 flex items-center rounded bg-surface pl-1",
+                "absolute inset-y-0 right-1 flex items-center gap-1 rounded bg-surface pl-1",
                 REVEALED_ON_CARD,
               )}
             >
@@ -683,6 +726,7 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
                 label={tokenEntryName("Quantity of", view)}
                 onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
+              <LineRemove view={view} pile={pile} size="line" />
             </span>
           </li>
         ))}
@@ -699,9 +743,11 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
  * The Table view's pile — a trailing section under the table's bands, as a compact list rather
  * than more `VirtualTable` rows: its columns (price, owned, rarity, printing) are facts about a
  * deck card that a token does not have, and a row with six empty cells reads as a row that failed
- * to load. Four things per entry: the stepper, the name (with the entry's finish mark, and
+ * to load. Five things per entry: the stepper, the name (with the entry's finish mark, and
  * `NOT MADE BY DECK` after it for a token the deck does not make) over its subtitle, what makes
- * it, and the press that opens the printing picker on that entry.
+ * it, the press that opens the printing picker on that entry, and **Remove printing**
+ * ({@link LineRemove}) — its own column, empty on an implicit entry, so every row's art button
+ * stays in one column down the list.
  */
 export function TokenTablePile({ pile }: { pile: TokenPile }) {
   const headingId = useId();
@@ -721,7 +767,7 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
         {pile.tokens.map((view) => (
           <li
             key={view.entryKey}
-            className="grid min-h-9 grid-cols-[6.5rem_minmax(12rem,3fr)_minmax(0,2fr)_auto] items-center gap-x-3 px-2 py-1 text-sm"
+            className="grid min-h-9 grid-cols-[6.5rem_minmax(12rem,3fr)_minmax(0,2fr)_auto_1.75rem] items-center gap-x-3 px-2 py-1 text-sm"
           >
             <span className="flex justify-center">
               <QuantityStepper
@@ -764,6 +810,11 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
             >
               <ImageIcon aria-hidden="true" className="size-3.5" />
             </button>
+            {/* A cell of its own even where nothing is drawn in it, so the grid keeps five
+                columns and every art button above and below stays where the eye expects it. */}
+            <span className="flex justify-center">
+              <LineRemove view={view} pile={pile} size="row" />
+            </span>
           </li>
         ))}
       </ul>

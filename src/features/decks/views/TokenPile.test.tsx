@@ -20,7 +20,13 @@ import { deckCardScale, STACK_OPEN_ATTR, stackHeight } from "../CardStack";
 import { CARD_BODY_ATTR, DECK_GROUP_ATTR } from "../cardControl";
 import { tokenCountWords } from "../CountPill";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
-import { pileTokens, tokenArtName, tokenEntryName, type DeckTokenView } from "../deckTokens";
+import {
+  entryRef,
+  pileTokens,
+  tokenArtName,
+  tokenEntryName,
+  type DeckTokenView,
+} from "../deckTokens";
 import { DECK_CARD_ATTR } from "../dnd";
 import {
   TOKEN_PILE_ATTR,
@@ -636,6 +642,35 @@ describe.each([
     expect([...tag.classList].filter((c) => c !== "shrink-0" && c !== "whitespace-nowrap")).toEqual(
       recipe,
     );
+  });
+
+  /**
+   * **Remove printing on every line, as on every card** (managed tokens spec §3.4: every tile, band
+   * and pile — the final review's M3). The same write and the same name as the band's tile and the
+   * two card drawings, so one entry answers to one name on every surface: a token's foil and plain
+   * entries are two presses, each reaching its own entry.
+   */
+  it("removes the entry its Remove printing is drawn on", () => {
+    const [plain, foil] = TWO_ENTRIES;
+    const pile = pileOf([plain, foil, HAND_ADDED]);
+    renderWith(draw(pile));
+
+    fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Remove", foil) }));
+    expect(pile.remove).toHaveBeenCalledTimes(1);
+    expect(pile.remove).toHaveBeenCalledWith(entryRef(foil));
+    fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Remove", HAND_ADDED) }));
+    expect(pile.remove).toHaveBeenLastCalledWith(entryRef(HAND_ADDED));
+    // One name per entry: three entries, three distinct Remove buttons.
+    expect(screen.getAllByRole("button", { name: /^Remove / })).toHaveLength(3);
+  });
+
+  it("draws no Remove on an implicit entry, nor without a remove to call", () => {
+    renderWith(draw(pileOf([token({ implicit: true, quantity: 3 })])));
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+    cleanup();
+
+    renderWith(draw({ ...pileOf([token()]), remove: undefined }));
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
   });
 });
 
