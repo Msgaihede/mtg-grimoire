@@ -11190,14 +11190,16 @@ describe("the whole command table", () => {
    * three every stored preference has, not three facts about marketplaces.
    *
    * The refusal is the one worth the assertion. `printing_group_by` discards a mode it does not
-   * know *in silence*, so a fake that accepted `"rarity"` would save it, read back `"artist"`,
+   * know *in silence*, so a fake that accepted `"rarity"` would save it, read back `"released"`,
    * and look to a story exactly like a preference that worked — which is the bug the backend's
    * validation exists to make unreachable, and therefore the bug this file has to be capable of
    * refusing in the same place.
    */
-  it("falls back to artist on a missing or unknown grouping row, and refuses a bad write", () => {
-    expect(readHandlers(makeDb()).printing_group_by()).toBe("artist");
-    expect(readHandlers(makeDb({ printingGroupBy: "rarity" })).printing_group_by()).toBe("artist");
+  it("falls back to release date on a missing or unknown grouping row, and refuses a bad write", () => {
+    expect(readHandlers(makeDb()).printing_group_by()).toBe("released");
+    expect(readHandlers(makeDb({ printingGroupBy: "rarity" })).printing_group_by()).toBe(
+      "released",
+    );
     expect(readHandlers(makeDb({ printingGroupBy: "price" })).printing_group_by()).toBe("price");
 
     // Every mode the picker offers, not just the default: the setting outlives the process, so
