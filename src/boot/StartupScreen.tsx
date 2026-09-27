@@ -53,16 +53,7 @@ export function StartupScreen({ status }: StartupScreenProps) {
   const talking = useDelayedFlag(status.state === "loading", ACTIVITY_DELAY_MS);
 
   return (
-    <div
-      className="flex h-dvh flex-col overflow-hidden bg-bg text-text"
-      // `AppShell`'s three insets, for `AppShell`'s reason — on a phone the ground runs under the
-      // status bar and the cut-out. An inline style because a mistyped arbitrary value emits no rule.
-      style={{
-        paddingTop: "var(--safe-t)",
-        paddingLeft: "var(--safe-l)",
-        paddingRight: "var(--safe-r)",
-      }}
-    >
+    <div className="flex h-dvh flex-col overflow-hidden bg-bg text-text">
       <TitleBar />
 
       {/* `m-auto` on the column rather than `justify-center` on the scroller: a centred flex

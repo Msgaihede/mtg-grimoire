@@ -164,8 +164,9 @@ export const Searching: Story = {
 };
 
 /**
- * The rail with no pane beside it — a phone, or a window narrow enough that 232 and 480 cannot
- * share a line.
+ * The rail with no pane beside it — a page too narrow for 232 and 480 to share a line, which the
+ * app's 1024px window floor does not reach today; `SettingsNav`'s own doc has the arithmetic and
+ * why the shape is kept anyway.
  *
  * **This is the story the container query exists for, and a browser is the only place it can be
  * seen**: the row is 420px, the two items wrap, the rail becomes the full width of the page, and

@@ -1,10 +1,10 @@
 /**
- * The narrowest window each target promises to be usable in.
+ * The smallest window the app promises to be usable in — the one promise this module carries.
  *
- * **These are three different promises, and conflating them is the mistake this module exists
- * to prevent.** A good many files in this repo say "the app's 1024px floor" as though it were a
- * property of the app; it is a property of *one target*, enforced by `tauri.conf.json`'s
- * `minWidth`, and a browser tab and a phone honour nothing of the sort.
+ * **It is enforced by `tauri.conf.json`, not by anything here.** The window's `minWidth` and
+ * `minHeight` are what stop a reader dragging it smaller; these constants only quote them, so a
+ * story or a test can be drawn at the floor without typing `1024` again. The quote is what can
+ * rot, which is why this module's test reads the two numbers out of the file that enforces them.
  *
  * They are **widths to look at, not breakpoints to branch on.** Where a control row folds is a
  * question about that row's own box — `FilterBar` answers it with `@container/fb` and
@@ -19,19 +19,3 @@ export const DESKTOP_FLOOR_PX = 1024;
 
 /** `src-tauri/tauri.conf.json`'s `minHeight`. */
 export const DESKTOP_FLOOR_HEIGHT_PX = 700;
-
-/**
- * The phone frame the design round is drawn in — a 390×844 CSS viewport, which is the iPhone
- * 12/13/14 and sits within a pixel or two of the common Android flagship in CSS pixels.
- *
- * **Chosen as a hard case rather than as a device.** It is narrow enough that
- * `CardGrid.columnsFor` floors at one column against today's 170px tile, which is the failure
- * the wall's round exists to answer.
- */
-export const PHONE_PX = 390;
-
-/** The same frame's height, before any browser chrome is taken off it. */
-export const PHONE_HEIGHT_PX = 844;
-
-/** The middle frame — a portrait tablet, where the deck editor's two columns become possible again. */
-export const TABLET_PX = 768;

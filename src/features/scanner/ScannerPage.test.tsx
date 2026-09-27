@@ -153,27 +153,14 @@ function frames(...verdicts: ScannerVerdict[]) {
   });
 }
 
-/** `useNarrowWindow`'s answer, at read time — the hook keeps no `MediaQueryList`. */
-function windowIsNarrow(narrow: boolean) {
-  vi.spyOn(window, "matchMedia").mockImplementation(
-    (media: string) =>
-      ({
-        matches: narrow,
-        media,
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      }) as unknown as MediaQueryList,
-  );
-}
-
-/** The video box — the one the two layout arms size differently. */
+/** The video box — the camera's picture, with the detector's strip laid over it. */
 function videoBox(container: HTMLElement): HTMLElement {
   const box = container.querySelector("video")?.parentElement;
   if (!box) throw new Error("no video box");
   return box;
 }
 
-/** The layout row: the camera's column and the tray's, side by side or stacked. */
+/** The layout row: the camera's column and the tray's, side by side. */
 function row(container: HTMLElement): HTMLElement {
   const found = videoBox(container).parentElement?.parentElement;
   if (!found) throw new Error("no layout row around the camera");
@@ -302,42 +289,14 @@ describe("ScannerPage", () => {
     }
   });
 
-  it("stacks the camera above the tray on a phone and puts it beside the camera otherwise", async () => {
+  it("puts the tray beside the camera, the video box taking what the row leaves", async () => {
     refused();
-    windowIsNarrow(true);
-    const narrow = mount();
+    const { container } = mount();
     await screen.findByRole("status", { name: "Scanner status" });
-    expect(row(narrow.container)).toHaveClass("flex-col");
-    // The video box is sized by its own aspect ratio here rather than by what is left over. A
-    // zero-basis `flex-1` under this scrolling column yields its free space to the `shrink-0`
-    // tray beside it, so `flex-1` on a phone is a camera that collapses to nothing the moment
-    // the tray grows — which is why the class must be absent and not merely outranked.
-    expect(videoBox(narrow.container)).toHaveClass("shrink-0");
-    expect(videoBox(narrow.container).classList.contains("flex-1")).toBe(false);
-    expect(videoBox(narrow.container).style.aspectRatio).not.toBe("");
-    narrow.unmount();
-
-    windowIsNarrow(false);
-    const wide = mount();
-    await screen.findByRole("status", { name: "Scanner status" });
-    expect(row(wide.container).classList.contains("flex-col")).toBe(false);
-    expect(videoBox(wide.container)).toHaveClass("flex-1");
-    expect(videoBox(wide.container).classList.contains("shrink-0")).toBe(false);
-    expect(videoBox(wide.container).style.aspectRatio).toBe("");
-  });
-
-  it("gives the phone's video box the camera's own shape once the stream reports one", async () => {
-    const restore = shimVideo();
-    opens();
-    windowIsNarrow(true);
-    vi.mocked(ipc.scannerFrame).mockReturnValue(new Promise(() => {}));
-    try {
-      const { container } = mount();
-      // 4:3 is the placeholder a starting or refused camera gets; 1280×720 is `shimVideo`'s.
-      await waitFor(() => expect(videoBox(container).style.aspectRatio).toBe("1280 / 720"));
-    } finally {
-      restore();
-    }
+    expect(row(container).classList.contains("flex-col")).toBe(false);
+    expect(videoBox(container)).toHaveClass("flex-1");
+    expect(videoBox(container).classList.contains("shrink-0")).toBe(false);
+    expect(videoBox(container).style.aspectRatio).toBe("");
   });
 
   it("shows the Match panel behind the Developer switch, and hides it again", async () => {
