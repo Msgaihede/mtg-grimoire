@@ -51,6 +51,18 @@ export interface ValidationIssue {
    * sideboard's size): highlighting sixty rows says nothing the sentence did not.
    */
   cardIds?: string[];
+  /**
+   * The **rows** a card mark files this finding under — `deck_cards.id` values — and set only by
+   * `validateForMarks`, never by `validateDeck`.
+   *
+   * `cardIds` names a printing, and one printing is often several rows: the same Sol Ring in an
+   * active pile and a parked one. The two passes behind the marks judge different rows — the
+   * deck's findings are about the active rows, the parked pass's about the parked ones — so a
+   * mark filed by printing put the active piles' singleton break on the parked Sol Ring too, and
+   * printed a ban twice on a card in both (issue #554). Only the pass knows which rows it judged,
+   * so the pass says; `violations.ts` files by these and never by `cardIds`.
+   */
+  rowIds?: number[];
 }
 
 /**

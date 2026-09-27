@@ -31,7 +31,9 @@ const FRAME_WAIT = 5_000;
 const meta = {
   title: "Decks/TheoryDiffDialog",
   component: TheoryDiffDialog,
-  args: { open: true, deckId: 4, onDismiss: fn(), onClose: fn() },
+  // `onSent` is spied rather than left out: the footer's press reports what it did through it
+  // as the dialog closes (issue #553), and the three `Send…` plays below assert on it.
+  args: { open: true, deckId: 4, onDismiss: fn(), onClose: fn(), onSent: fn() },
   parameters: {
     // The dialog is `fixed inset-0` — it covers the window, so a padded canvas would only draw a
     // frame around a scrim that ignores it.
@@ -151,7 +153,7 @@ export const Filtered: Story = {
  * here.
  */
 export const WishlistOneRow: Story = {
-  play: async ({ canvas }) => {
+  play: async ({ canvas, args }) => {
     const copter = (await canvas.findByText("Smuggler's Copter")).closest("li")!;
     const button = within(copter).getByRole("button", {
       name: /Wishlist 2 more Smuggler's Copter/,
@@ -171,24 +173,68 @@ export const WishlistOneRow: Story = {
     await expect(within(jace).getByRole("button", { name: /Wishlist/ })).toHaveTextContent(
       "Wishlist",
     );
+    // **And the dialog stays open** (issue #553): only the footer's press closes it. A reader
+    // pressing a row's button is working down a list, and each press answers on its own button.
+    await expect(args.onDismiss).not.toHaveBeenCalled();
+    await expect(args.onSent).not.toHaveBeenCalled();
   },
 };
 
-/** The footer's one press over everything ticked, and the sentence it answers with. One wish per
- *  card, folding rather than duplicating, so a second press would raise lines rather than make
- *  new ones. */
+/**
+ * The footer's one press over everything ticked — **and the dialog closes on it** (issue #553).
+ *
+ * One wish per card, folding rather than duplicating, so a second press would *raise* every
+ * wish the first one wrote. The reader kept that fold and asked instead for the press to be
+ * unmistakably done: a success hands the host what it did through `onSent` and then leaves
+ * through `onDismiss`, the door that gives the caret back to `Compare`. The dialog stays drawn
+ * here only because a story's `open` is an arg nobody flips — the two calls are the claim.
+ */
 export const SendAll: Story = {
-  play: async ({ canvas }) => {
+  play: async ({ canvas, args }) => {
     await canvas.findByText("Smuggler's Copter");
 
     await userEvent.click(canvas.getByRole("button", { name: "Send 5 selected to wishlist" }));
 
-    // The dialog's arrival, waited out once — see `Shopping`. The press above is not a substitute
-    // for it: `userEvent`'s own waits are timers, and the frame this needs is a `rAF`.
-    await waitFor(
-      async () => await expect(await canvas.findByText("Sent. 5 wishes updated.")).toBeVisible(),
-      { timeout: FRAME_WAIT },
-    );
+    await waitFor(() => expect(args.onDismiss).toHaveBeenCalledTimes(1), {
+      timeout: FRAME_WAIT,
+    });
+    await expect(args.onSent).toHaveBeenCalledWith({ wishes: 5, destination: null });
+    // The scrim's door is the one that moves no caret, and it is not the one a press inside the
+    // dialog takes.
+    await expect(args.onClose).not.toHaveBeenCalled();
+    // Nothing is said in the footer on the way out: the sentence is the host's now.
+    await expect(canvas.queryByText(/wishes updated/)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * **A refused press keeps the dialog open**, with the backend's own sentence in the footer — the
+ * reader has nothing to be handed back to yet, and a closed dialog could not say why.
+ *
+ * `busy` is the fault that refuses a write and leaves the reads alone, so the list arrives and
+ * only the press fails.
+ */
+export const SendRefused: Story = {
+  parameters: { fake: { fault: "busy" } },
+  play: async ({ canvas, args }) => {
+    // The dialog's arrival, waited out once — see `Shopping`.
+    await waitFor(async () => expect(await canvas.findByText("Smuggler's Copter")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
+
+    await userEvent.click(canvas.getByRole("button", { name: "Send 5 selected to wishlist" }));
+
+    await expect(
+      await canvas.findByText(
+        "The card database is busy finishing a sync. Try that again in a moment.",
+      ),
+    ).toBeVisible();
+    await expect(args.onDismiss).not.toHaveBeenCalled();
+    await expect(args.onSent).not.toHaveBeenCalled();
+    // And the press is there to be tried again.
+    await expect(
+      canvas.getByRole("button", { name: "Send 5 selected to wishlist" }),
+    ).toBeEnabled();
   },
 };
 
@@ -201,7 +247,7 @@ export const SendAll: Story = {
  * button worth reading: five rows minus one is four *wishes*, not four copies.
  */
 export const SendSome: Story = {
-  play: async ({ canvas }) => {
+  play: async ({ canvas, args }) => {
     // The dialog's arrival, waited out once — see `Shopping`.
     await waitFor(async () => expect(await canvas.findByText("Smuggler's Copter")).toBeVisible(), {
       timeout: FRAME_WAIT,
@@ -214,10 +260,11 @@ export const SendSome: Story = {
     await expect(canvas.getByText(/4 of 5 selected/)).toBeVisible();
     await userEvent.click(canvas.getByRole("button", { name: "Send 4 selected to wishlist" }));
 
-    await waitFor(
-      async () => await expect(await canvas.findByText("Sent. 4 wishes updated.")).toBeVisible(),
-      { timeout: FRAME_WAIT },
-    );
+    // Four wishes, not five — and said on the way out, since the dialog closes on it.
+    await waitFor(() => expect(args.onDismiss).toHaveBeenCalledTimes(1), {
+      timeout: FRAME_WAIT,
+    });
+    await expect(args.onSent).toHaveBeenCalledWith({ wishes: 4, destination: null });
   },
 };
 
@@ -231,13 +278,14 @@ export const SendSome: Story = {
  * picked here is a drawer a reader could have made.
  *
  * **One destination for the whole dialog**, and the play walks every place it is said: the
- * trigger, each row's own button and the sentence the press answers with. All three come out of
- * one `useWishDestinationName` lookup, which is why they cannot disagree — and the point of the
+ * trigger, each row's own button and the answer the press hands its host as the dialog closes.
+ * All three come out of one `useWishDestinationName` lookup, which is why they cannot disagree
+ * — and the point of the
  * `Shopping` story beside this one is that at the root none of them says anything at all, so a
  * reader who never touches the control gets the dialog exactly as it was.
  */
 export const SendToFolder: Story = {
-  play: async ({ canvas }) => {
+  play: async ({ canvas, args }) => {
     // The dialog's arrival, waited out once — see `Shopping`.
     await waitFor(async () => expect(await canvas.findByText("Smuggler's Copter")).toBeVisible(), {
       timeout: FRAME_WAIT,
@@ -264,11 +312,11 @@ export const SendToFolder: Story = {
 
     await userEvent.click(canvas.getByRole("button", { name: "Send 5 selected to wishlist" }));
 
-    await waitFor(
-      async () =>
-        await expect(await canvas.findByText("Sent. 5 wishes updated in Ordered.")).toBeVisible(),
-      { timeout: FRAME_WAIT },
-    );
+    // The folder's name travels out with the answer, so the host's sentence can say where.
+    await waitFor(() => expect(args.onDismiss).toHaveBeenCalledTimes(1), {
+      timeout: FRAME_WAIT,
+    });
+    await expect(args.onSent).toHaveBeenCalledWith({ wishes: 5, destination: "Ordered" });
   },
 };
 

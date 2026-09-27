@@ -216,7 +216,7 @@ const THEORY_BUCKET_ORDER: Readonly<Record<TheoryTier, number>> = {
 
 function theoryBucket(
   plan: TheoryPlan,
-  card: Pick<DeckCard, "cardId" | "finish" | "name">,
+  card: Pick<DeckCard, "cardId" | "finish" | "finishes" | "name">,
 ): { key: string; name: string; order: number } {
   const tier = theoryTier(plan, card);
   return { key: `theory-${tier}`, name: THEORY_TIER_NAMES[tier], order: THEORY_BUCKET_ORDER[tier] };
