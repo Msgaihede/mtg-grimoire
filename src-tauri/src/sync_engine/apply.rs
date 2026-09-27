@@ -6,7 +6,12 @@
 //!    other half: an op replayed after a reconnect must add its delta once.
 //! 2. **A row is found by grain, then by uid, then inserted** — and where a grain match carries
 //!    a different uid, both devices set the row's uid to `min(theirs, ours)`, which converges
-//!    with no alias table.
+//!    with no alias table — except onto a row this page deletes, whose uid the sender retired, so
+//!    the incoming uid wins outright; and a group whose own ops end in a delete is found by its
+//!    uid alone, never by grain. A folder's or a deck's delete that would clear rows out of
+//!    it waits until a pass of its own, which runs only once a pass taking every other decision
+//!    has landed nothing, then re-homes whatever is still filed there itself, merging each onto
+//!    the root's twin under the lower uid ([`rehome`]).
 //! 3. **Foreign uids become local ids.** A parent the device has never seen is a *deferral*, not
 //!    an error.
 //! 4. **Cycles are broken and `needs_review` is written.**
@@ -67,7 +72,7 @@
 //!
 //! | The group | Class | Holds its device? | Recorded? |
 //! | --- | --- | --- | --- |
-//! | Names a parent deleted here — a `del` in this device's own `sync_ops` — or in this page, whose delete cascades to it | moot | no | no |
+//! | Names a parent deleted in this page, or anywhere a delete has ever reached this device — a `sync_gone` row — whose delete cascades to it | moot | no | no |
 //! | Any reason, and an op in it was sealed by a **newer** schema ([`Op::schema`]) | held · newer | yes, with no bound | no — the panel says it |
 //! | An unknown parent, from a same or older schema | held · waiting | yes, until [`Waiting::Release`] | when released |
 //! | An unknown table, or a row this database cannot build, from a same or older schema | dropped | no | yes |
@@ -78,10 +83,27 @@
 //! a parent whose key is `SET NULL` — a binder, a deck folder, a label — is not a deferral at
 //! all when it is gone, and the child is written without it, which is what the child's own
 //! device does to it when the delete arrives there. **A moot row this device already holds goes
-//! too**, where the group's placement under the deleted parent is the one that stands and no
-//! synced table files rows under it: that is what the delete's cascade does to it on the device
-//! that sent the group. A folder moot here is consumed and left standing. A moot or dropped
-//! group is *consumed*: it holds nothing, the ops after it apply, and the watermark passes it.
+//! too**, where the group's placement under the deleted parent is the one that stands: that is
+//! what the delete's cascade does to it on the device that sent the group. **A folder included**,
+//! whose rows are re-homed at the root first, as a delete's are; the `sync_gone` row its delete
+//! leaves is what lands a later child of it here the way it lands on the sender. **Both answers
+//! are given only on a retry pass that follows one on which nothing landed**
+//! ([`Why::DecidedOnRetry`], `run_groups`), so a parent that any group of the same page brings
+//! back through add-wins, however late in the page, is found instead, and the group is written as
+//! any other. **A deciding pass takes its decisions in page order**, so a decision there can come
+//! before a group that an earlier decision of the same pass unblocks. Ordinary commands reach that
+//! with a binder and a deck's group: a deck written without the deck folder deleted here lands its
+//! group on that pass, and the binder's delete — which ranks before the copies it holds — re-homed
+//! a copy the sender had moved out of it into that group before the move came round. **So a
+//! delete that would clear rows out of a folder — this arm's included — waits one pass further**,
+//! for an [`Attempt::Clear`] pass, which runs only after a deciding pass that landed nothing. A
+//! moot or `SET NULL` decision keeps the exposure only where the group that would bring its gone
+//! parent back lands on that pass alone and shares the deciding row's rank, so page order can put
+//! the decision first — a folder filed under a deck group, which no command builds. Whoever adds a
+//! `SET NULL` key into a tree table, or a command that files a folder under a deck group, makes
+//! that reachable, and owes the deciding pass a parents-first order within the table. A moot or
+//! dropped group is *consumed*: it holds nothing, the ops after it apply, and the watermark passes
+//! it.
 //! `client::pull` holds `PULL_CURSOR` while either held count is non-zero, so the relay hands the
 //! page back, and ends a waiting hold at its bound by applying the page once more with
 //! [`Waiting::Release`]. [sync.md](../../../docs/reference/sync.md) is the record.
@@ -130,16 +152,17 @@ pub struct ApplyReport {
     /// Of `deferred`, the ops in a group whose parent a later page may still bring, and the ops
     /// held behind one. [`Waiting::Release`] gives up on them.
     pub held_waiting: usize,
-    /// Ops consumed because they name a parent deleted here or in this page whose delete
-    /// cascades to them. The convergent outcome — the delete would have taken the child with it
-    /// on any device that held both — and recorded nowhere. **A row this device already holds
-    /// under the group's uid is deleted with it**, when the group's placement under that parent
-    /// is the one the fold says stands and no synced table files rows under it: a peer that moved
-    /// the row there loses it to the delete's cascade, and so does this device. Where this device
-    /// placed the row somewhere later it is left alone, because that move reaches the peer too —
-    /// though what the peer then holds depends on its own history: it applies the delete first,
-    /// parents before children, and the move rebuilds the row there only if it holds the row's
-    /// insert. A folder is never deleted this way; see `cascade_onto_the_row_here`.
+    /// Ops consumed because they name a parent deleted in this page, or anywhere a delete has
+    /// reached this device, whose delete cascades to them. The convergent outcome — the delete
+    /// would have taken the child with it on any device that held both — and recorded nowhere. **A
+    /// row this device already holds under the group's uid is deleted with it**, when the group's
+    /// placement under that parent is the one the fold says stands: a peer that moved the row
+    /// there loses it to the delete's cascade, and so does this device. Where this device placed
+    /// the row somewhere later it is left alone, because that move reaches the peer too — though
+    /// what the peer then holds depends on its own history: it applies the delete first, parents
+    /// before children, and the move rebuilds the row there only if it holds the row's insert. A
+    /// folder is deleted this way too, its rows re-homed at the root first; see
+    /// `cascade_onto_the_row_here`.
     pub moot: usize,
     /// Ops consumed because nothing that can arrive will let them apply: a table this build does
     /// not sync, a row it cannot build, or a released wait. Each group is an `error_log` row
@@ -626,6 +649,30 @@ enum Why {
     /// match that would move a row onto a uid another row wears. The constraint's own words,
     /// kept for the record, where they were once discarded.
     Unbuildable(String),
+    /// Not decided yet, because what the page does to the group is only known once other groups
+    /// have landed. Two things answer it (spec 2026-09-27 §3.3):
+    ///
+    /// - **A group naming a parent [`gone`] says was deleted**, whether its key cascades (moot) or
+    ///   is `SET NULL` (written without it), on the first attempt and on every
+    ///   [`Attempt::Retry`] pass — decided only on an [`Attempt::Decide`] or [`Attempt::Clear`]
+    ///   pass, each of which follows a pass on which nothing landed, so any group of the page that
+    ///   brings the parent back through add-wins has landed first, however late, and the parent
+    ///   is resolved again and found.
+    /// - **A delete that would clear rows out of a folder** — the delete arm's, or the moot arm's
+    ///   delete of a folder it holds — on every pass but an [`Attempt::Clear`] one while rows are
+    ///   still filed there, so the page's own re-filing of them lands first. A pass that finds the
+    ///   folder empty deletes it; otherwise it is taken only on a `Clear` pass, which follows a
+    ///   `Decide` pass on which nothing landed, and re-homes what is left at the root before the
+    ///   delete. **A `Decide` pass is not late enough for it**: that pass's own decisions land
+    ///   groups — a deck written without its gone folder, then the deck's group — and a copy the
+    ///   sender moved into such a group is re-filed only after them, later in that same pass.
+    ///
+    /// **Never classified**, short of the loop's cap: a withheld group is on every pass until it
+    /// is decided, `run_groups` stops only on a pass that withheld nothing, and it keeps only
+    /// each group's last answer. (Were one ever to reach [`classify`], it would be read like
+    /// [`Why::Unbuildable`]: held where a newer schema sealed the group, and dropped through the
+    /// final `match`'s `_` otherwise.)
+    DecidedOnRetry,
 }
 
 impl Why {
@@ -637,7 +684,45 @@ impl Why {
                 format!("the {table} row {uid} it belongs to never arrived")
             }
             Why::Unbuildable(e) => e.clone(),
+            Why::DecidedOnRetry => "decided on the page's retry".to_owned(),
         }
+    }
+}
+
+/// Which attempt at a group this is. `run_groups` tries every group once, then again for the
+/// ones that did not land on retry passes — after every other group in the page, which is what
+/// lets a delete that would clear rows wait for the sender's own re-filing, and a child of a
+/// deleted parent wait for a same-page resurrection of it ([`Why::DecidedOnRetry`], spec
+/// 2026-09-27 §3.3). `run_groups` says which kind of retry pass runs next, and when they stop.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Attempt {
+    /// Every group once, in page order.
+    First,
+    /// A retry pass on which every decision [`Why::DecidedOnRetry`] names stays withheld. The
+    /// first follows the first attempt, whatever it landed; every later one follows a pass on
+    /// which something landed or was decided — a `Decide` or `Clear` pass's decisions count —
+    /// because the page may yet bring a parent back, or re-file a row out of a folder it deletes.
+    Retry,
+    /// A retry pass after a `Retry` pass on which nothing landed: whatever the page could write
+    /// without a withheld decision it has written, so this one takes the decisions resting on
+    /// [`gone`] — moot or `SET NULL` — and still withholds every clearing delete, because what
+    /// those decisions land can re-file rows later in this same pass.
+    Decide,
+    /// A retry pass after a `Decide` pass on which nothing landed: nothing else in the page can
+    /// land any more, so this one takes every withheld decision, clearing deletes included — it
+    /// re-homes what is still filed in a folder at the root and deletes the folder.
+    Clear,
+}
+
+impl Attempt {
+    /// Whether a decision resting on [`gone`] is taken on this pass.
+    fn decides_gone(self) -> bool {
+        matches!(self, Attempt::Decide | Attempt::Clear)
+    }
+
+    /// Whether a delete that would clear rows out of a folder is taken on this pass.
+    fn clears(self) -> bool {
+        self == Attempt::Clear
     }
 }
 
@@ -648,7 +733,8 @@ enum Class {
     Newer,
     /// Held, for a parent a later page may still bring.
     Waiting,
-    /// Consumed silently: its parent was deleted, here or in this page, and the delete cascades.
+    /// Consumed silently: its parent was deleted — in this page, or anywhere a delete has reached
+    /// this device — and the delete cascades.
     Moot,
     /// Consumed and recorded: nothing that can arrive will let it apply.
     Dropped,
@@ -868,11 +954,88 @@ fn apply_in(
     Ok((report, held))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The most retry passes any `run_groups` call has made since a test last reset it — what the
+    /// fixed-point loop's tests read, so a loop that ran to its cap cannot pass for one that
+    /// stopped. Per thread, as each test runs on its own; test-only, like
+    /// `rehome::CASCADES_INTO_FOLDERS`.
+    static RETRY_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// One attempt at a batch, with the devices already known to be stalled cut short.
 ///
 /// Answers the groups it could not apply, each classified. Everything else — the soft parent,
 /// the cycle-break — happens here too, because a round that is going to be rolled back must not
 /// leave any of it behind.
+///
+/// # Every group once, then retry passes to a fixed point
+///
+/// The first attempt takes every group in page order. The groups that did not land are then
+/// retried, in page order, on **retry passes**, of three kinds:
+///
+/// - **[`Attempt::Retry`]** writes what it can and **withholds every decision resting on
+///   [`gone`]** — the moot arm and the `SET NULL` arm both answer [`Why::DecidedOnRetry`] and go
+///   round again — **and every delete that would clear rows out of a folder** still holding any.
+/// - **[`Attempt::Decide`]** runs only after a `Retry` pass on which **nothing landed**, and takes
+///   the decisions resting on `gone`. A decision is progress in its own right — a moot delete and
+///   its tombstone, or a row written without its parent — so the loop goes on with `Retry` passes
+///   after it. **It still withholds every clearing delete**, the moot arm's delete of a folder
+///   included.
+/// - **[`Attempt::Clear`]** runs only after a `Decide` pass on which nothing landed, and takes
+///   every decision still withheld: a clearing delete re-homes what is still filed in the folder
+///   at the root and deletes it.
+///
+/// A pass that landed or decided something is followed by a `Retry`. One that did neither but
+/// withheld a decision is followed by a `Decide` if it was a `Retry`, and by a `Clear` if it was a
+/// `Decide`; a `Clear` withholds nothing. A pass that neither progressed nor withheld ends the
+/// loop. A group whose parent is unknown and not gone goes round again; every other answer is
+/// final. **Only the last answer a group gave is classified**, so a hold is decided by the page as
+/// it finally stood.
+///
+/// **Why a decision waits for a pass on which nothing landed.** The group that brings a deleted
+/// parent back through add-wins can land later than the child that names the parent — later in
+/// the same pass, or on a later pass because it waits on a parent of its own. `b` holds `X` and
+/// deletes `P`; `a` moves `X` under `P`, renames `P`, makes `Outer` and moves `P` into it. The
+/// page meets `X`, `P`, `Outer`; `P` waits on `Outer` on the first attempt and is resurrected on
+/// the first retry pass — after `X` was met on it. Decided on that pass, `X` was deleted as moot
+/// and lost for good (`a_folder_moved_under_a_parent_resurrected_on_a_retry_pass_follows_it`, and
+/// `a_copy_filed_into_a_binder_resurrected_on_a_later_retry_pass_stays_in_it` for the `SET NULL`
+/// arm two passes in). A pass on which nothing landed is one after which no group of this page can
+/// land without a withheld decision, so no resurrection is still to come.
+///
+/// **Why a clearing delete waits one pass further, for a `Clear` pass.** The deciding pass's own
+/// decisions land groups, and those can unblock a re-filing later in that same pass. `b` holds a
+/// deck folder `F` and deletes it; `a` makes a deck `Q` in `F`, moves a
+/// copy `c` out of binder `B` into `Q`'s group and deletes `B`. The page meets `Q`, the group, `B`
+/// and `c`'s move, and nothing lands until the deciding pass writes `Q` without `F`; the group
+/// lands after it, and `B`, decided on that pass, re-homed `c` onto a root twin before `c`'s move
+/// came round — which then carried both copies into the group, or found no row and was dropped
+/// (`a_copy_moved_into_a_decks_group_the_page_makes_late_lands_there`, the moot arm's folder delete
+/// alongside). A `Clear` pass comes after a `Decide` pass that landed nothing, when nothing that
+/// could still re-file a row is left to land.
+///
+/// **Why more than one pass at all.** A child can be met before the parent it waits on has been
+/// decided. `a` renames `X`, makes `Z` under a `P` this device deleted, and moves `X` into `Z`:
+/// `X`'s group sorts ahead of `Z`'s, its oldest op being older than `Z`'s creation, so `X` asks
+/// after `Z` while `Z` is unknown and not yet gone; `Z` is tombstoned as moot on a `Decide` pass,
+/// and only a later pass finds `X` under a parent that is gone. With one retry `X` was held, and
+/// the release dropped `X`'s ops while this device kept `X` and `a`'s cascade took it
+/// (`a_folder_moved_into_one_made_under_a_parent_deleted_here_goes_on_both`). Retrying the
+/// withheld groups before the others instead answers that and breaks the opposite order
+/// (`a_copy_filed_into_a_binder_the_same_page_brings_back_stays_in_it`); going round again is
+/// right in both, because a group waiting on an unknown parent writes nothing.
+///
+/// **The cap is three times the page's group count plus one, and it is never reached.** Every pass
+/// that lands or decides something takes at least one group out of the waiting set for good, and
+/// the passes between two of those are at most two: a `Retry` that landed nothing is followed by
+/// a `Decide`, and a `Decide` that landed nothing by a `Clear`, which withholds nothing and so
+/// either decides something or ends the loop. A run that ends the loop is at most those same three
+/// passes, and it only comes with at least one group still waiting. So a page whose first attempt
+/// leaves `n` groups unwritten takes at most `3n` retry passes. The cap is there so a mistake in
+/// that reasoning is a pass too many rather than a hang. **The cost** is up to three passes for
+/// each link of the longest chain of waiting groups, over only the groups still waiting; a page
+/// with nothing withheld and nothing waiting pays the one retry it always paid.
 fn run_groups<'a>(
     conn: &Connection,
     groups: &'a [Group<'a>],
@@ -893,15 +1056,82 @@ fn run_groups<'a>(
             });
             continue;
         }
-        if let Outcome::Deferred(_) = write_group(conn, g, report, &mut soft, deleted)? {
+        if let Outcome::Deferred(_) =
+            write_group(conn, g, report, &mut soft, deleted, Attempt::First)?
+        {
             failed.push(g);
         }
     }
-    // A second attempt, because a batch can carry a child before its parent even when one
-    // device's own stream cannot: the relay hands over several devices' streams interleaved.
-    // **Only the second attempt's reason is kept**, since it is the one the page settled on.
-    for g in failed {
-        if let Outcome::Deferred(why) = write_group(conn, g, report, &mut soft, deleted)? {
+    // Retry passes, because a batch can carry a child before its parent even when one device's
+    // own stream cannot: the relay hands over several devices' streams interleaved. They are also
+    // what every decision resting on `gone` waits for ([`Why::DecidedOnRetry`]) — and not merely
+    // the first of them, but the first on which nothing else is still landing; a clearing delete
+    // waits one pass further still. The doc above says why, how many there can be, and when they
+    // stop.
+    let cap = 3 * groups.len() + 1;
+    let mut last: Vec<Option<Why>> = failed.iter().map(|_| None).collect();
+    let mut pending: Vec<usize> = (0..failed.len()).collect();
+    let mut passes = 0;
+    let mut attempt = Attempt::Retry;
+    while !pending.is_empty() {
+        passes += 1;
+        let mut progressed = false;
+        let mut withheld = false;
+        let mut again: Vec<usize> = Vec::new();
+        for i in pending {
+            match write_group(conn, failed[i], report, &mut soft, deleted, attempt)? {
+                Outcome::Written => {
+                    last[i] = None;
+                    progressed = true;
+                }
+                Outcome::Deferred(why) => {
+                    match &why {
+                        // A decision withheld — a gone-based one until a `Decide` pass, a delete
+                        // that would clear rows out of a folder until a `Clear` one.
+                        Why::DecidedOnRetry => {
+                            withheld = true;
+                            again.push(i);
+                        }
+                        // An unknown parent that is gone was the moot arm, which decided the
+                        // group; one that is not gone may yet be written or tombstoned by a group
+                        // a later pass lands, so it goes round again.
+                        Why::UnknownParent { table, uid } => {
+                            if gone(conn, table, uid, deleted)? {
+                                progressed = true;
+                            } else {
+                                again.push(i);
+                            }
+                        }
+                        _ => {}
+                    }
+                    last[i] = Some(why);
+                }
+            }
+        }
+        if passes >= cap {
+            break;
+        }
+        attempt = match (progressed, withheld, attempt) {
+            // Something landed or was decided, so a parent the page brings back, or a row it
+            // re-files out of a folder it deletes, may land next: keep withholding.
+            (true, _, _) => Attempt::Retry,
+            // Nothing landed and decisions are withheld: the page has done all it can without
+            // them, so take the ones resting on `gone` — and if that lands nothing either, the
+            // clearing deletes, which only then have nothing left to wait for.
+            (false, true, Attempt::First | Attempt::Retry) => Attempt::Decide,
+            (false, true, Attempt::Decide) => Attempt::Clear,
+            // A `Clear` pass withholds nothing, and a pass that neither landed nor withheld leaves
+            // only groups waiting on a parent the page does not carry.
+            (false, _, _) => break,
+        };
+        pending = again;
+    }
+    #[cfg(test)]
+    RETRY_PASSES.with(|c| c.set(c.get().max(passes)));
+    // **Only the last answer a group gave is kept**, since it is the one the page settled on — in
+    // page order, as the groups were met.
+    for (g, why) in failed.into_iter().zip(last) {
+        if let Some(why) = why {
             out.push(Deferral {
                 group: g,
                 class: classify(conn, g, &why, deleted, waiting)?,
@@ -970,13 +1200,19 @@ fn classify(
     })
 }
 
-/// Whether a parent this database cannot find was deleted: here, by the reader — a `del` for
-/// its uid in this device's own `sync_ops`, served by `idx_sync_ops_row` — or by a delete in
-/// this page.
+/// Whether a parent this database cannot find was deleted: in this page, or anywhere a delete has
+/// ever reached this device — the reader's own, a peer's applied here, and every row a cascade
+/// took with either, which is what `sync_gone` records (spec 2026-09-27 §3.1). One primary-key
+/// read.
 ///
-/// **A delete a peer made and this device applied on an earlier pull leaves no trace here**
-/// (`apply` runs inside `capture::suppressed`, and there is no tombstone table), so its child
-/// waits instead, and the client's bound ends it.
+/// **One source for all of them**, so an own delete and an applied one are asked the same way.
+/// Until user schema v54 this read a `del` in this device's own `sync_ops`, and a delete a peer
+/// made left nothing there — `apply` runs inside `capture::suppressed`, and so does every cascade
+/// it sets off — so a child of it arriving on a later page waited out the bound and was dropped,
+/// recorded, while its own device kept it at the root where the key is `SET NULL` (§1.2). The
+/// tombstone trigger ignores that guard, which is its point. **A delete applied here before the
+/// v54 rung left no row**, since the rung backfills only this device's own `del`s, and is still
+/// read as missing.
 fn gone(
     conn: &Connection,
     table: &str,
@@ -987,7 +1223,7 @@ fn gone(
         return Ok(true);
     }
     conn.query_row(
-        "SELECT 1 FROM sync_ops WHERE tbl = ?1 AND uid = ?2 AND kind = 'del' LIMIT 1",
+        "SELECT 1 FROM sync_gone WHERE tbl = ?1 AND uid = ?2",
         [table, uid],
         |_| Ok(()),
     )
@@ -998,8 +1234,12 @@ fn gone(
 
 /// A group made moot by a cascading parent that is gone, about a row **this device already
 /// holds**: delete that row, as the delete's cascade does on the device that sent the group — but
-/// only when the group's placement under that parent is the one that stands, and never for a row
-/// other rows are filed under.
+/// only when the group's placement under that parent is the one that stands. Answers whether it
+/// decided: `false` is a folder it would clear rows out of, on a pass that is not a `Clear` one,
+/// and writes nothing. **Called only on an [`Attempt::Decide`] or [`Attempt::Clear`] pass**, like
+/// every decision resting on [`gone`] ([`Why::DecidedOnRetry`]): each follows a pass on which
+/// nothing landed, so any group of the page that brings the parent back has landed — which
+/// `resolve_parent` then finds, and this is never reached.
 ///
 /// A peer moves a card into a pile deleted here. On the peer the card is in that pile when the
 /// delete arrives, and the cascade takes it; consuming the move here and touching nothing left the
@@ -1012,29 +1252,50 @@ fn gone(
 /// holds the row's insert — otherwise the move is a row it cannot build, skipped, and the two
 /// differ the other way (sync.md, *Held while it can resolve, skipped when it cannot*).
 ///
-/// **Not for a table any capture spec names as a parent** ([`is_a_parent`]) — the three folder
-/// tables, and the tables whose rows moot never finds here anyway (a deck, a pile, a label, a
-/// note). The delete is uncaptured and is no delete in the page, so `gone` cannot see it: a peer
-/// that moved a folder under one deleted here and then filed a deck in it would find the deck
-/// waiting on a folder nothing says is gone, and the release would drop the deck and every card
-/// in it — where on the peer the same delete cascades the folder and `SET NULL` puts the deck at
-/// the root (the scoped re-review of this delete). For those the moot arm stays what it was:
-/// consume the group and touch nothing.
+/// **A folder goes too, and the rows filed in it are re-homed first**, by the delete arm's own
+/// merge ([`rehome`]) and for its reasons: whatever is still filed there once the page's re-filing
+/// has landed is merged at the root one row at a time before the `DELETE`, whose `SET NULL` then
+/// has nothing to act on. **It is a clearing delete like the delete arm's, and waits as that one
+/// does**: while rows are still filed in the folder it decides only on a `Clear` pass, which
+/// follows a `Decide` pass on which nothing landed. A `Decide` pass alone was not late enough — its
+/// own decisions land groups, a deck written without its gone folder and then the deck's group,
+/// and a copy the sender moved out of this folder into such a group was re-homed here before its
+/// move came round later in that pass
+/// (`a_copy_moved_into_a_late_decks_group_out_of_a_moot_binder_over_a_…_root_twin_lands_there`).
+/// The copies the page's own ordinary re-filing moves out land before any deciding pass, which two
+/// dragged-copy tests pin
+/// (`a_copy_dragged_onto_a_…_root_twin_out_of_a_binder_moved_under_a_deleted_one_lands_once`).
+/// **Until user schema v54 a table any capture spec names as a parent was
+/// excluded here**, and the reason was `gone`: this delete is uncaptured and is no delete in the
+/// page, so while `gone` read only this device's own `sync_ops` it could not see it, and a peer
+/// that moved a folder under one deleted here and then filed a deck in it found the deck waiting
+/// on a folder nothing said was gone — the release dropped the deck and every card in it, where on
+/// the peer the same delete cascades the folder and `SET NULL` puts the deck at the root (the
+/// scoped re-review of this delete). So the folder was consumed and left standing, and what this
+/// device had filed into it stayed filed here alone. **The tombstones end that**: this `DELETE`
+/// writes a `sync_gone` row like any other, so the peer's later children of the folder land here
+/// the way the folder's key answers a delete, as they do there (spec 2026-09-27 §3.2).
+///
+/// **A row that is not here is tombstoned by hand**, where rows are filed under its table
+/// ([`tombstone`]): a `DELETE` that finds nothing fires no trigger, and a folder a peer made under
+/// a parent deleted here — consumed as moot on its first page — would leave the peer's next
+/// filing into it waiting on a folder nothing said was gone, while the peer's cascade puts that
+/// filing at the root. Written on the first attempt, as it was for one fix round, it sent a child
+/// in the same page to the root before a later group brought the parent back, and the retry then
+/// built the folder under that parent — the child at the root here and in the folder on the peer
+/// (`a_folder_made_under_a_parent_the_same_page_brings_back_keeps_its_copy`).
 ///
 /// Inside the pass's savepoint, like every other write of a round, so a round that is rolled back
-/// takes the delete with it. A row that is not here deletes nothing. **A delete this database
-/// refuses leaves the row where it is**, which is what the moot arm did before it deleted
-/// anything: nothing on the tables this reaches refuses one today, and a refusal that escaped
-/// would fail the apply on every pull after.
+/// takes the delete with it. **A delete this database refuses — the read of the doomed rows and
+/// the re-homing included — leaves the row where it is**, which is what the moot arm did before it
+/// deleted anything: a refusal that escaped would fail the apply on every pull after.
 fn cascade_onto_the_row_here(
     conn: &Connection,
     meta: &Meta,
     g: &Group,
     p: &Parent,
-) -> Result<(), String> {
-    if is_a_parent(meta.table) {
-        return Ok(());
-    }
+    attempt: Attempt,
+) -> Result<bool, String> {
     let uid = &g.ops[0].uid;
     let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
     all.extend(local_history(conn, meta.table, std::slice::from_ref(uid))?);
@@ -1042,27 +1303,59 @@ fn cascade_onto_the_row_here(
     let placed = g.resolved.parents.get(p.key).map(|(_, at)| at);
     let stands = combined.parents.get(p.key).map(|(_, at)| at);
     if placed.is_none() || placed != stands {
-        return Ok(());
+        return Ok(true);
     }
     conn.execute_batch("SAVEPOINT sync_moot_row")
         .map_err(|e| e.to_string())?;
-    let end = match conn.execute(
-        &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
-        [uid],
-    ) {
-        Ok(_) => "RELEASE sync_moot_row",
+    let doomed = rehome::doomed(conn, meta.table, uid);
+    if !attempt.clears() && doomed.as_ref().is_ok_and(|d| !d.is_empty()) {
+        conn.execute_batch("RELEASE sync_moot_row")
+            .map_err(|e| e.to_string())?;
+        return Ok(false);
+    }
+    let done = doomed
+        .and_then(|d| rehome::rehome(conn, &d))
+        .and_then(|()| {
+            conn.execute(
+                &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
+                [uid],
+            )
+            .map_err(|e| e.to_string())
+        })
+        .and_then(|n| match n {
+            0 => tombstone(conn, meta.table, uid),
+            _ => Ok(()),
+        });
+    let end = match done {
+        Ok(()) => "RELEASE sync_moot_row",
         Err(_) => "ROLLBACK TO sync_moot_row; RELEASE sync_moot_row",
     };
-    conn.execute_batch(end).map_err(|e| e.to_string())
+    conn.execute_batch(end).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
-/// Whether any synced table's capture spec names `table` as a parent — a table other rows are
-/// filed under. **Read off [`capture::TABLES`] rather than listed**, so a synced table that grows a
-/// child is excluded from the moot delete the day its spec says so.
-fn is_a_parent(table: &str) -> bool {
-    capture::TABLES
-        .iter()
-        .any(|s| s.parents.iter().any(|p| p.table == table))
+/// Record a delete of a row this device does not hold, where `table` is one other rows are filed
+/// under — `capture::parent_tables`, the set the tombstone trigger is installed on, so the two
+/// cannot disagree about which tables are recorded. Any other table is a no-op.
+///
+/// **The trigger records every delete that finds a row, and only those**: a delete of a row that
+/// is not here runs no `DELETE`, or one that takes nothing, and fires nothing. Two such deletes
+/// still say a parent is gone, and a child of it on a later page would otherwise wait out the
+/// bound: the delete arm's, of a parent a third device made and deleted between two of this
+/// device's pulls (spec 2026-09-27 §3.1, as amended), and the moot arm's, which runs only on a
+/// `Decide` or `Clear` pass, of a folder a peer made under one deleted here. `OR IGNORE`, so a
+/// second delete
+/// of one uid — a re-delivery included — writes nothing.
+fn tombstone(conn: &Connection, table: &str, uid: &str) -> Result<(), String> {
+    if !capture::parent_tables().contains(&table) {
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO sync_gone (tbl, uid) VALUES (?1, ?2)",
+        [table, uid],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// Whether deleting the row `p` names deletes the `table` row that names it — `ON DELETE
@@ -1237,14 +1530,51 @@ fn absent_value(p: &Parent) -> Sql {
 /// the lower uid was free — so a grain match onto a uid another local row wore failed
 /// `idx_{table}_uid`, the `?` unwound the whole batch, and the same page failed the same way on
 /// every pull after it.
+///
+/// # Onto a row this page deletes, the incoming uid wins outright
+///
+/// Where the row the grain finds wears a uid a `del` in this page names — `deleted`, which
+/// [`apply_in`] builds from the whole page, re-delivered deletes included — the sender **retired**
+/// that uid: it deleted the row and made this one in its place at the same grain. `min` is the
+/// wrong question there. `reset::clear_collection` deletes every folder and re-makes
+/// `Recently removed` and one group per deck in one write, and both are grained (partially, on
+/// `kind = 'removed'` and on `deck_id`), so on a peer whose old folders still hold copies the old
+/// rows' deletes wait for the retry ([`Why::DecidedOnRetry`]) while the re-made rows' inserts land on
+/// the old rows. Kept by `min` wherever the old uid sorted lower, the retried delete then took
+/// the very row the insert had just landed on, and the peer lost its holding area or a deck's
+/// group with nothing recorded (spec 2026-09-27 §3.3, as amended). Under the incoming uid the
+/// retried delete finds no row to take. [`adopt_uid`]'s taken-check still applies.
+///
+/// # A group whose own ops end in a delete is found by its uid alone
+///
+/// The other half of the same fact. Where the group's **own** incoming ops fold to deleted
+/// ([`Group::resolved`]), the sender made that row and discarded it, so its delete can only ever
+/// mean a row wearing that uid — and a grain match could only hand it a row this device keeps.
+/// Two ways that happened, both a row deleted with nothing recorded: `reset::clear_collection`
+/// run twice between two pulls (or a deck switched to Virtual and back twice) sends `del R`,
+/// `put R'` + `del R'`, `put R''` on one partial grain, and on the retry the `R'` group grain-hit
+/// `R''`, adopted by `min` and deleted it; and a copy a sender added and removed again grain-hit
+/// a copy of that printing the peer had made itself, and deleted that. So no grain is asked, and
+/// a row not wearing the uid is simply not this group's to delete — a baseline put and a later
+/// delete of it in one first-contact page included, which leaves the peer's own twin standing on
+/// purpose.
+///
+/// **Keyed on the group's own fold, and not on the page's delete set**, which is `deleted`'s
+/// other use above: a row deleted and put back in one page — an edit on a third device beating
+/// the delete, add-wins — names its uid in a `del` and still folds to a row that exists. That
+/// group grain-matches like any put, so a twin this device made on its own meets it as one row;
+/// found by its uid alone it inserted beside the twin and was dropped as unbuildable
+/// (`a_row_deleted_and_put_back_in_one_page_still_meets_its_twin`).
 fn find_row(
     conn: &Connection,
     meta: &Meta,
     g: &Group,
     parents: &BTreeMap<&'static str, Sql>,
+    deleted: &BTreeSet<(&str, &str)>,
 ) -> Result<Found, String> {
     let op_uid = g.ops[0].uid.clone();
-    for grain in meta.grains {
+    let grains: &[Grain] = if g.resolved.deleted { &[] } else { meta.grains };
+    for grain in grains {
         if let Some(values) = grain_values(grain, g, parents) {
             let found: Option<String> = conn
                 .query_row(
@@ -1259,7 +1589,12 @@ fn find_row(
                 .map_err(|e| e.to_string())?;
             if let Some(found) = found {
                 if found != op_uid {
-                    let winner = found.clone().min(op_uid.clone());
+                    let retired = deleted.contains(&(meta.table, found.as_str()));
+                    let winner = if retired {
+                        op_uid.clone()
+                    } else {
+                        found.clone().min(op_uid.clone())
+                    };
                     let rename = (winner != found).then(|| (found.clone(), winner.clone()));
                     return Ok(Found {
                         uid: Some(winner),
@@ -1399,6 +1734,7 @@ fn write_group<'a>(
     report: &mut ApplyReport,
     soft: &mut Vec<(&'a Group<'a>, String)>,
     deleted: &BTreeSet<(&str, &str)>,
+    attempt: Attempt,
 ) -> Result<Outcome, String> {
     let (Some(meta), Some(spec)) = (meta_of(g.table), spec_of(g.table)) else {
         // A table this build does not sync: a newer device's new one, which is held, or one
@@ -1427,10 +1763,37 @@ fn write_group<'a>(
             // left every child it found in place with the column cleared, and that is what the
             // child's own device does to it when the delete reaches it; consumed here instead, it
             // would be a card one device holds and the other never will. So it is written
-            // absent, like a parent the op never named.
+            // absent, like a parent the op never named. A moot row this device holds goes with
+            // it, as the cascade takes it on the sender ([`cascade_onto_the_row_here`]).
+            //
+            // **Every decision resting on `gone` is made on a `Decide` or `Clear` pass, and only
+            // there** — both arms, the moot one and the absent one; the first attempt and every
+            // `Retry` pass withhold it ([`Why::DecidedOnRetry`]). `gone` answers for the page as it
+            // stands, and a group of the same page can still bring the parent back: an edit made
+            // on the sender after this device's delete resurrects it through add-wins, and that
+            // group can sort after the child, or land only on a retry pass because it waits on a
+            // parent of its own. Decided early, a folder moved under the parent was deleted here as
+            // moot and could not be rebuilt from its sparse move when the parent returned, and a
+            // copy filed into a deleted binder was written at the root while the peer kept it in
+            // the binder. A `Decide` pass comes only after a pass on which nothing landed, so
+            // every group that could bring the parent back has; `resolve_parent`, asked again at
+            // the top of this loop, finds it, and the group is written like any other — only a
+            // parent still unknown and still gone reaches the arms below. A moot delete of a
+            // folder that still holds rows waits one pass further, for a `Clear` pass, like the
+            // delete arm's own ([`cascade_onto_the_row_here`]). **The cost: every group
+            // naming a gone parent takes at least two retry passes** — one that withholds, one
+            // that decides. That is a put, or a put and its delete in one page, naming the
+            // parent: a bare `del` carries no parents, resolves `Resolution::None` and never
+            // reaches this arm. Each pass is one more `write_group` over a parent already not
+            // found, cheap beside the pull.
             Resolution::Unknown(uid) if gone(conn, p.table, &uid, deleted)? => {
+                if !attempt.decides_gone() {
+                    return Ok(Outcome::Deferred(Why::DecidedOnRetry));
+                }
                 if cascades(conn, meta.table, p)? {
-                    cascade_onto_the_row_here(conn, meta, g, p)?;
+                    if !cascade_onto_the_row_here(conn, meta, g, p, attempt)? {
+                        return Ok(Outcome::Deferred(Why::DecidedOnRetry));
+                    }
                     return Ok(Outcome::Deferred(Why::UnknownParent {
                         table: p.table,
                         uid,
@@ -1450,11 +1813,11 @@ fn write_group<'a>(
         return Ok(Outcome::Deferred(why));
     }
 
-    let existing = find_row(conn, meta, g, &parents)?;
+    let existing = find_row(conn, meta, g, &parents, deleted)?;
 
     // **The second fold, over this device's own history as well.** See the module doc: a
-    // tombstone folded on its own has nothing to lose to, so add-wins would never fire on the
-    // two-device group, which is the ordinary one.
+    // tombstone — a `del` op, not a `sync_gone` row — folded on its own has nothing to lose to,
+    // so add-wins would never fire on the two-device group, which is the ordinary one.
     let mut uids: Vec<String> = vec![g.ops[0].uid.clone()];
     if let Some(uid) = &existing.uid {
         uids.push(uid.clone());
@@ -1485,11 +1848,56 @@ fn write_group<'a>(
 
     if combined.deleted {
         if let Some(uid) = &existing.uid {
-            conn.execute(
-                &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
-                [uid],
-            )
-            .map_err(|e| e.to_string())?;
+            // **A delete that would clear rows out of a folder waits — whether or not it would
+            // collide yet — and is taken only on a `Clear` pass, the one that follows a `Decide`
+            // pass on which nothing landed.** A folder's or a deck's `DELETE` clears the folder
+            // off every row filed beneath it (`SET NULL`), and the page takes parents first, so it
+            // runs ahead of the sender's own writes to those rows — rank 7 or 9, which a retry
+            // pass finds landed. Merging now would fold a copy the sender has itself just merged
+            // onto the root, and its `+n` for the twin would count it a second time; and a delete
+            // that collides with nothing *yet* is no safer, because the root copy it will meet may
+            // be in the same page, and re-homing onto the free grain first let that copy's insert
+            // land on the re-homed row. **Waiting one pass was not enough, and neither was waiting
+            // for a `Decide` pass**: a copy the sender moved into a folder that lands only on a
+            // retry pass is moved there only on that pass, after this delete — a folder made late
+            // in the page lands on the first retry pass, and a deck's group made in a deck folder
+            // deleted here lands only on the `Decide` pass that writes its deck — and re-homing
+            // first folded it onto a root twin: its move then carried both copies into the folder,
+            // or found no row and was dropped (spec 2026-09-27 §3.3, as amended). A pass that
+            // finds nothing filed here deletes at once.
+            //
+            // **Never `?` from here.** A refusal — the read of the doomed rows included — rolls
+            // the group back and is a row this database cannot build: dropped and recorded, or
+            // held where the sender is newer. A delete that failed through `?` failed the whole
+            // apply, and the same page failed it again on every pull after (spec §1.1).
+            let doomed = rehome::doomed(conn, meta.table, uid);
+            if !attempt.clears() && doomed.as_ref().is_ok_and(|d| !d.is_empty()) {
+                rollback()?;
+                return Ok(Outcome::Deferred(Why::DecidedOnRetry));
+            }
+            let done = doomed
+                .and_then(|d| rehome::rehome(conn, &d))
+                .and_then(|()| {
+                    conn.execute(
+                        &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
+                        [uid],
+                    )
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+                });
+            if let Err(e) = done {
+                rollback()?;
+                return Ok(Outcome::Deferred(Why::Unbuildable(e)));
+            }
+        } else if let Err(e) = tombstone(conn, meta.table, &g.ops[0].uid) {
+            // **A delete of a row this device never held still says the row is gone.** A parent a
+            // third device made and deleted between two of this device's pulls arrives as a put
+            // and a `del` folding to deleted, finds no row here and so fires no trigger; a child
+            // another device filed into it, on a later page, would then wait out the bound and be
+            // dropped where its own device keeps it at the root (spec 2026-09-27 §3.1, as
+            // amended). A refusal is the delete arm's: rolled back, and never `?`.
+            rollback()?;
+            return Ok(Outcome::Deferred(Why::Unbuildable(e)));
         }
         conn.execute_batch(&format!("RELEASE {savepoint}"))
             .map_err(|e| e.to_string())?;
@@ -1998,5 +2406,6 @@ fn advance_watermarks(
     Ok(())
 }
 
+mod rehome;
 #[cfg(test)]
 mod tests;

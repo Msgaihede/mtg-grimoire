@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { DeckFinish, DeckPullCandidate, DeckPullRow } from "@/lib/ipc";
-import { NO_CHOICE, planPull, preferSource, pullKey, toggleRow } from "./pullPlan";
+import {
+  NO_CHOICE,
+  deckCardPullKey,
+  planPull,
+  preferSource,
+  pullKey,
+  toggleRow,
+} from "./pullPlan";
 
 /**
  * One collection row that could fill a hole. Only `entryId` and `quantity` are ever read — the
@@ -94,6 +101,49 @@ describe("pullKey", () => {
     ];
 
     expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+/** Issue #563's card: Palantír of Orthanc, HOC 85, a Surge Foil Scryfall sells in no other way. */
+const PALANTIR = { cardId: "palantir-hoc", finishes: '["foil"]' };
+
+/** A printing sold in both finishes, where a row that says nothing has not chosen the foil. */
+const FOILABLE = { cardId: "bolt-m10", finishes: '["nonfoil","foil"]' };
+
+describe("deckCardPullKey", () => {
+  /**
+   * **The plan is folded on the finish a row plays, so the card has to be keyed the same way.**
+   * `deck_pull_plan` answers `"foil"` for a foil-only printing whatever its deck rows stored — an
+   * add from the search stores no finish, an add out of the binder stores the copy's own `foil` —
+   * so a card keyed on the stored column would miss its own row and `Collection ▸ Pull …` would
+   * hand the dialog nothing. Both spellings land on the plan row's key, and so does an etched-only
+   * printing's unsaid row.
+   */
+  it("keys an unsaid row of a single-finish printing as the finish the plan folds it to", () => {
+    const planned = pullKey(row(PALANTIR.cardId, 1, [candidate(1, 1)], "foil"));
+
+    expect(deckCardPullKey({ ...PALANTIR, finish: null })).toBe(planned);
+    expect(deckCardPullKey({ ...PALANTIR, finish: "foil" })).toBe(planned);
+    expect(deckCardPullKey({ cardId: "p-etched", finish: null, finishes: '["etched"]' })).toBe(
+      pullKey({ cardId: "p-etched", finish: "etched" }),
+    );
+  });
+
+  /**
+   * **A printing with a choice is untouched**: `soleFinish` answers nothing there, so an unsaid row
+   * is still the regular copy and the foil row beside it is still a second shortfall filled from a
+   * second pile. The column saying nothing at all (`finishes: null`) reads the same way.
+   */
+  it("keeps the regular copy and the foil of a printing sold in both apart", () => {
+    const regular = deckCardPullKey({ ...FOILABLE, finish: null });
+    const foil = deckCardPullKey({ ...FOILABLE, finish: "foil" });
+
+    expect(regular).toBe(pullKey(row(FOILABLE.cardId, 1, [candidate(1, 1)])));
+    expect(foil).toBe(pullKey(row(FOILABLE.cardId, 1, [candidate(1, 1)], "foil")));
+    expect(regular).not.toBe(foil);
+    expect(deckCardPullKey({ cardId: "bolt-lea", finish: null, finishes: null })).toBe(
+      "bolt-lea|",
+    );
   });
 });
 

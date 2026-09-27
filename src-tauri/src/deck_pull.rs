@@ -129,10 +129,6 @@ const REMOVED_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
 /// against custody, and it is answered there. The custody half is untouched and is the whole of
 /// this fence.
 const LIVE: &str = crate::schema::DECK_VARIANTS[0];
-/// `FINISHES[0]` — the word [`crate::deck::normalise_finish`] maps *away* on a deck row and the
-/// one `collection_entries.finish` stores for a plain copy. Reading it back is the whole of the
-/// translation between the two tables.
-const NONFOIL: &str = crate::schema::FINISHES[0];
 
 /// One printing the live list is short of, and every copy on the reader's desk that could fill
 /// it.
@@ -149,10 +145,12 @@ pub struct PullRow {
     pub name: String,
     pub set_code: String,
     pub collector_number: String,
-    /// The deck row's finish, where `None` is nonfoil — [`crate::deck::normalise_finish`]'s
-    /// translation carried through unchanged, so this reads exactly as
-    /// [`crate::deck::DeckCardRow::finish`] does and a caller holding both never has to tell two
-    /// spellings of "regular" apart.
+    /// The finish the deck rows **play** — [`crate::deck::played_finish`], where `None` is the
+    /// regular copy. Not [`crate::deck::DeckCardRow::finish`] as stored: an unsaid row of a
+    /// printing sold only in foil reads `foil` here (2026-09-27), because the foil copies are what
+    /// can fill it, so a caller matching a deck row against this reads that row through
+    /// `playedFinish` too — `pullPlan.ts`' `deckCardPullKey`, and never `pullKey` on the stored
+    /// finish, which misses every such row.
     pub finish: Option<String>,
     /// Copies of this printing and finish the live list still wants, summed over its **active**
     /// piles — `quantity - owned_quantity`, which is the same subtraction the editor's missing
@@ -283,7 +281,7 @@ const CANDIDATE_SQL: &str = "SELECT e.id, e.quantity, e.folder_id, f.name, f.kin
        FROM collection_entries e
        LEFT JOIN collection_folders f ON f.id = e.folder_id
       WHERE e.card_id = ?1
-        AND e.finish = ?2
+        AND e.finish IN (?2, ?5)
         AND e.quantity > 0
         AND (e.folder_id IS NULL OR f.kind <> ?3)
       ORDER BY CASE
@@ -334,9 +332,24 @@ pub fn plan(conn: &Connection, deck_id: i64) -> Result<Vec<PullRow>, String> {
     // grain, the inactive-pile skip, the read order and the "one pile named once" rule are all
     // written down on it. What is left in this function is the half that is a pull's own: the
     // candidates, and dropping the rows that have none.
-    let mut rows: Vec<PullRow> = crate::deck::live_shortfall(conn, deck_id)?
-        .into_iter()
-        .map(|s| PullRow {
+    //
+    // One prepared statement for the whole plan rather than one per row: a 100-card list short
+    // of thirty printings is thirty index lookups on `idx_collection_card`, not thirty prepares.
+    let mut stmt = conn.prepare(CANDIDATE_SQL).map_err(|e| e.to_string())?;
+    let mut rows: Vec<PullRow> = Vec::new();
+    for s in crate::deck::live_shortfall(conn, deck_id)? {
+        let candidates = candidates(
+            &mut stmt,
+            &s.card_id,
+            s.finish.as_deref(),
+            s.finishes.as_deref(),
+        )?;
+        // **Dropped rather than returned empty**, so `candidates` is never empty on the wire and
+        // a plan of zero rows is the whole of "nothing here can be filled".
+        if candidates.is_empty() {
+            continue;
+        }
+        rows.push(PullRow {
             card_id: s.card_id,
             name: s.name,
             set_code: s.set_code,
@@ -345,51 +358,50 @@ pub fn plan(conn: &Connection, deck_id: i64) -> Result<Vec<PullRow>, String> {
             short: s.short,
             categories: s.categories,
             image_uris: s.image_uris,
-            candidates: Vec::new(),
-        })
-        .collect();
-
-    // One prepared statement for the whole plan rather than one per row: a 100-card list short
-    // of thirty printings is thirty index lookups on `idx_collection_card`, not thirty prepares.
-    let mut stmt = conn.prepare(CANDIDATE_SQL).map_err(|e| e.to_string())?;
-    for row in &mut rows {
-        row.candidates = candidates(&mut stmt, &row.card_id, row.finish.as_deref())?;
+            candidates,
+        });
     }
-    // **Dropped rather than returned empty**, so `candidates` is never empty on the wire and a
-    // plan of zero rows is the whole of "nothing here can be filled".
-    rows.retain(|row| !row.candidates.is_empty());
     Ok(rows)
 }
 
 /// Run [`CANDIDATE_SQL`] for one printing and finish.
 ///
-/// The finish arrives in the deck's spelling, where `None` is regular, and leaves in the
-/// collection's, where the word is stored — [`NONFOIL`] is that one translation and it is not
-/// respelled anywhere else in this module.
+/// The finish arrives in the deck's spelling — the one the row **plays**, where `None` is regular
+/// — and leaves as every word a collection row may store for that copy:
+/// [`crate::deck::entry_finish`] and [`crate::deck::entry_spellings`], which are the crate's one
+/// translation between the two tables. On a printing sold only in foil that is `foil` *and* a
+/// `nonfoil` a writer mislabelled it with (2026-09-27); everywhere else it is the one word twice.
+/// Until then this bound the unsaid row's `nonfoil` and offered nothing for a card the reader was
+/// holding in foil.
 fn candidates(
     stmt: &mut rusqlite::Statement<'_>,
     card_id: &str,
     finish: Option<&str>,
+    finishes: Option<&str>,
 ) -> Result<Vec<PullCandidate>, String> {
-    let finish = finish.unwrap_or(NONFOIL);
+    let played = crate::deck::entry_finish(finish, finishes);
+    let [said, legacy] = crate::deck::entry_spellings(&played, finishes);
     let rows = stmt
-        .query_map(params![card_id, finish, DECK_KIND, REMOVED_KIND], |r| {
-            Ok(PullCandidate {
-                entry_id: r.get(0)?,
-                quantity: r.get(1)?,
-                folder_id: r.get(2)?,
-                folder_name: r.get(3)?,
-                folder_kind: r.get(4)?,
-                condition: r.get(5)?,
-                lang: r.get(6)?,
-                altered: r.get(7)?,
-                signed: r.get(8)?,
-                proxy: r.get(9)?,
-                misprint: r.get(10)?,
-                grading: r.get(11)?,
-                serial_number: r.get(12)?,
-            })
-        })
+        .query_map(
+            params![card_id, said, DECK_KIND, REMOVED_KIND, legacy],
+            |r| {
+                Ok(PullCandidate {
+                    entry_id: r.get(0)?,
+                    quantity: r.get(1)?,
+                    folder_id: r.get(2)?,
+                    folder_name: r.get(3)?,
+                    folder_kind: r.get(4)?,
+                    condition: r.get(5)?,
+                    lang: r.get(6)?,
+                    altered: r.get(7)?,
+                    signed: r.get(8)?,
+                    proxy: r.get(9)?,
+                    misprint: r.get(10)?,
+                    grading: r.get(11)?,
+                    serial_number: r.get(12)?,
+                })
+            },
+        )
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
@@ -658,6 +670,10 @@ mod tests {
     use crate::schema::tests::{deck as seed_deck, seed_card};
     use serde_json::Value;
 
+    /// `FINISHES[0]`, the collection's word for a plain copy — what most fixtures here file. The
+    /// module itself no longer spells it: [`crate::deck::entry_finish`] is the translation.
+    const NONFOIL: &str = crate::schema::FINISHES[0];
+
     /// **`foreign_keys` is ON**, as [`crate::db::open`] sets it for every connection the app
     /// hands out — [`crate::collection_alloc`]'s test suite opens the same way and for the same
     /// reason: `collection_entries.folder_id` SET NULLs and `collection_folders.deck_id`
@@ -911,6 +927,42 @@ mod tests {
             4,
             "the list is what it was — a pull writes no `deck_cards` row"
         );
+        assert!(plan(&conn, deck).unwrap().is_empty(), "no hole is left");
+    }
+
+    /// **An unsaid row of a printing sold only in foil is filled by the foil copies on the desk**
+    /// (issue #563's follow-up). Its NULL can only be the foil — the collection's own add offers
+    /// nothing else — so the candidates are the foil copies, and the row says `foil`, the finish
+    /// it plays, which is the key the per-card press looks the row up by. The candidate match was
+    /// `nonfoil`, so this dialog offered nothing for a card the reader was holding.
+    #[test]
+    fn an_unsaid_foil_only_row_is_filled_by_the_foil_copies_on_the_desk() {
+        let (conn, deck, cat) = fixture();
+        conn.execute(
+            "UPDATE cards SET finishes = '[\"foil\"]' WHERE id = 'bolt'",
+            [],
+        )
+        .unwrap();
+        add_deck_card(&conn, deck, cat, "bolt", 1, None);
+        let binder = seed_entry_as(&conn, "bolt", 1, None, "foil", "NM");
+
+        let rows = plan(&conn, deck).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].finish.as_deref(), Some("foil"));
+        assert_eq!(rows[0].candidates.len(), 1);
+        assert_eq!(rows[0].candidates[0].entry_id, binder);
+
+        from_collection(
+            &conn,
+            deck,
+            &[Pick {
+                entry_id: binder,
+                quantity: 1,
+            }],
+        )
+        .unwrap();
+        assert_eq!(group_copies(&conn, deck, "bolt"), 1);
+        assert_eq!(owned_in_deck(&conn, deck, "bolt"), 1);
         assert!(plan(&conn, deck).unwrap().is_empty(), "no hole is left");
     }
 

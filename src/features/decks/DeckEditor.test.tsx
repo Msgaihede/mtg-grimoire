@@ -5721,9 +5721,9 @@ describe("layerMatches", () => {
    * while the other is up — one slot, and both are modal — so this is asserted directly, which is
    * the same reason the export case above is a unit test rather than a press.
    *
-   * The card comparison is by `pullKey` rather than by object identity, because a `DeckCard` is a
-   * fresh object on every `deck_get`: the two `bolt()` calls below are two objects naming one row,
-   * which is exactly what a refetch under an open dialog produces.
+   * The card comparison is by `deckCardPullKey` rather than by object identity, because a
+   * `DeckCard` is a fresh object on every `deck_get`: the two `bolt()` calls below are two objects
+   * naming one row, which is exactly what a refetch under an open dialog produces.
    */
   it("tells the deck-wide pull from a card's", () => {
     const deckWide = { kind: "pull" } as const;
@@ -6901,6 +6901,30 @@ describe("DeckEditor — the Collection submenu", () => {
     ).toBeInTheDocument();
     expect(within(dialog).queryByRole("checkbox", { name: /^Pull Bear/ })).not.toBeInTheDocument();
     expect(deckPullFromCollection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A foil-only printing's row that said no finish is still narrowed to its own plan row**
+   * (issue #563's follow-up). `deck_pull_plan` folds on the finish a row *plays*, so a Surge Foil
+   * added from the search — `deck_cards.finish` NULL — comes back as a `"foil"` row. The dialog is
+   * narrowed here, in the editor, and a narrowing keyed on the stored finish handed it nothing:
+   * `Nothing to pull.` over two copies the reader owns.
+   */
+  it("opens the pull on a foil-only card's foil row when its row said no finish", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [bolt({ quantity: 4, ownedQuantity: 0, finishes: '["foil"]' })]),
+    );
+    deckPullPlan.mockResolvedValue([planRow([55, 56], { finish: "foil" })]);
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Pull Lightning Bolt, 4 copies, foil" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText("Nothing to pull.")).not.toBeInTheDocument();
   });
 
   /**

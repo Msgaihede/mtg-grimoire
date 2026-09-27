@@ -82,7 +82,7 @@ describe("theorySlot", () => {
 
   /**
    * **Issue #563: an unsaid row of a printing with no choice is spelled as the finish it plays.**
-   * `deck_theory.rs`' `played_finish` spells the plan's half the same way — `"palantir-hoc|foil"`
+   * `deck.rs`' `played_finish` spells the plan's half the same way — `"palantir-hoc|foil"`
    * for a plan that stored the foil *and* for one that stored nothing — so the live row has to, or
    * the Surge Foil the reader has in both lists misses its own slot. These are the literals that
    * file's `sole_finish_answers_only_for_a_printing_with_no_choice` asserts, from this side.
