@@ -3,12 +3,12 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { dndManager } from "@/lib/dndManager";
-import type { CollectionFolder, CollectionRow, DeckCategory, DeckFolder, WishlistFolder } from "@/lib/ipc";
+import type { CollectionRow, DeckCategory, DeckFolder } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
-import type { FolderNode } from "@/lib/folderTree";
-import { CollectionFolderCard, type CollectionFolderTotals } from "@/features/collection/CollectionFolderCard";
 import { CollectionTable } from "@/features/collection/CollectionTable";
-import { WishFolderCard } from "@/features/wishlist/WishFolderCard";
+import { ShelfHeading } from "@/features/shelves/ShelfHeading";
+import { useShelfDragSource } from "@/features/shelves/useShelfDrag";
+import type { Shelf } from "@/lib/shelves";
 import { DEFAULT_FOLDER_TREE_WIDTH_PX, FolderTree } from "@/features/decks/FolderTree";
 import type { FolderNode as DeckFolderNode } from "@/features/decks/folders";
 import { card } from "@/features/decks/validation/fixtures";
@@ -22,8 +22,9 @@ import { GridView } from "@/features/decks/views/GridView";
  * **What a drag in this app is to a reader who is not holding a mouse — pinned as it is, not as
  * it should be.**
  *
- * 3a removed dnd-kit's `Accessibility` plugin because its DOM mutations take the `listitem` role
- * off a folder card and add a tab stop per row, and kept `KeyboardSensor` on the stated grounds
+ * 3a removed dnd-kit's `Accessibility` plugin because its DOM mutations took the `listitem` role
+ * off a folder card (a folder heading's box, since folder shelves) and add a tab stop per row, and
+ * kept `KeyboardSensor` on the stated grounds
  * that "dragging a folder from the keyboard is unaffected". 3b then removed `KeyboardSensor` too,
  * for a different reason again — it answers Enter and Space with `preventDefault()` **and**
  * `stopImmediatePropagation()`, and from the moment every card in the app became a drag source
@@ -141,81 +142,52 @@ function tabReachable(a: Activator): boolean {
 // a hand-written stand-in would be measuring the stand-in.
 // ---------------------------------------------------------------------------------------------
 
-const COLLECTION_FOLDER: CollectionFolder = {
+/** A reader's own folder at the level's top, open — the one kind of heading that is a drag source. */
+const SHELF: Shelf = {
   id: 3,
+  kind: "folder",
+  group: "own",
   name: "Trade binder",
-  parentId: null,
-  kind: "user",
-  deckId: null,
-  sortOrder: 3,
+  pathIds: [3],
+  path: ["Trade binder"],
+  depth: 0,
+  indent: 0,
+  lead: [],
+  leadIds: [],
+  headless: false,
+  collapsed: false,
   locked: false,
-  syncUid: null,
 };
-
-const WISH_FOLDER: WishlistFolder = { id: 4, name: "Buy next", parentId: null, sortOrder: 4, managedDeckId: null };
-
-function collectionNode(): FolderNode<CollectionFolder> {
-  return { folder: COLLECTION_FOLDER, depth: 0, count: 0, children: [] };
-}
-
-function wishNode(): FolderNode<WishlistFolder> {
-  return { folder: WISH_FOLDER, depth: 0, count: 0, children: [] };
-}
 
 const ROW_MENU = { onContextMenu: vi.fn(), onKeyDown: vi.fn(), onClick: vi.fn() };
 
 /**
- * A folder card whose name is **not** being edited, which is the state both walls are in here.
- *
- * The rename field replaces the card's own button with an `<input>` and marks its `<form>`
- * `data-no-drag` — a different set of elements, and one press the sensor refuses — where every
- * measurement in this file is about the element a registration lands on. That element is the
- * `<li>` either way, so a renaming card would answer the same question with more moving parts.
- * The field's own drag guard is `CollectionFolderCard.test.tsx`'s.
+ * A heading wired the way both pages wire theirs: `useShelfDragSource` handed the folder and the
+ * cabinet it belongs to, its ref on the heading. The same component on both cabinets, so the one
+ * measurement is asked of each — which is what the two folder cards' two tests used to be.
  */
-const RESTING_RENAME = {
-  active: false,
-  pending: false,
-  onSubmit: vi.fn(),
-  onCancel: vi.fn(),
-};
-
-async function renderCollectionWall() {
-  render(
-    <ul aria-label="Folders">
-      <CollectionFolderCard
-        node={collectionNode()}
-        summary={{ cards: 12, value: 340.25 } as CollectionFolderTotals}
-        currency="usd"
-        onOpen={vi.fn()}
-        rowMenu={ROW_MENU}
-        rename={RESTING_RENAME}
-        canDrop={() => true}
-        onDropCard={vi.fn()}
-        canDropFolder={() => true}
-        onDropFolder={vi.fn()}
-      />
-    </ul>,
+function DraggableHeading({ scope }: { scope: "collection" | "wishlist" }) {
+  const drag = useShelfDragSource({ id: SHELF.id, name: SHELF.name, parentId: null }, scope);
+  return (
+    <ShelfHeading
+      shelf={SHELF}
+      stat="12 cards · $340.25"
+      peek={[]}
+      onToggle={vi.fn()}
+      onOpen={vi.fn()}
+      onAddFolder={vi.fn()}
+      onRename={vi.fn()}
+      menu={ROW_MENU}
+      dragRef={drag}
+    />
   );
-  await frame();
 }
 
-async function renderWishWall() {
+async function renderHeading(scope: "collection" | "wishlist" = "collection") {
   render(
-    <ul aria-label="Folders">
-      <WishFolderCard
-        node={wishNode()}
-        summary={null}
-        currency="usd"
-        onOpen={vi.fn()}
-        rowMenu={ROW_MENU}
-        rename={RESTING_RENAME}
-        canDrop={() => true}
-        onDropWish={vi.fn()}
-        canDropFolder={() => true}
-        onDropFolder={vi.fn()}
-      />
-    </ul>,
+    <TooltipProvider>
+      <DraggableHeading scope={scope} />
+    </TooltipProvider>,
   );
   await frame();
 }
@@ -388,25 +360,32 @@ async function renderCollectionTable() {
 
 describe("what a drag is to a screen reader", () => {
   /**
-   * **The measurement 3a refused the plugin on, restated so it cannot go stale silently.**
+   * **The measurement 3a refused the plugin on, taken on the heading that replaced the folder
+   * card** (folder shelves, 2026-09-26).
    *
-   * `Accessibility.registerEffect` stamps `role="button"` on any activator that is not a
-   * `<button>` and carries no role of its own — which is exactly a folder card's `<li>` — and
-   * `role="button"` on an `<li>` takes the `listitem` role away, so the wall stops being a list a
-   * screen reader can count. Both walls are asserted because both are `<li>`s and only one of
-   * them (`CollectionPage.test.tsx`) had a test that would have caught it.
+   * `Accessibility.registerEffect` stamps `role="button"` and a tab stop on any activator that is
+   * not a `<button>` and carries no role of its own — which is exactly a heading's root box. On a
+   * heading that would be worse than on the card it replaced: the box holds the chevron, the title,
+   * Add folder, Rename and the ⋯, so a `role="button"` around them would nest five buttons inside a
+   * sixth and put a stop in front of all of them. Measured on both cabinets, because both draw it.
+   *
+   * **`tabindex="-1"`, not absent**: a heading with a ⋯ menu takes `tabIndex={-1}` on its box
+   * (`ShelfHeading.tsx`) because a menu hands the caret back to the element its handler sits on.
+   * That is still no stop — `tabReachable` is false — and it is a `tabindex` of the box's own, so
+   * the plugin, were it ever back, would skip the box rather than stamp one.
    */
-  it("keeps every folder card a listitem, on both walls", async () => {
-    await renderCollectionWall();
-    expect(screen.getAllByRole("listitem")).toHaveLength(1);
-    expect(activators()).toEqual([{ tag: "li", role: null, tabindex: null, handled: false }]);
-  });
-
-  it("keeps every wishlist folder card a listitem too", async () => {
-    await renderWishWall();
-    expect(screen.getAllByRole("listitem")).toHaveLength(1);
-    expect(activators()).toEqual([{ tag: "li", role: null, tabindex: null, handled: false }]);
-  });
+  it.each(["collection", "wishlist"] as const)(
+    "keeps a %s heading's source on its own box, with no role and no tab stop",
+    async (scope) => {
+      await renderHeading(scope);
+      expect(activators()).toEqual([{ tag: "div", role: null, tabindex: "-1", handled: false }]);
+      expect(activators().some(tabReachable)).toBe(false);
+      // The controls inside stay what they are, each its own stop.
+      expect(screen.getByRole("button", { name: "Collapse Trade binder" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Trade binder" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Manage Trade binder" })).toBeInTheDocument();
+    },
+  );
 
   /**
    * The plugin appends a hidden instructions `<div>` and a live region to `<body>`, prefixed
@@ -417,7 +396,7 @@ describe("what a drag is to a screen reader", () => {
    * It is also the whole of what this app says to a screen reader during a drag: nothing.
    */
   it("appends no instructions element and no live region, because nothing writes one", async () => {
-    await renderCollectionWall();
+    await renderHeading();
     expect(document.querySelector("[id^='dnd-kit-description']")).toBeNull();
     expect(document.querySelector("[id^='dnd-kit-announcement']")).toBeNull();
     expect(document.body.querySelector("[aria-live]")).toBeNull();
@@ -427,7 +406,7 @@ describe("what a drag is to a screen reader", () => {
    *  stamping its own (it skips an element that already has a `role` or a `tabindex`, and offers
    *  no opt-out for any of these): measured absent at rest, on the element a reader would grab. */
   it("puts no aria-roledescription, aria-grabbed, aria-pressed or aria-disabled on a source", async () => {
-    await renderCollectionWall();
+    await renderHeading();
     const [drag] = [...dndManager.registry.draggables];
     const element = drag.element as HTMLElement;
     for (const attribute of [

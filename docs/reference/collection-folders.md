@@ -187,6 +187,11 @@ rather than on "skip slot 0". `a_folder_the_app_owns_is_not_part_of_the_readers_
 group at `sort_order` 9 alongside the holding area at 0, because either weaker spelling passes with
 one system folder in the table.
 
+**History (2026-09-26):** there is no pinned section any more — the app's folders are shelves under
+a `Decks` label, ordered by name in `buildShelves` and never by `sort_order`, so the `kind` fence
+still matters for the reader's sequence and nothing reads the app folders' numbers at all. See
+[Shelves](#shelves-2026-09-26).
+
 ## The eleventh term, and why it is load-bearing
 
 ```rust
@@ -263,7 +268,10 @@ is what it was for.
   reads `Collection · all folders`, there is no folder on screen to be standing in, and the page
   passes `folderId: null` rather than whatever `useCollection` still holds underneath. The
   collection ships flattened, so out of the box the sidebar behaves exactly as the `+` always has,
-  and the default starts working the moment a reader opens a folder.
+  and the default starts working the moment a reader opens a folder. **History (2026-09-26):**
+  Flatten is deleted, so this fence went with it — the page always passes the level it stands on
+  (the docked search column's `folderId` in `CollectionPage.tsx`), which is the shelf at the top
+  of the wall. See [Shelves](#shelves-2026-09-26).
 - **Absent and `null` are different on the wire**, and the page sends `null` explicitly. Absent
   sends no `folderId` field at all — which is what `SearchPage` and the Tags page still do, and why
   they were untouched by this — where `null` sends `folderId: null` and *names* the root as the
@@ -698,6 +706,14 @@ UI side. A copy in a locked drawer is drawn wearing a `Lock`:
 - **the table's Folder cell** — `CollectionTable.folderLocked`, a caller-supplied predicate in
   `quantityBlocked`'s way, drawing a `role="img"` glyph named `Locked`.
 
+**History (2026-09-26):** both marks went with the surfaces that drew them — shelves draw no caption
+under a tile, and `WishFolderCaption` itself was deleted in the branch's final review (W-M6) once
+nothing drew it; the table dropped its Folder column because every row now sits under the band
+that names its drawer (`columnsFor`'s doc in `CollectionTable.tsx`). A set-aside copy is marked
+by its **shelf** instead: a locked folder's heading wears the `Lock` (`ShelfHeading`'s `Locked`
+glyph), and the table's band is that same heading. The rest of this subsection is the record of the
+two marks as they shipped on 2026-09-09. See [Shelves](#shelves-2026-09-26).
+
 **The wall's mark answers on *any*, and the asymmetry with the caption beside it is deliberate.** A
 tile merges every copy of one printing in one finish across drawers, so it can stand for a copy in
 a display case and a copy loose at the root at once. `filedIn` refuses to *name* one of several
@@ -786,6 +802,10 @@ and a lock on either would be a control with nothing to say. **Unlocking is like
 visible**, and the menu is where that is answered: the write touches the folder's own flag only, so
 clearing the flag on a child of a locked parent changes what the row says and not what the reader
 sees — that row is greyed with its reason rather than reporting a success the badge contradicts.
+
+**History (2026-09-26):** `PinnedFolders.tsx` draws nothing now — the strip became the `Decks`
+shelves — and keeps only the vocabulary (`DECK_KIND`, `REMOVED_KIND`, `pinnedFolders`). The word
+argument above holds for those shelves' headings unchanged. See [Shelves](#shelves-2026-09-26).
 
 ## The deck groups, `Recently removed`, and what v25 converted
 
@@ -1555,6 +1575,12 @@ rather than rediscovering.** Not flattened, the query is scoped to `folderId`, s
 wall is in that folder and the per-tile rule fences every tile of its own accord. The per-tile rule
 is the one that does all the work, because Flatten starts `true`.
 
+**History (2026-09-26):** both paragraphs above describe a wall that is gone. Flatten is deleted,
+and since shelves a tile is one folder's, so no tile can mix a binder with a deck's group and
+"every copy behind the art" and "the tile's folder" are one question (`stepperByTile`'s doc in
+`CollectionPage.tsx`).
+The fence itself is unchanged. See [Shelves](#shelves-2026-09-26).
+
 **In the table the fence is a prop rather than a lookup**, `quantityBlocked?: (row) => string | null`
 — the *sentence*, not a boolean, because a control that vanishes without saying why is worse than
 one that refuses in words. The page supplies it from the same predicate the wall uses, one helper
@@ -1628,6 +1654,15 @@ reason.
   — a clear is not a way to change a deck. This one confirms where the menu row does not because it
   is aimed at the whole folder, not at the cards the reader is pointing at.
 
+**History (2026-09-26):** "never a flattened tile that mixes one in" and "not flattened" describe a
+state that no longer exists — Flatten is deleted and no tile mixes folders — and the
+*Drag a card onto a folder…* sentence went with the folder band. `Clear…` sits on the path row
+beside `ShelfToolbar` while the reader stands in `Recently removed` (`inRemoved` in
+`CollectionPage.tsx`).
+The `New folder` card and the pinned strip the next paragraph names are gone as well: Add folder
+is on the path row and on the reader's own headings, and a `Recently removed` heading carries no
+`⋯`. See [Shelves](#shelves-2026-09-26).
+
 **`clear_removed` is the first write aimed *at* `Recently removed` by the reader, and it did not
 open the folder to edits.** The folder is still no destination (`readersOwnLevel` still answers the
 drop and the `New folder` card, and `set_entry_folder` still refuses a `removed` destination), still
@@ -1684,6 +1719,11 @@ about them.
 
 ## The way back up is a tile on the wall, and inside `Recently removed` it is the target that was missing
 
+**History (2026-09-26):** the tile and the `Recently removed` substitution are both gone with the
+folder band. Moving a copy or a folder up is a drop on a path segment, and #209's drag back into a
+binder happens at the root, where `Recently removed` is a shelf beside the binders' headings — see
+[Shelves](#shelves-2026-09-26), which records that move.
+
 Issue #283 was reported against the wishlist and the cabinet here has exactly the same shape, so
 the tile is one component drawn by all three walls —
 `src/components/ParentFolderCard.tsx`, wrapped here by `CollectionParentFolderCard`, which holds
@@ -1716,6 +1756,13 @@ every card in the group — the invitation to a gesture that does nothing that `
 make one paragraph up. The breadcrumb is still the way out of one, as it always was.
 
 ## The wall names its own folders, and the strip kept two of its four jobs
+
+**History (2026-09-26):** the `New folder` tile and the folder cards are gone. **Add folder** is on
+the path row and on every heading of the reader's own folders, the name is typed on the heading
+where the folder will appear, and Rename is a button on the heading — see
+[Shelves](#shelves-2026-09-26). The strip still holds `Move to folder…`, `Delete…` and `Clear…`.
+The `openPanel` level clause below lost its `flatten` arm and became `onThisWall`: a naming field
+closes when its heading is no longer on the wall (`onThisWall` in `CollectionPage.tsx`).
 
 **2026-09-03.** The tile that makes a folder and the card that holds one both answer their naming
 gesture **on themselves** now. `New folder` and a folder card's `⋯ → Rename…` used to raise a
@@ -1865,6 +1912,11 @@ and an id nothing answers to would sail through.
 
 ## The root is the ungrouped cards, and Flatten is the whole binder
 
+**History (2026-09-26):** neither half of this heading is true any more. The root draws every card
+the reader owns — Not sorted first, then every folder as a shelf — and Flatten is deleted. The wire
+this section designed is unchanged and its table still describes `CollectionQuery` exactly; the
+page asks with `shelves` instead. See [Shelves](#shelves-2026-09-26), directly below.
+
 **Until 2026-08-26 this cabinet had a root that was also the whole binder**, and the two could not
 be told apart by any press. `useCollection` sent no `folderId`, `CollectionQuery::folder_id` reads
 an absent one as *every folder* (spec §8.4), and so the level a reader stood on at the top of the
@@ -1940,7 +1992,606 @@ Two consequences that are easy to miss and are each pinned by a test:
   Flatten by design, so `inRemoved` stayed true under a page drawing no folder cards at all, and
   the caption invited a drag onto targets that were not there.
 
+## Shelves (2026-09-26)
+
+**Since 2026-09-26 the wall at any level is every card at and below it, one shelf per folder.**
+The design is
+[2026-09-26-folder-shelves-design.md](../superpowers/specs/2026-09-26-folder-shelves-design.md),
+and every *why* this section does not repeat is there. Until then every level was a drill-down that
+drew a folder's **direct** members and nothing below it — the root sent `rootOnly: true` whenever
+Flatten was off — so a reader who filed everything stood on a page holding a band of folder cards
+and no cards at all. The sections above that describe that wall (the folder band, the `New folder`
+tile, the up-one-level tile, the pinned strip, Flatten) are the record, and each carries a
+**History (2026-09-26)** line pointing here. The wishlist took the same wall the same day; what is its own is in
+[wishlist-folders.md](wishlist-folders.md#shelves-2026-09-26).
+
+**Vocabulary, fixed by the spec so it cannot drift.** A **shelf** is one folder's section of the
+wall: its **heading** and the cards filed directly in it. **Not sorted** is the shelf of copies
+filed in no folder — `UNFILED_SHELF` in TypeScript (`src/lib/shelves.ts`), `0` on the wire — and
+the only shelf that is not a folder. The button is **Add folder**, never "New folder".
+
+### What the wall is
+
+`buildShelves` (`src/lib/shelves.ts`) decides the whole order, and it is TypeScript's:
+
+- **At the root, Not sorted comes first**, and is drawn only once the counts say it holds
+  something (`visibleShelves`). **Then the reader's folders, depth-first** — a shelf
+  before its subfolders' shelves, siblings in `buildFolderTree`'s `sortOrder, name, id`. **Then, at
+  the root only, the app's own under a `Decks` label**: every deck group by name, then `Recently
+  removed`.
+- **Inside an opened folder** the level's own cards come first under no heading, because the path
+  row already names the folder — a `headless` shelf, never collapsed — and its
+  subfolders follow, starting again at depth 0. No app-owned group is drawn below the root.
+- **Collapse starts from the kind** (`defaultCollapsed`): a reader's folder and Not sorted
+  open, a deck group and `Recently removed` shut, because they are built decks and a holding area
+  rather than binders. The reader's own overrides are one `app_meta` row, `shelf_folds`, kept
+  [per window](multi-window.md#app_meta-which-rows-follow-and-which-stay). **Any active search or
+  filter suspends collapse and writes nothing**: every shelf with a match opens, every shelf with
+  none is hidden, and a folder whose matches are all below it keeps its heading as their container.
+  **The fold controls say so rather than going quiet** (the final review's C-I2): while a filter is
+  on, a heading's chevron, **Expand all** and **Collapse all** are `aria-disabled` with the reason
+  *Folding is paused while filtering* as their description (`FOLD_PAUSED_REASON`, handed to
+  `ShelfToolbar` and every `ShelfHeading` as `foldPaused`), stay in the tab order, and a press
+  writes nothing. Until then the chevron here stored a fold the reader could not see, and Expand
+  all and Collapse all wrote on both pages. Driven on 2026-09-27 (debug build, re-check 2): on both
+  pages all three were `aria-disabled` and still tabbable, the sentence showed on hover and on
+  keyboard focus, clicks and an Enter changed nothing, and `app_meta.shelf_folds` was
+  byte-identical afterwards.
+- **Indentation stops at three levels** (`MAX_SHELF_INDENT`); a deeper heading keeps the
+  third level's indent and names its path from the ancestor on the cap. `SHELF_INDENT_PX` is 32 per
+  level on the grid and the table alike (`SHELF_INDENT_PX`, `src/lib/shelfLayout.ts`).
+- **An empty folder is a heading over a dashed drop box, and only a reader's folder with nothing
+  drawn inside it gets one** (`layoutShelves`). A folder whose cards are
+  all in its subfolders draws its heading and no box; Not sorted, a deck group and `Recently
+  removed` never draw one.
+
+**The path row** is the breadcrumb on the left and `ShelfToolbar` on the right — **Add folder**,
+**Expand all**, **Collapse all** — with Add folder gated by
+`canMakeFolder`, which is `readersOwnLevel` exactly as the `New folder` tile was. Expand
+all and Collapse all reach every shelf below the level, app-owned ones included, and skip the
+headless one, which has no chevron to reopen it with (`foldAll` in
+`collectionShelfModel.ts`). **A reader's-folder heading carries Add folder, Rename and `⋯`;
+a deck group or `Recently removed` heading carries its chevron, its title and its figures and
+nothing a press could be refused for**, because every folder write refuses those two kinds in words
+(`headingFor` in `CollectionPage.tsx`). Not sorted has a chevron and plain text. Add folder
+draws a heading whose name is the naming field, last among its siblings, under the id
+`NEW_FOLDER_SHELF` (`-1`, `collectionShelfModel.ts`), which never reaches the wire. The field is
+`FolderNameField` at `size="heading"`: a 36px frame inside the 40px row, with ✓ and ✕ on the
+row's centre line. **A create clears any fold stored under the id it answers** (the final
+review's R-M2): `collection_folders.id` is `INTEGER PRIMARY KEY` without `AUTOINCREMENT`, so a new
+folder can be handed a deleted folder's id, and would otherwise open shut, or open, the way the
+deleted one was left. A create whose id has nothing stored writes nothing to the folds.
+
+**The status line above the path row keeps its slot** — `min-h-4 text-xs`, silent or not, still
+`role="status"` — so the `Updating…` a write's refetch shows for 40–80 ms moves nothing below
+it. The live re-check (2026-09-26, debug build) found that 16px line coming and going after every
+write and throwing the grid's reveal 16px off through Chromium's scroll anchoring — and, very
+likely, the fold anchor's three drops that settled 16px low, which carry the same signature. Both
+pages spell it the same. **Re-check 2 confirmed both** (2026-09-27, debug build): through a far
+Move up the wall's page offset held at 262 in every frame while `Updating…` showed, and the three
+drops that had settled 16px low landed exactly where they were released (503/503 and 371/371 here,
+419/419 on the wishlist).
+
+### The wire: `shelves`, an ordered list the crate never builds
+
+`CollectionQuery::shelves: Option<Vec<i64>>`, serde-defaulted to `None`, beside `root_only` in
+`collection.rs`. **Present, it replaces the folder question outright**: `folder_id`, `root_only`
+**and `exclude_locked`** are not read, which is `root_only`'s own named-folder rule applied to a
+list. Rows come back in **list position first**, then the reader's sort, then the `e.id` tiebreak.
+`0` names the unfiled shelf, an id no folder answers to matches nothing and refuses nothing — a
+folder deleted in another window is a shelf with no rows — and an empty list answers nothing
+rather than everything. **Absent is the old answer byte for byte**: the plain-text mirror, *Export
+everything*, the importer and the deck builder's Collection Search send no list and kept their
+behaviour untouched — and the share snapshot never reads through this query at all.
+`shelves_win_over_folder_id_root_only_and_exclude_locked`,
+`an_unknown_shelf_id_returns_no_rows_and_no_error` and
+`a_query_without_shelves_answers_exactly_what_it_did_before` are the fences.
+
+**The page sends two lists** (`useCollection`). The list query asks for the shelves
+drawn **open** (`shelvesToFetch`) — a shut shelf's cards, and those of every
+shelf under it, are never fetched. The summary, the counts and the export sweep ask for **every**
+shelf at and below the level, shut ones included (`shelvesToCount`, riding
+`filters`). So `Cards`, `Unique`, `Value` and `For trade` describe the whole wall
+whatever is folded, and Export pressed inside a folder exports that folder and everything under it,
+which is what is on screen. Nothing is asked until the folder census answers (`censusReady`): before
+it the list would be Not sorted alone, the empty page drawn for one round trip.
+
+**No app code sends `rootOnly: true` any more.** The field stays on the wire and its default is
+still what keeps an unasked query wide; the only senders left are two `CollectionPage.stories.tsx`
+fixtures that read the root the way any other caller would.
+[The three-state table](#the-wire-was-widened-not-flipped-and-that-was-the-whole-design) still
+describes the query exactly. It no longer describes the page.
+
+**Why TypeScript builds the list** is the spec's decision 10, and
+[`folder_summary`'s rule](#folder_summary-answers-direct-counts-and-no-row-at-all-for-an-empty-folder)
+one step further: the tree already lives in `buildFolderTree`, and SQL orders siblings
+`sort_order, id` where the tree orders them `sortOrder, name, id`. With the list arriving from one
+side, only one of them ever decides.
+
+**Two statement shapes, decided in Rust from the list itself** — the measurement below is why.
+`collection::shelf_term` asks `e.folder_id IN (SELECT j.value FROM json_each(?))` when the list
+leaves out `0`, which `idx_collection_folder` can search, and keeps `shelf_member`'s
+`coalesce(e.folder_id, 0) IN (…)` — a scan — when the list names `0`, because only the `coalesce`
+finds a NULL and every index plan measured for that list lost to the scan. The position is
+`shelf_position`, an `instr` over one bound comma-wrapped string (`,3,0,12,`, from `shelf_order`)
+whose first occurrence keeps a shelf named twice at its first place. Each binds one string whatever
+the list's length, so a statement's text does not vary with it and nothing a caller sent is
+interpolated. The wishlist shares all three over `w.folder_id`: `wishlist::wishlist_scope` calls
+`shelf_term`, and `wishlist::list_statements` binds `shelf_order` for `shelf_position`. Both
+halves are fenced where the page runs them: `a_list_without_the_unfiled_shelf_is_searched_through_the_folder_index`
+asserts `EXPLAIN QUERY PLAN` on `list_entries`' own count and page statements, and
+`a_list_naming_one_shelf_twice_answers_its_first_place` pins the first-occurrence rule — each with a
+wishlist twin. **The peeks call `shelf_term` too since the final review (R-M3)**, on both pages:
+`fill_peek` builds its statement for the shelves the counts answered, so a peek inside a folder
+searches `idx_collection_folder` where it used to scan the table through `shelf_member`'s
+`coalesce`. `a_peek_without_the_unfiled_shelf_is_searched_through_the_folder_index` pins its plan,
+and `a_wishlist_peek_without_the_root_is_searched_through_the_folder_index` the wishlist's.
+
+### `collection_shelf_counts`
+
+One `ShelfCount` per **non-empty** shelf, over `scope` — the search and every filter included, so a
+count and the list it sizes describe the same rows (`collection::shelf_counts`). The struct is
+defined once in `collection.rs` and `wishlist.rs` imports it, `BreakdownRow`'s arrangement.
+
+| Field | On the collection |
+| --- | --- |
+| `folderId` | the shelf; `0` is Not sorted |
+| `tiles` | `count(DISTINCT card_id \|\| '/' \|\| finish)` — what the wall draws for that shelf |
+| `copies` | `sum(quantity)` |
+| `value` | `sum(quantity × unit price)` at the query's marketplace; `null` when nothing in the shelf is priced, never `0` |
+| `unpriced` | the unpriced entries' **copies** — the unit of the heading's `42 cards` and of `CollectionSummary::unpriced` |
+| `peek` | up to `SHELF_PEEK` (4) card ids, one per printing, by card name then id — **unfiltered** |
+
+**It is what places every heading before a page of cards has arrived**: `layoutShelves` sizes each
+shelf from `tiles`, and a slot whose page has not landed draws an empty 5:7 frame. It is also what
+hides a shelf with no match under a filter, and what a heading's figures are summed from. **A
+heading states its subtree, not its own row** — `rolledUp` adds every shelf's count into each of
+its ancestors (`collectionShelfModel.ts`), so a folder whose cards are all in subfolders does
+not read `0 cards` over twelve — and under a filter it reads `3 of 42 cards`, the `42` coming from
+`collection_folder_summary` plus `subtotalsOf` (`shelfStat`). **The peek is the only
+picture a shut shelf has**, because its cards are never fetched: `fill_peek` answers every shelf in
+one `row_number()` window statement, and `peekOf` walks the shut shelf and everything under it.
+
+### A tile is one folder's: the eleventh term reaches the wall
+
+**The grain has carried the folder since v24, and the wall did not until shelves** (the spec's
+decision 11). [The wall's grain](#the-walls-grain-is-the-printing-and-the-finish) was the printing
+and the finish, and the folder was one of the terms that merged, so one tile could carry copies from
+a binder and from a deck's group at once. **A tile now belongs to one shelf.** Its key is
+`tileKeyOf(cardId, finish, folderId)`, spelled `` `${cardId}:${finish}@${folderId}` ``, where a copy
+filed nowhere reads `@unfiled` and `null` and `0` are one key (`src/lib/tileKey.ts`; the
+`tiles` memo in `CollectionPage.tsx`). **The ring key is `tileKeyOf(cardId, finish)`, with
+no folder** (the tile's `ringKey`), compared by `CardGrid` against a `selectedId` the page builds
+the same way — so opening a card rings **every** tile of that printing on screen, one per shelf.
+**The third argument is optional and absent is byte-identical**, which keeps `collectionTiles.ts`'s
+`foldCopies` — the deck editor's docked collection column, a wall with no shelves — merging across
+folders as it always has.
+
+What that retired, and what it did not:
+
+- **The stepper's "every copy behind the art" clause** ([the copies
+  control](#the-copies-control-belongs-to-a-normal-folder-in-both-views)) can no longer meet a mixed
+  tile: every row behind a tile shares its folder, so "every row" and "the tile's folder" are one
+  question (`stepperByTile`'s doc in `CollectionPage.tsx`). The loop still asks per row,
+  which costs nothing.
+- **`Remove from collection`'s "never a flattened tile that mixes one in"**
+  ([issue #506](#managing-recently-removed--issue-506)) is the same clause from the menu's side and
+  went the same way.
+- **The lock mark moved to the heading.** #436's two marks — the flattened wall's caption and the
+  table's Folder cell — went with the surfaces that drew them, and a locked folder's heading wears
+  the `Lock` (`ShelfHeading`'s `Locked` glyph).
+- **Not retired: a tile is still several rows.** Condition, language and the grain's other terms
+  still merge, so a drag still
+  hands a folder every row behind the art and `PickCopies` still asks which; its folder column now
+  reads one drawer down the whole list.
+
+### Flatten was deleted, not hidden
+
+The spec's decision 2: keeping Flatten as a "no headings" mode was weighed against Shelves being
+the only way either wall is drawn, and lost. The root now puts every card on screen, which was the
+whole of what Flatten was for, and a second drawing of the same cards is a second set of answers to
+which copies a control reaches. **Deleted in `6fb98daa`**: `FilterBar`'s `flatten` prop, the store's
+`collectionFlattened` flag (it started `true` here and `false` on the wishlist),
+`useFlattenPersistence`, the `flatten_state` / `set_flatten_state` commands and the whole
+`src-tauri/src/flatten.rs` module. **The `app_meta` row they kept, `flatten`, is read by nothing now
+and deleted by nothing either** — no rung was owed for a key nobody asks for. What survives is the
+wire: `CollectionQuery::root_only` and `WishlistQuery::flatten` stay fields, and the wishlist's
+*Export everything* still sends `flatten: true`.
+
+### One behaviour moved rather than survived: #209's drag back
+
+**Standing inside `Recently removed`, the wall used to substitute the reader's own top level for its
+own children**, so a copy that had just left a deck could be dragged straight back into a binder
+([the section that recorded it](#the-way-back-up-is-a-tile-on-the-wall-and-inside-recently-removed-it-is-the-target-that-was-missing)).
+Shelves has no band to substitute into, and a level draws what is at and below it. **The same drag
+now happens at the root**, where `Recently removed` is a shelf under `Decks` on the same wall as
+every binder's heading: open it and drag from it onto a heading. It starts shut, so the gesture is
+one chevron press longer than it was.
+
+### A folder drag folds the wall, on the grid only
+
+A reader's folder is moved by dragging its heading — before, inside or after by `folderDrag.ts`'s
+vertical edge zones — and Move up / Move down in the `⋯` are the non-drag path. **For the length of
+that drag every shelf folds to its heading** (`foldedForDrag` in `collectionShelfModel.ts`), a
+render-time override that writes nothing.
+
+**The carried heading stays under the pointer through the fold, the unfold and the drop, and the
+wall keeps it there rather than the page.** `useFoldAnchor` (`src/features/shelves/useFoldAnchor.ts`)
+is the page's half: it records the press, the pointer and the fold into `shelfCarry`
+(`src/features/shelves/shelfCarry.ts`), which is module state because there is one pointer.
+`CardGrid` is the wall's half. It answers each `ShelfAnchorRequest` from its own layout
+(`rowStartOf` and `anchorPlan`, in `src/lib/shelfLayout.ts`), keeps the carried heading's row drawn
+whatever its virtual window says, and adds temporary room where a folded wall is too short to put
+the heading at the pointer. After a drop it goes on re-anchoring the moved heading as the new order
+arrives, for up to `SETTLE_MS` (2 s); a wheel, a key or a press ends that sooner.
+
+**Why the wall is a live-pass finding** (FAIL 4, 2026-09-26, debug build). The anchor was first a
+page-side scroll by the heading element's measured box, and it failed three ways at once. During a
+drag dnd-kit promotes that element to a `position: fixed` copy at the pointer, so its box is never
+its slot. The fold's own render still used the old scroll offset, so the heading's row was
+virtualised away in that very commit, which also lost dnd-kit's feedback element. And the page's
+layout effect runs after the wall's. `shelfCarry`'s own doc carries the argument, and
+[the live record](#folder-shelves--four-passes-2026-09-26-and-2026-09-27) has the
+figures before and after. **A moved heading gets no drop animation** (`useShelfDragSource` passes
+`folderDraggable` `animateDrop: false`): dnd-kit aims its floating copy at the slot measured when
+the drag began, which a far move has already re-laid out, so the copy slid away from the heading for
+2–4 frames (live re-check, new finding 3). Re-check 2 (2026-09-27, debug build) found the copy gone
+from the first frame after the release in four far drops on both pages.
+
+**The room below a folded wall is measured from the end of the wall's own rows, not from the end
+of the page** (re-check 2's finding A, 2026-09-27, debug build; fixed in `2ece040d`). Both
+cabinets set the wall in a flex row beside the docked search column, whose dock is
+`sticky top-0 self-start` and made as tall as the scrollport by `useDockHeight` — and it keeps
+that height when the panel collapses to its rail. A folded wall shorter than that row sat in a row
+the dock decided: 766px of folded wishlist in a 988px row. Room added after the wall grew the wall
+inside the row's slack, `main`'s scroll end never moved, and the virtualiser clamped the fold at
+scrollTop 222, so a heading pressed at y=512 near the end of the wall was held 78–126px under the
+pointer for the whole drag (Escape still ended exact). The collection escaped only because its
+folded root, 1,289px, is taller than the row; a shorter cabinet had the same failure waiting.
+`anchorPlan` now takes an optional `end` — where the wall's own rows end in the scroll content,
+which `CardGrid` passes as `rowsTop + layoutHeight(…)` and which defaults to `content` — and
+sizes the room below as `max(wanted − most, wanted + viewport − end)`, so the rows reach the
+scrollport's bottom at the wanted offset whatever stretches around the wall. The second half of
+the same mechanism: once the row has swallowed room, the page less the whole room underestimates
+the page, so a request that may add room takes the whole room off, and one that may not — an
+Escape, an unfold — leaves it on and lets the browser's own end clamp it.
+
+**Re-check 3** (2026-09-27, debug build, at `2ece040d`, 3 of 3 pass): the same wishlist press
+folded to scrollTop 300 with the slot at 518, the pointer's 518, held through a 150px hover, and
+ended with Escape at 374/374 and a drop at 419/419. A short cabinet staged inside `Binder`, its
+last heading pressed at y≈300, folded to 416 with the slot at the pointer's 306, where the old
+arithmetic would have clamped it about 194px low; Escape 462/462, drops 371/371 and 757/757. The
+collection root's deep folds and drops stayed exact. After every unfold the page's height and the
+wall's end were what they had been before the press. What the room costs is blank space below the
+last folded heading for the length of the drag — about 350px on that wishlist and 746px in that
+cabinet.
+
+**Known and accepted: an Escape at the very end of a level can come back 2px short** (re-check 2's
+finding C, 2026-09-27, debug build). `Recheck CT`, the last heading of `Binder`'s level, returned
+at 897 against a pointer of 899; every other Escape in that pass and in re-check 3 landed exactly
+on the pointer.
+
+**The table does not fold** — the page hands `useFoldAnchor` `false` there — because `VirtualTable`
+keys its rows by position, so folding under a carried heading would remount it and end the drag.
+**It keeps the carried band drawn instead** (the final review's S-I3): the page reads the drag in
+flight (`useDragRecord` and `readFolderDrag`) and passes that band's index as `VirtualTable`'s
+`keepRow`, which a `rangeExtractor` keeps in the rendered range however far the table scrolls.
+Without it, a band dragged past the overscan unmounted its own drag source. The table's paging rule
+reads the virtual window's own last row, never a kept row parked below it. Driven on 2026-09-27
+(debug build, re-check 2): a band carried up through about 3,800px of autoscroll stayed connected,
+with its floating copy, the whole way, and landed where its `before` line said.
+
+### The table draws bands, and stops at the edge of what has loaded
+
+The same shelves, as heading rows spanning every column — `VirtualTable`'s `band` — with the sticky
+bar pinned under the column header (`stickyBand`). **While pages remain, `shelvedRows` stops after
+the shelf holding the last loaded row** (`shelvedRows` in `CollectionTable.tsx`). A shelf's count is
+in *tiles* and the table draws *entries*, so the edge is found from rows; without it every later
+band stood over rows that were not there, and `VirtualTable`, which asks for the next page when the
+rows it has drawn run low, counted those bands as rows and asked late. The wishlist's `shelfTable`
+reached the same rule first.
+
+**A heading that has to be shown past that edge is paged to** (the final review's C-I1). The page
+names it as `revealShelfId`: Add folder's draft, or a heading a caret request is waiting for. While
+the layout holds that shelf, its band is not among the drawn rows and pages remain, an effect asks
+for the next page, and asks again as each lands. Before this, Add folder on any list longer than a
+page drew no field at all in the table, while the invisible field still held the Escape rung, and
+later paging mounted it and pulled the caret and the scroll with it.
+
+### The banded table's focus, reveal and Top
+
+Four things about a table with a sticky band, all `VirtualTable`'s
+(`src/components/table/VirtualTable.tsx`) and all shared with the wishlist:
+
+- **The tab stop is the element that scrolls.** A band holds buttons and a drop target, and a
+  `role="table"` may own only rows and row groups, so with `stickyBand` the scroller becomes a
+  `role="group"` named by the table's label, with `tabIndex={0}`, and the table is no longer a
+  stop. A Tab onto it scrolls nothing. The first live pass measured a Tab onto the inner table
+  moving the list 855 → 191; the re-check measured 855 → 855.
+- **The table draws its own focus frame**, `FRAME_FOCUS`: a 2px accent outline at a −1px offset,
+  straddling the 1px border, on whichever element is the frame, the scroller and the stop in that
+  shape. Until then the table drew only the base layer's `outline: auto` around the inner table,
+  whose top edge sat under the sticky header and whose bottom was thousands of pixels down the
+  scroll: two faint 1px lines, which is no focus indicator (WCAG 2.4.7, first pass check 11). The
+  scroller also takes a `scroll-padding-top` of the header plus the band, so a row that takes focus
+  comes to rest clear of both.
+- **`revealIndex` scrolls a row into view and never moves focus.** The page passes the band of a
+  heading a caret request is waiting for, or of Add folder's draft, which a virtualised table has
+  not mounted. It lands clear of the header and the band, and the heading then takes the caret
+  itself as it is drawn ([the caret a heading is owed](#the-caret-a-heading-is-owed)).
+- **Top hands the caret on rather than dropping it** (the final review's S-I1). The page draws no
+  bar over a heading, so Top landed the list on the first heading, the bar unmounted with the caret
+  inside it, and the caret fell to `<body>`. Now a caret that fell is handed to the first control
+  of the row at the header's edge — the first heading's chevron — or to the scroller where that row
+  has none. A caret that anything else claimed in the same commit is left where it is. Re-check 2
+  (2026-09-27, debug build) pressed Top by click and by Enter, in the table and the grid on both
+  pages: 8 of 8 left the caret on the first row's chevron at scrollTop 0.
+
+### The grid: the sticky bar's room, Top, and a caret across a zoom
+
+- **The sticky bar's height is one number**, `SHELF_STICKY_HEIGHT` (36, `src/lib/shelfLayout.ts`).
+  `ShelfStickyBar` takes it as its inline height and a sectioned `CardGrid` reserves it as the
+  virtualiser's `scrollPaddingStart`, so a revealed or walked-to row lands below the bar rather than
+  half under it (the final review's S-M2). In re-check 2 (2026-09-27, debug build) the headings the
+  re-check had found half under the bar landed flush under it at 128–168.
+- **A revealed heading brings its empty box with it.** When the row after the heading is that
+  shelf's empty box, the wall scrolls to the box — except for a heading above the window, where
+  aligning the heading to the top already brings the box in under it (S-M5).
+- **Top hands the caret on** (S-I1, the grid's half). The bar unmounts at scrollTop 0, so a caret
+  in it fell to `<body>`. Now, once the bar has gone, a caret that fell moves to the first control
+  of the wall's first row, with `preventScroll`.
+- **A focused tile keeps the caret through a zoom that changes the column count.** The first pass
+  lost it across a column change (FAIL 6: tile 6 here, tile 18 on the wishlist). The fix wave kept
+  it for a tile whose row stayed drawn but not for one deep in the wall: in the re-check, tile 63
+  lost it and the page scrolled to the tile with the caret on `<body>`, because the one retry was
+  spent by the tile-height `measure()` commit before the scroll event drew the row. `caretChase`
+  replaced the retry (S-I2). The tile is re-checked on every commit until it is drawn, the
+  reader's caret moves elsewhere, the tile leaves the list, a new re-layout happens, or
+  `CARET_CHASE_COMMITS` (8) run out. A focused tile whose row stayed drawn but ended off-screen (the
+  re-check's tile 40, at −491…−175) is scrolled back into view after the column change
+  (`keepInView`). **Re-check 2** (2026-09-27, debug build): tile 63 kept the caret through one
+  Ctrl+wheel step (scrollTop 6192 → 5070, the tile at 128–444), and so did the wishlist's tile 60.
+  The caret landed on the third React commit after the wheel on both pages, against the budget of
+  8, and tile 40 came back into view at 128–444.
+
+### The level on screen trails the level asked for
+
+**Walking to a level nothing has cached draws the previous level whole until the new one has
+answered, then switches in one render.** `useCollection` keeps the last level whose figures, shelf
+counts and first page all answered for their own keys — `shown`, a `ShownLevel` — and while a walk
+is in flight (`held`) it serves the level, its shelves, counts, rows, figures, scroll key and
+export filters from that frame. `answered()` means not pending and not the previous key's
+placeholder. A refusal counts as an answer, so a failing read ends the hold and the page says so.
+The frame is a copy rather than `keepPreviousData`'s placeholders because the three reads cache
+apart: the list is keyed on the sort and the folds, and the figures and counts are not. Held on the
+placeholders alone, a walk under another sort drew the new figures over the old wall. A level
+already cached switches in the render that asked for it.
+
+**The hook publishes both levels.** `folderId` is the level drawn, and everything drawn reads it.
+`requestedFolderId` is the level asked for, and only navigation reads it: Escape's step up (two
+presses in quick succession are two levels) and the render-phase hand-offs. `levelHeld` stops the
+page paging past the held rows. `useWishlist` holds the same frame, less the figures its page has no
+read of its own for.
+
+Measured in the shipped window (debug build, 1920×1080, 2026-09-26): the first pass saw 36–106 ms,
+2–6 frames, of a wall missing its level's own leading row under the child level's figures — Deep
+Four → Showcase read `Cards 5 · $13.55` — before the cards popped in above the first heading
+(FAIL 14). The re-check saw every walk from a never-read level switch in one frame, with no frame
+mixing two levels, and re-check 2 (2026-09-27, debug build) saw the same on all five walks it drove,
+at 148–190 ms.
+
+**A level deleted elsewhere is walked away from** (the final review's C-M4). While the asked level
+is in the folder list, the page remembers its trail (`levelTrail`, root-most first). Once the list
+has answered without it — another window deleted it, or a synced device — the page opens the
+nearest surviving ancestor, or the root. Both writes are render-phase and terminate, because each
+lands on a level the list holds. Before this, the reader stood on an empty wall with an inert path
+row and only Escape to leave by. A folder deleted before this page ever drew it has no trail and
+goes to the root.
+
+### The caret a heading is owed
+
+**After Add folder in a heading, Move up or Move down, Move to folder… and Delete…, the caret is
+handed back to a heading that may not be drawn.** The wall is virtualised. A new folder's field is
+revealed at the end of its parent's subtree, which scrolls the parent's heading out of the window,
+and a move carries the heading past a neighbour's whole subtree. So the element the page remembered
+is often detached, and `focus()` on a detached node is a silent no-op. The first pass found exactly
+that (check 8, 2026-09-26): after Add folder in `Binder`, and after each Move up or Move down, the
+caret went to `<body>`.
+
+The contract has two halves, both shared with the wishlist:
+
+- **The page half is `useHeadingCaret`** (`src/features/shelves/useHeadingCaret.ts`), one machine
+  for both pages. It was two verbatim copies until the final review (C-M7 / W-M5), and they had
+  already drifted once. The page records which heading's control is owed the caret as a
+  `CaretBack`: the shelf, `"add"` or `"manage"`, the pressed element, and the level drawn, the level
+  asked and the view the request was made in. A request is asked at the press (`ask`, a fresh id)
+  and recorded when its moment comes (`record`): after a successful write, or on a keyboard cancel
+  of Add folder. It is refused if something newer was asked or a layer opened meanwhile
+  (`supersede`), and dropped on a level change, drawn or asked, and on a view change. A move is
+  decided at the folder list's first answer after the write: in its planned order (`order`, for
+  Move up / down) or filed under its destination (`into`, for Move to folder…), it goes on; if not,
+  it is dropped rather than left to fire on some later read. Both views then bring the heading into
+  view — the grid's `revealShelfId`, the table's `revealIndex` — and `caretFor` hands that one
+  heading its `caret` prop.
+- **The heading half is `useTakeHeadingCaret`** (`headingCaret.ts`), one layout effect that both
+  heading components call with their own row. The heading takes the caret the moment it is drawn
+  with a request on it — **only while nothing else has it** (`<body>`, or still the pressed
+  element) and **once per request** (`claim`, which spends it). The control is found inside the
+  heading's own row (`HEADING_CARET_CONTROL`) and never across `document`, because during a reorder
+  two rows can briefly stand for one folder. `claim` setting the page's state from this effect is
+  the one documented exception to the no-`setState`-in-an-effect rule: it is an event only that
+  commit can see, guarded and loop-free.
+
+| Gesture | Where the caret goes |
+| --- | --- |
+| Add folder in a heading: commit, Escape or ✕ | that heading's Add folder |
+| Add folder in a heading: a blur that discards it | the same, decided one task later (`afterBlur`), and only if the caret is still nowhere |
+| Add folder on the path row: commit | the path row's Add folder, with `preventScroll`, so the page stays on the folder just made |
+| Add folder on the path row: a blur that discards it | the same one-task decision, with `preventScroll`; Escape and ✕ return it at once |
+| Move up / Move down | the moved heading's `⋯` |
+| Move to folder… into a heading this wall draws open, or onto the level itself | the moved heading's `⋯` |
+| Move to folder… anywhere else, and Delete… | the `⋯` of the heading the folder was filed under, or the path row's Add folder where it stood at the top of the level (`leave`, the final review's C-M5) |
+
+**A blur waits one task** because during a blur the caret is on `<body>` whether or not a click is
+about to put it somewhere, and Blink blocks a click's own focus change when a `focusout` handler
+moves focus. The path row's blur went straight to `dismiss` until the final review (C-I3 / W-I1),
+and the re-check measured what that cost on both pages: a click on a tile above the path row's draft
+closed the field, moved the caret to the path row's Add folder, scrolled the page to 0 and
+swallowed the click. The heading's draft already waited, and the re-check measured that too: a
+click on a tile below it left the scroll alone and the caret on the tile.
+
+**Measured after the fix wave** (the re-check, debug build, 1920×1080, 2026-09-26): the caret
+landed on the heading's own control in **22 of 22** cases across the grid and the table on both
+pages, including headings that had been virtualised away, and the table's reveal landed clear of the
+header and the band every time. In the grid, 4 of 9 cases left the heading only partly on screen —
+half under the sticky bar after a far Move up and after the wishlist's commit, and 6px past the
+window's bottom after this page's far Move down. The re-check traced all four to the `Updating…`
+line, which now keeps its slot, and the bar's height is now the grid's scroll padding.
+
+**Re-check 2 drove the final review's half** (2026-09-27, debug build, at `cf8553c0`). The four
+grid cases landed flush under the bar at 128–168 with the caret on the control, and the far Move
+down at 924–964 with its empty box, 972–1068, in view too. Move to folder… and Delete… never left
+the caret on `<body>`: into an open heading it went to the moved heading's `⋯` (revealed at
+924–964 here), into a collapsed one to the `⋯` of the heading the folder left, after deleting a
+child to the parent's `⋯`, and after deleting a root folder on the wishlist to the path row's Add
+folder. A click on a tile above the path row's draft opened that tile's card with the scroll held
+(8079 here, 9580 on the wishlist) and left the caret on the tile after Escape; the path row's commit
+kept the scroll too, with the new folder in view at 924–964.
+
+### A card lands only where the pointer is
+
+**Every shelf target takes a drop only while the pointer is inside it** — headings, empty boxes and
+path segments — through `useDndDropTarget`'s `pointerOnly` (`src/lib/dndTarget.ts`, set by
+`useShelfDropTarget`). dnd-kit's default detector falls back to the carried card's *rectangle* when
+the pointer is in no target, which is right for a tall deck pile and wrong for a 40px heading laid
+between rows of tiles that are not targets at all. The first pass measured it (2026-09-26, debug
+build): a card released on tile 50 of `Foils` was added to `Showcase`, the heading 22px below. In
+the re-check the same release filed nothing and the heading only armed. `pointerOnly` is asked
+twice: by the detector on every collision pass, and again at the release against the target's own
+rect as it is then (`containsPointer`). The second ask is there because the collisions follow a
+scrolling wall about one update behind, and a heading that autoscroll carried past a still pointer
+stayed the target up to 16px after it had passed (re-check, new finding 5); in re-check 2
+(2026-09-27, debug build) three cards released with the target still on a passed heading and the
+pointer 4px outside it filed nothing. The folder half takes
+the same rule, because the table does not fold during a folder drag, and a heading carried over card
+rows would otherwise land beside whichever heading it overlapped. What that gives up is a folder
+dropped in the 8px gap between two folded headings, which now lands nowhere.
+
+**Known and accepted: during autoscroll a heading becomes the target only after about 30px of
+travel under a still pointer** (re-check 2's finding B, 2026-09-27, debug build). A card released
+14px into a heading that autoscroll was carrying past filed nothing, because the operation's target
+was still `null`; at 30px it filed, twice. It fails safe — the release files nowhere rather than
+into the wrong shelf — and it is probably also why one table run in that pass, with the pointer
+left still on `Binder`'s band when the scroll stopped, landed nothing.
+
+**The sidebar joined in the final review.** The re-check found the navigation rail's Wishlist entry
+taking a card whose pointer was on the wall's first tile column, and adding a wish at the root (new
+finding 1): the rail sits flush against the page's left edge. `useSidebarDropTarget`
+(`src/components/useSidebarDrops.ts`) now passes `pointerOnly`, which covers both drawings of the
+navigation. The deck editor's own targets keep the default detector. In re-check 2 (2026-09-27,
+debug build) a card held 1.2s on the wishlist's first tile, overlapping the Wishlist entry, left
+the target `null` and filed nothing, while a release on the entry itself still added a wish.
+
+**The sticky bar is the one shelf target drawn over the others**, so it is an `overlay` instead
+(`useShelfStickyDropTarget`): the same pointer-inside detector, ranked `CollisionPriority.Highest`.
+Headings and table bands scroll underneath it, and dnd-kit ranks two pointer collisions by distance
+to each centre and never by paint order, so a heading half under the bar used to take the drop
+(the final review's S-M1).
+
+**The landing mark is the landing the release makes, from the first frame.** `useFolderDropTarget`
+read dnd-kit's `position.current` in its `dragmove` listener, which the library writes a microtask
+after dispatching the move. So a heading arrived at in its bottom quarter showed the `inside` wash
+with no line, and the release then landed `after` (re-check, new finding 4, on the table). The
+listener now reads the move's own point, and re-check 2 (2026-09-27, debug build) saw the `after`
+line drawn one frame, 7ms, after the pointer arrived, with no nudge, and the release land `after`.
+
+### What the `shelves` query costs — measured 2026-09-26, in a test harness on Windows
+
+**Not in the shipped window.** Two measurements, both on the same Windows 11 Pro machine (AMD
+Ryzen 9 5900X) with SQLite 3.53.2 bundled through rusqlite 0.40.1, and both by a temporary
+`#[ignore]` harness (`shelves_bench.rs`, deleted after each) that called the crate's own functions
+on `db::open_read` after `prepare_database`:
+
+- **The first measurement, at `3efd50b0`** — the code before the fix.
+- **The re-measure, of the fix as committed in `0604eff0`** — taken from the working tree just
+  before that commit, with `collection.rs` at blob `a0f92a99` and `wishlist.rs` at `3dc09c83`,
+  which are the blobs the commit holds. The harness called `list_entries`, `shelf_counts` and
+  `summarise` as they stand and re-implemented nothing of the fix.
+
+**debug** is `cargo test`, the `tauri dev` profile; **release** is `cargo test --release`. Three
+warm-up calls, then twenty timed; every figure is a median. Two data sets, both byte copies of
+`src-tauri/target/debug/data/`: the real one — 277 entries in 7 folders, migrated from user v46 to
+v51 on the copy — and the same copy with 100,000 entries seeded into user tables only, 100,277 in
+all, 30,001 of them unfiled, 57 folders to depth 6, so the root sends 58 ids. The re-measure took
+fresh copies and re-seeded them from the same deterministic seed, and the seeded copy came out the
+same: the same entry, unfiled and folder counts, the same depth, the same deep folder and subtree,
+and the same row totals in every case.
+
+**The plan's gate was `shelves` at no more than 3× `rootOnly`'s median. The first measurement
+tripped it, and found a second regression the gate had not asked about:**
+
+| 100k copy, before the fix (`3efd50b0`) | debug | release |
+| --- | --- | --- |
+| The root wall (58 ids) against `rootOnly` | 4.51× | 3.72× |
+| One folder four levels down, 120 rows, `shelves=[id]` against `folderId=id` | 25× | 33× |
+
+The two causes are different. The root wall reads 100,277 rows where `rootOnly` reads 30,001, and
+paid a correlated `json_each` position lookup per row on top. **A folder below the root lost
+`idx_collection_folder`**, because `coalesce(folder_id, 0) IN (…)` cannot use it: `EXPLAIN QUERY
+PLAN` read `SCAN e` for every `shelves` statement against `SEARCH e USING INDEX idx_collection_folder`
+for `rootOnly` and `folderId`.
+
+**The fix is the two builder changes above, and no schema rung.** The harness first timed candidate
+variants of `list_entries`' own statements, string-edited and asserted to answer the same total and
+the same first-page ids in the same order. That **prediction** for the chosen pair was 2.79× (debug)
+and 2.70× (release) for the root wall and 1.06× and 0.98× for the deep folder, with `instr` alone
+taking the root wall's statements from 1643 to 1021 ms (debug) and from 1263 to 902 ms (release).
+An expression index on `coalesce(folder_id, 0)` was timed too, though not the same way: it was
+created on the seeded copy and read through `list_entries` with the crate's SQL unchanged, rather
+than as an edited statement. It was refused: it gained nothing the builder change does not, it cost
+20–26% on the whole-root list, and it would have been a user-schema rung. **The re-measure of the
+committed code confirmed the prediction:**
+
+| 100k copy, after the fix (`0604eff0`) | debug | release |
+| --- | --- | --- |
+| The root wall, against `rootOnly` | 1041.6 ms / 375.6 ms = **2.77×** | 916.0 ms / 339.4 ms = **2.70×** |
+| The 120-row folder, against `folderId` | 2.229 ms / 2.050 ms = **1.09×** | 1.048 ms / 1.006 ms = **1.04×** |
+
+**What is left of the root's ratio is row count.** Over the same 100,277 rows the root wall is now
+*faster* than a list with no folder term at all — the old Flatten query — at 0.93× (debug) and 0.90×
+(release) of it. The deep folder and its subtree plan `SEARCH e USING INDEX idx_collection_folder`
+again; the root list names `0` and scans by design; no plan shows a `MULTI-INDEX OR`.
+
+**On the real dev database the whole question is milliseconds, and its ratio is not the gate's.**
+After the fix the root's `shelves` list took 3.8 ms debug and 1.8 ms release, and the list, the
+counts and the summary together about 7.4 ms debug and 3.7 ms release. **It still reads about 12×
+`rootOnly` there** (12.6× debug, 12.2× release), and that is a row-count artefact rather than a
+regression: 277 rows against the 1 this database has unfiled. Over the same rows it is 1.23× and
+1.17×. So the gate passes at 100k and is simply not the right question at 277 rows — nobody should
+read it as passing everywhere.
+
+⚠️ **Open: `collection_shelf_counts` is the largest read on a very large collection, and the fix
+does not touch it.** At the 100k root (58 shelves) it took **2.9 s debug and 2.5 s release** in the
+re-measure (3.06 s and 2.44 s in the first). **`fill_peek` was 45% and 47% of it in the first
+measurement** (1.38 s and 1.15 s) and was not timed apart in the re-measure: the peek groups every
+scoped row by `(shelf, card_id)` and fetches `cards.name` for each before the window cuts to four.
+Inside a 7-shelf, 8,813-row subtree it took 271 ms debug and 221 ms release (first measurement
+only); on the real database 2.6 ms and 1.3 ms after the fix. The list, the counts and the summary
+all take the one `db_read` mutex, so they run in series. The likeliest next step — ask for a peek
+only for the shelves whose heading is shut, since only a shut heading draws one — changes
+`ShelfCount`'s contract across both pages, is not built, and has no figure behind it.
+
+**The wall has been driven in the shipped window since this section was first written** — a first
+pass and a re-check on 2026-09-26, and two more re-checks on 2026-09-27, all on the debug build.
+What they measured is in [the live record](#folder-shelves--four-passes-2026-09-26-and-2026-09-27),
+and what each finding changed is in the subsections above. None of them measured the query's cost,
+which is the harness's figures above and nothing else.
 ## The page, and the drag payload's own key
+
+**History (2026-09-26):** the folder cards are headings now and wear the same two marks —
+`DROP_EDGE` on the heading's own always-present transparent edge, `DROP_OVER` under the pointer
+(`ShelfHeading`'s `dropMark`) — and a breadcrumb segment takes a folder as well as a copy. See
+[Shelves](#shelves-2026-09-26).
 
 The collection page is the wishlist's page ported, and the pieces it reuses are named in
 [wishlist-folders.md](wishlist-folders.md) rather than re-argued: folder cards in the grid, a
@@ -1963,24 +2614,39 @@ ring's — an inset ring cannot be clipped, a half-drawn focus indicator is a WC
 
 ## The wall's grain is the printing **and** the finish
 
+**History (2026-09-26):** on the collection page the folder joined the tile too. Its tiles key on
+`tileKeyOf(cardId, finish, folderId)` (the page's `tiles` memo), so the same printing in two
+folders is a tile on each shelf, and only `foldCopies` — the deck editor's docked collection
+column — still keys on the printing and the finish alone (`foldCopies` in
+`features/decks/collectionTiles.ts`). The ring is still the two-part key on both walls; on the
+collection wall it is a tile's own `ringKey`. See
+[A tile is one folder's](#a-tile-is-one-folders-the-eleventh-term-reaches-the-wall). Sentences below
+that this changed are corrected where they stand.
+
 2026-08-26, out of
 [2026-08-26-card-chin-and-exact-prices-design.md](../superpowers/specs/2026-08-26-card-chin-and-exact-prices-design.md).
 The storage grain has had eleven terms since v24 and did not move; what moved is what a **tile**
 is. A foil and a played nonfoil of one printing are two objects at two prices sharing only a set
-and a number, so they are two tiles — and every other grain term still merges. Condition, language
-and **folder** are all one object seen from more than one place, and the table beside the wall is
-where a reader gets those apart.
+and a number, so they are two tiles — and every other grain term merged. Condition, language and,
+until shelves, **folder** were all one object seen from more than one place, and the table beside
+the wall is where a reader gets those apart. Since shelves the collection page splits a tile on the
+printing, the finish and the folder, and merges every other grain term — condition and language, and
+the altered, signed, proxy, misprint, serial and grading terms with them; the deck editor's docked
+column still merges the folder too.
 
 **There are two folds of the collection into tiles, not one, and both split.** The collection page
 folds rows in `CollectionPage`'s `tiles` memo; the deck editor's docked Collection tab folds the
 same rows in `collectionTiles.ts`'s `foldCopies`. They were written apart and keyed the same way, so
 splitting one alone would have made two drawings of one collection disagree about what a tile *is*.
-Both key on `` `${cardId}:${finish}` `` now, through **one** `tileKeyOf`, in `src/lib/tileKey.ts`.
-Each fold stamps a tile with it and each wall builds the ring composite back out of the pane's card
-and finish with it, so the two ends of that ring cannot be two spellings of one string — both are
-plain `string` and nothing in the type system relates them, which is why a missed spelling would be
-a wall where pressing a tile rings nothing at all, silently and with nothing red. The `?? "nonfoil"`
-that makes the two ends meet is spelled there once, for both walls.
+Both keyed on `` `${cardId}:${finish}` `` from 2026-08-26, through **one** `tileKeyOf`, in
+`src/lib/tileKey.ts`; since shelves the collection page passes the folder as that function's third
+argument and `foldCopies` does not. Each wall builds the ring composite back out of the pane's card
+and finish with the two-part call, and each tile carries the same two-part string to be compared
+against it — the tile's key on the docked column, the tile's `ringKey` on the collection wall — so
+the two ends of that ring cannot be two spellings of one string. Both are plain `string` and nothing
+in the type system relates them, which is why a missed spelling would be a wall where pressing a
+tile rings nothing at all, silently and with nothing red. The `?? "nonfoil"` that makes the two ends
+meet is spelled there once, for both walls.
 
 **It was written out twice before that module existed, byte for byte, each copy carrying a doc
 block arguing that the duplication is what must not happen.** `src/lib/` is where the survivor went
@@ -2024,17 +2690,20 @@ a control acting on cardboard the reader is not pointing at, with the tile itsel
 rather than `tile.id`.
 
 **What is still a list rather than a single id is the point of that map.** One finish of one
-printing is still several rows — they differ in grade, in language and in folder — so a drag still
-hands a folder every one of them and the reader still answers which. The split narrowed *which* rows
-sit behind a picture; it did not turn the several into one. The two `cardId`s in the drag payload
-stay `tile.id` deliberately: a drop onto a **deck** is `deck_add_card(deckId, cardId, …)`, which
-names a printing and takes no finish, and the tile half's `cardId` is what a folder card and a
-breadcrumb caption say the reader is filing. Only the *rows* are the finish's.
+printing is still several rows — they differ in grade and in language, and until shelves in folder
+too — so a drag still hands a folder every one of them and the reader still answers which. The
+split narrowed *which* rows sit behind a picture; it did not turn the several into one. The two
+`cardId`s in the drag payload stay `tile.id` deliberately: a drop onto a **deck** is
+`deck_add_card(deckId, cardId, …)`, which names a printing and takes no finish, and the tile half's
+`cardId` is what a drop target and a breadcrumb segment say the reader is filing — a folder card
+until shelves, a heading since. Only the *rows* are the finish's.
 
 **`CardGrid` gained `GridCard.key` for this and nothing else changed on the other walls.** It
-defaults to `id`, so six of the seven walls pass none and are untouched. `id` stays what fetches the
-art, what a press opens and what `onSelect` is about; `key` is what the ring compares, what
-`data-grid-index` walks and what the picked set remembers.
+defaults to `id`, so a wall that passes none is untouched. `id` stays what fetches the
+art, what a press opens and what `onSelect` is about; `key` is what `data-grid-index` walks and what
+the picked set remembers, and what the ring compares — **unless a tile carries a `ringKey`**, which
+the collection wall's has since shelves (`GridCard.ringKey`), so one printing on two shelves is two
+keys and one ring.
 
 **The open card's side of that composite is the store's `paneFinish`.** Two openers set it —
 `openCardAsFinish`, the collection wall's, and `openCardFromDeckSearch`, *widened* to carry the
@@ -2223,6 +2892,11 @@ explaining that it does not work teaches nothing its absence would not have. **`
 folder edit**: it deletes the entries filed in `Recently removed` and leaves the folder standing,
 and its button lives inside the level rather than on this strip, which still has no `⋯`.
 
+**History (2026-09-26):** *pinned* is gone. The app's folders are shelves under the `Decks` label
+at the root only (spec §3.1), so reaching `Recently removed` from three drawers down is a walk back
+to the root again; *flat* and *fixed* still hold, and are why those headings carry no Add folder,
+Rename, `⋯` or drag. See [Shelves](#shelves-2026-09-26).
+
 **That third word was *locked* until v33, and it was renamed rather than kept.** #365 gave the
 reader a lock of their own, and the two are very nearly opposites: a folder locked by a reader is
 still theirs to rename, to move, to file cards into and out of, and still carries its full `⋯`
@@ -2316,6 +2990,72 @@ about; a folder is where a card was kept rather than a card, and the rebuilt row
 rather than what was in it.
 
 ## What driving the shipped window found
+
+### Folder shelves — four passes, 2026-09-26 and 2026-09-27
+
+**All on the debug build** (`npm run tauri dev` in the branch's worktree), in a 1920×1080 window at
+DPR 1, driven with real CDP input and read back with DOM and rect probes, per-frame
+`requestAnimationFrame` samplers, and `user.db` over `node:sqlite`. The data was a byte copy of the
+main checkout's dev `data/` folder, migrated from user v46 on its first launch, with folders staged
+through the app's own IPC into the copy only. On this page that was `Binder`, with
+`Foils › Showcase › Deep Four › Deep Five` nested inside it, and `Trade`, with every copy filed.
+
+**The first pass** (17:00–17:55, the branch at `e5f874d8`) ran spec §8's fourteen checks on both
+pages and found **8 pass and 6 fail**, plus one fail outside the list. **The re-check** (21:45–22:25,
+at `7201901e`) re-drove every fail after a fix wave of five commits — `30e1d170`, `94f9d4e4`,
+`b012116c`, `c590b53a` and `7201901e` — and found **6 pass and 2 fail**. On this page:
+
+| Check | First pass | Re-check |
+| --- | --- | --- |
+| A card released on a shelf's tiles (found outside the list) | **FAIL**: filed into the nearest heading — tile 50 of `Foils` went into `Showcase`, 22px below | **PASS**: the heading armed only, and nothing was filed |
+| 4 — a folder drag folds, anchors, lands and unfolds | **FAIL** on the anchor: the fold jumped to the folded wall's clamp (scrollTop 222), the heading sat 96–402px from the pointer and was unmounted for a frame, and Escape ended at 222 with the heading about 4,600px away | **PASS**: the fold lands in one frame, the heading is in every frame, across both pages Escape put it back under the pointer 3 of 3 times, and 3 of 7 drops settled 16px low |
+| 6 — Ctrl+wheel, and the caret across a column change | **FAIL**: tile 6 lost the caret going from 4 to 5 columns | **FAIL** on a deep tile: tile 6 kept it both ways, tile 63 lost it |
+| 8 — the caret after Add folder and Move up / Move down | PASS, with the caret on `<body>` wherever the heading had been virtualised away | **FAIL** on visibility: the caret right in 22 of 22 cases (both pages), with 4 of the grid's 9 leaving the heading partly under the sticky bar or 6px off-screen |
+| 10 — the name field in the 40px heading | **FAIL**: a 42px frame 1px proud top and bottom, ✓ and ✕ 3px above the centre line | **PASS**: a 36px frame at the row's top + 2, and every item on the centre line (0px), in the grid and the table |
+| 11 — the table: band, focus, popup, Top, paging | **FAIL** on the table's own focus ring: two faint 1px lines, and a Tab moved the list 855 → 191 | **PASS**: a whole 2px frame on four sides, and a Tab left 855 at 855 |
+| 14 — walking up a level | **FAIL**: 36–106 ms of a wall missing its own leading row under the child's figures | **PASS**: every walk in one frame |
+
+The rest passed on the first pass and were not re-driven. **1**: the root full, reading
+`Cards 340 · Unique 273 · Value $3,890.20`, equal to `collection_summary` and to the database.
+**2**: the sticky bar flush at 0.0px under `main`'s top and 36px tall over twelve wheel steps,
+naming each shelf as its heading passed under it; its path opened `Foils`, whose figures read 18 = 8
++ 5 + 3 + 2. **3**: a card dragged from the docked search onto a heading that mounted mid-drag,
+armed on arrival and filed. **5**: the arrows across a short last row and across headings, and a
+Shift range across two shelves. **7**: a search inside a collapsed `Binder` opening its ancestors
+and shutting it again when cleared. **9**: collapse kept per window, both ways. Check 13's failure
+was the wishlist's — this page drew the same dashed box in both views — and check 12 is the
+wishlist's alone.
+
+**The re-check's new findings** went to the branch's final review with the two fails, and each is
+answered in [Shelves](#shelves-2026-09-26): the sidebar's Wishlist entry taking a stray card
+(`pointerOnly`), a 16px `Updating…` line throwing the reveal and the drop anchor off after every
+write (the status line keeps its slot), the drop animation flying the floating heading toward a
+stale slot for 2–4 frames (`animateDrop: false`), the table's landing mark lagging one pointer move,
+a heading left the target up to 16px after autoscroll carried it past a still pointer (the release
+check), and a focused tile left off-screen by a zoom (`keepInView`).
+
+**Re-check 2** (2026-09-27, the branch at `cf8553c0`, after the final review's fix wave and a merge
+of `main` that took the copy to user schema v52) drove thirteen items — the two fails above, the six
+new findings, the final review's table carry, both Tops, the path row's draft, Move to folder… and
+Delete…, the fold pause, and a regression sweep over everything that had passed — and passed
+**13 of 13**. Its figures are written into [Shelves](#shelves-2026-09-26), beside each mechanism.
+Beside the checklist it found three things:
+
+- **A, fixed.** A fold that needs room below a wall shorter than the row the docked search column
+  stretches clamped at scrollTop 222, and held the heading 78–126px under the pointer — on the
+  wishlist, and waiting on any short cabinet here.
+  [The fold section](#a-folder-drag-folds-the-wall-on-the-grid-only) has the cause and the fix,
+  `2ece040d`.
+- **B, known and accepted.** During autoscroll a heading becomes the target only after about 30px
+  of travel under a still pointer, so a release 14px into a passing heading files nowhere. It fails
+  safe.
+- **C, known and accepted.** One Escape, of the last heading in `Binder`'s level, came back 2px
+  short (897 against a pointer of 899); every other came back exact.
+
+**Re-check 3** (2026-09-27, at `2ece040d`) drove finding A's fix on the wishlist and on a short
+cabinet staged inside `Binder`, and re-drove the root's deep folds and drops: **3 of 3 pass**, with
+the slot on the pointer through every fold, hover, Escape and drop, and the page's height and the
+wall's end back to what they were before the press after every unfold.
 
 ### v25 and Collection Search — not driven yet
 
@@ -2444,7 +3184,7 @@ build, not a description of this one.
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the pair that moves a row across the deck boundary and back — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/deck_pull.rs` | The third crossing (2026-09-03, issue #351): `deck_pull_plan` and `deck_pull_from_collection` — filling a hole the list already declares, writing no `deck_cards` row. Candidate eligibility, the pre-pick order, the all-or-nothing batch, and the `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has) |
 | `src-tauri/src/deck_quick_add.rs` | The fourth crossing (2026-09-03, issue #350): `deck_quick_add_wishes` and `deck_quick_add_to_collection` — the only one that *creates* a row rather than moving one. The seven-step order, `WISH_GONE` and `WISH_WRONG_CARD`, the wishlist predicate and why it drops the any-printing arm, and the fourth `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-quick-add-recording-cardboard-nobody-had-written-down) |
-| `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation`, `CollectionQuery::exclude_locked` with `scope`'s term for it, and `add_entry_filed` with `DECK_WRITE_FOLDERS` — the private door that takes the folder fence as a parameter, and its two callers |
+| `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation`, `CollectionQuery::exclude_locked` with `scope`'s term for it, and `add_entry_filed` with `DECK_WRITE_FOLDERS` — the private door that takes the folder fence as a parameter, and its two callers. Since 2026-09-26 also `CollectionQuery::shelves`, the shelf term builders `wishlist.rs` shares, `ShelfCount`, `shelf_counts`, `fill_peek` and `collection_shelf_counts` |
 | `src-tauri/src/deck_theory.rs` | `OWNED_SPARE_SQL` — "what can I build with", and the first ownership-shaped statement the lock changed, unconditionally |
 | `src-tauri/src/collection_source.rs` | The three scoped fragments, `copies_by_printing_and_finish` (the whole statement, 2026-09-09) and `Availability` — the second thing the lock reaches, as a **scope a caller passes** rather than a statement: `ForDeck` drops another deck's group and every locked drawer, keeping the asking deck's own group, and has two readers that must stay one pool — the deck builder's card search (issue #349) and a `theory` row's owned figure (issue #435) |
 | `src-tauri/src/deck.rs` | `owned_by_printing` (`owned_by_oracle` before 2026-09-07), `available_by_printing` (the plan's wider pool, 2026-09-09) and `attribute_owned` — a `live` row's owned/missing as a sum over the group, a `theory` row's over everything this deck could use, both keyed `(card_id, finish)`, with `get_deck` the one line that picks — `delete_deck`, which re-files into `Recently removed`, `release_unclaimed_copies` — the sweep `swap_printing` and `set_card_finish` each call after rewriting a row's identity — and `release_group_copies`, the crate's one walk over a group's rows — exact `(card_id, finish)` only since the oracle-grain fallback left it the same day — which `deck_to_collection` calls for its one row and `release_live_copies` loops for the four bulk sites (`clear_category`, `clear_variant`, `deck_meta::delete_category`'s cascade arm, `import::commit_import`'s `replace` arm), carrying the `live` fence for all of them |
@@ -2453,15 +3193,21 @@ build, not a description of this one.
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, and `lockedFolderIds` — the one function there that is this cabinet's alone |
 | `src/features/collection/collectionDrag.ts` | Both payloads under their own keys, the row and the tile that offer them, the targets that take either |
 | `src/features/collection/PickCopies.tsx` | The question a drop asks when the art stands for more than one row |
-| `src/lib/tileKey.ts` | `tileKeyOf` — **the one place** `` `${cardId}:${finish}` `` is spelled, and the `?? "nonfoil"` the ring composite meets a tile's key on. Both folds and both walls call it |
-| `src/features/collection/CollectionPage.tsx` | The `tiles` memo, `copiesByTile`, `entryIdsOf` — the wall's own printing-and-finish grain, keyed through `tileKeyOf` |
+| `src/lib/tileKey.ts` | `tileKeyOf` — **the one place** `` `${cardId}:${finish}` `` is spelled, and the `?? "nonfoil"` the ring composite meets a tile's key on. Both folds and both walls call it. Its optional third argument, the folder, is the shelved wall's (2026-09-26) |
+| `src/features/collection/CollectionPage.tsx` | The `tiles` memo, `copiesByTile`, `entryIdsOf` — the wall's own grain, keyed through `tileKeyOf` on the printing, the finish and, since shelves, the folder — and the wall's shelves, headings and path row |
 | `src/features/decks/collectionTiles.ts` | `foldCopies` — the *other* fold of the same rows, split the same way and keyed through the same `tileKeyOf` |
 | `src/features/search/CardGrid.tsx` | `GridCard.key` and `tileKey` — a tile's identity where it differs from its card's |
-| `src/features/collection/CollectionFolderCard.tsx` | The tile, `folderFace`, its `rename` branch, and its stories beside it |
-| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` |
-| `src/components/NewFolderCard.tsx` | The tile that makes a folder, and the field it becomes |
-| `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
-| `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and **fixed**, the word that used to be *locked* — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |
+| `src/features/collection/CollectionFolderCard.tsx` | `folderFace` and `CollectionFolderTotals` — the folder card's figures line, kept for the home page's Folders widget. The card itself went with the folder band on 2026-09-26 |
+| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` — drawn on a shelf heading since 2026-09-26 |
+| ~~`src/components/NewFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band. Add folder is `ShelfToolbar` and `ShelfHeading` |
+| `src/components/ParentFolderCard.tsx` | The up-one-level tile — drawn by no cabinet since 2026-09-26, with its stories kept; the deck gallery's `FolderCard` imports its words (`UP_ONE_LEVEL`, `upCardName`) |
+| `src/features/collection/PinnedFolders.tsx` | `DECK_KIND`, `REMOVED_KIND` and `pinnedFolders` — the vocabulary. The pinned strip it drew became the `Decks` shelves on 2026-09-26 |
+| `src/lib/shelves.ts` | `buildShelves`, `defaultCollapsed`, `shelvesToFetch`, `shelvesToCount`, `visibleShelves`, `UNFILED_SHELF` — the order, the folds and the two id lists, shared with the wishlist |
+| `src/lib/shelfLayout.ts` | `layoutShelves` — the shelves as heading, tile, label and empty rows at one column count — and the heights and indent constants |
+| `src/features/shelves/` | `ShelfHeading`, `ShelfStickyBar`, `EmptyShelf`, `ShelfLabel`, `ShelfToolbar`, `useShelfFolds`, `useShelfDrag`, `useFoldOnFolderDrag`, `useFoldAnchor` — shared by both pages |
+| `src/features/collection/collectionShelfModel.ts` | This cabinet's reading of the shelves: `shelfFolderOf`, `DRAFT_SHELF`, `rolledUp`, `shelfStat`, `foldAll`, `peekOf`, `keepShelf`, `foldedForDrag` |
+| `src/features/collection/CollectionShelfParts.tsx` | The heading, the empty box and the sticky bar, each wired to the drags this cabinet answers |
+| `src-tauri/src/shelffolds.rs` | The `shelf_folds` `app_meta` row — `shelf_folds` and `set_shelf_folds` |
 | `src/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |
 | `src/features/transfer/import/destinations/collection.ts` | `grainKey` — the importer's fold, now every grain term it can vary |
 | `src/lib/ipc.ts` | `MoveOutcome`, `collectionToDeck` and `deckToCollection`, and `CollectionQuery.allocation` — whose two words nothing sent until Collection Search |

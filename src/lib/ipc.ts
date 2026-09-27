@@ -67,33 +67,34 @@
  * `ScannerPrefs`, `ScannerTrayRow` and `ScannerTrayChoice` — because they are this app's stored
  * rows rather than the detector's JSON, and they sit on `plainMirrors` with every other one.
  *
- * **Twelve settings are one `app_meta` row each, and ten of them carry no struct at all.** (The
- * scanner's two rows, `scanner_prefs` and `scanner_tray`, are on top of those twelve and both
- * carry structs; see {@link ScannerPrefs} and {@link ScannerTrayRow}.) Of the
- * ten: four answered as a
+ * **The stored settings are one `app_meta` row each, and most of them carry no struct at all.**
+ * (The scanner's two rows, `scanner_prefs` and `scanner_tray`, carry structs; see
+ * {@link ScannerPrefs} and {@link ScannerTrayRow}.) Of the settings without one, some answer as a
  * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
  * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`),
  * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) and
- * `startView`/`setStartView` (`src-tauri/src/startview.rs`) — five as a bare map,
+ * `startView`/`setStartView` (`src-tauri/src/startview.rs`) — some as a bare map,
  * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
- * (`src-tauri/src/listview.rs`), `flattenState`/`setFlattenState`
- * (`src-tauri/src/flatten.rs`), `markColors`/`setMarkColor`
+ * (`src-tauri/src/listview.rs`), `markColors`/`setMarkColor`
  * (`src-tauri/src/markcolors.rs`) and `searchOpen`/`setSearchOpen`
- * (`src-tauri/src/searchopen.rs`), and one as a
- * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). All twelve are
- * the shape a stored preference has to have: the read falls back on its default for a row that
- * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
+ * (`src-tauri/src/searchopen.rs`), and one as a bare `boolean`:
+ * `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). The settings that do carry a struct
+ * are `deckFolderPane`, `homeLayout` and `shelfFolds`, below. Every one of them is the shape a
+ * stored preference has to have: the read falls back on its default for a row that is missing
+ * *or* holds a value this build does not recognise, and only the *write* refuses. **They are
+ * named here and never counted**: this paragraph said "eleven" after `shelfFolds` made the rows
+ * one more, because a count is a fact a build answers (`grep -rln "app_meta::" src-tauri/src`)
+ * and a prose-only edit turns nothing red.
  *
- * Nine of them are therefore typed loosely here rather than as their unions: the narrowing
- * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
- * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows,
+ * All of those but the boolean are therefore typed loosely here rather than as their unions: the
+ * narrowing belongs to the module that owns the vocabulary (`@/lib/marketplace`,
+ * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for its list-layout row,
  * `@/features/decks/deckSort`, `@/lib/useMarkColors`, `@/features/search/useSearchOpen`,
- * `@/features/home` for the start view), and a
- * row a newer build wrote
- * must reach this side as what it is. **The deck sort and the start view are the two where the
- * *write* refuses nothing but a blank**, and they are the rule above meeting a vocabulary the
- * backend does not have rather than an exception to it: three of the six sort keys are computed on
- * this side, so `deck_sort.rs` has no list to check a word against, and which views exist is a
+ * `@/features/home` for the start view), and a row a newer build wrote must reach this side as
+ * what it is. **The deck sort and the start view are where the *write* refuses nothing but a
+ * blank**, and they are the rule above meeting a vocabulary the backend does not have rather than
+ * an exception to it: some of the sort keys are computed on this side, so `deck_sort.rs` has no
+ * list to check a word against, and which views exist is a
  * fact about this app's router, so `startview.rs` has none either — see {@link ipc.setDeckSort}
  * and {@link ipc.setStartView}. **The one bare boolean left is the one with no narrowing to do**, and that is
  * the same argument arriving at nothing rather than an exception to it: a boolean has no
@@ -111,8 +112,7 @@
  * {@link ipc.searchOpen} now, a map keyed by section — so the setting moved out of the boolean
  * paragraph and into the map one without a word of either argument changing.
  *
- * **The tenth is the first stored preference that carries a struct**, and it is on the list above
- * rather than in the paragraph below because of it: {@link DeckFolderPane}
+ * **The folder pane is the first stored preference that carried a struct**: {@link DeckFolderPane}
  * (`src-tauri/src/deckpane.rs`) is how wide the decks page's folder tree was dragged *and*
  * whether it is folded to its rail, and the two are one row because they are one gesture's worth
  * of state — a reader who folds a tree they had widened must come back to both facts, and two
@@ -121,15 +121,16 @@
  * search-column row has one *kind* of value under keys this side invents, and this one has two
  * *different* values under names both sides already know, so a `Record<string, unknown>` here
  * would throw away the only thing worth checking. Being a struct is also what puts it on
- * `ipc.test.ts`' mirror table, where the ten below cannot be — a bare `boolean` has no fields
- * to compare — so it is one of the two stored settings whose *shape* cannot drift silently.
- * **`width` is nullable and `collapsed` is not**, which is the same asymmetry those ten turn on:
- * how wide is a number a reader has to have produced, so a database nobody has dragged has
+ * `ipc.test.ts`' mirror table, where the unstructured settings cannot be — a bare `boolean` has
+ * no fields to compare — so it is one of the stored settings whose *shape* cannot drift silently.
+ * **`width` is nullable and `collapsed` is not**, which is the same asymmetry the unstructured
+ * ones turn on: how wide is a number a reader has to have produced, so a database nobody has
+ * dragged has
  * nothing honest to say and says `null`; folded-or-not has a default that is true of every
  * database from the first launch. `@/features/decks/useFolderPane` is where the `null` becomes a
  * pixel count, and `FolderTree` owns that number.
  *
- * **The eleventh is the second, and it is a struct for the opposite reason.** {@link HomeLayout}
+ * **The home layout is the second, and it is a struct for the opposite reason.** {@link HomeLayout}
  * (`src-tauri/src/home.rs`) is the home page's tiles — their order, their widths and whatever each
  * one remembers — and where the folder pane is a struct because its two *known* fields must land
  * together, this one is a struct because most of what it holds is **unknown to the backend
@@ -140,20 +141,27 @@
  * struct puts it on the same mirror table, which is what its two declared fields are worth
  * checking for; nothing on this side can fence the rest, and nothing should try.
  *
- * The zoom row, the list-layout row, the flatten row, the mark-colour row and the search-column
- * row are the five of the ten whose *shape* is a map, and the difference is worth a sentence:
- * none has a single default to fall back on, because there are eight walls, four lists, two
- * cabinets, three search columns and a handful of marks, and each one has been touched or not. So
+ * **The shelf folds are the third, and the struct is the one vocabulary both sides spell.**
+ * {@link ShelfFolds} (`src-tauri/src/shelffolds.rs`, `shelfFolds`/`setShelfFolds`) is which
+ * shelves the reader folded away from their default, per page. The *pages* are named on both
+ * sides — {@link ShelfFoldPage} here and the Rust struct's fields there, held together by
+ * `ipc.test.ts` (and `shelffolds::PAGES` held to those fields by the crate's own test) — and
+ * under each page it is the search-column row's shape one level deeper:
+ * folder ids this side sends, mapped to plain booleans. Its write follows the rules above — it
+ * refuses an unknown page or a key that is not a folder id, keeps a page this build does not
+ * know — and a `null` takes an override back off rather than storing the default.
+ *
+ * The zoom row, the list-layout row, the mark-colour row and the search-column row are the
+ * unstructured settings whose *shape* is a map, and the difference is worth a sentence:
+ * none has a single default to fall back on, because each covers several walls, lists, search
+ * columns or marks, and each one of those has been touched or not. So
  * the backend answers only what it has, and a section it says nothing about keeps the default the
  * store was built with — which for the mark colours is the one `index.css` draws, a default this
  * side does not hold as a value at all.
- * **The flatten row and the search-column row are the two where the keys are a vocabulary and
- * the values are not** — which
- * is the two arguments above meeting in one row rather than a third kind of setting: *which*
- * pages file cards is `@/lib/store`'s to say and *which* pages carry a search column is
- * `@/features/search/useSearchOpen`'s, while a `bool` has no junk state for a later build
- * to have widened. So `isFlattenSection` narrows the key, and the only thing `hydrateFlatten`
- * asks of the value is that it really is a boolean — which is a check on the *wire*, not on a
+ * **The search-column row is the one where the keys are a vocabulary and the values are not** —
+ * which pages carry a search column is `@/features/search/useSearchOpen`'s to say, while a `bool`
+ * has no junk state for a later build to have widened. So the key is narrowed on this side, and the
+ * only thing asked of the value is that it really is a boolean — a check on the *wire*, not on a
  * vocabulary: this file's `boolean` is a claim about what the far end sends, and a row that has
  * been hand-edited is exactly where a claim stops being true.
  *
@@ -1403,6 +1411,19 @@ export interface CollectionQuery extends CardFilters {
    */
   rootOnly?: boolean;
   /**
+   * **The shelves to answer, in the order to answer them** — folder ids, `0` for Not sorted (the
+   * rows filed nowhere). A Shelves wall sends the ids it draws expanded, depth-first, for the list,
+   * and every shelf at and below its level for {@link ipc.collectionShelfCounts} and
+   * {@link ipc.collectionSummary}; `@/lib/shelves` builds both lists.
+   *
+   * **Sent, it replaces {@link folderId}, {@link rootOnly} and {@link excludeLocked}** — none of
+   * the three is read. Rows come back in list position, then {@link sort}, then id; `limit`,
+   * `offset` and `total` are unchanged. An id no folder answers to matches nothing and refuses
+   * nothing. **Absent is today's answer**, which the mirror, the export sweep and the importer all
+   * still ask by saying nothing.
+   */
+  shelves?: number[];
+  /**
    * `true` drops the copies filed in a **locked** folder — a drawer the reader set aside
    * ({@link CollectionFolder.locked}) — and in every folder underneath one, since the lock
    * inherits down the tree. Default `false`; **ignored entirely when {@link folderId} names a
@@ -1639,6 +1660,45 @@ export interface CollectionSummary {
 }
 
 /**
+ * One shelf of a Shelves wall, counted — `collection::ShelfCount`, which `wishlist.rs` answers
+ * too. One row per **non-empty** shelf in the query's scope, ordered by folder id; a shelf with
+ * nothing in scope has no row at all. The four figures honour search and filters; {@link peek}
+ * does not.
+ */
+export interface ShelfCount {
+  /** The folder, or `0` for Not sorted. */
+  folderId: number;
+  /** What the wall draws: on the collection one per printing and finish on this shelf (two grades
+   *  of one printing are one tile), on the wishlist one per wish. */
+  tiles: number;
+  /** `sum(quantity)`. */
+  copies: number;
+  /** Priced at the query's marketplace; `null` when it prices nothing on the shelf — an em dash,
+   *  never `0.00`. */
+  value: number | null;
+  /** What the marketplace could not price, in the heading's own unit: on the collection
+   *  **copies** (the unit of its "n cards" and of {@link CollectionSummary.unpriced}), on the
+   *  wishlist **wishes** (the unit of its "n wishes"). */
+  unpriced: number;
+  /** Up to four card ids for a **collapsed** heading's thumbnails — the only source, because a
+   *  collapsed shelf's cards are never fetched. By card name then id, one id per card, each the
+   *  id that card's tile is drawn from (a wish's `artCardId`). **Unfiltered**: a filter opens
+   *  every shelf, so a peek is only drawn with none active. */
+  peek: string[];
+}
+
+/** The two pages that draw shelves — `shelffolds::PAGES`, and the keys of {@link ShelfFolds}. */
+export type ShelfFoldPage = "collection" | "wishlist";
+
+/**
+ * The shelves the reader folded away from their default, per page: folder id (decimal) →
+ * collapsed. **Only overrides** — a shelf with no entry is at its default, which is
+ * `@/lib/shelves`' `defaultCollapsed` to say. An id whose folder is gone is answered like any
+ * other and matches nothing.
+ */
+export type ShelfFolds = Record<ShelfFoldPage, Record<string, boolean>>;
+
+/**
  * One bucket of a list, sliced along one dimension — the home page's two value widgets.
  *
  * **One struct for two commands**, and the two are deliberately not one: `collection.rs` owns the
@@ -1737,6 +1797,13 @@ export interface WishlistQuery extends CardFilters {
    * rather than smuggled into `folderId` as some other sentinel.
    */
   flatten?: boolean;
+  /**
+   * **The shelves to answer, in the order to answer them** — {@link CollectionQuery.shelves} one
+   * table over: folder ids, `0` for the root. **Sent, it replaces {@link folderId} and
+   * {@link flatten}**; rows come back in list position, then the sort, then id. Absent is today's
+   * answer — the root, or every wish when flattened.
+   */
+  shelves?: number[];
   /** How to order the list, first column deciding. Empty or absent is name order. */
   sort?: SortSpec<WishlistSortKey>;
   /** Which marketplace every price is quoted from, and therefore what the `cost` and `price`
@@ -7706,6 +7773,13 @@ export const ipc = {
   collectionSummary: (query: CollectionQuery) =>
     invoke<CollectionSummary>("collection_summary", { query }),
   /**
+   * One {@link ShelfCount} per non-empty shelf, over the **same** query the list and the summary
+   * take — send `shelves` as every shelf at and below the level, collapsed ones too. `sort`,
+   * `limit` and `offset` are read by nothing on the far side.
+   */
+  collectionShelfCounts: (query: CollectionQuery) =>
+    invoke<ShelfCount[]>("collection_shelf_counts", { query }),
+  /**
    * The whole collection sliced along one dimension — `rarity`, `color`, `set` or `finish`.
    *
    * **The whole collection, and no query**: this is the home page's figure, not the wall's, so it
@@ -7956,6 +8030,10 @@ export const ipc = {
     invoke<EntryChange>("wishlist_set_quantity", { id, quantity }),
   wishlistRemove: (id: number) => invoke<EntryChange>("wishlist_remove", { id }),
   wishlistList: (query: WishlistQuery) => invoke<WishlistPage>("wishlist_list", { query }),
+  /** {@link collectionShelfCounts} one table over: a tile is a wish, and summed over every shelf
+   *  the counts are the wishlist header's Total cost. */
+  wishlistShelfCounts: (query: WishlistQuery) =>
+    invoke<ShelfCount[]>("wishlist_shelf_counts", { query }),
   /**
    * The whole wishlist as one aggregate — see {@link WishlistSummary}, where the reason it is not
    * a folder subtotal is written out.
@@ -9388,7 +9466,7 @@ export const ipc = {
    * How large each wall of cards was last left drawn, as section name → multiplier.
    *
    * The third `app_meta` setting and the **first** whose shape is a map — see this file's header,
-   * and {@link listView}, {@link flattenState} and {@link markColors}, each of which copies the
+   * and {@link listView} and {@link markColors}, each of which copies the
    * contract below.
    * **A section is absent rather than defaulted**: the ladder's stops are this side's
    * (`@/lib/cardZoom`), so a missing entry means the reader has never zoomed that wall, and the
@@ -9415,7 +9493,7 @@ export const ipc = {
    * they left it.
    *
    * The **fourth** `app_meta` setting and the first that is a bare `boolean` — see this file's
-   * header. It is also the one that needs no narrowing on this side: the other nine carry
+   * header. It is also the one that needs no narrowing on this side: the other eight carry
    * a vocabulary a newer build could have widened, and `true`/`false` has none, so there is no
    * third state to fall back from. **The far end is infallible**: a missing row, a row holding
    * something that is not a boolean, and a row that cannot be read at all all answer `false` —
@@ -9456,41 +9534,6 @@ export const ipc = {
    */
   setListView: (section: string, view: string) =>
     invoke<void>("set_list_view", { section, view }),
-  /**
-   * Whether each page with a cabinet was last left ignoring its filing, as section name →
-   * flattened.
-   *
-   * The **seventh** `app_meta` setting and the third whose shape is a map — see this file's
-   * header, and {@link listView} beside it, whose contract this copies whole. **A section is
-   * absent rather than defaulted**: which pages file cards is this side's (`@/lib/store`), and
-   * the two defaults differ (`collectionFlattened` opens `true`, `wishlistFlattened` `false`), so
-   * a missing entry means the reader has never touched that switch and the backend does not
-   * invent an answer it does not own. **Infallible by signature** — a whole unreadable row
-   * answers `{}`, which is a complete, drawable app.
-   *
-   * `Record<string, boolean>` and not `Record<FlattenSection, boolean>`, for {@link listView}'s
-   * reason on the key half only: the keys are whatever some build of this app wrote, so
-   * `isFlattenSection` narrows them in `@/lib/store`. The **values** have no vocabulary to
-   * narrow, which is why the type says `boolean` — and `hydrateFlatten` still checks it, because
-   * that word is a promise about the far end rather than a fact about the row.
-   */
-  flattenState: () => invoke<Record<string, boolean>>("flatten_state"),
-  /**
-   * Remember one page's switch, leaving the other entry in the row alone.
-   *
-   * Two arguments where most of its neighbours take one, and Tauri matches by name. Rejects a
-   * blank section and nothing else: a `bool` off the IPC boundary has no junk state for a
-   * validation to catch, so unlike {@link setListView} there is no word to refuse — the
-   * asymmetry {@link setNavCollapsed} spells out, on a row whose *keys* still belong to this
-   * side.
-   *
-   * Answers `collection::BUSY` under a running sync, like every other write, and the caller
-   * deliberately does not put the switch back when it does — {@link setNavCollapsed}'s trade, for
-   * its reason: a refusal costs the reader nothing they can see this session and only the next
-   * launch's starting state for that page.
-   */
-  setFlattenState: (section: string, flattened: boolean) =>
-    invoke<void>("set_flatten_state", { section, flattened }),
   /**
    * What colour the reader has each card mark drawn in, as mark name → `#rrggbb`.
    *
@@ -9539,7 +9582,7 @@ export const ipc = {
    *
    * It stands exactly where `deckSearchOpen` stood, having replaced it on 2026-09-07, and its
    * shape is a map. See this file's header,
-   * and {@link flattenState} beside it, whose contract this copies whole down to the value type.
+   * and {@link listView}, whose contract this copies with a `boolean` where the word is.
    * **A section is absent rather than defaulted**: which pages have a search column at all is
    * this side's (`@/features/search/useSearchOpen`), so a missing entry means the reader has
    * never touched that disclosure and the backend does not invent a preference it does not own.
@@ -9564,7 +9607,7 @@ export const ipc = {
    * Two arguments where some of its neighbours take one, and Tauri matches by name. Rejects a
    * blank section and nothing else: a `bool` off the IPC boundary has no junk state for a
    * validation to catch, so unlike {@link setListView} there is no word to refuse —
-   * {@link setFlattenState}'s asymmetry exactly, on a row whose *keys* also belong to this side.
+   * {@link setNavCollapsed}'s asymmetry, on a row whose *keys* belong to this side.
    *
    * Answers `collection::BUSY` under a running sync, like every other write, and the caller
    * deliberately does not put the column back when it does — {@link setNavCollapsed}'s trade,
@@ -9573,6 +9616,20 @@ export const ipc = {
    */
   setSearchOpen: (section: string, open: boolean) =>
     invoke<void>("set_search_open", { section, open }),
+  /**
+   * The folded-shelf overrides on both pages. {@link searchOpen}'s contract one level deeper:
+   * **infallible by signature** — an unreadable row answers both pages empty, which is every
+   * shelf at its default.
+   */
+  shelfFolds: () => invoke<ShelfFolds>("shelf_folds"),
+  /**
+   * Set (`true`/`false`) or remove (`null`) overrides on one page, leaving every other entry
+   * alone. Refuses a page with no shelves and a key that is not a folder id; answers
+   * `collection::BUSY` under a running sync, which the caller swallows — {@link setSearchOpen}'s
+   * trade.
+   */
+  setShelfFolds: (page: ShelfFoldPage, changes: Record<string, boolean | null>) =>
+    invoke<void>("set_shelf_folds", { page, changes }),
   /**
    * How the decks page's folder tree was last left — how wide the reader dragged it, and whether
    * it is folded to its rail.

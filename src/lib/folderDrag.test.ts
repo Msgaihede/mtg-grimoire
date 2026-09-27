@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, useEffect } from "react";
 import { act, renderHook } from "@testing-library/react";
+import { Feedback } from "@dnd-kit/dom";
 import { dragData, readDragData } from "@/features/decks/dnd";
 import { startPointerDrag } from "@/test-drag";
 import { dndManager } from "@/lib/dndManager";
@@ -230,8 +231,8 @@ const BEFORE = { y: 0.1 };
 const INSIDE = { y: 0.5 };
 const AFTER = { y: 0.9 };
 
-function mountSource(folder: () => FolderDrag): HTMLElement {
-  const element = boxed(document.createElement("div"), 0);
+function mountSource(folder: () => FolderDrag, top = 0): HTMLElement {
+  const element = boxed(document.createElement("div"), top);
   element.textContent = "a folder";
   document.body.append(element);
   const stop = folderDraggable({ element, folder });
@@ -307,6 +308,32 @@ describe("folderDraggable", () => {
     expect(held.started).toBe(true);
     await held.cancel();
   });
+
+  /**
+   * **`animateDrop: false` is the shelves' opt-in, and the default is the library's animation.**
+   * dnd-kit's drop animation flies the floating copy back to the slot it measured when the drag
+   * began; a shelf heading moved far on a virtualised wall has left that slot by the time the
+   * animation runs, so the copy slid off the screen for 2–4 frames (live re-check, new finding 3).
+   * The deck tree and the deck folder cards keep their animation, so a source that did not ask
+   * carries no plugin config at all. Pinned as the registration's config: the animation is
+   * `Feedback`'s WAAPI machinery, which jsdom does not run.
+   */
+  it("keeps the drop animation unless asked not to", () => {
+    const registered = (element: HTMLElement) =>
+      [...dndManager.registry.draggables].find((entity) => entity.element === element);
+
+    const plain = mountSource(() => FOLDER);
+    expect(registered(plain)?.pluginConfig(Feedback)).toBeUndefined();
+
+    const still = document.createElement("div");
+    document.body.append(still);
+    const stop = folderDraggable({ element: still, folder: () => FOLDER, animateDrop: false });
+    undo.push(() => {
+      stop();
+      still.remove();
+    });
+    expect(registered(still)?.pluginConfig(Feedback)).toEqual({ dropAnimation: null });
+  });
 });
 
 interface TargetProps {
@@ -314,6 +341,8 @@ interface TargetProps {
   axis: "vertical" | "horizontal";
   canDrop: (drag: FolderDrag, edge: FolderEdge) => boolean;
   onDrop: (drag: FolderDrag, edge: FolderEdge) => void;
+  armOnMount?: boolean;
+  pointerOnly?: boolean;
 }
 
 function mountTarget({ top = TARGET_TOP, ...props }: Partial<TargetProps> & { top?: number } = {}) {
@@ -461,7 +490,8 @@ describe("useFolderDropTarget", () => {
    * The reason both callbacks are read through a ref: a folder list refetching mid-drag re-renders
    * every target on screen, and a target that registered its handlers into the library would go on
    * calling the render they were made in. The observable is the *newest* one being called; that a
-   * target does not tear itself down to get there is the deps array, `[ref, scope, axis]`.
+   * target does not tear itself down to get there is the deps array,
+   * `[ref, scope, axis, pointerOnly]` — none of them a callback.
    */
   it("acts on the newest onDrop, not the one it registered with", async () => {
     const registered = vi.fn();
@@ -599,5 +629,200 @@ describe("registering with the manager", () => {
 
     await settled();
     expect(mine(element, "draggables")).toHaveLength(1);
+  });
+});
+
+/**
+ * **A folder target that mounts mid-drag** — a shelf heading scrolling into view while a heading is
+ * being carried (spec §3.9 folds the wall, which remounts every heading at once). The landing has to
+ * follow the pointer and the drop has to land, exactly as on a target that was there all along.
+ */
+describe("useFolderDropTarget with armOnMount", () => {
+  const SHELF: FolderDrag = { folderId: 12, name: "Foils", parentId: null, scope: "collection" };
+
+  it("arms a folder target that mounts in the middle of a drag, and only when asked to", async () => {
+    const held = await startPointerDrag(mountSource(() => SHELF));
+    const asked = mountTarget({ scope: "collection", armOnMount: true });
+    const plain = mountTarget({ scope: "collection", top: OTHER_TOP });
+
+    expect(asked.state.armed).toBe(true);
+    expect(plain.state.armed).toBe(false);
+
+    await held.cancel();
+    expect(asked.state.armed).toBe(false);
+  });
+
+  it("reports the landing and files the folder on a target that mounted mid-drag", async () => {
+    const onDrop = vi.fn();
+    const held = await startPointerDrag(mountSource(() => SHELF));
+    const target = mountTarget({ scope: "collection", armOnMount: true, onDrop });
+
+    await held.over(target.element, BEFORE);
+    expect(target.state.edge).toBe("before");
+    await held.over(target.element, INSIDE);
+    expect(target.state.edge).toBe("inside");
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith(SHELF, "inside");
+  });
+
+  it("stays dark mid-drag for a folder from another cabinet", async () => {
+    const held = await startPointerDrag(mountSource(() => SHELF));
+    const target = mountTarget({ scope: "wishlist", armOnMount: true });
+
+    expect(target.state.armed).toBe(false);
+    await held.cancel();
+  });
+});
+
+/**
+ * **A folder target that lands a folder only while the pointer is inside it** — the shelves'
+ * opt-in, `useDndDropTarget`'s `pointerOnly` for the folder half. dnd-kit's default detector falls
+ * back to the **carried folder's whole rectangle** when the pointer is in no target, so a heading
+ * dragged over the table view's card rows (which do not fold away) became the target of whichever
+ * heading it overlapped, and `folderEdge` — which answers a point outside the box by the end it is
+ * past — turned that into a reorder beside a heading the pointer was nowhere near. The folder-drag
+ * half of the live pass's "Extra, found during 3".
+ *
+ * **The overlap is staged from the source's box**, for `dndTarget.test.ts`'s reason: jsdom measures
+ * the carried rectangle once, off the source, and never moves it with the pointer. A source at
+ * 230–270 overlaps the 200–240 target by 10px with its centre — where the press lands — 10px below
+ * it; the pointer is then walked off to where nothing is.
+ */
+describe("useFolderDropTarget with pointerOnly", () => {
+  /** 10px of the carried folder inside the 200–240 target; its centre 10px below it. */
+  const OVERLAPPING = TARGET_TOP + 30;
+  /** Past the target and past the source: the pointer is over nothing at all. */
+  const OFF = { x: 100, y: 330 };
+
+  /** The fence for everybody who did not ask — the deck tree and the deck folder cards: a folder
+   *  whose rectangle overlaps a target still lands beside it, as it always has. */
+  it("leaves a plain target landing a folder that overlaps it with the pointer outside", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(() => FOLDER, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    expect(target.state.edge).toBe("after");
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith(FOLDER, "after");
+  });
+
+  it("reports no landing, and files nothing, while the pointer is outside it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(() => FOLDER, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    expect(target.state.armed).toBe(true);
+    expect(target.state.edge).toBeNull();
+    await held.drop();
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  /** Inside, the three landings are exactly what they were: the pointer's quarter decides. */
+  it("reports the landing the pointer is over, and files there, once it is inside", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(() => FOLDER, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    await held.over(target.element, BEFORE);
+    expect(target.state.edge).toBe("before");
+    await held.over(target.element, INSIDE);
+    expect(target.state.edge).toBe("inside");
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith(FOLDER, "inside");
+  });
+});
+
+/**
+ * One `pointermove`, dispatched **once**. `test-drag.ts`'s `moveTo` fires every move twice on
+ * purpose — `dragOperation.position.current` lags one move behind, and a test driven through it
+ * would otherwise read each landing one move early — which is exactly why no test built on it can
+ * see the lag the live re-check found. This is the reader's pointer: one event per step.
+ */
+async function oneMove(x: number, y: number): Promise<void> {
+  await act(async () => {
+    document.dispatchEvent(
+      new PointerEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: x,
+        clientY: y,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+        button: 0,
+        buttons: 1,
+      }),
+    );
+  });
+  for (let i = 0; i < 3; i++) {
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+  }
+}
+
+/**
+ * **The mark is the landing the release makes, from the move that arrived** — the live re-check's
+ * new finding 4. dnd-kit dispatches `dragmove` with the new coordinates in `to` and writes
+ * `position.current` a microtask *later*, so a listener reading the operation's position reads the
+ * move before this one. Arriving in a heading's bottom quarter from its middle drew the `inside`
+ * wash with no line, and a release there landed `after` — the screen said one landing and the drop
+ * made another. Reproduced twice in the shipped window; one 3px nudge more always corrected it.
+ */
+describe("useFolderDropTarget, one pointer move at a time", () => {
+  it("reports the landing of the move that arrived, not the one before it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
+
+    await held.over(target.element, INSIDE);
+    expect(target.state.edge).toBe("inside");
+
+    const box = target.element.getBoundingClientRect();
+    await oneMove(box.left + box.width / 2, box.top + box.height * AFTER.y);
+    expect(target.state.edge).toBe("after");
+
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith(FOLDER, "after");
+  });
+});
+
+/**
+ * **A pointer-inside folder target that has moved out from under the pointer lands nothing** —
+ * the live re-check's new finding 5, for a folder. Autoscroll carries a heading past a still
+ * pointer and the collisions follow a step behind, so the heading was still the operation's target
+ * at the release — and `folderEdge`, answering a point outside the box by the end it is past, turned
+ * that into a reorder beside a heading the pointer had already left. Staged as `dndTarget.test.ts`
+ * stages it: over the target, then its box moves with no pointer move, then the release.
+ */
+describe("useFolderDropTarget, a target that moved away before the release", () => {
+  it("files nothing from a pointer-inside target the pointer is no longer inside", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
+
+    await held.over(target.element, INSIDE);
+    expect(target.state.edge).toBe("inside");
+    // Autoscroll carries the heading 200px up past the still pointer; nothing measures it again.
+    boxed(target.element, 0);
+    await held.drop();
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  /** The fence: a plain folder target (the deck tree, the deck folder cards) still lands the drop
+   *  its collision gave it, by the end the pointer is past — exactly as before. */
+  it("leaves a plain target landing the drop the last collision gave it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
+
+    await held.over(target.element, INSIDE);
+    boxed(target.element, 0);
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith(FOLDER, "after");
   });
 });

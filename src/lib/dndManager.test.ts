@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom";
+import { Feedback, PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom";
 import css from "@/index.css?raw";
 import { folderDraggable } from "@/lib/folderDrag";
 import { dndManager, DRAGGING_ATTRIBUTE } from "@/lib/dndManager";
@@ -420,6 +420,44 @@ describe("the manager's sensors", () => {
     stopGrip();
     tile.remove();
     heading.remove();
+  });
+
+  /**
+   * **#331's twin, on the plugin registry.** A `Draggable` with a per-source `plugins` list
+   * re-registers each plugin on the manager from an effect — `registry.plugins.register(plugin)`,
+   * the constructor alone, the entry's options dropped — and `PluginRegistry.register` reads the
+   * omitted options as an instruction to *write* them. So the first source to carry a plugin list
+   * would clear the manager's own configuration of that plugin, for the rest of the session.
+   *
+   * It is armed rather than live: the manager configures `Feedback` with nothing today, so a clear
+   * is `undefined` over `undefined`. The folder-shelf heading is the first source to carry a
+   * plugin list (`folderDraggable`'s `animateDrop: false`), which is what makes the day somebody
+   * configures `Feedback` at the manager the day this goes silently wrong — the fence goes in with
+   * the first source that could trip it.
+   */
+  it("keeps a plugin's own options when a source brings a plugin list of its own", async () => {
+    const feedback = dndManager.registry.plugins.get(Feedback)!;
+    const saved = feedback.options;
+    const configured = { dropAnimation: { duration: 123 } };
+    feedback.options = configured;
+    const element = boxed(document.createElement("div"), 0);
+    document.body.append(element);
+    try {
+      const stop = folderDraggable({
+        element,
+        folder: () => ({ folderId: 1, name: "Reds", parentId: null, scope: "collection" }),
+        animateDrop: false,
+      });
+      // The source's plugin list is registered from an effect; give it every chance to run.
+      const held = await startPointerDrag(element);
+      await held.cancel();
+      stop();
+
+      expect(feedback.options).toBe(configured);
+    } finally {
+      feedback.options = saved;
+      element.remove();
+    }
   });
 });
 

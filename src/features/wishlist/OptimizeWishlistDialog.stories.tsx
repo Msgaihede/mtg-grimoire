@@ -112,7 +112,7 @@ const meta = {
   tags: ["autodocs"],
   args: {
     open: true,
-    scope: { folder: "Wishlist", flatten: false, filtered: false },
+    scope: { folder: "Wishlist", everyFolder: false, filtered: false },
     plan: planOf([BOLT, RAGAVAN, RHYSTIC]),
     loading: false,
     readError: null,
@@ -147,7 +147,7 @@ const meta = {
           "marketplace does not list is offered, drawn `— → $2.30`, counted as no saving and " +
           "left unticked: an unlisted printing may be cheap rather than dear.\n\n" +
           "**The scope is the rows on screen.** The plan takes the same query the list was " +
-          "drawn from — the folder, the Flatten switch and every active filter — so the " +
+          "drawn from — the folder, every shelf below it and every active filter — so the " +
           "subtitle says where it looked and the footer says what it passed over.\n\n" +
           "**It stays open afterwards.** The page underneath has no place for a transient " +
           "sentence, and a wish that folded into one the reader already had is the app's own " +
@@ -243,14 +243,14 @@ export const SelectingEverything: Story = {
 };
 
 /**
- * Flattened: the sweep covers every drawer, so each row says which one it came out of.
+ * Every folder: the sweep covers every drawer, so each row says which one it came out of.
  *
- * The subtitle changes with it — there is no level to name when the filing is being ignored, and
- * the folder the reader last stood in is not what is being swept.
+ * The subtitle changes with it — at the root the sweep covers every shelf, so there is no one
+ * level to name, and the folder the reader last stood in is not what is being swept.
  */
-export const Flattened: Story = {
+export const EveryFolder: Story = {
   args: {
-    scope: { folder: "Ordered", flatten: true, filtered: true },
+    scope: { folder: "Ordered", everyFolder: true, filtered: true },
     plan: planOf([
       { ...BOLT, folderId: 1 },
       { ...RAGAVAN, folderId: 2 },
@@ -286,7 +286,7 @@ export const AlreadyCheapest: Story = {
  */
 export const NothingInScope: Story = {
   args: {
-    scope: { folder: "Someday", flatten: false, filtered: true },
+    scope: { folder: "Someday", everyFolder: false, filtered: true },
     plan: planOf([], { considered: 0, alreadyCheapest: 0, skipped: 0 }),
   },
 };

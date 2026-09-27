@@ -24,6 +24,7 @@ import { DECK_SORT_KEY } from "@/features/decks/useDeckSort";
 import { DECK_SEARCH_TAB_KEY } from "@/features/decks/DeckSearchPanel";
 import { MIRROR_KEY } from "@/features/settings/BackupPanel";
 import { SHARE_LIST_KEY } from "@/features/share/useShares";
+import { SHELF_FOLDS_KEY } from "@/features/shelves/useShelfFolds";
 
 /** Every key seeded, so an invalidation's reach is readable off `isInvalidated`. */
 function seeded(keys: readonly (readonly unknown[])[]): QueryClient {
@@ -258,5 +259,15 @@ describe("the cross-window table map", () => {
   it("treats a key under a per-window root as per-window", () => {
     expect(isPerWindowKey([...DECK_SORT_KEY, 3])).toBe(true);
     expect(isPerWindowKey(["decks", "list"])).toBe(false);
+  });
+});
+
+describe("the shelves' stored folds", () => {
+  /** One value in two places, because `lib` may not import it from `features` — this is the
+   *  fence that keeps the spelling here and the hook's key the same key. */
+  it("stay per window, under the key the hook reads", () => {
+    expect(PER_WINDOW_KEYS).toContainEqual(SHELF_FOLDS_KEY);
+    expect(isPerWindowKey(SHELF_FOLDS_KEY)).toBe(true);
+    expect(keysForTables(["app_meta"])).not.toContainEqual(SHELF_FOLDS_KEY);
   });
 });

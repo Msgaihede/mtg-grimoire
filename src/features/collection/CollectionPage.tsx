@@ -6,14 +6,14 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { FolderInput, Lock, LockOpen, Pencil, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, FolderInput, Lock, LockOpen, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog } from "@/components/Dialog";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
-import { NewFolderCard } from "@/components/NewFolderCard";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
@@ -23,16 +23,29 @@ import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { dragData } from "@/features/decks/dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
-import { CardGrid, PHONE_TILE_WIDTH, type GridCard } from "@/features/search/CardGrid";
+import {
+  CardGrid,
+  PHONE_TILE_WIDTH,
+  type GridCard,
+  type GridSections,
+} from "@/features/search/CardGrid";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
+import { ShelfLabel } from "@/features/shelves/ShelfLabel";
+import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
+import { useFoldAnchor } from "@/features/shelves/useFoldAnchor";
+import { useFoldOnFolderDrag } from "@/features/shelves/useFoldOnFolderDrag";
+import {
+  caretIsNowhere,
+  pathRowAddFolder,
+  sameIds,
+  useHeadingCaret,
+} from "@/features/shelves/useHeadingCaret";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
 import { collectionDestination } from "@/features/transfer/import/destinations/CollectionPreview";
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
-import { WishFolderCaption } from "@/features/wishlist/wishMarks";
 import { CONDITION_LABEL, CONDITIONS, MENU_CONDITION } from "@/lib/conditions";
-import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
 import { FINISHES, FINISH_LABEL, finishLabel, isFinish, type Finish } from "@/lib/finish";
@@ -41,7 +54,6 @@ import {
   buildFolderTree,
   folderDescendants,
   folderLevel,
-  lockedFolderIds,
   type FolderNode,
 } from "@/lib/folderTree";
 import {
@@ -54,6 +66,8 @@ import {
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
+import { layoutShelves, type ShelfSection } from "@/lib/shelfLayout";
+import { UNFILED_SHELF, buildShelves, visibleShelves, type Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
 import { tileKeyOf } from "@/lib/tileKey";
 import { useDeskWidth } from "@/lib/useDeskWidth";
@@ -64,14 +78,28 @@ import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
-import {
-  CollectionFolderCard,
-  CollectionParentFolderCard,
-  type CollectionFolderTotals,
-} from "./CollectionFolderCard";
+import type { CollectionFolderTotals } from "./CollectionFolderCard";
 import { CollectionSearchPanel } from "./CollectionSearchPanel";
 import { CollectionSummaryHeader } from "./CollectionSummary";
-import { CollectionTable } from "./CollectionTable";
+import { CollectionTable, type CollectionTableShelves } from "./CollectionTable";
+import {
+  CollectionEmptyShelf,
+  CollectionShelfHeading,
+  CollectionShelfSticky,
+  type CardTarget,
+} from "./CollectionShelfParts";
+import {
+  NEW_FOLDER_SHELF,
+  draftFolder,
+  foldAll,
+  foldChange,
+  foldedForDrag,
+  keepShelf,
+  peekOf,
+  rolledUp,
+  shelfStat,
+  treeParents,
+} from "./collectionShelfModel";
 import { EditCopy, type EditCopyTarget } from "./EditCopy";
 import {
   collectionTileDragData,
@@ -80,7 +108,7 @@ import {
 } from "./collectionDrag";
 import { PickCopies, type CopyChoice } from "./PickCopies";
 import { ShareFolderMenu, shareTargetFor } from "./ShareFolderMenu";
-import { PinnedFolders, pinnedFolders } from "./PinnedFolders";
+import { pinnedFolders } from "./PinnedFolders";
 import { useCollection, type Collection } from "./useCollection";
 import { useCollectionFolders, useSetCollectionFolder } from "./useCollectionFolders";
 
@@ -99,7 +127,7 @@ const ROOT_LABEL = "Collection";
  * The root as `reorderedLevel` has to address it — an id no folder has, because
  * `collection_folders.id` is an `INTEGER PRIMARY KEY` and therefore always positive.
  *
- * Only the **up** tile needs it, and only to satisfy an argument it does not use: an `inside`
+ * Only a breadcrumb segment's folder drop needs it, and only to satisfy an argument it does not use: an `inside`
  * landing reads `target` for one thing, the "dropped on itself" refusal, and a folder can never
  * be dropped on the root. The alternative is widening `reorderedLevel`'s `target` to
  * `number | null`, which would put a case in the shared arithmetic that only one caller has.
@@ -116,9 +144,9 @@ const ROOT_TARGET = 0;
  * what {@link useDismissOnEscape} has to order.
  *
  * **No id lives in here that is not read.** `deleteFolder` carries its folder because — unlike
- * the gallery's, which asks about the folder the reader is *standing in* — this question is always
- * asked about a folder **card**, one level down from where the reader is, and there is nothing
- * else on the page holding which one.
+ * the gallery's, which asks about the folder the reader is *standing in* — this question is asked
+ * about a folder's **heading**, anywhere on the wall under where the
+ * reader is standing, and there is nothing else on the page holding which one.
  *
  * **`editCopy` is the first member that is not about the cabinet**, and it is in here rather than
  * beside it as a fifth boolean for the union's own argument: a half-typed folder name under an
@@ -226,7 +254,7 @@ function trailOf(
  * `collection_folder_summary` answers *direct* counts — this folder's own copies, never the ones
  * nested under it — and says so at its own type, because SQL that walked the tree would be a
  * second implementation of the arithmetic `buildFolderTree` already does for `FolderNode.count`.
- * This is that arithmetic over the two fields: a folder card handed a raw lookup would draw
+ * This is that arithmetic over the two fields: a heading handed a raw lookup would draw
  * `0 cards` over a drawer holding twelve in two sub-folders, and the reader would only catch it by
  * opening the drawer.
  *
@@ -266,15 +294,22 @@ function subtotalsOf(
  *  holds. */
 interface CollectionTile extends GridCard {
   /**
-   * This tile's identity — `` `${cardId}:${finish}` ``, which is **not** the card's id.
+   * This tile's identity — {@link tileKeyOf} over the card, the finish **and the folder**, which is
+   * **not** the card's id.
    *
-   * A foil and a played nonfoil of one printing are two tiles carrying one `id`, so the wall's
-   * ring, its arrow walk and its picked set all key on this instead. See `CardGrid`'s
+   * A foil and a played nonfoil of one printing are two tiles carrying one `id`, and since shelves
+   * (decision 11) so are the same finish filed in two folders: each shelf draws its own tile with
+   * its own count, so the wall's arrow walk and picked set key on this instead. See `CardGrid`'s
    * `GridCard.key`.
    */
   key: string;
+  /**
+   * What the ring compares with the open card — the card and the finish, **no folder** (spec
+   * §5.6). The reader opened a printing, not a filing, so every shelf it sits on says so.
+   */
+  ringKey: string;
   /** How many copies of this printing **in this finish** the collection holds, across every
-   *  grade, language and folder — what `OwnedBadge` draws over the art. */
+   *  grade and language **in this tile's folder** — what `OwnedBadge` draws over the art. */
   copies: number;
   /**
    * The finish to mark the art with — the tile's own, since the finish is part of what makes two
@@ -329,25 +364,15 @@ interface CollectionTile extends GridCard {
    */
   finishes: string;
   /**
-   * Which folders the copies behind this tile are filed in — every distinct one, `null` for the
-   * root, in the order the rows arrived.
+   * The folder every copy behind this tile is filed in — `null` for the root.
    *
-   * **A list rather than a folder, because a tile is a printing-and-a-finish and a filing is a
-   * row.** The wall merges every entry for one object, and since v24 the folder is part of what
-   * makes two rows two rows — so while the list is flattened one tile can perfectly well stand
-   * for copies in a binder, in a deck's group and at the root at once. Naming the first of them
-   * would be the app picking which copy the reader meant, which is exactly what {@link tileTarget}
-   * refuses to do about `entryId` one function down.
-   *
-   * **The finish splits a tile and the folder deliberately does not**, which is the one asymmetry
-   * worth stating here: a foil and a played nonfoil are two objects at two prices, where the same
-   * copies in two drawers are one object seen from two places, and the table below the wall is
-   * where a reader gets those apart.
-   *
-   * Ids and not names, so this stays pure over `rows` and the tile can be built without the folder
-   * census: {@link filedIn} is where the words are chosen, at render, from the page's own map.
+   * **One folder, and that is decision 11.** The folder joined the tile's key when the wall became
+   * shelves, because a tile belongs to one shelf and a shelf is one folder: a printing filed in two
+   * drawers is a tile on each, each badged with that drawer's own copies. So what used to be a list
+   * — and a caption that said `2 folders` because no single name was honest — is one id, and the
+   * heading above the tile names it.
    */
-  folders: readonly (number | null)[];
+  folderId: number | null;
 }
 
 /**
@@ -376,104 +401,44 @@ function finishMarkOf(tile: CollectionTile): Finish | null {
 }
 
 /**
- * What a flattened tile's caption says about where its copies are — the words, or nothing.
+ * Whether this tile's copies are in a drawer the reader has set aside (issue #436).
  *
- * One folder is that folder's name (`Collection` at the root, which is `folderNameOf`'s own word
- * for `null`). Two or more is a **count**, because there is no honest single name for a printing
- * the reader keeps in three places, and the alternative — naming one of them — is the caption
- * quietly claiming the other copies are somewhere they are not. `Filed in 2 folders` is the whole
- * sentence a reader gets on the wall, and the table beside it is drawn at the row grain, where
- * every copy names its own drawer.
- *
- * `null` draws nothing, which is {@link WishFolderCaption}'s own rule and the honest answer for a
- * drawer another window deleted between the entry read and the folder read.
- */
-function filedIn(
-  tile: CollectionTile,
-  folderNameOf: (id: number | null) => string | null,
-): string | null {
-  if (tile.folders.length === 0) return null;
-  if (tile.folders.length === 1) return folderNameOf(tile.folders[0]);
-  return `${tile.folders.length} folders`;
-}
-
-/**
- * Whether the caption's glyph is a lock — **true when any drawer behind this tile is set
- * aside**, and the asymmetry with {@link filedIn} above it is the decision rather than an
- * oversight.
- *
- * A tile merges every copy of one printing in one finish across grades, languages **and
- * folders**, so it can perfectly well stand for a copy in a display case and a copy loose at the
- * root at once. `filedIn` refuses to name one of several drawers because naming one claims the
- * others are somewhere they are not; a lock has the opposite failure available. Under-reporting
- * — drawing a plain `Folder` because one of three copies is not set aside — is a set-aside copy
- * quietly rejoining what the wall offers, which is the one direction the whole of issue #365 is
- * shaped against, and it is `folder_row`'s "a `2` is locked" reasoning arriving at a second site.
- * Over-reporting costs the reader a glyph they can resolve by opening the drawer, which the
- * caption's `2 folders` is already telling them to do.
- *
- * **`lockedIds` and never a folder's own `locked` flag**, for the reason every consumer of the
- * lock on this page has: it inherits down the tree, so a copy in a subfolder of a locked binder
- * carries no flag of its own and is set aside all the same. `null` is the root, which is never a
- * folder and can never be locked.
- *
- * This is the wall's whole share of issue #436. The copies came back to the list and the header
- * in that issue; the mark is what keeps "set aside" legible now that absence no longer says it.
+ * One folder per tile since shelves (decision 11), so this is that folder's **effective** lock —
+ * `lockedIds`, never a folder's own `locked` flag, because the lock inherits down the tree. The
+ * heading above the tile wears the same lock; the tile wears it too because a shelf of forty cards
+ * scrolls its heading off screen long before its last row, and the sticky bar names the shelf
+ * without its figures.
  */
 function tileLocked(tile: CollectionTile, lockedIds: ReadonlySet<number>): boolean {
-  return tile.folders.some((id) => id !== null && lockedIds.has(id));
+  return tile.folderId !== null && lockedIds.has(tile.folderId);
 }
 
 /**
- * The caption a **flattened** wall draws: the printing, and the drawer its copies sit in.
+ * The chin's printing line — `CardGrid`'s own `SET · number`, with a `Lock` after it on a tile whose
+ * drawer is set aside.
  *
- * Built for that state and handed to `CardGrid` only there — unflattened the slot is left unset, so
- * the wall draws its own `SET · number` and this file does not spell it at all. Flattened, the
- * folder is the only way a reader sees where a copy is without opening it, which is the whole of
- * what Flatten promises and exactly why `WishlistGrid` captions its own tiles the same way.
+ * **The words are the wall's own default, restated because the slot is the whole of that line**:
+ * `caption` replaces the text rather than appending to it, and an unlocked tile must read exactly
+ * as it would with no slot at all. `role="img"` named `Locked`, the heading's and `ElsewhereMark`'s
+ * arrangement, so the fact survives being read rather than seen.
  *
- * **{@link WishFolderCaption} is reused across the feature boundary rather than twinned**, and its
- * name is the only thing about it that is the wishlist's: it takes a folder name and draws a glyph,
- * a truncating word and a `Filed in …` tooltip, scaling on `var(--mark-scale)` like every other
- * mark drawn on a card. **The lock is the one thing it takes that the wishlist never passes**
- * (issue #436), and it is a prop on that shared component rather than a second glyph drawn here
- * for the same reason the component is shared at all — the argument is at its own site. A local copy would be one fact rendered twice — two glyphs, two shades,
- * two sentences, none of it decided — which is the drift `wishMarks.tsx`'s own header exists to
- * prevent; and this app already imports the other way, `WishlistGrid` drawing the collection's
- * `REVEAL_ON_HOVER`.
- *
- * **The line must stay one line.** `CardGrid` positions its virtual rows from `CAPTION_HEIGHT`,
- * which is a *budget* rather than a minimum, so a caption that wrapped would be a wall whose rows
- * overlap by the difference. Hence the printing truncates and the mark is `shrink-0` beside it —
- * `WishlistGrid`'s arrangement, for its reason: at 170px a drawer the reader named is worth more
- * than the last few characters of a set code.
- *
- * A closure over the page's two answers — the folder census and {@link lockedFolderIds}' set —
- * rather than module scope, which costs nothing here: `caption` is read on **render** rather than
- * registered, unlike `dragRecord`/`tileRef` and the three card-fact slots `CardGrid` asks to be
- * held still.
+ * **The line must stay one line** — `CardGrid` positions its rows from `CAPTION_HEIGHT`, a budget
+ * rather than a minimum — so the printing truncates and the glyph is `shrink-0` beside it.
  */
-const captionFor =
-  (folderNameOf: (folderId: number | null) => string | null, lockedIds: ReadonlySet<number>) =>
-  (tile: CollectionTile) => (
+const lockedCaption = (lockedIds: ReadonlySet<number>) => (tile: CollectionTile) => {
+  const printing = `${tile.setCode.toUpperCase()} · ${tile.collectorNumber}`;
+  if (!tileLocked(tile, lockedIds)) return printing;
+  return (
     <span className="flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]">
-      {/* `CardGrid`'s own default text, restated because the slot is the whole of that line and
-          there is nothing to append to — see the component's `caption`, which is the *text* and
-          not the strip around it. */}
-      <span className="min-w-0 truncate">
-        {`${tile.setCode.toUpperCase()} · ${tile.collectorNumber}`}
-      </span>
-      {/* The glyph turns into a lock for a copy the reader has set aside (issue #436) — see
-          {@link tileLocked}, which is where "any of them" is argued. Flattened is the one state
-          where a locked copy sits beside an unlocked one with nothing above the wall to tell
-          them apart: unflattened, the root sends `rootOnly` and a folder's own page has the
-          breadcrumb and the badged folder card saying it once. */}
-      <WishFolderCaption
-        name={filedIn(tile, folderNameOf)}
-        locked={tileLocked(tile, lockedIds)}
+      <span className="min-w-0 truncate">{printing}</span>
+      <Lock
+        role="img"
+        aria-label="Locked"
+        className="size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-dim"
       />
     </span>
   );
+};
 
 /**
  * The entries' finishes for one printing, in the app's own order, as stored JSON.
@@ -625,12 +590,13 @@ const COLLECTION_LABELS: FilterLabels = {
  * to a page that draws two things rather than one**, and the number the docked search column is
  * railed by.
  *
- * The deck's floor is 192 because that is one stack column. This page's list is a *pair* of walls
- * stacked vertically — the cabinet's folder cards above and the card grid or table below — so the
- * floor is whichever of the two needs more, and both land near the same figure: a folder card's
- * cell is `minmax(180px, 1fr)` (`CollectionFolderCard`), and the wall below it draws
- * `PHONE_TILE_WIDTH` tiles at the narrow rung. 192 holds one of each with the page's own padding
- * off it, which is why the deck's number is reused rather than a second one invented.
+ * The deck's floor is 192 because that is one stack column. This page's list was a *pair* of walls
+ * stacked vertically until folder shelves (2026-09-26) — the cabinet's folder cards above, each
+ * cell `minmax(180px, 1fr)`, and the card grid or table below — and both landed near the same
+ * figure, since the wall draws `PHONE_TILE_WIDTH` tiles at the narrow rung. The shelved wall is one
+ * wall now and its headings fill whatever width the wall has, so 192 still holds a column of tiles
+ * with the page's own padding off it, which is why the deck's number is reused rather than a
+ * second one invented.
  *
  * **Measured in the shipped window on 2026-09-07** (`npm run tauri dev`, a debug build, against a
  * real 276-copy collection), and the measurement split it in two: **the floor is the *view's*, not
@@ -660,6 +626,16 @@ const COLLECTION_LABELS: FilterLabels = {
 const CARD_FLOOR = 192;
 const TABLE_FLOOR = 680;
 
+/** What a shelf with nothing loaded hands `CardGrid` and the table — one array, so an empty
+ *  shelf's answer is the same object every render. */
+const NO_TILES: readonly CollectionTile[] = [];
+const NO_ROWS: readonly CollectionRow[] = [];
+
+/** The element holding the caret, or `null` — what a callback with no event hands {@link open}. */
+function focusedElement(): HTMLElement | null {
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null;
+}
+
 /**
  * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
  *
@@ -682,16 +658,14 @@ const COLLECTION_TRAY: readonly TrayCell[] = [
 ];
 
 export function CollectionPage() {
-  // The To review widget's needs-review hand-off, and the flat sweep that comes with it —
-  // `useReviewHandoff` has the whole rule; its two halves sit either side of the list hook.
-  const flattenStored = useAppStore((s) => s.collectionFlattened);
-  const review = useReviewHandoff("collection", flattenStored);
-  const collection = useCollection({
-    flattenLocally: review.reviewSweep,
-    initialNeedsReview: review.initialNeedsReview,
-  });
+  // The To review widget's needs-review hand-off — `useReviewHandoff` has the whole rule.
+  const review = useReviewHandoff("collection");
+  const collection = useCollection({ initialNeedsReview: review.initialNeedsReview });
   review.settle(collection.needsReview, collection.setNeedsReview);
-  const { query, summary, rows, total, marketplace, folderId, flatten } = collection;
+  // `folderId` is the level **on screen**, which trails `requestedFolderId` by a round trip while a
+  // level nothing has cached arrives (`useCollection`'s `shown`). Everything drawn reads the
+  // first; the page's navigation — the two hand-offs below and Escape's step up — reads the second.
+  const { query, figures, rows, total, marketplace, folderId, requestedFolderId } = collection;
   const view = useAppStore((s) => s.collectionView);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   // What the wall below is sized by — see its `baseTileWidth`. A consumer of the app's one
@@ -750,7 +724,10 @@ export function CollectionPage() {
     pendingFolder !== null && pendingFolder.scope === "collection" && !folders.query.isPending
       ? pendingFolder.id
       : null;
-  if (pendingHere !== null && folderId !== pendingHere) {
+  // Against the level asked for, never the one on screen: that one trails a render-phase write
+  // by a round trip, so comparing with it would write the same level again every pass until React
+  // gave up.
+  if (pendingHere !== null && requestedFolderId !== pendingHere) {
     if (folders.folders.some((folder) => folder.id === pendingHere)) {
       collection.openFolder(pendingHere);
     }
@@ -758,14 +735,62 @@ export function CollectionPage() {
   useEffect(() => {
     if (pendingHere !== null) clearPendingFolder();
   }, [pendingHere, clearPendingFolder]);
+  /**
+   * **A review hand-off opens the root**, which is the whole cabinet on shelves — To review counted
+   * the flagged copies in every drawer, and a folder's wall holds only its own subtree. A page
+   * freshly mounted is at the root already (`folderId` is `useState`, never restored), so this acts
+   * only when the hand-off lands on a page standing in a folder. `initialNeedsReview` is `true`
+   * exactly while a hand-off naming this page is waiting, and `requestedFolderId !== null` is what
+   * makes the render-phase write terminate — the level asked for, for the reason one block up.
+   * **A named drawer outranks it** (`pendingHere === null`): no surface posts both, but two
+   * render-phase writes aimed at two levels would chase each other until React gave up, so the pair
+   * is ordered rather than trusted.
+   */
+  if (review.initialNeedsReview && pendingHere === null && requestedFolderId !== null) {
+    collection.openFolder(null);
+  }
+
+  /**
+   * **A level deleted elsewhere is walked out of** (the final review's C-M4) — another window or a
+   * synced device deletes the drawer this page stands in. `buildShelves` answers no shelves for a
+   * level that no longer exists, so the reader was left on an empty wall under a breadcrumb with
+   * nothing to press, and only Escape could get them out. Once the folder list has answered without
+   * the level, the page opens **its nearest surviving ancestor**, or the root if none survives.
+   *
+   * The ancestors are the ones the level last had: a deleted folder's `parent_id` goes with it, so
+   * the trail is remembered while the level is there (`levelTrail`) and read back once it is not.
+   * Both writes are render-phase adjustments — the `pendingFolder` block's arrangement — and both
+   * terminate: the trail is written only when it changed, and the walk moves the level asked for to
+   * one the list does carry, or to the root. **A hand-off waiting for this page outranks it**, the
+   * pair above's ordering, so two render-phase writes can never chase each other.
+   */
+  const [levelTrail, setLevelTrail] = useState<{
+    level: number;
+    ids: readonly number[];
+  } | null>(null);
+  if (requestedFolderId !== null && !folders.query.isPending && pendingHere === null) {
+    if (folders.folders.some((folder) => folder.id === requestedFolderId)) {
+      const ids = trailOf(folders.folders, requestedFolderId).map((folder) => folder.id);
+      if (levelTrail?.level !== requestedFolderId || !sameIds(levelTrail.ids, ids)) {
+        setLevelTrail({ level: requestedFolderId, ids });
+      }
+    } else {
+      const known = levelTrail?.level === requestedFolderId ? levelTrail.ids : [];
+      const survivor = known
+        .filter((id) => id !== requestedFolderId)
+        .reverse()
+        .find((id) => folders.folders.some((folder) => folder.id === id));
+      collection.openFolder(survivor ?? null);
+    }
+  }
 
   /**
    * Which folder layer is open, and what the caret goes back to when it closes.
    *
    * **The opener is a ref rather than a piece of `Panel`** for the reason `DecksPage` gives: the
-   * three triggers here are all tiles of one wall — the `New folder` card, and for the other two
-   * whichever folder card's `⋯` a reader happened to press — so capturing the element when the
-   * layer opens is the only way one handler can serve a wall of them.
+   * triggers here are controls of one wall — the path row's Add folder, and every heading's Add
+   * folder, Rename and `⋯` — so capturing the element when the layer opens is the only way one
+   * handler can serve a wall of them.
    */
   const [panel, setPanel] = useState<Panel>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -903,6 +928,11 @@ export function CollectionPage() {
     // Named rather than folded into `["collection"]`, which would take the list with it — the
     // paragraph above is why the list is deliberately left alone here.
     void queryClient.invalidateQueries({ queryKey: ["collection", "folderSummary"] });
+    // And the headings, for the same reason one level further down: a heading's figures are
+    // `collection_shelf_counts` rolled up the tree, so a stepper press on a filed row moves the
+    // heading over it by exactly what it moved the header — and the counts query is mounted for the
+    // life of the page, so a stale mark alone would change nothing.
+    void queryClient.invalidateQueries({ queryKey: ["collection", "shelfCounts"] });
     // The wishlist counts this list: a wish's `ownedQuantity` is computed from
     // `collection_entries`, so a stepper press has just made every cached wish for that card
     // wrong. The same pair `AddToCollection` invalidates, for the same reason — a write here
@@ -1103,65 +1133,60 @@ export function CollectionPage() {
     [setQuantity],
   );
   const onRemove = useCallback((row: CollectionRow) => remove.mutate(row), [remove]);
+  // Not while the previous level is still drawn (`levelHeld`): the rows the wall is asking to page
+  // past are that level's, and `query` is already the next level's list.
+  const { levelHeld } = collection;
   const onNeedNextPage = useCallback(() => {
-    if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
+    if (
+      !levelHeld &&
+      query.hasNextPage &&
+      !query.isFetchingNextPage &&
+      !query.isFetchNextPageError
+    ) {
       void query.fetchNextPage();
     }
-  }, [query]);
+  }, [levelHeld, query]);
 
   /**
-   * The wall is a wall of *objects*, where the table is a list of entries: a printing held in
-   * one finish across three grades, two languages and two drawers is one piece of art to look
-   * at, so the tile carries the copies of all of them.
+   * The wall is a wall of *objects*, where the table is a list of entries: a printing held in one
+   * finish across three grades and two languages is one piece of art to look at, so the tile
+   * carries the copies of all of them.
    *
-   * **The finish is part of the key and condition, language and folder are not**, which is the
-   * whole of this wall's grain. A foil and a played nonfoil are two objects at two prices sharing
-   * only a set and a number — two pictures, and no single honest figure to draw under one of
-   * them — where the same finish in two drawers is one object seen from two places, and the
-   * table beside the wall is where a reader gets those apart. `foldCopies` in
-   * `features/decks/collectionTiles.ts` folds the app's *other* collection wall on the same pair,
-   * deliberately: two drawings of one collection that disagreed about what a tile **is** would be
-   * exactly the drift the grain exists to remove.
+   * **The finish and the folder are part of the key; condition and language are not.** A foil and
+   * a played nonfoil are two objects at two prices; the same finish in two drawers is, since shelves
+   * (decision 11), a tile on each drawer's shelf, because a shelf is one folder and a tile belongs
+   * to one shelf. `foldCopies` in `features/decks/collectionTiles.ts` still folds the deck panel's
+   * collection wall on the card and the finish, which is right there: that wall has no shelves.
+   *
+   * The rows arrive shelf by shelf — the list query sends the open shelves in wall order and the
+   * backend orders by position in that list — so each shelf's tiles are already contiguous and in
+   * the reader's sort.
    */
   const tiles = useMemo(() => {
     const copies = new Map<string, number>();
-    // The same walk, answering the tile's second question: *which finishes* those copies are in.
-    // A second pass would be a second definition of "the entries behind this object" — and the
-    // answer is now always a one-element set, which is what {@link ownedFinishes} is for.
+    // The same walk, answering the tile's second question: *which finishes* those copies are in —
+    // always a one-element set now, which is what {@link ownedFinishes} is for.
     const finishes = new Map<string, Set<string>>();
-    // And its third, which only a flattened wall draws: *where* those copies are filed. A `Set`
-    // because a printing held four times in one drawer is one folder, and insertion-ordered
-    // because a tile in exactly one folder must name the folder its rows named.
-    const filed = new Map<string, Set<number | null>>();
     for (const row of rows) {
-      // **The raw `row.finish`, never the narrowed one.** For the three finishes the CHECK
-      // constraint permits the two are identical; a row spelling something this build cannot
-      // name keys as its own word and gets a tile of its own, rather than being folded in with
-      // the plain copies it is not.
-      //
-      // What that costs such a tile is not merely its own ring. Pressing it calls
-      // `openCardAsFinish(id, null)` — the narrowed finish is `null` — so `paneFinish` is `null`,
-      // the composite spells `id:nonfoil`, and the ring lands on the **plain tile beside it**, or
-      // on nothing where the reader holds no plain copy. Still strictly better than before the
-      // split, where no tile of a printing was distinguishable from any other, and under the
-      // CHECK constraint it describes 0 rows. See {@link tileKeyOf}, which carries this in full.
-      const key = tileKeyOf(row.cardId, row.finish);
+      // **The raw `row.finish`, never the narrowed one** — see {@link tileKeyOf}, which carries
+      // why a word this build cannot name keys as its own tile.
+      const key = tileKeyOf(row.cardId, row.finish, row.folderId);
       copies.set(key, (copies.get(key) ?? 0) + row.quantity);
       const held = finishes.get(key) ?? new Set<string>();
       held.add(row.finish);
       finishes.set(key, held);
-      const drawers = filed.get(key) ?? new Set<number | null>();
-      drawers.add(row.folderId);
-      filed.set(key, drawers);
     }
     const seen = new Set<string>();
     const out: CollectionTile[] = [];
     for (const row of rows) {
-      const key = tileKeyOf(row.cardId, row.finish);
+      const key = tileKeyOf(row.cardId, row.finish, row.folderId);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push({
         key,
+        // The card and the finish without the folder, so every shelf a printing sits on rings
+        // together when it is opened (Review Focus 1).
+        ringKey: tileKeyOf(row.cardId, row.finish),
         // **The printing, which is what a press opens** — `CardGrid` keeps the two apart, and
         // this is the half `onSelect`, the art fetch and the caret note are all about.
         id: row.cardId,
@@ -1191,11 +1216,44 @@ export function CollectionPage() {
         typeLine: row.typeLine,
         oracleId: row.oracleId,
         finishes: ownedFinishes(finishes.get(key) ?? new Set()),
-        folders: [...(filed.get(key) ?? new Set<number | null>())],
+        folderId: row.folderId,
       });
     }
     return out;
   }, [rows]);
+
+  /**
+   * The tiles and the rows **by shelf** — what `CardGrid`'s `tilesOf` and the table's `rowsOf`
+   * hand out. `folderId ?? UNFILED_SHELF`, so a copy filed nowhere is Not sorted's.
+   */
+  const tilesByShelf = useMemo(() => {
+    const out = new Map<number, CollectionTile[]>();
+    for (const tile of tiles) {
+      const shelf = tile.folderId ?? UNFILED_SHELF;
+      const held = out.get(shelf) ?? [];
+      held.push(tile);
+      out.set(shelf, held);
+    }
+    return out;
+  }, [tiles]);
+  const tilesOf = useCallback(
+    (shelfId: number): readonly CollectionTile[] => tilesByShelf.get(shelfId) ?? NO_TILES,
+    [tilesByShelf],
+  );
+  const rowsByShelf = useMemo(() => {
+    const out = new Map<number, CollectionRow[]>();
+    for (const row of rows) {
+      const shelf = row.folderId ?? UNFILED_SHELF;
+      const held = out.get(shelf) ?? [];
+      held.push(row);
+      out.set(shelf, held);
+    }
+    return out;
+  }, [rows]);
+  const rowsOf = useCallback(
+    (shelfId: number): readonly CollectionRow[] => rowsByShelf.get(shelfId) ?? NO_ROWS,
+    [rowsByShelf],
+  );
 
   /**
    * The rows behind each piece of art — the other half of {@link tiles}, kept apart from it
@@ -1219,9 +1277,9 @@ export function CollectionPage() {
    * than filing.
    *
    * **What is still a *list* rather than a single id is the point of the map.** One finish of one
-   * printing is still several rows — they differ in grade, in language and, the term that makes
-   * this a question at all, in **folder** — so a drag still hands a folder every one of them and
-   * the reader still answers which ({@link fileCard}). The split narrowed *which* rows are behind
+   * printing in one folder is still several rows — they differ in grade and in language — so a
+   * drag still hands a folder every one of them and the reader still answers which
+   * ({@link fileCard}). The split narrowed *which* rows are behind
    * a picture; it did not turn the several into one.
    *
    * **Built from the loaded, filtered rows, which is exactly what the tile claims.** The tile's
@@ -1232,7 +1290,7 @@ export function CollectionPage() {
   const copiesByTile = useMemo(() => {
     const out = new Map<string, CollectionCopy[]>();
     for (const row of rows) {
-      const key = tileKeyOf(row.cardId, row.finish);
+      const key = tileKeyOf(row.cardId, row.finish, row.folderId);
       const held = out.get(key) ?? [];
       held.push({ entryId: row.id, folderId: row.folderId });
       out.set(key, held);
@@ -1245,7 +1303,7 @@ export function CollectionPage() {
    * why this is `CardGrid`'s `dragRecord` and not its `dragPayload`.
    *
    * The card half is what a deck category and the sidebar's Decks entry have always taken from
-   * the collection's *table* rows; the tile half is what a folder card and a breadcrumb segment
+   * the collection's *table* rows; the tile half is what a shelf heading and a breadcrumb segment
    * read. Neither reader can see the other's key, which is `collectionDrag.ts`'s whole argument.
    *
    * `null` for a printing with no loaded row — impossible while the tile is drawn from those very
@@ -1268,7 +1326,7 @@ export function CollectionPage() {
       // The tile's rows, by the tile's own key. **The two `cardId`s below stay `tile.id`**, and
       // the reason differs per half.
       //
-      // The tile half's is what a folder card and a breadcrumb caption say the reader is filing
+      // The tile half's is what a heading and a breadcrumb caption say the reader is filing
       // ("Move 2 copies of Lightning Bolt"), and the rows it travels with are already narrowed —
       // it is a label, not an address. It has no consumer that reads it as an address at all.
       //
@@ -1295,7 +1353,7 @@ export function CollectionPage() {
 
   /**
    * The question a drop asks when the tile it was given stands for more than one row, or `null`
-   * while nothing is being asked — the destination travels with it, because the folder card that
+   * while nothing is being asked — the destination travels with it, because the heading that
    * took the drop is gone from the conversation by the time the reader answers.
    */
   const [picking, setPicking] = useState<{
@@ -1310,13 +1368,13 @@ export function CollectionPage() {
    *
    * The whole drop travels with it rather than a card id, because the answer replays the gesture:
    * a tile standing for several rows still has to reach {@link fileCard}'s own picker afterwards,
-   * and the folder card that took the drop is long gone from the conversation by then.
+   * and the heading that took the drop is long gone from the conversation by then.
    *
    * **Only a drag raises one.** A drop target is a rectangle a pointer can land on by mistake and
-   * this is the whole gesture the badge on the tile exists to slow down; the card menu's
+   * this is the whole gesture the lock on the heading exists to slow down; the card menu's
    * `Add to → <folder>` and the row's `Move to folder…` both put the folder's name in the press
    * the reader made, so a confirmation there would ask them to agree with a sentence they had just
-   * typed the answer to — which is `PinnedFolders`' rule one step further along.
+   * typed the answer to.
    */
   const [crossing, setCrossing] = useState<LockedMove | null>(null);
 
@@ -1395,7 +1453,7 @@ export function CollectionPage() {
    * open, which is the honest answer — the copy is gone and so is the question.
    *
    * **No {@link openerRef}, and it is not an omission.** {@link open} exists to remember the
-   * folder card whose `⋯` raised a layer so the caret can go back to it; a `MenuAction.onSelect`
+   * heading control that raised a layer so the caret can go back to it; a `MenuAction.onSelect`
    * has no element behind it and the menu's panel has already closed by the time this runs, so
    * there is nothing to remember. The copy picker beside it sets its state the same bare way.
    */
@@ -1462,37 +1520,32 @@ export function CollectionPage() {
    *
    * `collection_folders.kind` is one of three: `user`, the `deck` folder that stands for a deck,
    * and the single `removed` one. Only the first is a drawer the reader arranged, so only the
-   * first belongs in the nestable tree they drag between and rename. **The other two render as a
-   * separate pinned flat section** — {@link PinnedFolders}, which carries the whole argument for
-   * why it is locked and why neither kind takes a drop. Schema v25 creates them, so that section
-   * is real from this PR on; it was drawn empty for one PR and rendered nothing at all, because
-   * an empty heading is a promise about a feature that has not shipped.
+   * first belongs in the nestable tree they drag between and rename. **The other two are shelves
+   * under the Decks label** — shut by default, never draggable, never renamed and never a drop
+   * target (`CollectionShelfParts` and `buildShelves` carry both halves of that).
    *
    * The filter is on the *tree's* input alone. {@link trailOf} and `folderNameOf` below read the
-   * whole list, so a copy that sits in an app-owned folder is still named honestly by the table's
-   * Folder column rather than reading as unfiled — and the breadcrumb can still walk a reader out
-   * of a deck group they have opened.
+   * whole list, so the breadcrumb can still walk a reader out of a deck group they have opened.
    */
   const userFolders = useMemo(
     () => folders.folders.filter((folder) => folder.kind === "user"),
     [folders.folders],
   );
 
-  /** The other two kinds, split and ordered for the pinned section. */
+  /** The other two kinds, split by kind — the holding area is what `Clear…` and the stepper's
+   *  fence ask about, and the deck groups are the drag's source fence. */
   const pinned = useMemo(() => pinnedFolders(folders.folders), [folders.folders]);
 
   /**
-   * The figures one pinned entry draws.
+   * An app-owned folder's own figures — `Recently removed`'s, for `Clear…`.
    *
    * **The summary row directly, never {@link subtotalsOf}**: that map is built by walking the
    * reader's tree, and these folders are deliberately not in it. Nothing can nest under a deck
    * group or under `Recently removed` — no command writes a `parent_id` naming one — so the
    * direct count *is* the recursive count here, and there is nothing to add up.
    *
-   * `isPending` is the same window the wall above draws an em dash across, and for the same
-   * reason: a `Map.get` miss means "empty" once the summary has answered and "not counted yet"
-   * before it has, and `0 cards` over a deck holding sixty is a wrong number rather than a
-   * spinner.
+   * `null` while the summary has not answered: a `Map.get` miss means "empty" once it has and "not
+   * counted yet" before it has, and `0 cards` over a pile of sixty is a wrong number.
    */
   const pinnedTotals = useCallback(
     (folder: CollectionFolder): CollectionFolderTotals | null =>
@@ -1516,31 +1569,6 @@ export function CollectionPage() {
   const subtotals = useMemo(() => subtotalsOf(nodes, folders.summary), [nodes, folders.summary]);
 
   /**
-   * The folders filed directly at the level being drawn — nothing deeper, because a card is a door
-   * into one drawer rather than a picture of the cabinet.
-   *
-   * Read off the *tree* rather than filtered out of the flat rows, so a folder whose parent
-   * another surface deleted surfaces here at the root instead of disappearing with the parent that
-   * is gone — `buildFolderTree`'s rule, and the reason this is not a one-line `filter`.
-   */
-  const childFolders = useMemo(() => folderLevel(nodes, folderId), [nodes, folderId]);
-
-  /**
-   * The level **above** the one on screen — `null` at the root, and `null` again inside a deck
-   * group or `Recently removed`, which are pinned at the top level and hold nothing but cards.
-   *
-   * Read off the {@link trail} rather than off the open folder's own `parentId`, and the two are
-   * not always the same word: `trailOf` walks up through `parentId` and stops at a folder this
-   * list does not carry, so a binder whose parent another surface deleted has a one-segment trail
-   * and climbs to the root — which is exactly where `buildFolderTree` has drawn it. The tile and
-   * the trail therefore lead to the same place by construction rather than by agreement.
-   */
-  const upFolderId = useMemo(
-    () => (folderId === null ? null : (trail[trail.length - 2]?.id ?? null)),
-    [folderId, trail],
-  );
-
-  /**
    * What to call a folder, for the two sentences the layers below build out of one.
    *
    * A `Map` and not a `find` per call: the strip names a folder three times over while it is open,
@@ -1561,20 +1589,50 @@ export function CollectionPage() {
   );
 
   /**
-   * The drawers the reader has set aside — **every folder inside a locked one included**, because
-   * the lock inherits down the tree (issue #365, design §3).
-   *
-   * `lockedFolderIds` is the single place that inheritance is computed on this side and no call
-   * site here re-derives it: the badge on a folder card, the greyed Lock/Unlock row, the greyed
-   * Delete and the drag confirmation are all four about the *effective* answer, and reading
-   * `CollectionFolder.locked` at any of them would draw an unmarked drawer inside a locked one.
-   *
-   * **The whole census rather than {@link userFolders}**, which is not tidiness: a deck group and
-   * `Recently removed` carry `locked = false` — the write refuses anything that is not
-   * `kind = 'user'` in words — so including them costs nothing, and leaving them out would break
-   * {@link lockRootOf}'s walk the day anything is nested under one.
+   * The drawers the reader has set aside — **every folder inside a locked one included** (issue
+   * #365, design §3). `useCollection` computes it once, from the same census, because a shelf's
+   * `locked` is this answer too; the page reads the hook's set rather than deriving a second one.
    */
-  const lockedIds = useMemo(() => lockedFolderIds(folders.folders), [folders.folders]);
+  const { lockedIds } = collection;
+
+  /** Every folder by id — a heading is built from its shelf, and the menu and the drag source
+   *  want the row behind it. */
+  const folderById = useMemo(
+    () => new Map(folders.folders.map((folder) => [folder.id, folder])),
+    [folders.folders],
+  );
+
+  /**
+   * Every reader's folder's parent **as the tree draws it** — `null` for the root — which is what
+   * a before/after drop beside a heading reorders, and what Move up / Move down step within. See
+   * {@link treeParents} for why this is not the row's own `parentId`.
+   */
+  const treeParent = useMemo(() => treeParents(nodes), [nodes]);
+
+  /**
+   * **The caret handed back to a heading that may no longer be drawn** (live pass, check 8) — after
+   * Add folder in a heading, to its `Add folder`, and after Move up / Move down, to the moved
+   * heading's `⋯`. `useHeadingCaret` is the whole machine, shared with the wishlist; the page asks
+   * for a request at the press, records it when its moment comes, and hands the due one to its
+   * heading (`caretFor`) and to both views' reveal (`caretDue`). Called here, where the folder tree
+   * a move is decided against exists.
+   */
+  const {
+    due: caretDue,
+    caretFor,
+    ask: askCaret,
+    record: recordCaret,
+    supersede: supersedeCaret,
+    afterBlur,
+    leave: leaveCaret,
+  } = useHeadingCaret({
+    level: folderId,
+    asked: requestedFolderId,
+    view,
+    opener: openerRef,
+    fetching: folders.query.isFetching,
+    levelIds: (parentId) => folderLevel(nodes, parentId).map((node) => node.folder.id),
+  });
 
   /**
    * What the Share control is about — **the level on screen**, and `null` where this level has
@@ -1642,47 +1700,52 @@ export function CollectionPage() {
   );
 
   /**
-   * Flatten closes whatever folder layer is open, and it does it by *deriving* rather than by
-   * writing state from an effect.
-   *
-   * With the filing ignored the whole wall goes — `New folder`'s tile and every folder card's `⋯`
-   * with it, since all of them are drawn *inside* it — so every trigger that could have opened one
-   * of these is off screen. A rename field left standing over a flattened list would be a layer
-   * with nothing on screen explaining what it is about. The derived value is what the whole page
-   * reads, {@link panel} itself only what the setters write, so pressing Flatten and pressing it
-   * back does not resurrect the layer. `WishlistPage`'s twin, verbatim.
-   *
-   * **The level clause arrived with the field moving into the tile.** A naming field is drawn
-   * *by* `New folder`'s tile now, so a `newFolder` panel opened at one level and left open while
-   * the reader walked into another would be a layer with no field on screen at all — invisible,
-   * and still swallowing the Escape that should have walked them back out. Where the strip was
-   * merely confusing about which level it meant, nothing is worse; so the panel goes with the
-   * level it was opened for. Nothing else in the page can produce that state, because
-   * {@link openNewFolder} always opens with the level the reader is standing in.
-   */
-  /**
    * The **folder** members of {@link Panel}, which is what everything below this line is about.
    *
-   * `editCopy` is drawn from the collection's rows rather than from its cabinet, so neither of
-   * the two rules under this heading applies to it and both would be wrong if they did: its
-   * trigger is a card's context-menu row, which survives Flatten (there are *more* rows with the
-   * filing ignored, not fewer), and it has no level for the clause below to compare against. It is
-   * also not the page's Escape rung's business — a `Dialog` registers its own — so letting it
-   * arm this one would be a second `"inner"` layer for one press, whose `dismiss` would hand the
-   * caret to whichever folder card's `⋯` {@link openerRef} happens to be holding.
+   * `editCopy` is drawn from the collection's rows rather than from its cabinet, so neither rule
+   * under this heading applies to it: its trigger is a card's context-menu row, and it has no level
+   * to compare against. It is also not the page's Escape rung's business — a `Dialog` registers its
+   * own.
    */
   const folderPanel = panel === null || panel.kind === "editCopy" ? null : panel;
-  /** Standing in the holding area, which is the one level whose wall is not its own children. */
+  /** Standing in the holding area — the one level whose path row carries `Clear…`. */
   const inRemoved = pinned.removed !== null && folderId === pinned.removed.id;
-  // `clearRemoved` goes with the level for `newFolder`'s reason: its trigger is drawn only inside
-  // `Recently removed`, so a question left open while the reader walked out would be a layer about
-  // a folder no longer on screen — and a confirm pressed there would clear a pile they cannot see.
+  /**
+   * Whether a folder has a heading on this wall — at or below the level, drawn or folded away.
+   * `null` is the root, which has a heading on no wall but is the level itself at the top.
+   */
+  const onThisWall = useCallback(
+    (id: number | null) =>
+      id === folderId ||
+      collection.shelves.some((shelf) => shelf.id === id && !shelf.headless),
+    [folderId, collection.shelves],
+  );
+  /**
+   * **A layer goes with the wall it was opened on, derived rather than written from an effect.**
+   * A naming field is drawn *by* a heading — the new folder's placeholder heading, or the renamed
+   * folder's own — so a field whose heading is no longer on this wall would be a layer with nothing
+   * on screen, still swallowing the Escape that should walk the reader back out. So walking into
+   * another folder closes a new folder whose parent is not on the new wall, and a rename whose
+   * folder has no heading there (it is the level now, or somewhere else entirely). `clearRemoved`
+   * goes with `Recently removed`, because its trigger is drawn only there.
+   */
   const openPanel =
-    flatten ||
-    (folderPanel?.kind === "newFolder" && folderPanel.parentId !== folderId) ||
+    (folderPanel?.kind === "newFolder" && !onThisWall(folderPanel.parentId)) ||
+    (folderPanel?.kind === "renameFolder" &&
+      (folderPanel.folderId === folderId || !onThisWall(folderPanel.folderId))) ||
     (folderPanel?.kind === "clearRemoved" && !inRemoved)
       ? null
       : folderPanel;
+
+  /**
+   * The Add folder a naming field was opened from, when that is a **heading's** — the one whose
+   * caret has to be handed back by request (`useHeadingCaret`). The path row's makes a folder *at*
+   * the level, its parent is the level itself, and its button is never scrolled away.
+   */
+  const headingAddedIn =
+    panel?.kind === "newFolder" && panel.parentId !== null && panel.parentId !== folderId
+      ? panel.parentId
+      : null;
 
   // Focus first, then close: the opener is still mounted at this point, and an element that
   // unmounts with the caret on it drops focus to `<body>` — after which the next Tab restarts from
@@ -1690,11 +1753,55 @@ export function CollectionPage() {
   // `close` below is the click-away way and is deliberately a different function: CLAUDE.md's rule
   // is that an outside click does *not* hand the caret back, because the reader is already
   // somewhere else.
+  //
+  // **Add folder in a heading also records a request** (`useHeadingCaret`), committed or cancelled:
+  // the field is revealed at the end of the parent's subtree, so on a long wall the parent's heading
+  // — and with it the opener — has been virtualised away by the time the field closes, and the focus
+  // above is a no-op on a detached node. The heading takes the caret back as it is drawn.
   const dismiss = useCallback(() => {
     openerRef.current?.focus();
+    if (headingAddedIn !== null) recordCaret(askCaret(headingAddedIn, "add"));
     setPanel(null);
-  }, []);
+  }, [headingAddedIn, recordCaret, askCaret]);
   const close = useCallback(() => setPanel(null), []);
+
+  /**
+   * **Add folder's field, given up** — its ✕, or the reader clicking or tabbing away, which
+   * `FolderNameField` answers with the same `onCancel` (its blur discard). Escape never reaches
+   * here: the page's `"inner"` rung takes it and calls {@link dismiss}.
+   *
+   * **The ✕ is a keyboard cancel's twin** — the caret is on it, inside the field — so it is
+   * {@link dismiss}, and a heading's Add folder records its caret return.
+   *
+   * **A blur discard is an outside click, and an outside click does not hand the caret back**:
+   * the field closes and nothing is focused, because the reader is already somewhere else — a
+   * click on a tile below the draft must neither scroll the wall back up to the parent nor take
+   * the caret off the tile (review Minor 5). While the blur runs the caret is on `<body>` on its
+   * way to wherever it is going, so the question waits one task (`afterBlur`): **only if
+   * it is still nowhere** is the heading's request recorded (revealed first). The request is made
+   * at the blur, so anything newer — a layer opened by the click that blurred the field, another
+   * request — supersedes it before the task runs.
+   *
+   * **The path row's field decides the same way** (the final review's C-I3): its button is never
+   * scrolled away, but a focus made from inside a `focusout` handler is one Blink refuses the click
+   * its own focus — so `dismiss` there took the caret off whatever was clicked and scrolled the page
+   * to the top. One task later, and only if the caret is still nowhere, it goes back to the path
+   * row's Add folder, **without scrolling** — the page stays where the reader was.
+   */
+  const cancelNewFolder = useCallback(() => {
+    if (!caretIsNowhere()) {
+      dismiss();
+      return;
+    }
+    if (headingAddedIn !== null) {
+      const request = askCaret(headingAddedIn, "add");
+      afterBlur(() => recordCaret(request));
+    } else {
+      const opener = openerRef.current;
+      afterBlur(() => opener?.focus({ preventScroll: true }));
+    }
+    setPanel(null);
+  }, [dismiss, headingAddedIn, recordCaret, askCaret, afterBlur]);
 
   useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: openPanel !== null });
 
@@ -1703,9 +1810,8 @@ export function CollectionPage() {
    *
    * {@link trailOf} ends with the folder the reader is standing in, so the step before it is the
    * one the breadcrumb draws as the last *pressable* segment, and an empty step is the root. That
-   * is `null`, which for this cabinet is the copies filed **nowhere** — `useCollection` sends
-   * `rootOnly` for it, the wishlist's reading rather than the "every folder" this page opened on
-   * until Flatten arrived. Either way the two ways out land in the same place by construction
+   * is `null`, which for this cabinet is the copies filed **nowhere** — and, since shelves, the whole
+   * cabinet on one wall. Either way the two ways out land in the same place by construction
    * rather than by two pieces of arithmetic that happen to agree.
    *
    * **A deck group and `Recently removed` need no branch here, and that is a fact about `trailOf`
@@ -1717,14 +1823,25 @@ export function CollectionPage() {
    * A `folderId` naming a folder this list no longer carries answers the root too — `trailOf`
    * resolves a broken parent *towards* the root for exactly the reason this reads it: the
    * alternative strands the reader inside a drawer with no way out.
+   *
+   * **Stepped from the level asked for (`requestedFolderId`), which is the breadcrumb's own trail
+   * whenever the two agree.** The breadcrumb draws the level on screen, and while a level nothing
+   * has cached is arriving the two differ by one press — so a second Escape inside that round trip,
+   * stepped from the breadcrumb, would land on the level already asked for and do nothing. Two
+   * presses are two levels.
    */
-  const parentFolderId = trail.length >= 2 ? trail[trail.length - 2].id : null;
+  const askedTrail = useMemo(
+    () => (requestedFolderId === folderId ? trail : trailOf(folders.folders, requestedFolderId)),
+    [requestedFolderId, folderId, trail, folders.folders],
+  );
+  const parentFolderId = askedTrail.length >= 2 ? askedTrail[askedTrail.length - 2].id : null;
 
   /**
    * Escape walks the reader out of a drawer — the floor rung, and the same step the breadcrumb's
    * last pressable segment takes.
    *
-   * **`enabled` on `folderId !== null` is what keeps the press from being swallowed at the root.**
+   * **`enabled` on `requestedFolderId !== null` is what keeps the press from being swallowed at the
+   * root.**
    * A registered layer takes the press whether or not it has anywhere to go, and a `"navigation"`
    * rung that consumed Escape at the top of the cabinet would be a floor with nothing under it:
    * every press a reader made on this page would stop here and reach nothing else that might one
@@ -1734,47 +1851,65 @@ export function CollectionPage() {
    * `clearFieldOnEscape` in `FilterBar` — because Chromium empties an
    * `<input type="search">` on Escape by itself and does **not** mark the press handled, so
    * without it one press would clear the box *and* walk the reader up a level.
-   *
-   * **Flatten is deliberately not a rung of this, and that is a decision rather than an
-   * oversight** — do not "fix" it by toggling the chip off here. `WishlistPage` states the
-   * argument in full and it holds one cabinet over: Flatten is not a place the reader walked into,
-   * it is the filing being ignored, so there is no level on screen to leave — the breadcrumb, the
-   * wall and the pinned strip are all off. With it on, Escape does nothing at all here, **including
-   * when a `folderId` is still set underneath**, because walking a level the reader cannot see
-   * would silently move where un-flattening puts them back. The chip is one press away and says
-   * which state it is in.
    */
   useDismissOnEscape({
     layer: "navigation",
     onDismiss: () => collection.openFolder(parentFolderId),
-    enabled: !flatten && folderId !== null,
+    enabled: requestedFolderId !== null,
   });
 
   const open = useCallback((next: NonNullable<Panel>, opener: HTMLElement | null) => {
     openerRef.current = opener;
+    // A caret still owed to a heading is the last layer's business, not this one's — and a request
+    // whose write has not answered yet, or whose blur is still deciding, is superseded, so it is
+    // never recorded at all.
+    supersedeCaret();
     setPanel(next);
-  }, []);
+  }, [supersedeCaret]);
 
   /**
-   * `New folder`, the wall's own first tile — **inside the folder the reader is standing in**,
-   * which at the root is the top level, and which is the whole of what it promises by going away
-   * with the wall while the list is flattened.
+   * **Add folder** — on the path row it makes one at the level the reader is standing in, and on a
+   * heading it makes one inside that folder (spec §3.8). Either way the new folder appears where it
+   * will live: a placeholder heading, last among its siblings, over an empty shelf, with the name
+   * typed on the line the name will occupy.
    *
-   * **`HTMLElement` rather than the `HTMLButtonElement` this took while it was wired to a
-   * `<button>` here.** {@link NewFolderCard} owns the element now and hands it over as an
-   * `HTMLElement`; under `strictFunctionTypes` a callback asking for the narrower type is not
-   * assignable to that prop at all, and it never needed the narrower one — {@link open} takes an
-   * `HTMLElement | null`, because all it does with the element is `focus()` it.
+   * **A shut parent opens first**, through the same write its chevron makes, so the new heading has
+   * somewhere to be drawn; the stored fold goes back to the default rather than to "open", which is
+   * what the chevron would store too.
    *
-   * `folders.create.reset()` for `DecksPage`'s reason: a refusal from the last attempt is not news
-   * about this one.
+   * **The opener is read off the focus**, because `ShelfToolbar` and `ShelfHeading` both hand a bare
+   * callback: a pointer press and a keyboard press alike leave the button that was pressed focused,
+   * and that is the element {@link dismiss} gives the caret back to. `folders.create.reset()` for
+   * `DecksPage`'s reason: a refusal from the last attempt is not news about this one.
    */
+  // Taken off the hook here rather than with the wall's other fields below, because Add folder is
+  // the first callback that needs them — and a method called through `collection.` would make the
+  // whole hook result a dependency.
+  const { shelves: builtShelves, setFold, folds: storedFolds } = collection;
   const openNewFolder = useCallback(
-    (opener: HTMLElement) => {
+    (parentId: number | null) => {
       folders.create.reset();
-      open({ kind: "newFolder", parentId: folderId }, opener);
+      const parent =
+        parentId === null
+          ? undefined
+          : builtShelves.find((shelf) => shelf.id === parentId && !shelf.headless);
+      if (parent !== undefined && parent.collapsed) {
+        setFold(parent.id, foldChange(parent, false));
+      }
+      open({ kind: "newFolder", parentId }, focusedElement());
     },
-    [folders.create, folderId, open],
+    [folders.create, builtShelves, setFold, open],
+  );
+
+  /** **Rename**, on the heading itself — the field replaces the title in place (spec §3.8), and
+   *  `ShelfHeading`'s own `useFolderFieldReturn` hands the caret back to the Rename button it
+   *  draws again, which is a new element by then. */
+  const openRename = useCallback(
+    (id: number) => {
+      folders.rename.reset();
+      open({ kind: "renameFolder", folderId: id }, focusedElement());
+    },
+    [folders.rename, open],
   );
 
   /**
@@ -1788,20 +1923,68 @@ export function CollectionPage() {
    * for its reason: the reader is looking at the cards they are about to file, and walking them
    * into the new empty drawer would take exactly those cards off screen and replace them with
    * `Nothing filed here yet.` The card they just made is right there to drag onto.
+   *
+   * **A made folder starts on its own kind's fold** (the final review's R-M2):
+   * `collection_folders.id` is an `INTEGER PRIMARY KEY` without `AUTOINCREMENT`, so a new folder
+   * can take a deleted folder's id — and with it whatever fold was stored under that id. The create
+   * clears it, and only where something is stored, so an ordinary create writes nothing.
+   *
+   * **The path row's caret comes back without scrolling** (ledger 217): the new heading is drawn
+   * last among its siblings, often well below the path row, and the return is the button the reader
+   * pressed — spec §3.8's — so an ordinary `focus()` took the page to the top and off the folder
+   * just made. A heading's Add folder is {@link dismiss}'s request, which reveals the heading.
    */
   const nameFolder = useCallback(
     (name: string) => {
       if (panel?.kind === "newFolder") {
-        folders.create.mutate({ parentId: panel.parentId, name }, { onSuccess: dismiss });
+        const pathRow = headingAddedIn === null;
+        folders.create.mutate(
+          { parentId: panel.parentId, name },
+          {
+            onSuccess: (made) => {
+              if (storedFolds[String(made.id)] !== undefined) setFold(made.id, null);
+              if (!pathRow) {
+                dismiss();
+                return;
+              }
+              openerRef.current?.focus({ preventScroll: true });
+              setPanel(null);
+            },
+          },
+        );
       } else if (panel?.kind === "renameFolder") {
         folders.rename.mutate({ id: panel.folderId, name }, { onSuccess: dismiss });
       }
     },
-    [panel, folders.create, folders.rename, dismiss],
+    [panel, headingAddedIn, folders.create, folders.rename, storedFolds, setFold, dismiss],
   );
 
   /**
-   * One folder card's three doors into one menu — a right-click, a `ContextMenu` keypress, and the
+   * **Move up / Move down** (spec §3.2) — the keyboard's reorder, which WCAG 2.5.7 asks for
+   * wherever a drag is the other way to do it. A step is a before/after drop on the neighbour, so it
+   * goes through the same `reorderedLevel` a heading drop does and writes the same level order.
+   * `null` at either end of the level, which the menu greys.
+   */
+  const stepPlacement = useCallback(
+    (id: number, step: -1 | 1): { parentId: number | null; ids: number[] } | null => {
+      const parentId = treeParent.get(id) ?? null;
+      const siblings = folderLevel(nodes, parentId).map((node) => node.folder.id);
+      const at = siblings.indexOf(id);
+      const neighbour = siblings[at + step];
+      if (at === -1 || neighbour === undefined) return null;
+      const ids = reorderedLevel({
+        siblings,
+        dragged: id,
+        target: neighbour,
+        edge: step === -1 ? "before" : "after",
+      });
+      return ids === null ? null : { parentId, ids: [...ids] };
+    },
+    [treeParent, nodes],
+  );
+
+  /**
+   * One heading's three doors into one menu — a right-click, a `ContextMenu` keypress, and the
    * `⋯` trigger's own plain click, which is what {@link useContextMenu.menuClick} exists for.
    *
    * The item list is a **thunk** inside each handle, so a level holding twelve drawers builds no
@@ -1825,6 +2008,14 @@ export function CollectionPage() {
        *  width of the entire panel. The two arms point at the two different things a reader would
        *  go and do next, which is the grammar {@link blockedReason}'s greyed rows already use. */
       const ancestorReason = "a folder above it is locked";
+      /** A step, written — and once it has landed, the caret goes to this heading's `⋯` wherever the
+       *  step put it. The request is made **at the press** and recorded when the write answers, so
+       *  anything the reader opens in between supersedes it; the folder list's first answer after
+       *  the write decides it (`caretDue`). */
+      const step = (plan: { parentId: number | null; ids: number[] }) => {
+        const request = askCaret(folder.id, "manage", { order: plan });
+        folders.reorder.mutate(plan, { onSuccess: () => recordCaret(request) });
+      };
       const build = (): MenuItem[] => {
         /** A locked folder anywhere **beneath** this one, which the delete would re-file with
          *  the rest — `delete_folder`'s `FOLDER_HOLDS_LOCKED`. Asked when the menu opens rather
@@ -1835,16 +2026,6 @@ export function CollectionPage() {
         return [
           {
             kind: "action",
-            id: "rename",
-            label: "Rename…",
-            Icon: Pencil,
-            onSelect: () => {
-              folders.rename.reset();
-              open({ kind: "renameFolder", folderId: folder.id }, openerRef.current);
-            },
-          },
-          {
-            kind: "action",
             id: "move",
             label: "Move to folder…",
             Icon: FolderInput,
@@ -1853,6 +2034,32 @@ export function CollectionPage() {
               open({ kind: "moveFolder", folderId: folder.id }, openerRef.current);
             },
           },
+          (() => {
+            const up = stepPlacement(folder.id, -1);
+            return {
+              kind: "action" as const,
+              id: "up",
+              label: "Move up",
+              Icon: ArrowUp,
+              ...(up === null ? { disabled: true, reason: "Already first" } : {}),
+              onSelect: () => {
+                if (up !== null) step(up);
+              },
+            };
+          })(),
+          (() => {
+            const down = stepPlacement(folder.id, 1);
+            return {
+              kind: "action" as const,
+              id: "down",
+              label: "Move down",
+              Icon: ArrowDown,
+              ...(down === null ? { disabled: true, reason: "Already last" } : {}),
+              onSelect: () => {
+                if (down !== null) step(down);
+              },
+            };
+          })(),
           /**
            * **Set the drawer aside, or bring it back** — issue #365, and the one row here that is
            * neither a layer nor a field: it writes on the press, and what the reader watches change
@@ -1865,9 +2072,9 @@ export function CollectionPage() {
            * the fact to disagree with the first.
            *
            * **Greyed, with its reason in the row's accessible name, when an ancestor is locked.**
-           * Unlocking a child of a locked parent changes nothing a reader can see — the badge stays
-           * and the copies stay out of the flattened list — and a row that reported success over an
-           * unmoved badge is worse than a greyed one. `Rename…` and `Move to folder…` above stay
+           * Unlocking a child of a locked parent changes nothing a reader can see — the lock on the
+           * heading stays — and a row that reported success over an
+           * unmoved badge is worse than a greyed one. `Move to folder…` and the two steps above stay
            * live in every state, deliberately: neither disturbs a card, so neither is what the lock
            * is about (design §4.4).
            *
@@ -1891,12 +2098,12 @@ export function CollectionPage() {
            * **Greyed on the *effective* lock**, which is `delete_folder`'s own fence said early:
            * deleting re-files every card in the sub-tree to the root, silently undoing exactly the
            * filing the lock was protecting, so the backend refuses it in words (`FOLDER_IS_LOCKED`)
-           * for a folder inside a locked parent as surely as for the one the reader pressed Lock
-           * on. **And the UI must not let the press happen**: `PinnedFolders`' own rule is that a
-           * control whose only outcome is a sentence explaining that it does not work teaches the
-           * reader nothing its absence would not have. That band answers it by omitting the menu;
-           * a locked drawer keeps its menu, so this greys with its reason in the row's accessible
-           * name.
+           * for a folder inside a locked parent as surely as for the one the reader pressed Lock on.
+           * **And the UI must not let the press happen**: the rule app-owned shelves follow is that
+           * a control whose only outcome is a sentence explaining that it does not work teaches the
+           * reader nothing its absence would not have. An app-owned heading answers it by omitting
+           * the menu; a locked drawer keeps its menu, so this greys with its reason in the row's
+           * accessible name.
            *
            * **And on a lock anywhere beneath it** (`holdsLock`), which the backend refuses in words
            * of its own (`FOLDER_HOLDS_LOCKED`): the delete re-files the whole sub-tree, so a locked
@@ -1926,15 +2133,15 @@ export function CollectionPage() {
         openerRef.current = element;
       };
       return {
-        onContextMenu: (e: ReactMouseEvent<HTMLButtonElement>) => {
+        onContextMenu: (e: ReactMouseEvent<HTMLElement>) => {
           remember(e.currentTarget);
           menu(build)(e);
         },
-        onKeyDown: (e: ReactKeyboardEvent<HTMLButtonElement>) => {
+        onKeyDown: (e: ReactKeyboardEvent<HTMLElement>) => {
           remember(e.currentTarget);
           menuKey(build)(e);
         },
-        onClick: (e: ReactMouseEvent<HTMLButtonElement>) => {
+        onClick: (e: ReactMouseEvent<HTMLElement>) => {
           remember(e.currentTarget);
           menuClick(build)(e);
         },
@@ -1946,11 +2153,14 @@ export function CollectionPage() {
       menuClick,
       open,
       lockedIds,
+      stepPlacement,
       folders.folders,
-      folders.rename,
       folders.move,
       folders.remove,
+      folders.reorder,
       folders.setLocked,
+      askCaret,
+      recordCaret,
     ],
   );
 
@@ -2044,22 +2254,12 @@ export function CollectionPage() {
    *
    * # The fence
    *
-   * A stepper is drawn only where **every** row behind the art is at the root, in a drawer the
-   * reader made, or in `Recently removed` (issue #506 — see {@link countEditable} for why the
-   * holding area joined). Not *any*: the number the control shows is the tile's **sum**, so a
-   * tile mixing a copy in a binder with a copy in a deck's group would move a total that is partly
-   * untouchable —
-   * the reader would press `−` on a 3 and watch it become a 2 while one of those three copies is
-   * the deck's custody and `set_entry_folder`'s `ENTRY_IN_A_DECK` exists precisely to keep it
-   * there. `canFile` takes the opposite rule for the opposite reason and says so at its own site:
-   * a *drag* asks which copies may move and the reader answers, where a stepper is a number with
-   * no question attached to it.
-   *
-   * **This is also why no page-level branch is needed for "the reader is standing inside a deck
-   * group".** Unflattened, every row on that wall is in that folder, so every tile is fenced by
-   * this rule alone; and flatten ships **on** (`useCollection.ts`), so the per-tile rule is the one
-   * that actually does the work in the state a reader meets. A second gate on `folderId` would be
-   * a fact this map already knows, stated again somewhere it could drift.
+   * A stepper is drawn only where the tile's folder is the root, a drawer the reader made, or
+   * `Recently removed` (issue #506 — see {@link countEditable} for why the holding area joined).
+   * **Every row behind a tile shares its folder since shelves** (decision 11), so "every row" and
+   * "the tile's folder" are one question now: the mixed tile this fence was written against — a
+   * sum partly in a deck's custody — can no longer be drawn. The loop still asks it per row, which
+   * costs nothing and stays right if the grain ever widens again.
    *
    * **A filed tile is fenced until the census has answered**, which is the fail-*closed* direction
    * and is deliberate: `useCollectionFolderList` starts empty, and "empty" is a collection nobody
@@ -2103,7 +2303,7 @@ export function CollectionPage() {
     const first = new Map<string, CollectionRow>();
     const fenced = new Set<string>();
     for (const row of rows) {
-      const key = tileKeyOf(row.cardId, row.finish);
+      const key = tileKeyOf(row.cardId, row.finish, row.folderId);
       if (!first.has(key)) first.set(key, row);
       if (!countEditable(row.folderId)) fenced.add(key);
     }
@@ -2257,8 +2457,9 @@ export function CollectionPage() {
    * *The destination must be the root or a folder the reader made.* That is not this page's rule
    * but `collection_folders::set_entry_folder`'s: it calls `user_folder` on the destination and
    * refuses a deck group or `Recently removed` in words. **No gesture on this page reaches it
-   * today** and that is deliberate: `PinnedFolders` registers no drop target, and the only
-   * breadcrumb segment that could name a pinned folder is the last one, which is never a target.
+   * today** and that is deliberate: an app-owned shelf's heading takes no card
+   * (`CollectionShelfParts`), and the only breadcrumb segment that could name one is the last,
+   * which is never a target.
    * It is the fence rather than the affordance — the thing that keeps the invariant local the day
    * somebody makes a pinned entry droppable "because the ring looked missing". A mutation check
    * confirmed the reachability: removing this clause fails nothing, where removing either of the
@@ -2298,6 +2499,10 @@ export function CollectionPage() {
    * (The example was "in two finishes" until 2026-08-26, when the finish joined the wall's grain
    * and stopped being a way one tile's rows can differ. The rule is unchanged — grade, language
    * and folder still split rows without splitting a tile.)
+   *
+   * Since shelves every copy behind a tile shares its folder (decision 11), so "any" and "all" give
+   * one answer on the wall; the rule is kept as written because a **picked set** can still span
+   * folders, and that reaches the picker the same way.
    */
   const canFile = useCallback(
     (drop: CollectionDrop, to: number | null) => {
@@ -2487,7 +2692,13 @@ export function CollectionPage() {
     });
   }, [picking, rows, blockedReason]);
 
-  const failure = query.isError ? ipcError(query.error) : null;
+  // The list's refusal, or the counts' — the wall is laid out from the counts, so a refusal there
+  // is a wall that never arrives and has to be said as surely as the list's.
+  const failure = query.isError
+    ? ipcError(query.error)
+    : collection.countsError !== null
+      ? ipcError(collection.countsError)
+      : null;
   // The *latest* write on the screen, not whichever is still holding an error: with `isError` on
   // both, a refused stepper press left "Could not change your collection" on screen while the
   // reader went on to remove the row successfully — an alert about something that had already been
@@ -2524,31 +2735,6 @@ export function CollectionPage() {
   // Without this clause the trail was gated on a list that folder is deliberately not in, so
   // opening a deck group closed the door behind them.
   const hasFolders = userFolders.length > 0 || folderId !== null;
-  /**
-   * **Does this level hold drawers of its own** — the question {@link statusOf} asks, and the only
-   * one this value answers. It stays the reader's own children: the refile wall drawn inside
-   * `Recently removed` is not that level's content.
-   *
-   * `!flatten` for the wishlist's reason, and it is a correctness clause rather than tidiness: a
-   * flattened list draws no folder cards at all, so "the cards below are the answer, leave them
-   * alone" would silence the one line an empty flattened collection has to say. `New folder` is
-   * not content either — a wall holding nothing but the tile that makes the first folder is still
-   * a level with nothing in it.
-   */
-  const filed = !flatten && childFolders.length > 0;
-  /**
-   * The folders drawn over the cards at this level.
-   *
-   * **Inside `Recently removed` it is the reader's own top level rather than nothing**, and that
-   * substitution *is* #209's feature. Nothing nests under the holding area, so its own children
-   * are always empty — and a reader standing in a pile of copies that just left a deck, with no
-   * drop target on screen, can sort them back only through the row menu. The wall puts their
-   * binders under the pointer, so the sort is the drag it should have been.
-   *
-   * Not done for a **deck group**, whose cards may not be dragged out at all ({@link canFile}): a
-   * wall of drawers that every ring refuses would be an invitation to a gesture that does nothing.
-   */
-  const wall = inRemoved ? nodes : childFolders;
 
   /**
    * How many copies `Recently removed` holds, from the folder summary — or `null` before it has
@@ -2563,273 +2749,452 @@ export function CollectionPage() {
   const canClearRemoved = inRemoved && (removedCards === null ? !empty : removedCards > 0);
 
   /**
-   * The level the wall is drawing: the parent every card on it is a child of, and that level's
-   * ids in the order they are drawn.
+   * What a folder heading let go on another heading means as a write — the destination level and
+   * that level's whole new order — or `null` for a drop this page will not make (spec §6).
    *
-   * **Read off the wall rather than off the target card's own `parentId`, and the two are not
-   * always the same word.** `buildFolderTree` draws a folder whose parent this list does not
-   * carry at the **root** rather than dropping it, so an orphan's row still names a folder that
-   * is gone — sending that as a destination would be a reorder into nothing. What is on screen is
-   * the honest answer, and writing it down also files the orphan where the reader can already see
-   * it: `collection_folder_reorder` writes `parent_id` from this argument for every id in the
-   * list, which is that same paragraph read from the other end.
+   * **One function for both halves of the gesture**, because a mark that promised a write the drop
+   * then refused would be worse than no mark: `useShelfDropTarget` asks once per frame to decide
+   * what to draw and again at the drop. The refusals are the backend's, said early:
    *
-   * `null` inside `Recently removed`, which is the one level whose wall is not its own children —
-   * the substitution #209 asked for, and therefore the one place `folderId` is not the parent of
-   * what is drawn.
-   */
-  const wallLevel = useMemo(
-    () => ({ parentId: inRemoved ? null : folderId, ids: wall.map((one) => one.folder.id) }),
-    [inRemoved, folderId, wall],
-  );
-
-  /**
-   * What a folder let go on another folder means as a write — the destination level and that
-   * level's whole new order — or `null` for a drop this page will not make.
+   * - **Both ends must be a folder the reader made.** `collection_folders::reorder_folders` calls
+   *   `user_folder` on the destination and on every id it is handed, so a deck group or
+   *   `Recently removed` at either end is `FOLDER_NOT_YOURS`. No gesture reaches it — an app-owned
+   *   heading is neither a folder target nor a drag source (`CollectionShelfParts`) — so this is
+   *   the fence rather than the affordance.
+   * - **A folder may not land inside itself or inside anything it holds.** `parent_id` is
+   *   `ON DELETE CASCADE` on itself, so a cycle is a graph SQLite would walk forever. **This one is
+   *   reachable now**: the wall draws the whole subtree, so a parent's heading can be dropped on its
+   *   own child's. Asked of the *destination parent*, which covers all three landings at once —
+   *   `inside` a descendant and `before` one are the same cycle.
+   * - **A drop that would reproduce the order already on screen is not a write** — `reorderedLevel`
+   *   answers `null` for it, so a heading put back where it sits writes nothing.
    *
-   * **One function for both halves of the gesture**, because a mark that promised a write the
-   * drop then refused would be worse than no mark: `useFolderDropTarget` asks the question once
-   * per target per frame to decide what to draw, and again at the drop because the two can be a
-   * second apart and only the second one writes. Three of the four clauses below are refusals the
-   * **backend** makes in words, said early enough to be a missing ring rather than a red banner.
-   *
-   * **Both ends must be a folder the reader made, and that clause is this cabinet's alone.**
-   * `collection_folders.kind` is one of `user`, `deck` and `removed`, and
-   * `collection_folders::reorder_folders` calls `user_folder` on the destination *and* on every
-   * id it is handed — a deck's group or `Recently removed` at either end is `FOLDER_NOT_YOURS`.
-   * `deck_folders` and `wishlist_folders` carry no such column, which is why the wishlist's twin
-   * of this function has one clause fewer rather than having forgotten one. **No gesture on this
-   * page reaches it today and that is deliberate**: `PinnedFolders` registers neither a drop
-   * target nor a drag source, so a pinned entry can be neither picked up nor pointed at, and the
-   * wall this guards is built from `userFolders`. It is the fence rather than the affordance —
-   * {@link canMoveCopy}'s third clause, for the same reason and with the same warning attached:
-   * it is what keeps the invariant local the day somebody makes a pinned entry draggable
-   * "because the ring looked missing".
-   *
-   * **A folder may not land inside itself or inside anything it holds.** The backend refuses that
-   * too, and the guard is not cosmetic: `collection_folders.parent_id` is `ON DELETE CASCADE`
-   * **on itself**, so a cycle is a graph SQLite's recursive cascade would walk forever the day
-   * the folder is deleted. It is asked of the **destination parent** rather than of the card
-   * under the pointer, which is what covers all three landings at once — `inside` a descendant
-   * and `before` one are the same cycle, since a descendant's own parent is the dragged folder or
-   * something already under it. This one is unreachable from this page for a different reason
-   * than the clause above: the wall draws exactly **one level**, so every card on it is a sibling
-   * of every other and a descendant is never on screen beside its ancestor. The arrangement that
-   * does put them there is a cabinet that already holds a cycle, which `buildFolderTree` draws at
-   * the root as leaves and which only corruption produces.
-   *
-   * **And a drop that would reproduce the order already on screen is not a write.**
-   * `reorderedLevel` is what says so; its `null` is a refusal rather than an error, because
-   * dropping a folder back where it already sits is a gesture a reader makes by accident every
-   * time they think better of one mid-drag, and a write for it would bump `updated_at` and
-   * re-read the list to arrive at what is already drawn.
+   * **Before and after reorder the level the target is drawn in** — {@link treeParent}, not its
+   * row's `parentId` — so a drop beside a folder whose parent another surface deleted reorders the
+   * root, where `buildFolderTree` draws it.
    */
   const folderPlacement = useCallback(
     (
       drag: FolderDrag,
-      target: FolderNode<CollectionFolder>,
+      targetId: number,
       edge: FolderEdge,
     ): { parentId: number | null; ids: number[] } | null => {
-      // `inside` says which drawer and the target *is* it; `before`/`after` say where in the
-      // level the target sits in, which is the level being drawn.
-      const parentId = edge === "inside" ? target.folder.id : wallLevel.parentId;
-      if (!userFolderIds.has(drag.folderId) || !userFolderIds.has(target.folder.id)) return null;
+      if (!userFolderIds.has(drag.folderId) || !userFolderIds.has(targetId)) return null;
+      const parentId = edge === "inside" ? targetId : (treeParent.get(targetId) ?? null);
       if (parentId !== null && !userFolderIds.has(parentId)) return null;
-      if (parentId !== null && parentId === drag.folderId) return null;
-      if (parentId !== null && folderDescendants(userFolders, drag.folderId).has(parentId)) {
+      if (
+        parentId !== null &&
+        (parentId === drag.folderId || folderDescendants(userFolders, drag.folderId).has(parentId))
+      ) {
         return null;
       }
       const ids = reorderedLevel({
-        // The target's own children for a nest — in the order the tree already draws them, so a
-        // nest re-states the level it is joining rather than re-sorting it — and the level on
-        // screen for the other two.
-        siblings:
-          edge === "inside" ? target.children.map((child) => child.folder.id) : wallLevel.ids,
+        // The destination level in the order the tree draws it — the target's children for a
+        // nest, the target's own level for the other two.
+        siblings: folderLevel(nodes, parentId).map((node) => node.folder.id),
         dragged: drag.folderId,
-        target: target.folder.id,
+        target: targetId,
         edge,
       });
       return ids === null ? null : { parentId, ids: [...ids] };
     },
-    [userFolderIds, userFolders, wallLevel],
+    [userFolderIds, treeParent, userFolders, nodes],
   );
-
-  /**
-   * The two halves of {@link folderPlacement}, bound per card by the wall below.
-   *
-   * **A folder is deliberately not droppable on the breadcrumb, where a copy is**, and the two
-   * are not the same gesture wearing different payloads. `collection_set_folder` takes one
-   * destination and that is the whole of the write, so a trail segment names a complete answer —
-   * which is why `CollectionBreadcrumb` takes card drops at all: without somewhere to drop a copy
-   * that moves it *up*, that gesture would only ever push copies deeper.
-   * `collection_folder_reorder` takes a destination **and that level's whole order**, and the
-   * order is what this gesture is for — a quarter of every folder card means "beside this one,
-   * here" (`EDGE_ZONE`). A segment is one word with no order to point into, so the only thing a
-   * drop on it could say is "last, in a level that is not on screen", and the folder would leave
-   * the wall with nothing drawn saying where it went. The way back out is `Move to folder…`, on
-   * the card's own `⋯`, which names every destination including the root — so unlike a copy, a
-   * folder is not one gesture short of a route home. If this is revisited, the thing to change is
-   * the *mark*, not the target: a segment would need to say "last" before it could honestly take
-   * one.
-   */
   const canPlaceFolder = useCallback(
-    (drag: FolderDrag, target: FolderNode<CollectionFolder>, edge: FolderEdge) =>
-      folderPlacement(drag, target, edge) !== null,
+    (drag: FolderDrag, targetId: number, edge: FolderEdge) =>
+      folderPlacement(drag, targetId, edge) !== null,
     [folderPlacement],
   );
   const placeFolder = useCallback(
-    (drag: FolderDrag, target: FolderNode<CollectionFolder>, edge: FolderEdge) => {
-      const plan = folderPlacement(drag, target, edge);
-      // A `null` writes **nothing at all** — not a reorder of the level as it stands, which would
-      // be a transaction to arrive at the list already on screen.
+    (drag: FolderDrag, targetId: number, edge: FolderEdge) => {
+      const plan = folderPlacement(drag, targetId, edge);
+      // A `null` writes **nothing at all** — not a reorder of the level as it stands.
       if (plan !== null) folders.reorder.mutate(plan);
     },
     [folderPlacement, folders.reorder],
   );
 
   /**
-   * The **up** tile's folder drop: a binder moved out of the level on screen and into the one
-   * above it, last in that level.
+   * **A folder dropped on a path-row segment**: moved into that level, last (spec §6). The only
+   * segments that take a folder are the path row's — a heading's lead segments and the sticky bar's
+   * are buttons only — and this is the way *up* the up tile used to be.
    *
-   * **Not a special case of {@link folderPlacement}, because that one is asked about a card on the
-   * wall and this destination has no card.** The level above is the one the reader walked out of;
-   * nothing on screen belongs to it, so there is no target row, no `before`/`after`, and no order
-   * to point into — which is precisely the objection {@link canPlaceFolder} raises against letting
-   * a breadcrumb segment take a folder. **What answers it here is that the tile says "last"
-   * without having to draw it**: `inside` is the landing a reader already gets by dropping a
-   * folder on another folder's middle, it already means "which drawer, and nothing about where in
-   * it", and `reorderedLevel` already appends. The tile is one landing wide, so there is no second
-   * position for the reader to have meant.
-   *
-   * The four refusals are {@link folderPlacement}'s own, asked of a destination rather than of a
-   * card. **Both ends must be a folder the reader made** — this cabinet's alone, because
-   * `collection_folders::reorder_folders` calls `user_folder` on the destination and on every id
-   * it is handed. The destination is never anything else in practice (nothing nests inside a deck
-   * group or `Recently removed`, so a trail's second-from-last segment is a user folder or the
-   * root), which makes this the fence rather than the affordance — exactly as it is one function
-   * up. **Already there**, **into itself or into what it holds**, and `reorderedLevel`'s own
-   * `null` complete the set; the middle one is unreachable while the wall draws one level, and is
-   * kept because `parent_id` cascades onto itself and a cycle is a graph SQLite would walk
-   * forever.
-   *
-   * **Inside `Recently removed` the "already there" clause is the whole of the answer**, and that
-   * is the one place it does real work: the wall there is not that level's children but the
-   * reader's own top level ({@link wall}), so every folder card on it is *already* at the
-   * destination this tile names, and each of them draws no ring rather than one that would shuffle
-   * it to the end of the level it is in.
+   * `inside` is the landing a segment means, because a segment is one word with no order to point
+   * into, and `reorderedLevel` already appends for it. The refusals are {@link folderPlacement}'s,
+   * asked of a level rather than a heading, plus **already there** — the folder's tree parent is the
+   * segment — which draws no ring rather than one that would shuffle it to the end of its own level.
    */
-  const upPlacement = useCallback(
-    (drag: FolderDrag): { parentId: number | null; ids: number[] } | null => {
-      if (folderId === null) return null;
+  const levelPlacement = useCallback(
+    (drag: FolderDrag, levelId: number | null): { parentId: number | null; ids: number[] } | null => {
       if (!userFolderIds.has(drag.folderId)) return null;
-      if (upFolderId !== null && !userFolderIds.has(upFolderId)) return null;
-      if (drag.parentId === upFolderId) return null;
+      if (levelId !== null && !userFolderIds.has(levelId)) return null;
+      if ((treeParent.get(drag.folderId) ?? null) === levelId) return null;
       if (
-        upFolderId !== null &&
-        (upFolderId === drag.folderId ||
-          folderDescendants(userFolders, drag.folderId).has(upFolderId))
+        levelId !== null &&
+        (levelId === drag.folderId || folderDescendants(userFolders, drag.folderId).has(levelId))
       ) {
         return null;
       }
       const ids = reorderedLevel({
-        // The destination level as the tree draws it, which is what makes the arriving folder
-        // *last* rather than last among whatever the flat rows happen to name.
-        siblings: folderLevel(nodes, upFolderId).map((one) => one.folder.id),
+        siblings: folderLevel(nodes, levelId).map((node) => node.folder.id),
         dragged: drag.folderId,
-        target: upFolderId ?? ROOT_TARGET,
+        target: levelId ?? ROOT_TARGET,
         edge: "inside",
       });
-      return ids === null ? null : { parentId: upFolderId, ids: [...ids] };
+      return ids === null ? null : { parentId: levelId, ids: [...ids] };
     },
-    [folderId, upFolderId, nodes, userFolderIds, userFolders],
+    [userFolderIds, treeParent, userFolders, nodes],
   );
-  const canMoveFolderUp = useCallback(
-    (drag: FolderDrag) => upPlacement(drag) !== null,
-    [upPlacement],
+  const canPlaceOnLevel = useCallback(
+    (drag: FolderDrag, levelId: number | null) => levelPlacement(drag, levelId) !== null,
+    [levelPlacement],
   );
-  const moveFolderUp = useCallback(
-    (drag: FolderDrag) => {
-      const plan = upPlacement(drag);
+  const placeOnLevel = useCallback(
+    (drag: FolderDrag, levelId: number | null) => {
+      const plan = levelPlacement(drag, levelId);
       if (plan !== null) folders.reorder.mutate(plan);
     },
-    [upPlacement, folders.reorder],
+    [levelPlacement, folders.reorder],
   );
 
   /**
-   * **Whether the cabinet is drawn at all — and it is drawn over an empty one on purpose.**
-   *
-   * Deliberately *not* {@link filed}, and deliberately not `wall.length > 0`, which is what gated
-   * it while `+ New folder` sat in a row of its own. With the tile living **inside** the wall that
-   * gate is a trap door: a reader who has filed nothing has no folder card to draw, therefore no
-   * wall, therefore no way to make their first folder, and the cabinet could never be opened by
-   * anyone who did not already have one.
-   *
-   * Flatten is the whole of what closes it, which is where the old `+ New folder` note went: a
-   * flattened list has no current folder to make one inside, so the control that promises "here"
-   * goes with the level it was promising about — one gate instead of that condition written twice.
-   */
-  const cabinet = !flatten;
-
-  /**
-   * Whether **this** level can hold a new folder — the tile's own gate, and a fence rather than an
-   * affordance.
-   *
-   * `create_folder` calls `user_folder` on the parent and answers `FOLDER_NOT_YOURS` for a deck
-   * group or `Recently removed` (`collection_folders.rs`), and {@link openNewFolder} always names
-   * the level the reader is standing in. So a tile drawn inside either would be a press whose only
-   * possible outcome is a sentence explaining that it does not work — `PinnedFolders`' argument for
-   * having no `⋯` at all, one level out. **It matters most inside `Recently removed`**, where the
-   * wall is *not* this level's children but the reader's own top level ({@link wall}): every card
-   * in that wall is a real drop target and the tile beside them would be the one control that is
-   * not, filing into an app-owned holding area.
-   *
-   * The root-is-a-level arm and the reason the test is written positively both live on
-   * {@link readersOwnLevel} now, which is this line's own expression named once and read by the
-   * drag's destination fence and the wall's stepper as well. It was spelled out here until the
-   * stepper needed a third copy of it.
+   * Whether **this** level can hold a new folder — the path row's **Add folder**, and a fence rather
+   * than an affordance. `create_folder` calls `user_folder` on the parent and answers
+   * `FOLDER_NOT_YOURS` for a deck group or `Recently removed`, so a button drawn inside either would
+   * be a press whose only outcome is a sentence saying it does not work. A heading's own Add folder
+   * asks the same question of its folder, and is drawn on the reader's own folders only.
    */
   const canMakeFolder = readersOwnLevel(folderId);
 
   /**
+   * **The wall** (spec §3.1): the shelves to draw, and what each shelf holds.
+   *
+   * - `drawnShelves` is the hook's shelves, re-asked of `buildShelves` with the folder being named
+   *   put in while Add folder is open (`draftFolder`) — it never reaches the wire.
+   * - `wallShelves` hides what `visibleShelves` hides, and puts back a heading holding a naming or
+   *   renaming field (`keepShelf`). **Nothing is laid out until the counts answer**: a layout drawn
+   *   from no counts would put an empty box under every folder for a round trip.
+   * - **During a folder drag the wall folds** (spec §3.9) — every heading shut, no cards, nothing
+   *   written (`foldedForDrag`) — and {@link useFoldAnchor} keeps the carried heading under the
+   *   pointer as it does. **Grid only**: `VirtualTable` keys its rows by position, so folding the
+   *   table under a carried heading would remount it and end the drag.
+   */
+  const {
+    visible: openShelves,
+    counts: shelfCounts,
+    filtering,
+    folds,
+    setMany,
+    shelfFolders,
+  } = collection;
+  const carrying = useFoldOnFolderDrag();
+  const folding = carrying && view === "grid";
+  useFoldAnchor(folding);
+  const addingIn = openPanel?.kind === "newFolder" ? openPanel.parentId : undefined;
+  const drawnShelves = useMemo(
+    () =>
+      addingIn === undefined
+        ? builtShelves
+        : buildShelves({
+            folders: [...shelfFolders, draftFolder(addingIn, lockedIds)],
+            levelId: folderId,
+            folds,
+            filtering,
+          }),
+    [addingIn, builtShelves, shelfFolders, lockedIds, folderId, folds, filtering],
+  );
+  const holding =
+    addingIn !== undefined
+      ? NEW_FOLDER_SHELF
+      : openPanel?.kind === "renameFolder"
+        ? openPanel.folderId
+        : null;
+  const wallShelves = useMemo((): Shelf[] => {
+    if (shelfCounts === null) return [];
+    if (folding) return foldedForDrag(drawnShelves, shelfCounts, filtering);
+    const shown =
+      addingIn === undefined ? openShelves : visibleShelves(drawnShelves, shelfCounts, filtering);
+    return keepShelf(shown, drawnShelves, holding);
+  }, [shelfCounts, folding, drawnShelves, filtering, addingIn, openShelves, holding]);
+  /**
+   * **Where the caret goes once a folder has left its heading** — Move to folder… and Delete…
+   * (the final review's C-M5). `useHeadingCaret`'s `leave` is the rule; this is the wall it is
+   * asked about — which headings are drawn open, the tree's parents, and the path row.
+   */
+  const pathRowRef = useRef<HTMLDivElement>(null);
+  const caretAfterLeaving = useCallback(
+    (id: number, into?: number | null) =>
+      leaveCaret({
+        id,
+        into,
+        drawnOpen: (shelfId) =>
+          openShelves.some(
+            (shelf) => shelf.id === shelfId && !shelf.headless && !shelf.collapsed,
+          ),
+        parentOf: (folder) => treeParent.get(folder) ?? null,
+        pathRowAdd: () => pathRowAddFolder(pathRowRef.current),
+      }),
+    [leaveCaret, openShelves, treeParent],
+  );
+  const moveFolderTo = useCallback(
+    (id: number, parentId: number | null) => {
+      const land = caretAfterLeaving(id, parentId);
+      folders.move.mutate(
+        { id, parentId },
+        {
+          onSuccess: () => {
+            setPanel(null);
+            land();
+          },
+        },
+      );
+    },
+    [caretAfterLeaving, folders.move],
+  );
+  const deleteFolder = useCallback(
+    (id: number) => {
+      const land = caretAfterLeaving(id);
+      folders.remove.mutate(id, {
+        onSuccess: () => {
+          setPanel(null);
+          land();
+        },
+      });
+    },
+    [caretAfterLeaving, folders.remove],
+  );
+
+  /** One section per shelf, sized by its count — none while shut (its cards were never fetched)
+   *  and none for the folder being named. `CardGrid` raises a count the loaded tiles outrun. */
+  const sections = useMemo<ShelfSection[]>(
+    () =>
+      wallShelves.map((shelf) => ({
+        shelf,
+        tileCount:
+          shelf.collapsed || shelf.id === NEW_FOLDER_SHELF ? 0 : (shelfCounts?.get(shelf.id)?.tiles ?? 0),
+      })),
+    [wallShelves, shelfCounts],
+  );
+  /** The layout at one column — the table's rows, and the one place "does the wall draw anything"
+   *  is answered for both views, since the rows other than tiles do not depend on the width. */
+  const tableLayout = useMemo(() => layoutShelves(sections, 1), [sections]);
+  const wallDrawn = tableLayout.rows.length > 0;
+
+  /** Where a copy let go on a shelf goes — `canFile` / `fileCard`, the one card policy on this page,
+   *  handed to every heading, empty box and the sticky bar. */
+  const cardTarget = useMemo<CardTarget>(
+    () => ({ canDrop: canFile, onDrop: fileCard }),
+    [canFile, fileCard],
+  );
+
+  /**
+   * **A heading's figures** (spec §3.2): the shelf's own counts with everything under it added
+   * (`rolledUp` — Review Focus 2), and under a filter `N of M`, where `M` is the unfiltered subtree
+   * from `collection_folder_summary` and `N` is the counts over the filter.
+   */
+  const rolled = useMemo(
+    () => (shelfCounts === null ? null : rolledUp(drawnShelves, shelfCounts)),
+    [drawnShelves, shelfCounts],
+  );
+  const totalOf = useCallback(
+    (shelf: Shelf): number | null => {
+      // Nothing counts Not sorted unfiltered, and a miss before the summary answers is not zero.
+      if (shelf.kind === "unfiled" || folders.summaryQuery.isPending) return null;
+      return (subtotals.get(shelf.id) ?? folders.summary.get(shelf.id) ?? NO_CARDS).cards;
+    },
+    [folders.summaryQuery.isPending, subtotals, folders.summary],
+  );
+  const statOf = useCallback(
+    (shelf: Shelf) =>
+      shelf.id === NEW_FOLDER_SHELF
+        ? ""
+        : shelfStat({
+            figures: rolled === null ? null : rolled.get(shelf.id),
+            total: totalOf(shelf),
+            filtering,
+            currency: marketplace.currency,
+          }),
+    [rolled, totalOf, filtering, marketplace.currency],
+  );
+  /**
+   * A chevron press: the new state, stored only where it moves off the kind's default.
+   *
+   * **Nothing while a filter is on** (the final review's C-I2 ruling). Collapse is suspended then
+   * (spec §3.4) — every shelf is drawn open whatever is stored — so a press wrote a fold the reader
+   * could not see, and it came back as a shut shelf the moment the filter cleared. Expand all and
+   * Collapse all are held the same way below.
+   */
+  const toggle = useCallback(
+    (shelf: Shelf) => {
+      if (filtering) return;
+      setFold(shelf.id, foldChange(shelf, !shelf.collapsed));
+    },
+    [filtering, setFold],
+  );
+
+  /**
+   * One shelf's heading, wired (spec §3.2, §3.8, §6). **The reader's own folder is the only kind
+   * that gets anything a press could be refused for** — Add folder, Rename, the ⋯, a folder drop
+   * and a drag — because the backend refuses every one of them for a deck group and `Recently
+   * removed` in words, and a folder being named is not a folder yet. Not sorted and the reader's
+   * folders take a card; the app's own shelves take nothing (`canFile` would refuse them anyway,
+   * and a heading that armed for a drop it always refuses is a promise the next press breaks).
+   */
+  const headingFor = useCallback(
+    (shelf: Shelf): ReactNode => {
+      const folder = folderById.get(shelf.id);
+      const mine = shelf.kind === "folder" && folder?.kind === "user" ? folder : null;
+      const renaming =
+        shelf.id === NEW_FOLDER_SHELF
+          ? {
+              initial: "",
+              mode: "create" as const,
+              pending: folders.create.isPending,
+              onCommit: nameFolder,
+              onCancel: cancelNewFolder,
+            }
+          : openPanel?.kind === "renameFolder" && openPanel.folderId === shelf.id
+            ? {
+                initial: shelf.name,
+                mode: "rename" as const,
+                pending: folders.rename.isPending,
+                onCommit: nameFolder,
+                onCancel: dismiss,
+              }
+            : undefined;
+      return (
+        <CollectionShelfHeading
+          shelf={shelf}
+          stat={statOf(shelf)}
+          peek={peekOf(shelf, builtShelves, shelfCounts)}
+          onToggle={() => toggle(shelf)}
+          // Refused in the open while a filter is on (spec §3.4): the chevron says why, and
+          // `toggle` writes nothing behind it either way.
+          foldPaused={filtering ? FOLD_PAUSED_REASON : undefined}
+          onOpen={collection.openFolder}
+          onAddFolder={mine ? () => openNewFolder(mine.id) : undefined}
+          onRename={mine ? () => openRename(mine.id) : undefined}
+          renaming={renaming}
+          menu={mine ? folderRowMenu(mine) : undefined}
+          cards={
+            shelf.id !== NEW_FOLDER_SHELF && (shelf.kind === "folder" || shelf.kind === "unfiled")
+              ? cardTarget
+              : undefined
+          }
+          folders={
+            mine
+              ? {
+                  canDrop: (drag, edge) => canPlaceFolder(drag, mine.id, edge),
+                  onDrop: (drag, edge) => placeFolder(drag, mine.id, edge),
+                }
+              : undefined
+          }
+          dragFolder={mine ?? undefined}
+          caret={caretFor(shelf.id)}
+        />
+      );
+    },
+    [
+      caretFor,
+      folderById,
+      folders.create.isPending,
+      folders.rename.isPending,
+      nameFolder,
+      dismiss,
+      cancelNewFolder,
+      openPanel,
+      statOf,
+      builtShelves,
+      shelfCounts,
+      toggle,
+      filtering,
+      collection.openFolder,
+      openNewFolder,
+      openRename,
+      folderRowMenu,
+      cardTarget,
+      canPlaceFolder,
+      placeFolder,
+    ],
+  );
+  const renderLabel = useCallback(
+    (group: "decks" | "managed") => <ShelfLabel group={group} />,
+    [],
+  );
+  const renderEmpty = useCallback(
+    (shelf: Shelf) => <CollectionEmptyShelf shelf={shelf} cards={cardTarget} />,
+    [cardTarget],
+  );
+  const renderSticky = useCallback(
+    (shelf: Shelf | null, scrollToTop: () => void) => (
+      <CollectionShelfSticky
+        shelf={shelf}
+        onOpen={collection.openFolder}
+        onTop={scrollToTop}
+        cards={cardTarget}
+      />
+    ),
+    [collection.openFolder, cardTarget],
+  );
+  /**
+   * The heading each view brings into view — the grid's `revealShelfId` and the table's, one answer.
+   * Add folder's placeholder heading while its field is open, so the name field is never below the
+   * fold of a long wall; and once it closes, or once a Move up / Move down has landed, the heading
+   * the caret goes back to (`caretDue`).
+   */
+  const revealShelfId = addingIn !== undefined ? NEW_FOLDER_SHELF : (caretDue?.shelfId ?? null);
+  const gridSections = useMemo<GridSections<CollectionTile>>(
+    () => ({
+      sections,
+      tilesOf,
+      renderHeading: headingFor,
+      renderEmpty,
+      renderLabel,
+      renderSticky,
+      revealShelfId,
+    }),
+    [sections, tilesOf, headingFor, renderEmpty, renderLabel, renderSticky, revealShelfId],
+  );
+  /**
+   * The table's half. `layout`, `rowsOf` and `complete` are what its rows are built from and each
+   * holds still across a render that changes no data; the drawings change with every render
+   * (`headingFor` closes over this page's mutations, and a `useMutation` result is new each time),
+   * which is why `CollectionTable` keys its rows on those three and never on this object.
+   */
+  // The list on screen's own answer, never `query.hasNextPage`: that is the level asked for, and
+  // while the previous level is still drawn the two are different lists.
+  const complete = collection.listComplete;
+  const tableShelves = useMemo<CollectionTableShelves>(
+    () => ({
+      layout: tableLayout.rows,
+      rowsOf,
+      complete,
+      renderHeading: headingFor,
+      renderLabel,
+      renderEmpty,
+      renderSticky,
+      revealShelfId,
+    }),
+    [tableLayout, rowsOf, complete, headingFor, renderLabel, renderEmpty, renderSticky, revealShelfId],
+  );
+  const caption = useMemo(() => lockedCaption(lockedIds), [lockedIds]);
+
+  /**
    * What the export dialog's two sentences have to say about where the reader is standing.
    *
-   * `folderId` is already in `collection.filters` and already in the sweep's key — as `rootOnly`
-   * and `flatten` now are — so the export has always been *correct* and it is the words that would
-   * not have been. Standing in `Trade binder` with nothing typed, the dialog would say `12 cards
-   * matching your filters` and offer "Export everything, ignoring the filters", when the only thing
-   * narrowing anything was the drawer neither sentence mentioned.
-   *
-   * **`narrows` is not "am I in a folder", and the sentence that used to stand here — that an
-   * absent `folderId` is every folder, so the root narrows nothing — is false as of this PR.** The
-   * root is `rootOnly: true` now, the copies filed *nowhere*, so a reader standing at the top of a
-   * cabinet is looking at a sweep that leaves every drawer out. That is the wishlist's rule
-   * verbatim, and this page reached it from the other direction.
-   *
-   * **The input is the whole census and not {@link hasFolders}**, which counts only the drawers the
-   * reader made. Since v25 the app owns folders too — one per deck, and `Recently removed` — and a
-   * copy filed in a deck's group is left out of the root just as surely as one in a binder, so a
-   * predicate blind to them would drop the clause for exactly the reader whose cards are mostly in
-   * decks. The remaining `folderId !== null` arm is for the level rather than the cabinet: standing
-   * *in* a drawer narrows whatever the census says.
-   *
-   * It is off while the list is flattened, where the level on screen already is every folder, and
-   * off for a database with no folders at all — a fixture, in practice, since v25 gives every real
-   * one a holding area — where there is no cabinet to speak of and the clause would be about
-   * nothing.
-   *
-   * **And unlike the wishlist, the escape hatch needs no second field.** `everythingFilters`
-   * strips everything but `marketplace`, which here lands on `folderId` absent *and* `rootOnly`
-   * absent — the widest answer the backend has. The wishlist has to say `flatten: true` a second
-   * way because its own strip lands back on the root. The conclusion has not changed; the reason
-   * has, and it used to be "there is only one field to strip".
+   * **Export sends the wall's `shelves` on purpose** — `useCollection` puts every shelf at and
+   * below the level on `filters`, collapsed ones included, and the sweep reads that object — so an
+   * export is what the wall covers. At the root that is every card, so there is no filing to widen
+   * past and no folders clause; standing in a drawer, it is that drawer and everything under it, and
+   * the dialog says so. `everythingFilters` strips `shelves` with the rest.
    */
   const exportFiling = {
-    folder: !flatten && folderId !== null ? folderNameOf(folderId) : null,
-    narrows: !flatten && (folders.folders.length > 0 || folderId !== null),
+    folder: folderId !== null ? folderNameOf(folderId) : null,
+    narrows: folderId !== null,
   };
   const status = statusOf(collection, failure, {
-    filed,
-    inFolder: !flatten && folderId !== null,
+    drawn: wallDrawn,
+    inFolder: folderId !== null,
   });
 
   return (
@@ -2854,7 +3219,7 @@ export function CollectionPage() {
       <h2 className="sr-only">Collection</h2>
 
       <CollectionSummaryHeader
-        summary={summary.data}
+        summary={figures}
         marketplace={marketplace}
         // The band's far end, where they used to sit beside the filter row — see `FigureRow`,
         // which is where the placement is argued. The names say *what* is moved, because both
@@ -2898,12 +3263,12 @@ export function CollectionPage() {
             `!== true`, not `!`: the chip has three states, and `false` is "the rows nothing
             flagged". Under a falsy test that state would put the banner back on screen above
             a list showing precisely the rows nothing is wrong with, offering to show them. */}
-        {collection.needsReview !== true && (summary.data?.needsReview ?? 0) > 0 && (
+        {collection.needsReview !== true && (figures?.needsReview ?? 0) > 0 && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-surface px-3 py-2 text-xs">
             <span className="min-w-0">
               <span className="mr-1 font-medium text-destructive">Needs review:</span>
-              <span className="font-mono tabular-nums">{summary.data?.needsReview}</span>{" "}
-              {summary.data?.needsReview === 1 ? "entry names" : "entries name"} a printing that
+              <span className="font-mono tabular-nums">{figures?.needsReview}</span>{" "}
+              {figures?.needsReview === 1 ? "entry names" : "entries name"} a printing that
               changed or left the card database.
             </span>
             <button
@@ -2932,15 +3297,6 @@ export function CollectionPage() {
         sortRows={collection.sortRows}
         tray={COLLECTION_TRAY}
         layoutFor="collection"
-        // On, it ignores the filing entirely: no folder cards, no breadcrumb, no pinned strip and
-        // no drill-down, and every copy in the list at once — each tile captioned with the drawer
-        // it is filed in instead, which is the only way a reader sees where a copy is without
-        // opening it. One press either way, since there is no third state to walk.
-        // A review hand-off's sweep takes the press first — `useReviewHandoff`'s `onFlattenToggle`.
-        flatten={{
-          pressed: collection.flatten,
-          onToggle: review.onFlattenToggle(collection.toggleFlatten),
-        }}
       />
 
       {/* **The row the list and the search column share** (design §4), and the one thing on this
@@ -2975,61 +3331,72 @@ export function CollectionPage() {
             across the whole page — the 1024px-floor failure `ManaValueChips` already shipped once.
             Everything else here is what this box has always carried. */}
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-          {/* **The fence is "not among the filters", and it was never "not on the bar" — which is
-              the half of this note that changed when Flatten moved.** `resetAll` leaves both
-              `folderId` and `flatten` alone (`useCollection` says so of each), so either one drawn
-              as a *filter* would be the one control in that row Reset all could not undo. But the
-              bar already has a home for controls that are not filters: past the second hairline,
-              beside the sort and the grid-or-table pair, where every control says how the list is
-              **drawn** rather than which rows are in it — and `FilterBar`'s own comment above
-              `ViewToggle` says in as many words that nothing there is counted or cleared by Reset
-              all. Flatten is exactly that kind of statement, so it rides the bar on the far side of
-              the hairline and satisfies the fence rather than breaking it.
+          {/* **The path row** (spec §3.5): where the reader is standing on the left, what they can
+              do to the shelves below on the right. Navigation and shelf controls both, which is why
+              neither is among the filters — Reset all undoes neither, and a control in that row
+              Reset all could not undo would be the one thing in it that lies.
 
-              **The breadcrumb does not follow it, and that is the surviving half.** Where the reader
-              is standing is not a way of drawing the list — it is a *place*, one the folder cards
-              below are the doors into — so the drill-down and the trail back out stay down here with
-              the cabinet they are about. `+ New folder` left this row in the other direction: it is
-              the wall's first tile now (`NewFolderCard`), which is where a reader already looks for
-              drawers. So this row is the whole of what is left of the old one, and it is drawn
-              wherever there is a cabinet to speak of — an empty flex row is chrome with nothing in
-              it, but a *flattened* cabinet is not empty, it is being ignored, and the bar is what
-              says so. Hence `hasFolders` alone and no `cabinet` term. */}
-          {hasFolders && (
-            <div className="min-w-0">
-              <CollectionBreadcrumb
-                // Root-most first and **without the root**, which the breadcrumb prepends itself:
-                // `null` is a destination rather than a folder, and only that component knows what
-                // it calls it.
-                trail={trail}
-                // **Not gated on `cabinet`, and it is the one piece of the cabinet that is not.**
-                // The wall and the pinned strip go; this stays and says so, in the inert words the
-                // component draws for the state — which is `WishlistBreadcrumb`'s own behaviour
-                // under the same flag, and the reason the two pages read identically under one
-                // control. See that component for why the argument for hiding it did not hold.
-                flattened={flatten}
-                onOpen={collection.openFolder}
-                canDrop={canFile}
-                onDropCard={fileCard}
+              The breadcrumb is drawn wherever there is a cabinet to speak of — a lone `Collection`
+              under a ribbon that says Collection is not one — and **its segments are the only place
+              a folder can be dropped besides a heading**: a heading's lead segments and the sticky
+              bar's are buttons only. `Clear…` joins the row inside `Recently removed` (issue #506),
+              by the summary's count, so a filter that hides every row does not hide the control
+              that would clear them. The toolbar is always drawn: Expand all and Collapse all mean
+              something at every level, and Add folder is drawn where the level can hold one. */}
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            {hasFolders && (
+              <div className="min-w-0">
+                <CollectionBreadcrumb
+                  trail={trail}
+                  onOpen={collection.openFolder}
+                  canDrop={canFile}
+                  onDropCard={fileCard}
+                  canDropFolder={canPlaceOnLevel}
+                  onDropFolder={placeOnLevel}
+                />
+              </div>
+            )}
+            <div ref={pathRowRef} className="ml-auto flex shrink-0 items-center gap-2">
+              {canClearRemoved && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    clearRemoved.reset();
+                    open({ kind: "clearRemoved" }, e.currentTarget);
+                  }}
+                  aria-expanded={openPanel?.kind === "clearRemoved"}
+                  className={CONFIRM_CANCEL}
+                >
+                  Clear…
+                </button>
+              )}
+              <ShelfToolbar
+                onAddFolder={canMakeFolder ? () => openNewFolder(folderId) : undefined}
+                // Held while filtering, the chevron's rule: every shelf is drawn open then, so a
+                // press would store folds the reader cannot see. `foldPaused` says so on both
+                // buttons; the guards below are the page's own half, kept behind it.
+                foldPaused={filtering ? FOLD_PAUSED_REASON : undefined}
+                onExpandAll={() => {
+                  if (!filtering) setMany(foldAll(builtShelves, false));
+                }}
+                onCollapseAll={() => {
+                  if (!filtering) setMany(foldAll(builtShelves, true));
+                }}
               />
             </div>
-          )}
+          </div>
 
           {/* **One strip for the two folder layers that are still layers, and it is not a placement
               decision so much as the only place there is.** Every other anchored layer in this app
-              hangs off a `relative` wrapper around its own trigger; the trigger here is a folder
-              card's `⋯`, and a card has nowhere to hang a panel and would clip it against the
-              scroller it sits in. So the strip sits where the thing being moved or deleted is:
-              directly above the row of cards, under the breadcrumb that says which level they are.
+              hangs off a `relative` wrapper around its own trigger; the trigger here is a heading's
+              `⋯`, and a heading in a virtualised wall has nowhere to hang a panel. So the strip sits
+              where the thing being moved or deleted is: directly above the wall, under the path row
+              that says which level it is.
 
-              **The other two moved out of it on 2026-09-03 and this box is what is left.** Naming a
-              folder and renaming one are drawn *in the wall* now — `NewFolderCard` becomes the field
-              it used to raise, and a folder card becomes the field its `⋯` used to raise — because
-              in both cases the thing being named has a tile of its own on screen, and a second
-              bordered box above the wall could only repeat what that tile already says. Moving and
-              deleting have no such tile: the answer to "into which folder" is a list of the *other*
-              folders, and the answer to "delete this?" is a sentence about what happens to the cards
-              inside. Neither fits on a 62px card, and neither is a name typed on a line. */}
+              **Naming and renaming are drawn on the heading itself**; moving and deleting have no
+              line of their own to be typed on — the answer to "into which folder" is a list of the
+              *other* folders, and the answer to "delete this?" is a sentence about what happens to
+              the cards inside. */}
           {(openPanel?.kind === "moveFolder" ||
             openPanel?.kind === "deleteFolder" ||
             openPanel?.kind === "clearRemoved") && (
@@ -3058,9 +3425,7 @@ export function CollectionPage() {
                   // a second Escape rung for one decision.
                   inline
                   pending={folders.move.isPending}
-                  onPick={(parentId) =>
-                    folders.move.mutate({ id: openPanel.folderId, parentId }, { onSuccess: dismiss })
-                  }
+                  onPick={(parentId) => moveFolderTo(openPanel.folderId, parentId)}
                   onClose={close}
                 />
               )}
@@ -3069,7 +3434,7 @@ export function CollectionPage() {
                 <DeleteFolderConfirm
                   name={folderNameOf(openPanel.folderId) ?? "this folder"}
                   pending={folders.remove.isPending}
-                  onConfirm={() => folders.remove.mutate(openPanel.folderId, { onSuccess: dismiss })}
+                  onConfirm={() => deleteFolder(openPanel.folderId)}
                   onCancel={dismiss}
                   onClose={close}
                 />
@@ -3102,10 +3467,6 @@ export function CollectionPage() {
            * card the reader is aiming at. It survives the position by naming the card and the drawer
            * in words, so the question never depended on remembering which tile the drag started on.
            *
-           * **Not gated on {@link cabinet}.** The wall is off while the list is flattened and the
-           * breadcrumb still takes copy drops, so a question that rode the cabinet would be a
-           * confirmation the reader could raise and never see.
-           *
            * `statusLine` and `overflow-hidden`, the failure banner's own grow-in: this column is a
            * stack of rows, so anything appearing in it pushes everything below it down together, and
            * a box with its own padding can never animate shorter than that padding.
@@ -3125,219 +3486,20 @@ export function CollectionPage() {
             )}
           </AnimatePresence>
 
-          {/* The sentence the substitution above needs, and only where it is doing something: a wall
-              of the reader's own binders drawn over a pile of copies that just left a deck is not
-              self-explaining, and the gesture it is inviting is one a reader has no reason to guess
-              at. Not drawn in a drawer of their own, where the wall is that drawer's contents — and
-              not over an *empty* holding area, where it would be inviting a drag of nothing beside a
-              line already saying there is nothing here.
-
-              **And not while the list is flattened**, which is the clause Flatten added: `folderId`
-              survives the press, so `inRemoved` stays true under a page that is no longer drawing
-              the wall this sentence is about — a caption for a row of folder cards that is not on
-              screen. It rides {@link cabinet} for exactly that reason rather than a fourth
-              condition of its own. */}
-          {/* **`Clear…` shares the line, and rides the cabinet for the sentence's own reason**
-              (issue #506): with the list flattened the reader is not *in* the holding area as far
-              as anything on screen says, so a press that empties it would be a write about a
-              folder nobody can see. It is drawn only while the folder holds cards — by the
-              summary's count, which is the folder's and not the filtered list's, so a filter that
-              hides every row does not hide the control that would clear them. Before the summary
-              answers the rows on screen stand in, which can only under-promise. */}
-          {cabinet && inRemoved && ((wall.length > 0 && !empty) || canClearRemoved) && (
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
-              {wall.length > 0 && !empty ? (
-                <p className="text-xs text-dim">
-                  Drag a card onto a folder to file it back into your collection.
-                </p>
-              ) : (
-                <span />
-              )}
-              {canClearRemoved && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    clearRemoved.reset();
-                    open({ kind: "clearRemoved" }, e.currentTarget);
-                  }}
-                  aria-expanded={openPanel?.kind === "clearRemoved"}
-                  className={CONFIRM_CANCEL}
-                >
-                  Clear…
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Drawn wherever the cabinet is *and* there is something to put in it — a folder card, or
-              the tile that makes the first one. The two clauses are not the same: inside a deck
-              group or `Recently removed` the tile is refused ({@link canMakeFolder}), so a deck
-              group with no cards of its own would otherwise draw an empty bordered band. */}
-          {cabinet && (wall.length > 0 || canMakeFolder) && (
-            // **The scroller is what makes the cabinet a band rather than the page.** A reader with
-            // twenty drawers must not lose the wall to them, so the row of cards is bounded and
-            // scrolls inside itself.
-            //
-            // `DROP_MARK_ROOM` is what that costs — and since 2026-09-03 it is bought for `FOCUS`
-            // alone. `overflow` clips at the padding box and the `FOCUS` outline stands 4px proud of
-            // the border box, so a folder card flush against the content edge would lose half its
-            // focus indicator: a WCAG 2.4.7 failure rather than a cosmetic one. **The drop mark is
-            // no longer part of this.** It used to be `DROP_RING`, a box shadow painted *outside*
-            // the border box and clipped the same way; it is now the card's own dashed edge going
-            // gold (`DROP_EDGE`), which is inside the border box and cannot be clipped at all. The
-            // padding does not change, because 6px was always `FOCUS`'s number rather than the
-            // ring's. It goes on the box carrying the `overflow`; one level in is not
-            // the same fix. `relative` for the rule beside it: a scroll container has to be the
-            // containing block for its own absolutely positioned content, or an `sr-only` label
-            // inside stretches the document. jsdom has no layout engine and can see none of this.
-            <div className={cn("relative max-h-44 shrink-0 overflow-y-auto", DROP_MARK_ROOM)}>
-              <ul
-                aria-label="Folders"
-                className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
-              >
-                {/* **First, and shaped like the cards it makes.** A wall of drawers is where a
-                    reader looks for the drawer they want, so it is also where they look for the one
-                    that is not there yet — and it is the only thing in this `<ul>` on a collection
-                    nobody has filed, which is what {@link cabinet} exists to allow.
-
-                    **Not drawn where the level cannot hold one** — see {@link canMakeFolder}. That
-                    is the collection's own clause and the wishlist has no equivalent: only this
-                    cabinet has folders the app owns, and only this page substitutes one level's wall
-                    for another's ({@link wall}), so `Recently removed` is the one place where every
-                    other tile in the row is a live drop target and this one would not be.
-
-                    It is handed {@link openNewFolder} directly rather than through an arrow: the
-                    panel this raises has to give the caret back to the control it was raised from,
-                    and `NewFolderCard` hands over its own button for exactly that. */}
-                {/* **Before the tile that makes a folder, and only inside one.** The way *out* is
-                    the first thing a reader looks for on a wall they have walked into, and the wall
-                    is read leading edge first — so at the root, where there is nowhere to go up to,
-                    nothing moves and `New folder` is still the first tile.
-
-                    It is what issue #283 asked for: a folder card only ever takes a copy deeper, and
-                    the only target that took one back out was a breadcrumb segment — one word of
-                    `text-sm`, a target a fifth the height of the drawers beside it, in a bar the
-                    pointer has already left. The trail stays exactly as it was; this is the same
-                    destination at the size of the things it stands among.
-
-                    **It rides the wall's own gate rather than adding a clause to it**, which is what
-                    keeps it out of a deck group: there the wall is not drawn at all, because that
-                    level has no children of its own and refuses a new folder — and a lone tile in an
-                    otherwise empty band, whose ring refuses every card in the group
-                    ({@link canFile}), is the invitation to a gesture that does nothing that
-                    {@link wall} declines to make one paragraph up. The breadcrumb is still the way
-                    out of one, as it always was. */}
-                {folderId !== null && (
-                  <CollectionParentFolderCard
-                    label={folderNameOf(upFolderId) ?? ROOT_LABEL}
-                    onOpen={() => collection.openFolder(upFolderId)}
-                    canDrop={(drop) => canFile(drop, upFolderId)}
-                    onDropCard={(drop) => fileCard(drop, upFolderId)}
-                    canDropFolder={canMoveFolderUp}
-                    onDropFolder={moveFolderUp}
-                  />
-                )}
-                {canMakeFolder && (
-                  <NewFolderCard
-                    onClick={openNewFolder}
-                    // The tile *is* the naming field while this is on. `openPanel` rather than
-                    // `panel`, so flattening the list and walking into another folder both close it
-                    // — the derived value is what the whole page reads.
-                    naming={openPanel?.kind === "newFolder"}
-                    pending={folders.create.isPending}
-                    onSubmit={nameFolder}
-                    onCancel={dismiss}
-                  />
-                )}
-                {wall.map((node) => (
-                  <CollectionFolderCard
-                    key={node.folder.id}
-                    node={node}
-                    // The recursive total, never the summary row: that one is direct per folder, and
-                    // a folder holding two sub-folders of six cards each has none of its own.
-                    //
-                    // **`null` while the summary is still reading, and that is not the same fallback
-                    // as `NO_CARDS`.** This wall is gated on the folder *list*, which is one flat
-                    // `SELECT`; the figures come from a `GROUP BY` with a price expression behind
-                    // it, and it answers later. Across that window a `Map.get` miss is
-                    // indistinguishable from an empty drawer, so a drawer holding 240 copies would
-                    // draw `0 cards` and then jump — a wrong number rather than a spinner.
-                    // `isPending` is exactly the read that has never answered *for this
-                    // marketplace*, which is the right span: switching marketplace is a new key, and
-                    // the old currency's subtotals are not this one's to draw either.
-                    summary={
-                      folders.summaryQuery.isPending
-                        ? null
-                        : (subtotals.get(node.folder.id) ?? NO_CARDS)
-                    }
-                    currency={marketplace.currency}
-                    // **The effective lock, never `node.folder.locked`.** A drawer inside a locked
-                    // one is locked, so it wears the badge too — a mark that appeared only on the
-                    // folder the reader pressed Lock on would make the inheritance invisible
-                    // exactly where it matters, which is standing inside that drawer looking at
-                    // what it took with it. {@link lockedIds} is the one place the tree is walked.
-                    locked={lockedIds.has(node.folder.id)}
-                    onOpen={() => collection.openFolder(node.folder.id)}
-                    rowMenu={folderRowMenu(node.folder)}
-                    // `Rename…` is answered on the card itself. One `openPanel` naming exactly one
-                    // folder is what keeps a wall of twelve drawers to one open field.
-                    rename={{
-                      active:
-                        openPanel?.kind === "renameFolder" &&
-                        openPanel.folderId === node.folder.id,
-                      pending: folders.rename.isPending,
-                      onSubmit: nameFolder,
-                      onCancel: dismiss,
-                    }}
-                    canDrop={(drag) => canFile(drag, node.folder.id)}
-                    onDropCard={(drag) => fileCard(drag, node.folder.id)}
-                    // The card asks about the folder in the air and where on itself it is; the
-                    // page adds which card that is, because only the page holds the level and the
-                    // tree the answer is worked out from.
-                    canDropFolder={(drag, edge) => canPlaceFolder(drag, node, edge)}
-                    onDropFolder={(drag, edge) => placeFolder(drag, node, edge)}
-                  />
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* **Under the reader's own cabinet, and drawn at every level — except the one that is not
-              a level.** The wall above is what the reader arranged and is the thing they came to
-              this page for; this is the app's own record of where the rest of their copies are, and
-              it belongs beside that rather than above it. Drawn at every level because *pinned* is
-              the word the spec uses and it is what makes `Recently removed` reachable from three
-              drawers down — see the component for the whole of what pinned, flat and fixed cost, and
-              for why its third word is no longer *locked*: that one belongs to the reader's own Lock
-              press since issue #365, and means very nearly the opposite.
-
-              **Flatten is the exception, and it is the one thing that could take this section away.**
-              Flatten's promise is that the filing is off screen and every copy is in the list; a
-              pinned strip surviving it would leave a row of doors into levels the list is
-              deliberately ignoring, so a press would silently un-flatten by drilling in. Nothing is
-              lost by the absence: the copies in every deck group and in the holding area are *in*
-              the flattened list, each tile captioned with the drawer it sits in ({@link captionFor})
-              and each table row naming it in the Folder column. What goes is the navigation, which
-              is the whole of what Flatten is for. */}
-          {cabinet && (
-            <PinnedFolders
-              decks={pinned.decks}
-              removed={pinned.removed}
-              totals={pinnedTotals}
-              currency={marketplace.currency}
-              openFolderId={folderId}
-              onOpen={collection.openFolder}
-            />
-          )}
-
           {/* One live region, mounted for the life of the view: a region that appears together
               with its text announces nothing, because there was no change for a screen reader
-              to notice. Empty — and therefore no taller than nothing — while the table below
-              is answering for itself. */}
+              to notice.
+
+              **Its line is reserved whether or not it says anything** (the final re-check's new 2):
+              `Updating…` came and went for 40–80 ms after every write, and a line that is nothing
+              tall while it is empty pushed the wall down 16px for exactly the frames a reveal or a
+              drop anchor was being measured across, then gave the 16px back as a scroll. So the
+              line is `min-h-4` — one line of `text-xs` — empty or not, and the wall's offset
+              never depends on what it says. The empty wall's own sentence is its own shape. */}
           <p
             role="status"
             className={cn(
-              empty && status ? "py-16 text-center text-sm" : "text-xs",
+              empty && status ? "py-16 text-center text-sm" : "min-h-4 text-xs",
               empty && failure ? "text-destructive" : "text-dim",
             )}
           >
@@ -3371,24 +3533,21 @@ export function CollectionPage() {
               from a menu that has already closed. */}
           <CardMenuRefusal error={menuFailure} />
 
-          {!empty &&
+          {wallDrawn &&
             (view === "grid" ? (
               <CardGrid
                 rows={tiles}
+                // **Shelves** (spec §3.1): one section per shelf, each drawn under its heading, the
+                // app's own under Decks — `rows` is still what the selection and the walk run over.
+                sections={gridSections}
                 label="Your collection"
-                listKey={collection.queryKeyString}
+                listKey={collection.scrollKey}
                 // **This wall grows and `main` scrolls it — the page is one long page.** The search
                 // page said it first (2026-09-03) and the wishlist takes the same change in this
                 // commit: bounded, the wall was whatever height the desk row had left after the
-                // figures band, the filter bar, the breadcrumb, the folder cabinet and the pinned
-                // strip, so a binder was read through a letterbox with a scrollbar of its own an
-                // inch from the page's — and nothing on screen said which one a wheel would turn.
-                //
-                // **The cabinet above it stays bounded and that is not an inconsistency.** A reader
-                // with twenty drawers must not lose the wall of cards to them, which is the
-                // `max-h-44` strip's own argument; what this changes is the list underneath, which
-                // has no reason to be a band. The two surfaces that must keep a scroller of their
-                // own are untouched — see `CardGrid`'s `grow`.
+                // figures band, the filter bar and the path row, so a binder was read through a
+                // letterbox with a scrollbar of its own an inch from the page's — and nothing on
+                // screen said which one a wheel would turn.
                 grow
                 // **A phone gets a narrower card, so the binder is two columns rather than one.**
                 // The same width the search wall takes and for the same arithmetic: 324px of wall
@@ -3405,7 +3564,7 @@ export function CollectionPage() {
                 // `dragPayload`: a tile's drag means two things at once — a card, for the deck
                 // categories and the sidebar's Decks entry that have always taken one from this
                 // page's *table*; and the several `collection_entries` rows the wall summed into
-                // one piece of art, for a folder card and a breadcrumb segment. Two marks in one
+                // one piece of art, for a heading and a breadcrumb segment. Two marks in one
                 // flat record is what that slot carries, and the wishlist's tiles reached the
                 // shape first. See {@link tileDrag}.
                 dragRecord={tileDrag}
@@ -3459,12 +3618,9 @@ export function CollectionPage() {
                 // expression this slot held until the stepper below started announcing the same fact
                 // in words.
                 finish={finishMarkOf}
-                // **Only while flattened**, which is the one state where a tile cannot be read off
-                // the level it is drawn on: with the filing ignored there is no breadcrumb saying
-                // which drawer these are, so the caption has to say it per tile. Unset otherwise, so
-                // the wall draws its own `SET · number` and this page spells that text exactly once
-                // — in {@link captionFor}, which is the flattened line and nothing else.
-                caption={flatten ? captionFor(folderNameOf, lockedIds) : undefined}
+                // The printing, and a lock after it on a tile whose drawer is set aside (issue #436)
+                // — see {@link lockedCaption}. The heading above says which drawer.
+                caption={caption}
                 /* **The wall's own stepper** (issue #284), standing in the tile's right margin
                    (issue #348). Until it landed this view could maintain quantities in its *table*
                    alone, which made the wall the layout a reader looked at and the table the one
@@ -3575,8 +3731,12 @@ export function CollectionPage() {
               <>
                 <CollectionTable
                   rows={rows}
+                  // The list query's own count, which is over the **open** shelves only (it sends
+                  // `shelves: toFetch`) — so it is the data rows this table can draw, and a shut
+                  // shelf's copies, never fetched, are not counted as rows. `VirtualTable` adds the
+                  // bands it has loaded, which keeps `aria-rowcount` exact.
                   total={total}
-                  listKey={collection.queryKeyString}
+                  listKey={collection.scrollKey}
                   sort={collection.sort}
                   onSort={collection.toggleSort}
                   onNeedNextPage={onNeedNextPage}
@@ -3588,16 +3748,10 @@ export function CollectionPage() {
                   // other is a difference no reader can account for. See {@link quantityBlocked},
                   // which carries the three sentences and why the third names no mechanism.
                   quantityBlocked={quantityBlocked}
-                  // **The wall's caption mark, said in the table** (issue #436). One predicate on
-                  // this page for the same reason `quantityBlocked` above it is one: the table and
-                  // the wall are two drawings of one list, and a copy marked set-aside in one of
-                  // them and not the other is a difference no reader can account for. It reads
-                  // {@link lockedIds}, which is the page's single answer about the *effective*
-                  // lock — a row's own `folderId` against the whole cabinet's ancestry.
-                  folderLocked={(row) => row.folderId !== null && lockedIds.has(row.folderId)}
                   rowMenu={rowMenu}
                   rowMenuKey={rowMenuKey}
                   marketplace={marketplace}
+                  shelves={tableShelves}
                 />
                 {/* The one thing about this table a reader cannot see: **the stepper is the
                     removal**. Since schema v24 a row taken to zero is deleted rather than kept
@@ -3656,16 +3810,10 @@ export function CollectionPage() {
           )}
         >
           <CollectionSearchPanel
-            // **`null` while the cabinet is flattened, and that is a decision rather than a
-            // fallback** (spec §5.3). `folderId` survives the Flatten press — it is where the
-            // reader was standing before they asked to see everything — so passing it here would
-            // file into a drawer that is not on screen, under a breadcrumb reading
-            // `Collection · all folders`. Flatten means "show me everything", and the root is what
-            // there is to be standing in when every folder is.
-            //
-            // **Written out rather than left `undefined`**: absent and `null` are different on the
-            // wire, and only `null` says *the root* — see the prop's own doc.
-            folderId={flatten ? null : folderId}
+            // The level the reader is standing in — a `+` files there, which is the shelf at the
+            // top of the wall. Written out rather than left `undefined`: absent and `null` differ on
+            // the wire, and only `null` says *the root*.
+            folderId={folderId}
             // The reader's own tree, already built for the wall below. Deck groups and
             // `Recently removed` are not in it and must not be: `collection_add` files into a
             // folder the same way `set_entry_folder` moves into one, and claiming a deck's group
@@ -3722,8 +3870,8 @@ export function CollectionPage() {
           `ipc.collectionUpdate`'s first caller in the app.
 
           **`close` on both exits rather than `dismiss` on one.** Every other layer this page
-          raises has an element to hand the caret back to — a folder card's `⋯`, `New folder`'s
-          tile — and {@link openerRef} is holding it. A context-menu row is not an element by the
+          raises has an element to hand the caret back to — a heading's `⋯`, an Add folder
+          button — and {@link openerRef} is holding it. A context-menu row is not an element by the
           time its handler runs, so `dismiss` here would focus whichever folder control the reader
           last used, which is worse than the landing `Dialog` gives up on its own.
 
@@ -3862,8 +4010,8 @@ function LockedMoveConfirm({
  * opposite ways and the confirmation says both, in that order: the reassuring half first, because
  * the fear is what stops the press.
  *
- * One sentence rather than the deck gallery's counted pair: a folder card's own face already says
- * how many copies are in the drawer, in the recursive number this page summed for it, so a
+ * One sentence rather than the deck gallery's counted pair: the folder's heading already says how
+ * many copies are in the drawer, in the recursive number this page summed for it, so a
  * confirmation repeating it would be the same figure twice with two chances to disagree.
  */
 function DeleteFolderConfirm({
@@ -3941,7 +4089,7 @@ function DeleteFolderConfirm({
  *
  * **It states its number, where {@link DeleteFolderConfirm} does not**, and the difference is the
  * one the wishlist's `ClearFolderConfirm` draws: a delete moves the cards somewhere the reader can
- * still find them, so the figure on the folder card is reassurance enough, but a clear *ends*
+ * still find them, so the figure on the folder's heading is reassurance enough, but a clear *ends*
  * them, and a reader deciding whether to lose forty cards should read "40" in the sentence they
  * are answering. `cards` is `null` before the summary has answered, and the sentence then says
  * which cards without guessing how many.
@@ -4027,38 +4175,32 @@ function ClearRemovedConfirm({
 /**
  * The one line that says what the list area is currently showing, or nothing at all.
  *
- * **Where the reader is standing changes what an empty list means**, which is the whole of what
- * the third argument is for. An empty root is a collection nobody has added to and the sentence
- * names the two controls that fill it; an empty *folder* is a drawer the reader made and has not
- * filed anything in yet, and telling them how to add a card to a collection they already have is
- * answering a question they did not ask. And a level whose content is folder cards is not empty at
- * all — the cards are the content, so the line stays out of their way.
+ * **A wall of headings is content**, which is the whole of what `drawn` is for: a reader who has
+ * collapsed every shelf, or who is standing in an empty folder under its dashed box, is looking at
+ * the answer, and a sentence over it would be the page contradicting itself. Only a wall with
+ * nothing on it at all says something — and what an empty wall means depends on where the reader
+ * is standing: an empty root is a collection nobody has added to, and an empty deck group is a
+ * drawer with nothing filed in it.
  */
 function statusOf(
   collection: Collection,
   failure: string | null,
-  { filed, inFolder }: { filed: boolean; inFolder: boolean },
+  { drawn, inFolder }: { drawn: boolean; inFolder: boolean },
 ): string {
-  const { query, rows, activeCount } = collection;
+  const { query, rows, activeCount, counts } = collection;
 
   if (rows.length === 0) {
     if (failure) return failure;
-    if (query.isPending) return "Reading your collection…";
+    if (query.isPending || counts === null) return "Reading your collection…";
+    if (drawn) return "";
     if (activeCount > 0) return "No cards in your collection match these filters.";
-    // Drawers, and nothing loose beside them. The cards below are the answer to "what is here",
-    // and a sentence over them would be the page contradicting itself.
-    if (filed) return "";
-    // Nothing filtered and nothing there: this is a statement about the collection, not
-    // about the query. "No cards match" would blame the reader for a table nobody has put
-    // anything in yet, and say nothing about how to — and the root's instruction would answer
-    // the wrong question inside a folder they have just made.
     return inFolder
       ? "Nothing filed here yet."
       : "Nothing here yet. Add cards from search, or import a collection file.";
   }
 
-  // With rows on screen the table captions itself and the header above counts it, so the
-  // only thing left to say is that something is still on its way.
+  // With rows on screen the headings caption the wall and the header above counts it, so the only
+  // thing left to say is that something is still on its way.
   if (query.isFetchingNextPage) return "Loading more…";
   if (query.isFetching) return "Updating…";
   return failure ?? "";

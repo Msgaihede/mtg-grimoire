@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Draggable, Droppable, type DragEndEvent } from "@dnd-kit/dom";
+import { pointerIntersection } from "@dnd-kit/collision";
+import { Draggable, Droppable, Feedback, type DragEndEvent } from "@dnd-kit/dom";
 import { dndId, dndManager, registerNow } from "@/lib/dndManager";
+import { containsPointer, useDragRecord } from "@/lib/dndTarget";
 
 /**
  * The gesture that rearranges a filing cabinet: a folder dropped on another folder's **middle**
@@ -125,13 +127,36 @@ function isFolderId(value: unknown): value is number {
 export function folderDraggable({
   element,
   folder,
+  animateDrop = true,
 }: {
   element: HTMLElement;
   folder: () => FolderDrag;
+  /**
+   * Whether dnd-kit flies the floating copy back to its slot when the folder is let go — the
+   * library's default, and `true` for every folder that does not ask.
+   *
+   * **A shelf heading asks for `false`, because its slot has moved by the time the flight runs.**
+   * The animation aims at the slot measured when the drag *began*; a heading dropped far along a
+   * virtualised wall has been reordered, re-laid out and re-anchored under the pointer by then, so
+   * the copy slid off toward where the heading used to be — 355 → 458 → 620 → 1482 … 7276px in
+   * one run of the live re-check (new finding 3) — while the real heading already sat in its new
+   * place. `Feedback`'s per-source `dropAnimation: null` is the library's own off switch. The deck
+   * tree and the deck folder cards keep the animation: their reorder lands after a refetch, so the
+   * slot the copy returns to is where the folder still is when it gets there.
+   */
+  animateDrop?: boolean;
 }): () => void {
   const draggable = new Draggable(
-    // `register: false` and a registration of our own — see {@link registerNow}.
-    { id: dndId("folder-source"), element, data: folderDragData(folder()), register: false },
+    {
+      id: dndId("folder-source"),
+      element,
+      data: folderDragData(folder()),
+      // `register: false` and a registration of our own — see {@link registerNow}.
+      register: false,
+      // A per-source plugin list is re-registered on the manager with its options dropped, which
+      // `dndManager.ts` fences for exactly this reason (issue #331, and its plugin twin).
+      ...(animateDrop ? {} : { plugins: [Feedback.configure({ dropAnimation: null })] }),
+    },
     dndManager,
   );
   registerNow(draggable);
@@ -288,6 +313,8 @@ export function useFolderDropTarget({
   axis,
   canDrop,
   onDrop,
+  armOnMount = false,
+  pointerOnly = false,
 }: {
   ref: RefObject<HTMLElement | null>;
   scope: FolderScope;
@@ -296,9 +323,33 @@ export function useFolderDropTarget({
   axis: "vertical" | "horizontal";
   canDrop: (drag: FolderDrag, edge: FolderEdge) => boolean;
   onDrop: (drag: FolderDrag, edge: FolderEdge) => void;
+  /**
+   * `useDndDropTarget`'s opt-in, for the same reason: arm on a folder that was already in the air
+   * when this target mounted, and follow `canDrop` live. A shelf heading asks for it; every other
+   * folder target leaves it off and keeps the `dragstart` rule above.
+   */
+  armOnMount?: boolean;
+  /**
+   * `useDndDropTarget`'s other opt-in: a collision **only while the pointer is inside this
+   * target**, so a folder lands on it only from over it.
+   *
+   * **The default detector's shape fallback plus {@link folderEdge}'s "a point outside answers by
+   * the end it is past" is a landing nobody aimed at.** dnd-kit falls back to comparing the carried
+   * folder's whole rectangle when the pointer is in no target, so the target it overlaps becomes the
+   * operation's, and the edge rule then turns a pointer 100px below it into `"after"`. That is
+   * right for a tree row or a folder card, whose neighbours are the only things around them. It is
+   * wrong for a shelf heading laid between rows of card tiles that are not targets at all — the
+   * table view does not fold away during a folder drag, so a heading carried over card rows was
+   * filed beside whichever heading it overlapped (Folder Shelves live pass, "Extra, found during
+   * 3"). The shelf hook asks for it; every other folder target keeps the default detector.
+   * Like `useDndDropTarget`'s, it is asked again at the release, of the target's rect as it is
+   * then, so a heading autoscroll carried past a still pointer lands nothing (new finding 5).
+   */
+  pointerOnly?: boolean;
 }): { armed: boolean; edge: FolderEdge | null } {
   const [armed, setArmed] = useState(false);
   const [edge, setEdge] = useState<FolderEdge | null>(null);
+  const inFlight = useDragRecord(armOnMount);
   const latest = useRef({ canDrop, onDrop });
   useEffect(() => {
     latest.current = { canDrop, onDrop };
@@ -330,18 +381,20 @@ export function useFolderDropTarget({
           const drag = read(source);
           return drag !== null && somehow(drag);
         },
+        ...(pointerOnly ? { collisionDetector: pointerIntersection } : {}),
       },
       dndManager,
     );
     registerNow(droppable);
 
-    const track = (operation: DragOperation) => {
+    /** The landing at `at`, drawn only while this target is the operation's. */
+    const track = (operation: DragOperation, at: PointerAt) => {
       const drag = read(operation.source);
       if (drag === null || operation.target !== droppable) {
         setEdge(null);
         return;
       }
-      setEdge(landing(drag, operation.position.current));
+      setEdge(landing(drag, at));
     };
 
     const off = [
@@ -349,8 +402,22 @@ export function useFolderDropTarget({
         const drag = read(operation.source);
         setArmed(drag !== null && somehow(drag));
       }),
-      dndManager.monitor.addEventListener("dragmove", ({ operation }) => track(operation)),
-      dndManager.monitor.addEventListener("dragover", ({ operation }) => track(operation)),
+      // **The point a move is arriving at is the event's, not the operation's.** dnd-kit dispatches
+      // `dragmove` with the new coordinates in `to` (or `by`, for a move that carries a delta) and
+      // writes `position.current` a microtask *later* — so a listener that read the operation's
+      // position drew the landing of the move before this one. Arriving in a heading's bottom
+      // quarter from its middle drew `inside` with no line while the release landed `after`
+      // (Folder Shelves live re-check, new finding 4). The point is resolved exactly as the
+      // library resolves it a microtask on, so the mark and the drop read one point.
+      dndManager.monitor.addEventListener("dragmove", ({ operation, to, by }) => {
+        const current = operation.position.current;
+        track(operation, to ?? { x: current.x + (by?.x ?? 0), y: current.y + (by?.y ?? 0) });
+      }),
+      // `dragover` fires once the collisions have moved the target, after the position is written,
+      // so the operation's own position is already the arriving one here.
+      dndManager.monitor.addEventListener("dragover", ({ operation }) =>
+        track(operation, operation.position.current),
+      ),
       // Fires for a cancelled drag as well as a completed one — the library ends both the same
       // way — so both marks stand down on Escape without this hearing a keypress.
       dndManager.monitor.addEventListener("dragend", ({ operation, canceled }) => {
@@ -359,7 +426,13 @@ export function useFolderDropTarget({
         if (canceled || operation.target !== droppable) return;
         const drag = read(operation.source);
         if (drag === null) return;
-        const at = landing(drag, operation.position.current);
+        const point = operation.position.current;
+        // `useDndDropTarget`'s release check, for a folder: a pointer-inside target the pointer has
+        // left since the last collision lands nothing, where `folderEdge` would have turned the
+        // point beyond it into a reorder beside a heading autoscroll had already carried past
+        // (live re-check, new finding 5). A target that did not opt in lands as before.
+        if (pointerOnly && !containsPointer(element.getBoundingClientRect(), point)) return;
+        const at = landing(drag, point);
         if (at !== null) latest.current.onDrop(drag, at);
       }),
     ];
@@ -368,7 +441,9 @@ export function useFolderDropTarget({
       for (const stop of off) stop();
       droppable.destroy();
     };
-  }, [ref, scope, axis]);
+  }, [ref, scope, axis, pointerOnly]);
 
-  return { armed, edge };
+  if (!armOnMount) return { armed, edge };
+  const drag = inFlight === null ? null : readFolderDrag(inFlight, scope);
+  return { armed: drag !== null && FOLDER_EDGES.some((at) => canDrop(drag, at)), edge };
 }

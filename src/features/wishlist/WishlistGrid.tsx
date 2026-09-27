@@ -1,20 +1,33 @@
-import { useMemo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useCallback,
+  useMemo,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { dragData } from "@/features/decks/dnd";
-import { CardGrid, PHONE_TILE_WIDTH, type GridCard } from "@/features/search/CardGrid";
+import {
+  CardGrid,
+  PHONE_TILE_WIDTH,
+  type GridCard,
+  type GridSections,
+} from "@/features/search/CardGrid";
 import { isFinish, type Finish } from "@/lib/finish";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
+import type { ShelfSection } from "@/lib/shelfLayout";
+import type { Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
 import { printingOf, wishLabel } from "./wish";
 import { wishDragData } from "./wishDrag";
-import { ElsewhereMark, WishFolderCaption } from "./wishMarks";
+import { ElsewhereMark } from "./wishMarks";
 
 /** One tile of the wall: a wish, and the printing there is a picture of. */
 interface WishTile extends GridCard {
@@ -24,6 +37,28 @@ interface WishTile extends GridCard {
    *  stays module scope, which `CardGrid` asks of every registered callback. */
   managed: boolean;
 }
+
+/**
+ * The shelves the page hands the wall — `CardGrid`'s {@link GridSections}, with the tiles still
+ * this component's to build: `rowsOf` gives a shelf's wishes, and each becomes a {@link WishTile}
+ * here, where the managed fence and the art mapping already live.
+ *
+ * **Hold `sections` and `rowsOf` still** (memos at the call site) — they are what the tiles and
+ * the wall's layout are keyed on. The object itself and the four render props may be fresh every
+ * render: they are read at draw time.
+ */
+export interface WishShelves {
+  sections: readonly ShelfSection[];
+  rowsOf: (shelfId: number) => readonly WishRow[];
+  renderHeading: (shelf: Shelf) => ReactNode;
+  renderEmpty: (shelf: Shelf) => ReactNode;
+  renderLabel: (group: "decks" | "managed") => ReactNode;
+  renderSticky: (shelf: Shelf | null, scrollToTop: () => void) => ReactNode;
+  /** The shelf `CardGrid` scrolls into view — the heading of a folder being added (spec §3.8). */
+  revealShelfId?: number | null;
+}
+
+const NO_TILES: readonly WishTile[] = [];
 
 /**
  * The wish a tile is for, and the printing it is drawn as — which are two different things, and
@@ -69,15 +104,14 @@ function toTile(wish: WishRow, managed: boolean): WishTile {
  * table's does not.** See that function: the finish is the other half of what makes two wishes for
  * one card two wishes, and it is still said here — by the chin's own mark where there is one.
  *
- * **One mark shares this line now, and the folder caption that used to sit beside it has moved
- * over the art** (2026-09-08). The paragraph this replaces argued that both marks had to be here
- * because every corner of a tile already had an owner, and it listed them: bottom-left the
- * owned/wanted fraction, top-left the review flag and the cost, top-right `FoilOverlay`'s chip.
- * That inventory is what changed. The fraction is gone with every other comparison this list
- * made against the collection, the flag and the cost have moved to the tile's bottom-right, and
- * bottom-left now holds the folder above a plain count of copies wanted — where the folder is a
- * word the reader chose and reads better on the picture than squeezed between a set code and a
- * price at 10px.
+ * **One mark shares this line now, and the folder caption that used to sit beside it moved over
+ * the art** (2026-09-08) **and then went with Flatten** (2026-09-26): a shelf's heading says which
+ * folder a tile is in, once, above the tiles it is about. The paragraph this replaces argued that
+ * both marks had to be here because every corner of a tile already had an owner, and it listed
+ * them: bottom-left the owned/wanted fraction, top-left the review flag and the cost, top-right
+ * `FoilOverlay`'s chip. That inventory is what changed. The fraction is gone with every other
+ * comparison this list made against the collection, the flag and the cost have moved to the
+ * tile's bottom-right, and bottom-left holds a plain count of copies wanted.
  *
  * What has **not** changed is the budget the old paragraph turned on: `CardGrid` positions its
  * virtual rows from `CAPTION_HEIGHT`, so a second line here is still a wall whose rows overlap by
@@ -198,10 +232,7 @@ const tileDrag = (tile: WishTile): Record<string, unknown> | null => {
 /**
  * The pill every mark in the tile's bottom-left corner is drawn in.
  *
- * That corner holds **two** marks now — the folder above the copies wanted — so it is the one
- * corner on any wall in this app where `CardGrid`'s single chip is the wrong shape: sized to
- * `Commander` it would leave `×4` alone on a row of empty backing half the tile wide. So the wall
- * passes `badgeChrome="bare"` and each mark brings its own.
+ * The corner held two marks while Flatten captioned a tile with its folder; it holds one now, and the mark keeps its own backing so the corner stays `bare` rather than growing a chip around a pill.
  *
  * The numbers are `CardGrid`'s corner chip, copied deliberately rather than shared, because what
  * is being kept identical is what a mark *looks* like on a photograph across six walls: the app's
@@ -268,8 +299,7 @@ export function WishlistGrid({
   listKey,
   folders,
   nodes,
-  folderNameOf,
-  flattened,
+  shelves,
   readOnly,
   onNeedNextPage,
   onSetQuantity,
@@ -297,19 +327,10 @@ export function WishlistGrid({
   folders: readonly WishlistFolder[];
   nodes: readonly FolderNode<WishlistFolder>[];
   /**
-   * What to call the folder a wish is filed in — `Wishlist` for the root, and `null` for a folder
-   * this page cannot name.
-   *
-   * The page's job rather than this component's, because the page is the one holding both the
-   * wishes and the folder list; joining them per tile here would be a lookup table rebuilt on
-   * every render of every wall. `null` draws **nothing** rather than a blank chip: a folder
-   * another window deleted between the two reads is a caption with no honest text.
+   * The shelves to draw the wall as — spec §3.1's wall, one heading per folder. Absent draws
+   * `rows` as one flat wall, which is what every test of the tiles themselves renders.
    */
-  folderNameOf: (folderId: number | null) => string | null;
-  /** Whether the list is showing every wish regardless of filing — spec §4's Flatten. The
-   *  folder caption is drawn only here, because inside a folder it would be the same word under
-   *  every tile and the breadcrumb above already says it. */
-  flattened: boolean;
+  shelves?: WishShelves;
   onNeedNextPage: () => void;
   /**
    * How many copies this wish is for — reached from **two** controls on one tile since issue
@@ -346,15 +367,65 @@ export function WishlistGrid({
   const narrowWindow = useNarrowWindow();
   const tip = useTooltip();
 
+  /**
+   * The tiles, per shelf when there are shelves — built once per change of **the shelves or their
+   * rows**, so `tilesOf` hands `CardGrid` the same array for the same shelf, and the flat `rows` it
+   * still takes is those arrays end to end in shelf order (the order its selection and arrow walk
+   * run).
+   *
+   * **Keyed on `shelves.sections` and `shelves.rowsOf`, never on the `shelves` object.** The page
+   * builds that object every render, because its four render props close over the page's writes —
+   * and a `useMutation` result is a fresh object on every render, so they cannot be held still.
+   * Memoised on the whole object, every render of the page re-tiled every shelf and handed
+   * `CardGrid` a new `tilesOf`, which re-lays the wall out and re-measures the virtualiser
+   * (`GridSections`' "hold `sections` and `tilesOf` still"). The two keys are the page's own memos
+   * and move only when the shelves or the rows do.
+   */
+  const sectionList = shelves?.sections;
+  const rowsOfShelf = shelves?.rowsOf;
+  const byShelf = useMemo(() => {
+    if (sectionList === undefined || rowsOfShelf === undefined) return null;
+    const out = new Map<number, WishTile[]>();
+    for (const { shelf } of sectionList) {
+      out.set(
+        shelf.id,
+        rowsOfShelf(shelf.id).map((row) => toTile(row, readOnly?.(row) ?? false)),
+      );
+    }
+    return out;
+  }, [sectionList, rowsOfShelf, readOnly]);
   const tiles = useMemo(
-    () => rows.map((row) => toTile(row, readOnly?.(row) ?? false)),
-    [rows, readOnly],
+    () =>
+      byShelf === null
+        ? rows.map((row) => toTile(row, readOnly?.(row) ?? false))
+        : [...byShelf.values()].flat(),
+    [byShelf, rows, readOnly],
   );
+  const tilesOf = useCallback(
+    (shelfId: number) => byShelf?.get(shelfId) ?? NO_TILES,
+    [byShelf],
+  );
+  // **Not memoised, on purpose**: `CardGrid` keys its layout on `sections.sections` and `tilesOf`,
+  // both held still above, and reads the four render props at draw time — so they go through as
+  // the page built them, and a heading that redraws on the page's state is never stale.
+  const sections: GridSections<WishTile> | undefined =
+    shelves === undefined
+      ? undefined
+      : {
+          sections: shelves.sections,
+          tilesOf,
+          renderHeading: shelves.renderHeading,
+          renderEmpty: shelves.renderEmpty,
+          renderLabel: shelves.renderLabel,
+          renderSticky: shelves.renderSticky,
+          revealShelfId: shelves.revealShelfId ?? null,
+        };
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return (
     <CardGrid
       rows={tiles}
+      sections={sections}
       label="Your wishlist"
       listKey={listKey}
       // **This wall grows and `main` scrolls it — the page is one long page.** The search page said
@@ -416,45 +487,15 @@ export function WishlistGrid({
       // every one of forty tiles. The corner keeps its own, because arithmetic over a wish is not
       // a figure the sentence under the wall is about.
       money={(tile) => formatPrice(tile.wish.unitPrice, currency)}
-      // **Two marks, stacked, each in a pill of its own** — which is why this wall is the one
-      // caller that asks `CardGrid` for a bare corner.
+      // **How many copies the reader wants, and nothing else, in a pill of its own** — which is
+      // why this wall is still the one caller that asks `CardGrid` for a bare corner: the pill is
+      // the mark's own backing, and the corner's chip around it would be a second.
       //
-      // The folder rides on top and is drawn **only while the list is flattened**. Flatten's whole
-      // promise is "every wish, wherever it is filed", so without it the switch would hand the
-      // reader one undifferentiated list and take the filing away in the act of showing it all;
-      // inside a folder the caption would be the same word under every tile and the breadcrumb
-      // above already says it. It moved here from the chin's caption on 2026-09-08, where it sat
-      // between a truncating set code and a price at 10px — a word the reader chose themselves,
-      // in the smallest and busiest type on the card.
-      //
-      // Under it, how many copies they want. `WishFolderCaption` is `wishMarks`' shared component
-      // and is drawn exactly as the table draws it, backing apart: it answers `null` for a folder
-      // this page cannot name, which is why the pill is guarded here rather than wrapped around
-      // whatever it returns — a bare chip with nothing in it is the one thing this corner cannot
-      // collapse, `badgeChrome="bare"` having handed `empty:hidden` a wrapper that is never empty.
-      //
-      // The width cap is what keeps a long folder name out of the bottom-right corner opposite,
-      // and it scales for the reason every other size on a card does — at 2× the two marks are
-      // twice as wide and so is the gutter they have to leave each other.
+      // It shared the corner with a folder pill while Flatten captioned every tile with where it
+      // was filed. Flatten is gone (spec §7) and the shelf's heading says which folder a tile is
+      // in, once, above the tiles it is about.
       badgeChrome="bare"
-      badge={(tile) => {
-        const folder = flattened ? folderNameOf(tile.wish.folderId) : null;
-        return (
-          <span
-            className={cn(
-              "flex flex-col items-start gap-[calc(0.25rem*var(--mark-scale,1))]",
-              "max-w-[calc(100%-2.75rem*var(--mark-scale,1))]",
-            )}
-          >
-            {folder !== null && (
-              <span className={cn(CORNER_PILL, "flex min-w-0 max-w-full")}>
-                <WishFolderCaption name={folder} />
-              </span>
-            )}
-            <WishWanted wish={tile.wish} />
-          </span>
-        );
-      }}
+      badge={(tile) => <WishWanted wish={tile.wish} />}
       // The bottom-right corner carries two facts in one chip: what the reconciler found, and
       // what this wish costs.
       //

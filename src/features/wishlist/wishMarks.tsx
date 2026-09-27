@@ -1,26 +1,28 @@
 import type { SVGProps } from "react";
-import { Copy, Folder, Lock } from "lucide-react";
+import { Copy } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 
 /**
- * The two things a wish says about itself that are neither its card nor its price — where it is
- * filed, and whether the same card is on the list somewhere else. Design spec §4.
+ * What a wish says about itself that is neither its card nor its price — whether the same card is
+ * on the list somewhere else. Design spec §4.
  *
- * **One module because both views draw both, beside the printing caption, and must not drift.**
+ * **One module because both views draw it, beside the printing caption, and must not drift.**
  * The wall's caption strip and the table's Printing cell are the same statement drawn at two
  * sizes, and the app has been bitten before by one fact rendered twice: two glyphs, two shades,
- * two sentences, none of it decided. Here it is decided once.
+ * two sentences, none of it decided. Here it is decided once. (It held a second mark until the
+ * final review — `WishFolderCaption`, which said where a wish was filed while the list was
+ * flattened. Flatten is deleted, the shelves' headings say where every wish is filed, and the
+ * caption went with it.)
  *
- * **They scale on a card and hold still in a row, with no prop and no branch.** Everything drawn
+ * **It scales on a card and holds still in a row, with no prop and no branch.** Everything drawn
  * on a card reads `var(--mark-scale, 1)` (`lib/cardZoom.ts`) — `CardGrid`'s tile publishes the
  * variable, a table row publishes nothing, and the `, 1` fallback is exactly what a row is owed
  * for knowing nothing about zoom. That is the rule in `src/CLAUDE.md`, and it is what lets one
  * component serve both surfaces.
  *
- * Both bind through `useTooltip()` rather than a `title`, and both pass `describes: false`: each
- * already carries its whole sentence in the accessibility tree — one as an `aria-label`, the
- * other as visible text with an `sr-only` preposition — so a wired `aria-describedby` would have
- * a screen reader say it twice.
+ * It binds through `useTooltip()` rather than a `title`, and passes `describes: false`: it already
+ * carries its whole sentence in the accessibility tree as an `aria-label`, so a wired
+ * `aria-describedby` would have a screen reader say it twice.
  */
 
 /**
@@ -63,81 +65,5 @@ export function ElsewhereMark({ count }: { count: number }) {
       {...(tip(sentence, { describes: false }) as SVGProps<SVGSVGElement>)}
       className="inline-block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-dim"
     />
-  );
-}
-
-/**
- * Which folder a wish is filed in — drawn **only while the list is flattened**, and reading
- * `Wishlist` for a wish at the root.
- *
- * Flatten's whole promise is "every wish, wherever it is filed", so without this the switch would
- * hand the reader one undifferentiated list and take the filing away in the act of showing it
- * all. Inside a folder the caption would be the folder's own name on every row, said once in the
- * breadcrumb above, which is why the caller gates it rather than this drawing something on every
- * screen.
- *
- * The name is **visible text** and not an `aria-label`: it is a word the reader chose, so it
- * belongs on screen, and the `sr-only` preposition in front of it is what keeps a bare "Expensive"
- * in a caption from reading as part of the printing beside it.
- *
- * `null` draws nothing, which is what the page answers for a folder it cannot name — one deleted
- * in another window between the wish read and the folder read. Handled here rather than at the
- * two call sites so that the "no honest text, no chip" rule cannot be remembered in one view and
- * forgotten in the other.
- *
- * ## The lock, and why it lives in the wishlist's module
- *
- * `locked` is the collection's alone — there is no wishlist equivalent of issue #365 and none
- * planned, which is `lockedFolderIds`' own reason for refusing to be generic. It is a prop here
- * rather than a second component for this module's founding reason: the wall's caption strip and
- * the table's Printing cell are one statement drawn at two sizes, and a collection tile drawing
- * its own lock beside this glyph would be the drift the header of this file exists to prevent.
- * Defaulted to `false`, so the wishlist's three call sites say nothing and draw what they always
- * drew.
- *
- * **The glyph swaps rather than doubling**, which is `CollectionFolderCard`'s decision read
- * across: a `Folder` that is set aside is a `Lock`, and two glyphs in a caption budgeted for one
- * line is how `CardGrid`'s `CAPTION_HEIGHT` comes to overlap its virtual rows. **And the word
- * travels with
- * it** — a glyph is not an accessible name, so the `sr-only` preposition leads with `Locked,` and
- * the tooltip says it too, both in the folder card's grammar (`locked, …`) rather than a second
- * one invented here.
- */
-export function WishFolderCaption({
-  name,
-  locked = false,
-}: {
-  name: string | null;
-  /**
-   * Whether the drawer this copy is filed in is **effectively** locked — its own flag or any
-   * ancestor's, which is `lockedFolderIds`' answer and never `CollectionFolder.locked`.
-   *
-   * The collection's flattened wall passes it; the wishlist's two views and the collection's
-   * unflattened one do not. Where a tile merges copies from several drawers it is true when
-   * **any** of them is set aside, which is `CollectionPage`'s `tileLocked` and argued there: a
-   * lock that under-reported would be a set-aside copy quietly rejoining what the wall offers,
-   * which is the one direction this feature is not allowed to fail in.
-   */
-  locked?: boolean;
-}) {
-  const tip = useTooltip();
-  if (name === null) return null;
-  const sentence = locked ? `Filed in ${name}, locked` : `Filed in ${name}`;
-  const Glyph = locked ? Lock : Folder;
-  return (
-    <span
-      {...tip(sentence, { describes: false })}
-      className="inline-flex min-w-0 shrink items-center gap-[calc(0.25rem*var(--mark-scale,1))] text-dim"
-    >
-      <Glyph
-        aria-hidden="true"
-        className="size-[calc(0.75rem*var(--mark-scale,1))] shrink-0"
-      />
-      {/* The trailing space is load-bearing: a flex `gap` is not a word separator, so an
-          accessible name assembled from these three spans would read `Locked, filed inTrade
-          binder` without it. */}
-      <span className="sr-only">{locked ? "Locked, filed in " : "Filed in "}</span>
-      <span className="truncate">{name}</span>
-    </span>
   );
 }

@@ -249,6 +249,13 @@ export function useSidebarDropTarget({
     onDrop: (payloads) => {
       for (const payload of payloads) drop?.onDrop(payload);
     },
+    // **Over only while the pointer is inside the entry.** dnd-kit's default detector falls back
+    // to the carried card's whole rectangle when the pointer is in no target, and the rail sits
+    // flush against the left edge of every page — so a card held on the wall's first tile column
+    // overlapped the Wishlist entry, lit it for the whole hold, and the release added a wish at
+    // the wishlist root (Folder Shelves live re-check, new finding 1). An entry is somewhere a card
+    // is let go on purpose; the deck editor's own piles, zones and tray keep the default.
+    pointerOnly: true,
   });
 
   return {

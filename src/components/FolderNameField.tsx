@@ -88,6 +88,28 @@ const CORNER_ROOM = "pr-[4.125rem]";
 /** One corner control's shape — the `⋯`'s box, so the three never disagree about the geometry. */
 const CORNER_BUTTON = "grid size-7 place-items-center rounded-md";
 
+/**
+ * The frame at **heading size**: one 36px line, for a shelf heading's 40px row — Folder Shelves'
+ * Rename, Add folder in a heading and Add folder at the root, which is the same heading.
+ *
+ * **Derived from the row, and measured wrong before it was.** A heading is `h-10` with a 1px
+ * border all round, so the box its `items-center` centres in is **38px** and its centre line is
+ * 20px down. The tile's rename frame is `p-2.5` round a 20px line plus two hairlines — **42px** —
+ * so in a heading it stood 1px proud of the row top and bottom, and the corner pair hung at `top-1`
+ * of it put the ✓ and ✕ at **17 of 40** while the chevron, the glyph and the figures sat at 20
+ * (live pass, debug build, 2026-09-26; identical for all three jobs on both pages). `h-9` is the
+ * tallest whole step inside the 38, and the text line is centred in it by `items-center` rather
+ * than by padding, so the 20px line and the frame cannot drift apart.
+ *
+ * `rounded-lg`, the heading row's own radius, where the tile takes `rounded-xl`: a 12px corner on a
+ * 36px box reads as a pill inside the row's 8px one. The border is the mode's, as on a tile.
+ *
+ * `pl-2.5` and never `px-2.5`: the right padding is {@link CORNER_ROOM}'s, and a `px` beside it
+ * would leave which of two utilities sets `padding-right` to the order Tailwind happens to emit
+ * them in. With only a left padding here there is nothing to order.
+ */
+const HEADING_FRAME = "flex h-9 w-full items-center gap-2 rounded-lg border bg-surface pl-2.5";
+
 export type FolderNameFieldProps = {
   /**
    * Which of the two jobs this is — and therefore the glyph, the border and the words on the
@@ -95,6 +117,14 @@ export type FolderNameFieldProps = {
    * of them: a solid-bordered rename would spend the wall's word for "container" wrong.
    */
   mode: "create" | "rename";
+  /**
+   * Which box the field stands in. `"tile"` (the default, and every caller that predates the
+   * shelves) is the folder wall's tile: the 62px create floor, the rename frame with its figures
+   * line under the name, and ✓ / ✕ in the top-right corner of the host. `"heading"` is one 36px
+   * line centred in a shelf heading's 40px row, with ✓ / ✕ on that line — see `HEADING_FRAME`. It
+   * draws no `footer`: a heading keeps its figures beside the field, on the row itself.
+   */
+  size?: "tile" | "heading";
   /** The input's accessible name — "New folder name", or "Rename Trade binder". */
   label: string;
   /** The name the field opens on, arriving **selected**: the commonest rename replaces the word
@@ -116,6 +146,7 @@ export type FolderNameFieldProps = {
 
 export function FolderNameField({
   mode,
+  size = "tile",
   label,
   initial = "",
   submitLabel,
@@ -141,6 +172,7 @@ export function FolderNameField({
 
   const trimmed = name.trim();
   const Glyph = mode === "create" ? FolderPlus : Folder;
+  const heading = size === "heading";
 
   const field = (
     <input
@@ -165,7 +197,11 @@ export function FolderNameField({
       // sized only by its own floor would shrink the moment it opened beside a card with a long
       // wrapped name. A rename does not want it — a folder card's own button is content-height,
       // so a field that stretched would be taller than the card it replaced.
-      className={mode === "create" ? "h-full" : undefined}
+      //
+      // At heading size the form is the pair's containing block instead (`relative`): the pair is
+      // centred on the one line the frame draws, and the frame is the form's whole height, so the
+      // centre it finds is the frame's — whatever the host wraps it in.
+      className={heading ? "relative" : mode === "create" ? "h-full" : undefined}
       // **`data-no-drag` on the whole form, not on each control.** `NOT_A_DRAG` is matched with
       // `closest()`, so one mark on the root covers the input, the tick and the cross at once —
       // and it is load-bearing on a rename, where the `<li>` under this form is a folder drag
@@ -184,7 +220,20 @@ export function FolderNameField({
         if (!rootRef.current?.contains(e.relatedTarget)) onCancel();
       }}
     >
-      {mode === "create" ? (
+      {heading ? (
+        <div
+          className={cn(
+            HEADING_FRAME,
+            // The border is still the whole of what tells the two jobs apart.
+            mode === "rename" && "border-dashed",
+            "border-accent",
+            CORNER_ROOM,
+          )}
+        >
+          <Glyph className="size-3.5 flex-none text-accent" aria-hidden="true" />
+          {field}
+        </div>
+      ) : mode === "create" ? (
         <div
           className={cn(
             "flex h-full w-full items-center gap-2 rounded-xl border border-accent bg-surface p-2.5",
@@ -210,11 +259,18 @@ export function FolderNameField({
         </div>
       )}
 
-      {/* The corner a folder card gives its `⋯`, holding the two answers this field has. Absolute
-          against the **`<li>`** rather than against anything here: a `<form>` with no positioning
-          establishes no containing block, so the pair lands in the same place on a naming tile and
-          on a renaming card, whose boxes are different heights. */}
-      <div className="absolute right-1 top-1 flex gap-0.5">
+      {/* The corner a folder card gives its `⋯`, holding the two answers this field has. On a tile,
+          absolute against the **`<li>`** rather than against anything here: a `<form>` with no
+          positioning establishes no containing block, so the pair lands in the same place on a
+          naming tile and on a renaming card, whose boxes are different heights. At heading size it
+          spans the form's height and centres itself, so the ✓ and ✕ sit on the frame's centre line
+          — which the heading's `items-center` has put on the row's. */}
+      <div
+        className={cn(
+          "absolute right-1 flex gap-0.5",
+          heading ? "inset-y-0 items-center" : "top-1",
+        )}
+      >
         <button
           type="submit"
           aria-label={submitLabel}

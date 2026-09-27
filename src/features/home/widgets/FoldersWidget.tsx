@@ -114,8 +114,9 @@ const MESSAGE_LINE = 20;
  *  `FolderNode.count` from this list, and this widget counts through the summaries instead. */
 const NO_MEMBERS: readonly [] = [];
 
-/** The wishlist's four figures, rolled up. `WishFolderCard`'s own `WishFolderSummary` minus the
- *  folder id, which is the map's key here. */
+/** The wishlist's four figures, rolled up — the shape the deleted `WishFolderCard`'s
+ *  `WishFolderSummary` had, which a wishlist shelf heading now states as `wishShelfPlan.ts`'s
+ *  `ShelfFigures`. The folder id is the map's key here. */
 interface WishTotals {
   wishes: number;
   copies: number;
@@ -227,10 +228,12 @@ function addWishes(into: WishTotals, under: WishTotals): WishTotals {
  *
  * `shown` is joined with the app's `·` and `spoken` with commas, because an `aria-label`
  * replaces everything inside the control and a middot read aloud is punctuation nobody asked
- * for. **A mirror of `WishFolderCard`'s own `face`, which is module-private there** — the rule
- * is that one's and is repeated here rather than diverged from: an empty drawer shows its wish
- * count and no money at all (`$0.00` under `0 wishes` is noise), and a folder whose every copy
- * is unpriced draws an em dash rather than claiming the marketplace quoted nothing for them.
+ * for. **A mirror of `wishShelfPlan.ts`'s own `face`, which is module-private there** — the
+ * wishlist shelf heading's figures line, and `WishFolderCard`'s `face` until that card went with
+ * the folder band (2026-09-26). The rule is that one's and is repeated here rather than diverged
+ * from: an empty drawer shows its wish count and no money at all (`$0.00` under `0 wishes` is
+ * noise), and a folder whose every copy is unpriced draws an em dash rather than claiming the
+ * marketplace quoted nothing for them.
  *
  * The collection's half of this is `folderFace`, which **is** exported and is imported above:
  * a second spelling of "12 cards · $340.00" is a second chance for two walls to disagree.

@@ -229,3 +229,42 @@ export const WhileTheWriteIsInFlight: Story = {
     );
   },
 };
+
+/**
+ * **Heading size — the field inside a shelf heading's 40px row** (Folder Shelves). One 36px line in
+ * the row's 38px content box, with ✓ / ✕ centred on it, so the pair sits on the same centre line as
+ * the chevron and the figures beside it. The tile shape stood 42px here — 1px proud of the row top
+ * and bottom — and hung its pair at `top-1`, 3px above that line (live pass, 2026-09-26).
+ *
+ * The row below is a bare stand-in for `ShelfHeading`'s own (`h-10`, a 1px border, `items-center`),
+ * so the story shows the field against the box it was sized for; `Shelves/Heading`'s Renaming and
+ * Adding stories draw the real heading. Class assertions, for the reason the stories above give.
+ */
+export const InAShelfHeading: Story = {
+  args: {
+    mode: "rename",
+    size: "heading",
+    label: "Rename Trade binder",
+    initial: "Trade binder",
+    submitLabel: "Rename folder",
+  },
+  render: (args) => (
+    <div className="max-w-2xl bg-bg p-4">
+      <div className="flex h-10 w-full items-center gap-2 rounded-lg border border-transparent px-1">
+        <span className="size-6 flex-none" aria-hidden="true" />
+        <div className="min-w-0 flex-[0_1_16rem]">
+          <FolderNameField {...args} />
+        </div>
+        <span className="text-xs tabular-nums text-dim">240 cards · $1,304.00</span>
+      </div>
+    </div>
+  ),
+  play: async ({ canvas }) => {
+    const form = canvas.getByRole("textbox", { name: "Rename Trade binder" }).closest("form");
+    await expect(form?.firstElementChild?.classList.contains("h-9")).toBe(true);
+    await expect(form?.classList.contains("relative")).toBe(true);
+    const pair = canvas.getByRole("button", { name: "Rename folder" }).parentElement;
+    await expect(pair?.classList.contains("inset-y-0")).toBe(true);
+    await expect(pair?.classList.contains("items-center")).toBe(true);
+  },
+};

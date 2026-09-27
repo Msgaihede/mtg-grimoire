@@ -144,11 +144,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // default — which is the state every case in this file is written against.
     listView: vi.fn().mockResolvedValue({}),
     setListView: vi.fn().mockResolvedValue(undefined),
-    // `useFlattenPersistence`' launch read, the third of these the shell makes. `{}` leaves the
-    // collection flattened and the wishlist not — `store.ts`' two defaults, which differ on
-    // purpose — and no case in this file turns either switch.
-    flattenState: vi.fn().mockResolvedValue({}),
-    setFlattenState: vi.fn().mockResolvedValue(undefined),
+    // The shelves' stored folds, prefetched by the shell at launch (`usePrefetchShelfFolds`).
+    // Nothing folded: every shelf opens on its kind's default.
+    shelfFolds: vi.fn().mockResolvedValue({ collection: {}, wishlist: {} }),
     setCardZoom: vi.fn().mockResolvedValue(undefined),
     // The shell reads the rail's width once as it launches and writes it back on every press.
     // Answered `false` in the `beforeEach` below, which is a database nobody has collapsed the

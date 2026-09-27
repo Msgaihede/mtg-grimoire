@@ -217,21 +217,25 @@ describe("summariseOutcome", () => {
 
 describe("optimizeScope", () => {
   it("names the folder the list is drawn at", () => {
-    expect(optimizeScope({ flatten: false, folder: "Ordered", filtered: false })).toBe("Ordered");
+    expect(optimizeScope({ everyFolder: false, folder: "Ordered", filtered: false })).toBe(
+      "Ordered",
+    );
   });
 
-  it("says Every folder while the list is flattened, whatever folder was last open", () => {
-    expect(optimizeScope({ flatten: true, folder: "Ordered", filtered: false })).toBe(
+  it("says Every folder while the sweep covers every folder, whatever folder was last open", () => {
+    expect(optimizeScope({ everyFolder: true, folder: "Ordered", filtered: false })).toBe(
       "Every folder",
     );
   });
 
   it("takes the root's own word from the caller", () => {
-    expect(optimizeScope({ flatten: false, folder: "Wishlist", filtered: false })).toBe("Wishlist");
+    expect(optimizeScope({ everyFolder: false, folder: "Wishlist", filtered: false })).toBe(
+      "Wishlist",
+    );
   });
 
   it("says so when filters are narrowing the sweep", () => {
-    expect(optimizeScope({ flatten: true, folder: "Wishlist", filtered: true })).toBe(
+    expect(optimizeScope({ everyFolder: true, folder: "Wishlist", filtered: true })).toBe(
       "Every folder, matching your filters",
     );
   });

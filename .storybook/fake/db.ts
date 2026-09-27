@@ -249,6 +249,9 @@ import type {
   SetCompletion,
   SetSummary,
   ShareRow,
+  ShelfCount,
+  ShelfFoldPage,
+  ShelfFolds,
   StickyNote,
   SupporterStatus,
   SwapResult,
@@ -1744,31 +1747,11 @@ export interface FakeDb {
    */
   listView: Record<string, string>;
   /**
-   * `app_meta.flatten_state` — whether each page with a cabinet was last left ignoring its
-   * filing, as section name → flattened.
-   *
-   * The third row here whose value is an *object*, and the one that is **half of each** of the
-   * two shapes above it. Like {@link FakeDb.listView} the keys are whatever some build wrote, so
-   * it is `Record<string, boolean>` rather than `Record<FlattenSection, boolean>` — a page this
-   * build does not file cards in is a state a story wants. Unlike it, the *values* have no junk
-   * state at all: a `bool` off the IPC boundary is one of two things, which is
-   * {@link FakeDb.navCollapsed}'s whole argument arriving inside a map.
-   *
-   * `{}` for "nothing stored", and here that absence carries more than it does for its two
-   * neighbours: the two pages' defaults **differ** — the collection opens flattened and the
-   * wishlist does not — so an absent key is not "the same default as the other one" but the only
-   * way a story can stand in a switch nobody has pressed.
-   *
-   * **The read drops only what it cannot key and the write refuses only that** — see
-   * {@link readHandlers.flatten_state} and {@link writeHandlers.set_flatten_state}.
-   */
-  flattenState: Record<string, boolean>;
-  /**
    * `app_meta.mark_colors` — what colour the reader has each card mark drawn in, as mark name →
    * `#rrggbb`.
    *
    * The **fourth** row here whose value is an object, and it takes {@link FakeDb.listView}'s
-   * contract rather than {@link FakeDb.flattenState}'s beside it: both halves have a junk state.
+   * contract rather than {@link FakeDb.searchOpen}'s: both halves have a junk state.
    * The keys are whatever some build wrote — which *marks* exist is TypeScript's vocabulary, and
    * `isMarkColorKey` is what narrows them — while the values are text a hand-edited row really
    * can fill with something that is not a colour. `markcolors.rs` owns only that second half, and
@@ -1812,10 +1795,11 @@ export interface FakeDb {
    * open, as section name → open.
    *
    * The sixth row of the same key/value table and the **fourth** whose value is an object, so it
-   * is {@link FakeDb.flattenState}'s field with a different key: the keys are whatever some build
-   * wrote (`Record<string, boolean>` and not `Record<SearchSection, boolean>`, because a page this
-   * build has no column on is a state a story wants) and the values have no junk state at all, a
-   * `bool` off the IPC boundary being one of two things.
+   * is {@link FakeDb.listView}'s field with a `boolean` where the word is: the keys are whatever
+   * some build wrote (`Record<string, boolean>` and not `Record<SearchSection, boolean>`, because a
+   * page this build has no column on is a state a story wants) and the values have no junk state
+   * at all, a `bool` off the IPC boundary being one of two things —
+   * {@link FakeDb.navCollapsed}'s whole argument arriving inside a map.
    *
    * **It replaced a plain `boolean` called `deckSearchOpen`**, which was the deck editor's column
    * and only that one; the collection and the wishlist grew the same column on 2026-09-07 and
@@ -1824,7 +1808,7 @@ export interface FakeDb {
    * controls gets every column **open**, which is now `DEFAULT_SEARCH_OPEN`'s to say rather than
    * this field's — and that is exactly why `{}` is the seed.
    *
-   * `{}` for "nothing stored", and it carries what it carries for {@link FakeDb.flattenState}: an
+   * `{}` for "nothing stored", and it carries what it carries for {@link FakeDb.listView}: an
    * absent key is the only way a story can stand in a disclosure nobody has pressed, which for
    * this row is every column of a fresh install.
    *
@@ -1832,6 +1816,17 @@ export interface FakeDb {
    * {@link readHandlers.search_open} and {@link writeHandlers.set_search_open}.
    */
   searchOpen: Record<string, boolean>;
+  /**
+   * `app_meta.shelf_folds` — the shelves the reader moved off their default fold, per page:
+   * folder id (decimal) → collapsed.
+   *
+   * **Both pages always present and both empty to begin with**, which is every shelf at its
+   * default — `@/lib/shelves`' `defaultCollapsed` says what that is, and a seeded fold would be a
+   * story about a press nobody made. See {@link readHandlers.shelf_folds} and
+   * {@link writeHandlers.set_shelf_folds}: the read copies, and the write refuses an unknown page
+   * or a key that is not a folder id, and takes an override off on `null`.
+   */
+  shelfFolds: ShelfFolds;
   /**
    * `app_meta.deck_sort` — how the deck gallery was last ordered, as `"<key>:<direction>"`.
    *
@@ -1857,8 +1852,8 @@ export interface FakeDb {
    * the reader railed it down to icons.
    *
    * **The first row here whose value is a stored *object* rather than a map**, and that is the
-   * one thing to read before the shape makes sense. Its four object-valued neighbours
-   * ({@link FakeDb.cardZoom}, {@link FakeDb.listView}, {@link FakeDb.flattenState},
+   * one thing to read before the shape makes sense. Its three object-valued neighbours
+   * ({@link FakeDb.cardZoom}, {@link FakeDb.listView} and
    * {@link FakeDb.searchOpen}) are `Record`s because each holds one answer *per section*, and a
    * page this build has no column on is a state a story wants. This one holds two halves of a
    * single answer about a single pane, so the row is a JSON object with two fixed keys and the
@@ -3223,11 +3218,6 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // sections it cares about and leaves the rest out — an absent key is a wall nobody has zoomed.
     cardZoom: {},
     listView: {},
-    // Empty for the same reason a third time, and here the emptiness is what makes a fresh world
-    // draw the *store's* two defaults rather than one answer for both pages: the collection opens
-    // flattened, the wishlist opens on its root. A story that wants a restored session passes the
-    // page it cares about and leaves the other out.
-    flattenState: {},
     // Empty a fourth time, and this one is a reader who has chosen no colour at all: both theory
     // marks are drawn in `index.css`'s own, which is what every story that says nothing about
     // Appearance is standing in. A colour in here is a **press a story made** — `mutedTags`' rule
@@ -3240,12 +3230,14 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // `null` to stand in — see {@link FakeDb.navCollapsed}. Every story that says nothing about
     // the sidebar is standing in the expanded shell.
     navCollapsed: false,
-    // The sixth, and empty for `flattenState`'s reason a second time — the difference being that
-    // here the three defaults agree rather than differ. `search_open` answers only what it holds,
+    // The sixth, and empty for `listView`'s reason — the three columns' defaults agreeing with
+    // each other rather than being one per list. `search_open` answers only what it holds,
     // so an absent section is a disclosure nobody has pressed and the frontend's own
     // `DEFAULT_SEARCH_OPEN` draws it: every column open, which is what the app ships. A story that
     // wants one railed passes that one section and leaves the others out.
     searchOpen: {},
+    // Every shelf at its default on both pages — `shelf_folds`' answer for a row never written.
+    shelfFolds: { collection: {}, wishlist: {} },
     // The gallery's order, and a `null` rather than a value again: `deck_sort` answers
     // `updated:desc` for a wall nobody has re-ordered, so every deck story that says nothing
     // about the picker is standing in the order the app ships — most recently touched first,
@@ -7015,8 +7007,16 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     // **`folderId` outranks `rootOnly` rather than intersecting with it**, which is the arm a
     // test has to hold: a stale flag riding beside a folder id would otherwise answer the empty
     // intersection and read as an emptied drawer.
+    //
+    // **A `shelves` list replaces all three states above** — `collection::scope`'s first arm:
+    // membership of `folderId ?? 0` in the list, `0` for the rows filed nowhere. A list that names
+    // every folder it wants has said where it is standing, so `folderId`, `rootOnly` and
+    // `excludeLocked` are not read, and an id no folder answers to simply matches nothing.
+    const shelves = q.shelves ?? null;
     const named = q.folderId ?? null;
-    if (named !== null) {
+    if (shelves !== null) {
+      if (!shelves.includes(e.folderId ?? 0)) return false;
+    } else if (named !== null) {
       if (e.folderId !== named) return false;
     } else if (q.rootOnly === true && e.folderId !== null) {
       return false;
@@ -7039,7 +7039,7 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     //
     // The lock asked about is the **effective** one, so a folder inside a locked folder drops
     // out too — {@link collectionFolderLocked}.
-    if (q.excludeLocked === true && named === null) {
+    if (q.excludeLocked === true && named === null && shelves === null) {
       if (e.folderId !== null && collectionFolderLocked(db, e.folderId)) return false;
     }
     // `"unallocated"` drops the copies a **deck** is holding and nothing else: the root, a
@@ -7218,7 +7218,16 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
     // the omission as "no filter" would draw a list the app never shows. And **`flatten` is a
     // second field rather than a third value of the first**, because `null` is already spoken
     // for as the root — flattened, the reader is standing everywhere and no term applies at all.
-    if (q.flatten !== true && w.folderId !== (q.folderId ?? null)) return false;
+    //
+    // **`shelves` replaces both of those questions** — `wishlist::wishlist_scope`'s first arm:
+    // membership of `folderId ?? 0`, with `0` the root. A `null` is the crate's `None`, as it is
+    // in {@link collectionScope}.
+    const shelves = q.shelves ?? null;
+    if (shelves !== null) {
+      if (!shelves.includes(w.folderId ?? 0)) return false;
+    } else if (q.flatten !== true && w.folderId !== (q.folderId ?? null)) {
+      return false;
+    }
     const card = wishCard(db, w);
     if (!matchesCardFilters(db, card, { ...q, text: undefined, paperOnly: false }, w.setCode)) {
       return false;
@@ -8365,6 +8374,98 @@ function wishlistOrder(
   );
 }
 
+/**
+ * `shelf_position(…) ASC` in front of a list's own `ORDER BY` — position in the list the page
+ * sent, then the reader's sort, then the id tiebreak the wrapped comparator already ends on.
+ * `undefined` hands the comparator back untouched, which is `shelves` absent meaning today's
+ * order. A duplicate id keeps its **first** place — the crate's `min(key)`.
+ */
+function shelfFirst<T extends { folderId: number | null }>(
+  shelves: readonly number[] | undefined,
+  order: Compare<T>,
+): Compare<T> {
+  if (shelves === undefined) return order;
+  const place = new Map<number, number>();
+  shelves.forEach((id, i) => {
+    if (!place.has(id)) place.set(id, i);
+  });
+  const at = (row: T) => place.get(row.folderId ?? 0) ?? shelves.length;
+  return (a, b) => at(a) - at(b) || order(a, b);
+}
+
+/** One row as a shelf count sees it — the inner `SELECT` of `collection::shelf_counts` and
+ *  `wishlist::shelf_counts`. */
+interface ShelfRow {
+  shelf: number;
+  /** What makes a tile: `cardId/finish` on the collection, the wish's own id on the wishlist. */
+  tile: string;
+  copies: number;
+  unit: number | null;
+  /** What this row adds to `unpriced` when `unit` is `null`: its copies on the collection (the
+   *  unit of the heading's "n cards"), `1` on the wishlist (the unit of its "n wishes"). */
+  unpricedBy: number;
+}
+
+/** One **unfiltered** row as a shelf's peek sees it — the inner `SELECT` of the crate's peek
+ *  statements: the id the card's tile is drawn from, and the name it sorts under. */
+interface PeekRow {
+  shelf: number;
+  cardId: string;
+  name: string;
+}
+
+/** `collection::SHELF_PEEK`. */
+const SHELF_PEEK = 4;
+
+/**
+ * `GROUP BY shelf ORDER BY shelf` over `rows`. `value` stays `null` until a priced row lands
+ * — `sum()` over nothing but NULLs — and `unpriced` adds each unpriced row's `unpricedBy`.
+ *
+ * **The peek comes from `peekRows`, which the caller passes unfiltered** — the crate's peek
+ * statement reads shelf membership and nothing else — sorted by name then card id, one id per
+ * card, cut to {@link SHELF_PEEK}; only shelves that have a count row get one.
+ */
+function shelfCounts(rows: readonly ShelfRow[], peekRows: readonly PeekRow[]): ShelfCount[] {
+  const shelves = new Map<
+    number,
+    { tiles: Set<string>; copies: number; value: number | null; unpriced: number }
+  >();
+  for (const row of rows) {
+    const shelf = shelves.get(row.shelf) ?? {
+      tiles: new Set<string>(),
+      copies: 0,
+      value: null,
+      unpriced: 0,
+    };
+    shelf.tiles.add(row.tile);
+    shelf.copies += row.copies;
+    if (row.unit === null) shelf.unpriced += row.unpricedBy;
+    else shelf.value = (shelf.value ?? 0) + row.unit * row.copies;
+    shelves.set(row.shelf, shelf);
+  }
+  const peekOf = (shelf: number): string[] => {
+    const ids: string[] = [];
+    const sorted = peekRows
+      .filter((p) => p.shelf === shelf)
+      .sort((a, b) => cmp(a.name, b.name) || cmp(a.cardId, b.cardId));
+    for (const p of sorted) {
+      if (ids.length === SHELF_PEEK) break;
+      if (!ids.includes(p.cardId)) ids.push(p.cardId);
+    }
+    return ids;
+  };
+  return [...shelves.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([folderId, s]) => ({
+      folderId,
+      tiles: s.tiles.size,
+      copies: s.copies,
+      value: s.value,
+      unpriced: s.unpriced,
+      peek: peekOf(folderId),
+    }));
+}
+
 /* ------------------------------------------------------------------ the handlers ------ */
 
 /** `search.rs`'s page size when the caller does not choose one, and the ceiling when it
@@ -9487,7 +9588,7 @@ export function readHandlers(db: FakeDb) {
       const mp = marketplaceOf(q.marketplace);
       const rows = collectionScope(db, q);
       const limit = pageLimit(q.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
-      const sorted = [...rows].sort(collectionOrder(db, rows, q.sort, mp));
+      const sorted = [...rows].sort(shelfFirst(q.shelves, collectionOrder(db, rows, q.sort, mp)));
       return {
         items: sorted
           .slice(q.offset, q.offset + limit)
@@ -9533,6 +9634,32 @@ export function readHandlers(db: FakeDb) {
         unpriced: sum((r) => (r.unit === null ? r.e.quantity : 0)),
         needsReview: rows.filter((e) => e.needsReview !== null).length,
       };
+    },
+
+    /**
+     * `collection::shelf_counts` — one row per non-empty shelf over {@link collectionScope}, search
+     * and filters included. A tile is a printing and a finish **on one shelf** (spec decision 11),
+     * priced by {@link finishPriceAt} like the list's own `unitPrice`; `unpriced` counts **copies**,
+     * {@link readHandlers.collection_summary}'s unit.
+     */
+    collection_shelf_counts: (args: { query: CollectionQuery }): ShelfCount[] => {
+      const mp = marketplaceOf(args.query.marketplace);
+      return shelfCounts(
+        collectionScope(db, args.query).map((e) => ({
+          shelf: e.folderId ?? 0,
+          tile: `${e.cardId}/${e.finish}`,
+          copies: e.quantity,
+          unit: finishPriceAt(db, cardById(db, e.cardId), e.finish, mp),
+          unpricedBy: e.quantity,
+        })),
+        // The peek reads every entry, not the scope: a filter narrows the figures and never the
+        // pictures. An orphan sorts under its card id, `COLLECTION_DEFAULT_ORDER`'s rule.
+        db.collectionEntries.map((e) => ({
+          shelf: e.folderId ?? 0,
+          cardId: e.cardId,
+          name: cardById(db, e.cardId)?.name ?? e.cardId,
+        })),
+      );
     },
 
     /**
@@ -9614,11 +9741,36 @@ export function readHandlers(db: FakeDb) {
       const mp = marketplaceOf(q.marketplace);
       const rows = wishlistScope(db, q);
       const limit = pageLimit(q.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
-      const sorted = [...rows].sort(wishlistOrder(db, rows, q.sort, mp));
+      const sorted = [...rows].sort(shelfFirst(q.shelves, wishlistOrder(db, rows, q.sort, mp)));
       return {
         items: sorted.slice(q.offset, q.offset + limit).map((w) => toWishRow(db, w, mp)),
         total: rows.length,
       };
+    },
+
+    /**
+     * `wishlist::shelf_counts` — {@link readHandlers.collection_shelf_counts} one table over. One
+     * wish is one tile, priced by {@link wishPriceAt} like the row's own `unitPrice`, and one
+     * unpriced wish is one unpriced whatever its quantity — the heading counts wishes.
+     */
+    wishlist_shelf_counts: (args: { query: WishlistQuery }): ShelfCount[] => {
+      const mp = marketplaceOf(args.query.marketplace);
+      return shelfCounts(
+        wishlistScope(db, args.query).map((w) => ({
+          shelf: w.folderId ?? 0,
+          tile: String(w.id),
+          copies: w.quantity,
+          unit: wishPriceAt(db, wishCard(db, w), w.preferredFinish, mp),
+          unpricedBy: 1,
+        })),
+        // Every wish, unfiltered, peeking at the printing its tile is drawn as —
+        // {@link toWishRow}'s `artCardId`, which is {@link wishCard}'s answer — and a genuine
+        // orphan, with no picture, is left out as the crate's `c.id IS NOT NULL` leaves it.
+        db.wishlistEntries.flatMap((w) => {
+          const card = wishCard(db, w);
+          return card === null ? [] : [{ shelf: w.folderId ?? 0, cardId: card.id, name: w.name }];
+        }),
+      );
     },
 
     /**
@@ -11047,37 +11199,13 @@ export function readHandlers(db: FakeDb) {
       ),
 
     /**
-     * `flatten::flatten_state` — every cabinet's remembered Flatten switch.
-     *
-     * The seventh `app_meta` setting and the third whose value is an object, so
-     * {@link readHandlers.list_view}'s per-entry rule applies unchanged: one unusable key costs
-     * that page its memory and leaves the other intact.
-     *
-     * **What is missing from the filter is the point.** Its two neighbours drop a bad *value* as
-     * well as a bad key — a zoom off the ladder, a word that is not a layout — because the row
-     * can hold text a build cannot place. This one cannot: `flatten.rs` stores a `bool` and the
-     * frontend reads a `bool`, so there is no third state to drop and a fake that invented one
-     * would be storying the app against a backend it does not have. The blank key is all that is
-     * left, and it is here for the same reason it is there — `set_flatten_state` refuses it, so a
-     * row holding one was hand-edited.
-     *
-     * The **section** name is unfiltered, exactly as the zoom's and the layout's are: which pages
-     * have a cabinet is TypeScript's vocabulary, and `isFlattenSection` on the frontend is what
-     * that split exists for.
-     *
-     * A read, so it answers through every second of a sync — the write below does not.
-     */
-    flatten_state: (): Record<string, boolean> =>
-      Object.fromEntries(Object.entries(db.flattenState).filter(([section]) => section !== "")),
-
-    /**
      * `markcolors::mark_colors` — every mark the reader has chosen a colour for.
      *
      * The eighth `app_meta` setting and the fourth whose value is an object, so
      * {@link readHandlers.list_view}'s per-entry rule applies unchanged: one hand-edited entry
      * costs that mark its colour and leaves the other standing. **Both halves of the filter are
      * back**, which is what puts it beside the layout rather than beside
-     * {@link readHandlers.flatten_state} — the blank key is dropped as everywhere here, and a
+     * {@link readHandlers.search_open} — the blank key is dropped as everywhere here, and a
      * value is dropped when it is not `#rrggbb`, because the row is text and a `bool` is not.
      *
      * **Folded on the way out**, which is `markcolors::stored`'s own `to_ascii_lowercase`: the
@@ -11125,11 +11253,12 @@ export function readHandlers(db: FakeDb) {
      * `searchopen::search_open` — every docked card-search column's remembered disclosure.
      *
      * The sixth `app_meta` setting and the **fourth** whose value is an object, so this is
-     * {@link readHandlers.flatten_state} with a different key and the same one-line filter: the
-     * blank key and nothing else, because `search_open` stores a `bool` and the frontend reads a
-     * `bool`, leaving no third state to drop. The **section** name is unfiltered for that
-     * handler's reason too — which pages have a search column is TypeScript's vocabulary, and
-     * `useSearchOpen`'s narrowing on the frontend is what the split exists for.
+     * {@link readHandlers.list_view}'s per-entry rule with half of its filter: the blank key and
+     * nothing else, because `search_open` stores a `bool` and the frontend reads a `bool`, leaving
+     * no third state to drop — a fake that invented one would be storying the app against a
+     * backend it does not have. The **section** name is unfiltered for the layout's reason too —
+     * which pages have a search column is TypeScript's vocabulary, and `useSearchOpen`'s narrowing
+     * on the frontend is what the split exists for.
      *
      * **The crate's legacy `deck_search_open` bridge has no counterpart here, deliberately.**
      * `searchopen::stored` falls back to that old row when the map carries no `deck` entry, which
@@ -11144,6 +11273,15 @@ export function readHandlers(db: FakeDb) {
      */
     search_open: (): Record<string, boolean> =>
       Object.fromEntries(Object.entries(db.searchOpen).filter(([section]) => section !== "")),
+
+    /**
+     * `shelffolds::shelf_folds` — every folded-shelf override, both pages always present. A copy,
+     * so a caller mutating the answer cannot reach the store. A read, so it answers through a sync.
+     */
+    shelf_folds: (): ShelfFolds => ({
+      collection: { ...db.shelfFolds.collection },
+      wishlist: { ...db.shelfFolds.wishlist },
+    }),
 
     /**
      * `decksort::deck_sort` — how the deck gallery was last ordered, or the default.
@@ -11184,9 +11322,9 @@ export function readHandlers(db: FakeDb) {
      *
      * That puts this read **with** the narrowing reads above rather than against them, which is
      * the correction this comment carries: it said the opposite for one wave, on the reasoning
-     * that one JSON object parses or does not. `flatten_state` drops the one entry it cannot key
-     * and leaves the page beside it standing; this drops the one *field* it cannot use and
-     * leaves the field beside it standing. Same rule, one grain finer.
+     * that one JSON object parses or does not. `list_view` drops the one entry it cannot use and
+     * leaves the lists beside it standing; this drops the one *field* it cannot use and leaves
+     * the field beside it standing. Same rule, one grain finer.
      *
      * **Infallible like {@link readHandlers.nav_collapsed}**, and for its reason: nothing here
      * throws, because there is nothing useful a page can do with an error that is not "draw the
@@ -15423,6 +15561,10 @@ function takeLoneWish(
   }
   return take;
 }
+
+/** `shelffolds::UNKNOWN_PAGE` and `shelffolds::NOT_A_SHELF`, verbatim. */
+const SHELF_PAGE_UNKNOWN = "Shelves are folded on the collection or the wishlist, and nowhere else.";
+const NOT_A_SHELF = "A shelf is named by its folder id, or 0 for Not sorted.";
 
 /**
  * Every write command, bound to the same store {@link readHandlers} answers from.
@@ -19916,38 +20058,6 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `flatten::set_flatten_state` — remember whether one page is showing its whole cabinet.
-     *
-     * **The blank section is the whole of the validation, and the absence of a second check is
-     * the note worth reading.** {@link writeHandlers.set_card_zoom} and
-     * {@link writeHandlers.set_list_view} each refuse a value as well, because the read beside
-     * them drops what it cannot use *in silence* — so a fake that accepted anything would let a
-     * story save a setting, read back nothing, and look like it worked. There is no third
-     * instance of that here: a `bool` off the IPC boundary has no junk state, Tauri's
-     * deserializer having refused anything that is not `true` or `false` before this handler is
-     * reached at all. {@link writeHandlers.set_nav_collapsed} makes the argument in full; this is
-     * the same argument inside a map, which is why one half of it survives and the other does
-     * not.
-     *
-     * The **section** is unchecked past being non-empty, for its neighbours' asymmetry: which
-     * pages have a cabinet is TypeScript's vocabulary and `flatten.rs` deliberately does not know
-     * it. And only the named section is touched, so the page beside it keeps its own answer —
-     * which matters more here than for the two rows above, because the two defaults differ.
-     *
-     * **`false` writes an entry rather than removing one**: a reader who flattens a page and then
-     * un-flattens it has made a second choice, not withdrawn the first, and on the collection
-     * that second choice is the only thing that can beat a `true` default.
-     *
-     * It honours `busy` like every other ordinary write — `flatten.rs` takes the write connection
-     * through `sync::with_write`, and the lock comes first.
-     */
-    set_flatten_state: (args: { section: string; flattened: boolean }): void => {
-      refuseIfBusy(db);
-      if (args.section === "") throw refuse("A flatten section cannot be blank.");
-      db.flattenState = { ...db.flattenState, [args.section]: args.flattened };
-    },
-
-    /**
      * `markcolors::set_mark_color` — remember one mark's colour, or, with `null`, **forget** it.
      *
      * {@link writeHandlers.set_list_view}'s three rules with a fourth of its own. The refusals are
@@ -20018,11 +20128,11 @@ export function writeHandlers(db: FakeDb) {
     /**
      * `searchopen::set_search_open` — remember whether one docked search column is open.
      *
-     * {@link writeHandlers.set_flatten_state}'s handler with a different key, down to which half
-     * of the validation survives: the **blank section is refused** and the value is not, a `bool`
-     * off the IPC boundary having no junk state for Tauri's deserializer to have let through. That
-     * asymmetry is argued in full at {@link writeHandlers.set_nav_collapsed}; this is the second
-     * place it lands inside a map.
+     * {@link writeHandlers.set_list_view}'s handler with a `bool` where the word is, and that
+     * decides which half of the validation survives: the **blank section is refused** and the
+     * value is not, a `bool` off the IPC boundary having no junk state for Tauri's deserializer to
+     * have let through. That asymmetry is argued in full at {@link writeHandlers.set_nav_collapsed};
+     * this is where it lands inside a map.
      *
      * The **section** is unchecked past being non-empty, deliberately — which pages have a search
      * column is TypeScript's vocabulary and `searchopen.rs` knows only the one word `deck`, and
@@ -20040,6 +20150,28 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       if (args.section === "") throw refuse("A search section cannot be blank.");
       db.searchOpen = { ...db.searchOpen, [args.section]: args.open };
+    },
+
+    /**
+     * `shelffolds::set_shelf_folds` — set (`true`/`false`) or remove (`null`) overrides on one
+     * page. The lock first, like every write here; then the page, then **every** key, so a refused
+     * change set writes nothing. `null` deletes the entry: the absence is the default.
+     */
+    set_shelf_folds: (args: { page: string; changes: Record<string, boolean | null> }): void => {
+      refuseIfBusy(db);
+      if (args.page !== "collection" && args.page !== "wishlist") {
+        throw refuse(SHELF_PAGE_UNKNOWN);
+      }
+      if (Object.keys(args.changes).some((id) => !/^[0-9]+$/.test(id))) {
+        throw refuse(NOT_A_SHELF);
+      }
+      const page: ShelfFoldPage = args.page;
+      const next = Object.fromEntries(
+        Object.entries({ ...db.shelfFolds[page], ...args.changes }).filter(
+          (entry): entry is [string, boolean] => entry[1] !== null,
+        ),
+      );
+      db.shelfFolds = { ...db.shelfFolds, [page]: next };
     },
 
     /**
@@ -20085,7 +20217,7 @@ export function writeHandlers(db: FakeDb) {
      * and why {@link FakeDb.deckFolderPane} has no half-written state to seed.
      *
      * **The width is refused and the collapse is not**, which is
-     * {@link writeHandlers.set_flatten_state}'s split drawn with a number where that one has a
+     * {@link writeHandlers.set_search_open}'s split drawn with a number where that one has a
      * section. The `boolean` has no junk state — Tauri's deserializer refused anything that is
      * not `true` or `false` before this handler was reached, the argument
      * {@link writeHandlers.set_nav_collapsed} makes in full. The **number** has one, and

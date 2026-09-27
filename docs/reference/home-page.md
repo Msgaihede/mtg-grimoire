@@ -2004,19 +2004,16 @@ the two pages from reading each other's post. It adds two things `pendingFolder`
   **first** pass's options (probed in `CollectionPage.test.tsx` on 2026-09-26). On a page already
   mounted it is `settle`, the ordinary render-phase adjustment, which is what makes the widget's two
   store writes safe in one commit or two.
-* **The page draws flattened for that visit, and the stored switch is never written.** To review
-  counts flagged rows in every drawer, but a page whose Flatten is off stands at its root — on the
-  collection, *filed nowhere* since v25 — so the filter alone would draw a flagged root, usually
-  empty, under a card that has just counted the flagged entries. So where the reader's stored
-  switch is off, the hand-off also turns on `reviewSweep`, a **local `useState`** the list hook ORs
-  into what it draws (`flattenLocally`) — never `collectionFlattened` or `wishlistFlattened`, which
-  are the reader's, and never the store, so leaving the view drops it. It lives exactly as long as
-  it does something: the filter goes and it goes; the stored switch comes on and it goes, since a
-  sweep over a list already read flat would make the reader's next Flatten press a no-op; and
-  Flatten pressed spends it and writes nothing (`onFlattenToggle`). The collection's switch starts
-  on, so there it rarely arms; the wishlist's starts **off**, so there it is the common case, and
-  without it a reader sent by the `Wishes` row would land on a flagged root holding none of the
-  wishes they were counted.
+* **The filter is the whole of the hand-off, and where the page stands needs nothing.** Since
+  folder shelves (2026-09-26) a page opened on its root draws every drawer as a shelf, so the
+  flagged rows To review counted are on the wall wherever they are filed. Until then a page at its
+  root drew only what was filed nowhere — so the hand-off also armed `reviewSweep`, a local
+  `useState` the list hook ORed into what it drew (`flattenLocally`), and it had rules for Flatten
+  being on, being pressed, and starting off on the wishlist. **That sweep, its `onFlattenToggle` and
+  the hook's `flattenStored` argument were deleted in the final review (R-I1)**: nothing had read
+  the sweep since both pages lost Flatten, and the hook is now `useReviewHandoff(scope)` answering
+  `{ initialNeedsReview, settle }` and nothing else. The widget switches the view as well, so the
+  page it lands on mounts at its root.
 
 **`pendingSettingsPanel: string`** — To review's deck-cards row, answered by `SettingsPage`. **It
 names a panel, `"review"`, and not a group — a disagreement with spec §2.2**, which named the `sync`
@@ -2053,9 +2050,11 @@ next live pass's to confirm.
 
 **`pendingOptimize: boolean`** — Wishlist savings' press, answered by `WishlistPage`, which opens
 `OptimizeWishlistDialog` with a **scope override**, `sweepOver: "whole"`, planning
-`wholeWishlistQuery` — **never by writing `wishlistFlattened` or a filter**, so closing the dialog
-leaves the page exactly as the reader left it. The override is left standing when the dialog closes,
-deliberately: the panel outlives the flag by its fade, and a scope put back on close would re-key the
+`wholeWishlistQuery` — **never by writing a filter or a view state**, so closing the dialog
+leaves the page exactly as the reader left it. (This said *never by writing `wishlistFlattened`*
+until folder shelves deleted that store flag on 2026-09-26; the page has no Flatten to write.) The
+override is left standing when the dialog closes, deliberately: the panel outlives the flag by its
+fade, and a scope put back on close would re-key the
 plan mid-fade and flash its loading sentence; the page's own Optimise button writes `"page"` on its
 press instead. A boolean because there is nothing else to say — the widget only ever asks about the
 whole list.
