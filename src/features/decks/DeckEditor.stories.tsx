@@ -376,8 +376,8 @@ export const Modern60: Story = {
  *
  * **A clean Commander companion is not buildable from this corpus, and the fixture stages that
  * dead end deliberately.** Lurrus of the Dream-Den asks that every permanent card in the starting
- * deck have mana value 2 or less, `companions.ts`' `STARTING_DECK` is `["main", "commander"]`
- * (CR 903.5a puts the commander in the pile it judges), Lurrus is `WB`, and the corpus's only
+ * deck have mana value 2 or less, `companions.ts`' `STARTING_DECK` is `SIZE_KINDS` — `main`,
+ * `commander` and a switched-on `maybe` (CR 903.5a puts the commander in the pile it judges), Lurrus is `WB`, and the corpus's only
  * legends whose identity covers both W and B are Kenrith at mana value 5 and Tymna at 3. So the
  * one error names the commander, and it is the deck's whole issue list — measured 2026-08-10 by
  * running the real `validateDeck` over `deck_get({ id: 2 })`.

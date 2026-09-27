@@ -28,6 +28,7 @@
  */
 import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
+import { deckCardSlot } from "@/features/decks/dnd";
 import { buildGroups, type GroupBy } from "@/features/decks/grouping";
 import type { SortBy } from "@/features/decks/sorting";
 import { theoryMatchPlan, type TheoryPlan } from "@/features/decks/theoryMatch";
@@ -502,7 +503,7 @@ export function deckGroups(
   // rows still claiming to count.
   const ramp: DeckCategory = {
     ...deckCategory("main"),
-    id: 10,
+    id: RAMP_PILE_ID,
     name: "Ramp",
     sortOrder: 1,
     isActive: switchedOff !== "Ramp",
@@ -564,9 +565,17 @@ export function deckGroups(
   return buildGroups(cards, [commander, ramp, removal, side, maybe], groupBy, sortBy, separateX);
 }
 
+/** The Ramp pile's id in {@link deckGroups}, named because {@link deckViolations} addresses a row
+ *  in it by slot. */
+const RAMP_PILE_ID = 10;
+
 /**
  * One finding about one of the cards above, so a view story can draw the `RULE BREAK` mark
  * beside the game-changer badge it must never be confusable with.
+ *
+ * Keyed by the row's **slot**, as `violationsBySlot` answers — never by the printing (issue #554)
+ * — and the slot rather than the row id because {@link deckGroups} mints fresh row ids on every
+ * call, and a story that regroups the deck still has to find its mark.
  */
 export function deckViolations(): Map<string, ValidationIssue[]> {
   // The sentence names the fixture's own card rather than a pasted one: `CARDS` is generated
@@ -575,7 +584,7 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
   const card = printing("lea", "288");
   return new Map([
     [
-      card.id,
+      deckCardSlot(RAMP_PILE_ID, card.id, null),
       [
         {
           severity: "error" as const,
