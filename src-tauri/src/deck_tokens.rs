@@ -628,12 +628,13 @@ fn derive(conn: &Connection, deck_id: i64, variant: &str) -> Result<Derivation, 
 /// that would not open over it is a worse answer than a wall that is empty. [`derive`] is the
 /// walk, and its doc carries the five things about it.
 ///
-/// **Which tokens are on the wall**: every token the list derives, and every `manual` token it
-/// does not **that holds an entry in this list** — a hand-added token draws its entries and never
-/// an implicit one (the token-improvements spec §3.4), so a Soldier added to the live list is not
-/// on the plan's wall. A token with entries that is neither — its maker was cut through a write
-/// the reconcile could not reach yet — draws nothing, and [`reconcile_in`] will take its entries
-/// at the next write.
+/// **Which tokens are on the wall**: every token the list derives, and every token it does not
+/// whose state is `manual` — or a pre-v54 `hidden` the launch has not retired yet — **and that
+/// holds an entry in this list**. A hand-added token draws its entries and never an implicit one
+/// (the token-improvements spec §3.4), so a Soldier added to the live list is not on the plan's
+/// wall. An `auto` token with entries that the list does not derive — its maker was cut through a
+/// write the reconcile could not reach yet — draws nothing, and [`reconcile_in`] will take its
+/// entries at the next write.
 ///
 /// Order is `(name, oracle_id)`, derived tokens first and hand-added ones after, and within one
 /// token its entries by `(card_id, finish)`. Which order the wall is actually in is
@@ -676,15 +677,19 @@ pub fn deck_token_rows(
         )?;
     }
 
-    // The hand-added tail: a `manual` token the list derives nothing for is on the wall because
-    // the reader said so — **in a list that holds an entry of it, and only there**. There is no
-    // implicit row here: an implicit entry is the deck's default for a token its cards make, and
-    // nothing makes this one, so a list with none of its entries has nothing to draw.
+    // The hand-added tail: a token the list derives nothing for is on the wall because the reader
+    // said so — **in a list that holds an entry of it, and only there**. There is no implicit row
+    // here: an implicit entry is the deck's default for a token its cards make, and nothing makes
+    // this one, so a list with none of its entries has nothing to draw.
+    // **Any state but `auto` says so**: `manual`, and a `hidden` that arrived by sync after the
+    // launch retired this device's own — a hand-added token dismissed on an older peer, which must
+    // draw like any other until the next launch (Review Focus 1). An `auto` row with entries is a
+    // token whose maker was cut, which the reconcile takes.
     // Resolved by `oracle_id`, so a token whose every entry names a printing that has left the
     // corpus still draws — `default_card_id` is answerable without them.
     let mut added: Vec<(&String, Printing)> = Vec::new();
     for (oracle_id, stored) in &overrides {
-        if stored.2 != MANUAL_STATE || on_wall.contains(oracle_id) {
+        if stored.2 == AUTO_STATE || on_wall.contains(oracle_id) {
             continue;
         }
         if entries.get(oracle_id).is_none_or(Vec::is_empty) {
@@ -1386,6 +1391,29 @@ fn named_entry(
     }
 }
 
+/// **A stale `hidden`, settled by the write that touches the token** — `auto` where this list
+/// makes it, `manual` where it does not, the answer [`add_printing_in`] has always given. The word
+/// is a pre-v54 dismissal nothing draws any more ([`retire_hidden`] settles the rest at launch),
+/// and a step, a swap or a remove on the token is the reader using it; leaving the word behind
+/// would hand a later reconcile a hand-added token it thinks it may take.
+///
+/// Called inside the write's own [`journal_in`], so the state change is captured with the write
+/// and rides its undo step: one Undo brings the count and the word back together. A token in any
+/// other state is left alone, without a derivation.
+fn settle_hidden(
+    tx: &Connection,
+    deck_id: i64,
+    variant: &str,
+    oracle_id: &str,
+) -> Result<(), String> {
+    if state_of(tx, deck_id, oracle_id)?.state.as_deref() != Some(HIDDEN_STATE) {
+        return Ok(());
+    }
+    let made = derived_printing(tx, deck_id, variant, oracle_id)?.is_some();
+    let state = if made { AUTO_STATE } else { MANUAL_STATE };
+    write_state(tx, deck_id, oracle_id, state)
+}
+
 /// What one token write did — the variable half of its history row.
 struct Change {
     /// `quantity`, `swap`, `add` or `remove` — `auditText.ts`' arms. (`state` and `reset` were
@@ -1667,6 +1695,7 @@ pub fn set_quantity(
                 },
             )?;
         }
+        settle_hidden(tx, deck_id, variant, oracle_id)?;
         Ok(
             Change::new("quantity", json!(target.quantity), json!(quantity))
                 .about(&target.card_id, &target.finish),
@@ -1716,6 +1745,7 @@ pub fn swap(
             ..source.clone()
         };
         put_entry(tx, deck_id, &landed)?;
+        settle_hidden(tx, deck_id, variant, oracle_id)?;
         Ok(
             Change::new("swap", entry_facts(tx, &source)?, entry_facts(tx, &landed)?)
                 .about(&landed.card_id, &landed.finish)
@@ -1748,9 +1778,11 @@ pub fn add_printing(
 /// the deck is touched, and the history row and the undo step are written:
 ///
 /// 1. **An implicit entry is materialised first** (rule 2), so adding art B to a token drawn at
-///    art A keeps A — the whole point of the rule. Only a derived token has one, and since v54 an
-///    untouched one is at zero, so step 2 clears it again in the same write and B is filed
-///    alone; what keeps A is a legacy count.
+///    art A keeps A — the whole point of the rule. Only a derived token has one, and **only one
+///    at a count is materialised**: since v54 an untouched implicit entry is at zero, which step 2
+///    would clear again in the same write, so writing it would be a captured insert and delete of
+///    a row nobody saw, sent to every device in the group. B is filed alone; what keeps A is a
+///    legacy count.
 /// 2. The entry is inserted at `quantity`, or an existing entry of that printing and finish is
 ///    stepped up by it — and **the token's zero-quantity entries in this list are deleted**,
 ///    never the one just added to. Rule 3 held one at zero because it was the last; beside the
@@ -1788,7 +1820,9 @@ pub fn add_printing_in(
         let best = derived_printing(tx, deck_id, variant, &oracle_id)?;
         let derived = best.is_some();
         if entries_of(tx, deck_id, variant, &oracle_id)?.is_empty() {
-            if let Some(implicit) = implicit_of(tx, deck_id, variant, &oracle_id, best)? {
+            if let Some(implicit) = implicit_of(tx, deck_id, variant, &oracle_id, best)?
+                .filter(|implicit| implicit.quantity > 0)
+            {
                 put_entry(tx, deck_id, &implicit)?;
             }
         }
@@ -1864,6 +1898,7 @@ pub fn remove_entry(
     write_tokens(conn, deck_id, variant, oracle_id, |tx| {
         let (target, _) = named_entry(tx, deck_id, variant, oracle_id, Some(entry))?;
         drop_entry(tx, deck_id, &target)?;
+        settle_hidden(tx, deck_id, variant, oracle_id)?;
         let held_anywhere: bool = tx
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM deck_token_printings
@@ -2244,7 +2279,7 @@ pub fn convert_legacy_picks(conn: &Connection) -> Result<(), String> {
                     .flatten()
             });
             let finish = default_finish(listed.as_deref());
-            let converted = one_pick(&tx, || {
+            let converted = one_row(&tx, || {
                 let (uid, named_here) = name_of(&tx, pick)?;
                 for variant in crate::schema::DECK_VARIANTS {
                     convert_pick_in(&tx, pick, &uid, variant, finish)?;
@@ -2264,25 +2299,28 @@ pub fn convert_legacy_picks(conn: &Connection) -> Result<(), String> {
         }
     }
     for pick in owed {
-        if let Err(e) = one_pick(&tx, || clear_pick(&tx, pick)) {
+        if let Err(e) = one_row(&tx, || clear_pick(&tx, pick)) {
             skipped(pick, &e);
         }
     }
     tx.commit().map_err(|e| e.to_string())
 }
 
-/// Run one pick's writes inside a savepoint of their own: released when `f` succeeds, rolled back
-/// to when it fails, so one pick's failure costs that pick alone — [`convert_legacy_picks`]' doc.
-fn one_pick<T>(tx: &Connection, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
-    tx.execute_batch("SAVEPOINT convert_pick")
+/// Run one row's writes inside a savepoint of their own: released when `f` succeeds, rolled back
+/// to when it fails, so one row's failure costs that row alone — a pick in
+/// [`convert_legacy_picks`], a dismissal in [`retire_hidden`]. Both are launch passes over every
+/// deck at once, where one transaction for the file would let one bad row undo every other, at
+/// every launch, for as long as it kept failing.
+fn one_row<T>(tx: &Connection, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    tx.execute_batch("SAVEPOINT token_pass")
         .map_err(|e| e.to_string())?;
     match f() {
         Ok(value) => tx
-            .execute_batch("RELEASE convert_pick")
+            .execute_batch("RELEASE token_pass")
             .map(|()| value)
             .map_err(|e| e.to_string()),
         Err(e) => {
-            let _ = tx.execute_batch("ROLLBACK TO convert_pick; RELEASE convert_pick");
+            let _ = tx.execute_batch("ROLLBACK TO token_pass; RELEASE token_pass");
             Err(e)
         }
     }
@@ -2523,11 +2561,20 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
 
 /// **The launch pass that retires a dismissal** (user schema v54, the token-improvements spec
 /// §3.3): every token still `hidden` comes back as an ordinary token **at zero, its printings
-/// kept** — the reader's own rule, and the whole of what this does. Its entries' quantities go to
-/// zero in both lists, at the printings they name, and its state becomes `auto` where the deck
-/// still makes the token — in either list, because the state is shared by both — and `manual`
-/// where it does not, through [`write_state`]. A dismissed Treasure the deck makes is then no row
-/// at all; a dismissed token nothing makes stays on the wall as the reader's own, at zero.
+/// kept** — the reader's own rule, and the whole of what this does. Per token:
+///
+/// 1. **Its entries' quantities go to zero** in both lists, at the printings they name.
+/// 2. **So does its legacy count**: `deck_tokens.quantity` is `NULL` where the row carries no pick
+///    and `0` where a v51 pick still waits for conversion. [`write_state`] alone keeps a legacy
+///    count — a dismissed Treasure counted at 3 before v52 would come back at 3 in every list with
+///    no entries — and a paired device climbing from v51 runs this pass *before* the pull that
+///    converts its picks, at `quantity ?? 1`; the `0` is what makes those entries arrive at zero.
+/// 3. **Its state becomes `auto` where the deck still makes the token** — in either list,
+///    because the state is shared by both — **or where it holds nothing**, and `manual` where it
+///    holds an entry or a pick nothing makes, through [`write_state`]. A dismissed Treasure the
+///    deck makes is then no row at all; a dismissed token nothing makes stays on the wall as the
+///    reader's own, at zero, in the lists that hold it; and one nothing makes or holds is gone,
+///    where `manual` would be a row drawn in no list.
 ///
 /// **A pass and not a rung**, because whether the deck still makes the token is [`derive`]'s
 /// answer, which reads `cards.raw`, and no rung reads the corpus — `migrate_user` runs before
@@ -2552,6 +2599,10 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
 /// every reconcile after its maker is cut. So that token is left as it is, entries and all, for a
 /// launch whose corpus can answer: retired whole or not at all. One the deck provably still makes
 /// is retired whatever else in the deck is unreadable.
+///
+/// **One savepoint per token** ([`one_row`]), [`convert_legacy_picks`]' shape: a token whose
+/// derivation or write fails is rolled back to its own savepoint, written to stderr and left
+/// `hidden` for the next launch, and every other token is still retired.
 pub fn retire_hidden(conn: &Connection) -> Result<(), String> {
     let hidden: Vec<(i64, String)> = {
         let mut stmt = conn
@@ -2572,34 +2623,76 @@ pub fn retire_hidden(conn: &Connection) -> Result<(), String> {
     }
     crate::sync_engine::capture::suppressed(conn, || {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        // One derivation per list per deck, however many of its tokens were dismissed.
-        let mut derived: HashMap<(i64, &str), Derivation> = HashMap::new();
+        // One derivation per list per deck, however many of its tokens were dismissed. A
+        // derivation is a read, so one cached before a later token's savepoint rolled back is
+        // still true.
+        let mut derived: Derivations = HashMap::new();
         for (deck_id, oracle_id) in &hidden {
-            let (mut made, mut unsure) = (false, false);
-            for variant in crate::schema::DECK_VARIANTS {
-                let derivation = match derived.entry((*deck_id, variant)) {
-                    std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(derive(&tx, *deck_id, variant)?)
-                    }
-                };
-                made |= derivation.tokens.contains_key(oracle_id);
-                unsure |= derivation.unreadable;
+            let retired = one_row(&tx, || retire_one(&tx, &mut derived, *deck_id, oracle_id));
+            if let Err(e) = retired {
+                eprintln!(
+                    "a dismissed token (deck {deck_id}, token {oracle_id}) could not be brought \
+                     back at launch: {e}\nIt is tried again at the next launch, and draws as an \
+                     ordinary token until then; every other dismissed token was tried on its own."
+                );
             }
-            if !made && unsure {
-                continue;
-            }
-            tx.execute(
-                "UPDATE deck_token_printings SET quantity = 0, updated_at = unixepoch()
-                  WHERE deck_id = ?1 AND oracle_id = ?2",
-                params![deck_id, oracle_id],
-            )
-            .map_err(|e| e.to_string())?;
-            let state = if made { AUTO_STATE } else { MANUAL_STATE };
-            write_state(&tx, *deck_id, oracle_id, state)?;
         }
         tx.commit().map_err(|e| e.to_string())
     })
+}
+
+/// [`retire_hidden`]'s cache: one [`Derivation`] per deck per list.
+type Derivations = HashMap<(i64, &'static str), Derivation>;
+
+/// One dismissal, retired — [`retire_hidden`]'s three steps, or nothing where the token cannot be
+/// proved unmade.
+fn retire_one(
+    tx: &Connection,
+    derived: &mut Derivations,
+    deck_id: i64,
+    oracle_id: &str,
+) -> Result<(), String> {
+    let (mut made, mut unsure) = (false, false);
+    for variant in crate::schema::DECK_VARIANTS {
+        let derivation = match derived.entry((deck_id, variant)) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(derive(tx, deck_id, variant)?),
+        };
+        made |= derivation.tokens.contains_key(oracle_id);
+        unsure |= derivation.unreadable;
+    }
+    if !made && unsure {
+        return Ok(());
+    }
+    tx.execute(
+        "UPDATE deck_token_printings SET quantity = 0, updated_at = unixepoch()
+          WHERE deck_id = ?1 AND oracle_id = ?2",
+        params![deck_id, oracle_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE deck_tokens SET quantity = CASE WHEN card_id IS NULL THEN NULL ELSE 0 END
+          WHERE deck_id = ?1 AND oracle_id = ?2",
+        params![deck_id, oracle_id],
+    )
+    .map_err(|e| e.to_string())?;
+    // A pick still waiting for conversion counts as held: it becomes the token's entries.
+    let held: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM deck_token_printings
+                            WHERE deck_id = ?1 AND oracle_id = ?2)
+                 OR EXISTS(SELECT 1 FROM deck_tokens
+                            WHERE deck_id = ?1 AND oracle_id = ?2 AND card_id IS NOT NULL)",
+            params![deck_id, oracle_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let state = if made || !held {
+        AUTO_STATE
+    } else {
+        MANUAL_STATE
+    };
+    write_state(tx, deck_id, oracle_id, state)
 }
 
 /// [`retire_hidden`] with its failure written to stderr rather than returned — what
@@ -4287,6 +4380,32 @@ mod tests {
         );
     }
 
+    /// **Review Focus 1: a hand-added token dismissed on an older peer is still drawn** — it
+    /// arrives by sync as `hidden`, nothing derives it, and it holds a live entry. The tail
+    /// answers every token nothing makes whose state is not `auto`, so it draws in the list that
+    /// holds it until the next launch retires the word; nothing may hide it meanwhile.
+    #[test]
+    fn a_dismissed_token_nothing_makes_is_drawn_where_it_holds_an_entry() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 2);
+
+        let live = rows(&conn, deck);
+        assert_eq!(names(&live), vec!["Treasure", "Soldier"]);
+        assert_eq!(
+            (live[1].derived, live[1].quantity, live[1].state.as_str()),
+            (false, 2, "hidden")
+        );
+        assert!(
+            deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer)
+                .unwrap()
+                .is_empty(),
+            "and only where it holds an entry"
+        );
+    }
+
     #[test]
     fn a_manual_state_on_a_derived_token_is_not_appended_twice() {
         let conn = open();
@@ -4616,9 +4735,9 @@ mod tests {
     /// **Adding art B keeps art A** — the implicit entry is materialised first, at the count it
     /// was drawn at — and a second add of B steps it up.
     ///
-    /// **An untouched token's implicit entry is at zero**, so the add materialises it and then
-    /// clears it as one of the token's zero entries in the same write: B is filed alone, which is
-    /// the net of the two and what the reader sees. A legacy count is what makes A worth keeping.
+    /// **An untouched token's implicit entry is at zero**, so the add does not materialise it —
+    /// it would be one of the token's zero entries the same write clears — and B is filed alone.
+    /// A legacy count is what makes A worth keeping.
     #[test]
     fn adding_a_printing_materialises_the_implicit_one_then_steps_up() {
         let conn = open();
@@ -4664,6 +4783,24 @@ mod tests {
             ],
             "a counted A is materialised at its count and kept beside B"
         );
+    }
+
+    /// **The first add of an untouched token announces one entry and nothing else** — its implicit
+    /// entry is at zero, so materialising it only to clear it in the same write would be a captured
+    /// insert and delete of a row no reader ever saw, sent to every device in the group.
+    #[test]
+    fn adding_a_printing_to_an_untouched_token_announces_one_entry() {
+        let conn = paired();
+        let (deck, _, _) = tithe_deck(&conn);
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        add_printing(&conn, deck, "live", treasure_older().id, Some("foil")).unwrap();
+        let ops: Vec<String> = recorded(&conn)
+            .into_iter()
+            .filter(|(t, ..)| t == "deck_token_printings")
+            .map(|(_, _, kind, _)| kind)
+            .collect();
+        assert_eq!(ops, ["put"], "one put for the added printing");
     }
 
     /// **A token nothing derives becomes `manual`** — the reader's own, which no cut reconciles
@@ -5019,6 +5156,53 @@ mod tests {
         );
         crate::deck_undo::apply_reversal(&conn, deck, audit, false).unwrap();
         assert_eq!(snap(&conn), after, "and Redo takes them again");
+    }
+
+    /// **Every token write settles a stale `hidden`**, as an add always has: the dismissal is a
+    /// pre-v54 word nothing draws, and a write to the token is the reader using it. A step on a
+    /// Treasure the deck makes sends it to `auto` (no row), a remove on a Soldier nothing makes that
+    /// still holds another entry sends it to `manual`, and each rides its write's own undo step.
+    #[test]
+    fn a_write_to_a_dismissed_token_settles_its_state_with_the_write() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
+
+        set_quantity(&conn, deck, "live", treasure().oracle_id, None, 2).unwrap();
+        assert!(stored(&conn, deck).is_empty(), "`auto`, which is no row");
+        let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
+        assert_eq!(
+            (entries(&conn, deck), stored(&conn, deck)),
+            (
+                vec![],
+                vec![(
+                    treasure().oracle_id.to_owned(),
+                    None,
+                    None,
+                    "hidden".to_owned()
+                )]
+            ),
+            "one Undo puts the count and the word back together"
+        );
+
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 1);
+        seed_entry(&conn, deck, "theory", &soldier(), "nonfoil", 1);
+        remove_entry(
+            &conn,
+            deck,
+            "theory",
+            soldier().oracle_id,
+            &treasure_key(&soldier(), "nonfoil"),
+        )
+        .unwrap();
+        assert_eq!(
+            stored(&conn, deck).last().map(|r| r.3.as_str()),
+            Some("manual"),
+            "the reader's own, still held in the live list"
+        );
     }
 
     // ── The state ────────────────────────────────────────────────────────────────────
@@ -5897,6 +6081,153 @@ mod tests {
             ],
             "and the waiting token keeps its count until it is retired whole"
         );
+    }
+
+    /// **A dismissed token whose only count is the legacy column comes back at zero too** — the
+    /// reader's rule is *at zero*, and `write_state` alone keeps a legacy quantity. The row
+    /// carried nothing but that count and the dismissal, so once both are gone it is no row, and
+    /// each list draws the implicit entry at zero.
+    #[test]
+    fn retire_hidden_brings_a_legacy_count_back_at_zero() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        play(&conn, deck, main, &tithe(), "theory");
+        seed_state(&conn, deck, treasure().oracle_id, Some(3), "hidden");
+
+        retire_hidden(&conn).unwrap();
+
+        assert!(
+            stored(&conn, deck).is_empty(),
+            "no dismissal and no count left to carry, so no row: {:?}",
+            stored(&conn, deck)
+        );
+        for variant in crate::schema::DECK_VARIANTS {
+            let out = deck_token_rows(&conn, deck, variant, Marketplace::Tcgplayer).unwrap();
+            assert_eq!(
+                (out.len(), out[0].implicit, out[0].quantity),
+                (1, true, 0),
+                "the {variant} list draws the implicit Treasure at zero"
+            );
+        }
+    }
+
+    /// **A dismissed pick a paired device has not converted yet comes back at zero as well.** On a
+    /// device climbing from v51 the launch converts nothing until a pull lands
+    /// ([`convert_legacy_picks_at_launch`]'s gate), so this pass runs first and the pull's
+    /// conversion after it — which files each pick at `quantity ?? 1`. The pass zeroes the pick's
+    /// count so the entries it becomes are at zero: the Treasure's count of 3 and the Soldier's
+    /// absent one alike. The Soldier nothing makes stays the reader's own, because the pick it
+    /// holds becomes its entries.
+    #[test]
+    fn retire_hidden_zeroes_a_pick_the_pull_has_not_converted_yet() {
+        let conn = paired();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_pick(&conn, deck, &treasure_older(), Some(3), "u-treasure");
+        seed_pick(&conn, deck, &soldier(), None, "u-soldier");
+        conn.execute(
+            "UPDATE deck_tokens SET state = 'hidden' WHERE deck_id = ?1",
+            params![deck],
+        )
+        .unwrap();
+
+        convert_legacy_picks_at_launch(&conn).unwrap();
+        assert!(entries(&conn, deck).is_empty(), "the gate holds the picks");
+        retire_hidden(&conn).unwrap();
+        convert_legacy_picks_after_pull(&conn).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e(
+                    "live",
+                    treasure().oracle_id,
+                    treasure_older().id,
+                    "nonfoil",
+                    0
+                ),
+                e("live", soldier().oracle_id, soldier().id, "nonfoil", 0),
+                e(
+                    "theory",
+                    treasure().oracle_id,
+                    treasure_older().id,
+                    "nonfoil",
+                    0
+                ),
+                e("theory", soldier().oracle_id, soldier().id, "nonfoil", 0),
+            ],
+            "every entry the pull converts is at zero, the printings kept"
+        );
+        let states: Vec<String> = stored(&conn, deck).into_iter().map(|r| r.3).collect();
+        assert_eq!(states, ["auto", "manual"]);
+    }
+
+    /// **A dismissed token nothing makes and nothing holds goes back to `auto`**, which is no row
+    /// — `manual` there would be a row drawn in no list.
+    #[test]
+    fn retire_hidden_sends_a_token_nothing_makes_or_holds_to_auto() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+
+        retire_hidden(&conn).unwrap();
+        assert!(stored(&conn, deck).is_empty(), "{:?}", stored(&conn, deck));
+    }
+
+    /// **One dismissal that cannot be retired costs that token alone** — each is retired inside a
+    /// savepoint of its own, [`convert_legacy_picks`]' shape, and a failure is logged and skipped:
+    /// one transaction over every deck would retire nothing, at every launch, for as long as the
+    /// one kept failing. The next launch retires it.
+    #[test]
+    fn a_dismissal_that_fails_to_retire_is_skipped_and_every_other_is_retired() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
+        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 3);
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+        conn.execute_batch(&format!(
+            "CREATE TEMP TRIGGER refuse_treasure BEFORE UPDATE ON deck_token_printings
+               WHEN OLD.oracle_id = '{}'
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+            treasure().oracle_id
+        ))
+        .unwrap();
+
+        retire_hidden(&conn).expect("a token that fails is skipped, not the pass");
+        assert_eq!(
+            stored(&conn, deck),
+            vec![
+                (
+                    treasure().oracle_id.to_owned(),
+                    None,
+                    None,
+                    "hidden".to_owned()
+                ),
+                (
+                    soldier().oracle_id.to_owned(),
+                    None,
+                    None,
+                    "manual".to_owned()
+                ),
+            ],
+            "the Treasure waits and the Soldier is retired"
+        );
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e("live", treasure().oracle_id, treasure().id, "nonfoil", 2),
+                e("live", soldier().oracle_id, soldier().id, "nonfoil", 0),
+            ],
+            "and the Treasure's count is untouched, not half-written"
+        );
+
+        conn.execute_batch("DROP TRIGGER temp.refuse_treasure")
+            .unwrap();
+        retire_hidden(&conn).unwrap();
+        assert_eq!(entries(&conn, deck)[0].4, 0, "the next launch retires it");
     }
 
     // ── The legacy conversion ────────────────────────────────────────────────────────
@@ -6807,9 +7138,10 @@ mod tests {
     /// **Every paper token and emblem printing, and nothing else — held to
     /// [`is_token_printing`]**, so the SQL predicate and the Rust one cannot come to disagree
     /// about which cards the All tokens picker offers. A token, an emblem, a double-faced token, a
-    /// `flip` Role and the `reversible_card` Mechtitan are in; a normal card, a Kamigawa-style
-    /// `flip` card, a reversible legend and a digital-only token are out. Ordered by token name,
-    /// then by `oracle_id`, then newest printing first — the picker's grouping.
+    /// `flip` Role, the `reversible_card` Mechtitan, and two-sided printings whose token or emblem
+    /// is on the back face only are in; a normal card, a Kamigawa-style `flip` card, a reversible
+    /// legend and a digital-only token are out. Ordered by token name, then by `oracle_id`, then
+    /// newest printing first — the picker's grouping.
     #[test]
     fn token_printings_answers_every_token_and_nothing_else() {
         let conn = open();
@@ -6827,6 +7159,25 @@ mod tests {
             name: "Royal // Young Hero",
             type_line: "Token Enchantment — Aura Role // Token Enchantment — Aura Role",
             layout: "flip",
+            ..Card::default()
+        };
+        // Two synthetic shapes for the back-face arms (`% // Token%`, `% // Emblem%`): no printing
+        // in the corpus is a card on the front and a token or an emblem only on the back, and
+        // these are what hold the SQL's "any face" to the Rust's.
+        let token_back = Card {
+            id: "c-token-back",
+            oracle_id: "o-token-back",
+            name: "Kami of the Back Face // Spirit",
+            type_line: "Creature — Human // Token Creature — Spirit",
+            layout: "flip",
+            ..Card::default()
+        };
+        let emblem_back = Card {
+            id: "c-emblem-back",
+            oracle_id: "o-emblem-back",
+            name: "Planeswalker of the Back Face // Emblem",
+            type_line: "Legendary Planeswalker — Tester // Emblem — Tester",
+            layout: "reversible_card",
             ..Card::default()
         };
         let flip_card = Card {
@@ -6857,6 +7208,8 @@ mod tests {
             dfc.clone(),
             role.clone(),
             mechtitan(),
+            token_back.clone(),
+            emblem_back.clone(),
             tithe(),
             flip_card.clone(),
             legend.clone(),
@@ -6879,7 +7232,9 @@ mod tests {
             vec![
                 ("Elspeth, Sun's Champion Emblem", elspeth_emblem().id),
                 ("Human Soldier // Spirit", dfc.id),
+                ("Kami of the Back Face // Spirit", token_back.id),
                 ("Mechtitan // Mechtitan", mechtitan().id),
+                ("Planeswalker of the Back Face // Emblem", emblem_back.id),
                 ("Royal // Young Hero", role.id),
                 ("Treasure", treasure().id),
                 ("Treasure", treasure_older().id),
@@ -6898,8 +7253,9 @@ mod tests {
                 assert_eq!(p.oracle_id, card.oracle_id, "{}", card.name);
             }
         }
+        let newest_treasure = got.iter().find(|p| p.printing.id == treasure().id).unwrap();
         assert_eq!(
-            got[4].printing.finish_prices.nonfoil,
+            newest_treasure.printing.finish_prices.nonfoil,
             Some(0.25),
             "priced the way the printings picker prices one"
         );
