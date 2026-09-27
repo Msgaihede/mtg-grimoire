@@ -132,7 +132,6 @@ import { DEFAULT_SCANNER_PREFS, STATUS, VERDICTS } from "@/features/scanner/fixt
 import { IMAGE_VARIANTS, type ImageVariant } from "@/lib/images";
 import type {
   ActivityEntry,
-  BackupZip,
   BracketCardRow,
   BreakdownRow,
   CardCombo,
@@ -2953,8 +2952,8 @@ const MAX_UPCOMING_DAYS = 365;
  * did not name and the crate's shared list carries.
  *
  * Where `sets` has rows the crate also drops four `set_type`s. **This fake has no `set_type`**
- * ({@link readHandlers.list_sets} answers `null` for it), which is the browser build's shape
- * exactly — there `sets` is never filled and this fence is the whole of the layout rule.
+ * ({@link readHandlers.list_sets} answers `null` for it), so here this fence is the whole of the
+ * layout rule.
  */
 const UPCOMING_SKIPPED_LAYOUTS: ReadonlySet<string> = new Set([
   "art_series",
@@ -5812,30 +5811,20 @@ function implicitTokenQuantity(db: FakeDb, deckId: number, oracleId: string): nu
 }
 
 /**
- * `image_uri::front_face_map` over a fixture row — the picture the **web target and the phone**
- * draw, and the field only three DTOs here carry.
+ * `image_uri::front_face_map` over a fixture row — the field only three DTOs here carry: a
+ * token row, a combo piece and a note card's representative printing
+ * ({@link noteCardsOf}, through {@link noteCardPrinting}).
  *
  * **Every other DTO omits `imageUris` and that is still the rule**: a picture under Storybook
- * comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever fetches. What
- * earns an exception is a view that ***folds*** the field instead of passing it through, and
- * there are three of those. `deckTokenViews` reads a token tile's `imageUrl` as
- * `imageUris?.[WALL_CARD_VARIANT] ?? null`; `CombosDialog.tsx` reads a combo piece's the same
- * way, character for character; and since 2026-09-20 a **note card** reads its representative
- * printing's the same way again ({@link noteCardsOf}, through {@link noteCardPrinting}). A row
- * that omitted it would make the fake the one place all three views are always `null` and each
- * panel's own resolution unexercised.
- *
- * ⚠️ **This said "two" for as long as it took the notes band to grow a thumbnail**, which is the
- * drift `.storybook/CLAUDE.md` names by rule: a prose-only edit routes to neither CI job, so a
- * count here goes red nowhere. **Re-count the callers when you add one** —
- * `grep -n "frontFaceImageUris(" .storybook/fake/db.ts` is the census, and the enumeration above
- * is what makes it checkable.
+ * comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever fetches. **No
+ * view reads this field any more either** — every card frame draws the `mtgimg` protocol through
+ * `cardImageUrl` — so these three carry it only to keep the payloads the shape Rust sends.
+ * `grep -n "frontFaceImageUris(" .storybook/fake/db.ts` is the census.
  *
  * Nothing minted: the two URLs are the fixture's own real Scryfall ones, the same pair
  * {@link readHandlers.card_image_uri} answers with, and the same two variants
  * `image_uri::LIST_VARIANTS` names — `display` from `normalUrl` and `art` from `artCropUrl`. The
  * corpus can answer no others, which is why `thumb` and `grid` are absent here as they are there.
- * `WALL_CARD_VARIANT` is `display`, so both folds land on the one this can always answer.
  *
  * `null` rather than `{}` for a row with neither, which is `front_face_map`'s own answer, and
  * the {@link FakeDb.fault} `imageUrisMissing` is every row in that state.
@@ -8669,16 +8658,14 @@ export function isNewer(candidate: string, current: string): boolean {
 /**
  * `update::pick_asset` — matched on the tail of the name, lowercased.
  *
- * **Three of the five kinds pick nothing**, which is the whole of what makes an install
- * un-updatable from inside the app: `other` because nothing knows what would install it,
- * `managed` and `web` because something else already does — the store on a phone, the
- * service worker in a browser.
+ * **One of the three kinds picks nothing**, which is the whole of what makes an install
+ * un-updatable from inside the app: `other`, because nothing knows what would install it.
  *
- * **Written as an allow-list rather than as `kind === "other"`, and that was a real defect.**
- * The old form fell through to `NSIS_SUFFIX` for anything it did not name, so it handed a
- * *managed* install the Windows setup — a mock encoding a state the backend refuses, which
- * stays green for ever because nothing else in the workbench disagrees with it. Rust lists
- * all three by name for the same reason, so a sixth kind makes the compiler ask.
+ * **Written as an allow-list rather than as `kind === "other"`.** A form that fell through to
+ * `NSIS_SUFFIX` for anything it did not name would hand a new kind the Windows setup — a mock
+ * encoding a state the backend refuses, which stays green for ever because nothing else in the
+ * workbench disagrees with it. Rust lists every kind by name for the same reason, so a fourth
+ * kind makes the compiler ask.
  */
 export function pickAsset(assets: UpdateAsset[], kind: InstallKind): UpdateAsset | null {
   const suffix =
@@ -13290,16 +13277,6 @@ function isAbsolutePath(path: string): boolean {
  * never made is one fewer file by arithmetic rather than by a branch. **Derived, never a
  * constant** is what buys that.
  */
-/**
- * An empty zip archive, base64 — the 22-byte end-of-central-directory record and nothing else.
- *
- * `PK\x05\x06` then eighteen zero bytes. Every unzip program accepts it as an archive holding no
- * entries, which is what makes it the right stand-in: a workbench that handed the panel an
- * invented string would have the browser save a file that will not open, teaching a failure the
- * app does not have.
- */
-const EMPTY_ZIP_BASE64 = "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==";
-
 function mirrorFileCount(db: FakeDb): number {
   const FORMATS = 7;
   const decks = db.decks.length + db.decks.filter((d) => d.theoryEnabled).length;
@@ -20556,9 +20533,8 @@ export function writeHandlers(db: FakeDb) {
     /**
      * `new_printings::mark_seen` — move the *seen* cursor to `at`, in unix seconds.
      *
-     * **The clock is the caller's**, which is `record_recent_card`'s rule one `app_meta` row over
-     * and made for the same reason: `SystemTime::now()` panics on the wasm target rather than
-     * erroring, so the page stamps the moment and the backend stores it.
+     * **The clock is the caller's**, which is `record_recent_card`'s rule one `app_meta` row over:
+     * the page stamps the moment and the backend stores it.
      *
      * **No refusal of its own, which is unusual here and is the point.** The value is a number
      * off the IPC boundary and has no junk state, and there is nothing about a cursor for this
@@ -21174,50 +21150,6 @@ export function writeHandlers(db: FakeDb) {
       db.mirror.lastError = null;
       return report;
     },
-
-    /**
-     * `mirror::snapshot::mirror_backup_zip` — the whole backup as one archive.
-     *
-     * **What web and Android have instead of the folder**, so it is the one mirror command the
-     * workbench answers that the desktop panel never calls. The file count is
-     * {@link mirrorFileCount}'s, because the archive holds exactly what a pass would write with
-     * `.mirror-manifest` left out — a zip prunes nothing, so it records nothing to prune with.
-     *
-     * **The bytes are a real, empty zip and deliberately not a fake string.** A story that
-     * pressed the button would otherwise hand `atob` something that decodes to nonsense, and the
-     * browser would save a file that will not open — a workbench teaching a failure the app does
-     * not have. This is the 22-byte end-of-central-directory record, which every unzip program
-     * accepts as an archive with nothing in it. The *count* is honest and the *contents* are
-     * empty, which is the same bargain `mirror_rebuild` above already makes.
-     *
-     * `mirrorRootUnwritable` is **not** a fault here, and that is the platform rather than an
-     * omission: there is no root to be unwritable, which is the whole reason this command exists.
-     */
-    mirror_backup_zip: (): BackupZip => {
-      const files = mirrorFileCount(db);
-      return {
-        fileName: `mtg-grimoire-backup-${new Date().toISOString().slice(0, 10)}.zip`,
-        files,
-        failed: 0,
-        // ~1.4 kB a file is what the measured 100-file mirror deflated to, per file.
-        byteLength: files * 1_400,
-        base64: EMPTY_ZIP_BASE64,
-      };
-    },
-
-    /**
-     * `mirror::snapshot::mirror_backup_save` — the same archive, written where the reader said.
-     *
-     * Android's door. **It takes no argument at all**, where the command takes a path: this fake
-     * has no filesystem, and one that pretended to would teach a model the app does not have — so
-     * the destination is dropped by the dispatcher rather than named here. `base64` comes back
-     * `null`, which is the field the panel reads to know Rust wrote the file itself, so a story
-     * here draws "Saved" rather than naming a file the reader typed.
-     */
-    mirror_backup_save: (): BackupZip => ({
-      ...writeHandlers(db).mirror_backup_zip(),
-      base64: null,
-    }),
 
     /**
      * `sync_pairing_begin` — start offering a pairing.
@@ -22235,7 +22167,7 @@ function supporterStatus(db: FakeDb): SupporterStatus {
  * Two signals because `/token` has two doors (spec §2.2): the refresh secret, which only the
  * device that pressed Connect ever holds, and a stored `active`/`grace` status, which is the
  * relay having answered *this device's group auth*. The second is the whole of the reader's
- * item 3 - a phone paired to a paid-up desktop mints on its own and never opens a browser.
+ * item 3 - a device paired to a paid-up one mints on its own and never opens a browser.
  */
 function isEntitled(db: FakeDb): boolean {
   if (db.supporter.refreshSecret) return true;

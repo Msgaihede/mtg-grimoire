@@ -1,9 +1,4 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { isWebTarget } from "@/pwa/target";
-
-// The build flag `cardArtSrc` branches on. `false` is what `__CORE__` already answers under
-// vitest, so this changes nothing here until a case below asks for a browser.
-vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1973,20 +1968,12 @@ describe("CardStack marks", () => {
 });
 
 /**
- * **The Stacks view in a browser — and the one card surface in the app that makes the
- * desktop/web choice itself.**
- *
- * Every other wall hands both candidates to `CardArt`, which calls `cardArtSrc` for them. This
- * view cannot: its face is a bare `<img>` at the stack's own height rather than a 5:7 frame, so
- * the call is here, and a change that wired the four walls and stopped would leave this one
- * drawing a broken image in a browser rather than a picture.
+ * **The stack card builds its own `<img>`** — its face is a bare image at the stack's own height
+ * rather than a 5:7 `CardArt` frame — so it is the one deck surface that asks for the picture
+ * itself, and it must ask the local cache even for a row that carries a Scryfall URL.
  */
 describe("a stack card's art", () => {
   const SCRYFALL = { display: "https://cards.scryfall.io/display/front/s/o/sol.webp?1706230661" };
-
-  afterEach(() => {
-    vi.mocked(isWebTarget).mockReturnValue(false);
-  });
 
   const draw = () =>
     render(
@@ -1997,14 +1984,7 @@ describe("a stack card's art", () => {
       />,
     );
 
-  it("draws the row's own picture in a browser", () => {
-    vi.mocked(isWebTarget).mockReturnValue(true);
-    const { container } = draw();
-
-    expect(container.querySelector("img")).toHaveAttribute("src", SCRYFALL.display);
-  });
-
-  it("keeps drawing the cached protocol picture on desktop", () => {
+  it("draws the cached protocol picture for a row that carries a URL", () => {
     const { container } = draw();
 
     const src = container.querySelector("img")?.getAttribute("src");

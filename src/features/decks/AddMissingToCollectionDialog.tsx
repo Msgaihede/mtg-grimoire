@@ -70,7 +70,7 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { plural } from "@/lib/counts";
 import { FINISH_LABEL } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { cardArtSrc, cardImageUrl } from "@/lib/images";
+import { cardImageUrl } from "@/lib/images";
 import {
   ipcError,
   type DeckMissingOutcome,
@@ -559,12 +559,8 @@ function Row({
 }) {
   const { row, on, copies } = planned;
 
-  // The desktop/web branch, in the one place it is ever written: the protocol URL on Tauri, the
-  // row's own `cards.scryfall.io` URL in a browser — which has no `mtgimg://` to ask, because
-  // wasm cannot register a URL scheme with one — and `null` when the row carries neither. A
-  // `null` draws no `<img>` at all, leaving the `bg-surface` frame below, which is what this line
-  // shows while the bytes are on their way and for a printing that has no art.
-  const art = cardArtSrc(cardImageUrl(row.cardId, 0, "art"), row.imageUris?.art);
+  // The `bg-surface` frame below is what this line shows while the bytes are on their way.
+  const art = cardImageUrl(row.cardId, 0, "art");
 
   const wish = wishLine(planned);
 
@@ -610,17 +606,15 @@ function Row({
             aria-hidden="true"
             className="mt-0.5 h-8 w-11 shrink-0 overflow-hidden rounded bg-surface"
           >
-            {art !== null && (
-              <CardImage
-                src={art}
-                alt=""
-                draggable={false}
-                // Lazy, for the difference list's reason and not a wall's: this is a plain
-                // scroller, so a sixty-row plan really is sixty mounted rows.
-                loading="lazy"
-                className="size-full object-cover"
-              />
-            )}
+            <CardImage
+              src={art}
+              alt=""
+              draggable={false}
+              // Lazy, for the difference list's reason and not a wall's: this is a plain
+              // scroller, so a sixty-row plan really is sixty mounted rows.
+              loading="lazy"
+              className="size-full object-cover"
+            />
           </span>
 
           <span className="flex min-w-0 flex-1 flex-col gap-1">

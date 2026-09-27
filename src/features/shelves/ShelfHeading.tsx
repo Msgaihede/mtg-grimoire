@@ -47,7 +47,7 @@ import { Cards } from "@/components/icons";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
-import { cardArtSrc, cardImageUrl } from "@/lib/images";
+import { cardImageUrl } from "@/lib/images";
 import type { Shelf, ShelfKind } from "@/lib/shelves";
 import { cn } from "@/lib/utils";
 import { SHELF_CHEVRON, SHELF_ICON_BUTTON } from "./shelfButtons";
@@ -404,18 +404,14 @@ export function ShelfHeading({
 /**
  * One peek thumbnail: 22×31 of the whole card, the canvas's size. `thumb` because it is the smallest
  * variant that is a whole card, and a whole card carries its printed artist credit — an `art` crop
- * here would owe one. The web build has no protocol, and a peek row carries no Scryfall URL, so it
- * draws the empty frame there.
+ * here would owe one.
  */
 function PeekThumb({ cardId, first }: { cardId: string; first: boolean }): ReactElement {
-  const src = cardArtSrc(cardImageUrl(cardId, 0, "thumb"));
   const box = cn(
     "h-[31px] w-[22px] flex-none rounded-[2px] bg-surface shadow-[0_0_0_1.5px_var(--color-bg)]",
     !first && "-ml-[9px]",
   );
-  return src === null ? (
-    <span className={box} />
-  ) : (
-    <CardImage src={src} alt="" className={cn(box, "object-cover")} />
+  return (
+    <CardImage src={cardImageUrl(cardId, 0, "thumb")} alt="" className={cn(box, "object-cover")} />
   );
 }

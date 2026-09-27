@@ -32,12 +32,12 @@ it("seeds from syncLiveState before any event arrives", async () => {
 });
 
 /**
- * The web target has no relay commands at all (`web/route.rs`'s `COMMANDS` carries none of
- * them), so `syncLiveState()` rejects there. The hook must stay `"off"` with no throw and no
- * unhandled rejection — a rejected seed is not worth taking the app down for.
+ * Under a plain `vite dev` there is no Tauri window, so `syncLiveState()` rejects. The hook must
+ * stay `"off"` with no throw and no unhandled rejection — a rejected seed is not worth taking the
+ * app down for.
  */
 it("stays off when syncLiveState rejects, with no unhandled rejection", async () => {
-  syncLiveState.mockRejectedValue(new Error("no relay commands on web"));
+  syncLiveState.mockRejectedValue(new Error("no Tauri window"));
   const { result } = renderHook(() => useDeviceSyncLive());
   await waitFor(() => expect(syncLiveState).toHaveBeenCalled());
   await new Promise((r) => setTimeout(r, 0));

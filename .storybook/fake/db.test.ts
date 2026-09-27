@@ -10046,14 +10046,6 @@ describe("the busy fault", () => {
       // not to the database. Its two neighbours (`mirror_set_enabled`, `mirror_set_root`) take
       // `sync::with_write` and are in the loop below with everything else.
       "mirror_rebuild",
-      // The backup archive, both doors, unlocked for `mirror_rebuild`'s reason exactly:
-      // `mirror::snapshot::build_now` opens a **read-only connection of its own** and falls back
-      // to the shared read connection only if it cannot — it never reaches for the write one, so
-      // there is no `BUSY` for either to answer. They are in `writeHandlers` because they
-      // *produce* something (a download, or a file at a picked path), not because they write a
-      // row.
-      "mirror_backup_zip",
-      "mirror_backup_save",
       // The eleventh, and the first that touches **no connection of any kind**: pairing's
       // cancel clears `AppState.pairing`, a mutex of its own that has nothing to do with
       // the database, so there is no `BUSY` for it to answer. Its seven neighbours all take
@@ -10482,9 +10474,6 @@ describe("the busy fault", () => {
     // that is worth this loop's attention rather than in spite of it: everything *after* the door
     // in that command is best effort by design (spec §2.1), so `refuseIfBusy` is the one refusal
     // it has and a handler that forgot it would look identical from outside.
-    // The backup archive then added **two handlers and no refusals**, so its own delta was zero:
-    // `mirror_backup_zip` and `mirror_backup_save` both joined `unlocked` above, for
-    // `mirror_rebuild`'s reason.
     //
     // One-sided pairing then moved it by **minus one**: `sync_pairing_respond` and
     // `sync_pairing_complete` are gone (a relay carries both blobs now, spec §1) and
@@ -10588,10 +10577,8 @@ describe("the busy fault", () => {
     //
     // **Both of the two paragraphs above were written as `96 → 97`, on two branches that
     // could not see each other, and the merge of them is `98`.** That is the fourth time this
-    // file has met it and the second time in one afternoon — `src-tauri/src/web/route.rs`'s
-    // `COMMANDS.len()` hit the identical shape in the same merge, 143 against 142 answering
-    // 144. Neither delta was wrong; a count is a fact about a *tree*, and two open branches
-    // are two trees. **98 was taken by running the sweep and reading `left`**, which is what
+    // file has met it. Neither delta was wrong; a count is a fact about a *tree*, and two open
+    // branches are two trees. **98 was taken by running the sweep and reading `left`**, which is what
     // every paragraph here tells you to do and what neither branch could do alone.
     //
     // The folder tree's remembered width then added **one**, 98 → 99: `set_deck_folder_pane` is
@@ -14577,8 +14564,6 @@ describe("deck tokens", () => {
    * **The picture is the entry's printing**, and the starter world is the fixture that can tell
    * the entry from the resolver apart: deck 1's Treasure entry is the older art while the resolver
    * names the newer, so a row taking the resolver's would draw the art the reader chose against.
-   * That failure reaches the web target and the phone alone — on the desktop `mtgimg://` corrects
-   * it off `printingId` — so nothing else here can see it.
    *
    * The URLs are read back off `CARDS` rather than written out: they are the fixture's own real
    * Scryfall ones, and an assertion quoting them would pin a generated file's contents.
@@ -14746,7 +14731,7 @@ describe("deck tokens", () => {
   });
 
   /** The `imageUrisMissing` fault is the whole corpus with both URL columns empty, so every
-   *  token answers `null` — the no-art frame, which is what a browser draws for such a row. */
+   *  token answers `null`. */
   it("answers no picture at all under the imageUrisMissing fault", () => {
     const rows = tokensOf({ ...seed("starter"), fault: "imageUrisMissing" }, 1);
 
@@ -17361,9 +17346,8 @@ describe("deck review count", () => {
 
 /**
  * `upcoming_sets` — sets with paper printings released after today and inside the window, read
- * over `cards` because the browser build never fills `sets`. The fake has no `set_type` at all,
- * which is the browser build's shape: the layout fence and the released-set rule are the whole of
- * it here.
+ * over `cards`. The fake has no `set_type` at all, so the layout fence and the released-set rule
+ * are the whole of it here.
  */
 describe("upcoming sets", () => {
   const TODAY = new Date(CLOCK_BASE * 1_000).toISOString().slice(0, 10);

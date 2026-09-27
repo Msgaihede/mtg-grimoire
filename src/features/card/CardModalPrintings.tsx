@@ -422,16 +422,7 @@ export function CardModalPrintings({
         </div>
       ))}
 
-      {/* **The URL comes from here because this is the only place that has it.** `dwell` carries
-          a printing *id*, and on the web build there is no local cache to ask for the bytes —
-          `cardArtSrc` needs the row's own `image_uris`, which the hook never sees. The `find`
-          runs only while a preview is open, over a list already capped by the page the host
-          asked for. */}
-      <PrintingPreview
-        printingId={dwell.printingId}
-        imageUrl={items.find((p) => p.id === dwell.printingId)?.imageUris?.display}
-        anchor={dwell.anchor}
-      />
+      <PrintingPreview printingId={dwell.printingId} anchor={dwell.anchor} />
       </div>
     </section>
     </>

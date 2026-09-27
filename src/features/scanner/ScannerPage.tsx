@@ -6,7 +6,6 @@ import { ipc, ipcError } from "@/lib/ipc";
 import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
-import { isWebTarget } from "@/pwa/target";
 import { Overlay } from "./Overlay";
 import { TiersPanel } from "./panels/TiersPanel";
 import { statusLine, type LastAdded } from "./reader/readerText";
@@ -21,7 +20,7 @@ import { useScanLoop } from "./useScanLoop";
 import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS, useScannerElsewhere } from "./useScannerElsewhere";
 import { useScannerPrefs } from "./useScannerPrefs";
 import { useTray } from "./useTray";
-import { bundleSentence, modelsSentence, SCANNER_OPEN_ELSEWHERE, WEB_SENTENCE } from "./verdictText";
+import { bundleSentence, modelsSentence, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
 /**
  * How long a row that just landed stays marked as the one to flash.
@@ -76,14 +75,12 @@ function withoutCommitted(
  * The Scanner view: the reader's bar across the top, the camera and one line saying what it is
  * doing, and the review tray beside it — with today's developer panels one switch away.
  *
- * **Dispatched above the hooks, and gated below the dispatch.** On the web target there is no
- * detector, so the whole view is one sentence and nothing below this line runs: no camera is asked
- * for, no command is called, and no `useQuery` is conditional — `BackupPanel`'s shape, for
- * `BackupPanel`'s reason. On the desktop {@link ScannerGate} stands between that dispatch and the
- * live view, because one window scans at a time and whether another holds the scanner has to be
- * answered *before* the camera is asked for — the live view's own hooks open it as they mount. So
- * the question is a component of its own with one query in it, and the live view mounts only once
- * the answer is "free".
+ * **Gated above the live view.** One window scans at a time (spec §5.3): the scanner is a lease
+ * the window using it keeps renewing, and whether another holds it has to be answered *before* the
+ * camera is asked for — the live view's own hooks open it as they mount. So this component asks
+ * that one question with one query, and `LiveScanner` mounts only once the answer is "free", so a
+ * second window never opens a camera only to be refused. A failed ask is treated as "free" — the
+ * live view's heartbeat is the real gate and asks again the moment it is refused.
  *
  * **The camera and the panels are two halves on purpose.** `useCamera` and `useScanLoop` own
  * the stream and the pump; `ScanBar`, `TrayPanel` and `ScannerPanels` are pure and take what
@@ -97,25 +94,6 @@ function withoutCommitted(
  * this view.
  */
 export function ScannerPage(): JSX.Element {
-  return isWebTarget() ? <WebSentence /> : <ScannerGate />;
-}
-
-function WebSentence() {
-  return (
-    <section className="flex h-full flex-col gap-3">
-      <h2 className="sr-only">Scanner</h2>
-      <p className="text-dim">{WEB_SENTENCE}</p>
-    </section>
-  );
-}
-
-/**
- * One window scans at a time (spec §5.3): the scanner is a lease the window using it keeps
- * renewing. Asked before `LiveScanner` mounts, so a second window never opens a camera only to be
- * refused. A failed ask is treated as "free" — the live view's heartbeat is the real gate and asks
- * again the moment it is refused.
- */
-function ScannerGate() {
   const elsewhere = useScannerElsewhere();
   if (elsewhere.data === true) return <ElsewhereSentence />;
   if (elsewhere.isPending) {

@@ -19,11 +19,6 @@ export default defineConfig({
     alias: { "@": "/src" },
   },
 
-  // Which core the bundle talks to. `"tauri"` here and in vitest; `vite.web.config.ts`
-  // overrides it. A `define` rather than an env read so the unused branch is folded away
-  // rather than merely unreachable.
-  define: { __CORE__: JSON.stringify("tauri") },
-
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
@@ -145,10 +140,6 @@ export default defineConfig({
         // only ever runs in a browser.
         "src/vite-env.d.ts",
         "src/main.tsx",
-        // The service worker's global-scope half. `swCore.ts` beside it holds every decision
-        // and is covered; this file is `caches` calls with no branches, it cannot be imported
-        // into jsdom at all, and the live pass is what proves it.
-        "src/pwa/sw.ts",
         ".claude/**/*",
       ],
     },

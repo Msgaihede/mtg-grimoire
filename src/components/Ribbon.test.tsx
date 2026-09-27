@@ -234,8 +234,7 @@ describe("Ribbon", () => {
   });
 
   /**
-   * `deviceSync` is `null` for both the web target and every installation that has paired
-   * nothing — which is every installation today. Neither is a failure, so the row says
+   * `deviceSync` is `null` when the caller passes none. That is not a failure, so the row says
    * nothing rather than drawing a marker for a feature that does not apply.
    */
   it("says nothing about device sync when there is no group", () => {
@@ -245,10 +244,9 @@ describe("Ribbon", () => {
 
   /**
    * `null` and `"off"` are two different answers and this file's `null` case above does not
-   * stand in for this one. `AppShell` substitutes `null` only for the web target
-   * (`isWebTarget() ? null : deviceSync`); `useDeviceSyncLive` itself holds `"off"` on desktop
-   * and Android for every installation that has paired nothing, which is every installation
-   * today — so this is the branch every real desktop and Android reader is actually on.
+   * stand in for this one. `useDeviceSyncLive` holds `"off"` for every installation that has
+   * paired nothing, which is every installation today — so this is the branch every real reader
+   * is actually on.
    */
   it("says nothing when the socket is off", () => {
     render(<Ribbon {...props({ deviceSync: "off" })} />);

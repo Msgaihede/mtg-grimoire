@@ -45,7 +45,7 @@ import { FoilOverlay } from "@/components/CardArt";
 import { CardImage } from "@/components/CardImage";
 import { ManaText } from "@/components/ManaText";
 import { playedFinish } from "@/lib/finish";
-import { cardArtSrc, cardImageUrl } from "@/lib/images";
+import { cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
@@ -208,7 +208,6 @@ export type DeckCardFaceFacts = Pick<
   DeckCard,
   | "cardId"
   | "needsReview"
-  | "imageUris"
   | "finish"
   | "finishes"
   | "name"
@@ -279,15 +278,7 @@ export function DeckCardFace({
   // it is corrected here rather than carried across, because a moved comment is the last place a
   // stale number gets read.
   const face = useImageRetry(
-    // **`cardArtSrc` is called here rather than inside `CardArt`** — these two views build their
-    // own `<img>` (the height is a computed pixel count, not 5:7), so this is the one deck surface
-    // that has to make the desktop/web choice itself. Both candidates go in and one URL comes out:
-    // the protocol on Tauri, the row's own URL on web, and `null` for an orphan or a printing with
-    // no picture, which is what the frame under it already draws for.
-    cardArtSrc(
-      card.needsReview === null ? cardImageUrl(card.cardId, 0, DECK_CARD_VARIANT) : null,
-      card.imageUris?.[DECK_CARD_VARIANT],
-    ),
+    card.needsReview === null ? cardImageUrl(card.cardId, 0, DECK_CARD_VARIANT) : null,
   );
   const finish = playedFinish(card.finish, card.finishes);
   // There is a URL and it has not failed. Not "the bytes have arrived" — nothing here can know

@@ -16,9 +16,8 @@ import { BUTTON } from "./controls";
  *
  * **`jsQR` rather than `BarcodeDetector`, which is `undefined` in WebView2** (measured
  * 2026-08-31) — so a platform decoder is not on the table and a JS one is required whatever else
- * is decided. `jsQR` is a plain function over `ImageData`, which is also what makes this one
- * component serve the desktop scanner, Android's and a future web build's, with nothing native
- * underneath any of them.
+ * is decided. `jsQR` is a plain function over `ImageData`, so there is nothing native underneath
+ * it.
  *
  * ⚠️ **`NotSupportedError` here does not mean the browser lacks the API.** Measured 2026-08-31:
  * in the Tauri WebView2, permissions policy allows `camera`, `permissions.query` answers

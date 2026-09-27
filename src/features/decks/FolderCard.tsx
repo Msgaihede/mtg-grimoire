@@ -25,7 +25,7 @@ import { plural } from "@/lib/counts";
 import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import { useFolderDropTarget, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
 import { FOCUS } from "@/lib/focus";
-import { ART_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
+import { ART_ASPECT, cardImageUrl } from "@/lib/images";
 import type { DeckRow } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { useImageRetry } from "@/lib/useImageRetry";
@@ -153,7 +153,7 @@ const TRAY_SUBMIT = cn(
  */
 function folderFace(
   node: FolderNode,
-  arts: readonly { id: number; cardId: string; artUrl: string | null; artist: string }[],
+  arts: readonly { id: number; cardId: string; artist: string }[],
   nameLine: ReactNode,
 ): ReactNode {
   return (
@@ -177,7 +177,7 @@ function folderFace(
           </span>
         ) : (
           arts.map((art) => (
-            <MemberArt key={art.id} cardId={art.cardId} artUrl={art.artUrl} artist={art.artist} />
+            <MemberArt key={art.id} cardId={art.cardId} artist={art.artist} />
           ))
         )}
       </span>
@@ -243,7 +243,7 @@ function FolderRenameForm({
   mark,
 }: {
   node: FolderNode;
-  arts: readonly { id: number; cardId: string; artUrl: string | null; artist: string }[];
+  arts: readonly { id: number; cardId: string; artist: string }[];
   rename: { pending: boolean; onSubmit: (name: string) => void; onCancel: () => void };
   /**
    * The two drags' marks, as the card's own edge — {@link DROP_EDGE} and {@link DROP_OVER}, in
@@ -561,10 +561,6 @@ export function FolderCard({
               id: deck.id,
               cardId: deck.coverCardId,
               artist: deck.coverArtist,
-              // The web build's only picture of this cover — see {@link MemberArt}. Carried
-              // beside the id rather than looked up again, because it is the *row's* answer
-              // about that card and this list is already holding the row.
-              artUrl: deck.imageUris?.art ?? null,
             },
           ]
         : [],
@@ -932,16 +928,12 @@ export function ParentDeckFolderCard({
  *
  * **Only its box changed on 2026-09-08**, and it changed by not being one: the crops fill the
  * whole frame now instead of sitting in a 96px band above the name, so this cell is a `flex-1`
- * column of a box that is the card. Everything below — the two source candidates, the artist's
- * tooltip, the empty cell, the retry — is exactly what it was.
+ * column of a box that is the card. Everything below — the artist's tooltip, the empty cell, the
+ * retry — is exactly what it was.
  *
- * **Both candidates go to `cardArtSrc`, which is the whole of the desktop/web branch and is
- * written nowhere else.** `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL
- * scheme with a browser, so on web the picture is whatever `deck_list` put on that member's own
- * row — and `null` when it put none. A `null` draws the empty `bg-surface` cell below, which is
- * the same thing this frame shows while the bytes are on their way: the card keeps its geometry
- * either way — it comes from the aspect box rather than from any picture — and no broken `<img>`
- * is ever left in it.
+ * The empty `bg-surface` cell is what this frame shows while the bytes are on their way: the card
+ * keeps its geometry either way, because it comes from the aspect box rather than from any
+ * picture.
  *
  * **The illustrator's name is this frame's since 2026-09-07, and it is the reason the card's
  * credit line could go.** Scryfall's image guidelines require an `art` crop's artist to be
@@ -957,17 +949,15 @@ export function ParentDeckFolderCard({
  */
 function MemberArt({
   cardId,
-  artUrl,
   artist,
 }: {
   cardId: string;
-  artUrl: string | null;
   /** Never `null`: the `arts` builder above requires both `coverCardId` and `coverArtist`, so a
    *  crop with nobody to credit is not on the card to begin with. */
   artist: string;
 }) {
   const tip = useTooltip();
-  const image = useImageRetry(cardArtSrc(cardImageUrl(cardId, 0, "art"), artUrl));
+  const image = useImageRetry(cardImageUrl(cardId, 0, "art"));
   return (
     <span {...tip(`Art by ${artist}`)} className="min-w-0 flex-1 overflow-hidden bg-surface">
       {image.src && (

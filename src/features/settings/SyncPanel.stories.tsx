@@ -280,8 +280,8 @@ export const CodeRefused: Story = {
  * for, and the question a real machine name leaves open once the rows stop reading identically.
  *
  * The two names here are what a reader who has renamed their devices sees. What a fresh
- * install mints is the machine itself — `MAIN-PC` on Windows, `OnePlus 12` on Android, a label
- * like `Chrome on Windows` in a browser — and `Rename` is the one press away from either.
+ * install mints is the machine itself — `MAIN-PC` on Windows, the hostname elsewhere — and
+ * `Rename` is the one press away from either.
  */
 export const Paired: Story = {
   parameters: { fake: { seed: "paired" } },
@@ -789,7 +789,7 @@ export const TheReadsAreRefused: Story = {
  * only asked *what happened last time* rather than *is anything listening right now*.
  *
  * **Nothing in the fake answers `sync_live_state` by default**, so `useDeviceSyncLive`'s own
- * seed rejects here exactly as it does on the web target — swallowed, per its own doc — and the
+ * seed rejects here exactly as it does under a plain `vite dev` — swallowed, per its own doc — and the
  * panel opens silent. What moves it is the same `sync:live` event the ribbon's marker
  * subscribes to, driven by hand with `emitFake` the way `AppShell.stories.tsx`'s
  * `FirstRunFailedMidRun` drives `sync:progress`.

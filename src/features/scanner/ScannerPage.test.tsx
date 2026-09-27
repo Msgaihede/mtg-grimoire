@@ -3,10 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionFolder, ScannerPrefs, ScannerVerdict } from "@/lib/ipc";
-import { SCANNER_OPEN_ELSEWHERE, WEB_SENTENCE } from "./verdictText";
+import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import { DEFAULT_SCANNER_PREFS, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
 
-vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 vi.mock("@/lib/ipc", async (orig) => {
   const real = await orig<typeof import("@/lib/ipc")>();
   const { DEFAULT_SCANNER_PREFS: prefs } = await import("./fixtures");
@@ -41,7 +40,6 @@ vi.mock("@/lib/ipc", async (orig) => {
     },
   };
 });
-import { isWebTarget } from "@/pwa/target";
 import { ipc } from "@/lib/ipc";
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
@@ -243,17 +241,6 @@ afterEach(() => {
 });
 
 describe("ScannerPage", () => {
-  it("says the web build has no detector and asks for no camera", () => {
-    vi.mocked(isWebTarget).mockReturnValueOnce(true);
-    const getUserMedia = vi.fn();
-    mediaDevices(getUserMedia);
-    mount();
-    expect(screen.getByText(WEB_SENTENCE)).toBeInTheDocument();
-    expect(getUserMedia).not.toHaveBeenCalled();
-    expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
-    expect(vi.mocked(ipc.scannerStatus)).not.toHaveBeenCalled();
-  });
-
   it("shows the refused camera's sentence in place of the video, and the missing bundle under it", async () => {
     refused();
     mount();

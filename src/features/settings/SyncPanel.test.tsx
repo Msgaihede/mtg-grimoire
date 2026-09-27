@@ -87,8 +87,8 @@ const PHONE = "cc".repeat(16);
  *  panel must draw as an offer rather than as a group of one. */
 const UNPAIRED: PairingStatus = {
   deviceId: ME,
-  // A hostname, because `identity::ensure` mints one — `COMPUTERNAME` on Windows, the model on
-  // Android, a user-agent label in a browser. "This device" was every install's name until
+  // A hostname, because `identity::ensure` mints one — `COMPUTERNAME` on Windows, `HOSTNAME`
+  // elsewhere. "This device" was every install's name until
   // 2026-08-29 and is now only ever the **pill**, so a fixture still carrying it as a *name*
   // would make `getByText("This device")` ambiguous in exactly the test that matters.
   deviceName: "MAIN-PC",

@@ -2,8 +2,7 @@ import { defineConfig, mergeConfig } from "vite";
 import base from "./vite.config";
 
 /**
- * The **public web viewer**'s build — the third Vite config in this repo, after the app's and the
- * web target's.
+ * The **public web viewer**'s build — a Vite config of its own, merged over the app's.
  *
  * It produces `dist-share/`, which `share-worker/wrangler.jsonc` serves through its `assets`
  * binding. A static asset request is free and unlimited even on the Workers free plan, which is
@@ -40,13 +39,6 @@ export default mergeConfig(
     // ⚠️ **The root stays the repository root.** `resolve.alias`' `"@": "/src"` is *root-relative*
     // in Vite, so `root: "share"` would quietly resolve every `@/…` against `share/` — the entry
     // is named below instead, which is the whole difference.
-    //
-    // Which core the bundle talks to. **`"web"` is required rather than cosmetic**:
-    // `src/lib/core/index.ts` and `src/pwa/target.ts` read `__CORE__` at module scope and a
-    // bundle without it fails to build. It is also what makes `cardArtSrc` prefer the URL the
-    // snapshot carries over the `mtgimg://` protocol a browser has never heard of.
-    define: { __CORE__: JSON.stringify("web") },
-
     build: {
       outDir: "dist-share",
       emptyOutDir: true,
@@ -68,8 +60,8 @@ export default mergeConfig(
       },
     },
 
-    // Not 1420 (`tauri dev`, hardcoded in tracked files), not 5173 (the web target), not 6006
-    // (Storybook). All four have to be able to run at once.
+    // Not 1420 (`tauri dev`, hardcoded in tracked files) and not 6006 (Storybook). All three have
+    // to be able to run at once.
     server: { port: 5174, strictPort: true },
   }),
 );
