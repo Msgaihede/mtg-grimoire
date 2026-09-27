@@ -581,50 +581,6 @@ fn grouped_diff(
     Ok(diff)
 }
 
-/// Copy the live list into the theory one, leaving whatever theory already holds alone.
-///
-/// **Takes the caller's connection and opens no transaction**, exactly as
-/// [`crate::deck_audit::record`] does, because its caller [`copy_from_live`] pairs it with a
-/// `touch_deck` and a history row and the three are one fact: a copy that committed while the
-/// history rolled back is a change with no line against it.
-///
-/// `ON CONFLICT … DO NOTHING` on [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) rather
-/// than a fold: a theory row the user already made is *their plan for that card*, and topping
-/// it up with the live count would silently overwrite the very edit the theory list exists to
-/// hold. So this is a seed that can also top up — idempotent, never destructive, and returning
-/// how many rows it actually wrote.
-///
-/// `label_id` and `needs_review` travel with the copy. A label is the user's word about this card
-/// in this deck and a plan inherits it; the flag says the printing left the card database, which
-/// is as true of the copy as of the original.
-///
-/// **Moves no cardboard**, and must not: it writes `deck_cards` rows and nothing else. Copies
-/// cross the deck boundary only through [`crate::collection_alloc`]'s two writes, which a plan
-/// cannot reach — so a seed that touched the collection would file a second set of copies the
-/// reader does not own into a group that already holds theirs.
-///
-/// Answers the number of **rows** written, which is what `execute` counts. [`copy_from_live`]
-/// wants **copies** for its history and measures them itself with [`theory_copies`] — a row is
-/// a line and a copy is a card, and this app counts decks in cards everywhere else.
-pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, String> {
-    let sql = format!(
-        // `finish` comes across with the row: the plan is what is sleeved up, and a plan that
-        // quietly turned every foil into a regular copy would price differently from the deck
-        // it was copied from.
-        "INSERT INTO deck_cards
-            (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-             label_id, quantity, needs_review, finish, created_at, updated_at)
-         SELECT deck_id, category_id, ?2, card_id, set_code, collector_number, lang, name,
-                label_id, quantity, needs_review, finish, unixepoch(), unixepoch()
-           FROM deck_cards
-          WHERE deck_id = ?1 AND variant = ?3
-         ON CONFLICT({grain}) DO NOTHING",
-        grain = crate::schema::DECK_CARD_GRAIN
-    );
-    tx.execute(&sql, params![deck_id, THEORY, LIVE])
-        .map_err(|e| e.to_string())
-}
-
 /// **Move** the live list into the theory one: the same rows, re-labelled, leaving `live`
 /// empty.
 ///
@@ -654,8 +610,9 @@ pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, Str
 /// the copies are physically in the box with the deck's name on it, the plan moving does not
 /// unsleeve them, and `enabling_theory_leaves_the_copies_in_the_decks_group` pins it.
 ///
-/// Answers the number of **rows** moved, which is what `execute` counts — [`seed_from_live`]'s
-/// unit, and for its reason.
+/// Answers the number of **rows** moved, which is what `execute` counts — lines, not cards. A
+/// row is a line and a copy is a card, and this app counts decks in cards everywhere else, so the
+/// number is not one to put in front of a reader as it stands.
 pub(crate) fn move_live_into_theory(tx: &Connection, deck_id: i64) -> Result<usize, String> {
     let moved = tx
         .execute(
@@ -682,72 +639,6 @@ pub(crate) fn theory_is_empty(conn: &Connection, deck_id: i64) -> Result<bool, S
         |r| r.get(0),
     )
     .map_err(|e| e.to_string())
-}
-
-/// Copies the theory list holds, summed. The unit a deck is counted in everywhere else in this
-/// app — two printings at 2 and 3 is 5 cards, not 2.
-fn theory_copies(conn: &Connection, deck_id: i64) -> Result<i64, String> {
-    conn.query_row(
-        "SELECT coalesce(sum(quantity), 0) FROM deck_cards
-          WHERE deck_id = ?1 AND variant = ?2",
-        params![deck_id, THEORY],
-        |r| r.get(0),
-    )
-    .map_err(|e| e.to_string())
-}
-
-/// [`seed_from_live`] as a command of its own — "copy what I have sleeved up into the plan",
-/// pressed.
-///
-/// **This is the copy, and it stays a copy**, which is what tells it apart from
-/// [`move_live_into_theory`] now that switching the list on is a move. That one runs once, on a
-/// deck whose live list *is* the plan the reader typed out; this one is pressed later, on a deck
-/// that has both lists, and it means "the cards I actually own should be in the plan too". Live
-/// keeps every row, exactly as the button says.
-///
-/// Opens the transaction its callee will not, and moves `updated_at` through
-/// [`crate::deck::touch_deck`] so the gallery surfaces the edit and a stale deck id is answered
-/// with [`crate::deck::GONE`] rather than with a silent no-op.
-///
-/// **Records exactly one history row**, kind `deck`, field `theory`, carrying the copies it
-/// added — and it has to, for a reason worth stating because the opposite was tried first. The
-/// toggle's own row is a fact about a *switch*, written once per deck whether the deck holds
-/// forty cards or none; on a list that already exists, which is the only state where this button
-/// is meaningfully pressed, the toggle's row was written long ago and nothing else would be.
-/// "Log ALL changes" is the whole point of the table, and a press that copies forty cards into a
-/// list is a change.
-///
-/// One row and not one per card: N `add` rows would read as a deck somebody typed out, and the
-/// toggle path — where the move rides along inside `update_deck` — records one row for the
-/// same reason. `copied` is in the payload **and** in `delta`, which is [`crate::deck_audit`]'s
-/// established shape (an `add` carries its quantity in both): `delta` is the day header's
-/// arithmetic, the payload is the sentence's facts.
-pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> {
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    crate::deck::touch_deck(&tx, deck_id)?;
-    // Measured either side of the insert rather than derived from its row count: `execute`
-    // counts rows and a row is a line, while what a reader (and `delta`) wants is cards.
-    let before = theory_copies(&tx, deck_id)?;
-    // The plan as it stood. `copied` is a count and cannot rebuild a list — and this command's
-    // whole job is to pour one list into another, so what an undo has to put back is the
-    // *other* list's rows rather than a number of them.
-    let cards_before = crate::deck_undo::read_variant(&tx, deck_id, THEORY)?;
-    let rows = seed_from_live(&tx, deck_id)?;
-    let copied = theory_copies(&tx, deck_id)? - before;
-    let audit_id = crate::deck_audit::record(
-        &tx,
-        deck_id,
-        THEORY,
-        crate::deck_audit::DECK,
-        None,
-        &serde_json::json!({ "field": "theory", "copied": copied }),
-        copied,
-    )?;
-    // `None` for the pile diff: `seed_from_live` re-labels rows into categories the deck
-    // already has, so this command cannot invent one.
-    crate::deck_undo::record_variant(&tx, audit_id, deck_id, THEORY, cards_before, None, None)?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(rows)
 }
 
 /// Everything the plan is short of, onto the wishlist. Returns how many wishes were touched.
@@ -1129,19 +1020,6 @@ pub async fn deck_theory_diff(
     })
     .await
     .map_err(|e| format!("the theory list could not be read: {e}"))?
-}
-
-/// Seed the theory list from the live one. Answers how many rows were written.
-#[cfg(not(target_family = "wasm"))]
-#[tauri::command]
-pub async fn deck_theory_copy_from_live(
-    state: tauri::State<'_, Arc<AppState>>,
-    deck_id: i64,
-) -> Result<usize, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| copy_from_live(c, deck_id)))
-        .await
-        .map_err(unfinished)?
 }
 
 /// The one click: everything the plan is short of, onto the wishlist — or, with `only`, the
@@ -2597,103 +2475,12 @@ mod tests {
         );
     }
 
-    /// Rule 1 of the audit table reaches this button too: a press that moves forty cards into
-    /// the plan is a change, and on an already-seeded list the toggle's row was written long
-    /// ago. One row, carrying **copies** rather than rows — a line is not a card.
-    #[test]
-    fn copying_from_live_records_one_row_carrying_the_copies() {
-        let conn = seeded();
-        let id = deck(&conn, "Burn");
-        let main = category(&conn, id, "Main deck");
-        add(&conn, id, "bolt-lea", main, LIVE, 4);
-        add(&conn, id, "serra-lea", main, LIVE, 2);
-        conn.execute("DELETE FROM deck_audit", []).unwrap();
-
-        copy_from_live(&conn, id).unwrap();
-
-        let history = crate::deck_audit::list(&conn, id, 100).unwrap();
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].kind, crate::deck_audit::DECK);
-        assert_eq!(history[0].variant, THEORY);
-        assert_eq!(history[0].delta, 6, "copies, not the two rows");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&history[0].payload).unwrap(),
-            serde_json::json!({ "field": "theory", "copied": 6 })
-        );
-    }
-
-    /// An explicit copy tops the plan up without touching a row the user changed — the
-    /// `DO NOTHING` half of [`seed_from_live`], which a fold would get wrong invisibly.
-    #[test]
-    fn copying_from_live_leaves_a_changed_theory_row_alone() {
-        let conn = seeded();
-        let id = deck(&conn, "Burn");
-        let main = category(&conn, id, "Main deck");
-        add(&conn, id, "bolt-lea", main, LIVE, 4);
-        add(&conn, id, "serra-lea", main, LIVE, 2);
-        add(&conn, id, "bolt-lea", main, THEORY, 1);
-
-        let copied = copy_from_live(&conn, id).unwrap();
-
-        assert_eq!(copied, 1, "only the row theory did not have");
-        assert_eq!(
-            cards_in(&conn, id, THEORY),
-            vec![("bolt-lea".to_owned(), 1), ("serra-lea".to_owned(), 2)],
-            "the user's own count for the Bolt survives"
-        );
-    }
-
-    /// **A plan moves no cardboard**, which is what this rule became at schema v25. It used to
-    /// read "a plan reserves nothing" against a claim ledger; there is no ledger, and the way a
-    /// plan could now go wrong is sharper — [`seed_from_live`] writes a pile of `theory` rows in
-    /// one statement, and any of that copying reaching the collection would file a second set of
-    /// copies the reader does not own into a group that already holds theirs.
-    ///
-    /// **The deck has to really hold the copies, or the test cannot fail.** Eight owned against
-    /// four sleeved up, so a seed that duplicated the group's contents would come out at eight
-    /// in the box — a fixture with everything in the group already at its maximum could not tell
-    /// a doubling from a no-op.
-    #[test]
-    fn seeding_the_plan_moves_no_collection_copy() {
-        let conn = seeded();
-        let id = deck(&conn, "Burn");
-        let main = category(&conn, id, "Main deck");
-        // Four sleeved up and four still in the binder. **The split is what makes a doubling
-        // visible**: a group already holding everything the reader owns reads the same whether
-        // the seed filed a second set or nothing at all. Filed first and topped up after,
-        // because `own` lands on the eleven-term grain — a second add at the root while the
-        // first row is still there is one row of eight, not two rows of four.
-        let sleeved = own(&conn, "bolt-lea", 4);
-        file_into(&conn, sleeved, Some(group_of(&conn, id)));
-        own(&conn, "bolt-lea", 4);
-        add(&conn, id, "bolt-lea", main, LIVE, 4);
-
-        copy_from_live(&conn, id).unwrap();
-
-        assert_eq!(
-            cards_in(&conn, id, THEORY),
-            vec![("bolt-lea".to_owned(), 4)],
-            "the plan holds the same four copies"
-        );
-        assert_eq!(
-            copies_in(&conn, Some(group_of(&conn, id))),
-            vec![("bolt-lea".to_owned(), 4)],
-            "and the box still holds four, not eight"
-        );
-        assert_eq!(
-            copies_in(&conn, None),
-            vec![("bolt-lea".to_owned(), 4)],
-            "the binder is untouched too — a plan is a list, and lists move no cardboard"
-        );
-    }
-
     /// A stale deck id is answered in words by every entry point here, rather than by an empty
     /// list that reads like a deck with nothing in it.
     #[test]
     fn a_deck_that_is_gone_is_refused_by_name() {
         let conn = seeded();
 
-        assert_eq!(copy_from_live(&conn, 404).unwrap_err(), crate::deck::GONE);
         assert_eq!(
             missing_to_wishlist(&conn, 404, None, None).unwrap_err(),
             crate::deck::GONE

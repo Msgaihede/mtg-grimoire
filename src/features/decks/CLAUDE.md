@@ -1094,8 +1094,8 @@ layer.
   an empty theory list beside a full live one reads as data loss. Right danger, wrong half:
   nothing is deleted either way — the two lists are the same table — and what the copy actually
   handed the reader was two identical lists with no way to tell which one they were editing.
-  `deck_theory_copy_from_live` is unchanged and still means "copy what is sleeved up into the
-  plan".
+  The explicit copy-from-live command that outlived that rule was removed on 2026-09-27: it never
+  had a caller, so nothing in the app copies one list into the other now.
 - **The Live list marks which of its cards are the plan, and that mark is `theoryMatch.ts`.** A
   live list is what the reader has actually sleeved up; the one thing it cannot say about itself is
   which rows are the deck they designed and which are the proxies and stand-ins waiting to be
@@ -2144,7 +2144,8 @@ layer.
   number **per card section** (`ZoomSection`) rather than one for the app, so the deck desk and the
   docked search column zoom apart. It lands between the two poles and on neither: session-scoped
   like the view toggles, but keyed by which _wall_ the reader is looking at, and still not a fact
-  about a particular deck — every deck's desk shares the one `deck` entry, so it cannot answer what
+  about a particular deck — every deck's desk shares the one `deck` entry (and every deck's Grid
+  the one `deckGrid`), so it cannot answer what
   `lastVariant`/`lastGroupBy`/`lastSortBy` are asked. The two view toggles are what the argument
   above rests on, and they are unchanged.
 - **The narrowing is TypeScript's, and that is the boundary rather than a missing constraint.**
@@ -2391,6 +2392,17 @@ layer.
   border` wrapper and the stack's resting shadow, `CardChin` under it with this view's `seam` and
   the deck's own shortage figure, and `DeckCardControls layout="card-column"` over it — which is
   exactly the split `CardStack` already makes.
+  **The tile publishes `deckCardScale(width)` — its width over the stacked card's 210px — and
+  never the zoom** (issue #567, 2026-09-27). Every length on the face, the chin and the controls
+  column is written for a 210px card at `--mark-scale` 1, and a stacked card's width *is* 210 × the
+  zoom, so the stack publishing the zoom is right. The tile is 150px at 1× and published the zoom
+  too, so it wore a 210px card's marks on a card 1.4× smaller: a 27px title-bar scrim over the
+  ~19px bar the picture prints, the tag and tick overrunning it, a 28px chin, and a stepper column
+  over half the card — the reader's "badges and quantity buttons way too big". Read off the width,
+  a tile is the stacked card at ~71 % at every stop. The reader chose that over drawing the tile
+  at 210px (the grid's density is kept), and `TokenGridPile` takes the same answer off its own
+  `tileWidth`. **The zoom now decides only the tile's width and the wall's gutter**, and since the
+  same issue it is `deckGrid`'s rather than the Stacks desk's `deck`: the two views zoom apart.
   **What this replaces is the 2026-08-16 move to `components/CardArt`, and that move was the right
   fix aimed at the wrong wall.** Its finding is kept because it was true: the tile *was* a
   hand-rolled copy of the search wall's frame — its own `useImageRetry` call, its own
@@ -2506,6 +2518,14 @@ layer.
     Everything else about the tile — the wrapper's border and shadow, the chin's seam,
     the controls column at each end of the zoom ladder — is still owed, and no figure for any of
     it belongs on this page until it is taken.
+- **Each view keeps its own scroll position on that one scroller** (issue #567, 2026-09-27).
+  `main` outlives a view switch, so the departing view's `scrollTop` used to carry into the
+  arriving one — two thousand pixels down a Stacks desk was two thousand pixels down a Grid wall
+  laid out nothing like it. `lib/useScrollPerView` keeps a position per view and hands it back on
+  return; a view never visited opens at the page's top. **The view picker calls `parkScroll()`
+  _before_ `setView`**, and that order is the fix: after the switch the new view is in the DOM and
+  `scrollTop` reads back already clamped to its height. A second control that changes the view has
+  to park first too.
 - **The editor is no longer a scroller at all — `AppShell`'s `main` is the one that scrolls**
   (changed 2026-08-24, `f02b284` "fix scroll"). The `<section>` is `relative flex h-full min-h-0
   flex-col gap-3` and carries no `overflow`, where it carried `overflow-y-auto` from 2026-08-14
@@ -3605,7 +3625,7 @@ layer.
 - **Every number in the two bullets above is the value at zoom 1×, which is where the reader starts
   and no longer where they stay.** Ctrl+wheel over the desk steps **the desk's own zoom** —
   `useAppStore`'s `cardZoom.deck`, one entry of a record keyed by card section
-  (`src/lib/cardZoom.ts`), shared by the Stacks and Grid views because they draw the same pile —
+  (`src/lib/cardZoom.ts`) — Stacks' alone since issue #567, when Grid took `deckGrid` of its own —
   along a ten-stop ladder from 0.5× to 2×, so each of those constants now
   has a function beside it — `stackCardWidth`, `stackImageHeight`, `stackDataHeight`,
   `stackCardHeight`, `stackAdvance`, `stackCollapsedMargin`, `stackHeight(n, zoom)`, and

@@ -217,11 +217,14 @@ pub fn open_read(data_dir: &Path) -> rusqlite::Result<Connection> {
 /// `image_cache` produced no callback at all and the row was there. Twelve corpus tables are
 /// `WITHOUT ROWID`: `image_cache`, `marketplace_prices`, `art_tags`, `art_tag_parents`,
 /// `art_taggings`, `art_tag_illustrations`, `oracle_tags`, `oracle_tag_parents`,
-/// `oracle_taggings`, `oracle_tag_cards`, `cards_fts_idx` and `cards_fts_config`. **Two are on
-/// the user side, not one — `muted_tags` and, since user schema v31, `device_names`**
-/// ([`crate::schema::SYNCED_TABLES`], and both `CREATE TABLE`s
-/// carry the same `) WITHOUT ROWID;`). A transaction whose *only* corpus write is to one of the
-/// first twelve is invisible here, and `image_cache` is the likeliest candidate in the crate.
+/// `oracle_taggings`, `oracle_tag_cards`, `cards_fts_idx` and `cards_fts_config`. **Six are on
+/// the user side** — `muted_tags`, `device_names`, `sync_devices` and `sync_state`, which a
+/// command marks by hand, and `price_snapshots` and `sync_peers`, which only the app writes; the
+/// census and its `sqlite_master` test are `changes::MARKED_BY_COMMAND` and
+/// `changes::WRITTEN_BY_THE_APP` (a desktop-only module, so not linked from this every-target one). Two of the six are synced — `muted_tags` and, since
+/// user schema v31, `device_names` ([`crate::schema::SYNCED_TABLES`]). A transaction whose *only*
+/// corpus write is to one of the first twelve is invisible here, and `image_cache` is the
+/// likeliest candidate in the crate.
 /// **The same blind spot is why live sync's write-wake rides `commit_hook` rather than this
 /// one**: `commit_hook` fires once per transaction regardless of a table's rowid shape, where an
 /// update-hook debounce would silently never sync a muted tag or a device rename. See

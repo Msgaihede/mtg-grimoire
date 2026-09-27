@@ -3627,6 +3627,27 @@ mod tests {
         assert!(filed.root_only);
     }
 
+    /// **Two finish fields on one flattened object, and neither may swallow the other.**
+    /// `finishes` is this query's own — the finish one *copy* is in — and `printedFinishes` is
+    /// [`crate::filters::CardFilters::printed_finishes`], the finishes the printing is published
+    /// in, arriving through `#[serde(flatten)]`. Had the card filter taken the name `finishes`,
+    /// serde would hand the key to one field and leave the other `None`, and a binder filtered
+    /// by the copy's finish would silently stop being filtered by it.
+    #[test]
+    fn a_collection_payload_carries_the_copys_finish_and_the_printings_finishes_apart() {
+        let q: CollectionQuery = serde_json::from_str(
+            r#"{"finishes":["nonfoil"],"printedFinishes":["foil"],"borders":["fullart"]}"#,
+        )
+        .unwrap();
+        assert_eq!(q.finishes, Some(vec!["nonfoil".to_owned()]), "the copy's");
+        assert_eq!(
+            q.cards.printed_finishes,
+            Some(vec!["foil".to_owned()]),
+            "the printing's, through the flatten"
+        );
+        assert_eq!(q.cards.borders, Some(vec!["fullart".to_owned()]));
+    }
+
     /// Set a folder aside, straight into the column. `collection_folders::set_folder_locked` is
     /// the reader's press and that module's to test; these tests want a folder that **is**
     /// locked rather than the press that locks it — [`filed_in`]'s reason, one table over.

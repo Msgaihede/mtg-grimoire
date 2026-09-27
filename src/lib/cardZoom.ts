@@ -106,8 +106,13 @@ export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
  * **The list is the census and it is deliberately not counted in this sentence.** It has grown
  * four times, and a number written here is a fact about a *tree* rather than about the rule.
  *
- * `deck` is one key for **both** deck views. Stacks and Grid are two drawings of the same pile,
- * so switching between them must not resize the cards the reader just settled on.
+ * `deck` is the deck editor's **Stacks** view (and the token band on its desk), and `deckGrid` is
+ * its **Grid**. They were one key until issue #567, on the argument that the two are drawings of
+ * the same pile and a view switch should not be a resize. The reader asked for them apart: a wall
+ * of every card and a desk of piles are sized for different jobs — how much of the deck fits on a
+ * screen, against how legible one pile is — and one number made a size settled on either the
+ * other's too. `deck` kept the old key, so a stored Stacks size survives the split; Grid opens at
+ * {@link DEFAULT_ZOOM} once and remembers its own from then on.
  *
  * `printings` is the all-printings modal's wall, and it is the strongest case on the list rather
  * than the weakest: the modal opens **over** a wall the reader has already sized, so a shared
@@ -145,6 +150,7 @@ export const ZOOM_SECTIONS = [
   "wishlistSearch",
   "deckSearch",
   "deck",
+  "deckGrid",
   "deckGallery",
   "home",
   "printings",
@@ -190,6 +196,9 @@ export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
   wishlistSearch: DEFAULT_ZOOM,
   deckSearch: DEFAULT_ZOOM,
   deck: DEFAULT_ZOOM,
+  // The deck editor's Grid view — its own key rather than `deck`'s since issue #567; see
+  // {@link ZOOM_SECTIONS}.
+  deckGrid: DEFAULT_ZOOM,
   // The decks page's wall of tiles and folder cards. A whole deck rather than a card, so it is
   // the one section here whose default is a statement about a 626px art crop and a name under
   // it rather than about a 5:7 face.

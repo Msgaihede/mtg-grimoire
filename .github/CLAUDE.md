@@ -13,24 +13,26 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `main` still can.
 - **A change only builds what it can have broken.** The `changes` job diffs against the base and
   hands the paths to **`scripts/ci-route.mjs`**, whose arms are `case` semantics kept exactly —
-  first match wins, `*` crosses `/`. `src-tauri/**` → **all four build jobs**, `frontend`
-  included, because frontend tests read its files as text (`ipc.test.ts`'s mirror rows, the
-  share golden); `src/features/transfer/__golden__/**` and `src/lib/userTables.json` →
-  `frontend` **and `rust`**, because Rust tests read them; **`crates/*` → all four** (the
-  `card-scanner` package is compiled by `rust` and `android`, and `frontend` reads eight of its
-  `.rs` files as text for `ipc.test.ts` and lints its `scripts/*.mjs`); frontend sources,
-  lockfiles, configs and **`scripts/` because `eslint .` lints it** → `frontend`;
-  `src/workers/`, `src/web/`, `src/lib/core/`, `scripts/build-wasm.mjs` and
-  `vite.web.config.ts` → `frontend` and `wasm`; `*.ps1`/`*.psm1`/`*.psd1` → `powershell`;
-  `ci.yml` and the router itself → every job, `powershell` included; prose and editor
-  bookkeeping → neither; and **anything unrecognised → every build job**. That last arm is the
-  fail-safe that makes the lists safe to be wrong in the cheap direction — and it is
-  load-bearing for `share-worker/`, whose `wrangler.jsonc` a Rust test reads. **Only the
-  "neither" arm can wrongly skip work, so it stays small.**
-  **`scanner-bundle.yml` has no arm of its own (2026-09-15)**, so a PR touching it falls to that
-  fail-safe and runs `frontend`, `rust`, `wasm` and `android` — none of which reads the file —
-  and not `powershell`. That errs in the cheap direction; the arm it belongs on is
-  `release.yml`'s "neither", since no job in `ci.yml` reads either file.
+  first match wins, `*` crosses `/`. `src-tauri/**` → **`frontend`, `rust`, `wasm` and
+  `android`**, `frontend` included because frontend tests read its files as text
+  (`ipc.test.ts`'s mirror rows, the share golden, `desktop.rs`'s `generate_handler!` for the
+  fake's parity test) — and **not `storybook`**, which builds nothing from there;
+  `src/features/transfer/__golden__/**` and `src/lib/userTables.json` → `frontend`, `rust` and
+  `storybook`, because Rust tests read them; **`crates/*` → the same four as `src-tauri/**`**
+  (the `card-scanner` package is compiled by `rust` and `android`, and `frontend` reads eight of
+  its `.rs` files as text for `ipc.test.ts` and lints its `scripts/*.mjs`); frontend sources,
+  `.storybook/**`, lockfiles and configs → `frontend` and `storybook`; **`scripts/` because
+  `eslint .` lints it** → `frontend` alone; `src/workers/`, `src/web/`, `src/lib/core/` →
+  `frontend`, `wasm` and `storybook`, and `scripts/build-wasm.mjs` and `vite.web.config.ts` →
+  `frontend` and `wasm`; `rust-toolchain.toml` and `.github/actions/rust-toolchain/` → the
+  four Rust-side jobs; `release.yml` and `scanner-bundle.yml` → `frontend`, because
+  `scripts/toolchain.test.mjs` reads every workflow; `.nvmrc` → `frontend`, `wasm` and
+  `storybook`; `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router itself → every
+  job, `powershell` included; prose and editor bookkeeping → neither; and **anything
+  unrecognised → every build job**, `storybook` included. That last arm is the fail-safe that
+  makes the lists safe to be wrong in the cheap direction — and it is load-bearing for
+  `share-worker/`, whose `wrangler.jsonc` a Rust test reads. **Only the "neither" arm can
+  wrongly skip work, so it stays small.**
   - **The two halves read each other's files, and `scripts/ci-route.test.mjs` is the fence.**
     Until 2026-09-26 the router said they shared no inputs, so a Rust-only PR that drifted from
     `ipc.ts` merged green and the red landed on the next unrelated PR. The test derives the
@@ -38,18 +40,39 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
     `include_str!`/`include_bytes!`/`CARGO_MANIFEST_DIR` read in either cargo package — and fails
     when a file is read by one job and not routed to it, or crosses and is not routed to both.
     It also holds `ci.yml` to exposing and gating on the names `JOBS` prints, since a name the
-    workflow reads and the script never prints skips its job and `ci-ok` counts that as a pass;
-    the step itself fails on a missing or non-boolean output line.
+    workflow reads and the script never prints skips its job and `ci-ok` counts that as a pass,
+    and — since 2026-09-27 — to listing every one in the classify step's check and in `ci-ok`'s
+    `needs` and loop; the step itself fails on a missing or non-boolean output line.
   - **A push to `main` gets a concurrency group of its own**; PR runs still cancel each other.
     A `main` run's routing diffs from `github.event.before`, so a cancelled one's changes were
     never routed again — and disabling `cancel-in-progress` alone would not save them, because
     GitHub still replaces a *pending* run in the same group with the next.
+- **`frontend` is a matrix of five legs and `storybook` is its own job** (issue #559,
+  2026-09-27). One leg runs `npm run build` and `lint`; four run `npm run test:run --
+  --shard=N/4`, which needs no build first — nothing a test reads comes out of `dist/`. It was
+  one serial 8–12 minute job with `build-storybook` last, and branch protection's `strict: true`
+  re-queues every open PR on every merge, so that path was everybody's. `ci-ok` reads
+  `needs.frontend.result`, `failure` if any leg fails, so no protected name changed. A new test
+  that genuinely needs the built bundle would have to move into the build leg — sharding does
+  not order anything.
+- **`build-storybook` is the only gate `.storybook/DesignSystem.mdx` has** — `tsc` reads only
+  `.ts`/`.tsx` and ESLint ignores the file — and the only compile of `preview.css`.
+- **Rust is pinned by `rust-toolchain.toml`, and no workflow installs its own** (2026-09-27).
+  Every job, `release.yml` and `scanner-bundle.yml` use **`./.github/actions/rust-toolchain`**,
+  which reads the channel with `sed` and hands it to `dtolnay/rust-toolchain@master` — that
+  action does not read the file, and `@stable` beside it would install one toolchain and have
+  rustup fetch the pinned one, without the job's targets, on the first `cargo`. The `wasm` and
+  `android` jobs pass their target as the action's `targets` input. **Moving the pin is a
+  deliberate commit**: a new stable's lints can no longer turn every PR red by themselves.
+  **Node is pinned the same way** — every `setup-node` reads `node-version-file: .nvmrc`.
+  **`scripts/toolchain.test.mjs` fences both**: it globs every workflow and fails on a direct
+  `dtolnay/rust-toolchain`, a `rustup` install, or a `node-version:`.
 - **The `wasm` job exists because a fully green `npm run verify` can ship a broken web
   target.** The crate is one crate with two targets, and a `use tauri::` added to a module on
   the wasm side of `lib.rs`'s module map compiles on desktop and fails on
-  `wasm32-unknown-unknown` — the same shape as `cargo fmt` and `clippy` already being outside
-  `verify`. It is Linux-only (this compiles SQLite's C amalgamation with clang, which is the
-  same compiler everywhere), installs a `wasm-bindgen-cli` **pinned to the crate's exact
+  `wasm32-unknown-unknown` — the shape `cargo fmt` and `clippy` had until `npm run verify`
+  gained `lint:rust` on 2026-09-27. It is Linux-only (this compiles SQLite's C amalgamation
+  with clang, which is the same compiler everywhere), installs a `wasm-bindgen-cli` **pinned to the crate's exact
   version**, and needs no `dist/` stub because `build.rs` returns before `tauri_build` runs for
   a wasm `TARGET`. Its `npm run build:wasm` step also greps the generated glue for every
   exported entry point, which is the one check no compiler can make: dropping a
@@ -114,6 +137,8 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   one for something the step is not about.
 - `--locked` on every cargo call in every workflow. `cargo fmt --check` on Linux only;
   `clippy -D warnings` and `cargo test` on both — for `src-tauri` only, per the bullet above.
+  **`npm run verify` runs the same two as `lint:rust`** since 2026-09-27, after at least seven
+  `style: cargo fmt` catch-up commits in eight weeks — CI ran both and `verify` ran neither.
 
 ## `release.yml`
 

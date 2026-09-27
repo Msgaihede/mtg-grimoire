@@ -119,6 +119,39 @@ describe("folderId is not a filter", () => {
   });
 });
 
+/**
+ * The border chips (issue #573) — the one tray cell this surface gained from that issue. **No
+ * finish beside them**: a wish's `preferred_finish` is what the reader means to buy rather than a
+ * fact about the card, so neither `finishes` nor `printedFinishes` may ride.
+ */
+describe("the border chips", () => {
+  it("sends them as `borders`, keyed, counted as one kind, and cleared by resetAll", async () => {
+    const { result } = renderHook(() => useWishlist(), { wrapper });
+    await waitFor(() => expect(wishlistList).toHaveBeenCalled());
+    expect(lastQuery().borders).toBeUndefined();
+    const asked = wishlistList.mock.calls.length;
+    const key = result.current.queryKeyString;
+
+    act(() => result.current.toggleBorder("fullart"));
+    act(() => result.current.toggleBorder("regular"));
+
+    await waitFor(() => expect(wishlistList.mock.calls.length).toBeGreaterThan(asked));
+    expect(result.current.queryKeyString).not.toBe(key);
+    // In `BORDERS` order, whatever the press order.
+    await waitFor(() => expect(lastQuery().borders).toEqual(["regular", "fullart"]));
+    expect(lastQuery()).not.toHaveProperty("finishes");
+    expect(lastQuery()).not.toHaveProperty("printedFinishes");
+    expect(result.current.activeCount).toBe(1);
+    expect("toggleFinish" in result.current).toBe(false);
+
+    act(() => result.current.resetAll());
+
+    expect(result.current.borders).toEqual([]);
+    expect(result.current.activeCount).toBe(0);
+    await waitFor(() => expect(lastQuery().borders).toBeUndefined());
+  });
+});
+
 describe("the shelves it asks for", () => {
   /** A read before the folder list is a read for Not sorted alone, then a second one for the
    *  wall — a flash of the wrong page and a round trip thrown away. */
@@ -414,6 +447,7 @@ const NONE = {
   manaX: false,
   rarities: [],
   types: [],
+  borders: [],
   needsReview: undefined,
 } satisfies WishlistFilterState;
 
@@ -430,6 +464,7 @@ describe("activeFilterCount", () => {
     expect(activeFilterCount({ ...NONE, colors: ["R", "U"] })).toBe(1);
     expect(activeFilterCount({ ...NONE, sets: ["lea"] })).toBe(1);
     expect(activeFilterCount({ ...NONE, rarities: ["rare", "mythic"] })).toBe(1);
+    expect(activeFilterCount({ ...NONE, borders: ["borderless", "fullart"] })).toBe(1);
     // `false` — "everything the sync did not touch" — is a filter too. Compared against
     // `undefined`, never tested for truthiness.
     expect(activeFilterCount({ ...NONE, needsReview: false })).toBe(1);
@@ -448,15 +483,15 @@ describe("activeFilterCount", () => {
     expect(activeFilterCount({ ...NONE, manaValues: [1], manaX: true })).toBe(1);
   });
 
-  /** Eight — three until the three card views started drawing one `FilterBar`, eight until
+  /** Nine — three until the three card views started drawing one `FilterBar`, eight until
    *  `fulfilled` went with the rest of this list's comparisons against the collection, seven
-   *  after it, and eight again since the type chips. Reset all has to reach every one of them,
-   *  so the count has to see every one of them.
+   *  after it, eight again since the type chips, and nine since the border chips. Reset all has
+   *  to reach every one of them, so the count has to see every one of them.
    *
-   *  **`colorsStrict` is deliberately not a ninth**, here or in `activeFilterCount` itself: it
+   *  **`colorsStrict` is deliberately not a tenth**, here or in `activeFilterCount` itself: it
    *  modifies the colour filter rather than being one, so a badge that moved when it was pressed
    *  would be counting a narrowing that had not happened. */
-  it("sees all eight kinds the wishlist offers", () => {
+  it("sees all nine kinds the wishlist offers", () => {
     expect(
       activeFilterCount({
         text: "bolt",
@@ -467,9 +502,10 @@ describe("activeFilterCount", () => {
         manaX: true,
         rarities: ["rare"],
         types: ["Creature"],
+        borders: ["regular"],
         needsReview: true,
       }),
-    ).toBe(8);
+    ).toBe(9);
   });
 });
 

@@ -275,13 +275,13 @@ export const SendToFolder: Story = {
 /**
  * The two lists agree — which is an answer, and an answer is a sentence.
  *
- * Deck 3's plan is a copy of deck 3, which is not a contrived fixture: it is the state
- * `deckTheoryCopyFromLive` produces, and the only command that produces it — switching the
- * theory list *on* **moves** the deck into the plan and leaves the live list empty, so a full
- * list beside an identical full list is what asking for the copy by name gets you. A blank panel
- * here would read as a dialog that failed to load. The bulk button disables itself rather than
- * offering to send nothing, and the filter is not drawn at all: three rungs reading zero and a
- * checkbox that can never move are furniture rather than controls.
+ * Deck 3's plan is a copy of deck 3, which is not a contrived fixture: it is the state a reader
+ * reaches by building both lists card for card. No single press produces it — switching the
+ * theory list *on* **moves** the deck into the plan and leaves the live list empty, and the
+ * explicit copy command that once did it in one step never had a caller and was removed on
+ * 2026-09-27. A blank panel here would read as a dialog that failed to load. The bulk button
+ * disables itself rather than offering to send nothing, and the filter is not drawn at all:
+ * three rungs reading zero and a checkbox that can never move are furniture rather than controls.
  */
 export const Agreed: Story = {
   args: { deckId: 3 },

@@ -14,6 +14,8 @@ import type {
 } from "react";
 import { TooltipProvider, TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import {
+  chinHeight,
+  CONTROL_SHRINK,
   DEFAULT_SECTION_ZOOMS,
   DEFAULT_ZOOM,
   MIN_ZOOM,
@@ -41,7 +43,7 @@ import {
 import type { TheoryPlan } from "../theoryMatch";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
-import { stackCardWidth, stackLiftRoom } from "../CardStack";
+import { deckCardScale, stackCardWidth, stackLiftRoom } from "../CardStack";
 import {
   CARD_BODY_ATTR,
   DECK_GROUP_ATTR,
@@ -113,6 +115,14 @@ beforeAll(() => {
  */
 function setDeckZoom(zoom: number) {
   useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, deck: zoom } });
+}
+
+/**
+ * Size the cards on the **Grid** view, and leave every other section — Stacks' `deck` included —
+ * where it was. The two were one key until issue #567; see `ZOOM_SECTIONS`.
+ */
+function setGridZoom(zoom: number) {
+  useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, deckGrid: zoom } });
 }
 
 /**
@@ -2647,7 +2657,7 @@ describe("GridView tiles", () => {
    *  renders nothing at all without a `setQuantity`, so a case that does not need the column
    *  should not have one in its tree. */
   const draw = (zoom: number, actions?: DeckCardActions) => {
-    setDeckZoom(zoom);
+    setGridZoom(zoom);
     render(
       <GridView
         tracksCollection
@@ -2689,13 +2699,39 @@ describe("GridView tiles", () => {
    */
   it("publishes the deck's card scale to the marks on the tile", () => {
     draw(2);
-    expect(tile().style.getPropertyValue("--mark-scale")).toBe("2");
-    expect(tile().style.getPropertyValue("--control-scale")).toBe("1.7");
+    expect(tile().style.getPropertyValue("--mark-scale")).toBe(String(300 / 210));
+    expect(tile().style.getPropertyValue("--control-scale")).toBe(
+      String((300 / 210) * CONTROL_SHRINK),
+    );
     cleanup();
 
     draw(0.5);
-    expect(tile().style.getPropertyValue("--mark-scale")).toBe("0.5");
-    expect(tile().style.getPropertyValue("--control-scale")).toBe("0.425");
+    expect(tile().style.getPropertyValue("--mark-scale")).toBe(String(75 / 210));
+  });
+
+  /**
+   * **The scale is the tile's width against the stacked card's, never the wall's zoom** (issue
+   * #567). Every mark on the face is written for a 210px card at 1×, and a stacked card's width is
+   * that card times the zoom — so the stack publishes the zoom and is right. The tile is 150px at
+   * 1× and published the zoom too, which drew a 210px card's quantity tag, plan tick, chin and
+   * stepper column on a card 1.4× smaller: the reader's report was badges and quantity buttons
+   * "way too big" beside the same deck in Stacks.
+   *
+   * Swept across the whole ladder, and asserted the way the reader compared them: **a tile and a
+   * stacked card of the same width publish the same scale**. At 1× that is 0.71, which is the
+   * number the old code had as `1`.
+   */
+  it("scales its marks to its width, as a stacked card that wide would", () => {
+    for (const zoom of ZOOM_STEPS) {
+      draw(zoom);
+      const width = scaled(150, zoom);
+      expect(tile().style.getPropertyValue("--mark-scale")).toBe(String(deckCardScale(width)));
+      expect(deckCardScale(stackCardWidth(zoom))).toBeCloseTo(zoom, 2);
+      cleanup();
+    }
+
+    draw(DEFAULT_ZOOM);
+    expect(Number(tile().style.getPropertyValue("--mark-scale"))).toBeCloseTo(0.714, 3);
   });
 
   /**
@@ -2732,7 +2768,10 @@ describe("GridView tiles", () => {
     // tree because this case asked for it — see `draw`.
     draw(2, { setQuantity: vi.fn() });
     expect(wall().style.gap).toBe("20px");
-    expect(foot().style.height).toBe("56px");
+    // The chin at the *card's* scale — a 300px tile's foot is a 300px stacked card's, 28 × 300/210
+    // — and not at the wall's 2×, which drew a 420px card's 56px foot under it (issue #567).
+    expect(foot().style.height).toBe(`${chinHeight(300 / 210)}px`);
+    expect(foot().style.height).toBe("40px");
     expect(foot().style.fontSize).toBe("");
     // `classList.contains`, never `className.toContain` — see this describe's seam case for the
     // substring trap that spelling walks into, and there is no reason to keep two spellings of
@@ -2759,7 +2798,8 @@ describe("GridView tiles", () => {
     draw(0.5, { setQuantity: vi.fn() });
     expect(tile().style.width).toBe("75px");
     expect(wall().style.gap).toBe("10px");
-    expect(foot().style.height).toBe("14px");
+    expect(foot().style.height).toBe(`${chinHeight(75 / 210)}px`);
+    expect(foot().style.height).toBe("10px");
     // The type is asserted at **both** ends rather than at the top one only. The class is the
     // same string at every stop — it is `--mark-scale` that moves, and jsdom resolves no
     // `calc()` — so this end adds no information about the *size*. What it adds is the thing
@@ -3126,20 +3166,20 @@ describe("GridView tiles", () => {
 });
 
 /**
- * **The deck desk is one zoom section, and it is not the search column's.**
+ * **Stacks and Grid are two zoom sections, and neither is the search column's.**
  *
- * `useAppStore.cardZoom` holds a number per card section rather than one for the app, and the two
- * views here share the `deck` key: they are one deck drawn two ways, so switching between Stacks
- * and Grid must not resize the cards the reader just settled on. The block above pins what each
- * view does *with* a zoom; this one pins **which number it reads** — the half that has no
+ * `useAppStore.cardZoom` holds a number per card section rather than one for the app. The two
+ * views here shared the `deck` key until issue #567, on the argument that they are one deck drawn
+ * two ways; the reader asked for them apart — a wall of every card and a desk of piles are sized
+ * for different jobs — so Stacks kept `deck` and Grid reads `deckGrid`. The block above pins what
+ * each view does *with* a zoom; this one pins **which number it reads** — the half that has no
  * geometry in it and that every assertion in this file would go on passing without.
  *
- * The failure it exists for is the one the split was made to fix, in both directions: a view
- * reading a section of its own would make the toolbar's `Stacks | Grid` press a resize, and a view
- * left reading `deckSearch` (or a re-merged single number) would put the deck back to being
- * resized by a gesture over the card wall docked beside it.
+ * The failures it exists for, in every direction: a view re-merged onto the other's key would
+ * make a gesture over one resize the other, and a view left reading `deckSearch` (or a single
+ * shared number) would put the deck back to being resized by the card wall docked beside it.
  */
-describe("the deck's two views and their one zoom section", () => {
+describe("the deck's two views and their two zoom sections", () => {
   afterEach(resetZoom);
 
   /** One card in one pile, which is all either view needs to state a width. */
@@ -3154,14 +3194,15 @@ describe("the deck's two views and their one zoom section", () => {
       .style.width;
 
   /**
-   * **Both views draw at `cardZoom.deck`, and a future split of that key fails here.**
+   * **Each view draws at its own section and ignores the other's.**
    *
-   * Asserted as two views against one `setDeckZoom`, and against the *zoomed* answers rather than
-   * merely against each other: two views that had each grown a section of their own would still
-   * agree with one another at 1×, which is where a test that only compared them would sit.
+   * Asserted against the *zoomed* answers and with the two sections set to different stops, so a
+   * view that went back to reading the other's key — or a single shared one — draws the wrong
+   * width here rather than agreeing at 1×, which is where a test that only compared them would
+   * sit.
    */
-  it("draws Stacks and Grid at the one zoom the deck section holds", () => {
-    setDeckZoom(2);
+  it("draws Stacks at the deck section and Grid at its own", () => {
+    useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, deck: 2, deckGrid: MIN_ZOOM } });
 
     render(<StackView tracksCollection groups={ONE_CARD} marketplace={TCG} />);
     expect(columnWidth()).toBe(`${stackColumnWidth(2)}px`);
@@ -3169,14 +3210,14 @@ describe("the deck's two views and their one zoom section", () => {
     cleanup();
 
     render(<GridView tracksCollection groups={ONE_CARD} marketplace={TCG} />);
-    expect(tileWidth()).toBe(`${scaled(150, 2)}px`);
-    expect(tileWidth()).toBe("300px");
+    expect(tileWidth()).toBe(`${scaled(150, MIN_ZOOM)}px`);
+    expect(tileWidth()).toBe("75px");
   });
 
   /**
    * **…and neither of them moves when another section is zoomed**, which is the whole of the
-   * reader's complaint: the deck editor puts its docked card search column beside the desk, both
-   * are walls of cards, and one gesture used to size both.
+   * complaint behind splitting `cardZoom` at all: the deck editor puts its docked card search
+   * column beside the desk, both are walls of cards, and one gesture used to size both.
    *
    * `search` is set as well as `deckSearch` — the two sections the reader is most likely to have
    * left somewhere else — so this fails for a view that went back to reading any single shared
@@ -3204,27 +3245,36 @@ describe("the deck's two views and their one zoom section", () => {
    * is on the scroller as well as which key it steps — a view that passed the right section to a
    * ref pointing at the wrong element would answer every geometry assertion above.
    *
-   * The other three sections are swept out of `ZOOM_SECTIONS` rather than named, so a fifth
-   * section added later is covered by this the day it exists. `zoomSection` is asserted beside
-   * them because it is what tells the badge which corner to draw itself in — the value the
-   * reader sees is `cardZoom[zoomSection]`, so a gesture that stepped `deck` while naming
-   * something else would print a number nothing on screen is drawn at.
+   * Every other section is swept out of `ZOOM_SECTIONS` rather than named, so a section added
+   * later is covered by this the day it exists — and the *other* deck view's section is among
+   * them, which is the half issue #567 asked for. `zoomSection` is asserted beside them because
+   * it is what tells the badge which corner to draw itself in — the value the reader sees is
+   * `cardZoom[zoomSection]`, so a gesture that stepped one section while naming another would
+   * print a number nothing on screen is drawn at.
    */
   it.each([
-    ["StackView", <StackView tracksCollection key="s" groups={ONE_CARD} marketplace={TCG} />],
-    ["GridView", <GridView tracksCollection key="g" groups={ONE_CARD} marketplace={TCG} />],
-  ])("steps only the deck section on a ctrl+wheel over %s", (_name, element) => {
+    [
+      "StackView",
+      "deck",
+      <StackView tracksCollection key="s" groups={ONE_CARD} marketplace={TCG} />,
+    ],
+    [
+      "GridView",
+      "deckGrid",
+      <GridView tracksCollection key="g" groups={ONE_CARD} marketplace={TCG} />,
+    ],
+  ] as const)("steps only its own section on a ctrl+wheel over %s", (_name, own, element) => {
     const before = useAppStore.getState().zoomPulse;
     const { container } = render(element);
 
     fireEvent.wheel(container.firstElementChild as HTMLElement, { deltaY: -100, ctrlKey: true });
 
     const { cardZoom, zoomSection, zoomPulse } = useAppStore.getState();
-    expect(cardZoom.deck).toBe(1.1);
-    for (const section of ZOOM_SECTIONS.filter((s) => s !== "deck")) {
+    expect(cardZoom[own]).toBe(1.1);
+    for (const section of ZOOM_SECTIONS.filter((s) => s !== own)) {
       expect(cardZoom[section]).toBe(DEFAULT_ZOOM);
     }
-    expect(zoomSection).toBe("deck");
+    expect(zoomSection).toBe(own);
     // One wheel, one pulse — read as a delta rather than as `1`, because the counter is a
     // session's and this file is not the only thing that has run in it.
     expect(zoomPulse).toBe(before + 1);

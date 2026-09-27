@@ -642,9 +642,12 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   list — no count is written here, because a count is a fact about a tree and the constant already
   answers it): `search`, `tags`, `collection` and `wishlist`, the page-sized list walls;
   `deckSearch`, `collectionSearch` and `wishlistSearch`, the three **docked search columns**, each
-  of which is a second `CardGrid` on a page that already has one; `deck`, the editor's desk — **one
-  key for both deck views**, because Stacks and Grid are two drawings of the same pile and
-  switching between them must not resize the cards the reader just settled on; `deckGallery`, the
+  of which is a second `CardGrid` on a page that already has one; `deck`, the editor's Stacks desk,
+  and `deckGrid`, its Grid wall — **one key for both deck views until issue #567 (2026-09-27)**,
+  on the argument that the two are drawings of the same pile and a view switch should not be a
+  resize; the reader asked for them apart, because a wall of every card and a desk of piles are
+  sized for different jobs, and what keeps them looking alike is that the Grid tile's marks scale
+  off its width against a stacked card's (`deckCardScale`), not a shared number; `deckGallery`, the
   decks page's wall of deck tiles and folder cards; `home`, the dashboard, which is **not a wall of
   anything** and is spent differently from all of them (below); and `printings`, the modal's wall,
   which opens *over* a wall the reader has already sized. `useCardZoomGesture(ref, section)` names the section
@@ -2432,6 +2435,24 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     many surfaces that reaches; the design spec said eight and the JSX sites are six, because
     `CardSearchBody` is one component behind several docked panels — which is exactly why this
     page does not write the number down).
+- **`Border` and `Finish` sit after `Type` in the tray, and `Finish` now asks a different question
+  depending on what the rows are** (2026-09-27, issue #573). `Border` — Regular, Borderless, Full
+  art, in that order because the order is the information — is in every tray: search, Tags, the
+  docked panels, the collection (both callers) and the wishlist. It is `Type`'s shape: OR within,
+  AND without, greyed against `facets.borders`, and the chips overlap (a borderless full-art
+  printing answers both treatments). The ids are `printingFilters.ts`' own, so the printings modal
+  and the tray spell the fact one way; `@/lib/border` owns them.
+  - **`Finish` on a printing surface asks *published in*, reversing what this cell's comment said
+    until that day.** It used to be absent from the card search on the premise that "a printing
+    exists in every finish it was printed in at once", so `Foil` over a wall of printings had no
+    question behind it. The premise was the wrong way round: a printing exists in **only** the
+    finishes it was published in, and Scryfall's `is:foil` is exactly that question. On the dev
+    corpus (2026-09-27) 44,019 of 109,254 paper printings are nonfoil only and 12,389 foil only,
+    so `Foil` removes two fifths of the wall. The search surfaces send it as `printedFinishes` and
+    grey against `facets.finishes`; the collection and the deck editor's Collection tab keep the
+    cell's older meaning, the finish the **copy** is, sent as `finishes`. The wishlist draws
+    `Border` and no `Finish`. One cell, two questions, two wire names — the name is what keeps
+    them from colliding on the collection's flattened payload.
 
 ## The theory mark, and the four things a photograph settled
 
