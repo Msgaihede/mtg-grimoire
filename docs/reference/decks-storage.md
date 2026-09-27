@@ -800,6 +800,22 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
     thrown away with the window and cleared by any other write *that window* makes. A
     database-backed redo would offer to resurrect a fortnight-old branch of edits the reader had
     forgotten making.
+  - **The journal keeps each deck's newest 200 steps and the history keeps everything** (issue
+    #553, 2026-09-27). Until then nothing deleted a `deck_undo` row but deleting the deck or a
+    retired undo, and a step is rows on both sides: a settings Save carries all of `DECK_FIELDS`
+    twice, an import or a theory switch the whole list twice. `record_step` now deletes the deck's
+    rows below the newest `deck_undo::UNDO_STEPS_PER_DECK` by `audit_id`, in the caller's
+    transaction, right after its insert — the one statement that files a step, so the one place
+    the cap lives. `deck_audit` is not touched: it is the drawer's record and it **syncs**, where
+    `deck_undo` does not, so a prune here is a local decision no peer sees. **It cannot take
+    either button's target**: the row just inserted is the deck's highest id and applied, so it is
+    the cursor, and no undone row sits above it for `next_redo` to find — what goes is the oldest
+    applied steps and dead branches. Undoing down past the oldest kept step answers
+    `NOTHING_TO_UNDO`, and a history row whose step is gone reads as a pre-v17 row does: worded,
+    with nothing offering to reverse it (an undo's `{"of":…}` names a `deck_audit` id, so its
+    sentence survives). **A dead branch counts toward the 200 until it ages out**, because deleting
+    it would turn a stale redo's `MOVED_ON` into `NOTHING_TO_UNDO`. A database already over the cap
+    sheds the excess at that deck's next step rather than at a schema rung.
   - **Three commands**: `deck_undo_state(deckId, redoId)` — the two `DeckAuditEntry`s the buttons
     name themselves from, the redo half answered only for the id the caller hands in, and only when
     it is `next_redo` —

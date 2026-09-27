@@ -2117,6 +2117,13 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   keep out of the ordinary case, not a counter-example to it.) **The reversal's own row records no
   step**, so the stack stays linear.
   `undone_at` persists (undo survives a restart); the redo queue is the webview's and does not.
+  **The journal is capped and the history is not** (issue #553, 2026-09-27): `record_step` deletes
+  the deck's steps below the newest `UNDO_STEPS_PER_DECK` (200) by `audit_id`, in the same
+  transaction as its insert, because a step carries whole rows twice and nothing else ever pruned
+  one. `deck_audit` stays whole — it is the drawer's record and it syncs; `deck_undo` does not.
+  The just-inserted row is the cursor and nothing undone sits above it, so the prune can take
+  neither button's target; past the oldest kept step an undo answers `NOTHING_TO_UNDO`. **A new
+  statement that inserts a step must go through `record_step`** or it files outside the cap.
   **A reversal is checked, never trusted — twice.** The id must be the cursor (`next_undo`, or for
   a redo `next_redo`: the undone step above the cursor with the newest `undone_at` — an ordinal
   now, `max(now, newest + 1)`, never the wall clock). Then the deck must still hold the side the
