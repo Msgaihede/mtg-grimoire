@@ -2924,7 +2924,8 @@ export interface DeckMissingOutcome {
  * refuses is the same member spelled with two different types.
  */
 export interface TheorySlot {
-  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
+  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``, where the finish is
+   *  the one the row **plays** (its own, else the printing's sole finish — issue #563).
    *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
   key: string;
   /**
@@ -2995,7 +2996,10 @@ export interface TheoryDiffRow {
   setCode: string;
   collectorNumber: string;
   /**
-   * Which **object** this line is for — `deck_cards.finish`, so `null` is the regular copy.
+   * Which **object** this line is for — the finish the theory row **plays**, so `null` is the
+   * regular copy. That is `deck_cards.finish` where the row stored one and the printing's sole
+   * finish where it did not: an unsaid row of a foil-only printing reads `foil` here, because it
+   * can be no other object (issue #563, `deck_theory::played_finish`).
    *
    * **Half of the row's identity**, with {@link TheoryDiffRow.cardId}: a foil Sol Ring and a
    * regular one are two pieces of cardboard to go and find, two rows in `deck_cards`, and two
@@ -7848,6 +7852,18 @@ export const ipc = {
     invoke<EntryChange>("collection_set_quantity", { id, quantity }),
   collectionUpdate: (id: number, patch: EntryPatch) =>
     invoke<EntryChange>("collection_update", { id, patch }),
+  /**
+   * Move one row's copies onto another printing of the same card — the one write that reaches
+   * `collection_entries.card_id` after the row exists (issue #564). `set_code`,
+   * `collector_number` and `lang` follow from `cards`, because they describe the printing.
+   *
+   * **Merges rather than fails on a collision**, {@link ipc.collectionUpdate}'s rule: a row
+   * already holding the new printing at the same finish, condition and folder takes these copies,
+   * and the answer's `id` names *that* row — so a caller following the edit reads the id off the
+   * answer and never keeps the one it sent. A printing of a different card is refused.
+   */
+  collectionSetPrinting: (id: number, cardId: string) =>
+    invoke<EntryChange>("collection_set_printing", { id, cardId }),
   collectionRemove: (id: number) => invoke<EntryChange>("collection_remove", { id }),
   collectionList: (query: CollectionQuery) => invoke<CollectionPage>("collection_list", { query }),
   /** The aggregate header, over the same filters as the list it captions. */

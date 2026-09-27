@@ -412,6 +412,7 @@ pub fn run() {
             collection::collection_add,
             collection::collection_set_quantity,
             collection::collection_update,
+            collection::collection_set_printing,
             collection::collection_remove,
             collection::collection_list,
             collection::collection_summary,

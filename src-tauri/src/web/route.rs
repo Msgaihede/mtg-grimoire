@@ -150,6 +150,7 @@ pub const COMMANDS: &[&str] = &[
     "collection_add",
     "collection_set_quantity",
     "collection_update",
+    "collection_set_printing",
     "collection_remove",
     "collection_import_commit",
     "collection_folder_list",
@@ -1496,6 +1497,21 @@ pub fn call(
                 command,
                 crate::collection_source::with_write_owned(state, |c| {
                     crate::collection::update_entry(c, id, &patch)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The card pane's "Use this printing" on a collection row. `with_write_owned` for
+        // `collection_update`'s reason and not `wishlist_set_printing`'s plain `with_write`: the
+        // facet index's `owned` dimension is keyed by printing, and this moves copies between two.
+        "collection_set_printing" => {
+            let id: i64 = field(command, args, "id")?;
+            let card_id: String = field(command, args, "cardId")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::collection::set_entry_printing(c, id, &card_id)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -4747,10 +4763,15 @@ mod tests {
         // **188 on 2026-09-27, when the theory list's copy-from-live command was removed** — it
         // never had a caller on either target. `awk` over the array as it stands here.
         //
-        // **189 on 2026-09-27 with `search_marks`** (issue #552), taken from `left`.
+        // **189 when that met issue #564's `collection_set_printing`** — the card modal's printing
+        // change on a collection row. `awk` over the merged array, not 188 plus one on faith.
+        //
+        // **And 189 on the issue #552 branch too, with `search_marks`** — the same next value off
+        // the same 188, the collision this paragraph keeps predicting. The merge of the two is
+        // taken from `left`: **190**.
         assert_eq!(
             COMMANDS.len(),
-            189,
+            190,
             "update this number when a command is added"
         );
     }

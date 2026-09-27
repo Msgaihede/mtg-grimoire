@@ -1039,9 +1039,10 @@ function starterFolders(): FakeDeckFolder[] {
  * by **exactly one card and that card is the commander** — measured: the deck's whole issue
  * list is one error reading "Lurrus of the Dream-Den needs every permanent card in your deck to
  * have mana value 2 or less; Kenrith, the Returned King does not." `companions.ts`'
- * `STARTING_DECK` is `["main", "commander"]`, so Kenrith at mana value 5 is inside the pile
- * Lurrus judges. That is not a mistake in the fixture — it is unavoidable here and worth
- * staging deliberately. Lurrus is `WB`, so its commander's identity must cover `W` and `B`, and
+ * `STARTING_DECK` is `SIZE_KINDS` (`main`, `commander`, a switched-on `maybe`), so Kenrith at
+ * mana value 5 is inside the pile Lurrus judges. That is not a mistake in the fixture — it is
+ * unavoidable here and worth staging deliberately. Lurrus is `WB`, so its commander's identity
+ * must cover `W` and `B`, and
  * the corpus's only legends that wide are Kenrith (mana value 5) and Tymna (3); every
  * legal-companion arrangement is out of reach, and the app's own note says as much ("most of
  * why Lurrus is not an EDH companion"). The 84 basics are what singleton leaves: 99 − 15

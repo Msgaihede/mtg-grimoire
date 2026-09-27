@@ -135,7 +135,11 @@ Full record, with every measurement and the provenance of each rung:
   its `RULE BREAK` outline and badge, and the two answers are two functions in `engine.ts`:
   `validateDeck` is what the deck is — the header's check chip, the validation panel, the
   sentence a reader acts on — and `validateForMarks` is that plus what is wrong with each parked
-  card, which is what `DeckEditor` files through `violationsByCard` for the four views.
+  card, which is what `DeckEditor` files through `violationsBySlot` for the four views. **The marks
+  are filed by row slot, never by printing** (issue #554): `validateForMarks` stamps each finding
+  with the `rowIds` its own pass judged, so an active pile's singleton break names the parked Sol
+  Ring's printing and still leaves the parked row unmarked, and a ban on a card in both piles is
+  one sentence on each row rather than two on both.
   `ValidationPanel` calls the first and must go on calling it. **What a parked card is judged on
   is the card's own facts under this format and never a fact about a pile**: legality, the
   mana-value ceiling, and colour identity against the *active* command zone — each answerable
@@ -150,8 +154,14 @@ Full record, with every measurement and the provenance of each rung:
 - **`SIZE_KINDS` is `main`, `commander` and `maybe`** — the switch decides whether a pile counts
   at all; the kind decides only whether it is played _beside_ the deck or _in_ it, and only
   `side` and `companion` are beside it (CR 100.4a; EDH's companion is "effectively a 101st
-  card"). It is written in **three places that must stay one rule**: `engine.ts`'s constant,
-  `deck.rs`'s `DECK_SELECT` subquery behind `DeckRow.card_count`, and the Storybook fake's copy.
+  card"). It is written in **three places that must stay one rule**: the constant (in
+  `validation/kinds.ts` since issue #554, re-exported from `engine.ts`), `deck.rs`'s
+  `DECK_SELECT` subquery behind `DeckRow.card_count`, and the Storybook fake's copy. **Inside
+  `validation/` nothing spells it a second time**: the companion's starting deck *is* it, and the
+  identity pass is it less `commander` plus `side`. Both were hand-written lists that missed
+  `maybe`, so a switched-on Maybeboard counted toward 100 cards and was held to no identity and no
+  companion condition. It lives in a leaf module because `companions.ts` and `engine.ts` import
+  each other, and a top-level constant derived across that cycle is read before it exists.
 - **An add that names no category is filed by what the card _does_; an add that names one is
   untouched** — so every _drag_ overrides the rule by construction. The rule is `autoCategoryFor`,
   applied on **`useDeck.addCard`'s single definition**. Three steps, in this order: a front-face
@@ -1252,9 +1262,20 @@ layer.
   the name tier drops the category for the same reason and sums every pile on each side before
   subtracting: a card planned as Ramp and
   sleeved into Main deck is still the card that was planned, and a mark that went dark because a
-  pile was renamed is a mark nobody can learn to trust. `finish` is read **raw**, never through
-  `playedFinish` — that helper falls back to `soleFinish`, which would match a plan's explicit
-  `foil` against a live row the reader never said anything about.
+  pile was renamed is a mark nobody can learn to trust. **`finish` is the one the row _plays_ —
+  `playedFinish`, the stored finish or else the printing's `soleFinish` — on both sides and in
+  every theory surface** ([issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563),
+  2026-09-27). This line said *read raw, never through `playedFinish`* until then, and that rule
+  was the bug: the search's Add, the quick add, every drag and a decklist line with no `*F*` all
+  store no finish, while an add out of the binder stores the copy's own `foil` — so a foil-only
+  Surge Foil the reader had in both lists was `id|` in one and `id|foil` in the other, drawn blue
+  here and listed on the Compare dialog, the wishlist press and the managed wishlist at once. For a
+  printing sold in both finishes nothing moved: `soleFinish` answers `null` there, an unsaid row
+  is still the regular copy, and a plan's foil is still not answered by it. Rust's
+  `deck_theory::played_finish` is the plan's half and `theoryMatch.ts`' `theorySlot` the live
+  row's; **`TheoryAddress` makes `finishes` required** so a caller cannot leave it out and
+  silently key every unsaid foil-only row as the regular copy — a token entry, whose finish is
+  always stated, passes `null` and says so.
   **The grain agrees with `deck_theory_diff`, which reached it independently the same day** —
   that command groups on the exact card now, finish included, and `TheoryDiffDialog`'s `rowKey` is
   the same pair with a `|` where this uses a space. Keep the two in step if either moves.
@@ -4458,9 +4479,11 @@ already effective, and `viewOf` copies them.
   tokens (`planTokens`, above) and builds a token `TheoryPlan` with the existing
   `theoryMatchPlan` — no new arithmetic and no new tier, under the deck's own three mark switches.
   Each side is a list's **entries** — the implicit one where the list holds none — keyed
-  `theorySlot({ cardId: printingId, finish: tokenDeckFinish(view) })`, the finish spelled as a deck
-  card's is (`nonfoil` is `null`), so a token's slot is exactly the key a deck card of that
-  printing and finish would have. It was `finish: null` on both sides until v52, when a token
+  `theorySlot({ cardId: printingId, finish: tokenDeckFinish(view), finishes: null })`, the finish
+  spelled as a deck card's is (`nonfoil` is `null`), so a token's slot is the key a deck card of
+  that printing *stating* that finish would have. `finishes: null` is deliberate (issue #563): a
+  token entry's finish is always stated, so there is no unsaid finish for the printing's sole
+  finish to fill in, which a deck card's key does do. It was `finish: null` on both sides until v52, when a token
   carried no finish on the wire. **Both sides are built in TypeScript**, where a deck card's plan
   side is Rust's `deck_theory_slots` — there is no such command for tokens and none is wanted,
   because the plan's tokens are the theory list's own `deck_tokens` answer, so one `theorySlot`

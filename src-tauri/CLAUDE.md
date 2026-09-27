@@ -1936,9 +1936,18 @@ Full detail, with the measurements and the traps behind each rule, is in
   columns, one indexed scan, inactive categories excluded on `diff_select`'s rule; deliberately
   **not** a `deck_get` of the other variant, which prices every row and rolls up allocations for
   a mark that needs neither. **The quantity joined the key on 2026-08-26 (issue #212) and the
-  rows fold in the SQL with it** — `GROUP BY dc.card_id, dc.finish`, which is `group_key`'s own
-  grain: two `Vec` entries spelling one key were harmless while the caller built a set out of
-  them and would be a silently halved plan now.
+  rows fold with it**: two `Vec` entries spelling one key were harmless while the caller built a
+  set out of them and would be a silently halved plan now.
+  ⚠️ **The fold is in two halves since 2026-09-27, and the Rust half is not redundant**
+  ([issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563)). The SQL still says
+  `GROUP BY dc.card_id, dc.finish`, but `group_key` is keyed on the finish a row **plays** —
+  `deck_theory::played_finish`, the stored finish or else the printing's sole finish — so for a
+  printing sold only in foil an unsaid row and a `foil` row are two SQL groups and **one key**,
+  and `theory_slots` sums the second into the first in Rust. Deleting that loop as a duplicate of
+  the `GROUP BY` puts #563 back as a halved plan. The diff (`grouped_diff`) keys the same way,
+  and `theoryMatch.ts`' `theorySlot` spells the live row by the same rule: the search's Add, the
+  quick add, drags and an unmarked decklist line store no finish, while a binder filing stores
+  the copy's `foil`, so keyed raw the Surge Foil the reader had in both lists was two cards.
   The explicit copy-from-live command that used to sit beside the switch was removed on
   2026-09-27: it never had a caller, so nothing in the crate copies one list into the other now.
 - **There are three deck kinds, they are two booleans, and nothing may add a third column or an
@@ -2154,6 +2163,13 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   keep out of the ordinary case, not a counter-example to it.) **The reversal's own row records no
   step**, so the stack stays linear.
   `undone_at` persists (undo survives a restart); the redo queue is the webview's and does not.
+  **The journal is capped and the history is not** (issue #553, 2026-09-27): `record_step` deletes
+  the deck's steps below the newest `UNDO_STEPS_PER_DECK` (200) by `audit_id`, in the same
+  transaction as its insert, because a step carries whole rows twice and nothing else ever pruned
+  one. `deck_audit` stays whole — it is the drawer's record and it syncs; `deck_undo` does not.
+  The just-inserted row is the cursor and nothing undone sits above it, so the prune can take
+  neither button's target; past the oldest kept step an undo answers `NOTHING_TO_UNDO`. **A new
+  statement that inserts a step must go through `record_step`** or it files outside the cap.
   **A reversal is checked, never trusted — twice.** The id must be the cursor (`next_undo`, or for
   a redo `next_redo`: the undone step above the cursor with the newest `undone_at` — an ordinal
   now, `max(now, newest + 1)`, never the wall clock). Then the deck must still hold the side the

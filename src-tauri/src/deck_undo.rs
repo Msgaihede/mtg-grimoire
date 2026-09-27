@@ -642,7 +642,48 @@ impl Remap {
     }
 }
 
-/// Write one step, inside the transaction the caller already opened.
+/// How many steps one deck's journal keeps — the newest by `audit_id`, and every older one is
+/// deleted by the [`record_step`] that pushes it past the line (issue #553, 2026-09-27).
+///
+/// **Until then nothing deleted a `deck_undo` row except deleting the deck** (or a refused undo
+/// retiring its own), and a step is not small: it carries rows rather than a delta, and both
+/// sides of them. A settings Save records all of [`DECK_FIELDS`] twice; an import or a theory
+/// switch records the whole list twice. So a deck edited for a year carried a year of whole
+/// copies of itself, every one of them reachable only by pressing Ctrl+Z that many times.
+///
+/// **The history is not capped, and that is the other half of the decision.** `deck_audit` is
+/// the reader's record — the History drawer reads it — and it **syncs**, so it is a fact on
+/// every paired device and not this one's to thin. `deck_undo` is neither: it is absent from
+/// [`crate::schema::SYNCED_TABLES`], so a prune here is a local decision no peer can see. A history
+/// row whose step has been pruned reads exactly as one recorded before schema v17 did: the
+/// drawer words it, and nothing offers to reverse it. An undo row's `{"of": …}` names a
+/// `deck_audit` id and never a `deck_undo` one, so "Undid: …" still finds its sentence.
+///
+/// **The prune cannot take either button's target, in any state.** It runs right after the
+/// insert, and the row just inserted has the deck's highest `audit_id` (`deck_audit.id` is a
+/// rowid assigned by SQLite, never by a caller) and a NULL `undone_at` — so it *is*
+/// [`next_undo`]'s answer, and it is the newest row, which the prune never reaches. [`next_redo`]
+/// wants an undone row **above** the newest applied one, and at that moment there is none: every
+/// undone row of the deck is below the new step, which is the dead branch an edit made after an
+/// undo cuts off. So the rows a prune deletes are the oldest applied steps and dead branches, and
+/// neither is anything a press could name. Undoing down past the oldest kept step finds no row at
+/// the cursor and answers [`NOTHING_TO_UNDO`] — the answer a deck gives at the bottom of any
+/// journal.
+///
+/// **A dead branch counts toward the cap until it ages out**, and deleting it here would be the
+/// wrong fix: a stale redo id a window still holds is answered [`MOVED_ON`] because its row is
+/// still there to be found undone, and without the row it would read [`NOTHING_TO_UNDO`]. So a
+/// reader who undoes fifty changes and then edits can reach fifty fewer than this below it,
+/// until those fifty fall off the bottom on their own.
+///
+/// **A database that already holds more sheds the excess at that deck's next recorded step**,
+/// not at a schema rung — a rung would be a second copy of this rule to run once, and a deck
+/// nobody edits again is a deck whose journal nobody will press through either.
+pub const UNDO_STEPS_PER_DECK: i64 = 200;
+
+/// Write one step, inside the transaction the caller already opened — and prune the deck's
+/// journal to [`UNDO_STEPS_PER_DECK`] in the same transaction, so a rolled-back write takes its
+/// prune with it.
 ///
 /// `audit_id` is the history row this reverses — [`crate::deck_audit::record`] writes that row,
 /// so the call is `record_step(&tx, tx.last_insert_rowid(), …)` immediately after it. For the
@@ -650,6 +691,11 @@ impl Remap {
 /// (`deck_update`, `deck_import_commit` in `replace` mode, `deck_folder_delete`), the id is the
 /// **last** of them and the earlier rows get no step at all — one press is one Ctrl+Z, and a
 /// cursor that could land mid-press would undo half of a reader's single act.
+///
+/// **This is the only statement in the crate that files a step**, so it is the only place the
+/// cap has to live: [`record_cells`], [`record_variant`] and every hand-built step in `deck.rs`,
+/// `deck_meta.rs`, `deck_notes.rs` and `deck_tokens.rs` come through here. (The schema rungs
+/// that copy `deck_undo` through a table rebuild insert rows too, and are copies, not steps.)
 pub fn record_step(
     tx: &Connection,
     audit_id: i64,
@@ -660,6 +706,18 @@ pub fn record_step(
     tx.execute(
         "INSERT INTO deck_undo (audit_id, deck_id, step) VALUES (?1, ?2, ?3)",
         params![audit_id, deck_id, json],
+    )
+    .map_err(|e| e.to_string())?;
+    // The first row past the cap and everything older. The subquery walks
+    // `idx_deck_undo_deck` — `(deck_id, audit_id DESC)` — the cap's width and no further, and
+    // answers NULL for a journal still under it, which deletes nothing.
+    tx.execute(
+        "DELETE FROM deck_undo
+          WHERE deck_id = ?1
+            AND audit_id <= (SELECT audit_id FROM deck_undo
+                              WHERE deck_id = ?1
+                              ORDER BY audit_id DESC LIMIT 1 OFFSET ?2)",
+        params![deck_id, UNDO_STEPS_PER_DECK],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
@@ -4812,6 +4870,99 @@ mod tests {
             Some(first),
             "an undone step is stepped over, not undone twice"
         );
+    }
+
+    /// **The cap keeps the newest [`UNDO_STEPS_PER_DECK`] steps of the deck that recorded one, and
+    /// touches no other deck** (issue #553).
+    ///
+    /// The other deck's steps are filed **first**, so they carry the lowest ids in the table: a
+    /// prune that lost its `deck_id` term — in the `DELETE` or in the subquery that finds the
+    /// line — would take them as "older than the newest two hundred", and this is what says so.
+    #[test]
+    fn the_journal_keeps_only_the_newest_steps_of_the_deck_that_recorded_one() {
+        let conn = seeded();
+        let burn = deck(&conn, "Burn");
+        let angels = deck(&conn, "Angels");
+        let step = Step::new(vec![], vec![]);
+        let file = |deck_id: i64| -> i64 {
+            crate::deck_audit::record(
+                &conn,
+                deck_id,
+                "live",
+                crate::deck_audit::ADD,
+                None,
+                &json!({}),
+                0,
+            )
+            .unwrap();
+            let audit_id = conn.last_insert_rowid();
+            record_step(&conn, audit_id, deck_id, &step).unwrap();
+            audit_id
+        };
+        let kept = |deck_id: i64| -> Vec<i64> {
+            conn.prepare("SELECT audit_id FROM deck_undo WHERE deck_id = ?1 ORDER BY audit_id")
+                .unwrap()
+                .query_map(params![deck_id], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+
+        let others: Vec<i64> = (0..3).map(|_| file(angels)).collect();
+        let over = 7;
+        let filed: Vec<i64> = (0..UNDO_STEPS_PER_DECK + over)
+            .map(|_| file(burn))
+            .collect();
+
+        assert_eq!(
+            kept(burn),
+            filed[over as usize..],
+            "exactly the newest steps, by audit id"
+        );
+        assert_eq!(
+            kept(angels),
+            others,
+            "and another deck's journal is its own"
+        );
+        let history: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_audit WHERE deck_id = ?1",
+                params![burn],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            history >= UNDO_STEPS_PER_DECK + over,
+            "the history is not the journal and keeps every row"
+        );
+    }
+
+    /// **A capped journal undoes down to its oldest kept step and then says so** — through the
+    /// command's own path, over real card writes, so the rows a pruned step would have restored
+    /// are checked as well as the cursor.
+    ///
+    /// `fresh`'s own setup files steps too; they are older than every step here and go first.
+    /// Each step moves `bolt-lea` to a value no other step does, so the quantity at the bottom
+    /// names exactly which step the walk stopped above.
+    #[test]
+    fn undoing_past_the_oldest_kept_step_answers_nothing_to_undo() {
+        let (conn, id) = fresh();
+        let over = 5;
+        for n in 1..=UNDO_STEPS_PER_DECK + over {
+            step_bolt(&conn, id, 2 + n);
+        }
+        assert_eq!(bolt(&conn, id), 2 + UNDO_STEPS_PER_DECK + over);
+
+        for _ in 0..UNDO_STEPS_PER_DECK {
+            undo(&conn, id).unwrap();
+        }
+
+        assert_eq!(
+            bolt(&conn, id),
+            2 + over,
+            "the walk stops at the newest pruned step's result, not at the deck's first state"
+        );
+        assert_eq!(undo(&conn, id).unwrap_err(), NOTHING_TO_UNDO);
     }
 
     /// **The stack stays linear**, which is the property that makes Ctrl+Z twice go back two
