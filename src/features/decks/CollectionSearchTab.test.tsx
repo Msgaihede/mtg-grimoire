@@ -55,7 +55,7 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
     sortOrder: 0,
     cardCount: 0,
     totalPrice: null,
-    cardCountAllVariants: 0,
+    variant: "live",
     ...over,
   };
 }

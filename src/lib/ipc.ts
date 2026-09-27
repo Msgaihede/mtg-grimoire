@@ -2160,8 +2160,8 @@ export type CategoryKind = "main" | "side" | "commander" | "companion" | "maybe"
  *
  * That last sentence is the entire reason this is a column and not a name list. "Ramp", "Draw",
  * "Removal" and "Lands" are exactly what a person calls their own piles, and
- * `DECK_CATEGORY_GRAIN` is `(deck_id, name)` — one pile per name per deck — so a rule reading
- * the *name* would quietly take over the pile a reader made deliberately. **The name is the
+ * `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)` — one pile per name per list — so a rule
+ * reading the *name* would quietly take over the pile a reader made deliberately. **The name is the
  * user's; the kind is what the rules read**, and provenance is the same kind of fact as the
  * kind.
  *
@@ -2209,12 +2209,22 @@ export type DeckFinish = Exclude<Finish, "nonfoil"> | null;
  * One category of one deck: a named pile the user owns.
  *
  * Schema v8 replaced the fixed five-word zone with these. The four predefined ones
- * (`schema::PREDEFINED_CATEGORIES`) are seeded with every deck and cannot be renamed or
+ * (`schema::PREDEFINED_CATEGORIES`) are seeded with every list and cannot be renamed or
  * deleted; everything else is the user's, and `kind` is `main`.
  */
 export interface DeckCategory {
   id: number;
   deckId: number;
+  /**
+   * **Which of the deck's two lists this pile belongs to** — user schema v53 (issue #561).
+   *
+   * Until then a pile was the deck's and both lists shared one set, so a column made on Theory
+   * appeared on Actual and switching the Sideboard off on one switched it off on the other. The
+   * two lists are separate versions of the deck, and the theory diff is the only thing that
+   * joins them — so each list has its own piles, its own four predefined zones, its own names,
+   * order and switches, and a `deck_cards` row only ever points at a pile of its own list.
+   */
+  variant: DeckVariant;
   /** As the user wrote it — a column heading, and what every refusal about a card in it says. */
   name: string;
   kind: CategoryKind;
@@ -2256,9 +2266,9 @@ export interface DeckCategory {
    * Copies filed here **in the variant that was asked for** — `sum(quantity)`, not a row count.
    * Two printings at 2 and 3 copies read 5.
    *
-   * The number a *list* row wants: a panel drawing the deck's columns is drawing the list the
-   * reader is editing. It is **not** the number a delete confirmation wants — see
-   * {@link DeckCategory.cardCountAllVariants}, and read both before reaching for either.
+   * A pile holds cards of its own {@link DeckCategory.variant} only (issue #561), so this is
+   * every copy it holds — the number a list row draws **and** the number a delete confirmation
+   * quotes. Until v53 those were two numbers, because a pile was shared between the lists.
    */
   cardCount: number;
   /** Nonfoil unit price × copies over the same variant, at the marketplace the read named;
@@ -2266,17 +2276,6 @@ export interface DeckCategory {
    *  marketplaces' totals over one pile are legitimately not a conversion of each other — each
    *  omits the copies *it* cannot price. */
   totalPrice: number | null;
-  /**
-   * Copies filed here **across both variants**, live and theory together — the number a
-   * destructive confirmation has to quote, and the same answer whichever variant was asked by.
-   *
-   * A category is not per-variant. `deck_cards.category_id` is `ON DELETE CASCADE`, so deleting
-   * one takes its rows out of **both** lists, and `deckCategoryDelete`'s move arm moves both for
-   * the same reason. A dialog quoting {@link DeckCategory.cardCount} therefore understates what
-   * it is about to do on any theory-enabled deck — and understates the **destructive** arm in
-   * particular, which is a control lying in the direction of the reader pressing it.
-   */
-  cardCountAllVariants: number;
 }
 
 /**
@@ -3599,8 +3598,8 @@ export interface DeckPatch {
    * it" — {@link ipc.deckSetFolder} exists because `folderId` cannot. This column needs no such
    * command, because its cleared state is a number.
    *
-   * A non-zero id must name a category **of this deck**; Rust refuses anything else by name,
-   * since no foreign key says so.
+   * A non-zero id must name a category **of this deck's live list**; Rust refuses anything else
+   * by name, a theory pile included, since no foreign key says so.
    */
   defaultCategoryId?: number;
   /**
@@ -4049,9 +4048,13 @@ export interface DeckRow {
    * Zero can never collide with a real pile — `deck_categories.id` is an `INTEGER PRIMARY KEY`,
    * so rowids start at 1 — and Rust spells the same sentinel `deck::AUTO_CATEGORY`.
    *
-   * **An id this deck's `categories` does not carry reads as Auto**, and no writer has to
-   * arrange that: deleting a pile puts every deck filing by it back to zero in the same
-   * transaction, and a duplicate is remapped onto its own copy of the pile.
+   * **It names a _live_ pile** — Deck settings offers the live list's — and since user schema
+   * v53 (issue #561) the plan has piles of its own, so on the Theory tab the editor carries it
+   * across **by name** to the plan's pile of that name (`defaultCategory.ts`), else Auto.
+   *
+   * **An id the list's `categories` does not carry, and no name carries across, reads as Auto**,
+   * and no writer has to arrange that: deleting a pile puts every deck filing by it back to zero
+   * in the same transaction, and a duplicate is remapped onto its own copy of the pile.
    */
   defaultCategoryId: number;
   /**
@@ -8275,10 +8278,10 @@ export const ipc = {
    * One deck and everything in it, or `null` when no deck has that id — a gallery that has
    * not refreshed since another view deleted it asks for a deck that is not there.
    *
-   * `variant` scopes the **cards, and the two counts on every category and label row** — it is
-   * threaded into all three reads. What it does *not* scope is which categories and labels come
-   * back: every one of them does either way, so switching between the two lists changes the
-   * numbers in the column headings and never the columns themselves.
+   * `variant` scopes the **cards, the categories, and the two counts on every label row** — it
+   * is threaded into all three reads. Since user schema v53 (issue #561) each list has piles of
+   * its own, so switching between the two lists can change the columns as well as the numbers in
+   * them; which *labels* come back does not depend on it, only how many copies wear each.
    *
    * `marketplace` decides every price in the answer — each card's {@link DeckCard.unitPrice}
    * and each category's {@link DeckCategory.totalPrice} — so it is part of the question rather
@@ -8627,17 +8630,18 @@ export const ipc = {
    * A deck's categories on their own — the same list `deckGet` already carries, for a panel
    * that wants it without the cards.
    *
-   * `variant` scopes each row's `cardCount`/`totalPrice` and **nothing else**: which categories
-   * a deck has does not depend on which list is showing, which is what keeps the columns still
-   * while the reader switches between Live and Theory. `marketplace` decides what
+   * `variant` picks **which list's piles** come back — each list has its own since user schema
+   * v53 (issue #561), so a pile made on Theory is not a column on Actual — and scopes nothing
+   * else, because a pile's counts are already its own list's. `marketplace` decides what
    * {@link DeckCategory.totalPrice} is a total *of*.
    */
   deckCategoryList: (deckId: number, variant: DeckVariant, marketplace: MarketplaceId) =>
     invoke<DeckCategory[]>("deck_category_list", { deckId, variant, marketplace }),
-  /** A new category, always `kind: "main"` and always active, appended after the deck's last
-   *  one. Refuses a name the deck already has — the grain is `(deckId, name)`. */
-  deckCategoryCreate: (deckId: number, name: string) =>
-    invoke<DeckCategory>("deck_category_create", { deckId, name }),
+  /** A new category in **one of the deck's two lists**, always `kind: "main"` and always active,
+   *  appended after that list's last one. Refuses a name the list already has — the grain is
+   *  `(deckId, variant, name)`, so Theory and Actual may each hold a "Ramp" of their own. */
+  deckCategoryCreate: (deckId: number, variant: DeckVariant, name: string) =>
+    invoke<DeckCategory>("deck_category_create", { deckId, variant, name }),
   /**
    * Rename one category — `id`, not `deckId`, because a category names its own deck.
    *
@@ -8664,7 +8668,8 @@ export const ipc = {
    *
    * An id that is not this deck's — stale, or gone — is **silently skipped** rather than
    * failing the reorder over one entry, so a list that raced a delete still lands. Send every
-   * id: this is the order, not a move.
+   * id **of one list**: this is the order of that list's piles, not a move, and a list mixing
+   * Actual's piles with Theory's is refused (issue #561).
    */
   deckCategoryReorder: (deckId: number, ids: number[]) =>
     invoke<DeckCategory[]>("deck_category_reorder", { deckId, ids }),
@@ -8677,9 +8682,9 @@ export const ipc = {
    * confirm dialog has to say out loud. One command for both, because a caller doing the move
    * and the delete as two round trips could lose the cards between them.
    *
-   * The move covers **both variants**: a `live` row and a `theory` row of one printing fold
-   * into their own matching rows in the target and never into each other. Refuses a predefined
-   * category, a target belonging to another deck, and a move into itself.
+   * A pile holds one list's cards (issue #561), so the move stays inside that list: the target
+   * must be a pile of the same deck **and the same variant**. Refuses a predefined category, a
+   * target belonging to another deck or the other list, and a move into itself.
    */
   deckCategoryDelete: (id: number, moveToCategoryId: number | null) =>
     invoke<void>("deck_category_delete", { id, moveToCategoryId }),
@@ -8994,10 +8999,10 @@ export const ipc = {
    * `deckImportCommit`'s: a loop over a forty-card pile is forty transactions, forty history
    * rows and forty invalidations. This is one of each.
    *
-   * **This variant only**, which is the opposite of `deckCategoryDelete` — that takes the live
-   * list and the theory list together, because `deck_cards.category_id` cascades and a category
-   * is not variant-scoped. A clear leaves the pile standing, so what it empties is the list the
-   * reader is looking at, and the confirmation says so.
+   * **This variant only** — which, since a pile belongs to one list (user schema v53, issue
+   * #561), is every copy the pile holds — `variant` is the pile's own. A clear leaves the pile
+   * standing, so what it empties is the list the reader is looking at, and the confirmation says
+   * so.
    *
    * An empty pile answers `0` and writes nothing at all: no history row, no `updated_at`, and
    * not one collection row moved.

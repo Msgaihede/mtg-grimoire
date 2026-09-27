@@ -103,7 +103,7 @@ const ACTION_REORDER: &str = "reorder";
 /// The `WHERE` [`attachments_by_note`] takes for a whole deck's notes.
 ///
 /// A literal from this module and never a caller's string, so the `format!` that splices it
-/// carries no injection risk — [`crate::deck_meta::owning_deck`]'s arrangement.
+/// carries no injection risk — nothing a caller sends ever reaches the statement's text.
 const NOTES_OF_DECK: &str = "n.deck_id = ?1";
 
 /// The same for one note. Named on `deck_note_cards` rather than on `deck_notes`, so the join to
@@ -213,7 +213,7 @@ fn valid_oracle_id(oracle_id: &str) -> Result<&str, String> {
 /// The note's title, having established it exists and belongs to `deck_id`.
 ///
 /// Two refusals rather than one, because "gone" and "not yours" are different things to be told
-/// and a stale editor can produce either — [`crate::deck_meta::owning_deck`] draws the same
+/// and a stale editor can produce either — [`crate::deck_meta::pile_owner`] draws the same
 /// distinction for a category's move target.
 fn require_note(conn: &Connection, deck_id: i64, id: i64) -> Result<String, String> {
     let row: Option<(i64, String)> = conn
