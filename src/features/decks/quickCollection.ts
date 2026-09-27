@@ -35,7 +35,7 @@ import type {
   DeckPullRow,
   DeckQuickAddWish,
 } from "@/lib/ipc";
-import { NO_CHOICE, planPull, pullKey } from "./pullPlan";
+import { NO_CHOICE, deckCardPlanFinish, deckCardPullKey, planPull, pullKey } from "./pullPlan";
 
 /**
  * One row a quick add is pressed for, and the count its menu label quoted — issue #510.
@@ -53,9 +53,17 @@ export interface QuickAddTarget {
  * A picked set's quick add, as the deck-wide write's picks — `deck_missing_to_collection`, which
  * is one transaction and one history row for the whole press rather than one per card.
  *
- * **Folded on {@link pullKey}**, because that command's grain is `(cardId, finish)` and a printing
- * short in two piles is two deck rows but one address: sending both would be two picks for one
- * address. The copies are summed, which is what the two rows' chins say between them.
+ * **Folded on {@link deckCardPullKey}**, because that command's grain is `(cardId, finish)` and a
+ * printing short in two piles is two deck rows but one address: sending both would be two picks
+ * for one address. The copies are summed, which is what the two rows' chins say between them.
+ *
+ * **The finish is the one the row _plays_, in the key and in the pick** (issue #563's follow-up).
+ * The plan is folded on it, so a foil-only printing added once from the search (no finish stored)
+ * and once out of the binder (`"foil"`) is one row of `deck_missing_plan` — and keyed on the stored
+ * column it would be two picks for that one address, under two spellings, the first of them
+ * naming the regular copy of a printing that has none. The backend would resolve a bare `null` to
+ * the sole finish anyway; sending the played finish is what makes the pick say what the plan says
+ * rather than rely on the other side translating it.
  *
  * Order is first appearance, so the write reads the set in the order the reader picked it.
  */
@@ -63,10 +71,10 @@ export function missingPicks(targets: readonly QuickAddTarget[]): DeckMissingPic
   const byKey = new Map<string, DeckMissingPick>();
   for (const { card, copies } of targets) {
     if (copies <= 0) continue;
-    const key = pullKey(card);
+    const key = deckCardPullKey(card);
     const held = byKey.get(key);
     if (held === undefined) {
-      byKey.set(key, { cardId: card.cardId, finish: card.finish, quantity: copies });
+      byKey.set(key, { cardId: card.cardId, finish: deckCardPlanFinish(card), quantity: copies });
     } else {
       held.quantity += copies;
     }
@@ -231,10 +239,14 @@ export type PullChoiceForCard = { kind: "ask" } | { kind: "take"; picks: DeckPul
 /**
  * One card's slice of `deck_pull_plan`, read as a decision.
  *
- * The plan is a deck-wide answer; a per-card press is about one row of it, found by
- * {@link pullKey} — which takes the two fields it reads (`cardId`, `finish`) rather than a whole
- * {@link DeckPullRow}, so a {@link DeckCard} satisfies it unchanged and the two sides of the
- * match are one function.
+ * The plan is a deck-wide answer; a per-card press is about one row of it, found by keying the
+ * card with {@link deckCardPullKey} and each row with {@link pullKey} — one spelling of the key,
+ * over two readings of the finish. A row carries the finish the plan folded it on, which is the
+ * one the deck card _plays_ (its stored finish, else the printing's sole finish), so the card has
+ * to be read the same way. **It used to be `pullKey` on both sides**, on the argument that a
+ * `DeckCard` satisfies that signature unchanged — which it does, and which is how an unsaid row
+ * of a foil-only printing came to be keyed `id|` against a plan row `id|foil` and find nothing
+ * (issue #563's follow-up).
  *
  * **Ambiguous is `candidates.length >= 2`, and nothing else.** In particular a lone candidate
  * holding *fewer* copies than the shortfall is still unambiguous: there is one pile to take from
@@ -255,7 +267,7 @@ export type PullChoiceForCard = { kind: "ask" } | { kind: "take"; picks: DeckPul
  * does not.
  */
 export function choosePull(rows: readonly DeckPullRow[], card: DeckCard): PullChoiceForCard {
-  const key = pullKey(card);
+  const key = deckCardPullKey(card);
   const row = rows.find((r) => pullKey(r) === key);
   if (row === undefined || row.candidates.length >= 2) return { kind: "ask" };
 
@@ -270,14 +282,16 @@ export function choosePull(rows: readonly DeckPullRow[], card: DeckCard): PullCh
 /**
  * {@link choosePull} over a picked set — issue #510.
  *
- * **Silent only when every member is**: each distinct {@link pullKey} is asked the one-card
- * question, and a single `ask` among them opens the dialog over the whole set, where the
+ * **Silent only when every member is**: each distinct {@link deckCardPullKey} is asked the
+ * one-card question, and a single `ask` among them opens the dialog over the whole set, where the
  * unambiguous rows arrive pre-picked beside the ones that need the reader. Taking the easy half
  * silently and asking about the rest would split one press into a write and a question about a
  * different number than the menu quoted.
  *
  * Deduplicated by key, because a printing short in two piles is one row of the plan and taking
- * its picks twice would ask the backend for copies twice over.
+ * its picks twice would ask the backend for copies twice over. The key is the plan's —
+ * {@link choosePull}'s — so a foil-only printing picked once unsaid and once as `"foil"` is one
+ * member too: the plan folded the two into one row.
  */
 export function choosePullFor(
   rows: readonly DeckPullRow[],
@@ -286,7 +300,7 @@ export function choosePullFor(
   const seen = new Set<string>();
   const picks: DeckPullPick[] = [];
   for (const card of cards) {
-    const key = pullKey(card);
+    const key = deckCardPullKey(card);
     if (seen.has(key)) continue;
     seen.add(key);
     const choice = choosePull(rows, card);
