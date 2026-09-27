@@ -3079,7 +3079,7 @@ fn holding_areas_meet(a: &Connection, b: &Connection, ma: &mut i64, mb: &mut i64
 /// it and `SET NULL` dropped the copy onto the root's grain: `UNIQUE constraint failed`, through
 /// `?`, the whole apply failed, and the same page failed it on every pull after (spec §1.1).
 ///
-/// **What makes it red**: the delete arm with no collision check.
+/// **What makes it red**: the delete arm with no wait for the retry.
 #[test]
 fn a_binder_deleted_with_a_copy_the_root_also_holds_lands_on_the_peer() {
     let (a, b) = (paired("dev-a"), paired("dev-b"));
@@ -3141,6 +3141,76 @@ fn a_wishlist_folder_deleted_with_a_wish_the_root_also_holds_lands_on_the_peer()
     }
 }
 
+/// **Two wishes filed on the peer into two sub-folders of a wishlist folder the sender deletes end
+/// as one root wish on both.** The page re-files neither — they were never the sender's — so the
+/// retry re-homes them itself, one at a time: the first reaches the root and the second folds
+/// into it under the lower uid, which is the uid the sender's grain match adopts when their puts
+/// reach it with their folders gone. It is the one test here where `refile_wish` does the
+/// re-homing, and where two doomed rows merge onto each other rather than onto a root twin.
+#[test]
+fn two_wishes_filed_into_a_deleted_wishlist_folders_sub_folders_end_as_one_root_wish() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let wish_folder = |name: &str, parent: Option<i64>| -> i64 {
+        a.execute(
+            "INSERT INTO wishlist_folders (parent_id, name, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, 0, unixepoch(), unixepoch())",
+            rusqlite::params![parent, name],
+        )
+        .unwrap();
+        a.last_insert_rowid()
+    };
+    let top = wish_folder("Top", None);
+    wish_folder("One", Some(top));
+    wish_folder("Two", Some(top));
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    crate::wishlist_folders::delete_folder(&a, top).unwrap();
+    for name in ["One", "Two"] {
+        b.execute(
+            "INSERT INTO wishlist_entries (oracle_id, name, quantity, folder_id, created_at, updated_at)
+             VALUES ('o1', 'Bolt', 1, (SELECT id FROM wishlist_folders WHERE name = ?1),
+                     unixepoch(), unixepoch())",
+            [name],
+        )
+        .unwrap();
+    }
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+
+    assert_eq!((unwritten(ra), unwritten(rb)), ((0, 0), (0, 0)));
+    let wishes = |c: &Connection| -> Vec<(Option<String>, Option<i64>, i64)> {
+        let mut stmt = c
+            .prepare("SELECT sync_uid, folder_id, quantity FROM wishlist_entries ORDER BY id")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        rows.map(Result::unwrap).collect()
+    };
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let rows = wishes(c);
+        assert_eq!(rows.len(), 1, "{who} holds {rows:?}");
+        assert_eq!(
+            (rows[0].1, rows[0].2),
+            (None, 2),
+            "{who}: one root wish of two"
+        );
+        let drawers: i64 = c
+            .query_row("SELECT count(*) FROM wishlist_folders", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(drawers, 0, "{who} still holds a drawer");
+    }
+    assert_eq!(
+        wishes(&a)[0].0,
+        wishes(&b)[0].0,
+        "the two devices kept different uids"
+    );
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
+}
+
 /// **A deck deleted on one device, whose group holds a copy the root holds too, lands on the
 /// other.** `collection_folders.deck_id` cascades, so the deck's `DELETE` (rank 1) takes its
 /// group on the peer before the sender's re-filing into `Recently removed` (rank 7) arrives.
@@ -3183,6 +3253,116 @@ fn a_deck_deleted_with_a_copy_its_group_and_the_root_both_hold_lands_on_the_peer
             "{who}: one copy at the root, one in Recently removed"
         );
     }
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+}
+
+/// The `sync_uid`s `conn`'s collection folders of one `kind` wear, in order.
+fn folder_uids(conn: &Connection, kind: &str) -> Vec<String> {
+    let mut stmt = conn
+        .prepare("SELECT sync_uid FROM collection_folders WHERE kind = ?1 ORDER BY sync_uid")
+        .unwrap();
+    let rows = stmt.query_map([kind], |r| r.get(0)).unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// **A collection cleared on one device keeps the holding area and the deck groups it re-made, on
+/// the other.** `reset::clear_collection` deletes every folder and re-makes `Recently removed` and
+/// one group per deck in the same write. On the peer the old folders still hold copies, so their
+/// deletes wait for the retry — and the re-made rows' inserts grain-match the OLD rows, still
+/// standing, on the two partial grains (`kind = 'removed'`, `deck_id`). Adopting `min` kept the
+/// old uid wherever it sorted lower, and the retried delete then took the row the insert had just
+/// landed on: the peer lost its holding area and the deck's group, silently. The old uids are
+/// forced low on both devices here so the order is not a coin toss.
+///
+/// **What makes it red**: `find_row` adopting `min` on a grain hit whose uid this page deletes.
+#[test]
+fn a_collection_cleared_on_one_device_keeps_the_re_made_folders_on_the_other() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    holding_areas_meet(&a, &b, &mut ma, &mut mb);
+    a.execute(
+        "INSERT INTO decks (name, format_key, created_at, updated_at)
+         VALUES ('D', 'commander', unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let deck = a.last_insert_rowid();
+    a.execute(
+        "INSERT INTO collection_folders (name, kind, deck_id, sort_order, created_at, updated_at)
+         VALUES ('D', 'deck', ?1, 0, unixepoch(), unixepoch())",
+        [deck],
+    )
+    .unwrap();
+    let group = a.last_insert_rowid();
+    let removed: i64 = a
+        .query_row(
+            "SELECT id FROM collection_folders WHERE kind = 'removed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    add_copy(&a);
+    file_copies(&a, Some(group), 1);
+    file_copies(&a, Some(removed), 1);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+    // Below anything `randomblob` mints, and the same on both, as the met rows already are.
+    for c in [&a, &b] {
+        capture::suppressed(c, || {
+            c.execute_batch(
+                "UPDATE collection_folders SET sync_uid = '0000000000000000000000000000000a'
+                  WHERE kind = 'removed';
+                 UPDATE collection_folders SET sync_uid = '0000000000000000000000000000000b'
+                  WHERE kind = 'deck';",
+            )
+            .unwrap();
+        });
+    }
+
+    crate::reset::clear_collection(&a).unwrap();
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(unwritten(rb), (0, 0), "{rb:?}");
+    for kind in ["removed", "deck"] {
+        let (on_a, on_b) = (folder_uids(&a, kind), folder_uids(&b, kind));
+        assert_eq!(on_b.len(), 1, "b holds {on_b:?} as its {kind} folders");
+        assert_eq!(on_b, on_a, "b's {kind} folder is not the one a re-made");
+    }
+    assert_eq!(qty(&b), (0, 0), "the clear must cross");
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+}
+
+/// **A copy made at the root, then a binder deleted whose copy folds into it, lands at the
+/// sender's count.** The sender's page carries the new copy's insert, the `+2` its fold added,
+/// the binder copy's delete and the binder's delete — and the peer takes it parents first, so the
+/// binder's delete comes first and collides with nothing yet: the new copy has not landed.
+/// Re-homed then, the binder's copy took the root's grain, the new copy's insert grain-matched
+/// it and added its `+3` on top, and the two devices' counts parted. Waiting for the retry lets
+/// the insert and the delete land first, and the retry finds the binder empty (spec 2026-09-27
+/// §3.3, as amended).
+///
+/// **What makes it red**: a delete that waits only when it would collide.
+#[test]
+fn a_new_root_copy_and_a_binder_that_folds_into_it_land_at_the_senders_count() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    let bin = binder(&a, "Binder", None);
+    file_copies(&a, Some(bin), 2);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    add_copy(&a);
+    crate::collection_folders::delete_folder(&a, bin).unwrap();
+    assert_eq!(
+        qty(&a),
+        (1, 3),
+        "the premise: the binder's copy folded into the new one"
+    );
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(unwritten(rb), (0, 0), "{rb:?}");
+    assert_eq!(qty(&b), (1, 3));
+    assert_eq!(folders(&b), 0);
+    assert_eq!(uids_of_copies(&a), uids_of_copies(&b));
 }
 
 /// **A copy filed on the peer into the binder being deleted survives on both, as one row.**
@@ -3249,15 +3429,16 @@ fn three_copies_on_one_grain_under_a_deleted_folder_end_as_one_root_row_on_both(
     }
 }
 
-/// **Two doomed copies that are each other's twin make a delete wait too, with no root copy at
-/// all.** The test above never reaches that half of `collides`: its sub-folders' deletes come
-/// ahead of their parent's, one copy at a time, and each meets the root. A deck's group holding a
-/// sub-folder does — a tree no command builds and the DDL allows, which is why `delete_deck`
-/// walks the sub-tree — because the deck's one `DELETE` dooms both copies at once. The sender
-/// merges them into `Recently removed` one at a time; a peer that merged them itself before that
-/// re-filing landed would then add the sender's `+1` for the survivor on top.
+/// **Two doomed copies that are each other's twin, with no root copy at all, wait like any
+/// other.** A deck's group holding a sub-folder — a tree no command builds and the DDL allows,
+/// which is why `delete_deck` walks the sub-tree — is the one place a single `DELETE` dooms two
+/// copies of one printing at once, where the test above meets them one sub-folder at a time. The
+/// sender merges them into `Recently removed` one at a time; a peer that merged them itself before
+/// that re-filing landed would then add the sender's `+1` for the survivor on top. (It was written
+/// against the half of the old collision check that matched two doomed rows against each other;
+/// every delete that clears a row waits now, and this pins that the wait still covers it.)
 ///
-/// **What makes it red**: `collides` matching the doomed rows against the root alone.
+/// **What makes it red**: a delete that re-homes before the page's own re-filing has landed.
 #[test]
 fn a_deck_whose_group_and_its_sub_folder_hold_one_printing_lands_at_its_own_count() {
     let (a, b) = (paired("dev-a"), paired("dev-b"));

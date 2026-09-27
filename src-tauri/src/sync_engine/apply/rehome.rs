@@ -8,11 +8,20 @@
 //! `collection_folders::delete_folder` re-files one row at a time through the merge first. This
 //! is that merge on the receiving side, for the rows the page does not re-file itself.
 //!
+//! **Every delete that would clear a row waits for the page's retry, and not only one that would
+//! collide** (§3.3 as amended at Task B's review). Whether a delete collides depends on what has
+//! landed yet, and a page taken parents first has not landed the sender's own rows: a sender that
+//! made a root copy and then deleted a binder whose copy folded into it sends a delete that
+//! collides with nothing on the peer, and re-homing then put the binder's copy on the root's grain
+//! where the new copy's insert met it and added its count on top. So what [`doomed`] finds is the
+//! whole question — anything, and the delete waits — and by the retry the page's re-filing has
+//! taken what it moves and left only the rows it never mentioned for [`rehome`].
+//!
 //! **Every-target, like the rest of `sync_engine`**: the two merges it borrows,
 //! `collection_folders::refile_entry` and `wishlist_folders::refile_wish`, sit on the every-target
 //! half of their modules, so the browser build re-homes exactly as the desktop does.
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 /// Every `ON DELETE CASCADE` key into a folder table, as `(child table, column, parent table)`:
 /// the paths [`doomed`] follows. Held to the live schema by
@@ -35,6 +44,14 @@ pub(super) const CASCADES_INTO_FOLDERS: [(&str, &str, &str); 3] = [
 pub(super) struct Doomed {
     pub collection: Vec<i64>,
     pub wishlist: Vec<i64>,
+}
+
+impl Doomed {
+    /// Whether the delete would clear no row at all — the one kind that need not wait for the
+    /// retry, because its `SET NULL` has nothing to act on.
+    pub(super) fn is_empty(&self) -> bool {
+        self.collection.is_empty() && self.wishlist.is_empty()
+    }
 }
 
 /// What deleting `table`'s row `uid` would clear: a folder and its sub-tree, or a deck's group
@@ -90,68 +107,9 @@ pub(super) fn doomed(conn: &Connection, table: &str, uid: &str) -> Result<Doomed
     })
 }
 
-/// Whether clearing the doomed rows' folder would drop two rows onto one grain: a doomed row
-/// whose root twin exists, or two doomed rows that are each other's twin.
-///
-/// **Every grain term but the folder is spelled out**, `refile_entry`'s rule: the folder is the
-/// one term the `SET NULL` rewrites, so it is read as "the root, or another doomed row", and a
-/// probe that dropped any of the other ten would call two different printings one row and hold a
-/// delete that collides with nothing.
-pub(super) fn collides(conn: &Connection, d: &Doomed) -> Result<bool, String> {
-    for &id in &d.collection {
-        let hit: Option<i64> = conn
-            .query_row(
-                "SELECT t.id FROM collection_entries e JOIN collection_entries t
-                   ON t.id <> e.id
-                  AND t.card_id = e.card_id AND t.finish = e.finish
-                  AND t.condition = e.condition AND t.lang = e.lang
-                  AND t.altered = e.altered AND t.signed = e.signed
-                  AND t.proxy = e.proxy AND t.misprint = e.misprint
-                  AND coalesce(t.serial_number, '') = coalesce(e.serial_number, '')
-                  AND coalesce(t.grading, '') = coalesce(e.grading, '')
-                WHERE e.id = ?1
-                  AND (t.folder_id IS NULL OR t.id IN (SELECT value FROM json_each(?2)))
-                LIMIT 1",
-                rusqlite::params![id, ids_json(&d.collection)],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        if hit.is_some() {
-            return Ok(true);
-        }
-    }
-    for &id in &d.wishlist {
-        let hit: Option<i64> = conn
-            .query_row(
-                "SELECT t.id FROM wishlist_entries e JOIN wishlist_entries t
-                   ON t.id <> e.id
-                  AND coalesce(t.oracle_id, '') = coalesce(e.oracle_id, '')
-                  AND coalesce(t.card_id, '') = coalesce(e.card_id, '')
-                  AND coalesce(t.preferred_finish, '') = coalesce(e.preferred_finish, '')
-                WHERE e.id = ?1
-                  AND (t.folder_id IS NULL OR t.id IN (SELECT value FROM json_each(?2)))
-                LIMIT 1",
-                rusqlite::params![id, ids_json(&d.wishlist)],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        if hit.is_some() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-/// The ids as a JSON array, for `json_each` — one bound value however many rows are doomed,
-/// where a list of `?`s would be a statement built per call.
-fn ids_json(ids: &[i64]) -> String {
-    serde_json::to_string(ids).unwrap_or_else(|_| "[]".to_owned())
-}
-
 /// File every doomed row at the root, one at a time, through the crate's own merge — and where
-/// one folded onto a twin, give the survivor the lower of the two uids.
+/// one folded onto a twin, give the survivor the lower of the two uids. Called on the retry, so
+/// what is left doomed by then is what the page did not re-file.
 ///
 /// **Why the lower uid**: a row re-homed here is one the page did not mention, so its own put
 /// reaches the sender with its folder gone, the sender writes it without the folder, and

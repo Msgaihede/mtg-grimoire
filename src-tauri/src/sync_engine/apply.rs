@@ -6,9 +6,10 @@
 //!    other half: an op replayed after a reconnect must add its delta once.
 //! 2. **A row is found by grain, then by uid, then inserted** — and where a grain match carries
 //!    a different uid, both devices set the row's uid to `min(theirs, ours)`, which converges
-//!    with no alias table. A folder's or a deck's delete that would drop two rows onto one grain
-//!    waits for the page's second attempt and then re-homes them itself, merging each onto the
-//!    root's twin under the lower uid ([`rehome`]).
+//!    with no alias table — except onto a row this page deletes, whose uid the sender retired, so
+//!    the incoming uid wins outright. A folder's or a deck's delete that would clear rows out of
+//!    it waits for the page's second attempt, then re-homes whatever is still filed there itself,
+//!    merging each onto the root's twin under the lower uid ([`rehome`]).
 //! 3. **Foreign uids become local ids.** A parent the device has never seen is a *deferral*, not
 //!    an error.
 //! 4. **Cycles are broken and `needs_review` is written.**
@@ -615,11 +616,11 @@ enum Why {
     /// match that would move a row onto a uid another row wears. The constraint's own words,
     /// kept for the record, where they were once discarded.
     Unbuildable(String),
-    /// A delete that would drop two rows onto one grain, asked to wait for the retry. **Never
-    /// classified**: only a first attempt answers it, and only the second attempt's reason is
-    /// kept. (Were one ever to reach [`classify`], it would be read like [`Why::Unbuildable`]:
-    /// held where a newer schema sealed the group, and dropped through the final `match`'s `_`
-    /// otherwise.)
+    /// A delete that would clear rows out of a folder, asked to wait for the retry so the page's
+    /// own re-filing of them lands first. **Never classified**: only a first attempt answers it,
+    /// and only the second attempt's reason is kept. (Were one ever to reach [`classify`], it
+    /// would be read like [`Why::Unbuildable`]: held where a newer schema sealed the group, and
+    /// dropped through the final `match`'s `_` otherwise.)
     Occupied,
 }
 
@@ -639,7 +640,7 @@ impl Why {
 
 /// Which attempt at a group this is. `run_groups` tries every group once, then once more for the
 /// ones that did not land — after every other group in the page, which is what lets a delete
-/// that would collide wait for the sender's own re-filing (spec 2026-09-27 §3.3).
+/// that would clear rows wait for the sender's own re-filing (spec 2026-09-27 §3.3).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Attempt {
     First,
@@ -906,7 +907,7 @@ fn run_groups<'a>(
     }
     // A second attempt, because a batch can carry a child before its parent even when one
     // device's own stream cannot: the relay hands over several devices' streams interleaved.
-    // It is also the one a delete that would collide waits for ([`Why::Occupied`]): by now the
+    // It is also the one a delete that would clear rows waits for ([`Why::Occupied`]): by now the
     // sender's own re-filing of the rows it would drop, which is later in rank, has landed.
     // **Only the second attempt's reason is kept**, since it is the one the page settled on.
     for g in failed {
@@ -1250,11 +1251,26 @@ fn absent_value(p: &Parent) -> Sql {
 /// the lower uid was free — so a grain match onto a uid another local row wore failed
 /// `idx_{table}_uid`, the `?` unwound the whole batch, and the same page failed the same way on
 /// every pull after it.
+///
+/// # Onto a row this page deletes, the incoming uid wins outright
+///
+/// Where the row the grain finds wears a uid a `del` in this page names — `deleted`, which
+/// [`apply_in`] builds from the whole page, re-delivered deletes included — the sender **retired**
+/// that uid: it deleted the row and made this one in its place at the same grain. `min` is the
+/// wrong question there. `reset::clear_collection` deletes every folder and re-makes
+/// `Recently removed` and one group per deck in one write, and both are grained (partially, on
+/// `kind = 'removed'` and on `deck_id`), so on a peer whose old folders still hold copies the old
+/// rows' deletes wait for the retry ([`Why::Occupied`]) while the re-made rows' inserts land on
+/// the old rows. Kept by `min` wherever the old uid sorted lower, the retried delete then took
+/// the very row the insert had just landed on, and the peer lost its holding area or a deck's
+/// group with nothing recorded (spec 2026-09-27 §3.3, as amended). Under the incoming uid the
+/// retried delete finds no row to take. [`adopt_uid`]'s taken-check still applies.
 fn find_row(
     conn: &Connection,
     meta: &Meta,
     g: &Group,
     parents: &BTreeMap<&'static str, Sql>,
+    deleted: &BTreeSet<(&str, &str)>,
 ) -> Result<Found, String> {
     let op_uid = g.ops[0].uid.clone();
     for grain in meta.grains {
@@ -1272,7 +1288,12 @@ fn find_row(
                 .map_err(|e| e.to_string())?;
             if let Some(found) = found {
                 if found != op_uid {
-                    let winner = found.clone().min(op_uid.clone());
+                    let retired = deleted.contains(&(meta.table, found.as_str()));
+                    let winner = if retired {
+                        op_uid.clone()
+                    } else {
+                        found.clone().min(op_uid.clone())
+                    };
                     let rename = (winner != found).then(|| (found.clone(), winner.clone()));
                     return Ok(Found {
                         uid: Some(winner),
@@ -1464,7 +1485,7 @@ fn write_group<'a>(
         return Ok(Outcome::Deferred(why));
     }
 
-    let existing = find_row(conn, meta, g, &parents)?;
+    let existing = find_row(conn, meta, g, &parents, deleted)?;
 
     // **The second fold, over this device's own history as well.** See the module doc: a
     // tombstone folded on its own has nothing to lose to, so add-wins would never fire on the
@@ -1499,29 +1520,35 @@ fn write_group<'a>(
 
     if combined.deleted {
         if let Some(uid) = &existing.uid {
-            // **A delete that would drop two rows onto one grain waits, once.** A folder's or a
-            // deck's `DELETE` clears the folder off every row filed beneath it (`SET NULL`), and
-            // the page takes parents first, so it runs ahead of the sender's own re-filing of
-            // those rows — which is rank 7 or 9, and which the retry finds landed. Merging now
-            // would fold a copy the sender has itself just merged onto the root, and its `+n`
-            // for the twin would then count it a second time (spec 2026-09-27 §3.3).
-            let doomed = rehome::doomed(conn, meta.table, uid)?;
-            if attempt == Attempt::First && rehome::collides(conn, &doomed)? {
+            // **A delete that would clear rows out of a folder waits, once — whether or not it
+            // would collide yet.** A folder's or a deck's `DELETE` clears the folder off every
+            // row filed beneath it (`SET NULL`), and the page takes parents first, so it runs
+            // ahead of the sender's own writes to those rows — rank 7 or 9, which the retry finds
+            // landed. Merging now would fold a copy the sender has itself just merged onto the
+            // root, and its `+n` for the twin would count it a second time; and a delete that
+            // collides with nothing *yet* is no safer, because the root copy it will meet may be
+            // in the same page, and re-homing onto the free grain first let that copy's insert
+            // land on the re-homed row (spec 2026-09-27 §3.3, as amended).
+            //
+            // **Never `?` from here.** A refusal — the read of the doomed rows included — rolls
+            // the group back and is a row this database cannot build: dropped and recorded, or
+            // held where the sender is newer. A delete that failed through `?` failed the whole
+            // apply, and the same page failed it again on every pull after (spec §1.1).
+            let doomed = rehome::doomed(conn, meta.table, uid);
+            if attempt == Attempt::First && doomed.as_ref().is_ok_and(|d| !d.is_empty()) {
                 rollback()?;
                 return Ok(Outcome::Deferred(Why::Occupied));
             }
-            // **Never `?` from here.** A refusal rolls the group back and is a row this
-            // database cannot build — dropped and recorded, or held where the sender is newer —
-            // because a delete that failed through `?` failed the whole apply, and the same page
-            // failed it again on every pull after (spec §1.1).
-            let done = rehome::rehome(conn, &doomed).and_then(|()| {
-                conn.execute(
-                    &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
-                    [uid],
-                )
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-            });
+            let done = doomed
+                .and_then(|d| rehome::rehome(conn, &d))
+                .and_then(|()| {
+                    conn.execute(
+                        &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
+                        [uid],
+                    )
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+                });
             if let Err(e) = done {
                 rollback()?;
                 return Ok(Outcome::Deferred(Why::Unbuildable(e)));
