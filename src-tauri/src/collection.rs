@@ -518,25 +518,33 @@ fn card_name_of(conn: &Connection, card_id: &str) -> Result<Option<String>, Stri
 /// which writes a `deck_audit` row and by the feed's first rule must not write a second line
 /// about the same press. Both production callers of *this* function (`collection_add` and the
 /// web target's route) are the reader's own gesture, which is what makes this the right rung.
+///
+/// **The upsert and its feed row are one savepoint** ([`crate::db::in_savepoint`], issue #550).
+/// Neither command wrapper opens a transaction, so until then the upsert autocommitted on its
+/// own — and a `card_name_of`, a `folder_name` or the activity insert that failed after it
+/// answered an error over copies already added, which the reader's second press then added
+/// again. A savepoint rather than a transaction because it nests: a caller that holds its own
+/// transaction still owns this write, and a rollback there still takes both rows back.
 pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, String> {
-    let change = add_entry_filed(conn, input, READER_FOLDERS)?;
-    // Inside whatever transaction the caller holds, and never one of its own — see
-    // [`crate::activity::record`]. The folder is read back by name because the feed outlives the
-    // folder, exactly as `card_name` outlives the printing.
-    crate::activity::record(
-        conn,
-        crate::activity::COLLECTION,
-        crate::activity::ADD,
-        Some(&input.card_id),
-        card_name_of(conn, &input.card_id)?.as_deref(),
-        &serde_json::json!({
-            "folder": folder_name(conn, input.folder_id)?,
-            "finish": input.finish,
-        }),
-        input.quantity,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(change)
+    crate::db::in_savepoint(conn, "collection_add", || {
+        let change = add_entry_filed(conn, input, READER_FOLDERS)?;
+        // The folder is read back by name because the feed outlives the folder, exactly as
+        // `card_name` outlives the printing.
+        crate::activity::record(
+            conn,
+            crate::activity::COLLECTION,
+            crate::activity::ADD,
+            Some(&input.card_id),
+            card_name_of(conn, &input.card_id)?.as_deref(),
+            &serde_json::json!({
+                "folder": folder_name(conn, input.folder_id)?,
+                "finish": input.finish,
+            }),
+            input.quantity,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(change)
+    })
 }
 
 /// [`add_entry`] with the folder fence handed in, for the two callers that file into a folder no
@@ -1006,8 +1014,21 @@ pub(crate) fn commit_import_with(
 /// command, and an intermediate zero inside a transaction — [`commit_import`]'s `set` mode
 /// writes one before deleting it — is still legal. [`update_entry`] is the other deliberate
 /// exception, and its own doc says why.
+///
+/// **The write and its feed row are one savepoint** — [`add_entry`]'s rule and issue #550's
+/// reason: a feed insert that failed after an autocommitted write answered an error over a
+/// change that had landed. Each early [`GONE`] in [`set_quantity_inner`] leaves the savepoint
+/// having written nothing, so its rollback costs nothing.
 pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
     valid_quantity(quantity, "collection quantity")?;
+    crate::db::in_savepoint(conn, "collection_set_quantity", || {
+        set_quantity_inner(conn, id, quantity)
+    })
+}
+
+/// [`set_quantity`]'s body, inside the savepoint that function opens — split out so the early
+/// returns below stay a function's early returns rather than becoming a closure's.
+fn set_quantity_inner(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
     // Read before the write, because the write is what makes them unanswerable — and a `None`
     // here is the same [`GONE`] both arms below answer, asked one statement earlier.
     let Some(facts) = entry_facts(conn, id)? else {
@@ -1381,25 +1402,28 @@ fn record_edit(
 /// information — it is an error dialog over a success.
 ///
 /// **The reader's own delete, and the one that records it.** [`delete_entry`] is the same
-/// statement without the feed row, for [`commit_import`]'s per-line zeroes — see there.
+/// statement without the feed row, for [`commit_import`]'s per-line zeroes — see there. The
+/// delete and that row are one savepoint, [`add_entry`]'s rule (issue #550).
 pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
-    // Before the delete, and `None` is not a refusal here: an id that resolves to nothing is a
-    // success (see above), and there is no change to record because there was no change.
-    let facts = entry_facts(conn, id)?;
-    let change = delete_entry(conn, id)?;
-    if let Some(facts) = facts {
-        crate::activity::record(
-            conn,
-            crate::activity::COLLECTION,
-            crate::activity::REMOVE,
-            facts.card_id.as_deref(),
-            facts.card_name.as_deref(),
-            &serde_json::json!({ "folder": facts.folder }),
-            -facts.quantity,
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(change)
+    crate::db::in_savepoint(conn, "collection_remove", || {
+        // Before the delete, and `None` is not a refusal here: an id that resolves to nothing is
+        // a success (see above), and there is no change to record because there was no change.
+        let facts = entry_facts(conn, id)?;
+        let change = delete_entry(conn, id)?;
+        if let Some(facts) = facts {
+            crate::activity::record(
+                conn,
+                crate::activity::COLLECTION,
+                crate::activity::REMOVE,
+                facts.card_id.as_deref(),
+                facts.card_name.as_deref(),
+                &serde_json::json!({ "folder": facts.folder }),
+                -facts.quantity,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(change)
+    })
 }
 
 /// [`remove_entry`] with no feed row — the statement, and none of the history.
@@ -7688,5 +7712,142 @@ mod tests {
             0,
             "which is the same rollback, seen from the other table"
         );
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * Issue #550: a write and its feed row land together. Neither command wrapper opens a
+     * transaction, so each door holds a savepoint of its own — and a feed insert that fails
+     * must take the write back with it, or the reader's retry counts the copies twice.
+     * ---------------------------------------------------------------------------------- */
+
+    /// Make every `activity` insert fail, as a full disk or a locked table would — a temp
+    /// trigger, so it lives on this connection only and [`allow_activity`] takes it away.
+    fn refuse_activity(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER refuse_activity BEFORE INSERT ON main.activity
+             BEGIN SELECT RAISE(ABORT, 'the feed is full'); END;",
+        )
+        .unwrap();
+    }
+
+    fn allow_activity(conn: &Connection) {
+        conn.execute_batch("DROP TRIGGER temp.refuse_activity")
+            .unwrap();
+    }
+
+    /// The quantity on the one `bolt-lea` nonfoil row, or `None` when there is no such row.
+    fn bolt_quantity(conn: &Connection) -> Option<i64> {
+        conn.query_row(
+            "SELECT quantity FROM collection_entries WHERE card_id = 'bolt-lea'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_add_back_with_it() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+
+        refuse_activity(&conn);
+        assert!(add_entry(&conn, &input("bolt-lea", "nonfoil", 3)).is_err());
+        assert_eq!(
+            bolt_quantity(&conn),
+            Some(2),
+            "the fold rolled back with the feed row"
+        );
+        assert!(
+            conn.is_autocommit(),
+            "and the savepoint left no transaction open behind it"
+        );
+
+        allow_activity(&conn);
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 3)).unwrap();
+        assert_eq!(
+            bolt_quantity(&conn),
+            Some(5),
+            "the retry counts the three copies once"
+        );
+        assert_eq!(feed(&conn).len(), 2, "one line per add that landed");
+    }
+
+    /// The first add of a printing is an `INSERT` rather than a fold, and it goes too.
+    #[test]
+    fn a_failed_activity_row_leaves_no_new_row_behind() {
+        let conn = seeded();
+        refuse_activity(&conn);
+        assert!(add_entry(&conn, &input("bolt-lea", "nonfoil", 3)).is_err());
+        assert_eq!(bolt_quantity(&conn), None);
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_quantity_change_back_with_it() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 4)).unwrap();
+
+        refuse_activity(&conn);
+        assert!(set_quantity(&conn, added.id, 1).is_err());
+        assert_eq!(bolt_quantity(&conn), Some(4), "the update rolled back");
+        assert!(set_quantity(&conn, added.id, 0).is_err());
+        assert_eq!(
+            bolt_quantity(&conn),
+            Some(4),
+            "and so did the zero's delete"
+        );
+
+        allow_activity(&conn);
+        set_quantity(&conn, added.id, 1).unwrap();
+        assert_eq!(bolt_quantity(&conn), Some(1));
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_removal_back_with_it() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 4)).unwrap();
+
+        refuse_activity(&conn);
+        assert!(remove_entry(&conn, added.id).is_err());
+        assert_eq!(
+            bolt_quantity(&conn),
+            Some(4),
+            "the row is still there to remove"
+        );
+
+        allow_activity(&conn);
+        remove_entry(&conn, added.id).unwrap();
+        assert_eq!(bolt_quantity(&conn), None);
+    }
+
+    /// **The savepoint nests**, which is why it is one rather than a transaction: a failure
+    /// inside a caller's transaction undoes that one write and leaves the caller's others, and
+    /// the transaction is still the caller's to commit.
+    #[test]
+    fn a_failed_add_inside_a_callers_transaction_undoes_only_itself() {
+        let conn = seeded();
+        let tx = conn.unchecked_transaction().unwrap();
+        add_entry(&tx, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        refuse_activity(&tx);
+        assert!(add_entry(&tx, &input("bolt-jp", "foil", 1)).is_err());
+        allow_activity(&tx);
+        tx.commit().unwrap();
+
+        assert_eq!(
+            bolt_quantity(&conn),
+            Some(2),
+            "the caller's first write committed"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM collection_entries WHERE card_id = 'bolt-jp'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0,
+            "and the failed one did not"
+        );
+        assert_eq!(feed(&conn).len(), 1);
     }
 }
