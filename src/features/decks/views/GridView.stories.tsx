@@ -10,7 +10,7 @@ import {
   deckViolations,
   printing,
 } from "../../../../.storybook/fake/fixtures";
-import { THEORY_MATCH_ATTR, THEORY_MATCH_NAME_LABEL } from "../CardMarks";
+import { THEORY_MATCH_ANY_LABEL, THEORY_MATCH_ATTR, THEORY_MATCH_NAME_LABEL } from "../CardMarks";
 import { buildGroups } from "../grouping";
 import { theoryMatchPlan, type TheoryMarkSwitches, type TheoryPlan } from "../theoryMatch";
 import { GridView } from "./GridView";
@@ -327,6 +327,8 @@ export const BothTiers: Story = {
  * is the finer statement. Both Bolts and the Sol Ring draw blue here, with blue's own
  * **name-grain** number — the green `+2` about a printing is gone, and the card-grain tick in its
  * place is the honest reading for a reader who has four Bolts and has stopped caring which art.
+ * Every blue mark on this deck says `Match` rather than `Art Mismatch` (since 2026-09-27), the
+ * words following the same switch the colour does.
  *
  * This is the switch for somebody playing proxies on purpose, and it is per **deck**
  * (`DeckSettingsForm`'s two `MarkSwitch` rows) where the colours are per device — the switch is
@@ -358,11 +360,16 @@ export const ExactMarkOff: Story = {
     // the number followed the tier, because the two are one statement. Both halves of the count
     // clause are named, because `theoryMatchLabel` has one phrasing per sign and an assertion
     // that checked only the one this row used to draw would go vacuous the moment it flipped.
+    //
+    // **And blue's sentence is `Match` on this deck, not `Art Mismatch`** (managed tokens spec
+    // §3.10, 2026-09-27): the reader switched printings off, so calling the very printing the plan
+    // names a mismatch of one would be telling them the thing they asked not to hear.
     const bolt = canvas.getAllByRole("button", { name: /^Lightning Bolt/ });
     for (const tile of bolt) {
       expect(tile).toHaveAccessibleName(
-        expect.stringContaining(THEORY_MATCH_NAME_LABEL.toLowerCase()),
+        expect.stringContaining(`, ${THEORY_MATCH_ANY_LABEL.toLowerCase()}`),
       );
+      expect(tile).toHaveAccessibleName(expect.not.stringContaining("mismatch"));
       expect(tile).toHaveAccessibleName(expect.not.stringContaining("to add"));
       expect(tile).toHaveAccessibleName(expect.not.stringContaining("to remove"));
     }

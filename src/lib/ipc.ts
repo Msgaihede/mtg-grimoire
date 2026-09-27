@@ -856,6 +856,37 @@ export interface Printing {
 }
 
 /**
+ * One printing of **any** token or emblem in the game — `token_printings`' row, the read behind
+ * Add printing's `All tokens` (managed tokens spec §3.6).
+ *
+ * **A {@link Printing} with the token's own facts beside it**, and that is the shape on purpose:
+ * `deck_tokens::TokenPrinting` flattens `card::Printing` into itself (`#[serde(flatten)]`), so the
+ * picker's tile code — written against `card_printings`' rows — draws these with no branch, and the
+ * facts it groups and subtitles by ride alongside. They are the ones `DeckTokenRow` carries for
+ * `tokenSubtitle`, because a token's name does not identify it: the whole game's tokens include
+ * `Wurmcoil Engine`'s two `Wurm`s, separated only by their rules text.
+ *
+ * **No `layout` of its own**: {@link Printing.layout} is already on the flattened printing, and a
+ * second field would serialise the key twice — the Rust struct is pinned to one.
+ *
+ * `ipc.test.ts` holds the fields here to the Rust struct's own, less the flattened one.
+ */
+export interface TokenPrinting extends Printing {
+  /** The token — the grain every printing of it shares, and what the picker groups by. */
+  oracleId: string;
+  name: string;
+  /** The token's type line — {@link DeckTokenRow.typeLine}'s, so a row hands `tokenSubtitle`
+   *  the whole shape its parameter names, as a deck's token row does. */
+  typeLine: string | null;
+  /** Scryfall's colour letters, concatenated — {@link DeckTokenRow.colors}' form. */
+  colors: string | null;
+  /** Printed sizes, strings for {@link DeckTokenRow.power}'s reason (`*`, `1+*`). */
+  power: string | null;
+  toughness: string | null;
+  oracleText: string | null;
+}
+
+/**
  * A page of printings and the size of the list it was taken from.
  *
  * `card::list_printings` caps the page at 400 rows, so `items.length < total` is the whole
@@ -2351,10 +2382,19 @@ export interface WishlistFolder {
    * the actual list — and Rust rewrites it after every write that changes the deck. It is the
    * **deck's** rather than the reader's: every write that would file, rename, move, delete or
    * edit a wish in it is refused by the backend, so a surface draws no such control for it.
-   * Always a root folder (`parentId` is `null`), and never synced — each device derives its own
-   * from the deck, which is.
+   * A root folder (`parentId` is `null`) — except its **Tokens** child, below — and never
+   * synced: each device derives its own from the deck, which is.
    */
   managedDeckId: number | null;
+  /**
+   * **The managed wishlist's Tokens subfolder** (user schema v54, managed tokens spec §3.8): the
+   * one child a managed folder can have, named `Tokens`, carrying the **same** `managedDeckId` and
+   * its parent's id in `parentId`, and holding the token printings that deck's plan is short of.
+   * `false` for every other folder — the reader's own and the managed folder itself. What tells
+   * one deck's `Tokens` from another's is the parent, never the name, so a list of managed folders
+   * by name leaves these out.
+   */
+  managedTokens: boolean;
 }
 
 /**
@@ -3001,6 +3041,22 @@ export interface TheoryDiffRow {
    */
   heldAsOtherPrinting: number;
   /**
+   * **A token the plan holds more of than the deck** rather than a card (managed tokens spec
+   * §3.7) — a `(card_id, finish)` of a token entry, the plan's entries (implicit rows included)
+   * less the deck's, at the card rows' own grain and by their own subtraction. Such a row is filed
+   * under **Tokens & Emblems**, `ownedSpare` counts that printing's loose copies, and
+   * `heldAsOtherPrinting` the deck's other printings of the same token.
+   *
+   * What Compare's views filter on: **Tokens** is these rows alone, **All** is every row, and
+   * **Missing** and **Different printing** are card rows only. A send to the wishlist files such a
+   * row as a wish pinned to its printing, its finish the preferred one.
+   *
+   * Required rather than optional, because an absent flag reads `undefined` — falsy — and would
+   * file every token row as a card row with nothing red anywhere; `ipc.test.ts` names it on both
+   * sides.
+   */
+  isToken: boolean;
+  /**
    * Where this row's printing's picture is, per variant — the web target's only way to draw the
    * thumbnail beside the name.
    *
@@ -3363,8 +3419,12 @@ export interface DeckInput {
  * Which Compare view a deck's managed wishlist follows — `decks.managed_wishlist_mode` (user
  * schema v49), and `managed_wishlist::MODES` in the crate. `other` is the dialog's
  * `Different printing`. The words and their order are `features/decks/managedWishlist.ts`'s.
+ *
+ * **`tokens` since user schema v54** (managed tokens spec §3.8): All and Tokens fill a `Tokens`
+ * subfolder inside the deck's folder with the plan's missing tokens, Tokens puts nothing in the
+ * folder itself, and Missing and Different printing leave tokens out.
  */
-export type ManagedWishlistMode = "off" | "all" | "missing" | "other";
+export type ManagedWishlistMode = "off" | "all" | "missing" | "other" | "tokens";
 
 /**
  * How a deck keeps its tokens — `decks.token_mode`, user schema v52, `NOT NULL DEFAULT
@@ -4533,9 +4593,16 @@ export interface DeckDetail {
  * hand-added token is the deck's, whichever list the reader is looking at.
  *
  * The vocabulary is closed by a `CHECK` on the column rather than by convention, so this union
- * is the whole of it: `auto` is a token the deck derives and the reader has not dismissed,
- * `hidden` is one the reader dismissed, and `manual` is drawn whether anything derives it or
- * not — a token added by hand, which a cut can never take away because no card made it.
+ * is the whole of it: `auto` is a token the deck derives, and `manual` is drawn whether anything
+ * derives it or not — a token added by hand, which a cut can never take away because no card
+ * made it.
+ *
+ * **`hidden` is still a word the wire can carry, and nothing on this side reads it** (managed
+ * tokens spec §3.3). Dismiss is gone and a launch pass (`deck_tokens::retire_hidden`) turns every
+ * dismissed token back into an ordinary one at 0 — but a peer on an older build can still write
+ * the word, and one it syncs in after that pass has run arrives here before the next launch
+ * retires it. Until then it is drawn like any other token: `deckTokens.ts` filters on nothing,
+ * because a token that vanished with no control left to bring it back is worse than a stale word.
  */
 export type DeckTokenState = "auto" | "hidden" | "manual";
 
@@ -4552,8 +4619,9 @@ export interface TokenSource {
 
 /**
  * One entry of a token list, addressed by the two facts that are its grain beside the deck,
- * the list and the token — `(card_id, finish)`. What {@link ipc.deckTokenSetQuantity} and
- * {@link ipc.deckTokenSwap} name, with `null` standing for the token's **implicit** entry.
+ * the list and the token — `(card_id, finish)`. What {@link ipc.deckTokenSetQuantity},
+ * {@link ipc.deckTokenSwap} and {@link ipc.deckTokenRemove} name, with `null` standing for the
+ * token's **implicit** entry in the first two (the third deletes a stored entry, and takes none).
  */
 export interface TokenEntryKey {
   cardId: string;
@@ -4583,9 +4651,12 @@ function tokenEntryArg(entry: TokenEntryKey | null): TokenEntryKey | null {
  *
  * **A token with entries in the list answers one row per entry; a token with none answers one
  * _implicit_ row** — {@link implicit} `true`, {@link cardId} the resolver's default printing in
- * its default finish, {@link quantity} the legacy `deck_tokens.quantity ?? 1`. So every row is
- * already the effective answer, and Rust resolves it: a view that fell back from one field to
- * another here would be a second, stale copy of spec §4.2's rule 1.
+ * its default finish, {@link quantity} the legacy `deck_tokens.quantity ?? 0` (0 since managed
+ * tokens spec §3.1: a token is something the reader starts to use). So every row is already the
+ * effective answer, and Rust resolves it: a view that fell back from one field to another here
+ * would be a second, stale copy of spec §4.2's rule 1. **A token nothing derives is the
+ * exception** (spec §3.4): it has no default printing to stand for, so it answers rows only in a
+ * list that holds an entry of it, and none — not even an implicit one — in a list that does not.
  *
  * **The rows of one token carry the same token facts** (name, type line, subtitle facts,
  * sources, state) and differ in the entry's own: the printing, the finish, the quantity, the
@@ -4661,7 +4732,7 @@ export interface DeckTokenRow {
   finish: Finish;
   /**
    * How many copies of this entry the list wants — **effective**, resolved by Rust: a stored
-   * entry's own `quantity`, or for an implicit entry the legacy `deck_tokens.quantity ?? 1`.
+   * entry's own `quantity`, or for an implicit entry the legacy `deck_tokens.quantity ?? 0`.
    * **`0` is a value** — rule 3 keeps a token's last entry at 0 rather than deleting it, so the
    * implicit default does not reappear under a reader who zeroed the only printing they had.
    */
@@ -8334,24 +8405,47 @@ export const ipc = {
   deckTokenAddPrinting: (deckId: number, variant: DeckVariant, cardId: string, finish: Finish) =>
     invoke<void>("deck_token_add_printing", { deckId, variant, cardId, finish }),
   /**
-   * **Dismiss or restore a token** — its `deck_tokens.state`, shared by both lists, which is why
-   * this is the one token write that names no `variant`: a dismissal is "not in this deck",
-   * whichever list the reader is looking at.
+   * **Remove printing** — one stored entry of one token in this list, deleted unconditionally
+   * (managed tokens spec §3.4). The one thing no other write does: a step to 0 keeps a token's
+   * last entry (rule 3), and the command that took them all, `deck_token_reset`, is retired along
+   * with Dismiss's `deck_token_state`.
    *
-   * `auto` is a derived token following the deck again; `manual` is one kept whether or not
-   * anything makes it; `hidden` is dismissed. Which of the first two a restore sends is the
-   * caller's conclusion — `useDeckTokens`' `restore` reads `derived` — because `hidden` costs a
-   * `manual` token its manual-ness and only the caller knows which it was.
+   * - **A derived token** whose last entry in this list goes falls back to its implicit entry,
+   *   the resolver's printing at 0 — what Reset printings did.
+   * - **A hand-added token** is drawn only in a list that holds an entry of it, so its last entry
+   *   here takes it off this list's band; when neither list holds one its state returns to `auto`
+   *   and it leaves the deck.
+   *
+   * **`entry` is never `null`**: an implicit entry is not stored, so there is nothing to delete
+   * and the band draws no Remove on one. An entry this list does not hold is refused in words
+   * (`ENTRY_GONE`). Journalled like every token write — one history row, *Removed Treasure's TMOM
+   * #12 printing*, and one undo step that puts it back.
    */
-  deckTokenState: (deckId: number, oracleId: string, state: DeckTokenState) =>
-    invoke<void>("deck_token_state", { deckId, oracleId, state }),
+  deckTokenRemove: (
+    deckId: number,
+    variant: DeckVariant,
+    oracleId: string,
+    entry: TokenEntryKey,
+  ) =>
+    invoke<void>("deck_token_remove", {
+      deckId,
+      variant,
+      oracleId,
+      entry: tokenEntryArg(entry),
+    }),
   /**
-   * **Reset one token's printings in this list** — deletes that list's entries, so the token is
-   * back to its implicit entry. The other list and the token's state are untouched. A token
-   * with no entries here is a success that writes nothing.
+   * **Every paper token and emblem printing in the game** — Add printing's `All tokens` (managed
+   * tokens spec §3.6). See {@link TokenPrinting}: the `card_printings` row the picker already
+   * draws, priced per finish at `marketplace`, with the token's own facts beside it.
+   *
+   * One statement over `cards` with `is_token_printing`'s predicate in SQL and **no index behind
+   * it**, which is a decision rather than an omission: it runs on a press of the toggle, never per
+   * keystroke — the picker narrows the answer it holds. The corpus answers ~3 245 printings over
+   * ~1 078 tokens (measured on the debug corpus when the token feature landed), so the picker
+   * lets the browser skip the groups off screen rather than drawing every one.
    */
-  deckTokenReset: (deckId: number, variant: DeckVariant, oracleId: string) =>
-    invoke<void>("deck_token_reset", { deckId, variant, oracleId }),
+  tokenPrintings: (marketplace: MarketplaceId) =>
+    invoke<TokenPrinting[]>("token_printings", { marketplace }),
   /**
    * Every note on the deck, in the reader's own order, each with the cards it names.
    *

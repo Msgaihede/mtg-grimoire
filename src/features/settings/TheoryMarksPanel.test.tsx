@@ -146,7 +146,7 @@ describe("TheoryMarksPanel", () => {
 
     expect(row("Matching printing").style.getPropertyValue("--color-theory-exact")).toBe("#ff0000");
     // The other mark is untouched — one picker is open, and it is about one mark.
-    expect(row("Different printing").style.getPropertyValue("--color-theory-name")).toBe(
+    expect(row("Any printing").style.getPropertyValue("--color-theory-name")).toBe(
       MARK_COLOR_DEFAULTS.theoryName,
     );
     expect(sent).toEqual([]);
@@ -284,7 +284,7 @@ describe("TheoryMarksPanel", () => {
     await waitFor(() => expect(markColors).toHaveBeenCalled());
 
     const names: string[] = [];
-    for (const noun of ["matching-printing", "different-printing", "unplanned-card"]) {
+    for (const noun of ["matching-printing", "any-printing", "unplanned-card"]) {
       const open = screen.getByRole("button", {
         name: new RegExp(`change the ${noun} mark`, "i"),
       });
@@ -301,7 +301,7 @@ describe("TheoryMarksPanel", () => {
 
     expect(names).toEqual([
       "Matching printing colour",
-      "Different printing colour",
+      "Any printing colour",
       "Not in the theory list colour",
     ]);
     expect(new Set(names).size).toBe(3);
@@ -317,7 +317,7 @@ describe("TheoryMarksPanel", () => {
 
     for (const [name, noun] of [
       ["Matching printing", "matching-printing"],
-      ["Different printing", "different-printing"],
+      ["Any printing", "any-printing"],
       // The third row is named for the mark's own sentence rather than for a distinction it does
       // not draw — `CardMarks.tsx`'s `THEORY_UNPLANNED_LABEL`, which is what the mark says on the
       // card and what `deckCardName` says in words.

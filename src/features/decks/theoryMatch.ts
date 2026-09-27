@@ -114,6 +114,12 @@ export type TheoryTier = "exact" | "name" | "unplanned";
  * tooltip and the `Matches theory` grouping's headings both say these, so a card sitting under
  * `Art Mismatch` wears a mark that says `Art Mismatch` too.
  *
+ * **Except on a deck with `Matching printing` switched off** (managed tokens spec §3.10,
+ * 2026-09-27), where every name-tier mark says `Match` — see {@link TheoryMark.anyPrinting} — and
+ * the headings stay these three words. That parting is deliberate rather than drift: a heading
+ * buckets by the *plan*, which the switches do not change ({@link theoryTier}), while a mark says
+ * what the reader has asked to be told, which they do.
+ *
  * Written here rather than in `CardMarks.tsx` because `grouping.ts` needs them and must not
  * import a component file to get them.
  */
@@ -136,6 +142,24 @@ export interface TheoryMark {
    * nullable, and `CardMarks.tsx` decides the glyph from the tier *before* it reads this.
    */
   delta: number;
+  /**
+   * Whether this row resolved on the **name** tier of a deck whose `Matching printing` switch is
+   * off — the reader has asked for any printing of a planned card to count as the card (managed
+   * tokens spec §3.10, 2026-09-27).
+   *
+   * **It changes the mark's words and nothing else.** The tier, the colour and the number are the
+   * name tier's exactly as before; what moves is `CardMarks.tsx`'s `theoryMatchLabel`, which says
+   * `Match` for such a row where it said `Art Mismatch` — a sentence telling the reader the one
+   * thing they switched off. True **whether or not the row's printing is the one the plan names**:
+   * the named printing falls through to this tier with the switch off, and a genuine other printing
+   * is on it anyway, and with printings not told apart the two are one statement.
+   *
+   * Always `false` on the `exact` tier, which the switch being off never reaches, and on the
+   * `unplanned` tier, which no printing switch can reach. A field on the mark rather than a second
+   * argument at every caller, for {@link TheoryPlan.marks}' own reason: the answer is decided here,
+   * once, and four views only draw it.
+   */
+  anyPrinting: boolean;
 }
 
 /**
@@ -364,6 +388,12 @@ export function theoryMatchPlan(
  * so the fact survives the switch; what the switch turns off is the finer statement. This is why
  * the fallback needs no arithmetic of its own: it is the same call, one tier down.
  *
+ * **And every name-tier row of such a deck is {@link TheoryMark.anyPrinting}** (2026-09-27), the
+ * fallen-through exact row and the genuine other printing alike — which is the whole of what
+ * words the mark `Match` rather than `Art Mismatch`. It is read off the switch rather than off
+ * the lookup that found the row, because what it records is the reader's question (*is this the
+ * card?*) and not which map happened to answer it.
+ *
  * ## The third tier is what the first two leave over, and it has no fallback in either direction
  *
  * A row in **neither** map is `unplanned` — the plan does not ask for this card at all — with a
@@ -392,17 +422,23 @@ export function theoryMatchMark(
 ): TheoryMark | null {
   if (plan === undefined) return null;
   const exact = plan.exact.get(theorySlot(card));
-  if (exact !== undefined && plan.marks.exact) return { tier: "exact", delta: exact };
+  if (exact !== undefined && plan.marks.exact) {
+    return { tier: "exact", delta: exact, anyPrinting: false };
+  }
   // Read before either switch is consulted, because it answers a question about the *plan* rather
   // than about what the reader has asked to see: a row in neither map is the third tier, and a
   // row in one of them is in the plan whatever the switches then do with it. The exact hit above
   // short-circuits, so the ordinary matching row still costs one lookup.
   const byName = plan.byName.get(theoryNameKey(card.name));
   if (exact === undefined && byName === undefined) {
-    return plan.marks.unplanned ? { tier: "unplanned", delta: 0 } : null;
+    return plan.marks.unplanned ? { tier: "unplanned", delta: 0, anyPrinting: false } : null;
   }
   if (!plan.marks.name) return null;
-  return byName === undefined ? null : { tier: "name", delta: byName };
+  // The switch, never which map answered: with printings not told apart, the named printing
+  // falling through and a genuine other one are the same statement — see the section above.
+  return byName === undefined
+    ? null
+    : { tier: "name", delta: byName, anyPrinting: !plan.marks.exact };
 }
 
 /**

@@ -70,10 +70,9 @@ const BLANK: DeckSettingsValue = {
   // is passed no `categories`, so no "Add cards to" row is drawn, and the create sends nothing
   // for it: `decks.default_category_id` has `DEFAULT 0`, which is this same value.
   defaultCategoryId: AUTO_CATEGORY,
-  // The token mode, `managed` — and never sent: `DeckInput` has no field for it and
-  // `decks.token_mode` is `DEFAULT 'managed'` (user schema v52). No `canSetTokenMode` is passed,
-  // so no control is drawn; the reader sets it in Deck settings or the band's own header.
-  tokenMode: "managed",
+  // No token mode: the value stopped carrying one on 2026-09-27 (managed tokens spec §3.9), when
+  // the control went from both hosts. `decks.token_mode`'s `DEFAULT 'managed'` still answers for
+  // a new deck and nothing reads it.
 };
 
 /**

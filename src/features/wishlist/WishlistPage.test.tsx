@@ -259,9 +259,9 @@ const SEARCH_BOLT: CardSummary = {
  * and an empty folder has **no summary row at all** — the read groups the wishes — so it is the
  * one that catches a card fed a raw `Map.get`.
  */
-const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null };
-const BACKORDERED: WishlistFolder = { id: 2, parentId: 1, name: "Backordered", sortOrder: 0, managedDeckId: null };
-const SOMEDAY: WishlistFolder = { id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null };
+const ORDERED: WishlistFolder = { id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false };
+const BACKORDERED: WishlistFolder = { id: 2, parentId: 1, name: "Backordered", sortOrder: 0, managedDeckId: null, managedTokens: false };
+const SOMEDAY: WishlistFolder = { id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null, managedTokens: false };
 const FOLDERS: WishlistFolder[] = [ORDERED, BACKORDERED, SOMEDAY];
 
 /** Direct per folder, and `Someday` is deliberately absent rather than zeroed. */
@@ -2125,6 +2125,7 @@ describe("the shelves", () => {
       name: "Mana base",
       sortOrder: 0,
       managedDeckId: null,
+      managedTokens: false,
     };
     const FETCH: WishlistFolder = {
       id: 11,
@@ -2132,6 +2133,7 @@ describe("the shelves", () => {
       name: "Fetchlands",
       sortOrder: 0,
       managedDeckId: null,
+      managedTokens: false,
     };
     const SHOCK: WishlistFolder = {
       id: 12,
@@ -2139,6 +2141,7 @@ describe("the shelves", () => {
       name: "Shocks",
       sortOrder: 1,
       managedDeckId: null,
+      managedTokens: false,
     };
     const land = (id: number, name: string, folderId: number): WishRow => ({
       ...BOLT,
@@ -3087,6 +3090,7 @@ describe("the shelves", () => {
       name: "Signed",
       sortOrder: 0,
       managedDeckId: null,
+      managedTokens: false,
     };
     const INSIDE: WishRow = {
       ...FILED,
@@ -4308,6 +4312,7 @@ describe("the folders", () => {
       name: "Add folder",
       sortOrder: 0,
       managedDeckId: null,
+      managedTokens: false,
     };
     const INNER: WishlistFolder = {
       id: 21,
@@ -4315,6 +4320,7 @@ describe("the folders", () => {
       name: "Inner",
       sortOrder: 0,
       managedDeckId: null,
+      managedTokens: false,
     };
     const DEEP: WishlistFolder = {
       id: 22,
@@ -4322,6 +4328,7 @@ describe("the folders", () => {
       name: "Deep",
       sortOrder: 0,
       managedDeckId: null,
+      managedTokens: false,
     };
 
     it("hands the caret to the toolbar's Add folder, never to a trail segment of that name", async () => {
@@ -4922,6 +4929,7 @@ describe("a deck's managed wishlist", () => {
     name: "Rhystic Testbed",
     sortOrder: 2,
     managedDeckId: 4,
+    managedTokens: false,
   };
   /** What the deck's plan is short of — filed in the managed folder by the deck, not the reader. */
   const COPTER: WishRow = {

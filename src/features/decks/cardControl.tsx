@@ -417,7 +417,8 @@ export function deckCardName(
    * itself is `TheoryMatchMark`, whose statement of *which* tier is a colour and a glyph — green
    * for the printing the plan named, blue for another printing of a planned card, red with an X
    * for a card the plan does not ask for at all — and a colour says nothing to a reader who
-   * cannot see it, so `theoryMatchLabel` is handed the tier below rather than the delta alone.
+   * cannot see it, so `theoryMatchLabel` is handed the whole mark below rather than the delta
+   * alone — tier, count and, since 2026-09-27, whether the deck asks for any printing.
    * **`null` and `0` are still not the same statement** and the clause turns on the difference:
    * absent draws no mark and says nothing, `0` says the tier's sentence, and anything else says
    * it with the count on the end — except on the `unplanned` tier, which never carries a count
@@ -500,10 +501,10 @@ export function deckCardName(
     // second and third tiers, the same sentence names **which** tier, because that half of the
     // mark is drawn as a colour and a glyph and a colour is the one thing a screen reader is told
     // nothing about. On the third tier the sentence is "no match" (issue #502's names) —
-    // which is the whole of what that mark says and is why the count clause is absent there.
-    theoryMark === null
-      ? null
-      : theoryMatchLabel(theoryMark.tier, theoryMark.delta).toLowerCase(),
+    // which is the whole of what that mark says and is why the count clause is absent there —
+    // and on the name tier of a deck with `Matching printing` off it is "match", because that
+    // reader asked not to be told printings apart (managed tokens spec §3.10).
+    theoryMark === null ? null : theoryMatchLabel(theoryMark).toLowerCase(),
     ruleBreakText === null ? null : `rule break: ${ruleBreakText}`,
   ]
     .filter((part): part is string => part !== null)
