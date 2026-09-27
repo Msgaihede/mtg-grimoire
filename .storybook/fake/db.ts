@@ -293,7 +293,7 @@ import type {
 // The app's own `{X}` test, borrowed rather than re-spelled: the fake answers what Rust
 // answers, and a second reading of "does this cost name X" would let the workbench and the
 // window disagree about which cards are X while both looked right.
-import { FINISHES as FINISH_WORDS, parseFinishes, type Finish } from "@/lib/finish";
+import { FINISHES as FINISH_WORDS, parseFinishes, playedFinish, type Finish } from "@/lib/finish";
 import { BORDERS, type Border } from "@/lib/border";
 import { hasVariableCost } from "@/lib/mana";
 // The token view's own rules, borrowed rather than re-spelled: `DEFAULT_TOKEN_QUANTITY` is the
@@ -10811,7 +10811,7 @@ export function readHandlers(db: FakeDb) {
         ) {
           continue;
         }
-        const key = `${dc.cardId}|${dc.finish ?? ""}`;
+        const key = theoryKey(db, dc);
         const held = wanted.get(key);
         if (held) held.quantity += dc.quantity;
         else wanted.set(key, { nameKey: cardById(db, dc.cardId)?.name ?? null, quantity: dc.quantity });
@@ -15161,6 +15161,25 @@ interface GroupedDiff {
 }
 
 /**
+ * `deck_theory::played_finish` — the finish a deck row plays: its own, or the printing's sole
+ * finish where it stored none (issue #563). The app's own `playedFinish`, borrowed for the reason
+ * the `{X}` test above is: a foil-only Surge Foil stored unsaid in one list and `foil` in the other
+ * is one card to Rust, and a fake that spelled it two ways would draw it on the Compare dialog in
+ * a story while the window did not.
+ */
+function theoryFinish(db: FakeDb, dc: FakeDeckCard): FakeDeckCard["finish"] {
+  const played = playedFinish(dc.finish, cardById(db, dc.cardId)?.finishes ?? null);
+  // Unreachable — `soleFinish` answers `null` rather than `nonfoil` — and spelled anyway, because
+  // a deck's regular copy is `null` and the type says so.
+  return played === "nonfoil" ? null : played;
+}
+
+/** `deck_theory::group_key` over {@link theoryFinish} — the key both theory handlers spell. */
+function theoryKey(db: FakeDb, dc: FakeDeckCard): string {
+  return `${dc.cardId}|${theoryFinish(db, dc) ?? ""}`;
+}
+
+/**
  * `deck_theory::grouped_diff` — cards the **theory** list holds that **live** does not.
  *
  * **One direction only**, which is the design rather than an omission: what live has and theory
@@ -15205,7 +15224,7 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
     const card = cardById(db, dc.cardId);
     // `deck_theory::group_key` — the exact card, in the exact object played. Not the category:
     // where a card sits is placement, not possession.
-    const key = `${dc.cardId}|${dc.finish ?? ""}`;
+    const key = theoryKey(db, dc);
     if (dc.variant !== "theory") {
       held.set(key, (held.get(key) ?? 0) + dc.quantity);
       // An orphan contributes nothing: there is no oracle card to file it under, so a printing
@@ -15230,7 +15249,9 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
           unitPrice: deckPriceAt(db, card, mp),
           setCode: dc.setCode,
           collectorNumber: dc.collectorNumber,
-          finish: dc.finish,
+          // The finish played rather than stored — the half of the key the line reports, and
+          // what `ownedSpare` and a wish are asked about.
+          finish: theoryFinish(db, dc),
           ownedSpare: 0,
           // Filled by the second pass below, once every exact match is known. Zero is already
           // the right answer for an orphan and for a card the deck plays no other copy of.
