@@ -3006,3 +3006,429 @@ fn the_round_cap_advances_watermarks_by_the_committed_passes_blocks() {
     apply(&b, &page).unwrap();
     assert_eq!(h(&b), Some(1), "a re-delivery added h's +1 a second time");
 }
+
+// ---------------------------------------------------------------------------------------
+// A delete that would drop two rows onto one grain — spec 2026-09-27 §3.3
+// ---------------------------------------------------------------------------------------
+
+/// A user binder named `name`, and its id.
+fn binder(conn: &Connection, name: &str, parent: Option<i64>) -> i64 {
+    conn.execute(
+        "INSERT INTO collection_folders (parent_id, name, kind, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, 'user', 0, unixepoch(), unixepoch())",
+        rusqlite::params![parent, name],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+/// `quantity` copies of the test printing (`add_copy`'s grain) filed in `folder`.
+fn file_copies(conn: &Connection, folder: Option<i64>, quantity: i64) {
+    conn.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+             created_at,updated_at)
+         VALUES ('c1','lea','1','en','nonfoil','NM',?1,?2,unixepoch(),unixepoch())",
+        rusqlite::params![quantity, folder],
+    )
+    .unwrap();
+}
+
+fn uids_of_copies(conn: &Connection) -> Vec<Option<String>> {
+    let mut stmt = conn
+        .prepare("SELECT sync_uid FROM collection_entries ORDER BY sync_uid")
+        .unwrap();
+    let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+fn folders(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT count(*) FROM collection_folders WHERE kind = 'user'",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// Both devices' `Recently removed`, wearing one uid. A re-filing into the holding area names it
+/// by uid, so until the two have met it names a folder the far device has never heard of, and
+/// waits.
+///
+/// They meet the way `clearing_the_collection_crosses_without_two_holding_areas` has them meet:
+/// a clear rebuilds `Recently removed` as a whole-row insert, and the far side's grain match
+/// adopts the lower uid. Both devices clear and both pages cross, so both end wearing that one.
+fn holding_areas_meet(a: &Connection, b: &Connection, ma: &mut i64, mb: &mut i64) {
+    crate::reset::clear_collection(a).unwrap();
+    crate::reset::clear_collection(b).unwrap();
+    apply(b, &since(a, ma)).unwrap();
+    apply(a, &since(b, mb)).unwrap();
+    let removed = |c: &Connection| -> String {
+        c.query_row(
+            "SELECT sync_uid FROM collection_folders WHERE kind = 'removed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(removed(a), removed(b), "the holding areas never met");
+}
+
+/// **A binder deleted on one device, holding a copy the root holds too, lands on the other.**
+/// The peer takes a page parents first, so the binder's `DELETE` ran while its copy was still in
+/// it and `SET NULL` dropped the copy onto the root's grain: `UNIQUE constraint failed`, through
+/// `?`, the whole apply failed, and the same page failed it on every pull after (spec §1.1).
+///
+/// **What makes it red**: the delete arm with no collision check.
+#[test]
+fn a_binder_deleted_with_a_copy_the_root_also_holds_lands_on_the_peer() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    add_copy(&a);
+    let bin = binder(&a, "Binder", None);
+    file_copies(&a, Some(bin), 2);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    crate::collection_folders::delete_folder(&a, bin).unwrap();
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(unwritten(rb), (0, 0));
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 3), "{who} does not hold one root row of three");
+        assert_eq!(folders(c), 0, "{who} still holds the binder");
+    }
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+}
+
+/// **The same for a wishlist folder**: `wishlist_entries.folder_id` is `SET NULL` and the
+/// wishlist's grain carries the folder too.
+#[test]
+fn a_wishlist_folder_deleted_with_a_wish_the_root_also_holds_lands_on_the_peer() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    a.execute(
+        "INSERT INTO wishlist_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Wants', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let wants = a.last_insert_rowid();
+    for (folder, n) in [(None, 1), (Some(wants), 2)] {
+        a.execute(
+            "INSERT INTO wishlist_entries (oracle_id, name, quantity, folder_id, created_at, updated_at)
+             VALUES ('o1', 'Bolt', ?1, ?2, unixepoch(), unixepoch())",
+            rusqlite::params![n, folder],
+        )
+        .unwrap();
+    }
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    crate::wishlist_folders::delete_folder(&a, wants).unwrap();
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(unwritten(rb), (0, 0));
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let (rows, sum): (i64, i64) = c
+            .query_row(
+                "SELECT count(*), coalesce(sum(quantity), 0) FROM wishlist_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((rows, sum), (1, 3), "{who}");
+    }
+}
+
+/// **A deck deleted on one device, whose group holds a copy the root holds too, lands on the
+/// other.** `collection_folders.deck_id` cascades, so the deck's `DELETE` (rank 1) takes its
+/// group on the peer before the sender's re-filing into `Recently removed` (rank 7) arrives.
+#[test]
+fn a_deck_deleted_with_a_copy_its_group_and_the_root_both_hold_lands_on_the_peer() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    holding_areas_meet(&a, &b, &mut ma, &mut mb);
+    a.execute(
+        "INSERT INTO decks (name, format_key, created_at, updated_at)
+         VALUES ('D', 'commander', unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let deck = a.last_insert_rowid();
+    a.execute(
+        "INSERT INTO collection_folders (name, kind, deck_id, sort_order, created_at, updated_at)
+         VALUES ('D', 'deck', ?1, 0, unixepoch(), unixepoch())",
+        [deck],
+    )
+    .unwrap();
+    let group = a.last_insert_rowid();
+    add_copy(&a);
+    file_copies(&a, Some(group), 1);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    crate::deck::delete_deck(&a, deck).unwrap();
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(unwritten(rb), (0, 0));
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let decks: i64 = c
+            .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(decks, 0, "{who}");
+        assert_eq!(
+            qty(c),
+            (2, 2),
+            "{who}: one copy at the root, one in Recently removed"
+        );
+    }
+}
+
+/// **A copy filed on the peer into the binder being deleted survives on both, as one row.**
+/// The page carries no re-filing for it, so no ordering saves it: the retry merges it onto the
+/// root's copy, and the sender meets its put with the binder gone and grain-matches the same
+/// row. Both adopt the lower uid.
+#[test]
+fn a_copy_filed_into_a_binder_the_peer_deletes_meets_the_roots_copy_as_one_row() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    add_copy(&a);
+    let bin = binder(&a, "Binder", None);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    crate::collection_folders::delete_folder(&a, bin).unwrap();
+    let b_bin: i64 = b
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'Binder'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    file_copies(&b, Some(b_bin), 2);
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+
+    assert_eq!((unwritten(ra), unwritten(rb)), ((0, 0), (0, 0)));
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 3), "{who}");
+        assert_eq!(folders(c), 0, "{who}");
+    }
+    assert_eq!(
+        uids_of_copies(&a),
+        uids_of_copies(&b),
+        "the two devices kept different uids"
+    );
+}
+
+/// **Two copies in two sub-folders, and a root copy, on one grain end as one root row.**
+/// The sender's `delete_folder` re-files one at a time; the peer meets the sub-folders' deletes
+/// first and must not drop either copy onto the other (Review Focus 2).
+#[test]
+fn three_copies_on_one_grain_under_a_deleted_folder_end_as_one_root_row_on_both() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    add_copy(&a);
+    let outer = binder(&a, "Outer", None);
+    let one = binder(&a, "One", Some(outer));
+    let two = binder(&a, "Two", Some(outer));
+    file_copies(&a, Some(one), 1);
+    file_copies(&a, Some(two), 1);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    crate::collection_folders::delete_folder(&a, outer).unwrap();
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(unwritten(rb), (0, 0));
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 3), "{who}");
+        assert_eq!(folders(c), 0, "{who}");
+    }
+}
+
+/// **Two doomed copies that are each other's twin make a delete wait too, with no root copy at
+/// all.** The test above never reaches that half of `collides`: its sub-folders' deletes come
+/// ahead of their parent's, one copy at a time, and each meets the root. A deck's group holding a
+/// sub-folder does — a tree no command builds and the DDL allows, which is why `delete_deck`
+/// walks the sub-tree — because the deck's one `DELETE` dooms both copies at once. The sender
+/// merges them into `Recently removed` one at a time; a peer that merged them itself before that
+/// re-filing landed would then add the sender's `+1` for the survivor on top.
+///
+/// **What makes it red**: `collides` matching the doomed rows against the root alone.
+#[test]
+fn a_deck_whose_group_and_its_sub_folder_hold_one_printing_lands_at_its_own_count() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    holding_areas_meet(&a, &b, &mut ma, &mut mb);
+    a.execute(
+        "INSERT INTO decks (name, format_key, created_at, updated_at)
+         VALUES ('D', 'commander', unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let deck = a.last_insert_rowid();
+    a.execute(
+        "INSERT INTO collection_folders (name, kind, deck_id, sort_order, created_at, updated_at)
+         VALUES ('D', 'deck', ?1, 0, unixepoch(), unixepoch())",
+        [deck],
+    )
+    .unwrap();
+    let group = a.last_insert_rowid();
+    let sub = binder(&a, "Sub", Some(group));
+    file_copies(&a, Some(group), 1);
+    file_copies(&a, Some(sub), 1);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    crate::deck::delete_deck(&a, deck).unwrap();
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(unwritten(rb), (0, 0), "{rb:?}");
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 2), "{who} does not hold one row of two");
+        let removed: i64 = c
+            .query_row(
+                "SELECT coalesce(sum(e.quantity), 0) FROM collection_entries e
+                   JOIN collection_folders f ON f.id = e.folder_id
+                  WHERE f.kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(removed, 2, "{who}: both copies belong in Recently removed");
+        assert_eq!(folders(c), 0, "{who} still holds the sub-folder");
+    }
+}
+
+/// **A page handed back after a held cursor re-homes and sums nothing a second time**
+/// (Review Focus 3): the delete is below its sender's watermark on the second delivery.
+#[test]
+fn a_redelivered_binder_delete_changes_nothing_the_second_time() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    add_copy(&a);
+    let bin = binder(&a, "Binder", None);
+    file_copies(&a, Some(bin), 2);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    crate::collection_folders::delete_folder(&a, bin).unwrap();
+    let page = since(&a, &mut ma);
+    apply(&b, &page).unwrap();
+    let again = apply(&b, &page).unwrap();
+    assert_eq!(unwritten(again), (0, 0));
+    assert_eq!(qty(&b), (1, 3));
+}
+
+/// **A survivor with no uid takes the one the re-homed copy had** (Review Focus 1). A row
+/// written behind the apply's guard can be nameless; the fold must still happen, and the name
+/// a peer knows the copy by must not be thrown away.
+#[test]
+fn a_copy_folded_onto_a_nameless_twin_gives_the_twin_its_uid() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let bin = binder(&a, "Binder", None);
+    file_copies(&a, Some(bin), 2);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+    let filed: String = b
+        .query_row("SELECT sync_uid FROM collection_entries", [], |r| r.get(0))
+        .unwrap();
+    // A nameless root twin on `b` alone.
+    crate::sync_engine::capture::suppressed(&b, || {
+        file_copies(&b, None, 1);
+        b.execute(
+            "UPDATE collection_entries SET sync_uid = NULL WHERE folder_id IS NULL",
+            [],
+        )
+        .unwrap();
+    });
+
+    crate::collection_folders::delete_folder(&a, bin).unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(qty(&b), (1, 3));
+    assert_eq!(uids_of_copies(&b), vec![Some(filed)]);
+}
+
+/// **A delete this database refuses is skipped and recorded, never a stall.** A TEMP trigger
+/// stands in for the first refusal nothing reaches today.
+#[test]
+fn a_folder_delete_this_database_refuses_is_dropped_and_the_page_applies() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    let bin = binder(&a, "Binder", None);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute_batch(
+        "CREATE TEMP TRIGGER refuse BEFORE DELETE ON collection_folders
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .unwrap();
+
+    crate::collection_folders::delete_folder(&a, bin).unwrap();
+    add_copy(&a);
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(unwritten(rb), (0, 1), "{rb:?}");
+    assert_eq!(folders(&b), 1, "the refused delete took the binder anyway");
+    assert_eq!(qty(&b), (1, 1), "the rest of the page did not apply");
+    assert_eq!(skips(&b).len(), 1, "{:?}", skips(&b));
+}
+
+/// **A copy removed and added again before the next pull ends at the re-added count** — the
+/// case a page applied "deletes last" would get wrong (spec §3.4), pinned so nobody makes it.
+#[test]
+fn a_copy_removed_and_added_again_in_one_page_ends_at_the_new_count() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    add_copy(&a);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    a.execute("DELETE FROM collection_entries", []).unwrap();
+    add_copy(&a);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(qty(&b), (1, 1));
+    assert_eq!(uids_of_copies(&a), uids_of_copies(&b));
+}
+
+/// **Every cascade into a folder table is one [`super::rehome::doomed`] follows.** Walks the live
+/// schema's `ON DELETE CASCADE` keys backwards from the two folder tables, so a new one — a
+/// token folder's own key, say — fails here until `doomed` is taught it.
+#[test]
+fn every_cascade_into_a_folder_table_is_one_doomed_follows() {
+    let conn = paired("dev-a");
+    let mut reached: Vec<String> = vec!["collection_folders".into(), "wishlist_folders".into()];
+    let mut edges: Vec<(String, String, String)> = Vec::new();
+    let mut i = 0;
+    while i < reached.len() {
+        let child = reached[i].clone();
+        let mut stmt = conn
+            .prepare(
+                "SELECT \"from\", \"table\" FROM pragma_foreign_key_list(?1)
+                  WHERE on_delete = 'CASCADE'",
+            )
+            .unwrap();
+        let keys: Vec<(String, String)> = stmt
+            .query_map([&child], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for (col, parent) in keys {
+            edges.push((child.clone(), col, parent.clone()));
+            if !reached.contains(&parent) {
+                reached.push(parent);
+            }
+        }
+        i += 1;
+    }
+    edges.sort();
+    let mut want: Vec<(String, String, String)> = super::rehome::CASCADES_INTO_FOLDERS
+        .iter()
+        .map(|(c, k, p)| ((*c).to_owned(), (*k).to_owned(), (*p).to_owned()))
+        .collect();
+    want.sort();
+    assert_eq!(edges, want);
+}
