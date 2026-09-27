@@ -762,9 +762,10 @@ describe("auditSentence", () => {
    * history line quietly saying less than it knows.
    *
    * **The sentences are the UI's words and not the columns'.** The switches read *Matching
-   * printing*, *Different printing* and *Not in the theory list*; a line naming
-   * `theory_mark_exact` at the reader would be the log describing a column at somebody who
-   * pressed a switch.
+   * printing*, *Any printing* and *Not in the theory list*; a line naming `theory_mark_exact` at
+   * the reader would be the log describing a column at somebody who pressed a switch. (The second
+   * read *Different printing* until 2026-09-27, and its sentence still says "a different
+   * printing" — `auditText.ts` says why at the arm.)
    */
   it("names all three theory marks by the words `deck.rs` writes, and tells them apart", () => {
     const deck = (payload: Record<string, unknown>) =>

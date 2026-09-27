@@ -142,7 +142,7 @@ export const Filtered: Story = {
     await expect(canvas.getByText("Black Lotus")).toBeVisible();
 
     // The plan counts no tokens, and the Tokens view says so in words rather than going blank.
-    await userEvent.click(canvas.getByRole("radio", { name: "Tokens, 0 cards" }));
+    await userEvent.click(canvas.getByRole("radio", { name: "Tokens, 0 tokens" }));
     await expect(canvas.queryAllByRole("listitem")).toHaveLength(0);
     await expect(
       canvas.getByText("The plan counts no tokens the deck is short of."),
@@ -176,7 +176,7 @@ export const Tokens: Story = {
     await expect(canvas.getAllByText("Treasure")).toHaveLength(2);
     await expect(canvas.getByText("Construct")).toBeVisible();
 
-    await userEvent.click(canvas.getByRole("radio", { name: "Tokens, 3 cards" }));
+    await userEvent.click(canvas.getByRole("radio", { name: "Tokens, 3 tokens" }));
     const lines = canvas.getAllByRole("listitem");
     await expect(lines).toHaveLength(3);
     for (const line of lines) {
@@ -185,7 +185,7 @@ export const Tokens: Story = {
     await expect(canvas.queryByText("Smuggler's Copter")).not.toBeInTheDocument();
     // The foil line names its finish, so two Treasure lines are never two identical controls.
     await expect(
-      canvas.getByRole("button", { name: "Wishlist 1 more Foil Treasure" }),
+      canvas.getByRole("button", { name: "Wishlist 1 more Foil Treasure (THOB #13)" }),
     ).toBeEnabled();
 
     // The card readings are the card rows they always were.

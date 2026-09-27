@@ -249,9 +249,15 @@ const rowFor = async (name: string) => (await screen.findByText(name)).closest("
  * window on 2026-08-22 settled it; the fix was to spell the name out on the control. Spelling it
  * here too means this helper *fails* if that label is ever dropped, rather than falling back to a
  * concatenation nobody can read aloud.
+ *
+ * **The `Tokens` rung counts tokens** and every other rung counts cards — `All`'s mixed count
+ * keeps the card noun on purpose (see `TheoryDiffDialog.tsx`'s `countNoun`), so the helper spells
+ * the noun from the label exactly as the control does.
  */
-const rung = (label: string, count: number) =>
-  screen.getByRole("radio", { name: `${label}, ${count} ${count === 1 ? "card" : "cards"}` });
+const rung = (label: string, count: number) => {
+  const noun = label === "Tokens" ? "token" : "card";
+  return screen.getByRole("radio", { name: `${label}, ${count} ${noun}${count === 1 ? "" : "s"}` });
+};
 
 /** The band's select-all, whose readout **is** its accessible name. */
 const selectAll = () => screen.getByRole("checkbox", { name: /selected$/ });
@@ -693,8 +699,62 @@ describe("the theory difference dialog", () => {
 
     await user.click(rung("Missing", 0));
 
-    expect(screen.getByText(/Nothing here is missing/)).toBeVisible();
+    expect(
+      screen.getByText(
+        "No card is missing. Every card the plan asks for is already on the table as another printing.",
+      ),
+    ).toBeVisible();
     expect(screen.queryByText(/The two lists agree/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The card readings' sentences are about cards**, because token rows are never in them: with
+   * the card side fully built and three Treasures short, `Missing` and `Different printing` are
+   * empty while the difference is not — and "every copy the plan asks for is already on the
+   * table" would be false of the three Treasures it is standing beside. A difference of token
+   * rows only says that instead: the cards agree, and what is left is tokens.
+   */
+  it("says the cards agree when the difference is tokens only", async () => {
+    const user = userEvent.setup();
+    deckTheoryDiff.mockResolvedValue([TREASURE]);
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Treasure");
+
+    const TOKENS_ONLY =
+      "Every card the plan asks for is already in the deck. What is left is tokens.";
+    for (const [label, gone] of [
+      ["Missing", /Nothing here is missing|No card is missing/],
+      ["Different printing", /No substitutions|No card substitutions/],
+    ] as const) {
+      await user.click(rung(label, 0));
+      expect(screen.getByText(TOKENS_ONLY)).toBeVisible();
+      expect(screen.queryByText(gone)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Every copy the plan asks for/)).not.toBeInTheDocument();
+    }
+  });
+
+  /** And with card rows beside the tokens, the card sentences are scoped to cards, so the token
+   *  rows still short are not contradicted by the sentence under an empty card reading. */
+  it("scopes the card readings' sentences to cards when tokens are short too", async () => {
+    const user = userEvent.setup();
+    deckTheoryDiff.mockResolvedValue([SUBSTITUTED, TREASURE]);
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Treasure");
+
+    await user.click(rung("Missing", 0));
+    expect(screen.getByText(/^No card is missing\. Every card the plan asks for/)).toBeVisible();
+
+    deckTheoryDiff.mockResolvedValue([row(), TREASURE]);
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["decks"] });
+    });
+    await screen.findByText("Lightning Bolt");
+    await user.click(rung("Different printing", 0));
+    expect(
+      screen.getByText(
+        "No card substitutions. Every card the plan asks for is one the deck has not got in any printing.",
+      ),
+    ).toBeVisible();
   });
 
   // --- the Tokens view (managed tokens spec §3.7) ------------------------------------------
@@ -747,10 +807,16 @@ describe("the theory difference dialog", () => {
 
     const copies = screen.getByText("Copies to find").closest("div")!;
     expect(copies).toHaveTextContent("5");
-    expect(copies).toHaveTextContent("2 cards");
+    // Counted as tokens under the Tokens rung — the rung's own noun, and nowhere else.
+    expect(copies).toHaveTextContent("2 tokens");
+    expect(copies).not.toHaveTextContent("cards");
     const cost = screen.getByText("Cost to build (USD)").closest("div")!;
     expect(cost).toHaveTextContent("$0.75");
     expect(cost).toHaveTextContent("2 unpriced");
+
+    // `All` counts the same rows beside the cards and keeps the card noun, deliberately.
+    await user.click(rung("All", 5));
+    expect(screen.getByText("Copies to find").closest("div")!).toHaveTextContent("5 cards");
   });
 
   /**
@@ -785,10 +851,57 @@ describe("the theory difference dialog", () => {
     wrap(<TheoryDiffDialog {...props} />);
 
     const treasure = await rowFor("Treasure");
-    await user.click(within(treasure).getByRole("button", { name: "Wishlist 3 more Treasure" }));
+    await user.click(
+      within(treasure).getByRole("button", { name: "Wishlist 3 more Treasure (THOB #13)" }),
+    );
 
     await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1));
     expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["treasure-thob|"], null);
+  });
+
+  /**
+   * **A token row names its printing**, because tokens share names in a way cards do not: two
+   * different Wurms, or two Treasure printings at one count and one finish, are two lines that a
+   * name, a count and a finish cannot tell apart — two identical `Wishlist 1 more Treasure`
+   * controls. The set and collector number are what separate them, the spelling the row's own
+   * printing column uses.
+   */
+  it("tells two token rows of one name and finish apart by their printing", async () => {
+    deckTheoryDiff.mockResolvedValue([
+      row({ ...TREASURE, quantity: 1 }),
+      row({
+        ...TREASURE,
+        cardId: "treasure-tafr",
+        quantity: 1,
+        setCode: "tafr",
+        collectorNumber: "22",
+      }),
+    ]);
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findAllByText("Treasure");
+
+    expect(
+      screen.getByRole("button", { name: "Wishlist 1 more Treasure (THOB #13)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Wishlist 1 more Treasure (TAFR #22)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "Select 1 more Treasure (THOB #13)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "Select 1 more Treasure (TAFR #22)" }),
+    ).toBeInTheDocument();
+  });
+
+  /** A card row's name is what it always was. The printing is added where one name covering many
+   *  lines is the ordinary case — a deck's Treasures — and not to every row of a shopping list. */
+  it("keeps a card row's name free of its printing", async () => {
+    wrap(<TheoryDiffDialog {...props} />);
+
+    expect(
+      await screen.findByRole("button", { name: "Wishlist 2 more Lightning Bolt" }),
+    ).toBeInTheDocument();
   });
 
   /** The footer's press from the Tokens view carries the token rows and nothing else —

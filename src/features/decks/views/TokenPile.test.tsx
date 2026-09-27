@@ -15,7 +15,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { getMarketplace, marketplaceFeedStatus },
 }));
 
-import { THEORY_MATCH_ATTR, theoryMatchLabel } from "../CardMarks";
+import { THEORY_MATCH_ATTR, theoryMatchLabel, WordMark } from "../CardMarks";
 import { STACK_OPEN_ATTR, stackHeight } from "../CardStack";
 import { CARD_BODY_ATTR, DECK_GROUP_ATTR } from "../cardControl";
 import { tokenCountWords } from "../CountPill";
@@ -621,6 +621,22 @@ describe.each([
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.getAllByText("NOT MADE BY DECK")).toHaveLength(1);
+  });
+
+  /**
+   * **The tag is `WordMark`'s line recipe, not a copy of it** — so a change to the rule-break
+   * box's shared half reaches this tag too. Compared against the recipe drawn on its own, class
+   * for class, with the two a line's tag adds to stay whole beside a name that truncates.
+   */
+  it("draws the tag through WordMark's line surface", () => {
+    renderWith(draw(pileOf([HAND_ADDED])));
+    const tag = screen.getByText("NOT MADE BY DECK");
+
+    const { container } = renderWith(<WordMark surface="line" word="THE RECIPE" hint="x" />);
+    const recipe = [...within(container).getByText("THE RECIPE").classList];
+    expect([...tag.classList].filter((c) => c !== "shrink-0" && c !== "whitespace-nowrap")).toEqual(
+      recipe,
+    );
   });
 });
 

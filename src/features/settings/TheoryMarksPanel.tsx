@@ -2,7 +2,7 @@ import { useState, type JSX } from "react";
 import { RotateCcw } from "lucide-react";
 import { TheoryMatchMark } from "@/features/decks/CardMarks";
 import { LabelColorRow, LabelSwatch } from "@/features/decks/LabelColorPicker";
-import type { TheoryTier } from "@/features/decks/theoryMatch";
+import type { TheoryMark, TheoryTier } from "@/features/decks/theoryMatch";
 import { FOCUS } from "@/lib/focus";
 import { labelFgCss } from "@/lib/hexColor";
 import { MARK_COLOR_DEFAULTS, useMarkColors, type MarkColorKey } from "@/lib/useMarkColors";
@@ -113,9 +113,9 @@ export function TheoryMarksPanel(): JSX.Element {
                       A second box beside it would have to hold either a duplicate X or a number
                       that tier never draws — a preview of a state the app cannot reach. */}
                   <span className="flex items-center gap-2 rounded-md bg-bg px-2 py-1.5">
-                    <TheoryMatchMark tier={mark.tier} delta={0} />
+                    <TheoryMatchMark mark={previewMark(mark.tier, 0)} />
                     {mark.tier !== "unplanned" && (
-                      <TheoryMatchMark tier={mark.tier} delta={PREVIEW_DELTA} />
+                      <TheoryMatchMark mark={previewMark(mark.tier, PREVIEW_DELTA)} />
                     )}
                   </span>
 
@@ -243,6 +243,19 @@ export function TheoryMarksPanel(): JSX.Element {
  * a state the app cannot produce.
  */
 const PREVIEW_DELTA = 2;
+
+/**
+ * A mark for the preview to draw — `CardMarks.tsx`'s components take a whole `TheoryMark` since
+ * 2026-09-27, so a preview with no deck behind it spells one out.
+ *
+ * **`anyPrinting: false`**, because it is a statement about a deck's switches and this panel
+ * belongs to no deck: the preview shows each tier as it is worded on a deck whose `Matching
+ * printing` switch is on, which is every deck's default. The flag moves the tooltip's word and
+ * nothing a colour preview is about.
+ */
+function previewMark(tier: TheoryTier, delta: number): TheoryMark {
+  return { tier, delta, anyPrinting: false };
+}
 
 /** One row of this panel: a mark, the words for it, and the name its two controls are found by. */
 interface MarkRow {

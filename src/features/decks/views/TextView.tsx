@@ -574,11 +574,7 @@ function TextRow({
             explicit `aria-label`, so the word is `deckCardName`'s. `TableView` is the one view
             that says it in text, because a cell is not swallowed by a label. */}
         {theoryMark !== null && (
-          <TheoryMatchBadge
-            tier={theoryMark.tier}
-            delta={theoryMark.delta}
-            anyPrinting={theoryMark.anyPrinting}
-          />
+          <TheoryMatchBadge mark={theoryMark} />
         )}
         {card.labelName !== null && <LabelDot name={card.labelName} color={card.labelColor} />}
         {/* Beside the dot, and separating from it by **shape** rather than by colour — a stroked

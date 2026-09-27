@@ -86,7 +86,7 @@ import { PRESS, stackCard } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
-import { DeckFinishMark, theoryMatchLabel } from "../CardMarks";
+import { DeckFinishMark, theoryMatchLabel, WordMark } from "../CardMarks";
 import {
   STACK_LIFTED_MARGIN,
   STACK_OPEN_ATTR,
@@ -251,18 +251,20 @@ function CardRemove({ view, pile }: { view: DeckTokenView; pile: TokenPile }) {
  * badge in and no card edge to colour. The words are the badge's and the tag says them outright,
  * so the pointer's sentence is all it adds; `aria-hidden` for the badge's reason — the line's
  * press carries the words in its own name (`tokenArtName`).
+ *
+ * **`CardMarks.tsx`'s `WordMark` on its `line` surface**, the recipe the corner badge and the
+ * rule break draw on art — so a change to that box's shared half reaches this tag as well, where
+ * it was a copy of the classes. The two this adds keep it whole beside a name that truncates.
  */
 function NotMadeByDeckTag({ view }: { view: DeckTokenView }) {
-  const tip = useTooltip();
   if (!isHandAdded(view)) return null;
   return (
-    <span
-      aria-hidden="true"
-      {...tip(notMadeByDeckHint(view.name), { describes: false })}
-      className="shrink-0 whitespace-nowrap rounded-[3px] border border-destructive/50 px-1 font-mono text-[0.5625rem] leading-3 text-destructive"
-    >
-      {NOT_MADE_BY_DECK}
-    </span>
+    <WordMark
+      surface="line"
+      word={NOT_MADE_BY_DECK}
+      hint={notMadeByDeckHint(view.name)}
+      className="shrink-0 whitespace-nowrap"
+    />
   );
 }
 

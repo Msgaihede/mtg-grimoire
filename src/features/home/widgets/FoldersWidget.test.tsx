@@ -84,6 +84,20 @@ const STAPLES: WishlistFolder = { id: 11, parentId: 10, name: "Staples", sortOrd
 const LATER: WishlistFolder = { id: 12, parentId: null, name: "Later", sortOrder: 1, managedDeckId: null, managedTokens: false };
 const WISHES = [BUY_SOON, STAPLES, LATER];
 
+/**
+ * A deck's **managed** wishlist folder at the root and its `Tokens` child inside it (managed tokens
+ * spec §3.8, user schema v54) — the child is `Tokens` on every deck, which is the whole reason the
+ * cases that use these exist. The child's id is the parent's plus one.
+ */
+function deckWishFolders(id: number, name: string, deckId: number): WishlistFolder[] {
+  const base = { sortOrder: 0, managedDeckId: deckId };
+  return [
+    { ...base, id, parentId: null, name, managedTokens: false },
+    { ...base, id: id + 1, parentId: id, name: "Tokens", managedTokens: true },
+  ];
+}
+const TWO_DECKS = [...deckWishFolders(20, "Burn", 3), ...deckWishFolders(22, "Elves", 4)];
+
 const WISHLIST_ROWS: WishlistFolderSummary[] = [
   { folderId: 10, wishes: 1, copies: 1, cost: 5, unpriced: 0 },
   { folderId: 11, wishes: 2, copies: 3, cost: 7.5, unpriced: 1 },
@@ -270,6 +284,26 @@ describe("FoldersWidget", () => {
       "Binder, collection folder, 12 cards, $30.00",
       "Later, wishlist folder, 0 wishes",
     ]);
+  });
+
+  /**
+   * **Two decks' pinned `Tokens` folders are two rows a reader can tell apart** — each named by
+   * the deck folder it sits in, on the row and in its spoken name, the settings picker's own
+   * spelling. Named by itself, each would be a row reading `Tokens`, twice.
+   */
+  it("names a pinned managed Tokens folder by the deck folder it sits in", () => {
+    draw(
+      { cabinets: "wishlist", wishlistFolderIds: [21, 23, 20] },
+      { seed: { wishlist: [...WISHES, ...TWO_DECKS], wishlistRows: [] } },
+    );
+
+    expect(rows()).toEqual([
+      "Burn › Tokens, managed wishlist, 0 wishes",
+      "Elves › Tokens, managed wishlist, 0 wishes",
+      "Burn, managed wishlist, 0 wishes",
+    ]);
+    expect(screen.getByText("Burn › Tokens")).toBeInTheDocument();
+    expect(screen.getByText("Elves › Tokens")).toBeInTheDocument();
   });
 
   describe("cabinets and captions", () => {
@@ -537,26 +571,8 @@ describe("FoldersWidget", () => {
      */
     it("names a managed Tokens folder by the deck folder it sits in", async () => {
       const user = userEvent.setup();
-      const managed = (over: Partial<WishlistFolder> & Pick<WishlistFolder, "id" | "name">) => ({
-        parentId: null,
-        sortOrder: 0,
-        managedDeckId: null,
-        managedTokens: false,
-        ...over,
-      });
-      /** A deck's managed folder at the root, and its `Tokens` child inside it. */
-      const deckFolders = (id: number, name: string, deckId: number) => [
-        managed({ id, name, managedDeckId: deckId }),
-        managed({
-          id: id + 1,
-          name: "Tokens",
-          parentId: id,
-          managedDeckId: deckId,
-          managedTokens: true,
-        }),
-      ];
       renderWith(
-        { wishlist: [...WISHES, ...deckFolders(20, "Burn", 3), ...deckFolders(22, "Elves", 4)] },
+        { wishlist: [...WISHES, ...TWO_DECKS] },
         <FoldersWidgetSettings widget={widget(null)} onConfig={vi.fn()} />,
       );
 

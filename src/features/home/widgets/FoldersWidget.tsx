@@ -294,26 +294,33 @@ function collectionKind(folder: CollectionFolder): {
 }
 
 /**
- * A wishlist folder's row in the settings picker — its own name, and a deck's managed list saying
- * so, as {@link collectionKind}'s `(deck)` does one picker up: a shortcut may point at one.
+ * A wishlist folder's name as this card says it — its own, except for **a managed `Tokens` child,
+ * which is named by the deck folder it sits in**: `Burn › Tokens` (managed tokens spec §3.8, user
+ * schema v54).
  *
- * **A managed `Tokens` child is named by the deck folder it sits in** — `Burn › Tokens (managed)`
- * (managed tokens spec §3.8, user schema v54). Every theory deck whose managed wishlist follows
- * `All` or `Tokens` has one, and every one of them is called `Tokens`, so naming it by itself drew
- * a column of identical rows a reader could not tell apart. `›` is `folderPaths`' separator in
- * Deck settings, the path read the way a reader says it; the parent is found in the list this
- * picker already holds, and a child whose parent it does not carry keeps its own name rather than
- * inventing one.
+ * Every theory deck whose managed wishlist follows `All` or `Tokens` has one, and every one of
+ * them is called `Tokens`, so naming it by itself drew a column of identical rows — pinned on the
+ * card as in the settings picker — that a reader could not tell apart. `›` is `folderPaths`'
+ * separator in Deck settings, the path read the way a reader says it. The parent is found in the
+ * list the caller already holds, and a child whose parent it does not carry keeps its own name
+ * rather than inventing one.
  */
-function wishlistFolderOption(folder: WishlistFolder, all: readonly WishlistFolder[]): string {
-  if (!isManaged(folder)) return folder.name;
+function wishlistFolderName(folder: WishlistFolder, all: readonly WishlistFolder[]): string {
   const parent =
-    folder.managedTokens && folder.parentId !== null
+    isManaged(folder) && folder.managedTokens && folder.parentId !== null
       ? all.find((each) => each.id === folder.parentId)
       : undefined;
-  return parent === undefined
-    ? `${folder.name} (managed)`
-    : `${parent.name} › ${folder.name} (managed)`;
+  return parent === undefined ? folder.name : `${parent.name} › ${folder.name}`;
+}
+
+/**
+ * A wishlist folder's row in the settings picker — {@link wishlistFolderName}, and a deck's
+ * managed list saying so, as {@link collectionKind}'s `(deck)` does one picker up: a shortcut may
+ * point at one.
+ */
+function wishlistFolderOption(folder: WishlistFolder, all: readonly WishlistFolder[]): string {
+  const name = wishlistFolderName(folder, all);
+  return isManaged(folder) ? `${name} (managed)` : name;
 }
 
 /** One row, whichever cabinet it came out of — already worded, so drawing it decides nothing. */
@@ -455,11 +462,13 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
       const face = wishFace(totals, currency);
       const wishes = plural(totals.wishes, "wish", "wishes");
       const managed = isManaged(folder);
+      // A deck's `Tokens` child by its deck's folder, so two decks' pinned ones are two rows.
+      const name = wishlistFolderName(folder, wishlist.folders);
       return {
         key: `wishlist-${folder.id}`,
         cabinet: "wishlist",
         id: folder.id,
-        name: folder.name,
+        name,
         // The unpriced count qualifies the money beside it, so it rides in the caption the money
         // has no room for — the same place `wishFace` puts it.
         caption: `${managed ? "Managed wishlist" : "Wishlist"} · ${wishes}${totals.unpriced > 0 ? ` · ${totals.unpriced} unpriced` : ""}`,
@@ -469,7 +478,7 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
             : formatPrice(totals.cost > 0 ? totals.cost : null, currency),
         count: wishes,
         face: face.shown,
-        spokenName: `${folder.name}, ${managed ? "managed wishlist" : "wishlist folder"}, ${face.spoken}`,
+        spokenName: `${name}, ${managed ? "managed wishlist" : "wishlist folder"}, ${face.spoken}`,
         // `Layers` on a managed one — the deck groups' glyph above, and the wishlist page's own
         // for the same fact: this folder belongs to a deck.
         icon: managed ? (

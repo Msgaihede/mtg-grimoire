@@ -84,6 +84,7 @@ import {
   NoteMark,
   QuantityTag,
   RuleBreakMark,
+  WordMark,
   THEORY_MATCH_ANY_LABEL,
   THEORY_MATCH_ATTR,
   THEORY_MATCH_NAME_LABEL,
@@ -94,7 +95,7 @@ import {
   theoryMatchLabel,
 } from "./CardMarks";
 import { NotMadeByDeckMark } from "./NotMadeByDeckMark";
-import type { TheoryTier } from "./theoryMatch";
+import type { TheoryMark, TheoryTier } from "./theoryMatch";
 
 /** The one element either component draws, found the way a live probe finds it. */
 function drawMark(ui: ReactElement): HTMLElement {
@@ -103,6 +104,18 @@ function drawMark(ui: ReactElement): HTMLElement {
   if (el === null) throw new Error("no theory mark rendered");
   return el;
 }
+
+/**
+ * A mark as `theoryMatchMark` answers one — the whole of what both mark components take since
+ * 2026-09-27. The tick and the exact switch on unless a case says otherwise, which is every
+ * deck's default and the only state the older cases knew.
+ */
+function planMark(tier: TheoryTier, delta = 0, anyPrinting = false): TheoryMark {
+  return { tier, delta, anyPrinting };
+}
+
+/** The tier a component wrote into {@link THEORY_MATCH_ATTR}, for the attribute cases. */
+const tierOf = (ui: ReactElement) => drawMark(ui).getAttribute(THEORY_MATCH_ATTR);
 
 /**
  * The tag's own sentence, read the only way it can be read.
@@ -123,10 +136,9 @@ async function tooltipOf(anchor: Element): Promise<HTMLElement> {
 }
 
 describe("theoryMatchLabel", () => {
-  /** A mark as `theoryMatchMark` answers one, with the exact switch **on** unless a case says
-   *  otherwise — which is every deck's default and the only state the older cases knew. */
+  /** {@link planMark}'s sentence — the exact switch **on** unless a case says otherwise. */
   const label = (tier: TheoryTier, delta: number, anyPrinting = false) =>
-    theoryMatchLabel({ tier, delta, anyPrinting });
+    theoryMatchLabel(planMark(tier, delta, anyPrinting));
 
   it("names the exact tier Exact Match", () => {
     expect(label("exact", 0)).toBe("Exact Match");
@@ -189,23 +201,19 @@ describe("theoryMatchLabel", () => {
 
 describe("TheoryMatchMark", () => {
   it("carries its tier as the attribute's value", () => {
-    expect(drawMark(<TheoryMatchMark tier="exact" />).getAttribute(THEORY_MATCH_ATTR)).toBe(
-      "exact",
-    );
-    expect(drawMark(<TheoryMatchMark tier="name" />).getAttribute(THEORY_MATCH_ATTR)).toBe("name");
-    expect(drawMark(<TheoryMatchMark tier="unplanned" />).getAttribute(THEORY_MATCH_ATTR)).toBe(
-      "unplanned",
-    );
+    expect(tierOf(<TheoryMatchMark mark={planMark("exact")} />)).toBe("exact");
+    expect(tierOf(<TheoryMatchMark mark={planMark("name")} />)).toBe("name");
+    expect(tierOf(<TheoryMatchMark mark={planMark("unplanned")} />)).toBe("unplanned");
   });
 
   it("fills from the exact tier's own two properties", () => {
-    const el = drawMark(<TheoryMatchMark tier="exact" />);
+    const el = drawMark(<TheoryMatchMark mark={planMark("exact")} />);
     expect(el.style.backgroundColor).toBe("var(--color-theory-exact)");
     expect(el.style.color).toBe("var(--color-theory-exact-fg)");
   });
 
   it("fills from the name tier's own two properties", () => {
-    const el = drawMark(<TheoryMatchMark tier="name" />);
+    const el = drawMark(<TheoryMatchMark mark={planMark("name")} />);
     expect(el.style.backgroundColor).toBe("var(--color-theory-name)");
     expect(el.style.color).toBe("var(--color-theory-name-fg)");
   });
@@ -214,14 +222,14 @@ describe("TheoryMatchMark", () => {
    *  of this file: `--color-theory-${tier}` is the template `CardMarks.tsx` forbids, and an
    *  assertion built the same way would agree with it. */
   it("fills from the unplanned tier's own two properties", () => {
-    const el = drawMark(<TheoryMatchMark tier="unplanned" />);
+    const el = drawMark(<TheoryMatchMark mark={planMark("unplanned")} />);
     expect(el.style.backgroundColor).toBe("var(--color-theory-unplanned)");
     expect(el.style.color).toBe("var(--color-theory-unplanned-fg)");
   });
 
   it("paints with no Tailwind colour utility, so the reader's choice is the only fill", () => {
     for (const tier of ["exact", "name", "unplanned"] as const) {
-      const el = drawMark(<TheoryMatchMark tier={tier} />);
+      const el = drawMark(<TheoryMatchMark mark={planMark(tier)} />);
       expect(el.classList.contains("bg-pie-u")).toBe(false);
       expect(el.classList.contains("bg-destructive")).toBe(false);
       expect(el.classList.contains("text-text")).toBe(false);
@@ -237,7 +245,7 @@ describe("TheoryMatchMark", () => {
     // property worth pinning is that nothing branches here at all — a shape re-derived from the
     // tier, or from anything else, is a second drawing coming back.
     for (const tier of ["exact", "name", "unplanned"] as const) {
-      expect(drawMark(<TheoryMatchMark tier={tier} />).style.clipPath).not.toBe("");
+      expect(drawMark(<TheoryMatchMark mark={planMark(tier)} />).style.clipPath).not.toBe("");
     }
   });
 
@@ -251,7 +259,7 @@ describe("TheoryMatchMark", () => {
    * mark drawing both would satisfy either assertion alone.
    */
   it("draws a glyph and no number on the unplanned tier, whatever delta it is handed", () => {
-    const el = drawMark(<TheoryMatchMark tier="unplanned" delta={3} />);
+    const el = drawMark(<TheoryMatchMark mark={planMark("unplanned", 3)} />);
     expect(el.querySelector("svg")).not.toBeNull();
     expect(el.textContent).toBe("");
   });
@@ -259,10 +267,11 @@ describe("TheoryMatchMark", () => {
   /** And the other two tiers still turn on the number, which is what says the branch above is
    *  about the tier rather than about the component having stopped drawing counts. */
   it("still draws the count on the two tiers that have one", () => {
-    const exact = drawMark(<TheoryMatchMark tier="exact" delta={3} />);
+    const exact = drawMark(<TheoryMatchMark mark={planMark("exact", 3)} />);
     expect(exact.querySelector("svg")).toBeNull();
     expect(exact.textContent).toBe("+3");
-    expect(drawMark(<TheoryMatchMark tier="exact" delta={0} />).querySelector("svg")).not.toBeNull();
+    const tick = drawMark(<TheoryMatchMark mark={planMark("exact", 0)} />);
+    expect(tick.querySelector("svg")).not.toBeNull();
   });
 
   /**
@@ -275,7 +284,7 @@ describe("TheoryMatchMark", () => {
     for (const Mark of [TheoryMatchMark, TheoryMatchBadge]) {
       const { container, unmount } = render(
         <TooltipProvider>
-          <Mark tier="name" delta={2} anyPrinting />
+          <Mark mark={planMark("name", 2, true)} />
         </TooltipProvider>,
       );
       const el = container.querySelector(`[${THEORY_MATCH_ATTR}]`)!;
@@ -289,7 +298,7 @@ describe("TheoryMatchMark", () => {
   it("keeps Art Mismatch in the tooltip with the exact switch on", async () => {
     const { container } = render(
       <TooltipProvider>
-        <TheoryMatchMark tier="name" />
+        <TheoryMatchMark mark={planMark("name")} />
       </TooltipProvider>,
     );
     expect(await tooltipOf(container.querySelector(`[${THEORY_MATCH_ATTR}]`)!)).toHaveTextContent(
@@ -300,32 +309,28 @@ describe("TheoryMatchMark", () => {
 
 describe("TheoryMatchBadge", () => {
   it("carries its tier as the attribute's value", () => {
-    expect(drawMark(<TheoryMatchBadge tier="exact" />).getAttribute(THEORY_MATCH_ATTR)).toBe(
-      "exact",
-    );
-    expect(drawMark(<TheoryMatchBadge tier="name" />).getAttribute(THEORY_MATCH_ATTR)).toBe("name");
-    expect(drawMark(<TheoryMatchBadge tier="unplanned" />).getAttribute(THEORY_MATCH_ATTR)).toBe(
-      "unplanned",
-    );
+    expect(tierOf(<TheoryMatchBadge mark={planMark("exact")} />)).toBe("exact");
+    expect(tierOf(<TheoryMatchBadge mark={planMark("name")} />)).toBe("name");
+    expect(tierOf(<TheoryMatchBadge mark={planMark("unplanned")} />)).toBe("unplanned");
   });
 
   it("sets the text colour only — there is no fill for a foreground to be legible on", () => {
-    const exact = drawMark(<TheoryMatchBadge tier="exact" />);
+    const exact = drawMark(<TheoryMatchBadge mark={planMark("exact")} />);
     expect(exact.style.color).toBe("var(--color-theory-exact)");
     expect(exact.style.backgroundColor).toBe("");
-    const name = drawMark(<TheoryMatchBadge tier="name" delta={-2} />);
+    const name = drawMark(<TheoryMatchBadge mark={planMark("name", -2)} />);
     expect(name.style.color).toBe("var(--color-theory-name)");
     expect(name.style.backgroundColor).toBe("");
     // The third tier takes the *fill* as its text colour and never the `-fg` beside it: there is
     // nothing printed on anything here, so the foreground would be a colour for no surface.
-    const unplanned = drawMark(<TheoryMatchBadge tier="unplanned" />);
+    const unplanned = drawMark(<TheoryMatchBadge mark={planMark("unplanned")} />);
     expect(unplanned.style.color).toBe("var(--color-theory-unplanned)");
     expect(unplanned.style.backgroundColor).toBe("");
   });
 
   it("paints with no Tailwind colour utility", () => {
     for (const tier of ["exact", "name", "unplanned"] as const) {
-      const el = drawMark(<TheoryMatchBadge tier={tier} />);
+      const el = drawMark(<TheoryMatchBadge mark={planMark(tier)} />);
       expect(el.classList.contains("text-pie-u")).toBe(false);
       expect(el.classList.contains("text-destructive")).toBe(false);
     }
@@ -334,7 +339,7 @@ describe("TheoryMatchBadge", () => {
   /** The card-face mark's rule, on the surface with no art: the glyph is the tier's and the delta
    *  is not consulted for it. */
   it("draws a glyph and no number on the unplanned tier, whatever delta it is handed", () => {
-    const el = drawMark(<TheoryMatchBadge tier="unplanned" delta={3} />);
+    const el = drawMark(<TheoryMatchBadge mark={planMark("unplanned", 3)} />);
     expect(el.querySelector("svg")).not.toBeNull();
     expect(el.textContent).toBe("");
     // And the mono face that dresses a *number* is not put on a row that draws a glyph.
@@ -933,5 +938,26 @@ describe("WordMark", () => {
     expect(token.text).toBe("NOT MADE BY DECK");
     expect(token.classes.filter((c) => c !== "whitespace-nowrap")).toEqual(rule.classes);
     expect(rule.classes).toContain("text-destructive");
+  });
+
+  /**
+   * **A line is the other surface, and it shares the box's half that is not about art.** The Text
+   * and Table drawings put the words after a name, on a 22px line with no art under them and no
+   * card to zoom, so the felt behind the words and the `--mark-scale` sizes are the art surface's
+   * alone — and the hairline, the radius, the data face and the destructive colour are both
+   * surfaces' at once, which is what a change to the rule-break box has to reach.
+   */
+  it("gives a line the box's shared half, without the art's felt or its scale", () => {
+    const art = classesOf(<WordMark word="A" hint="a" />).classes;
+    const line = classesOf(<WordMark surface="line" word="L" hint="l" />).classes;
+
+    const shared = line.filter((c) => art.includes(c));
+    for (const c of ["rounded-[3px]", "border", "border-destructive/50", "font-mono"]) {
+      expect(shared).toContain(c);
+    }
+    expect(shared).toContain("text-destructive");
+    expect(line).not.toContain("bg-bg/85");
+    expect(line.some((c) => c.includes("--mark-scale"))).toBe(false);
+    expect(art.some((c) => c.includes("--mark-scale"))).toBe(true);
   });
 });
