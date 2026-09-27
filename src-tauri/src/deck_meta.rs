@@ -1189,10 +1189,11 @@ pub fn reorder_categories(
 ///
 /// **`moveToCategoryId: Some(id)` moves the cards first, in the same transaction**, folding on
 /// [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) — `deck_id, variant, category_id,
-/// card_id` — into a target that must be a pile of **the same deck and the same list**
-/// ([`CATEGORY_WRONG_DECK`], [`CATEGORY_WRONG_LIST`]): since user schema v53 a pile holds one
-/// list's cards, and moving them under the other list's pile would file a theory card in a
-/// column only the Actual tab draws. `None` leaves the
+/// card_id, coalesce(finish, '')`, so a foil and the regular copy of one printing each fold into
+/// their own row and never into each other — into a target that must be a pile of **the same
+/// deck and the same list** ([`CATEGORY_WRONG_DECK`], [`CATEGORY_WRONG_LIST`]): since user schema
+/// v53 a pile holds one list's cards, and moving them under the other list's pile would file a
+/// theory card in a column only the Actual tab draws. `None` leaves the
 /// `ON DELETE CASCADE` on `deck_cards.category_id` to take the cards with the category, which
 /// is the DDL's own comment on that column: "deleting a category deletes the cards filed under
 /// it, which is what the confirm dialog says it will do."
@@ -1313,8 +1314,11 @@ pub fn delete_category(
         // target already holds keeps its own `label_id` and `needs_review`, never the moved
         // row's — the same "the existing row wins a fold" rule `move_card`'s comment names.
         //
-        // **Every column the row owns except the two this move rewrites** (`id`, which the
-        // INSERT mints, and `category_id`). `finish` is a `DECK_CARD_GRAIN` term, and until
+        // **Every column the row owns is carried except five**: `id`, which the INSERT mints;
+        // `category_id`, which is the move; the two timestamps, which are the move's, as in
+        // `move_card`; and `sync_uid`, which must not be — the source row still holds it when
+        // this INSERT runs, so a copy would collide on `idx_deck_cards_uid`, and the capture
+        // trigger mints the new row its own. `finish` is a `DECK_CARD_GRAIN` term, and until
         // 2026-09-27 it was the one left out: the moved row took the column's NULL, so a foil
         // became the regular copy and folded into the target's nonfoil row of that printing.
         let sql = format!(
