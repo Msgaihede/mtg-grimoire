@@ -94,7 +94,7 @@ import { useSwapFromPane } from "@/features/decks/useDeck";
 import { CardGrid } from "@/features/search/CardGrid";
 import { keepCaretForCard } from "@/lib/caretWalk";
 import { plural } from "@/lib/counts";
-import { soleFinish } from "@/lib/finish";
+import { soleFinish, type Finish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { ipc, ipcError, type Printing } from "@/lib/ipc";
 import { languageHint } from "@/lib/languages";
@@ -108,6 +108,7 @@ import {
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { buildCardMenu, type CardMenuDeps } from "./cardMenu";
+import { finishRefusal } from "./copyEdit";
 import { handBackToDeckCard } from "./deckControl";
 import { CardMenuRefusal } from "./CardMenuRefusal";
 import {
@@ -615,6 +616,10 @@ function Body({
    * decides with one value and is rebuilt on another.
    */
   const wish = request.wish;
+  /** The collection copy a press moves, or absent — set only by the card modal's `Edit`. Named
+   *  once for {@link wish}'s reason. */
+  const copy = request.copy;
+  const editCopy = useAppStore((s) => s.editCopy);
 
   const query = useQuery({
     // The page size is part of the key, and deliberately: the card pane reads the same card's
@@ -698,9 +703,36 @@ function Body({
    * It was `swapping` while a swap was the only write this surface could make. The name moved
    * with the meaning rather than staying and quietly covering a repoint too.
    */
-  const writing = swap.isPending || repoint.isPending;
+  /**
+   * The third write a press can be: the **collection copy** the card modal is editing, moved onto
+   * the printing pressed (issue #564) — `collection_set_printing`, which folds onto a row that
+   * already holds that printing rather than refusing.
+   *
+   * The four keys `CardDetailModal`'s own copy writes settle, for their reasons: the list and its
+   * summary, every wish (whose owned figure is summed from the collection), every deck (whose
+   * owned/missing reads the collection) and the search rows. **Then the modal behind is moved onto
+   * the copy** — its printing, its finish and the id that survived a fold — but only while it is
+   * still editing that copy, so an answer landing after the reader has left does not reopen it.
+   */
+  const moveCopy = useMutation({
+    mutationFn: ({ id, cardId }: { id: number; cardId: string; finish: Finish | null }) =>
+      ipc.collectionSetPrinting(id, cardId),
+    onSuccess: (change, { id, cardId, finish }) => {
+      void queryClient.invalidateQueries({ queryKey: ["collection"] });
+      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+      void queryClient.invalidateQueries({ queryKey: ["decks"] });
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      if (useAppStore.getState().paneCopy?.entryId === id) editCopy(cardId, finish, change.id);
+      onDone();
+    },
+  });
+  /** The copy's one refusal made before any write — a printing never made in its finish. */
+  const [copyRefusal, setCopyRefusal] = useState<string | null>(null);
+
+  const writing = swap.isPending || repoint.isPending || moveCopy.isPending;
   const startSwap = swap.mutate;
   const startRepoint = repoint.mutate;
+  const startMove = moveCopy.mutate;
 
   /**
    * What the last successful swap **did**, or `null` — the sentence the live region below draws.
@@ -745,6 +777,30 @@ function Body({
           collectorNumber: printing.collectorNumber,
         });
         onDone();
+        return;
+      }
+      /**
+       * **A collection copy, read second** — after the tray's hand-back and before everything the
+       * wall could otherwise do, because a request carries one only while the card modal's `Edit`
+       * is on and the reader asked for exactly this: *this copy is that printing*. The wall closes
+       * on the write's own success, so a refusal stays up beside it.
+       */
+      if (copy) {
+        setCopyRefusal(null);
+        if (cardId === request.cardId) {
+          onDone();
+          return;
+        }
+        const printing = items.find((row) => row.id === cardId);
+        const refused =
+          copy.finish === null || printing === undefined
+            ? null
+            : finishRefusal(copy.finish, printing);
+        if (refused !== null) {
+          setCopyRefusal(refused);
+          return;
+        }
+        startMove({ id: copy.id, cardId, finish: copy.finish });
         return;
       }
       /**
@@ -860,6 +916,8 @@ function Body({
     [
       writing,
       items,
+      copy,
+      startMove,
       wish,
       startRepoint,
       request,
@@ -1002,6 +1060,12 @@ function Body({
       {repoint.isError && (
         <p role="alert" className="shrink-0 text-xs text-destructive">
           Could not repoint that wish — {ipcError(repoint.error)}
+        </p>
+      )}
+      {/* And a copy that could not move — refused here before writing, or by the backend. */}
+      {(copyRefusal !== null || moveCopy.isError) && (
+        <p role="alert" className="shrink-0 text-xs text-destructive">
+          {copyRefusal ?? `Could not change this copy's printing — ${ipcError(moveCopy.error)}`}
         </p>
       )}
       {/* And a refused **menu** write, which is a different thing: an add the reader made from a

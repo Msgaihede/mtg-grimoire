@@ -1,4 +1,4 @@
-import { useAppStore, type PaneDeckContext } from "@/lib/store";
+import { useAppStore, type PaneCopy, type PaneDeckContext } from "@/lib/store";
 
 /**
  * Which of the app's card surfaces the open card was reached from — the modal's own vocabulary,
@@ -29,6 +29,16 @@ export interface CardModalScope {
   quantity: "deck" | "owned" | "wished" | null;
   /** Deck category and tag pickers, and the deck-only rail actions. */
   deckControls: boolean;
+  /**
+   * The collection row the reader pressed **Edit** on, or `null` — which is the collection
+   * surface until they do, and every other surface always (issue #564).
+   *
+   * **The one field here a surface does not decide by being the surface.** A deck row is writable
+   * because the reader opened it from a deck they are building; a collection tile is opened to
+   * look, so its foil toggle and its printing rows stay a view until this is set, and become
+   * writes against this one row once it is. See `PaneCopy` for why the gate is a press.
+   */
+  copy: PaneCopy | null;
 }
 
 /**
@@ -51,9 +61,10 @@ export interface CardModalScope {
 export function useCardModalScope(): CardModalScope {
   const deck = useAppStore((s) => s.paneDeckContext);
   const view = useAppStore((s) => s.activeView);
+  const paneCopy = useAppStore((s) => s.paneCopy);
 
   if (deck !== null) {
-    return { surface: "deck", deck, quantity: "deck", deckControls: true };
+    return { surface: "deck", deck, quantity: "deck", deckControls: true, copy: null };
   }
   const surface: CardModalSurface =
     view === "collection"
@@ -68,5 +79,9 @@ export function useCardModalScope(): CardModalScope {
   // on them to step — `Add to collection` and `Add to wishlist` in the action row are how a card
   // becomes one, which is the same door every other surface in the app uses.
   const quantity = surface === "collection" ? "owned" : surface === "wishlist" ? "wished" : null;
-  return { surface, deck: null, quantity, deckControls: false };
+  // The copy only counts on the collection's own wall. Every opener clears it anyway, so this is
+  // the second fence rather than the first — the one that holds if a surface is added which
+  // opens a card without going through one.
+  const copy = surface === "collection" ? paneCopy : null;
+  return { surface, deck: null, quantity, deckControls: false, copy };
 }
