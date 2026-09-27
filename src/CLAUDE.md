@@ -550,7 +550,9 @@ Every one of these has its measurement and its story in
   controls never fold away — the search box, the colours, the mana values and the sort — and
   everything else (set, format, owned, rarity, type, border, price, printings, finish,
   condition, needs review) is behind one `Filters`
-  disclosure, with the filters that are **on** stated as 26px chips under a rule. Thresholds are
+  disclosure, with the filters that are **on** stated as 26px chips on a line under the bar that is
+  drawn only while something is on — `Reset all` sits at the bar's own far end, greyed at zero, since
+  2026-09-27. Thresholds are
   640 / 900 / 1500 and each is where a *line's own contents* stop fitting, not a device.
   **The right-hand end of that row's first line belongs to the grid-or-table pair**, on every
   surface that has two layouts — which is where a reader now looks for it on all four card views,

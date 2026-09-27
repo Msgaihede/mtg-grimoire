@@ -1200,8 +1200,10 @@ describe("WishlistPage", () => {
    * **The status line never moves the wall** (the live re-check's new 2). It used to be empty, and
    * so no taller than nothing, until a write's re-read put `Updating…` in it for 40–80 ms — 16px
    * that pushed the wall down for exactly the frames the grid's reveal and the drop anchor measured
-   * it in. jsdom lays nothing out, so what is pinned is what produces the geometry: the line keeps
-   * its one `text-xs` line open (`min-h-4`) and its classes do not change when it starts talking.
+   * it in. jsdom lays nothing out, so what is pinned is what produces the geometry: since the
+   * header redesign (2026-09-27) the line rides the path row beside the shelf toolbar rather than
+   * holding a row of its own, `truncate` keeps it to one line, and its classes do not change when
+   * it starts talking.
    */
   it("holds the status line's one line open, so `Updating…` never moves the wall", async () => {
     const { client } = wrap(<WishlistPage />);
@@ -1218,7 +1220,8 @@ describe("WishlistPage", () => {
 
     await waitFor(() => expect(line).toHaveTextContent("Updating…"));
     expect(line.className).toBe(silent);
-    expect(line).toHaveClass("min-h-4", "text-xs");
+    expect(line).toHaveClass("truncate", "text-xs");
+    expect(line.parentElement).toContainElement(screen.getByRole("group", { name: "Shelves" }));
   });
 
   /** A write the backend refused has to be said out loud — a stepper that silently does

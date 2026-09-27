@@ -2138,7 +2138,7 @@ export function WishlistPage() {
   return (
     <section
       className={cn(
-        "flex flex-col gap-4",
+        "flex flex-col gap-3",
         // **`h-full` is the table's, not the page's** — `SearchPage`'s branch, one tab over.
         // `VirtualTable` is `min-h-0 flex-1 overflow-auto`, so it has a height only while every
         // box above it has one, and this section pinned to `main`'s height is the top of that
@@ -2292,8 +2292,8 @@ export function WishlistPage() {
               `folderId` and every fold alone, so none of these could sit in the filter row without
               being the one control there Reset all cannot undo. */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <div className="min-w-0 flex-1">
-              {hasFolders && (
+            {hasFolders && (
+              <div className="min-w-0">
                 <WishlistBreadcrumb
                   // Root-most first and **without the root**, which the breadcrumb prepends itself:
                   // `null` is a destination rather than a folder, and only that component knows
@@ -2305,13 +2305,44 @@ export function WishlistPage() {
                   canDropFolder={canMoveInto}
                   onDropFolder={moveInto}
                 />
+              </div>
+            )}
+            {/* **The page's one live region, and it lives in this row rather than on a line of its
+                own under it** (2026-09-27, the header redesign; the collection's twin). A region
+                that appears together with its text announces nothing, so it is mounted for the
+                life of the view.
+
+                It had a `min-h-4` line of its own until then, reserved whether or not it said
+                anything, because a write's re-read put `Updating…` in it for 40–80 ms — which
+                pushed the wall down 16px for exactly the frames the grid's reveal and the drop
+                anchor measured it in, and then Chromium's scroll anchoring took the 16 back, so a
+                revealed heading landed 16px short (the live re-check's new 2). That guarantee is
+                kept and the 24px it cost are not: this row is the toolbar's height whatever the
+                region says, `truncate` keeps a long sentence on its one line, and `flex-1` with a
+                zero basis both pushes the toolbar to the right end and never asks the row to wrap.
+
+                **The empty list's sentence is this same element**, never a second copy: it takes
+                `order-last basis-full`, which wraps it onto a whole line of its own under the
+                toolbar, and draws it large and centred where the wall would be. One element, so
+                the region is never remounted with its text and the sentence is never in the page
+                twice. */}
+            <p
+              role="status"
+              className={cn(
+                empty && status
+                  ? "order-last basis-full py-16 text-center text-sm"
+                  : "min-w-0 flex-1 truncate text-xs",
+                empty && failure ? "text-destructive" : "text-dim",
               )}
-            </div>
+            >
+              {status}
+            </p>
             {/* The ref the caret's path-row answer searches (`pathRowAddFolder`) is the toolbar's
                 alone — the collection's arrangement. Around the breadcrumb too, it found a trail
-                segment first for a folder a reader had named "Add folder". `contents`, so the
-                wrapper draws no box and the toolbar stays the row's flex item. */}
-            <div ref={pathRowRef} className="contents">
+                segment first for a folder a reader had named "Add folder". `ml-auto`, so the
+                toolbar holds the row's right end even on the empty list, where the status line
+                beside it has wrapped onto a line of its own and no longer pushes it there. */}
+            <div ref={pathRowRef} className="ml-auto">
               <ShelfToolbar
                 // The `canMakeFolder` gate, unchanged (spec §3.8): nothing is made inside a deck's
                 // managed folder, so the button is absent there rather than greyed.
@@ -2434,28 +2465,6 @@ export function WishlistPage() {
               )}
             </div>
           )}
-
-          {/* One live region, mounted for the life of the view: a region that appears together
-              with its text announces nothing, because there was no change for a screen reader
-              to notice.
-
-              **Over a wall, it holds its one line open whether or not it is saying anything**
-              (`min-h-4`, the `text-xs` line's own 1rem). It used to be empty, and so no taller
-              than nothing, until a write's re-read put `Updating…` in it for 40–80 ms — which
-              pushed the wall down 16px for exactly the frames the grid's reveal and the drop
-              anchor measured it in, and then Chromium's scroll anchoring took the 16 back, so a
-              revealed heading landed 16px short (the live re-check's new 2). A line that never
-              changes height cannot move the wall. The empty list's sentence is the one case that
-              does grow, and there is no wall under it to move. */}
-          <p
-            role="status"
-            className={cn(
-              empty && status ? "py-16 text-center text-sm" : "min-h-4 text-xs",
-              empty && failure ? "text-destructive" : "text-dim",
-            )}
-          >
-            {status}
-          </p>
 
           {/* A write that was refused, said where the writing happened. Not folded into the
               line above: that one describes the list, and this one describes something the

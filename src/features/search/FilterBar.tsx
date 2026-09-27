@@ -642,8 +642,8 @@ function activeChips<SortKey extends string>(
  * a gold border here and a lit chip there, spread across all of it. Four things are on the bar at
  * every width — the box you type in, the colours, the mana values, and the order the results come
  * in — because those are the four a reader reaches for without looking. Everything else is behind
- * one button, and what is *on* is stated as chips under a rule, where a search can be read in a
- * glance and undone one filter at a time.
+ * one button, and what is *on* is stated as chips on a line under the bar — drawn only while
+ * something is on — where a search can be read in a glance and undone one filter at a time.
  *
  * **It lays out by its own width and not the window's**, which is what `@container` is here for.
  * The same component is the search page's bar across a maximised window and the deck editor's
@@ -1208,6 +1208,33 @@ export function FilterBar<SortKey extends string>({
         </div>
       )}
 
+      {/* **Reset all, at the far end of the bar — and drawn whether or not there is anything to
+          reset**, greyed at zero. It moved up from a line of its own under the bar on 2026-09-27
+          (the collection and wishlist header redesign, option A): that line was unconditional for
+          this button's sake alone, so on every unfiltered page it was a 57px band holding one
+          greyed control. Unconditional *here* keeps the rule it was drawn for — a control that
+          appears mid-press moves everything beside it — because it never appears: it holds its
+          width on the bar from the first paint, and the chips line below is what comes and goes.
+
+          **Three places, one per band, and each is where a line had room — swept in Storybook
+          against the real stylesheet on 2026-09-27, 230px to 2400px.** From 900 it ends the first
+          line (`order-[9]`, after the view pair in the tree, so a surface without one ends the
+          line with it too); at 1500, where the bar is one line, that costs the search box width
+          and it still reads 269px at a 1501px container. Between 640 and 900 the first line has
+          no room left — pinned there it wrapped onto a line of its own and pushed the sort onto
+          a third — so it ends the second line instead, after the sort (`order-[35]`), which has
+          room from a 685px container up; in the 640–670 sliver below that it takes a third line
+          of its own, which is still shorter than the ruled row it replaced. Below 640 it follows the sort's own line (`order-[45]`), which is where the docked deck panel's
+          narrow bar has room for it. The hairline is its own, so a surface without the view pair
+          still separates it from the sort. Not on the phone, where the strip pins its one copy
+          beside the chips — see {@link statedFiltersStrip}. */}
+      {!narrow && (
+        <div className="order-[45] flex items-center gap-2 @min-[640px]/fb:order-[35] @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:order-[9] @min-[900px]/fb:gap-x-3">
+          <div aria-hidden="true" className="hidden h-9 w-px bg-border @min-[640px]/fb:block" />
+          <ResetAll count={search.activeCount} onReset={search.resetAll} />
+        </div>
+      )}
+
       {/* **The line break.** A `basis-full` flex item consumes the rest of its line, so
           everything ordered after it starts a new one. Gone at 1500, where the whole bar is one
           line and the items after it fold back into their places between `order-[2]` and
@@ -1268,14 +1295,17 @@ export function FilterBar<SortKey extends string>({
   );
 
   /**
-   * **The search, in words — and the row is drawn whether or not there is anything in it.**
+   * **The search, in words — drawn only when there is something to say.**
    *
-   * Reset all lives here now, and its own rule is why the row is unconditional: it is always
-   * drawn and greyed at zero, because a control that appears mid-press moves everything beside
-   * it. What changed is *which* things it would move. On the bar it took its width out of a
-   * `flex-1` search box and slid nine colour chips left under the finger that had just pressed
-   * one; under a rule below every control, an appearing chip moves only the wall of cards, and
-   * a wall that has just been re-queried is moving anyway.
+   * This row was unconditional until 2026-09-27, and the whole reason was Reset all, which lived
+   * at its right end: always drawn and greyed at zero, because a control that appears mid-press
+   * moves everything beside it. On every unfiltered page that made it a ruled band of 57px with
+   * one greyed button in it. Reset all is on the bar now (see the note in `row`), still
+   * unconditional there, so what is left here is the chips — and an appearing chip line moves
+   * only the wall of cards, which has just been re-queried and is moving anyway. That is the
+   * answer the phone strip below already reached, and the row now follows it on every width.
+   * No rule over it either: the rule separated a permanent row from the bar, and a row that is
+   * only there while the reader is filtering is read as the bar's own second line.
    *
    * **This shape is the bar's, at every width but the phone's.** It followed the controls it
    * states into the sheet for one day (2026-08-29, 9c's Task 2) and came back out the same week:
@@ -1284,29 +1314,12 @@ export function FilterBar<SortKey extends string>({
    * draws instead, and its own note carries the decision, the two shapes it was chosen over and
    * what the second line costs.
    */
-  const statedFilters = (
-    <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-      {chips.length > 0 && (
-        // Only when there is something to caption. `Filtering by` over an empty row is a
-        // sentence with nothing after it.
-        <span className={cn(FILTER_LABEL, "shrink-0")}>Filtering by</span>
-      )}
+  const statedFilters = chips.length > 0 && (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className={cn(FILTER_LABEL, "shrink-0")}>Filtering by</span>
       {chips.map((chip) => (
         <ActiveFilterChip key={chip.label} label={chip.label} onRemove={chip.remove} />
       ))}
-      {/* A whole line of its own below 640 and the right end of this one above it. `grid`
-          rather than `block` so the button stretches, and the arbitrary variant is what centres
-          its label once it has — `ResetAll` is `inline-flex` and would otherwise leave its two
-          words against the left edge of a 200px button.
-
-          **First when it is stacked, last when it is not**, which is the design's own call and
-          has a reason worth keeping: below 640 the chips wrap onto two and three lines as the
-          reader narrows, and a full-width button under them moves every time one does. Above
-          640 it is at the end of the line, where `ml-auto` holds it against the right edge and
-          the chips grow leftwards away from it. Either way it does not move under the press. */}
-      <div className="order-first grid basis-full [&>button]:justify-center @min-[640px]/fb:order-none @min-[640px]/fb:ml-auto @min-[640px]/fb:block @min-[640px]/fb:basis-auto">
-        <ResetAll count={search.activeCount} onReset={search.resetAll} />
-      </div>
     </div>
   );
 
@@ -1351,12 +1364,11 @@ export function FilterBar<SortKey extends string>({
    * not have made those targets smaller; it would have left them reaching 9px up into the search
    * box and 9px down into the first row of cards. A 44px line is where they fit.
    *
-   * **Drawn only when there is something to state**, which is the one place this parts company
-   * with the row above. That row is unconditional because an appearing `Reset all` used to take
-   * its width out of a `flex-1` search box and slide nine chips under the finger pressing one.
-   * Here it takes no width from anything: the line arrives *under* the strip and the only thing
-   * it moves is the wall — which is the same answer that rule already reached, and it is what
-   * keeps the shut, unfiltered phone at the 44px Task 2 measured.
+   * **Drawn only when there is something to state**, and since 2026-09-27 the row above agrees:
+   * it was unconditional for as long as `Reset all` lived in it, and that button is on the bar
+   * now. Here it takes no width from anything: the line arrives *under* the strip and the only
+   * thing it moves is the wall — and it is what keeps the shut, unfiltered phone at the 44px
+   * Task 2 measured.
    *
    * **`Reset all` is pinned outside the scroller, at the right end of the line.** It is the same
    * failure mode wearing a different hat: a Reset all the reader cannot see while looking at the
@@ -1479,8 +1491,8 @@ export function FilterBar<SortKey extends string>({
           **And `-mt-5` assumes this row is the first thing in `main`, which is true on one page
           of four.** Only the search page puts the bar straight under `main`'s 20px of padding.
           Tags draws `TagChips` above it at `gap-3`, the collection a summary header and the
-          needs-review row at `gap-4`, the wishlist a `FigureRow` at `gap-4` — so on those three
-          the 20px the strip reaches up is the gap **plus** the last 8px, 4px and 4px of the box
+          needs-review row at `gap-3`, the wishlist a `FigureRow` at `gap-3` — so on those three
+          the 20px the strip reaches up is the gap **plus** the last 8px of the box
           above, and `bg-bg` paints over them. At rest that is a visible bite out of the element
           above; pinned it is exactly right, because by then that element has scrolled away. There
           is no class that tells the two apart (CSS has no `:stuck`) and this component cannot see
@@ -1547,9 +1559,10 @@ export function FilterBar<SortKey extends string>({
           />
         )}
 
-        {/* The chips and Reset all, under the controls that made them. **On a phone they are the
-            strip's second line instead** — mounted up there rather than here, one copy in one of
-            two places, and in the sheet neither. See {@link statedFiltersStrip}. */}
+        {/* The chips, under the controls that made them, and only while there are any — Reset
+            all is at the bar's far end. **On a phone they are the strip's second line instead**,
+            with Reset all beside them — mounted up there rather than here, one copy in one of two
+            places, and in the sheet neither. See {@link statedFiltersStrip}. */}
         {!narrow && statedFilters}
 
         {/* The chips a typed `otag:ramp` produces, and the note an unknown tag name gets. Under the

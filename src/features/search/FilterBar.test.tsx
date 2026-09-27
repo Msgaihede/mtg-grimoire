@@ -2009,11 +2009,9 @@ describe("FilterBar, the filters its strip states", () => {
 
   /**
    * **Nothing to state, no second line** — which is what keeps the shut, unfiltered phone at the
-   * 44px Task 2 measured, and is the one place this parts company with the row a desktop draws.
-   * That row is unconditional because an appearing `Reset all` used to take its width out of a
-   * `flex-1` search box and slide nine colour chips under the finger pressing one. Here it takes
-   * width from nothing: the line arrives *under* the strip and moves only the wall — the same
-   * answer that rule already reached for the desktop chips.
+   * 44px Task 2 measured. The desktop's chip line has followed the same rule since 2026-09-27,
+   * when its `Reset all` moved onto the bar: the line arrives *under* the strip and takes width
+   * from nothing, so the only thing it moves is the wall.
    */
   it("draws no second line at all until there is something to state", () => {
     stubNarrowWindow(true);
@@ -2053,9 +2051,9 @@ describe("FilterBar, the filters its strip states", () => {
   /**
    * **The half that guards the other four surfaces.** This row is the search page's bar, the Tags
    * page's, both tabs of the deck editor's docked panel, the collection's and the wishlist's, and
-   * four of those have no phone in them. Above the phone width the chips are the wrapped block
-   * under a rule that they have always been — captioned, unconditional, and nowhere near a
-   * scroller or a sticky box.
+   * four of those have no phone in them. Above the phone width the chips are a wrapped, captioned
+   * block under the bar — nowhere near a scroller or a sticky box — and `Reset all` is on the bar
+   * itself rather than beside them.
    */
   it("leaves the stated filters exactly where they were at every other width", () => {
     stubNarrowWindow(false);
@@ -2067,8 +2065,9 @@ describe("FilterBar, the filters its strip states", () => {
     const { classList } = scroller();
     expect(classList.contains("flex-wrap")).toBe(true);
     expect(classList.contains("overflow-x-auto")).toBe(false);
-    // Not on the strip: the block is under the bar, and the bar is not pinned at this width.
-    expect(strip()).not.toContainElement(screen.getByRole("button", { name: /^Reset all/ }));
+    // Not on a strip: the block is under the bar, the bar is not pinned at this width, and Reset
+    // all is on the bar rather than among the chips.
+    expect(scroller()).not.toContainElement(screen.getByRole("button", { name: /^Reset all/ }));
     expect(strip().classList.contains("sticky")).toBe(false);
   });
 });
@@ -2719,8 +2718,25 @@ describe("FilterBar, the filters it states", () => {
 
     expect(screen.queryByText("Filtering by")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Remove filter/ })).toBeNull();
-    // The rule and Reset all stay, because that button is drawn on every row and greyed at zero.
+    // No line under the bar at all — but Reset all stays, on the bar, greyed at zero.
     expect(screen.getByRole("button", { name: /^Reset all/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **Reset all is on the bar, in the same row as the box, and not on the line of chips** (the
+   * header redesign, 2026-09-27). That line used to be drawn unconditionally for this button's
+   * sake alone; with the button on the bar, the line can come and go with the chips without
+   * anything beside a pressed control moving. Both halves are asserted, because a Reset all
+   * mounted in both places would pass either one alone.
+   */
+  it("keeps Reset all on the bar's own row, never on the line of chips", () => {
+    render(<FilterBar search={search({ colors: ["U"], rarities: ["rare"], activeCount: 2 })} />);
+
+    const reset = screen.getByRole("button", { name: /^Reset all/ });
+    const row =screen.getByLabelText("Search cards").parentElement!;
+    expect(row).toContainElement(reset);
+    expect(screen.getByText("Filtering by").parentElement).not.toContainElement(reset);
+    expect(screen.getAllByRole("button", { name: /^Reset all/ })).toHaveLength(1);
   });
 
   /**
