@@ -69,6 +69,7 @@ import { useDockHeight } from "@/lib/useDockHeight";
 import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
+import { refreshCardSearches } from "@/lib/searchMarks";
 import { ManagedFolderNote } from "./ManagedFolderNote";
 import { managedEmptySentence, managedIds, userWishFolders } from "./managed";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
@@ -685,7 +686,7 @@ export function WishlistPage() {
    */
   const settleWhole = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    void refreshCardSearches(queryClient);
   }, [queryClient]);
 
   const setQuantity = useMutation({

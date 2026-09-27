@@ -356,3 +356,57 @@ describe("parseQuery — a negated name (issue #571)", () => {
     expect(removeToken(input, name)).toBe("t:instant");
   });
 });
+
+describe("parseQuery — an apostrophe inside a word (issue #552)", () => {
+  // Until 2026-09-27 any `'` opened a quote that ran to the end of the box, so an apostrophe in a
+  // card name swallowed every term after it.
+  it("keeps a possessive name as one word and the terms after it as terms", () => {
+    const { text, predicates } = parseQuery("sensei's -t:artifact");
+    expect(text).toBe("sensei's");
+    expect(predicates.map((p) => [p.field, p.value, p.negated])).toEqual([
+      ["typeLine", "artifact", true],
+    ]);
+  });
+
+  it("reads Urza's and Ajani's beside other words", () => {
+    for (const input of ["urza's saga", "ajani's pridemate c:w"]) {
+      const parsed = parseQuery(input);
+      expect(parsed.text, input).toBe(input.replace(" c:w", ""));
+    }
+    expect(parseQuery("ajani's pridemate c:w").predicates).toHaveLength(1);
+  });
+
+  it("keeps an apostrophe in a value inside that value and the next term out of it", () => {
+    const { text, predicates } = parseQuery("o:can't t:creature");
+    expect(text).toBe("");
+    expect(predicates.map((p) => [p.field, p.value])).toEqual([
+      ["oracleText", "can't"],
+      ["typeLine", "creature"],
+    ]);
+  });
+
+  it("excludes a possessive name, with or without quotes around it", () => {
+    expect(parseQuery("-urza's t:land").predicates.map((p) => [p.field, p.value])).toEqual([
+      ["name", "urza's"],
+      ["typeLine", "land"],
+    ]);
+    expect(parseQuery('-"urza\'s saga" t:land').predicates[0]).toMatchObject({
+      field: "name",
+      value: "urza's saga",
+    });
+  });
+
+  it("does not close a single quote on an apostrophe mid-word", () => {
+    expect(parseQuery("o:'can't block' t:creature").predicates.map((p) => p.value)).toEqual([
+      "can't block",
+      "creature",
+    ]);
+    // Nor does a double-quoted value care about the apostrophe inside it.
+    expect(parseQuery('o:"can\'t block"').predicates[0]).toMatchObject({ value: "can't block" });
+  });
+
+  it("still opens a quote at the start of a chunk or a value", () => {
+    expect(parseQuery("'lightning bolt' t:instant").text).toBe("'lightning bolt'");
+    expect(terms("otag:'spot removal' bolt")).toEqual(["oracle:spot removal"]);
+  });
+});

@@ -3,8 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import type { CollectionFolder, CollectionImportItem } from "@/lib/ipc";
 import { ipc, ipcError } from "@/lib/ipc";
-import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
+import { invalidateOwnedWrite } from "@/lib/searchMarks";
 import { Overlay } from "./Overlay";
 import { TiersPanel } from "./panels/TiersPanel";
 import { statusLine, type LastAdded } from "./reader/readerText";
@@ -336,7 +336,7 @@ function LiveScanner() {
         await tray.commit(items, target, (latest) => withoutCommitted(latest, snapshot));
         // The import's own set, for the import's reason: these are copies the collection did not
         // hold a moment ago, and every surface that reads "what is owned" moves with them.
-        for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
+        invalidateOwnedWrite(queryClient);
       } catch (e) {
         setCommitError(ipcError(e));
       } finally {

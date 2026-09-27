@@ -389,6 +389,18 @@ using it.
   its guard _before_ calling `invalidate_owned`. The "build superseded" message stays an
   `eprintln!` and is deliberately **not** recorded — it is an expected interleaving, not a
   failure, and whatever superseded it owes a rebuild of its own.
+- **A refused `owned` amendment is read again, not dropped** (issue #552, 2026-09-27). Because
+  `invalidate_owned` runs after the write lock is released, two quick "+" presses clone one base;
+  the first to publish may have read `owned` before the second's row committed, and the second —
+  whose read held both — was refused by `publish_amendment`'s `Arc::ptr_eq` and dropped, so the
+  Owned chip greyed over a card the search returned until the next write. `amend_owned` now
+  re-clones whatever is live and reads again, up to four times; a refusal because the index went
+  **cold** still stops it, since the sync that cleared it owes a rebuild of its own.
+- **Negated `t:`, `o:` and name terms narrow the counts too** (issue #552, 2026-09-27).
+  `run_facets` discarded `fts_match`'s negatives on the stated ground that `BitSet` had no
+  complement — `facets.rs` had an `and_not` all along — so the counts read high under `-t:`,
+  `-o:` and `-bolt`. Each negative is now its own `MATCH`, resolved to rowids and subtracted,
+  from `ix.all` when no positive term stands beside it; the counts equal what the wall shows.
 - **The warm-up is ~767 ms** (median of five, 762–783, release build, warm page cache), so a
   launch answers not-ready for about that long. **Measured when the build's scan read six
   columns**; the X overlay added `mana_cost` to it, making seven, and nobody has re-timed the

@@ -71,6 +71,7 @@ import { useDockHeight } from "@/lib/useDockHeight";
 import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
+import { refreshCardSearches } from "@/lib/searchMarks";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
 import type { CollectionFolderTotals } from "./CollectionFolderCard";
 import { CollectionSearchPanel } from "./CollectionSearchPanel";
@@ -935,10 +936,10 @@ export function CollectionPage() {
     // wrong. The same pair `AddToCollection` invalidates, for the same reason — a write here
     // is the same write it makes.
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    // And the search results, which draw `ownedQuantity` on every row now. Refetched rather
-    // than merely marked — only *active* queries refetch, and while this view is on screen
-    // the search is unmounted, so from here the cost is a stale mark and nothing else.
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    // And the search results, which draw `ownedQuantity` on every row now. Brought up to date
+    // rather than merely marked — an active search is patched in place (`@/lib/searchMarks`),
+    // and one that is not on screen is only marked stale.
+    void refreshCardSearches(queryClient);
     // And every deck. Since schema v25 a deck owns what its own group physically holds, summed
     // per oracle id, so the row this stepper just changed *is* a deck's arithmetic if it is
     // filed in a deck group — and is spare for every theory list if it is not. Either way what
@@ -961,7 +962,7 @@ export function CollectionPage() {
   const settleFailure = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    void refreshCardSearches(queryClient);
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
   }, [queryClient]);
 
@@ -1121,7 +1122,7 @@ export function CollectionPage() {
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
   });
 

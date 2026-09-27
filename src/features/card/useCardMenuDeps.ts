@@ -27,6 +27,7 @@ import type { Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { refreshCardSearches } from "@/lib/searchMarks";
 import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
 import {
   DeckTargetSubmenu,
@@ -177,7 +178,7 @@ export function useCardMenuDeps(): CardMenuWiring {
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
     onError: (error) => setRefusal(`Could not add to your collection — ${ipcError(error)}`),
   });
@@ -207,7 +208,7 @@ export function useCardMenuDeps(): CardMenuWiring {
     onMutate: () => setRefusal(null),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
     onError: (error) => setRefusal(`Could not add to your wishlist — ${ipcError(error)}`),
   });

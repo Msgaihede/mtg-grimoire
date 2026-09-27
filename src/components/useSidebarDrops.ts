@@ -6,6 +6,7 @@ import { dndManager } from "@/lib/dndManager";
 import { useDndDropTarget } from "@/lib/dndTarget";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
+import { refreshCardSearches } from "@/lib/searchMarks";
 
 /**
  * How long a drop's sentence stays up when nothing takes it down first.
@@ -86,7 +87,7 @@ export function useSidebarDrops() {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       // A result row draws `wishlisted`, so the heart on every printing of this card has
       // just changed. No `["collection"]`: a wish moves no copies.
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
       setReport({ at: "wishlist", text: "Added to wishlist." });
     },
     // No invalidation on the way out, where the deck's write has one: a refused wish wrote

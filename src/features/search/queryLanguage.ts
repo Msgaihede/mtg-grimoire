@@ -503,12 +503,41 @@ function excludedName(
 }
 
 /**
+ * What may sit before a quote for it to *open* one: nothing, a lone `-`, or `-?keyword<op>` —
+ * the start of a chunk or the start of a value, and nowhere else (issue #552).
+ *
+ * Until 2026-09-27 any `'` opened a quote, and an apostrophe is the commonest punctuation in a
+ * card name. `sensei's -t:artifact` became one free-text chunk that ran to the end of the box and
+ * returned the Sensei's Divining Top the reader had excluded; `o:can't t:creature` swallowed its
+ * type filter into the rules-text value. A quote mid-word is now just a character of the word.
+ * The keyword need not be one this module knows — `itag:"spot removal"` stays one chunk of free
+ * text rather than two, which is what it was before.
+ */
+const QUOTE_OPENS = /^-?(?:[A-Za-z][A-Za-z0-9_-]*(?:>=|<=|!=|:|=|>|<))?$/;
+
+/**
+ * Whether the quote at `i` closes the one that is open.
+ *
+ * A `"` always does. A `'` does only at the end of a word — before whitespace or the end of the
+ * box — because the same character is an apostrophe inside one: `o:'can't block'` is one value,
+ * `can't block`, where closing at the first `'` would leave `t` glued to the term and `block'`
+ * adrift as free text. The rule is `'`-only because `"` is never an apostrophe, and applying it
+ * there would let `"a"b` swallow the rest of the box.
+ */
+function closesQuote(input: string, i: number): boolean {
+  if (input[i] === '"') return true;
+  const next = input[i + 1];
+  return next === undefined || /\s/.test(next);
+}
+
+/**
  * Split a query string into tag terms, typed predicates and the free text around them.
  *
  * The scan is whitespace-separated with one exception: a quote swallows spaces, so
  * `otag:"spot removal"` is one chunk and `spot` does not fall out of it into the FTS text.
  * Unbalanced quotes run to the end of the string, which is the state the box is in for as long
- * as it takes to type the closing one.
+ * as it takes to type the closing one. **Only a quote where a value can begin opens one** — see
+ * {@link QUOTE_OPENS} — so an apostrophe inside `Urza's` is part of the word.
  *
  * Order is preserved and nothing is deduplicated here — two chips reading the same term is a
  * thing the reader can see and fix, whereas a term that vanished on being typed twice is not.
@@ -530,8 +559,8 @@ export function parseQuery(input: string): ParsedQuery {
     while (i < input.length) {
       const ch = input[i];
       if (quote) {
-        if (ch === quote) quote = null;
-      } else if (ch === '"' || ch === "'") {
+        if (ch === quote && closesQuote(input, i)) quote = null;
+      } else if ((ch === '"' || ch === "'") && QUOTE_OPENS.test(input.slice(start, i))) {
         quote = ch;
       } else if (/\s/.test(ch)) {
         break;
