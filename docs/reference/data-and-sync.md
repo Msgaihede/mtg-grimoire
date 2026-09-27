@@ -1195,17 +1195,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **v53 adds `sync_gone`, one tombstone per deleted row of a table other rows are filed under**
   (2026-09-27,
   [folder deletes across devices](../superpowers/specs/2026-09-27-folder-deletes-across-devices-design.md)
-  §3.1). **One table, `WITHOUT ROWID`** — `(tbl TEXT NOT NULL, uid TEXT NOT NULL, PRIMARY KEY (tbl,
-  uid))` — whose composite key is the table, so it brings no index and no autoindex: the index
-  figure does not move, and the table figure is the grep at the top of this page, both re-counted
-  off `USER_SCHEMA_SQL` in the landing commit rather than added. **Not synced**, on no capture spec
-  and with no `sync_uid`: which parents a device has seen deleted is a fact about that device, and
-  each writes its own. **Written by a trigger and by nothing else** — `capture::install`'s
+  §3.1). A tombstone here is a row saying a parent went — not the `del` op in `sync_ops` that
+  [sync.md](sync.md) also calls one. **One table, `WITHOUT ROWID`** — `(tbl TEXT NOT NULL, uid
+  TEXT NOT NULL, PRIMARY KEY (tbl, uid))` — whose composite key is the table, so it brings no index
+  and no autoindex: the index figure does not move, and the table figure is the grep at the top of
+  this page, both re-counted off `USER_SCHEMA_SQL` in the landing commit rather than added. **Not
+  synced**, on no capture spec and with no `sync_uid`: which parents a device has seen deleted is a
+  fact about that device, and each writes its own. **Written by a trigger** — `capture::install`'s
   `sync_gone_{table}`, `AFTER DELETE` on every table `capture::parent_tables()` reads off
   `capture::TABLES`, gated on the row having a uid and **not** on the apply guard or on a group —
   so this device's own delete, one applied from a peer and every cascade either sets off all land
   there, where before only the first left anything `apply`'s `gone` could read, and a device in no
-  group still records what it deletes. **The rung backfills it from this device's own `del` ops**
+  group still records what it deletes; **and by `apply::tombstone` for a row `apply` deletes
+  without ever having held it**, since a `DELETE` that finds nothing fires no trigger (a parent a
+  third device made and deleted between two pulls, a folder a peer made under one deleted here).
+  Nothing else writes it. **The rung backfills it from this device's own `del` ops**
   for the seven parent tables of the day — `deck_folders`, `decks`, `deck_categories`,
   `deck_labels`, `deck_notes`, `collection_folders` and `wishlist_folders`, spelled in the rung
   because a rung is history while live code derives the list — so nothing `gone` answered the day
@@ -1219,7 +1223,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   such a fixture may rewind v53 and nothing below it. No production path drops the table. **v53 is
   the number token stacks PR 3 had planned** for a new `collection_folders.kind` word; that PR was
   dropped the same day. [sync.md](sync.md) *Held while it can resolve, skipped when it cannot* has
-  what reads the table and the colliding folder delete that shipped beside it.
+  what reads the table, and the folder delete that shipped beside it — one that would clear rows
+  out of a folder waits for the page's retry and re-homes what is left.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

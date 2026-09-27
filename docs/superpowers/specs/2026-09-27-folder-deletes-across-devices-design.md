@@ -140,10 +140,15 @@ whatever either device files into X afterwards is written at the root (a deck, a
 unchanged: the row goes only where the group's placement under the deleted parent is the one that
 stands. The delete itself goes through §3.3.
 
-### 3.3 A delete that would collide waits for the second attempt, then merges
+### 3.3 A delete that would clear rows waits for the second attempt, then re-homes them
+
+*(As approved this section waited only on a collision; the amendment in the bullet "Every delete
+that would clear rows waits" below widened it to any non-empty doomed set. Steps 1–2 stand; step 3
+and the first bullet are the record of the narrower rule.)*
 
 Every `DELETE` `apply` issues — `write_group`'s delete arm and the moot delete — first asks
-**whether it would drop two rows onto one grain**:
+**whether it would clear rows out of a folder** (as approved: *whether it would drop two rows onto
+one grain*):
 
 1. **The doomed folders** of the row being deleted: a `collection_folders` or `wishlist_folders`
    row and its sub-tree (`parent_id`); a `decks` row's `collection_folders` with that `deck_id`,

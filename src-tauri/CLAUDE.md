@@ -197,10 +197,12 @@ both plus the frontend.
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
   src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v53**
-  (2026-09-27, the folder-deletes spec §3.1) is `sync_gone`, a **tombstone table** — `(tbl, uid)`,
+  (2026-09-27, the folder-deletes spec §3.1) is `sync_gone`, a **tombstone table** — a row saying a
+  parent went, not the `del` op in `sync_ops` also called a tombstone — `(tbl, uid)`,
   `WITHOUT ROWID` and **not synced**, one row per deleted row of a table other rows are filed
-  under, written by `capture::install`'s `sync_gone_{table}` trigger and by nothing else (ungated by
-  the apply guard, so a peer's delete and every cascade leave one too) and **backfilled from this
+  under, written by `capture::install`'s `sync_gone_{table}` trigger (ungated by the apply guard,
+  so a peer's delete and every cascade leave one too) and by `apply` for a row it never held, and
+  **backfilled from this
   device's own `del` ops** for the seven parent tables of the day, spelled in the rung while live
   code reads `capture::parent_tables()`, so a delete applied from a peer before the upgrade is not
   recovered — on the number token stacks PR 3 had planned, and PR 3 was dropped the same day. That
@@ -1314,8 +1316,9 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   **`WITHOUT ROWID` tables never fire it at all** — `muted_tags`, `sync_devices`, `sync_state` and
   `device_names` are marked by the commands a reader's press reaches
   (`changes::MARKED_BY_COMMAND`), `price_snapshots`, `sync_peers` and `sync_gone` deliberately are
-  not (`WRITTEN_BY_THE_APP`: the app writes them and no press does — a press reaches `sync_gone`
-  only through the tombstone trigger, and no window draws it), and a test enumerates
+  not (`WRITTEN_BY_THE_APP`: the app writes them and no press does — a press reaches `sync_gone`,
+  whose rows are tombstones saying a parent went and not `del` ops, only through its trigger, and
+  no window draws it), and a test enumerates
   `main.sqlite_master` against the two lists so a new one goes red until somebody decides. It is
   also `db::CrossFileFence`'s blind spot, one bullet up, and the mirror's.
   **A bare `DELETE FROM t` with no `WHERE` is the second** — SQLite's truncate optimisation visits
@@ -1605,10 +1608,11 @@ record, with every measurement, is
   a build that changed the generator would leave every existing database running the old rules.
   **`capture::clear_stale_guard` runs just before them**: `suppressed` writes `applying` ahead of
   its work and no `Drop` runs through a kill, so a row left by one switches capture off until
-  something clears it — and before this, with no deck, nothing at launch did. **The tombstone
-  triggers ride the same install and are the one kind never gated on that guard** (user schema v53,
-  `sync_gone_{table}` on every `capture::parent_tables()` entry): a delete `apply` makes, and every
-  cascade it sets off, runs behind the guard, and recording exactly those is what they are for.
+  something clears it — and before this, with no deck, nothing at launch did. **The triggers that
+  write `sync_gone` tombstones — rows saying a parent went, not `del` ops — ride the same install
+  and are the one kind never gated on that guard** (user schema v53, `sync_gone_{table}` on every
+  `capture::parent_tables()` entry): a delete `apply` makes, and every cascade it sets off, runs
+  behind the guard, and recording exactly those is what they are for.
 - **`PRAGMA recursive_triggers` being OFF does not mean a trigger's statements fire no triggers**
   — it stops a trigger firing *itself*. The uid mint is an `UPDATE`, so an update trigger without
   both its guards (`AFTER UPDATE OF <captured columns>` **and** a `WHEN` that compares values)
@@ -1669,24 +1673,37 @@ record, with every measurement, is
   review's I1 — and `identity::leave_group` deletes the key with the group.
   Everything else is **consumed** and blocks nothing: a child of a parent deleted in the page, or
   anywhere a delete has ever reached this device — `gone` reads `sync_gone` since user schema v53,
-  which the tombstone trigger writes for this device's own deletes, a peer's applied here and every
-  row a cascade took with either — is **moot** where the key cascades, and a row this device holds
-  under its uid is deleted, as the sender's cascade takes it, where the fold says the group's
-  placement stands, **a folder included** (excluded until v53, because a delete made here
-  uncaptured was invisible to `gone`, and the release dropped the peer's later children of the
-  folder) — and written without it where the key is `SET NULL`;
+  whose rows are tombstones saying a parent went (not `del` ops), written by its trigger for this
+  device's own deletes, a peer's applied here and every row a cascade took with either, and by
+  `apply::tombstone` for a row `apply` deletes without ever having held it (a parent a third device
+  made and deleted between two pulls, a folder a peer made under one deleted here) — is **moot**
+  where the key cascades, and a row this device holds under its uid is deleted, as the sender's
+  cascade takes it, where the fold says the group's placement stands, **a folder included**
+  (excluded until v53, because a delete made here uncaptured was invisible to `gone`, and the
+  release dropped the peer's later children of the folder) — and written without it where the key
+  is `SET NULL`;
   an unknown table or an unbuildable row from a same or older schema is **dropped**, one
-  `error_log` row (`Source::Relay`, `apply`) folded per table. **A delete `apply` issues that would
-  drop two rows onto one grain** — a folder's or a deck's, whose `SET NULL` would land a copy or a
-  wish on a grain the root, or another doomed row, already holds — **waits for the page's retry**
-  (`Why::Occupied`, never classified), by which the sender's own re-filing has landed, **then
-  re-homes** each doomed row at the root through `collection_folders::refile_entry` /
-  `wishlist_folders::refile_wish`, the survivor of a fold keeping the lower `sync_uid`, and deletes;
-  a refusal is rolled back and is **never `?`** — `Why::Unbuildable` on the delete arm, the row left
-  standing on the moot one — where the delete arm's `?` used to fail the whole apply on every pull
-  (`apply/rehome.rs`). **Do not hold the cursor on anything that cannot resolve**: the relay
-  compacts nothing above a device's ack, so that hold
-  pins the group's log for good and re-downloads it on every pull — metered storage. **Do not
+  `error_log` row (`Source::Relay`, `apply`) folded per table. **Every delete `apply` issues that
+  would clear rows out of a folder waits for the page's retry** — a folder's or a deck's whose
+  doomed set (the copies and wishes filed in the folders it would take) is non-empty, collision or
+  not, answers `Why::Occupied` on the first attempt, never classified — **then re-homes** what is
+  still filed there at the root through `collection_folders::refile_entry` /
+  `wishlist_folders::refile_wish`, the survivor of a fold keeping the lower `sync_uid`, and deletes.
+  Waiting only on a collision double-counted: a new root copy and the delete of a binder whose copy
+  folds into it, in one page, collide with nothing until the new copy lands, so the re-homed copy
+  took the free grain and the new copy's insert added its count on top. Two `find_row` rules go
+  with it: **a grain hit on a row whose uid this page deletes adopts the incoming uid, not `min`**
+  — the sender retired the old one, and under `min` `reset::clear_collection` made the peer lose
+  its `Recently removed` and deck groups about half the time — and **a group whose own ops end in a
+  delete finds its row by uid alone**, because the sender made and discarded that row (a collection
+  cleared twice between pulls, a deck toggled Virtual on and off twice, a copy made and removed
+  that deleted a local twin), keyed on the group's own fold so a row deleted and put back in one
+  page, add-wins, still meets its twin. A refusal is rolled back and is **never `?`** —
+  `Why::Unbuildable` on the delete arm, the row left standing on the moot one — where the delete
+  arm's `?` used to fail the whole apply on every pull (`apply/rehome.rs`, `apply::find_row`).
+  **Do not hold the cursor on anything that cannot resolve**: the relay compacts nothing above a
+  device's ack, so that hold pins the group's log for good and re-downloads it on every pull —
+  metered storage. **Do not
   advance past a held op either**: until 2026-09-27 `pull` set the cursor to the page head
   whatever `apply` deferred, so a deferred op and its sender's later ops in the page were lost,
   upgrade or not — which a v51 client still does, so every device is updated before it syncs
