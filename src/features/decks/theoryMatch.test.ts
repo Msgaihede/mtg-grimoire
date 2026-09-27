@@ -101,7 +101,9 @@ describe("theorySlot", () => {
       "bolt-m10|",
     );
     expect(theorySlot(card({ cardId: "p", finishes: '["foil","etched"]' }))).toBe("p|");
+    expect(theorySlot(card({ cardId: "p", finishes: '["foil","foil"]' }))).toBe("p|");
     expect(theorySlot(card({ cardId: "p", finishes: "not json" }))).toBe("p|");
+    expect(theorySlot(card({ cardId: "p", finishes: '{"foil":true}' }))).toBe("p|");
   });
 
   it("lets a stated finish win over the printing's", () => {

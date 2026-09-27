@@ -2920,7 +2920,8 @@ export interface DeckMissingOutcome {
  * refuses is the same member spelled with two different types.
  */
 export interface TheorySlot {
-  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
+  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``, where the finish is
+   *  the one the row **plays** (its own, else the printing's sole finish — issue #563).
    *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
   key: string;
   /**
@@ -2991,7 +2992,10 @@ export interface TheoryDiffRow {
   setCode: string;
   collectorNumber: string;
   /**
-   * Which **object** this line is for — `deck_cards.finish`, so `null` is the regular copy.
+   * Which **object** this line is for — the finish the theory row **plays**, so `null` is the
+   * regular copy. That is `deck_cards.finish` where the row stored one and the printing's sole
+   * finish where it did not: an unsaid row of a foil-only printing reads `foil` here, because it
+   * can be no other object (issue #563, `deck_theory::played_finish`).
    *
    * **Half of the row's identity**, with {@link TheoryDiffRow.cardId}: a foil Sol Ring and a
    * regular one are two pieces of cardboard to go and find, two rows in `deck_cards`, and two

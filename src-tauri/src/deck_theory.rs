@@ -992,8 +992,9 @@ fn unfinished(e: tauri::Error) -> String {
 /// every row, joins categories and rolls up what the deck's group holds, which is a great deal
 /// of work for a mark.
 /// This command answers neither a comparison nor a priced row: one indexed scan of `deck_cards`,
-/// four columns, a LEFT JOIN to `cards` for the name alone, and no marketplace. The join arrived
-/// with the loose tier on 2026-09-07 and is a primary-key lookup per group; what the founding
+/// five columns, a LEFT JOIN to `cards` for the name and the printing's finishes, and no
+/// marketplace. The join arrived with the loose tier on 2026-09-07 (the finishes rode it on
+/// 2026-09-27, for [`played_finish`]) and is a primary-key lookup per group; what the founding
 /// argument was really against is still absent — this does not price a row, does not roll up what
 /// the group holds, and does not become a second `deck_get`. `DeckEditor.test.tsx` pins the first
 /// reason from the frontend side — nothing may call `deck_get` for the list the reader is not on.
@@ -1017,10 +1018,11 @@ fn unfinished(e: tauri::Error) -> String {
 ///
 /// **The rows therefore fold here rather than in the caller**, which is the one thing that had to
 /// change with it: two `Vec` entries spelling one key were harmless while a set was being built
-/// out of them, and would be a silently halved quantity now. `GROUP BY dc.card_id, dc.finish` is
-/// exactly [`group_key`]'s own grain — SQLite groups two NULL finishes together, which is the
-/// regular copy — so the same card filed as Ramp and as Main deck is still **one** planned card,
-/// now with both piles counted rather than one key printed twice.
+/// out of them, and would be a silently halved quantity now. `GROUP BY dc.card_id, dc.finish` does
+/// most of it — SQLite groups two NULL finishes together, which is the regular copy — so the same
+/// card filed as Ramp and as Main deck is still **one** planned card, with both piles counted
+/// rather than one key printed twice. It is no longer the whole of [`group_key`]'s grain, which is
+/// what the next paragraph is about.
 ///
 /// **The SQL groups on the stored finish and Rust finishes the fold on the played one** (issue
 /// #563). A foil-only printing the plan holds once unsaid and once as `foil` is two SQL groups and
@@ -1748,6 +1750,42 @@ mod tests {
         );
     }
 
+    /// The press the Compare dialog makes, for issue #563's card. Its `only` keys are built off the
+    /// diff rows, whose finish is the played one, so the dialog ticks `palantir-hoc|foil`, and that
+    /// is the spelling the press has to find. The wish is pinned to the foil, the only finish the
+    /// printing exists in. The pre-fix spelling `palantir-hoc|` names nothing now and writes nothing.
+    #[test]
+    fn the_press_finds_a_foil_only_line_by_its_played_key() {
+        let conn = seeded();
+        foil_only(&conn);
+        let id = deck(&conn, "Palantír");
+        let main = category(&conn, id, "Main deck");
+        add_finish(&conn, id, "palantir-hoc", main, THEORY, None, 2);
+        add_finish(&conn, id, "palantir-hoc", main, LIVE, Some("foil"), 1);
+
+        let stale = ["palantir-hoc|".to_owned()];
+        assert_eq!(
+            missing_to_wishlist(&conn, id, Some(&stale), None).unwrap(),
+            0
+        );
+
+        let ticked = ["palantir-hoc|foil".to_owned()];
+        assert_eq!(
+            missing_to_wishlist(&conn, id, Some(&ticked), None).unwrap(),
+            1
+        );
+        assert_eq!(
+            pinned_wishes(&conn),
+            vec![(
+                "o3".to_owned(),
+                "palantir-hoc".to_owned(),
+                Some("foil".to_owned()),
+                1
+            )],
+            "one copy short, wished for as the foil"
+        );
+    }
+
     /// **Only a printing with no choice is folded.** One sold in both finishes keeps the regular
     /// copy and the foil apart exactly as `the_diff_tells_a_foil_from_the_regular_copy` says —
     /// an unsaid row there is the regular copy, and the plan's foil is not answered by it.
@@ -1790,6 +1828,8 @@ mod tests {
             (Some(r#"["nonfoil"]"#), None),
             (Some(r#"["nonfoil","foil"]"#), None),
             (Some(r#"["foil","etched"]"#), None),
+            // A repeated word is counted twice, as `parseFinishes` keeps it twice.
+            (Some(r#"["foil","foil"]"#), None),
             // An unknown word is dropped before counting, as `parseFinishes` drops it.
             (Some(r#"["foil","glossy"]"#), Some("foil")),
             (Some("not json"), None),

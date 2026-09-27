@@ -4446,9 +4446,11 @@ already effective, and `viewOf` copies them.
   tokens (`planTokens`, above) and builds a token `TheoryPlan` with the existing
   `theoryMatchPlan` — no new arithmetic and no new tier, under the deck's own three mark switches.
   Each side is a list's **entries** — the implicit one where the list holds none — keyed
-  `theorySlot({ cardId: printingId, finish: tokenDeckFinish(view) })`, the finish spelled as a deck
-  card's is (`nonfoil` is `null`), so a token's slot is exactly the key a deck card of that
-  printing and finish would have. It was `finish: null` on both sides until v52, when a token
+  `theorySlot({ cardId: printingId, finish: tokenDeckFinish(view), finishes: null })`, the finish
+  spelled as a deck card's is (`nonfoil` is `null`), so a token's slot is the key a deck card of
+  that printing *stating* that finish would have. `finishes: null` is deliberate (issue #563): a
+  token entry's finish is always stated, so there is no unsaid finish for the printing's sole
+  finish to fill in, which a deck card's key does do. It was `finish: null` on both sides until v52, when a token
   carried no finish on the wire. **Both sides are built in TypeScript**, where a deck card's plan
   side is Rust's `deck_theory_slots` — there is no such command for tokens and none is wanted,
   because the plan's tokens are the theory list's own `deck_tokens` answer, so one `theorySlot`
