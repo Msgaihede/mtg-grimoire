@@ -124,6 +124,7 @@ const wishlistAdd = vi.fn();
  * that was pressed. `deckSwapPrinting`'s twin one surface over — see the `wish` tests below.
  */
 const wishlistSetPrinting = vi.fn();
+const collectionSetPrinting = vi.fn();
 
 /**
  * Every command the modal's tree can reach, wrapped in an arrow apiece.
@@ -167,6 +168,7 @@ vi.mock("@/lib/ipc", async (original) => ({
     collectionAdd: (input: unknown) => collectionAdd(input),
     wishlistAdd: (input: unknown) => wishlistAdd(input),
     wishlistSetPrinting: (id: number, cardId: string | null) => wishlistSetPrinting(id, cardId),
+    collectionSetPrinting: (id: number, cardId: string) => collectionSetPrinting(id, cardId),
   },
 }));
 
@@ -216,6 +218,7 @@ beforeEach(() => {
   // printing another wish in the same folder already names merges the two. The modal closes
   // either way and reads none of it; it is here so the mutation resolves rather than `undefined`.
   wishlistSetPrinting.mockReset().mockResolvedValue({ id: 7, quantity: 1, removed: false });
+  collectionSetPrinting.mockReset().mockResolvedValue({ id: 99, quantity: 3, removed: false });
   // The modal is driven by one store field and nothing else, so the store is the fixture.
   useAppStore.setState(useAppStore.getInitialState());
   // The stand-ins {@link deckCard} and {@link standInDialog} leave in the document. They are
@@ -940,6 +943,52 @@ describe("AllPrintingsDialog", () => {
     expect(wishlistSetPrinting).not.toHaveBeenCalled();
     await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("b"));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  /**
+   * Issue #564: opened from the card modal while its `Edit` is on, a press **moves the copy** —
+   * and the modal behind follows it onto the printing and the row that survived.
+   */
+  it("moves the collection copy being edited, and re-anchors the card modal on it", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const user = userEvent.setup();
+    renderDialog();
+    act(() => useAppStore.getState().editCopy("a", "nonfoil", 42));
+    open({
+      cardId: "a",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: null,
+      copy: { id: 42, finish: "nonfoil" },
+    });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    await waitFor(() => expect(collectionSetPrinting).toHaveBeenCalledWith(42, "b"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(useAppStore.getState().selectedCardId).toBe("b");
+    expect(useAppStore.getState().paneCopy).toEqual({ entryId: 99 });
+    expect(wishlistSetPrinting).not.toHaveBeenCalled();
+    expect(deckSwapPrinting).not.toHaveBeenCalled();
+  });
+
+  it("refuses to move a copy onto a printing never made in its finish", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const user = userEvent.setup();
+    renderDialog();
+    open({
+      cardId: "a",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: null,
+      copy: { id: 42, finish: "foil" },
+    });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/has no foil version/);
+    expect(collectionSetPrinting).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   /**
