@@ -5253,12 +5253,6 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // dropped on the command answers this same shape rides on, `sync_relay_status` and
     // `sync_now`. Here rather than on `mirrors` above for `DecksCleared`'s reason: neither draws
     // a picture and neither reaches ten fields.
-    //
-    // **`RelayStatus.pullHeld`, `RelayOutcome.heldNewer` and `RelayOutcome.dropped` are read out
-    // of the Rust source and do not exist there yet** — they land with the hold itself, so this
-    // row is expected to be red until then, and that is the fence doing its job rather than a
-    // mistake in this table: a struct that grew three fields on the Rust side and none here would
-    // otherwise pass in silence exactly the way `DecksCleared::covers` did.
     ["RelayStatus", syncCommandsRs, "RelayStatus"],
     ["RelayOutcome", syncClientRs, "RelayOutcome"],
   ];

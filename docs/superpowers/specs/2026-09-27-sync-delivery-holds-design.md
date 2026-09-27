@@ -77,7 +77,7 @@ before this build is.
 | The group | Class | Blocks its device? | Recorded? |
 | --- | --- | --- | --- |
 | Any reason, and an op in it is from a **newer** schema | **held · newer** | yes | no — the panel says it |
-| Unknown parent, and this device **deleted** that parent (a `del` for its uid in this device's own `sync_ops`, via `idx_sync_ops_row`) or the parent's delete is **in this batch** (below its sender's watermark included, so a re-delivered page still counts), and the parent's foreign key **cascades** | **moot** | no | no — the convergent outcome |
+| Unknown parent, and this device **deleted** that parent (a `del` for its uid in this device's own `sync_ops`, via `idx_sync_ops_row`) or the parent's delete is **in this batch** (below its sender's watermark included, so a re-delivered page still counts), and the parent's foreign key **cascades** | **moot** | no | no — the convergent outcome *(amended 2026-09-27, at the final review: a row this device already holds under the group's uid is deleted, as the sender's cascade takes it, where the fold over this device's own history says the group's placement under that parent stands — and never for a table a capture spec names as a parent, whose uncaptured delete would leave a peer's later children waiting on a parent nothing says is gone)* |
 | The same, but the foreign key is **`SET NULL`** (`collection_entries.folder_id`, `wishlist_entries.folder_id`, `decks.folder_id`, `deck_cards.label_id`) | **written without that parent** | no | no — what the deleting device's own cascade did *(amended 2026-09-27: consuming these lost a copy measured at `(0,0)` against `(1,1)`, and would lose a whole deck for `decks.folder_id`)* |
 | Unknown parent, otherwise (same/older sender) | **held · waiting** | yes | only when released |
 | Unknown table, or unbuildable, from a same/older sender | **skipped** | no | yes |
@@ -105,11 +105,20 @@ After `apply` in `client::pull` (the epoch `behind` rule is unchanged and still 
    `WireError::Malformed`: the AEAD passed, so a member of the group wrote it, and a batch this
    build cannot parse — an op `Kind` it does not know — can only come from a newer one. Today it is
    counted unreadable and stepped past, which drops it; an AEAD failure at the same epoch is still
-   stepped past, as today.)*
+   stepped past, as today.)* *(Amended 2026-09-27, at the final review: that "can only" was not
+   true — a same-version batch that does not parse would pin the relay's floor for good and ask
+   the reader to update a build they already run. The arm holds only when some op in the opened
+   plaintext, read as bare JSON, carries a `schema` above this build's — `WireError::Newer` — and
+   a `Malformed` batch is stepped past and recorded once. A held page's unreadable envelopes are
+   noted once per hold rather than on every pull.)*
 2. **Else `held_waiting > 0`** → hold, recording `{"kind":"waiting","since":…,"pulls":n}`. Once the
    hold has been seen on **3 pulls spanning at least 10 minutes**, re-run `apply` on the same ops
    with `release_waiting = true`, then advance. (A baseline its sender owed arrives on that sender's
-   next trip, seconds later; a parent deleted on a third device never arrives.)
+   next trip, seconds later; a parent deleted on a third device never arrives.) *(Amended
+   2026-09-27, at the final review: the count is of the same **blocks**, not the same kind. The
+   hold stores each held device at the stamp of its first held op, and a block not in the stored
+   set starts `since` and `pulls` over — counted by kind, a new wait inherited an old one's span
+   and was released with it. A row without `blocks`, written before the field, starts over.)*
 3. **Else** advance, and delete `pull_hold`.
 
 The ack follows `PULL_CURSOR` exactly as today, so the relay keeps the held rows. **The legacy

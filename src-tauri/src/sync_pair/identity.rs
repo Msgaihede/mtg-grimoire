@@ -1238,6 +1238,11 @@ pub fn adopt_epoch(
 /// one holding the refresh secret — the reader selling a laptop removes it from the phone — and
 /// throwing that secret away would cost them the membership rather than the pairing.
 /// `client::check_keys` is where the two facts sit side by side.
+///
+/// **A held pull goes with the group** (`sync_engine::client::PULL_HOLD`, the delivery holds'
+/// final review): it counts a wait by pulls and time against blocks in this group's page, and
+/// left behind, the next group this device joins would start with a count about a page it will
+/// never be handed — which is exactly what releases a new wait early.
 pub fn leave_group(conn: &Connection) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM sync_devices", [])
@@ -1245,6 +1250,11 @@ pub fn leave_group(conn: &Connection) -> Result<(), String> {
     tx.execute("DELETE FROM sync_group", [])
         .map_err(|e| e.to_string())?;
     forget_superseded(&tx).map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM sync_state WHERE key = ?1",
+        [crate::sync_engine::client::PULL_HOLD],
+    )
+    .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -2609,6 +2619,32 @@ mod tests {
         leave_group(&conn).unwrap();
 
         assert_eq!(superseded(&conn), 0);
+    }
+
+    /// **Leaving takes a held pull with it** (the delivery holds' final review, I1).
+    /// `sync_engine::client::PULL_HOLD` counts a wait by pulls and time against the blocks of a
+    /// page from *this* group; left behind, the next group this device joins would inherit that
+    /// count, and a stale waiting count is exactly what releases a new block early.
+    #[test]
+    fn leaving_clears_a_held_pull() {
+        use crate::sync_engine::client::{get_state, set_state, PULL_HOLD};
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        set_state(
+            &conn,
+            PULL_HOLD,
+            r#"{"kind":"waiting","since":1,"pulls":3,"blocks":{"phone":[5,0]}}"#,
+        )
+        .unwrap();
+
+        leave_group(&conn).unwrap();
+
+        assert_eq!(
+            get_state(&conn, PULL_HOLD),
+            None,
+            "a held pull outlived the group it was held in"
+        );
     }
 
     // -------------------------------------------------------------------------------------

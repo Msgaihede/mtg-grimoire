@@ -55,8 +55,19 @@ pub enum WireError {
     WrongEpoch,
     #[error("that batch could not be read - it is for another group, or it was altered")]
     Unreadable,
+    /// Not a list of ops. On the way in: opened under the group key and did not parse, and
+    /// **nothing in it says a newer build sealed it**, so no update of this device will ever read
+    /// it. On the way out: ops [`seal_batch`] could not serialize.
     #[error("that batch is not a list of ops: {0}")]
     Malformed(String),
+    /// Opened under the group key and did not parse as ops, and **an op in it carries a user
+    /// schema above this build's** ([`Op::schema`], read off the bare JSON): a member on a newer
+    /// build sealed it — an op `kind` this one has never heard of — and updating this device is
+    /// what reads it.
+    #[error(
+        "that batch was sealed by a newer version of MTG Grimoire, which this one cannot read: {0}"
+    )]
+    Newer(String),
 }
 
 /// The associated data every envelope is bound to.
@@ -181,7 +192,27 @@ pub fn open_batch(group: &Group, envelope: &Envelope) -> Result<Vec<Op>, WireErr
         &sealed,
     )
     .map_err(|_| WireError::Unreadable)?;
-    serde_json::from_slice(&plaintext).map_err(|e| WireError::Malformed(e.to_string()))
+    serde_json::from_slice(&plaintext).map_err(|e| {
+        if sealed_by_a_newer_build(&plaintext) {
+            WireError::Newer(e.to_string())
+        } else {
+            WireError::Malformed(e.to_string())
+        }
+    })
+}
+
+/// Whether an opened plaintext that did not parse as ops says a newer build sealed it: read as a
+/// list of bare JSON values, **some element carries a `schema` above
+/// [`crate::schema::USER_SCHEMA_VERSION`]** — the field [`seal_batch`] stamps on every op, which
+/// a newer build stamps too. A same-version batch, one sealed before the field, and anything that
+/// is not a JSON list at all answer `false`: nothing an update brings will read those, and a
+/// client that held on them would pin the relay's log for good.
+fn sealed_by_a_newer_build(plaintext: &[u8]) -> bool {
+    let ours = Some(crate::schema::USER_SCHEMA_VERSION);
+    serde_json::from_slice::<Vec<serde_json::Value>>(plaintext).is_ok_and(|ops| {
+        ops.iter()
+            .any(|op| op.get("schema").and_then(serde_json::Value::as_i64) > ours)
+    })
 }
 
 /// Split a device's outbox into stored rows.
@@ -314,6 +345,42 @@ mod tests {
         // ...and an unstamped op keeps that shape, so a peer that reads it changes nothing.
         let json = serde_json::to_string(&sent[0]).unwrap();
         assert!(!json.contains("\"schema\""), "{json}");
+    }
+
+    /// **A batch that opens and does not parse is `Newer` only when an op in it says so** — a
+    /// `schema` above this build's, read off the bare JSON. This build's schema, no schema at all,
+    /// and bytes that are not a list are `Malformed`: nothing an update brings will read them, and
+    /// the client steps over a `Malformed` batch where it holds on a `Newer` one.
+    #[test]
+    fn a_batch_that_does_not_parse_is_newer_only_when_an_op_says_so() {
+        let g = group(0);
+        let ours = crate::schema::USER_SCHEMA_VERSION;
+        let seal = |plaintext: &str| seal_plaintext(&g, "dev-a", plaintext.as_bytes(), (1, 0));
+        let op = |schema: &str| {
+            format!(
+                r#"{{"table":"decks","uid":"u1","kind":"merge","at":{{"ms":1,"ctr":0,"device":"d"}}{schema}}}"#
+            )
+        };
+        let newer = seal(&format!("[{}]", op(&format!(r#","schema":{}"#, ours + 1))));
+        assert!(
+            matches!(open_batch(&g, &newer), Err(WireError::Newer(_))),
+            "{:?}",
+            open_batch(&g, &newer)
+        );
+        for (what, plaintext) in [
+            (
+                "this build's",
+                format!("[{}]", op(&format!(r#","schema":{ours}"#))),
+            ),
+            ("none", format!("[{}]", op(""))),
+            ("not a list", r#"{"schema":999999}"#.to_owned()),
+        ] {
+            let opened = open_batch(&g, &seal(&plaintext));
+            assert!(
+                matches!(opened, Err(WireError::Malformed(_))),
+                "{what}: {opened:?}"
+            );
+        }
     }
 
     /// The envelope's stamp is the **last** op's, which is the relay's ordering key.

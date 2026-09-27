@@ -69,9 +69,10 @@ pub struct RelayStatus {
     /// Rows carrying a `needs_review` sentence, across all six tables that can.
     pub review_count: i64,
     /// Why this device's pull cursor is held — `"newer"` or `"waiting"`, the kind of
-    /// [`client::PULL_HOLD`] — or `None` when it is not, **and always `None` in no group**: the
-    /// key outlives leaving one, and a device that has left is held on nothing. The panel draws a
-    /// sentence for `"newer"` only, asking for an update; a wait resolves itself.
+    /// [`client::PULL_HOLD`] — or `None` when it is not, **and always `None` in no group**: a
+    /// device that has left is held on nothing. `identity::leave_group` deletes the key now, and a
+    /// database a build before that left a group on still holds it. The panel draws a sentence
+    /// for `"newer"` only, asking for an update; a wait resolves itself.
     pub pull_held: Option<String>,
 }
 
@@ -652,10 +653,11 @@ mod tests {
 
     /// **The panel's one sentence about a held pull reads `pull_hold`'s kind, as `pullHeld`** —
     /// `"newer"` draws *Update this device*, `"waiting"` draws nothing, and an unreadable row is
-    /// no hold at all. **A device in no group is held on nothing**: the key outlives a departure
-    /// (`identity::leave_group` clears the roster and the key, not `sync_state`'s cursor keys),
-    /// and a panel still asking for an update to hear a group this device has left would be
-    /// wrong in the way that sends a reader looking for a problem that is not there.
+    /// no hold at all. **A device in no group is held on nothing**: `identity::leave_group`
+    /// deletes the key with the group now, but a departure made by a build before that left it
+    /// behind, and a panel still asking for an update to hear a group this device has left would
+    /// be wrong in the way that sends a reader looking for a problem that is not there. The rows
+    /// here are the old shape, `blocks` and all absent, which is also the proof it still reads.
     #[test]
     fn relay_status_reports_the_hold() {
         let conn = db();

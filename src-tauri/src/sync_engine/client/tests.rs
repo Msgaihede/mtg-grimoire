@@ -2376,23 +2376,46 @@ fn sealed_as_is(group: &Group, device: &str, ops: &[Op]) -> Envelope {
 }
 
 /// `op` as a newer build's batch this one cannot parse — its `kind` is one this build has never
-/// heard of — sealed under the group key and `op`'s own stamp.
+/// heard of, and it carries the schema a newer build stamps — sealed under the group key and
+/// `op`'s own stamp.
 fn unparseable(group: &Group, device: &str, op: &Op) -> Envelope {
+    unparseable_as(
+        group,
+        device,
+        op,
+        Some(crate::schema::USER_SCHEMA_VERSION + 1),
+    )
+}
+
+/// [`unparseable`], stamped with `schema` — or with none at all, as a build before the field
+/// sealed — which is what decides whether it holds.
+fn unparseable_as(group: &Group, device: &str, op: &Op, schema: Option<i64>) -> Envelope {
     let mut json = serde_json::to_value(op).unwrap();
     json["kind"] = "merge".into();
+    match schema {
+        Some(s) => json["schema"] = s.into(),
+        None => {
+            json.as_object_mut().unwrap().remove("schema");
+        }
+    }
     let envelope = wire::seal_plaintext(
         group,
         device,
         &serde_json::to_vec(&[json]).unwrap(),
         (op.at.ms, op.at.ctr),
     );
-    assert!(
-        matches!(
-            wire::open_batch(group, &envelope),
-            Err(WireError::Malformed(_))
-        ),
-        "the fixture has to open and then fail to parse"
-    );
+    let opened = wire::open_batch(group, &envelope);
+    if schema > Some(crate::schema::USER_SCHEMA_VERSION) {
+        assert!(
+            matches!(opened, Err(WireError::Newer(_))),
+            "the fixture has to open, fail to parse, and say a newer build sealed it: {opened:?}"
+        );
+    } else {
+        assert!(
+            matches!(opened, Err(WireError::Malformed(_))),
+            "the fixture has to open and then fail to parse: {opened:?}"
+        );
+    }
     envelope
 }
 
@@ -2431,7 +2454,12 @@ fn an_ordinary_page(card: &str) -> Envelope {
 /// and the `+1`, and the folder insert the deck names — sealed apart, so a page can carry the
 /// child and leave the parent to a later one.
 fn a_child_and_the_parent_it_names(card: &str) -> (Envelope, Envelope) {
-    let a = paired("dev-a", 0);
+    a_child_and_its_parent_from("dev-a", card)
+}
+
+/// [`a_child_and_the_parent_it_names`], from `device`.
+fn a_child_and_its_parent_from(device: &str, card: &str) -> (Envelope, Envelope) {
+    let a = paired(device, 0);
     a.execute(
         "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
          VALUES ('Binder', 0, unixepoch(), unixepoch())",
@@ -2450,8 +2478,8 @@ fn a_child_and_the_parent_it_names(card: &str) -> (Envelope, Envelope) {
     assert_eq!(ops.len(), 3, "a folder, a deck and a +1: {ops:?}");
     let group = identity::group(&a).unwrap().unwrap();
     (
-        wire::seal_batch(&group, "dev-a", &ops[1..]).unwrap(),
-        wire::seal_batch(&group, "dev-a", &ops[..1]).unwrap(),
+        wire::seal_batch(&group, device, &ops[1..]).unwrap(),
+        wire::seal_batch(&group, device, &ops[..1]).unwrap(),
     )
 }
 
@@ -2534,13 +2562,20 @@ async fn a_newer_hold_keeps_the_cursor_and_the_ack_on_every_pull() {
     acked.assert_calls(0);
     assert_eq!(copies_of(&b, "n1"), 0);
 
-    // The shape is the spec's, verbatim: the same kind twice keeps `since` and counts the pull.
+    // The shape is the spec's, and the blocks it holds on: the same kind on the same blocks twice
+    // keeps `since` and counts the pull. `noted` is absent while nothing unreadable was met.
     let hold = hold_of(&b).unwrap();
     let mut keys: Vec<&String> = hold.as_object().unwrap().keys().collect();
     keys.sort();
-    assert_eq!(keys, ["kind", "pulls", "since"], "{hold}");
+    assert_eq!(keys, ["blocks", "kind", "pulls", "since"], "{hold}");
     assert_eq!(hold["pulls"], 2, "{hold}");
     assert!(hold["since"].as_i64().unwrap() > 0, "{hold}");
+    let blocked: Vec<&String> = hold["blocks"].as_object().unwrap().keys().collect();
+    assert_eq!(
+        blocked,
+        ["dev-a"],
+        "the newer device is what it holds on: {hold}"
+    );
     assert!(
         error_rows(&b).is_empty(),
         "a hold is the panel's to say: {:?}",
@@ -2740,6 +2775,108 @@ async fn a_malformed_batch_holds_its_senders_later_batches_too() {
     assert_eq!(hold_of(&b), None);
 }
 
+/// **A batch that opens and does not parse holds only when it says a newer build sealed it** (the
+/// final review). One whose ops carry this build's schema — or none, as a build before the field
+/// sealed — is a batch no update of this device will ever read: a bug, a hand-rolled client.
+/// Held, it would pin the relay's floor for good and ask the reader to update a build they already
+/// run. So it goes the way of an altered envelope: counted unreadable, recorded once, stepped
+/// over — and its sender's later batches are not held behind it.
+///
+/// **What makes it red**: holding on every `WireError::Malformed`, whatever its ops say.
+#[tokio::test]
+async fn a_same_version_batch_that_does_not_parse_is_stepped_over_and_recorded_once() {
+    for schema in [Some(crate::schema::USER_SCHEMA_VERSION), None] {
+        let a = paired("dev-a", 0);
+        for card in ["s1", "s2"] {
+            add_copy(&a, card, 1);
+        }
+        let ops = outbox(&a);
+        let group = identity::group(&a).unwrap().unwrap();
+        let broken = unparseable_as(&group, "dev-a", &ops[0], schema);
+        let later = wire::seal_batch(&group, "dev-a", &ops[1..2]).unwrap();
+
+        let server = MockServer::start_async().await;
+        serving(&server, &[&broken, &later], 9);
+        let b = paired("dev-b", 0);
+        set_state(&b, PULL_CURSOR, "3").unwrap();
+        let (unreadable, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+        assert_eq!(unreadable, 1, "{schema:?}: still counted unreadable");
+        assert_eq!(
+            (report.held_newer, report.deferred, report.applied),
+            (0, 0, 1),
+            "{schema:?}: {report:?}"
+        );
+        assert_eq!(
+            quantity_of(&b, "s2"),
+            (1, 1),
+            "{schema:?}: its sender's later batch waited behind it"
+        );
+        assert_eq!(
+            get_state(&b, PULL_CURSOR).as_deref(),
+            Some("9"),
+            "{schema:?}: a batch no update can read held the stream"
+        );
+        assert_eq!(hold_of(&b), None, "{schema:?}");
+        assert_eq!(
+            error_rows(&b),
+            [("pull".to_owned(), "parse".to_owned(), 1)],
+            "{schema:?}: recorded once"
+        );
+    }
+}
+
+/// **A held pull records the batches it cannot read once, not once a pull** (the final review).
+/// The page comes back on every trip for as long as the hold lasts — until the reader updates, for
+/// a newer one — and a note per trip turns one unreadable batch into an `error_log` row counting
+/// trips. Both kinds are here: the newer batch that holds the cursor, and a same-version one
+/// stepped over in the same page and handed back with it.
+///
+/// **What makes it red**: noting every unreadable envelope on every pull.
+#[tokio::test]
+async fn a_held_pull_records_its_unreadable_batches_once() {
+    let a = paired("dev-a", 0);
+    add_copy(&a, "m1", 1);
+    let newer = unparseable(
+        &identity::group(&a).unwrap().unwrap(),
+        "dev-a",
+        &outbox(&a)[0],
+    );
+    let c = paired("dev-c", 0);
+    add_copy(&c, "m2", 1);
+    let broken = unparseable_as(
+        &identity::group(&c).unwrap().unwrap(),
+        "dev-c",
+        &outbox(&c)[0],
+        Some(crate::schema::USER_SCHEMA_VERSION),
+    );
+
+    let server = MockServer::start_async().await;
+    serving(&server, &[&newer, &broken], 9);
+    let b = paired("dev-b", 0);
+    let noted = |conn: &Connection| -> i64 {
+        error_rows(conn)
+            .iter()
+            .filter(|(operation, _, _)| operation == "pull")
+            .map(|(_, _, count)| count)
+            .sum()
+    };
+    for trip in ["first", "second", "third"] {
+        let (unreadable, _) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+        assert_eq!(unreadable, 2, "{trip}");
+        assert_eq!(
+            get_state(&b, PULL_CURSOR),
+            None,
+            "{trip}: the fixture holds"
+        );
+        assert_eq!(
+            noted(&b),
+            2,
+            "{trip}: a held pull noted the same batches again: {:?}",
+            error_rows(&b)
+        );
+    }
+}
+
 /// **A waiting hold is released once it has been seen on three pulls spanning ten minutes — and
 /// not before either.** A parent its sender owed arrives on that sender's next trip, seconds
 /// later; one deleted on a third device never arrives, and holding on it for ever would pin the
@@ -2815,6 +2952,73 @@ async fn a_waiting_hold_releases_on_the_third_pull_after_ten_minutes() {
     );
     assert_eq!(error_rows(&late)[0].2, 1, "the release was recorded twice");
     assert_eq!(hold_of(&late), None);
+}
+
+/// ⚠ **The waiting bound belongs to the blocks it has watched, and a block it has never seen
+/// starts it over** (the final review's I1). A wait nothing will end — a child whose parent a
+/// third device deleted — has run its three pulls and ten minutes. Then a device that has just
+/// paired pushes a child ahead of the baseline carrying its parent, which lands a trip later.
+/// Counted on the old hold, the pull that meets the new child would release both, drop the new
+/// device's deck and apply its `+1` — and the parent arriving seconds later would find its child
+/// gone below the watermark.
+///
+/// A block that resolves and leaves the set is not new, so the pull after it keeps the restarted
+/// `since` and counts on.
+///
+/// **What makes it red**: a hold that keeps `since` and counts the pull by kind alone.
+#[tokio::test]
+async fn a_new_waiting_block_starts_the_bound_over() {
+    let (stale, _never_sent) = a_child_and_its_parent_from("dev-a", "w1");
+    let (fresh, its_parent) = a_child_and_its_parent_from("dev-x", "x1");
+    let server = MockServer::start_async().await;
+    let base = server.base_url();
+    let b = paired("dev-b", 0);
+
+    let first = serving(&server, &[&stale], 9);
+    for _ in 0..3 {
+        pull(&b, &base, "access-1").await.unwrap();
+    }
+    rewind_hold(&b, 601);
+    assert_eq!(
+        hold_of(&b).unwrap()["pulls"],
+        3,
+        "the fixture: the next pull would release"
+    );
+
+    // dev-x pairs, and its first trip pushes a child ahead of its parent.
+    first.delete_async().await;
+    let second = serving(&server, &[&stale, &fresh], 10);
+    let (_, met) = pull(&b, &base, "access-1").await.unwrap();
+    assert_eq!(
+        (met.held_waiting, met.dropped, met.applied),
+        (4, 0, 0),
+        "a block the hold had never seen was released on the old one's bound: {met:?}"
+    );
+    assert_eq!(get_state(&b, PULL_CURSOR), None);
+    let restarted = hold_of(&b).unwrap();
+    assert_eq!(restarted["pulls"], 1, "{restarted}");
+
+    // The parent lands on the next trip, and the child with it; dev-a's block still waits.
+    second.delete_async().await;
+    serving(&server, &[&stale, &fresh, &its_parent], 11);
+    let (_, landed) = pull(&b, &base, "access-1").await.unwrap();
+    assert_eq!(
+        (landed.applied, landed.held_waiting, landed.dropped),
+        (3, 2, 0),
+        "{landed:?}"
+    );
+    assert_eq!(
+        quantity_of(&b, "x1"),
+        (1, 1),
+        "the new device's child was lost"
+    );
+    assert_eq!(quantity_of(&b, "w1"), (0, 0));
+    let kept = hold_of(&b).unwrap();
+    assert_eq!(
+        (&kept["since"], &kept["pulls"]),
+        (&restarted["since"], &serde_json::json!(2)),
+        "a block that resolved and left the set started the bound over: {kept}"
+    );
 }
 
 /// **A release that uncovers a newer op holds it as newer rather than advancing past it.**
@@ -2977,13 +3181,11 @@ async fn a_newer_hold_is_never_released_by_the_waiting_bound() {
     serving(&server, &[&a_newer_devices_page("n1")], 9);
     let b = paired("dev-b", 0);
     pull(&b, &server.base_url(), "access-1").await.unwrap();
-    let since = hold_of(&b).unwrap()["since"].as_i64().unwrap() - 10_000;
-    set_state(
-        &b,
-        PULL_HOLD,
-        &serde_json::json!({ "kind": "newer", "since": since, "pulls": 50 }).to_string(),
-    )
-    .unwrap();
+    let mut hold = hold_of(&b).unwrap();
+    let since = hold["since"].as_i64().unwrap() - 10_000;
+    hold["since"] = since.into();
+    hold["pulls"] = 50.into();
+    set_state(&b, PULL_HOLD, &hold.to_string()).unwrap();
 
     let (_, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
     assert_eq!(
@@ -2996,11 +3198,42 @@ async fn a_newer_hold_is_never_released_by_the_waiting_bound() {
         None,
         "a newer hold was released"
     );
-    assert_eq!(
-        hold_of(&b).unwrap(),
-        serde_json::json!({ "kind": "newer", "since": since, "pulls": 51 })
-    );
+    hold["pulls"] = 51.into();
+    assert_eq!(hold_of(&b).unwrap(), hold);
     assert!(error_rows(&b).is_empty(), "{:?}", error_rows(&b));
+}
+
+/// **A hold a build before the blocks were stored wrote still reads, as a hold on blocks nobody
+/// knows** — `{"kind","since","pulls"}` and nothing else. The panel reads its kind as it always
+/// did, and the next pull starts the count over on the blocks it finds, rather than letting a
+/// count about some earlier page release this one.
+///
+/// **What makes it red**: a row without `blocks` failing to parse (the panel stops saying
+/// *update*), or read as a hold on no blocks — which every block set is a subset of — keeping its
+/// old count.
+#[tokio::test]
+async fn a_hold_written_before_its_blocks_were_stored_reads_and_starts_over() {
+    let (child, _never_sent) = a_child_and_the_parent_it_names("w1");
+    let server = MockServer::start_async().await;
+    serving(&server, &[&child], 9);
+    let b = paired("dev-b", 0);
+    set_state(&b, PULL_HOLD, r#"{"kind":"waiting","since":1,"pulls":7}"#).unwrap();
+    assert_eq!(
+        read_hold(&b).map(|h| h.kind).as_deref(),
+        Some("waiting"),
+        "an old row stopped reading"
+    );
+
+    let (_, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(
+        (report.held_waiting, report.dropped),
+        (2, 0),
+        "an old count released a page it never saw: {report:?}"
+    );
+    let hold = hold_of(&b).unwrap();
+    assert_eq!(hold["pulls"], 1, "{hold}");
+    assert!(hold["since"].as_i64().unwrap() > 1, "{hold}");
+    assert!(hold["blocks"]["dev-a"].is_array(), "{hold}");
 }
 
 /// **An ordinary page advances and clears whatever hold was left** — a newer one this device's

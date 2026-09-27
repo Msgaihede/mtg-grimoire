@@ -396,7 +396,7 @@ cannot* now.)*
 - **The pull gate holds for every laggard on v52 or later**, whose held page is re-delivered and
   applied before an advancing pull converts; a held pull neither converts nor sets
   `token_picks_ready`. For a laggard that pulled at v51 during the window, the reversion above
-  stands. <!-- verify-B -->
+  stands.
 - **The two generic gaps are closed.** The child of a parent deleted here or in the page is moot
   where the delete cascades — so a deck deleted during the window no longer costs a stream its
   page — and written without the parent where the key is `SET NULL`; `apply::find_row`'s uid rename

@@ -1084,8 +1084,9 @@ pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<
     // **Three marks, because the update hook hears none of what a departure writes.**
     // `identity::leave_group` empties `sync_devices`, which is `WITHOUT ROWID`, and `sync_group`
     // with a bare `DELETE` on a table no trigger and no foreign key touches — so SQLite truncates it
-    // and visits no row. `entitlement::clear` then empties the grant's `sync_state` rows,
-    // `WITHOUT ROWID` again. See `crate::changes`' module doc for both blind spots.
+    // and visits no row. It also deletes its own `sync_state` rows — the superseded keys and the
+    // held pull — and `entitlement::clear` then empties the grant's, `WITHOUT ROWID` again. See
+    // `crate::changes`' module doc for both blind spots.
     //
     // **Marked whatever the answer, because `Err` does not mean nothing was written**: the
     // departure commits before the clear runs, so a failed clear answers an error over a group

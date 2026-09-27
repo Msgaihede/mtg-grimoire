@@ -1096,8 +1096,9 @@ mod tests {
 
         // **And the token rows are `deck` rows: the kinds stay nine.** `deck_audit` syncs, so a
         // tenth word in its CHECK would be refused by a paired device on an older build, and its
-        // applier would defer the op — which the client today drops, with the rest of that
-        // device's page (`sync.md`, *Deferred ops are dropped, not held*).
+        // applier would defer the op — which a v51 client drops, with the rest of that device's
+        // page, and a v52 or later client holds until it upgrades (`sync.md`, *Held while it can
+        // resolve, skipped when it cannot*).
         let token_kinds: Vec<String> = conn
             .prepare(
                 "SELECT DISTINCT kind FROM deck_audit
