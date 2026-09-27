@@ -576,9 +576,11 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 ///
 /// **54 (2026-09-27, the folder-deletes spec §3.1) is `sync_gone`, one row per deleted row of a
 /// table other rows are filed under.** Per-device and not synced, written by
-/// `sync_engine::capture`'s tombstone trigger and by nothing else — including behind the apply
-/// guard, which is the point: a delete a peer made, and every cascade it set off, left no trace
-/// here before it, so a later change naming that parent read as merely early and was dropped. The
+/// `sync_engine::capture`'s tombstone trigger — including behind the apply guard, which is the
+/// point: a delete a peer made, and every cascade it set off, left no trace here before it, so a
+/// later change naming that parent read as merely early and was dropped — and by
+/// `sync_engine::apply`'s `tombstone`, for a parent the applier deletes without ever having held
+/// it, which fires no trigger. The
 /// rung backfills it from this device's own `del` ops; a delete applied from a peer before the
 /// upgrade recorded nothing anywhere and is not recovered. **Written as 53 and renumbered at the
 /// merge**: the per-list piles above landed on `main` first, and a shipped number is spent.

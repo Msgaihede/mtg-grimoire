@@ -1740,12 +1740,15 @@ record, with every measurement, is
   plus one, and only each group's last answer is classified. A single retry held a folder moved
   into a new folder made under a deleted parent, met before that folder was decided, and the
   release dropped it.
-  **Every delete `apply` issues that would clear rows out of a folder waits for the page's retry**
-  too — a folder's or a deck's whose doomed set (the copies and wishes filed in the folders it
-  would take) is non-empty, collision or not, answers `Why::DecidedOnRetry` on the first attempt,
-  never classified — **then re-homes** what is still filed there at the root through
-  `collection_folders::refile_entry` / `wishlist_folders::refile_wish`, the survivor of a fold
-  keeping the lower `sync_uid`, and deletes.
+  **Every delete `apply` issues that would clear rows out of a folder waits too, and like a gone
+  decision is taken only on a `Decide` pass** — a folder's or a deck's whose doomed set (the
+  copies and wishes filed in the folders it would take) is non-empty, collision or not, answers
+  `Why::DecidedOnRetry` on the first attempt and on every `Retry` pass, never classified, and a
+  pass that finds the set empty deletes at once — **then re-homes** what is still filed there at
+  the root through `collection_folders::refile_entry` / `wishlist_folders::refile_wish`, the
+  survivor of a fold keeping the lower `sync_uid`, and deletes. Deciding on the first retry pass
+  lost a copy the sender dragged out of the binder into a folder the page makes late: that folder,
+  and the move, land only on a retry pass, and the delete re-homed the copy onto a root twin first.
   Waiting only on a collision double-counted: a new root copy and the delete of a binder whose copy
   folds into it, in one page, collide with nothing until the new copy lands, so the re-homed copy
   took the free grain and the new copy's insert added its count on top. Two `find_row` rules go

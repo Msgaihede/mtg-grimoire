@@ -3258,8 +3258,10 @@ fn a_copy_filed_into_a_binder_the_same_page_brings_back_stays_in_it() {
 /// the rename, is older than `Z`'s creation), so on the one retry there was, `X` asked after `Z`
 /// before `Z` had been decided: unknown, and not yet gone, so `X` was held — and `Z` behind it —
 /// until the release dropped `X`'s ops and `b` kept `X`, where `a`'s cascade had taken it. The
-/// retry is a fixed point now: `Z` is tombstoned as moot on the first retry pass, and the second
-/// finds `X` under a parent that is gone and deletes it as `a`'s cascade did.
+/// retry is a fixed point now. Retry pass 1 withholds `Z`'s decision and lands nothing, so pass 2
+/// is the first `Decide` pass: it meets `X` while `Z` is still unknown, then tombstones `Z` as
+/// moot. Pass 3 finds `X` under a parent that is gone and withholds that decision too, and pass
+/// 4, the second `Decide` pass, deletes `X` as `a`'s cascade did.
 ///
 /// **What makes it red**: a single retry pass.
 #[test]
@@ -3620,6 +3622,135 @@ fn a_copy_dragged_onto_a_lower_root_twin_out_of_a_binder_moved_under_a_deleted_o
 #[test]
 fn a_copy_dragged_onto_a_higher_root_twin_out_of_a_binder_moved_under_a_deleted_one_lands_once() {
     a_copy_dragged_out_of_a_binder_moved_under_a_deleted_one_lands_once(false);
+}
+
+/// **A clearing delete waits for every pass on which something still lands, not only the first**
+/// — so a copy the sender dragged out of the binder it then deleted reaches the folder it went
+/// to, even when that folder only lands on a retry pass. Both devices hold binder `B` with a copy
+/// `c` in it and a root twin `t`, one printing. `a` makes `N`, then `Outer`, moves `N` into
+/// `Outer`, drags `c` from `B` into `N` and deletes `B`, which by then holds nothing. On `b` the
+/// page sorts `N`, `Outer`, `B`, `c`: `N` and `c`'s move fail the first attempt, each on a parent
+/// that lands later, and `B` waits. On the first retry pass `N` lands, and `B` was decided there
+/// before `c`'s move: its re-homing folded `c` onto `t` at the root. Where `c`'s uid sorts lower
+/// the survivor wore it and `c`'s move carried the merged row into `N` (`b`: `N` holding both,
+/// the root empty; `a`: `N` holding `c`, `t` at the root); where `t`'s does, the move found no row
+/// and was dropped with an `error_log` row. Waiting through every `Retry` pass, `c`'s move lands
+/// first and `B` is deleted empty.
+///
+/// The two uids are forced so both orders are driven rather than left to a coin toss.
+///
+/// **What makes it red**: the delete arm deciding on any retry pass — its wait on the first
+/// attempt alone.
+fn a_copy_dragged_into_a_folder_the_page_makes_late_out_of_a_deleted_binder_lands_there(
+    root_lower: bool,
+) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let b_on_a = binder(&a, "B", None);
+    file_copies(&a, Some(b_on_a), 1);
+    file_copies(&a, None, 1);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+    let (ut, uc) = if root_lower {
+        (
+            "0000000000000000000000000000000a",
+            "0000000000000000000000000000000b",
+        )
+    } else {
+        (
+            "0000000000000000000000000000000b",
+            "0000000000000000000000000000000a",
+        )
+    };
+    for d in [&a, &b] {
+        capture::suppressed(d, || {
+            d.execute(
+                "UPDATE collection_entries SET sync_uid = ?1 WHERE folder_id IS NULL",
+                [ut],
+            )
+            .unwrap();
+            d.execute(
+                "UPDATE collection_entries SET sync_uid = ?1 WHERE folder_id IS NOT NULL",
+                [uc],
+            )
+            .unwrap();
+        });
+    }
+    let b_uid: String = a
+        .query_row(
+            "SELECT sync_uid FROM collection_folders WHERE id = ?1",
+            [b_on_a],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    let n = binder(&a, "N", None);
+    let outer = binder(&a, "Outer", None);
+    crate::collection_folders::move_folder(&a, n, Some(outer)).unwrap();
+    let c_on_a: i64 = a
+        .query_row(
+            "SELECT id FROM collection_entries WHERE sync_uid = ?1",
+            [uc],
+            |r| r.get(0),
+        )
+        .unwrap();
+    crate::collection_folders::set_entry_folder(&a, c_on_a, Some(n)).unwrap();
+    crate::collection_folders::delete_folder(&a, b_on_a).unwrap();
+    let page = since(&a, &mut ma);
+    assert!(
+        page.iter()
+            .any(|op| op.uid == b_uid && op.kind == Kind::Del)
+            && page
+                .iter()
+                .any(|op| op.uid == uc && op.parents.contains_key("folder"))
+            && !page.iter().any(|op| op.uid == ut),
+        "the premise: B deleted empty, c moved, t untouched: {page:?}"
+    );
+
+    let rb = apply(&b, &page).unwrap();
+    assert_eq!(
+        unwritten(rb),
+        (0, 0),
+        "{rb:?}, b holds (rows, copies) {:?}",
+        qty(&b)
+    );
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+    for (who, d) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(d), (2, 2), "{who} does not hold two rows of one copy");
+        let filed_in: Option<String> = d
+            .query_row(
+                "SELECT f.name FROM collection_entries e
+                   LEFT JOIN collection_folders f ON f.id = e.folder_id
+                  WHERE e.sync_uid = ?1",
+                [uc],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(filed_in.as_deref(), Some("N"), "{who}: c is not in N");
+        assert_eq!(chain_of(d, "N"), ["N", "Outer"], "{who}");
+        let t_at_root: bool = d
+            .query_row(
+                "SELECT folder_id IS NULL FROM collection_entries WHERE sync_uid = ?1",
+                [ut],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(t_at_root, "{who}: t left the root");
+        assert_eq!(folders(d), 2, "{who} kept B or lost N or Outer");
+    }
+    assert_eq!(uids_of_copies(&a), uids_of_copies(&b));
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
+}
+
+#[test]
+fn a_copy_dragged_into_a_late_folder_out_of_a_deleted_binder_over_a_lower_root_twin_lands_there() {
+    a_copy_dragged_into_a_folder_the_page_makes_late_out_of_a_deleted_binder_lands_there(true);
+}
+
+#[test]
+fn a_copy_dragged_into_a_late_folder_out_of_a_deleted_binder_over_a_higher_root_twin_lands_there() {
+    a_copy_dragged_into_a_folder_the_page_makes_late_out_of_a_deleted_binder_lands_there(false);
 }
 
 /// **A newer device's child of a deleted parent is moot, never a permanent newer hold** (review

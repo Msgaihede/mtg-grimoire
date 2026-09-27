@@ -82,9 +82,16 @@ deleted survives on both devices, with one count and one uid.
 
 **Non-goals.** No wire change and no relay deploy. No tombstone pruning (§5 says why it does not
 need one). A delete applied from a peer **before** this build is not recovered — nothing recorded
-it. Add-wins (§7.3) is unchanged: a concurrent edit still resurrects a deleted row. A v52 peer
-keeps both bugs until it upgrades. The page order (parents first) is unchanged — §3.4 says why the
-obvious alternative is wrong.
+it. Add-wins (§7.3) is unchanged: a concurrent edit still resurrects a deleted row. A peer on an
+older build keeps both bugs until it upgrades — and, by the general design rather than anything
+this spec adds, more than both *(amended at the final review, for the builds that exist: `main`'s
+v53, which gave each deck list its own piles, and older)*. Every op this build seals is stamped
+with user schema 54 (`Op::schema`), so a v53 or v52 peer holds any group from it that it cannot
+write — a child of a parent it never recorded as gone included — as **newer**, with no bound,
+until it upgrades, and that sender's later ops with it, pinning the relay's log meanwhile. A v51
+peer holds nothing: it steps past what it cannot write and loses it with the sender's later ops
+in that page, which is why every device in a group is updated before it syncs across v52. The
+page order (parents first) is unchanged — §3.4 says why the obvious alternative is wrong.
 
 ## 3. Design
 
@@ -100,7 +107,9 @@ CREATE TABLE sync_gone (
 ) WITHOUT ROWID;
 ```
 
-- **Written by a trigger and by nothing else.** `capture::install` adds, for every table a capture
+- **Written by a trigger** — and by one hand-written insert besides, `apply::tombstone`, for a row
+  the applier deletes without ever having held it (the fourth bullet below; this read "and by
+  nothing else" as approved). `capture::install` adds, for every table a capture
   spec names as a parent (`apply::is_a_parent`'s question, read off `capture::TABLES` — today
   `deck_folders`, `decks`, `deck_categories`, `deck_labels`, `deck_notes`, `collection_folders`,
   `wishlist_folders`), an `AFTER DELETE` trigger:
@@ -141,11 +150,13 @@ whatever either device files into X afterwards is written at the root (a deck, a
 unchanged: the row goes only where the group's placement under the deleted parent is the one that
 stands. The delete itself goes through §3.3.
 
-### 3.3 A delete that would clear rows waits for the second attempt, then re-homes them
+### 3.3 A delete that would clear rows waits, then re-homes them
 
-*(As approved this section waited only on a collision; the amendment in the bullet "Every delete
-that would clear rows waits" below widened it to any non-empty doomed set. Steps 1–2 stand; step 3
-and the first bullet are the record of the narrower rule.)*
+*(As approved this section waited only on a collision, and only for the second attempt; the
+amendment in the bullet "Every delete that would clear rows waits" below widened it to any
+non-empty doomed set, and the final review's, the last bullet of the section, moved the decision
+from the second attempt to a deciding pass. Steps 1–2 stand; step 3 and the first two bullets are
+the record of the narrower rule.)*
 
 Every `DELETE` `apply` issues — `write_group`'s delete arm and the moot delete — first asks
 **whether it would clear rows out of a folder** (as approved: *whether it would drop two rows onto
@@ -221,6 +232,18 @@ from the same delete.
   page — and a decision taken before it deleted a folder the sender keeps. Withheld decisions are
   taken on the next pass that lands nothing, and the loop continues; the cap is twice the group count
   plus one.
+- **A clearing delete, like a gone decision, is taken only on a deciding pass** *(amended at the
+  final review)*. The delete arm answers `DecidedOnRetry` on the first attempt **and on every
+  `Retry` pass** while its doomed set is non-empty; a pass that finds the set empty deletes at once,
+  and a deciding pass re-homes what is left and deletes. Waiting for the second attempt alone lost
+  a copy the sender dragged out of the binder into a folder the page itself makes: `a` makes `N`,
+  then `Outer`, moves `N` into `Outer`, drags `c` from `B` into `N` and deletes `B`, so the peer
+  meets `N`, `Outer`, `B` and `c`'s move, and `N` lands — and with it the move — only on the first
+  retry pass. `B`, decided there between the two, re-homed `c` onto its root twin: where `c`'s uid
+  sorted lower the move carried both copies into `N`, and where the twin's did the move found no
+  row and was dropped with an `error_log` row
+  (`a_copy_dragged_into_a_folder_the_page_makes_late_out_of_a_deleted_binder_lands_there`, both uid
+  orders, red first). Every clearing-delete test kept its outcome.
 
 ### 3.4 Why not "apply deletes last"
 
@@ -248,6 +271,20 @@ waits.
   last-writer-wins. Counts and identity converge; a field both rows carried may not.
 - **A sparse edit under the losing uid, on a later page, is still skipped** — `find_row`'s
   existing behaviour after any grain merge, not new here.
+- **A copy the peer *dragged* into the binder the sender deletes, where the root holds its twin,
+  ends as one row on the peer and two on the sender** *(parked at the final review; read off the
+  code and unmeasured)*. On the peer the sender's delete re-homes the copy and folds it onto the
+  twin. On the sender the drag arrives as a sparse move naming the binder, which is gone: the
+  `SET NULL` arm writes it without the folder, `update_row` fails `idx_collection_grain` against
+  the twin, and the move is `Unbuildable` — dropped, with an `error_log` row — so the copy stays
+  where it was before the drag. Totals converge; rows and uids do not. **Not introduced here**: a
+  move applied from a peer onto an occupied grain has never folded, and this is only newly
+  reachable, where the old delete arm stalled. (A copy the peer *added* to the binder converges:
+  its put grain-matches the twin — `a_copy_filed_into_a_binder_the_peer_deletes_meets_the_roots_copy_as_one_row`.)
+  **The real fix** is a fold where the `SET NULL`
+  arm's update would collide — through `collection_folders::refile_entry` /
+  `wishlist_folders::refile_wish`, the survivor keeping the lower uid, as §3.3's re-homing does.
+  Left unbuilt, and no test asserts the divergence.
 
 ### 3.6 For whatever files into a folder next
 

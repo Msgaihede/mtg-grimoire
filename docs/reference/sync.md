@@ -1682,8 +1682,9 @@ receiver ignores the key, because nothing on the wire is `deny_unknown_fields`
 
 **`apply` classifies every group it could not write**, from why — `UnknownTable`,
 `UnknownParent { table, uid }`, or `Unbuildable` carrying the constraint's own words, which were
-once discarded; a fourth, `DecidedOnRetry`, is only ever a first attempt's and never reaches here
-(the table's notes) — and from who sealed it (`apply.rs`'s `classify`, asked in this order, of the
+once discarded; a fourth, `DecidedOnRetry`, is what the first attempt and every `Retry` pass answer
+for a decision withheld until a deciding pass, and never reaches here (the table's notes) — and from
+who sealed it (`apply.rs`'s `classify`, asked in this order, of the
 last answer each group gave):
 
 | The group | Class | Holds its device? | Recorded? |
@@ -1798,8 +1799,9 @@ last answer each group gave):
   rule is never restated beside the key it describes
   (`a_child_of_a_folder_this_device_deleted_lands_at_the_root_on_both`).
 - **Every decision resting on `gone` is taken only on a retry pass that follows one on which
-  nothing else landed** — both arms, the moot one and the `SET NULL` one. The first attempt, and
-  every retry pass after a pass that landed something, answers `Why::DecidedOnRetry` and withholds
+  nothing else landed** — both arms, the moot one and the `SET NULL` one. The first attempt and
+  every `Retry` pass — the first retry pass, whatever the first attempt landed, and each one after
+  a pass on which something landed or was decided — answer `Why::DecidedOnRetry` and withhold
   the decision (Task C's fix rounds, 2026-09-27: the branch decided both arms on the first attempt,
   then on any retry pass, before this). `gone` answers for the page as it stands, and a group of
   the same page can still bring the parent back: an edit made on the sender after this device's
@@ -1817,7 +1819,7 @@ last answer each group gave):
   moot and lost for good (`a_folder_moved_under_a_parent_resurrected_on_a_retry_pass_follows_it`,
   and `a_copy_filed_into_a_binder_resurrected_on_a_later_retry_pass_stays_in_it` for the
   `SET NULL` arm two passes in). A pass on which nothing landed is one after which no group of the
-  page can land without a gone-based decision, so no resurrection is still to come; `resolve_parent`
+  page can land without a withheld decision, so no resurrection is still to come; `resolve_parent`
   is asked again first on every pass, finds a resurrected parent, and the group is written like any
   other — only a parent still unknown and still gone reaches either arm. **The cost: every group
   naming a gone parent takes at least two retry passes**, one that withholds and one that decides.
@@ -1897,15 +1899,17 @@ deciding pass — now finds first what it would clear (`sync_engine/apply/rehome
    delete's `SET NULL` would move onto the root's grain.
 
 - **A first attempt with anything doomed writes nothing** and answers `Why::DecidedOnRetry` — the
-  reason every decision resting on `gone` shares (the table's notes, above). The group joins
-  `run_groups`' failed list and is tried again on the retry passes, after every other group in the
-  page has had its first attempt, by which time the sender's own writes to those rows — later in
-  rank, sealed before its delete — have landed. Any retry pass decides a clearing delete; a
-  gone-based decision waits for a deciding pass, and
-  answers `DecidedOnRetry` on every pass before it. The reason is **never classified**, short of
-  the loop's cap: a withheld group is on every pass until it is decided, the loop ends only on a
-  pass that withheld nothing, and only each group's last answer is kept. A delete that dooms
-  nothing — any other table, or an empty folder — goes on the first attempt, in stamp order.
+  reason every decision resting on `gone` shares (the table's notes, above) — **and so does every
+  `Retry` pass on which anything is still doomed.** The group joins `run_groups`' failed list and
+  is tried again on the retry passes, after every other group in the page has had its first
+  attempt, by which time the sender's own writes to those rows — later in rank, sealed before its
+  delete — have landed, or land on a later pass. **A clearing delete, like a gone-based decision,
+  is taken only on a deciding pass**: a pass that finds nothing doomed any more deletes at once,
+  and otherwise the delete answers `DecidedOnRetry` on every pass until one follows a pass on which
+  nothing landed. The reason is **never classified**, short of the loop's cap: a withheld group is
+  on every pass until it is decided, the loop ends only on a pass that withheld nothing, and only
+  each group's last answer is kept. A delete that dooms nothing — any other table, or an empty
+  folder — goes on the first attempt, in stamp order.
 - **The retry re-homes, then deletes.** Each doomed row still in a doomed folder, in `id`
   order, is filed at the root through the crate's own merge — `collection_folders::refile_entry`
   and `wishlist_folders::refile_wish` with no folder — which folds it onto a twin (counters summed,
@@ -1973,6 +1977,18 @@ deciding pass — now finds first what it would clear (`sync_engine/apply/rehome
   `+n` for the twin would then count it a second time. Measured by mutation on 2026-09-27, against
   the design before the wait was widened: merging on the first attempt turned five of the branch's
   new tests red, the binder's above among them.
+- **Why a deciding pass and not the first retry.** A copy the sender dragged out of the binder
+  into a folder the page itself makes is moved only once that folder lands, and the folder can
+  land only on a retry pass: `a` makes `N`, then `Outer`, moves `N` into `Outer`, drags `c` from
+  `B` into `N` and deletes `B`, so the peer meets `N`, `Outer`, `B` and `c`'s move in that order,
+  and `N` and the move each fail the first attempt on a parent that lands later. Decided on the
+  first retry pass — as it was until the final review — `B` came round after `N` had landed and
+  before `c`'s move, and re-homed `c` onto its root twin `t`. Where `c`'s uid sorted lower the
+  survivor wore it and the move carried both copies into `N`, while the sender kept `c` in `N` and
+  `t` at the root; where `t`'s did, the move found no row and was dropped with an `error_log` row
+  (`a_copy_dragged_into_a_folder_the_page_makes_late_out_of_a_deleted_binder_lands_there`, both uid
+  orders forced, red first against the first-attempt-only wait). Waiting through every `Retry`
+  pass, the move lands on the first retry pass and `B` is deleted empty on the next.
 - **Not "apply deletes last"**, which would have fixed the ordering in one line and is wrong: a row
   deleted and re-added at the same grain between two pulls — a card stepped to 0 and added again, a
   pile deleted and re-made under its old name — would have its put land first, grain-match the row
@@ -3239,6 +3255,20 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 - **A sparse edit under the losing uid, on a later page, is still skipped** (the same design §3.5,
   read off the code and unmeasured) — `find_row`'s existing behaviour after any grain merge, and
   not new here.
+- ⚠️ **A copy the peer dragged into a binder the sender deletes, where the root holds its twin,
+  ends as one row on the peer and two on the sender** (the same design §3.5, parked at the final
+  review, 2026-09-27, read off the code and unmeasured). On the peer the sender's delete re-homes
+  the dragged copy and folds it onto the twin. On the sender the drag arrives as a sparse move
+  naming the binder, which is gone, so the `SET NULL` arm writes it without the folder — and
+  `update_row` fails `idx_collection_grain` against the twin at the root, so the move is
+  `Unbuildable`, dropped with an `error_log` row, and the copy stays where it was before the drag.
+  Totals converge; rows and uids do not. **Older than this work**: a move applied from a peer onto
+  an occupied grain has never folded, and this is only newly *reachable*, where the old delete arm
+  stalled on it. A copy the peer *added* to the binder is not this case — its put grain-matches
+  the twin (`a_copy_filed_into_a_binder_the_peer_deletes_meets_the_roots_copy_as_one_row`). The
+  fix is a fold, not a refusal: where the `SET NULL` arm's update would collide, fold
+  through `collection_folders::refile_entry` / `wishlist_folders::refile_wish`, the survivor
+  keeping the lower uid, as the delete arm's re-homing does. No test pins it either way.
 - ⚠️ **A page carrying a `del X`, a third device's resurrecting edit of X and a new put Y on X's
   grain renames X to Y** (parked at Task B's scoped re-review, 2026-09-27, read off the code and
   unmeasured). The incoming-uid rule above is keyed on the page's delete set: X's own group folds
