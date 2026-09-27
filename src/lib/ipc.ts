@@ -6501,7 +6501,9 @@ export interface RelayStatus {
    * `schema` this device's own `USER_SCHEMA_VERSION` cannot clear, so nothing releases it but an
    * update, however many pulls or how much time pass. `"waiting"` is a peer's own ordinary
    * ordering — an op arrived before the parent it names, which a later pull carrying that parent
-   * clears on its own — and `null` is the ordinary case, where nothing is held at all.
+   * clears on its own, or is skipped after the bound (three pulls and ten minutes on the same
+   * blocks) when that parent never comes — and `null` is the ordinary case, where nothing is held
+   * at all, and always the answer on a device in no group.
    */
   pullHeld: "newer" | "waiting" | null;
 }
@@ -6591,13 +6593,15 @@ export interface RelayOutcome {
    * Ops in groups held because a newer schema wrote them — this device cannot parse them yet.
    * Counted separately from the rest of {@link RelayOutcome.deferred} because it has no bound:
    * nothing releases it but updating this device, where the waiting half of `deferred` clears on
-   * its own once the parent it is missing arrives on a later pull.
+   * its own once the parent it is missing arrives on a later pull, or is skipped after the bound.
    */
   heldNewer: number;
   /**
-   * Ops consumed because they could never apply — moot children and the like, each group
-   * recorded once in the error log rather than silently discarded. Distinct from `unreadable`
-   * (an envelope that failed to open) and from a hold (which might still clear).
+   * Ops consumed because they could never apply — a table this build does not sync, a row it
+   * cannot build, or a released wait — each group recorded once in the error log rather than
+   * silently discarded. Distinct from `unreadable` (an envelope that failed to open), from a
+   * hold (which might still clear), and from a moot child of a parent deleted here, which is
+   * consumed too but neither counted here nor recorded: the delete took it.
    */
   dropped: number;
   /**

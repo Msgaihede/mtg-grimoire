@@ -470,9 +470,10 @@ export function liveNote(state: LiveState): string | null {
  * cannot parse yet, and no amount of waiting clears that — only an update does, which is why its
  * sentence says so rather than "later". The **waiting** clause is `deferred - heldNewer`, the
  * ordinary case this used to be the whole of: an op arrived before the parent it names, which a
- * later pull carrying that parent clears on its own. `dropped` is the third and says the opposite
- * of both — not "still to come" but "will never come", so it points at the log rather than at a
- * later sync the way the old, single sentence used to promise every deferred row.
+ * later pull carrying that parent clears on its own, or the bound skips when it never comes — a
+ * skip `dropped` then counts on the trip that makes it. `dropped` is the third and says the
+ * opposite of both — not "still to come" but "will never come", so it points at the log rather
+ * than at a later sync the way the old, single sentence used to promise every deferred row.
  *
  * **The baseline clause is the one that has to explain a number rather than report it** (baseline
  * spec §13). A first exchange moves every row this device holds — 1 069 on the measured pair,
@@ -675,11 +676,13 @@ const RECLAIM_WARNING =
 /**
  * The one line drawn from `RelayStatus.pullHeld === "newer"`, and the reason it is a paragraph
  * beside the status line rather than a `PanelAlert`: this is not a failure this window suffered,
- * it is news about a peer, and the fix is a press this reader makes on a *different* device.
+ * it is news about a peer — and the fix is not a retry here but an update of *this* device, which
+ * is what the sentence asks for.
  *
  * **Persistent because the hold itself is.** A peer running a newer build stamped an op with a
  * schema this device's own build cannot clear — "newer" has no bound, unlike an ordinary peer's
- * op merely waiting on a parent that has not arrived yet, which a later pull clears on its own.
+ * op merely waiting on a parent that has not arrived yet, which a later pull clears on its own or
+ * the bound skips.
  * So this sentence has to survive however many pulls or how much time pass; only updating this
  * device does. `"waiting"` and `null` say nothing here on purpose: a wait that self-heals is not
  * this device's problem to fix, and the ordinary case is silence.

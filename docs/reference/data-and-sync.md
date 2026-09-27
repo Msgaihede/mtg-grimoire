@@ -1121,8 +1121,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     or a delete made on A went the same way. So `deck_tokens::convert_legacy_picks_at_launch` runs
     it only on a device in no sync group or once the `sync_state` key `token_picks_ready` is set,
     and `sync_engine::client::pull` sets that key and converts, captured, behind every pull that
-    read everything and advanced its cursor (never one held at an epoch, nor since 2026-09-27 one
-    held on a newer device's page). By then B has applied A's entries and A's clear — ⚠️ unless B <!-- verify-B -->
+    read everything and advanced its cursor — never one held, whatever held it: at an epoch, and
+    since 2026-09-27 on a newer device's page or on a parent a later page may still bring. By then
+    B has applied A's entries and A's clear — ⚠️ unless B
     *pulled* at v51 during the window, whose v51 client dropped them rather than holding them, so
     that B reverts A the same way; the delivery holds ship in v52 and cannot fetch that page back,
     though they keep the gate's promise for every laggard on v52 or later — so it has no pick left

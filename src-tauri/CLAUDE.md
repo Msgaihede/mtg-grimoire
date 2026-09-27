@@ -218,8 +218,8 @@ both plus the frontend.
   `convert_legacy_picks_at_launch` converts at launch only on a device in no group or once the
   `sync_state` key `token_picks_ready` is set, and `convert_legacy_picks_after_pull`, run by
   `sync_engine::client::pull` behind every pull that read everything **and advanced its cursor**,
-  sets it and converts — a pull held on a newer device's page has not heard everything, which is
-  the gate's own reason. <!-- verify-B -->
+  sets it and converts — a held pull, at an epoch, on a newer device's page or on a parent a later
+  page may still bring, has not heard everything, which is the gate's own reason.
   A laggard converting at launch — before it had applied the entries and the clear an earlier
   climber announced, but with its clock already past their stamps from deferring them on v51 —
   inserted `<uid>-live` at the legacy count under a later stamp and reverted the climber's steps,
@@ -1640,15 +1640,23 @@ record, with every measurement, is
   above it while holding it adds their counter deltas twice on a re-delivery. So `apply` holds a
   device's watermark at its first *held* op and leaves its later ops in the page unapplied, and
   `client::pull` keeps `PULL_CURSOR` — and so the ack — where it was, so the relay hands the page
-  back and the watermark makes that re-delivery safe. <!-- verify-B -->
-  **Two reasons hold, and nothing else does** (`apply::classify`, spec 2026-09-27 §3.2): a group a
-  **newer** schema sealed — `Op::schema > Some(USER_SCHEMA_VERSION)`, stamped by
-  `wire::seal_batch` and never at capture — holds with no bound, until this device upgrades, and
-  an envelope that opens under the key and does not parse counts as one; an **unknown parent**
-  from a same or older schema holds until seen on 3 pulls spanning at least 600 s, and then
-  `apply_with(.., Waiting::Release)` skips it. The state is `sync_state.pull_hold`, no rung. <!-- verify-B -->
+  back and the watermark makes that re-delivery safe.
+  **Beside the epoch hold — an envelope sealed at an epoch ahead of this device's, which holds until
+  `check_keys` brings the key — two reasons hold, and nothing else does** (`apply::classify`, spec
+  2026-09-27 §3.2): a group a **newer** schema sealed — `Op::schema > Some(USER_SCHEMA_VERSION)`,
+  stamped by `wire::seal_batch` and never at capture — holds with no bound, until this device
+  upgrades, and an envelope that opens under the key and does not parse counts as one **only when
+  an op in it carries such a schema** (`WireError::Newer`; a `Malformed` one is stepped over like
+  an altered envelope, or it would pin the log for good); an **unknown parent** from a same or
+  older schema holds until the same blocks have been seen on 3 pulls spanning at least 600 s, and
+  then `apply_held(.., Waiting::Release)` skips it. The state is `sync_state.pull_hold`, no rung,
+  and **it stores the blocks it holds on** (`apply::Held`): a block not in the stored set starts
+  the bound over, so a wait that has run its course cannot release a new one with it — the final
+  review's I1 — and `identity::leave_group` deletes the key with the group.
   Everything else is **consumed** and blocks nothing: a child of a parent deleted here or in the
-  page is **moot** where the key cascades and written without it where the key is `SET NULL`;
+  page is **moot** where the key cascades — and a row this device holds under its uid is deleted,
+  as the sender's cascade takes it, where the fold says the group's placement stands — and written
+  without it where the key is `SET NULL`;
   an unknown table or an unbuildable row from a same or older schema is **dropped**, one
   `error_log` row (`Source::Relay`, `apply`) folded per table. **Do not hold the cursor on
   anything that cannot resolve**: the relay compacts nothing above a device's ack, so that hold
@@ -1657,8 +1665,12 @@ record, with every measurement, is
   whatever `apply` deferred, so a deferred op and its sender's later ops in the page were lost,
   upgrade or not — which a v51 client still does, so every device is updated before it syncs
   across v52. **A future `LIMIT` on `pull` must page to the end before a hold is decided**, or a
-  held cursor never reaches the page that resolves it. [sync.md](../docs/reference/sync.md)
-  *Held while it can resolve, skipped when it cannot*.
+  held cursor never reaches the page that resolves it. ⚠️ **A newer hold that spans a device
+  removal loses what it held**: a removal forgets the superseded keys, so the held page no longer
+  opens, is stepped over as unreadable, and the cursor advances — the documented *a removal costs
+  the backlog behind it*, now as long as the hold. The relay refusing a push below the group's
+  epoch is the recorded follow-up that would let the keys be kept.
+  [sync.md](../docs/reference/sync.md) *Held while it can resolve, skipped when it cannot*.
 - **Six tables can hold a `needs_review` sentence** since v29, and `sync_engine::commands::REVIEWABLE`
   is the list, held to `sqlite_master` by a test. The sentences are Rust's, following
   `reconcile.rs`, and the first message wins.

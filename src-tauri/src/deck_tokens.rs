@@ -73,10 +73,10 @@
 //! **One `deck_audit` row of kind `deck` with `field: "token"`, and one `deck_undo` step**, for
 //! each of the five writes — which reverses what this module said until v52, that token writes
 //! record nothing. Never a new audit kind: `deck_audit` syncs, a word a paired device's `CHECK`
-//! does not know would be refused there, and its applier would defer the op — which the client
-//! today drops rather than holds (`sync.md`, *Deferred ops are dropped, not held*), taking the
-//! rest of that device's page with it. [`journal_in`] is the one place the five record, so they
-//! cannot differ in how.
+//! does not know would be refused there, and its applier would defer the op — which a v51 client
+//! drops, taking the rest of that device's page with it, and a v52 or later client holds, pinning
+//! the relay's log until it upgrades (`sync.md`, *Held while it can resolve, skipped when it
+//! cannot*). [`journal_in`] is the one place the five record, so they cannot differ in how.
 
 use crate::deck_undo::{Op, Step, TokenEntryRow, TokenStateRow};
 use crate::schema::{DECK_TOKEN_GRAIN, DECK_TOKEN_PRINTING_GRAIN};
@@ -2030,13 +2030,14 @@ pub const PICKS_READY: &str = "token_picks_ready";
 /// as an insert over it. `a_laggards_conversion_never_reverts_an_edit_made_since` is that
 /// scenario, and it went red (3 on both devices, not 5) with this gate switched off.
 ///
-/// ⚠️ **"Behind a pull, B has applied A's entries" rests on a re-delivery the client does not do
-/// yet.** B deferred A's batch at v51, and `sync_engine::client::pull` advanced B's cursor past
-/// it all the same, so B's first pull at v52 does not bring it back: a B that *pulled* at v51
-/// during the window still holds the pick after it climbs, and converting behind that pull is the
-/// same late insert. The gate closes the reversion for a laggard that did not pull during the
-/// window, and for every laggard once the sync-delivery fix holds the cursor on a newer-schema
-/// deferral — `sync_engine::apply`'s module doc has the mechanism.
+/// ⚠️ **"Behind a pull, B has applied A's entries" rests on a re-delivery a v51 client does not
+/// do.** B deferred A's batch at v51, and B's v51 client advanced its cursor past it all the same,
+/// so B's first pull at v52 does not bring it back: a B that *pulled* at v51 during the window
+/// still holds the pick after it climbs, and converting behind that pull is the same late insert.
+/// The gate closes the reversion for a laggard that did not pull during the window, and for every
+/// laggard on v52 or later, whose client holds its cursor on a newer-schema deferral and converts
+/// behind an advancing pull only (`sync.md`, *Held while it can resolve, skipped when it
+/// cannot*).
 ///
 /// **What it costs**: a paired device draws each unconverted token as its implicit entry — the
 /// resolver's printing, not the art the reader picked on v51 — until its first pull at v52 lands,
@@ -2150,13 +2151,14 @@ pub fn convert_legacy_picks_after_pull(conn: &Connection) -> Result<(), String> 
 /// exists — **all the entries first and the clears after**, so every clear rides behind an entry
 /// op in this device's stream. A v51 peer defers the first op for a table it does not know and
 /// leaves this device's later ops in that page unapplied, so it never applies a clear ahead of
-/// its entry and goes on drawing its art. ⚠️ **Not "until it upgrades"**, which this read: the
-/// client advances its pull cursor past a deferral (`sync_engine::apply`'s module doc), so the
-/// peer drops the entries and the clears alike and draws its art after it upgrades too, until the
-/// sync-delivery fix lands. (In a group of three or more that can fail cosmetically: a
-/// conversion that finds every list already holding the pick — a third device's announced
-/// entries — writes no entry op, and if no other pick's entry precedes it the clear reaches the
-/// v51 peer first, which then draws its default art.)
+/// its entry and goes on drawing its art. ⚠️ **Not "until it upgrades"**, which this read: a v51
+/// client advances its pull cursor past a deferral, so the peer drops the entries and the clears
+/// alike and draws its art after it upgrades too — the delivery holds that make a v52 client hold
+/// a newer sender's page instead cannot reach back for one a v51 build stepped past (`sync.md`,
+/// *Held while it can resolve, skipped when it cannot*). (In a group of three or more that can
+/// fail cosmetically: a conversion that finds every list already holding the pick — a third
+/// device's announced entries — writes no entry op, and if no other pick's entry precedes it the
+/// clear reaches the v51 peer first, which then draws its default art.)
 ///
 /// **One savepoint per pick, never one transaction for the file.** A pick whose entries or clear
 /// fail is rolled back to its own savepoint, written to stderr beside the deck and token it
@@ -5236,8 +5238,9 @@ mod tests {
     /// rather than a later sparse edit it has no row for. The pick's clear is captured too, and
     /// it is recorded **after** the entries: a v51 peer defers this device's first op for a table
     /// it does not know and leaves the later ones in that page unapplied, so it never applies the
-    /// clear ahead of the entry. (It then drops both, upgrade or not, until the sync-delivery fix —
-    /// `sync_engine::apply`'s module doc.)
+    /// clear ahead of the entry. (A v51 client then drops both, upgrade or not; a v52 or later
+    /// one holds them until it upgrades — `sync.md`, *Held while it can resolve, skipped when it
+    /// cannot*.)
     #[test]
     fn the_conversion_announces_every_entry_it_derives_and_the_cleared_pick_behind_them() {
         let conn = paired();

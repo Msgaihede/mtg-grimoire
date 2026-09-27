@@ -1077,7 +1077,7 @@ resolver's printing until its first pull at v52 lands, and a paired device that 
 one — a group with no membership, a relay it cannot reach — goes on doing so. **"Lands" means
 advances since 2026-09-27**: a pull that holds its cursor has not heard everything, which is the
 gate's own reason, so it neither converts nor sets `token_picks_ready`, and a device whose first
-v52 pulls hold on a newer device's page draws the resolver's printing until it updates. <!-- verify-B -->
+v52 pulls hold on a newer device's page draws the resolver's printing until it updates.
 ⚠️ **The argument above rests on a re-delivery, and a v51 client does not do one**: "B defers A's
 batch" and "behind a pull, B applies A's entries and A's clear first" assume the page B deferred at
 v51 is offered again once B climbs. It is not — B's v51 client stepped past it — so a B that
@@ -1087,7 +1087,7 @@ back from below its own cursor. The gate closes the reversion for a v51 laggard 
 during the window — and, because the delivery holds ship with v52, **for every laggard on v52 or
 later**, whose client holds a newer device's page until it updates and converts behind an advancing
 pull only, so the page it held is re-delivered and applied before any conversion runs (*Held while
-it can resolve, skipped when it cannot*, below). <!-- verify-B -->
+it can resolve, skipped when it cannot*, below).
 
 **What a mixed group does across v52**, then: a v51 peer **drops** a v52 device's page from its
 first `deck_token_printings` op on — that device's later ops in the page with it, the clears
@@ -1123,7 +1123,8 @@ understated until the fifth review round: a device whose corpus lacks the printi
 `<uid>-live` at the `nonfoil` fallback, and a device where the reader had already added that
 printing at its right finish — so case 1 declined to convert over it — receives the announcement,
 finds no grain match, inserts it beside the reader's entry, and its next repair folds the two and
-deletes the announced name uncaptured, after which the announcer's edits to that name defer there.
+deletes the announced name uncaptured, after which the announcer's edits to that name are skipped
+there and recorded — rows this database cannot build.
 **The gate does not close either route.** It orders a conversion after a pull, and neither route
 is a conversion racing a peer's: each is an announced fallback finish meeting a different row in a
 repair that runs uncaptured, and a pull that lands first changes nothing about that.
@@ -1223,7 +1224,7 @@ this build does not sync, and only the op's `schema` says what that means
   is left unapplied — and the client holds its cursor, so the page comes back on every pull until
   this device upgrades and its stream drains from the block. That is what this section always
   claimed, and it is true from v52 on; the relay's compaction floor stays at this device's ack for
-  as long as the hold lasts. <!-- verify-B -->
+  as long as the hold lasts.
 - **An older sender's op on a table this build renamed away is skipped**, recorded in the error log,
   and takes nothing of that sender's with it. Nothing can ever resolve it — the old name is gone from
   this build's census for good — so a hold would pin the relay's log for good too. What it costs is
@@ -1659,7 +1660,7 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
 
 | The group | Class | Holds its device? | Recorded? |
 | --- | --- | --- | --- |
-| Names a parent deleted here — a `del` for its uid in this device's own `sync_ops`, served by `idx_sync_ops_row` — or deleted in this page, and the parent's foreign key **cascades** | **moot** | no | no — the convergent outcome |
+| Names a parent deleted here — a `del` for its uid in this device's own `sync_ops`, served by `idx_sync_ops_row` — or deleted in this page, and the parent's foreign key **cascades** | **moot** — and the row goes here too, where this device holds it and the group's placement under that parent stands | no | no — the convergent outcome |
 | The same, but the key is **`SET NULL`** (`collection_entries.folder_id`, `wishlist_entries.folder_id`, `decks.folder_id`, `deck_cards.label_id`) | **not deferred** — written without that parent | no | no |
 | Any reason, and an op in it was sealed by a **newer** schema | **held · newer** | yes, with no bound | no — the Sync panel says it |
 | An unknown parent, from a same or older schema | **held · waiting** | yes, until the client's bound | only when released |
@@ -1674,6 +1675,23 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
   delete below its sender's watermark and the child perhaps attempted for the first time, and
   asking only the fresh ops would call the parent merely missing and hold its sender again
   (`a_redelivered_page_still_makes_a_child_of_its_delete_moot`).
+- **A moot row this device already holds goes, as the sender's cascade takes it** (the final
+  review, 2026-09-27). A peer moves a card into a pile deleted here: on the peer the card is in
+  the pile when the delete lands, and the cascade takes it — while moot consumed the move here and
+  left the card in its old pile, one device holding a card the other never will again. So
+  `apply::cascade_onto_the_row_here` deletes the local row under the group's uid
+  (`a_card_moved_into_a_pile_this_device_deleted_goes_on_both`). **Only where the group's
+  placement under the deleted parent is the one that stands**, which the fold over this device's
+  own history decides: where this device moved the row somewhere later, that move reaches the peer
+  too and wins there, so the row is leaving the pile when the delete lands — and deleting it here
+  would lose a row both devices place elsewhere
+  (`a_stale_move_into_a_deleted_pile_leaves_a_card_this_device_moved_since`, red against the
+  unconditional delete). A delete this database refuses — a folder whose `SET NULL` entries land
+  on a grain the root already holds — leaves the row where it is, as moot always did, rather than
+  failing the apply on every pull. ⚠️ **Read off the code and unmeasured**: the peer's own outcome
+  is not order-free either — its applier takes a page parents first, so a delete and a later move
+  of the same row in one page cascade the row before the move is attempted, and the move rebuilds
+  it only where that device's history holds the row's insert.
 - **The `SET NULL` row is an amendment, and a measurement made it.** The design called every child
   of a deleted parent moot, which holds only where the delete would have taken the child with it.
   Where the key is `SET NULL` the delete left its children in place with the column cleared, and
@@ -1706,15 +1724,17 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
 **The client holds for the reason, and for no longer than the reason lasts.** After `apply` in
 `client::pull`, with the epoch rule (`behind`) unchanged and still first:
 
-1. **`held_newer > 0`, or an envelope that opened and did not parse** → the cursor stays, and
-   `sync_state.pull_hold` says `newer`. **No bound**: an upgrade resolves it and nothing else does,
-   and releasing it would be the very loss this section used to record. <!-- verify-B -->
+1. **`held_newer > 0`, or an envelope that opened, did not parse and says a newer build sealed
+   it** (`WireError::Newer`, below) → the cursor stays, and `sync_state.pull_hold` says `newer`.
+   **No bound**: an upgrade resolves it and nothing else does, and releasing it would be the very
+   loss this section used to record.
 2. **Else `held_waiting > 0`** → the cursor stays, and `pull_hold` says `waiting`. Once the hold has
-   been seen on **3 pulls spanning at least 600 seconds**, the same ops are applied again with
-   `Waiting::Release`, and the cursor advances — unless the release uncovers a newer group: a
-   newer build's op held as collateral behind the waiting one reports as waiting until the release
-   attempts it, and it then holds as `newer` rather than being stepped past. <!-- verify-B -->
-3. **Else** the cursor advances and `pull_hold` is deleted. <!-- verify-B -->
+   been seen on **3 pulls spanning at least 600 seconds**, counted from the pull that first met the
+   blocks it holds, the same ops are applied again with `Waiting::Release`, and the cursor advances
+   — unless the release uncovers a newer group: a newer build's op held as collateral behind the
+   waiting one reports as waiting until the release attempts it, and it then holds as `newer`
+   rather than being stepped past (`a_release_that_uncovers_a_newer_op_holds_it_as_newer`).
+3. **Else** the cursor advances and `pull_hold` is deleted.
 
 **Why the waiting hold has both bounds.** Its ordinary cause is first contact: `round_trip` pushes
 before it emits baselines, so a peer can pull a child a moment before the baseline that carries its
@@ -1723,37 +1743,81 @@ it to have come. **Three pulls** is evidence that this device has looked since: 
 nothing about a device that slept through it, and its next page may be the one with the parent.
 What the bound ends is a parent that will never come — deleted on a third device, which leaves no
 trace here (below). A parent that does arrive clears the hold on that pull, advancing, with nothing
-recorded (`client`'s `a_waiting_hold_clears_when_the_parent_arrives`). <!-- verify-B -->
+recorded (`client`'s `a_waiting_hold_clears_when_the_parent_arrives`).
 
-**`pull_hold`** is `{"kind":"newer"|"waiting","since":<unix seconds>,"pulls":<n>}` in `sync_state`,
-and an absent key is not held. The same kind keeps `since` and counts the pull; a different kind
-starts over — so a page holding both kinds is a newer hold, and its waiting half starts counting
-only once an upgrade has cleared the newer one. `since` is SQL's `unixepoch()`, because
-`sync_engine` compiles for wasm and `SystemTime::now()` panics there. It is a `sync_state` key and
-no schema rung, it survives a restart, and a newer hold is never released by pull count or time
+**The bound belongs to the blocks it has watched, and a new block starts it over** (the final
+review's I1, 2026-09-27). The hold was counted by kind alone until then, so a second wait that
+began while an older one was open inherited the older one's pulls and span, and the release that
+ended the first dropped the second with it. The case that costs something: a wait nothing will end
+— a child whose parent a third device deleted — has run its course when a device that has just
+paired pushes a child ahead of the baseline carrying its parent; the pull that meets that child
+releases both, and the parent landing a trip later finds its child gone below the watermark. So
+`pull_hold` stores what it holds on — each held device at the stamp of its first held op
+(`apply::apply_held`'s `Held`) — and a pull that finds a block not in that set starts `since` and
+`pulls` over. A block that resolved and left is not new, and is simply dropped from the set
+(`a_new_waiting_block_starts_the_bound_over`). ⚠️ **What it costs**: the release is all or
+nothing, so an old wait sharing a hold with new ones is released only once no new block has
+appeared for three pulls and ten minutes — longer on the relay's floor, bounded by how often a
+first contact happens, which is the only ordinary source of a waiting block.
+
+**`pull_hold`** is `{"kind":"newer"|"waiting","since":<unix seconds>,"pulls":<n>,
+"blocks":{"<device>":[<ms>,<ctr>]},"noted":[["<device>",<ms>,<ctr>]]}` in `sync_state`, and an
+absent key is not held. `blocks` is what the hold holds on: `apply`'s held devices, and each
+device with a batch only a newer build can read, at the earlier of the two stamps. The same kind on
+no block it has not seen keeps `since` and counts the pull; a different kind or a new block starts
+over — so a page holding both kinds is a newer hold, and its waiting half starts counting only once
+an upgrade has cleared the newer one. **A row written before `blocks` was stored reads as a hold on
+an unknown set**: its kind still reaches the panel, and the next pull starts over
+(`a_hold_written_before_its_blocks_were_stored_reads_and_starts_over`). `noted` is the unreadable
+envelopes this hold's pulls have already written to `error_log`, by device and stamp, so a held page
+handed back on every trip records each once (below); it is left out while empty. `since` is SQL's
+`unixepoch()`, because `sync_engine` compiles for wasm and `SystemTime::now()` panics there. It is
+a `sync_state` key and no schema rung, it survives a restart, `identity::leave_group` deletes it
+with the group (`leaving_clears_a_held_pull` — a count left behind would carry into the next
+group's first wait), and a newer hold is never released by pull count or time
 (`a_newer_hold_is_never_released_by_the_waiting_bound`). `sync_relay_status` reads its kind into
-`RelayStatus.pullHeld` — `"newer" | "waiting" | null`. <!-- verify-B -->
+`RelayStatus.pullHeld` — `"newer" | "waiting" | null`, and **`null` whenever the device is in no
+group**, whatever the key says: a departure made by a build before `leave_group` deleted it left it
+behind, and a device that has left is held on nothing.
 
-**The Malformed arm.** `wire::open_batch` answers `WireError::Malformed` only after the group, the
-epoch and the AEAD have all passed, so a member of the group sealed the batch — and a batch this
-build cannot parse as ops, one carrying an op `Kind` it has never heard of, can only have come from
-a newer build. It used to be counted unreadable and stepped over, which dropped it. It is still
-counted and noted, and it now holds the cursor as `newer`
-(`an_authentic_batch_this_build_cannot_parse_holds_as_newer`). An envelope whose AEAD fails at the
-same epoch is stepped over as it always was: nothing says a member wrote it, and holding on it would
-pin the log for bytes nobody can read (*One correction to the plan*, below). <!-- verify-B -->
+**A batch that opens and does not parse holds only when it says a newer build sealed it.**
+`wire::open_batch` reaches the parse only after the group, the epoch and the AEAD have all passed,
+so a member of the group sealed the batch. It used to be counted unreadable and stepped over, which
+dropped a newer build's batch — one carrying an op `Kind` this build has never heard of. The design
+then held on every one, on the argument that only a newer build could seal what this one cannot
+parse; the final review found the hole in that: a same-version batch that does not parse — a bug, a
+hand-rolled client — would pin the relay's floor for good and ask the reader to update a build they
+already run. So `open_batch` re-reads a plaintext that failed as a list of bare JSON values, and
+answers **`WireError::Newer`** when some element carries a `schema` above `USER_SCHEMA_VERSION` —
+the field `seal_batch` stamps, which a newer build stamps too — and **`WireError::Malformed`**
+otherwise, including for no `schema` at all and for bytes that are not a list
+(`wire`'s `a_batch_that_does_not_parse_is_newer_only_when_an_op_says_so`). `Newer` is counted,
+noted and holds the cursor as `newer` (`an_authentic_batch_this_build_cannot_parse_holds_as_newer`);
+`Malformed` is counted, noted and stepped over, and holds none of its sender's later batches
+(`a_same_version_batch_that_does_not_parse_is_stepped_over_and_recorded_once`). An envelope whose
+AEAD fails at the same epoch is stepped over as it always was: nothing says a member wrote it, and
+holding on it would pin the log for bytes nobody can read (*One correction to the plan*, below).
 
-**The Malformed hold keeps the sender's later envelopes with the cursor.** `apply` never sees a
+**Every unreadable envelope in a held page is noted once per hold, not once per pull.** The page
+comes back on every trip — for a newer hold, until the reader updates — and a `pull`/`parse` note
+on each would turn one batch into an `error_log` row counting trips. So `pull` asks the stored
+hold's `noted` before it notes, and writes what this page met back into the hold
+(`a_held_pull_records_its_unreadable_batches_once`, a newer batch and a same-version one stepped
+over in the same held page). A pull held behind a key rotation writes no `pull_hold` and still notes
+its unreadable envelopes each time, as it always did.
+
+**The newer-batch hold keeps the sender's later envelopes with the cursor.** `apply` never sees a
 batch that did not parse, so a later envelope from the same device in the page — sealed by the same
 newer build, with nothing in it this one cannot read — would apply and move that device's watermark
 past the unparsed ops, and when an upgrade let them parse, the page would come back with them below
 the watermark and they would be skipped as seen. So `pull` leaves out every envelope from that
-device stamped at or after its first one that did not parse — by the envelope's own stamp
+device stamped at or after its first `Newer` one — by the envelope's own stamp
 (`hlcMs`, `hlcCtr`), not by its place in the page — and they wait with the cursor, counted in
 `held_newer`. The device's earlier envelopes are below the block and apply, and other devices'
 envelopes are untouched (`a_malformed_batch_holds_its_senders_later_batches_too`, which puts the
 later envelope first in the page, then re-delivers it with the batch parseable and lands its `+1`
-exactly once). <!-- verify-B -->
+exactly once). That first stamp is also the device's block in `pull_hold`, unless `apply` holds it
+earlier still.
 
 **What the relay pays for a hold.** A held cursor is a held ack — `ack` sends `PULL_CURSOR`, and
 sends nothing at all when it has not moved since the last one — so the group's compaction floor
@@ -1764,7 +1828,7 @@ reader updates**, which the Sync panel asks them to do; **for a waiting one, at 
 and ten minutes**, whichever comes later. The ops `apply` already wrote are skipped against their
 watermarks on every re-delivery and are not counted again: `RelayOutcome.pulled` counts newly
 applied ops only, so a held cursor does not fire `sync:applied` and refresh every screen on every
-trip (`a_held_page_applies_the_other_devices_once_and_counts_them_once`). <!-- verify-B -->
+trip (`a_held_page_applies_the_other_devices_once_and_counts_them_once`).
 
 **What the reader sees.** While `pullHeld` is `newer` the Sync panel draws "A device in your group
 runs a newer version of MTG Grimoire. Update this device to receive its changes." — a paragraph,
@@ -1777,7 +1841,7 @@ nothing re-delivered, and is gone.
 **The legacy token-pick conversion runs behind an advancing pull only.** A held pull has not heard
 everything, which is the gate's own reason (*A paired device converts behind a pull*, above), so
 it neither converts nor sets `token_picks_ready`
-(`no_legacy_pick_conversion_runs_behind_a_held_pull`). <!-- verify-B -->
+(`no_legacy_pick_conversion_runs_behind_a_held_pull`).
 
 ⚠️ **A future page limit must page to the end before a hold is evaluated.** `pull` has none today,
 and one is planned (*What is still owed*). A limit that answered a page at a time, with the client
@@ -1813,6 +1877,18 @@ The cursor-carrying loop the limit needs must walk to the head, and only then ma
   reaches it, and this device skipped it — the divergence the `SET NULL` row closes for a delete
   made here or in the page, left open for one made elsewhere. *A third device's tombstone* under
   *What is still owed* is the same missing table.
+- ⚠️ **A newer hold that spans a device removal loses everything it held** (the final review's I2,
+  read off the code and unmeasured). A removal makes every remaining device forget the superseded
+  keys (`identity::supersede` → `forget_superseded`, *One correction to the plan* below). The held
+  page is sealed under the epoch before the removal, so once this device has adopted the rotation,
+  `pull` cannot open those envelopes, steps over them as unreadable, and — nothing being held any
+  more — advances. The newer device's ops since the hold began are lost after the upgrade, and any
+  other device's collateral held with them. It is the documented *a removal costs the backlog
+  behind it*, now as long as the hold: a hold that lasts until the reader updates can straddle any
+  number of rotations, where an ordinary backlog is a few trips. It breaks spec §2's "nothing of
+  that device's stream is lost meanwhile" for exactly that case. **What would let the keys be
+  kept** is the follow-up already recorded there — the relay refusing a push below the group's
+  epoch, so a removed device holding the old key could no longer write under it.
 
 **The two neighbours the review found.** `apply::find_row` renamed a local row to the lower uid
 before the group's savepoint opened, without asking whether the uid was free, so a collision's
@@ -2471,9 +2547,11 @@ of the two ways it happens:
 - An old epoch whose key this device never held or has forgotten, or a failed AEAD — altered —
   opens nothing, so refusing to advance would stall the stream for the thirty days the relay keeps
   a tail, for nothing. It is counted, written to `error_log` and stepped over. **An envelope that
-  opens and then does not parse is not in this bullet since 2026-09-27**: the AEAD passing says a
-  member sealed it, so it is a newer build's batch and holds the cursor as `newer` (*Held while it
-  can resolve, skipped when it cannot*, above). <!-- verify-B -->
+  opens and then does not parse is in this bullet only when nothing in it says a newer build sealed
+  it** (`WireError::Malformed`): the AEAD passing says a member sealed it, and one whose ops carry a
+  schema above this build's (`WireError::Newer`) holds the cursor as `newer` instead (*Held while
+  it can resolve, skipped when it cannot*, above). A forgotten key can also cost a held page:
+  *What a hold cannot reach*, above.
 - **What the client cannot do on its own**, and three follow-ups, none built: a device that skips
   *N → N+2* never gets *N+1*'s key, because `/keys` answers only the newest manifest though the
   relay keeps eight — serving `/keys?epoch=` lifts it; a removal still costs the backlog behind it
@@ -2799,6 +2877,32 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   a same-version change that can never apply is skipped, recorded, without its sender's later ops.
   ⚠️ **What it cannot reach is a v51 client**, which still steps past a deferral: every device in a
   group is updated before it syncs across v52.
+- **A first-contact parent carried by a real baseline may be skipped as seen**, so the waiting
+  hold may not save the case it was built for (parked at the delivery holds' final review,
+  2026-09-27; older than the holds, read off the code and unmeasured). Baseline ops are stamped
+  from each row's `updated_at`, and an emitter's ordinary deltas earlier in the page set its
+  watermark here — so a parent in the baseline stamped below that watermark is skipped rather than
+  applied, and its child waits out the bound. The horizon exempts baseline ops from its own filter
+  and not from the watermark. It needs a client test with an earlier emitter delta and the parent
+  drawn from `baseline::build`, where the holds' tests seal the parent by hand.
+- ⚠️ **A folder delete from a peer fails the whole apply when one of its entries would land on a
+  grain the root already holds** (found 2026-09-27 while building the moot row's delete, older than
+  the holds; measured in the `apply` test harness, debug build). `collection_folders::delete_folder`
+  merges each entry into the root before the folder goes, so the deleting device never meets the
+  collision — but a peer applies a page parents first, `collection_folders` (rank 6) ahead of the
+  merge's `collection_entries` ops (rank 7), so the folder's `DELETE` runs while its entry is still
+  in it, `SET NULL` moves the entry onto the root row's grain, and `write_group`'s delete answers
+  `Err("UNIQUE constraint failed: index 'idx_collection_grain'")` through `?` — the whole apply
+  fails, and the same page fails it again on every pull, so that device's sync stops. A throwaway
+  probe — a binder holding one copy of a printing the root also holds, deleted through
+  `delete_folder` on one device and applied on the other — reproduced it. The moot row's own delete
+  is fenced against the same collision (it keeps the row); the applier's ordinary delete is not.
+- **An open Sync panel can show a stale `pullHeld`.** `RelayStatus` is under `SYNC_KEY`, which
+  `useDeviceSyncInvalidation` refreshes on `sync:applied` — and `live::trip` and `sync_now` emit that
+  only when a trip pulled or pushed something, while `pulled` counts newly applied ops only, on
+  purpose. So a background trip that starts a newer hold and pushes nothing draws no *Update this
+  device* on a panel already open, until something else refreshes it (parked at the same review;
+  a press of **Sync now** refreshes it through its own mutation).
 - **A removed device's ack pins the relay's compaction floor.** `group.ts` keeps one `acks` row per
   device and deletes them only when the whole group's log is dropped at a membership's end; a
   removal, a departure and a rotation leave the row. `log.ts`'s `compact` takes its floor as the

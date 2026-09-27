@@ -77,11 +77,13 @@
 //! upgrade changes. **It is moot only where the delete would have taken the child with it**:
 //! a parent whose key is `SET NULL` — a binder, a deck folder, a label — is not a deferral at
 //! all when it is gone, and the child is written without it, which is what the child's own
-//! device does to it when the delete arrives there. A moot or dropped group is *consumed*: it
-//! holds nothing, the ops after it apply, and the watermark passes it. `client::pull` holds `PULL_CURSOR` while either held
-//! count is non-zero, so the relay hands the page back, and ends a waiting hold at its bound by
-//! applying the page once more with [`Waiting::Release`].
-//! [sync.md](../../../docs/reference/sync.md) is the record.
+//! device does to it when the delete arrives there. **A moot row this device already holds goes
+//! too**, where the group's placement under the deleted parent is the one that stands: that is
+//! what the delete's cascade does to it on the device that sent the group. A moot or dropped
+//! group is *consumed*: it holds nothing, the ops after it apply, and the watermark passes it.
+//! `client::pull` holds `PULL_CURSOR` while either held count is non-zero, so the relay hands the
+//! page back, and ends a waiting hold at its bound by applying the page once more with
+//! [`Waiting::Release`]. [sync.md](../../../docs/reference/sync.md) is the record.
 
 use crate::sync_engine::capture::{self, Absent, Parent, Spec};
 use crate::sync_engine::hlc::Hlc;
@@ -129,7 +131,11 @@ pub struct ApplyReport {
     pub held_waiting: usize,
     /// Ops consumed because they name a parent deleted here or in this page whose delete
     /// cascades to them. The convergent outcome — the delete would have taken the child with it
-    /// on any device that held both — and recorded nowhere.
+    /// on any device that held both — and recorded nowhere. **A row this device already holds
+    /// under the group's uid is deleted with it**, when the group's placement under that parent
+    /// is the one the fold says stands: a peer that moved the row there loses it to the delete's
+    /// cascade, and so does this device. Where this device placed the row somewhere later, the
+    /// delete reaches the peer with the row on its way there, and it is left alone.
     pub moot: usize,
     /// Ops consumed because nothing that can arrive will let them apply: a table this build does
     /// not sync, a row it cannot build, or a released wait. Each group is an `error_log` row
@@ -650,6 +656,12 @@ struct Deferral<'a> {
 /// device → the stamp it is held at, and the class of the group that holds it there.
 type Blocks = BTreeMap<String, (Hlc, Class)>;
 
+/// What a committed pass left held: each held device, at the stamp of its first held op as
+/// `(ms, ctr)`. **This is what a client's hold is a hold on** — `client::pull` stores it in
+/// `pull_hold`, and a block it has not seen before starts the waiting bound over, so a wait that
+/// has run its course cannot take a new one down with it.
+pub type Held = BTreeMap<String, (i64, i64)>;
+
 /// One row's worth of incoming ops, folded, with the ops kept for the watermark.
 struct Group<'a> {
     table: &'a str,
@@ -672,13 +684,27 @@ pub fn apply(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
 /// forever. A dropped group's `error_log` row is written inside the same transaction, so a
 /// batch that fails leaves no record of a skip it never made.
 pub fn apply_with(conn: &Connection, ops: &[Op], waiting: Waiting) -> Result<ApplyReport, String> {
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let report = capture::suppressed(&tx, || apply_in(&tx, ops, waiting))?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(report)
+    apply_held(conn, ops, waiting).map(|(report, _)| report)
 }
 
-fn apply_in(conn: &Connection, ops: &[Op], waiting: Waiting) -> Result<ApplyReport, String> {
+/// [`apply_with`], answering as well which devices the committed pass left held, and where —
+/// the one caller that needs it is the client, which holds its cursor on exactly those.
+pub fn apply_held(
+    conn: &Connection,
+    ops: &[Op],
+    waiting: Waiting,
+) -> Result<(ApplyReport, Held), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let out = capture::suppressed(&tx, || apply_in(&tx, ops, waiting))?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+fn apply_in(
+    conn: &Connection,
+    ops: &[Op],
+    waiting: Waiting,
+) -> Result<(ApplyReport, Held), String> {
     let mut report = ApplyReport::default();
     let me: Option<String> = conn
         .query_row(
@@ -816,7 +842,13 @@ fn apply_in(conn: &Connection, ops: &[Op], waiting: Waiting) -> Result<ApplyRepo
 
     advance_watermarks(conn, &groups, &committed)?;
     observe(conn, fresh.iter().map(|o| &o.at).max())?;
-    Ok(report)
+    // Read off the pass that committed, as the watermarks were: at the round cap the blocks the
+    // last round found are not the ones it honoured.
+    let held: Held = blocks_of(&committed, &Blocks::new())
+        .into_iter()
+        .map(|(device, (at, _))| (device, (at.ms, at.ctr)))
+        .collect();
+    Ok((report, held))
 }
 
 /// One attempt at a batch, with the devices already known to be stalled cut short.
@@ -945,6 +977,49 @@ fn gone(
     .optional()
     .map(|hit| hit.is_some())
     .map_err(|e| e.to_string())
+}
+
+/// A group made moot by a cascading parent that is gone, about a row **this device already
+/// holds**: delete that row, as the delete's cascade does on the device that sent the group — but
+/// only when the group's placement under that parent is the one that stands.
+///
+/// A peer moves a card into a pile deleted here. On the peer the card is in that pile when the
+/// delete arrives, and the cascade takes it; consuming the move here and touching nothing left the
+/// card in its old pile on this device alone (the final review of the delivery holds). **The fold
+/// over this device's own history decides whether the placement stands**: where this device moved
+/// the row somewhere later, that move reaches the peer too and wins there, so the row is on its way
+/// out of the pile when the delete lands — and deleting it here would lose a row the peer keeps.
+///
+/// Inside the pass's savepoint, like every other write of a round, so a round that is rolled back
+/// takes the delete with it. A row that is not here deletes nothing. **A delete this database
+/// refuses leaves the row where it is**, which is what the moot arm did before it deleted
+/// anything: a folder's `SET NULL` entries landing on a grain the root already holds fail
+/// `idx_collection_grain`, and letting that fail the apply would fail it on every pull after.
+fn cascade_onto_the_row_here(
+    conn: &Connection,
+    meta: &Meta,
+    g: &Group,
+    p: &Parent,
+) -> Result<(), String> {
+    let uid = &g.ops[0].uid;
+    let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
+    all.extend(local_history(conn, meta.table, std::slice::from_ref(uid))?);
+    let combined = fold(&all);
+    let placed = g.resolved.parents.get(p.key).map(|(_, at)| at);
+    let stands = combined.parents.get(p.key).map(|(_, at)| at);
+    if placed.is_none() || placed != stands {
+        return Ok(());
+    }
+    conn.execute_batch("SAVEPOINT sync_moot_row")
+        .map_err(|e| e.to_string())?;
+    let end = match conn.execute(
+        &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
+        [uid],
+    ) {
+        Ok(_) => "RELEASE sync_moot_row",
+        Err(_) => "ROLLBACK TO sync_moot_row; RELEASE sync_moot_row",
+    };
+    conn.execute_batch(end).map_err(|e| e.to_string())
 }
 
 /// Whether deleting the row `p` names deletes the `table` row that names it — `ON DELETE
@@ -1314,6 +1389,7 @@ fn write_group<'a>(
             // absent, like a parent the op never named.
             Resolution::Unknown(uid) if gone(conn, p.table, &uid, deleted)? => {
                 if cascades(conn, meta.table, p)? {
+                    cascade_onto_the_row_here(conn, meta, g, p)?;
                     return Ok(Outcome::Deferred(Why::UnknownParent {
                         table: p.table,
                         uid,

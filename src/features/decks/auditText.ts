@@ -583,10 +583,11 @@ function categoryLine(p: Record<string, unknown>): AuditLine {
  * **A `deck` row and never a tenth audit kind**, and the reason is sync rather than the rebuild
  * the notes paid attention to: `deck_audit` is a synced, append-only table, so a word its `CHECK`
  * does not know would be refused by a paired device still on an older build — and its applier
- * defers the op, which today loses it and the sender's later ops in that page for good: the sync
- * client advances its cursor past a deferral, so upgrading brings nothing back (sync.md, "Deferred
- * ops are dropped, not held"). `deck` is already the deck-level kind, so no reader takes a token
- * for a deck card.
+ * defers the op. A v51 client loses it and the sender's later ops in that page for good, because
+ * it advances its cursor past a deferral and upgrading brings nothing back; a v52 or later client
+ * holds the sender's stream until it upgrades, which pins the relay's log meanwhile (sync.md,
+ * "Held while it can resolve, skipped when it cannot"). `deck` is already the deck-level kind, so
+ * no reader takes a token for a deck card.
  *
  * **The name is the payload's** (`name`), because Rust records no card on these rows — a token is
  * never a `deck_cards` row — so {@link DeckAuditEntry.cardName} is `null` here. The **subtitle**

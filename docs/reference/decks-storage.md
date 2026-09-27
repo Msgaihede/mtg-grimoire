@@ -3066,8 +3066,9 @@ Three notes on the sync half that are this table's own:
   local deck id means nothing on the far device; an oracle id is Scryfall's and means the same
   thing everywhere. Without the grain, two devices that each picked an art for the same token in
   the same deck hold one row under two uids, and the far op is not a row to update but a row to
-  insert — which hits the unique index, rolls the group's savepoint back, and defers that op for
-  ever. `deck_labels`' reason, one table over.
+  insert — which hits the unique index, rolls the group's savepoint back, and leaves a row this
+  database cannot build: skipped and recorded since 2026-09-27, lost with its sender's later ops
+  in the page before that. `deck_labels`' reason, one table over.
 
 ### The list is derived on every deck open, and that is cheaper than storing it
 
@@ -3429,13 +3430,14 @@ deferred op rather than holding it, so a B that did still holds the pick after i
 reverts A the same way. The delivery holds that ship with v52 cannot reach back for that page; what
 they do is make the proviso hold for every laggard on v52 or later, whose held page comes back and
 applies before any advancing pull converts ([sync.md](sync.md) *Held while it can resolve, skipped
-when it cannot*). <!-- verify-B -->
+when it cannot*).
 Otherwise the clear leaves no pick to convert, and a pick B re-made after it reaches case 3 below
 as a **move** of the entry A named — a sparse update — never as an insert over it. The key is the
 `sync_state` row `token_picks_ready` (`deck_tokens::PICKS_READY`), set by the pull half and never
 cleared; a pull held behind a key rotation neither sets it nor converts, because its unreadable
 envelopes may be exactly the entries and clears the gate waits for — and since 2026-09-27 neither
-does a pull held on a newer device's page, for the same reason. <!-- verify-B -->
+does any other held pull, on a newer device's page or on a parent a later page may still bring,
+for the same reason: only a pull that advanced its cursor has heard everything.
 The pull half runs behind **every** such pull, so a v51 peer's pick is converted on the pull that brings it rather than at the
 next launch. `a_paired_device_converts_nothing_at_launch_before_its_first_pull`,
 `an_unpaired_device_converts_at_launch`, and in `client`'s suite

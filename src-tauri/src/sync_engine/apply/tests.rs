@@ -2397,6 +2397,198 @@ fn a_child_of_a_folder_this_device_deleted_lands_at_the_root_on_both() {
     assert!(skips(&b).is_empty(), "{:?}", skips(&b));
 }
 
+/// A deck with three piles on `a` — `Main`, `Side` and `Maybe` — and one card in `Main`, applied
+/// to `b`. Every pile is `kind = 'main'`, so none meets `idx_deck_categories_kind`.
+fn a_deck_with_three_piles(a: &Connection, b: &Connection, ma: &mut i64, mb: &mut i64) {
+    a_deck_everywhere(a, ma, &[b]);
+    // Filed while `Main` is the only pile, which is what `file_a_card`'s subquery assumes.
+    file_a_card(a);
+    for name in ["Side", "Maybe"] {
+        a.execute(
+            "INSERT INTO deck_categories
+                (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+             VALUES (1, ?1, 'main', 1, 1, unixepoch(), unixepoch())",
+            [name],
+        )
+        .unwrap();
+    }
+    apply(b, &since(a, ma)).unwrap();
+    let _ = since(b, mb);
+    for c in [a, b] {
+        assert_eq!(
+            pile_of_the_card(c).as_deref(),
+            Some("Main"),
+            "the fixture: the card starts in Main"
+        );
+    }
+}
+
+/// Move the one card on `conn` into the pile called `pile`.
+fn move_the_card(conn: &Connection, pile: &str) {
+    conn.execute(
+        "UPDATE deck_cards SET category_id = (SELECT id FROM deck_categories WHERE name = ?1)",
+        [pile],
+    )
+    .unwrap();
+}
+
+/// The pile the one card on `conn` is in, or `None` when there is no card.
+fn pile_of_the_card(conn: &Connection) -> Option<String> {
+    conn.query_row(
+        "SELECT c.name FROM deck_cards dc JOIN deck_categories c ON c.id = dc.category_id",
+        [],
+        |r| r.get(0),
+    )
+    .optional()
+    .unwrap()
+}
+
+/// **A card this device holds, moved by a peer into a pile deleted here, goes on both** (the
+/// final review). `a` moves the card into `Side` while `b` deletes `Side`. On `a` the delete's
+/// cascade takes the card with the pile; moot used to consume the move on `b` and leave the card
+/// in `Main` — one device holding a card the other never will again. So a moot group whose row
+/// this device holds deletes that row, which is the outcome the delete reaches on `a`.
+///
+/// **What makes it red**: consuming the move and touching nothing — `b` ends with the card.
+#[test]
+fn a_card_moved_into_a_pile_this_device_deleted_goes_on_both() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    a_deck_with_three_piles(&a, &b, &mut ma, &mut mb);
+
+    b.execute("DELETE FROM deck_categories WHERE name = 'Side'", [])
+        .unwrap();
+    move_the_card(&a, "Side");
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(
+        (rb.moot, rb.applied, rb.deferred, rb.dropped),
+        (1, 0, 0, 0),
+        "{rb:?}"
+    );
+    apply(&a, &since(&b, &mut mb)).unwrap();
+
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(
+            pile_of_the_card(c),
+            None,
+            "{who} still holds the card the delete took"
+        );
+    }
+    assert!(skips(&b).is_empty(), "moot is not a fault: {:?}", skips(&b));
+}
+
+/// **...but only where the move into the deleted pile is the placement that stands.** `b` moved
+/// the card into `Maybe` after `a` moved it into `Side`, then deleted `Side`. `b`'s own later move
+/// wins the pile field, so the delete reaches `a` with the card on its way to `Maybe` — `a`
+/// rebuilds it there from its own history — and deleting it on `b` would lose a card both devices
+/// place in `Maybe`.
+///
+/// **What makes it red**: deleting the row for every moot group whose row is here, without asking
+/// the fold whose placement stands.
+#[test]
+fn a_stale_move_into_a_deleted_pile_leaves_a_card_this_device_moved_since() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    a_deck_with_three_piles(&a, &b, &mut ma, &mut mb);
+
+    move_the_card(&a, "Side");
+    // `b`'s move is the later one, which the clock is set to make certain rather than left to
+    // whichever device's millisecond came first.
+    b.execute("UPDATE sync_clock SET ms = ms + 60000", [])
+        .unwrap();
+    move_the_card(&b, "Maybe");
+    b.execute("DELETE FROM deck_categories WHERE name = 'Side'", [])
+        .unwrap();
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!((rb.moot, rb.deferred, rb.dropped), (1, 0, 0), "{rb:?}");
+    apply(&a, &since(&b, &mut mb)).unwrap();
+
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(
+            pile_of_the_card(c).as_deref(),
+            Some("Maybe"),
+            "{who} disagrees about the card"
+        );
+    }
+}
+
+/// **A moot row's delete that this database refuses leaves the row, and the rest of the page
+/// applies.** `a` files a copy in `Inner` while the root holds the same printing, then moves
+/// `Inner` into `Outer`, which `b` has deleted. The move is moot on `b` and `Inner` is `b`'s to
+/// delete — but `collection_entries.folder_id` is `SET NULL`, so the copy would land at the root on
+/// a grain the root already holds, and `idx_collection_grain` refuses the delete. Left to fail,
+/// that refusal would fail the whole apply, and the same page would fail it on every pull after.
+///
+/// **What makes it red**: letting the moot delete's error escape the apply.
+#[test]
+fn a_moot_delete_this_database_refuses_leaves_the_row_and_applies_the_rest() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    for name in ["Outer", "Inner"] {
+        a.execute(
+            "INSERT INTO collection_folders (name, kind, sort_order, created_at, updated_at)
+             VALUES (?1, 'user', 1, unixepoch(), unixepoch())",
+            [name],
+        )
+        .unwrap();
+    }
+    for folder in [Some("Inner"), None] {
+        a.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+                 created_at,updated_at)
+             VALUES ('c1','lea','1','en','nonfoil','NM',1,
+                     (SELECT id FROM collection_folders WHERE name = ?1),
+                     unixepoch(),unixepoch())",
+            [folder],
+        )
+        .unwrap();
+    }
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+    assert_eq!(
+        qty(&b),
+        (2, 2),
+        "the fixture: a copy in Inner and one at the root"
+    );
+
+    b.execute("DELETE FROM collection_folders WHERE name = 'Outer'", [])
+        .unwrap();
+    a.execute(
+        "UPDATE collection_folders
+            SET parent_id = (SELECT id FROM collection_folders WHERE name = 'Outer')
+          WHERE name = 'Inner'",
+        [],
+    )
+    .unwrap();
+    a.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,
+             created_at,updated_at)
+         VALUES ('c2','lea','2','en','nonfoil','NM',1,unixepoch(),unixepoch())",
+        [],
+    )
+    .unwrap();
+
+    let rb = apply(&b, &since(&a, &mut ma)).expect("a refused moot delete failed the apply");
+    assert_eq!(
+        (rb.moot, rb.applied, rb.deferred, rb.dropped),
+        (1, 1, 0, 0),
+        "{rb:?}"
+    );
+    let inner: i64 = b
+        .query_row(
+            "SELECT count(*) FROM collection_folders WHERE name = 'Inner'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(inner, 1, "the refused delete took the folder anyway");
+    assert_eq!(qty(&b), (3, 3), "a's later copy did not apply");
+}
+
 /// **A newer device's child of a deleted parent is moot, never a permanent newer hold** (review
 /// focus 2). Moot is asked first because it is a fact about *this* device that no upgrade
 /// changes: held as newer, the child would wait for an update that cannot help it, and pin the
