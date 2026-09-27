@@ -7,8 +7,8 @@
 // filesystem, which nothing under `src/` may touch (the absent `@types/node` is the fence).
 import { readFileSync } from "node:fs";
 import { defineConfig, mergeConfig } from "vite";
-import base from "./vite.config";
-import { webAssetsPlugin } from "./src/pwa/webAssets";
+import base from "./vite.config.ts";
+import { webAssetsPlugin } from "./src/pwa/webAssets.ts";
 
 /** The two raster sizes the manifest names, read from the tracked masters in `logos/png/`. */
 const icons = ["mark-256.png", "mark-512.png"].map((name) => ({

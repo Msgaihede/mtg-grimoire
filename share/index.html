@@ -21,8 +21,14 @@
         committed golden — the same document `src-tauri/src/share/__golden__/snapshot.json` that
         both suites assert against — so the dev server draws a real binder rather than the
         "not ready yet" state.
+
+      `vite-ignore` because Vite 8 treats a `rel="preload" as="fetch"` link as an asset: without it
+      `share:build` copies the golden into `dist-share/assets/`, the folder the share Worker's
+      `assets` binding serves, and publishes a test fixture. Vite drops the attribute on output and
+      the dev server still answers the raw path.
     -->
     <link
+      vite-ignore
       id="snapshot"
       rel="preload"
       as="fetch"
