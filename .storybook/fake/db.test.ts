@@ -15275,6 +15275,89 @@ describe("deck tokens", () => {
   });
 
   /**
+   * **The hand-added tail answers any state but `auto`** — Task 1's fix round,
+   * `a_dismissed_token_nothing_makes_is_drawn_where_it_holds_an_entry`. A `hidden` row an older
+   * peer synced in, for a token nothing makes, is still the reader's: drawn in a list that holds an
+   * entry of it, and nowhere else. Deck 2's Oko emblem is kept by hand in both lists; dismissed,
+   * and taken off the plan, it stays on the live band.
+   */
+  it("draws a dismissed token nothing makes wherever it holds an entry", () => {
+    const db = seed("starter");
+    storedTokenRows(db, 2, TOKEN_ORACLE.okoEmblem)[0].state = "hidden";
+    db.deckTokenPrintings = db.deckTokenPrintings.filter(
+      (e) => !(e.deckId === 2 && e.oracleId === TOKEN_ORACLE.okoEmblem && e.variant === "theory"),
+    );
+
+    expect(rowsOf(db, 2, TOKEN_ORACLE.okoEmblem)).toEqual([
+      expect.objectContaining({ derived: false, state: "hidden", quantity: 1 }),
+    ]);
+    expect(rowsOf(db, 2, TOKEN_ORACLE.okoEmblem, "theory")).toEqual([]);
+  });
+
+  /**
+   * **Every write settles a stale `hidden`** — Task 1's `settle_hidden`, run inside `set_quantity`,
+   * `swap` and `remove_entry`: `auto` where the written list makes the token, `manual` where it does
+   * not — `add_printing`'s own rule. It rides the write's own history row and undo step, so one
+   * Ctrl+Z puts the count and the `hidden` back together.
+   */
+  it("settles a dismissed token's state with any write to it, and one undo restores both", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    // Deck 1 makes the lifelink Wurm, and the seed has it dismissed.
+    expect(storedTokenRows(db, 1, TOKEN_ORACLE.wurmLifelink)).toEqual([
+      expect.objectContaining({ state: "hidden" }),
+    ]);
+    const snapshot = () =>
+      JSON.stringify([
+        db.deckTokenPrintings.filter((e) => e.deckId === 1),
+        db.deckTokens.filter((t) => t.deckId === 1),
+      ]);
+    const before = snapshot();
+
+    h.deck_token_set_quantity({
+      deckId: 1,
+      variant: "live",
+      oracleId: TOKEN_ORACLE.wurmLifelink,
+      entry: null,
+      quantity: 1,
+    });
+    // Derived here, so `auto` — which, carrying no legacy count, is no row at all.
+    expect(storedTokenRows(db, 1, TOKEN_ORACLE.wurmLifelink)).toEqual([]);
+    expect(rowsOf(db, 1, TOKEN_ORACLE.wurmLifelink)).toEqual([
+      expect.objectContaining({ derived: true, state: "auto", quantity: 1 }),
+    ]);
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(snapshot()).toBe(before);
+  });
+
+  /** And where the written list does not make it, `manual` — for a swap and a remove alike. */
+  it("settles a dismissed token nothing makes to manual on a swap or a remove", () => {
+    for (const write of ["swap", "remove"] as const) {
+      const db = seed("starter");
+      const w = writeHandlers(db);
+      storedTokenRows(db, 2, TOKEN_ORACLE.okoEmblem)[0].state = "hidden";
+      const entry = { cardId: TOKEN_PRINTING.okoEmblem, finish: "nonfoil" };
+      if (write === "swap") {
+        w.deck_token_swap({
+          deckId: 2,
+          variant: "live",
+          oracleId: TOKEN_ORACLE.okoEmblem,
+          from: entry,
+          to: { cardId: TOKEN_PRINTING.okoEmblem, finish: "foil" },
+        });
+      } else {
+        // Still held on the plan, so the remove leaves it the reader's.
+        w.deck_token_remove({ deckId: 2, variant: "live", oracleId: TOKEN_ORACLE.okoEmblem, entry });
+      }
+      expect(storedTokenRows(db, 2, TOKEN_ORACLE.okoEmblem), write).toEqual([
+        expect.objectContaining({ state: "manual" }),
+      ]);
+    }
+  });
+
+  /**
    * **Dismiss, restore and Reset printings are gone from the fake as from the crate** (spec §3.3,
    * §3.4): a story that still pressed one would be answered `No fake handler registered`, which is
    * the truth about a build with no such command.
@@ -16041,6 +16124,45 @@ describe("Compare's token rows", () => {
         [TOKEN_ORACLE.treasure, "Treasure", "nonfoil", 3, null],
       ].sort(),
     );
+  });
+
+  /**
+   * **An entry whose printing has left the corpus is a row with no oracle card** — the crate's
+   * `oracle_id: None`: still answered, so Compare says the plan is short, but with no wish to file
+   * and no pool to draw from. So neither the Send-to-wishlist press nor a managed wishlist's settle
+   * can throw on the card that is no longer there; both pass over it.
+   */
+  it("answers a token entry whose printing left the corpus, and neither sends nor files it", () => {
+    const GONE = "gone-token-printing";
+    const db = world([
+      { cardId: GONE, finish: "nonfoil", quantity: 2 },
+      { cardId: TOKEN_PRINTING.treasureThob, finish: "nonfoil", quantity: 1 },
+    ]);
+
+    const tokens = diffOf(db).filter((row) => row.isToken);
+    expect(tokens).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ cardId: GONE, quantity: 2, setCode: "", heldAsOtherPrinting: 0 }),
+      ]),
+    );
+
+    const w = writeHandlers(db);
+    expect(
+      w.deck_theory_missing_to_wishlist({
+        deckId: 4,
+        only: [`${GONE}|`, `${TOKEN_PRINTING.treasureThob}|`],
+      }),
+    ).toBe(1);
+    expect(db.wishlistEntries.some((wish) => wish.cardId === GONE)).toBe(false);
+
+    // And the managed folder under All, whose settle reads the same rows.
+    w.deck_update({ id: 4, patch: { managedWishlist: "all" } });
+    expect(db.wishlistEntries.some((wish) => wish.cardId === GONE)).toBe(false);
+    expect(
+      db.wishlistEntries.some(
+        (wish) => wish.cardId === TOKEN_PRINTING.treasureThob && wish.folderId !== null,
+      ),
+    ).toBe(true);
   });
 });
 

@@ -365,17 +365,17 @@ describe("deckTokenViews", () => {
   });
 
   /**
-   * `overridden` drives **Remove printing** (managed tokens spec §3.4), so it has to mean "this
-   * list holds this entry" and nothing else — `deck_token_remove` deletes one stored entry, and an
-   * implicit one is not stored, so a Remove over it would be a press that changes nothing. The
-   * token's state is not part of it: a `hidden` implicit entry is as unstored as an `auto` one.
+   * `implicit` is what **Remove printing** is drawn by (managed tokens spec §3.4), on the band and
+   * the pile alike, so it passes through as Rust answered it and nothing else bends it —
+   * `deck_token_remove` deletes one stored entry, and an implicit one is not stored. The token's
+   * state is not part of it: a `hidden` implicit entry is as unstored as an `auto` one.
    */
-  it("marks an entry overridden exactly when this list holds it", () => {
+  it("passes implicit through as the read answered it, whatever the state", () => {
     const untouched = deckTokenViews([row()])[0];
-    expect(untouched.overridden).toBe(false);
+    expect(untouched.implicit).toBe(true);
     expect(untouched.state).toBe("auto");
-    expect(deckTokenViews([row({ implicit: false })])[0].overridden).toBe(true);
-    expect(deckTokenViews([row({ state: "hidden" })])[0].overridden).toBe(false);
+    expect(deckTokenViews([row({ implicit: false })])[0].implicit).toBe(false);
+    expect(deckTokenViews([row({ state: "hidden" })])[0].implicit).toBe(true);
   });
 });
 

@@ -227,7 +227,7 @@ export interface DeckTokensPanelProps {
    * The header's **Add printing**: open the picker on every token the deck has, to add one
    * printing at one copy (spec §4.6, rule 5) — or, with the picker's `All tokens`, a printing of
    * any token in the game. The host owns that picker too, and decides which tokens it lists; the
-   * band draws the button only on a deck with at least one token.
+   * band draws the button on every deck whose read has answered, one that makes nothing included.
    */
   onAddPrinting: () => void;
 }
@@ -302,12 +302,16 @@ export function DeckTokensPanel({
    * asserting a fact it does not have.
    */
   const answered = tokens.query.isSuccess;
-  /**
-   * There is something to expand — and a token to add a printing of, which is what the picker's
-   * `add` mode offers first. One answer since managed tokens: it was narrower for Add printing
-   * while a deck's every token could be dismissed, and nothing can be now.
-   */
+  /** There is something to expand: a wall with at least one tile on it. */
   const canOpen = rows.length > 0;
+  /**
+   * **Add printing is offered once the read has answered, and on every deck it answered for** —
+   * a deck whose cards make nothing included, which is the spec's own case for a token added by
+   * hand (managed tokens §1.3, §3.6); the picker opens on every token in the game there. Not
+   * before the answer — there is no deck to add to yet — and not beside a refused read, which has
+   * already said so in its alert.
+   */
+  const canAdd = answered && readFailure === null;
 
   return (
     // The Deck stats band's own grammar, character for character: a rule and the content under
@@ -377,11 +381,11 @@ export function DeckTokensPanel({
             press and not the pick is the moment, so a picker the reader dismisses still leaves
             them looking at the wall.
 
-            **Absent on a deck that makes nothing** (`canOpen`): the picker opens on the printings
-            of the deck's own tokens, and with none it would open on a sentence saying so. A greyed
-            control that spends the whole deck refusing is this band's own argument against
-            drawing one. */}
-        {canOpen && (
+            **Drawn on a deck that makes nothing too** (`canAdd`, fix round 1): the picker opens
+            there on every token in the game, `All tokens` already pressed, because a token the
+            deck does not make is exactly what a reader adds by hand. Its press still opens the
+            band, so the first token added is on screen the moment it lands. */}
+        {canAdd && (
           <button
             type="button"
             onClick={() => {

@@ -85,6 +85,13 @@ describe("managedEmptySentence", () => {
     expect(new Set(said).size).toBe(4);
   });
 
+  /** The settle drops the Tokens child when the deck is short of no token, so the parent's
+   *  sentence must not point at *the* folder as though it were always there. */
+  it("names no Tokens folder under `tokens` that may not exist", () => {
+    expect(MANAGED_EMPTY.tokens).not.toMatch(/the Tokens folder/);
+    expect(MANAGED_EMPTY.tokens).toMatch(/a Tokens folder inside it/);
+  });
+
   it("keeps the words this page already said for `missing`", () => {
     expect(managedEmptySentence("missing")).toBe(
       "Nothing missing — this deck has every card its plan asks for.",

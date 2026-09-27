@@ -130,7 +130,8 @@ export const AllTokens: Story = {
  * **What this is for is first paint.** Every group is `content-visibility: auto` with an intrinsic
  * size one row tall, so the groups off screen cost no layout and no paint; opening the toggle here
  * is the measurement the managed-tokens spec asks for, and the number is in the change's record
- * rather than in this file.
+ * rather than in this file. **In a browser**, never under the story runner — see
+ * {@link AllTokensAtScale}.
  */
 const SCALE_TOKENS = 1_078;
 const SCALE_PRINTINGS = 3_245;
@@ -182,19 +183,20 @@ function ScaleHost(props: PickerHostProps): JSX.Element {
   return <PickerHost {...props} />;
 }
 
+/**
+ * **A measurement fixture with no `play`, on purpose** (fix round 1), so the story runner skips
+ * it and a browser is the only thing that presses its toggle.
+ *
+ * It had a play that waited for all 1 078 groups: 3.4–4.3 s a run under `src/stories.test.tsx`
+ * alone, 6.6–9.0 s on a loaded machine, against the runner's 15 s `testTimeout` — a flake waiting
+ * for CI. Asserting only the first-paint groups did not help, and a probe inside the play said
+ * why: **the press took 4.2 s and returned with all 1 078 groups already in the document**. Under
+ * the runner the click is wrapped in `act`, which flushes React's deferred render synchronously,
+ * so jsdom cannot see a first paint at all — the play was a whole-wall render test whatever it
+ * asserted. The structure first paint rests on is held by `TokenArtPicker.test.tsx` (`content-
+ * visibility` and the intrinsic size on every group); the timing is the live pass's — open this
+ * story in Storybook and press `All tokens`.
+ */
 export const AllTokensAtScale: Story = {
   render: (args) => <ScaleHost {...args} />,
-  play: async ({ canvasElement }) => {
-    const body = within(canvasElement.ownerDocument.body);
-    const dialog = await body.findByRole("dialog", { name: "Add a printing" });
-    await within(dialog).findAllByRole("button", { name: / — / });
-    await userEvent.click(within(dialog).getByRole("button", { name: "All tokens" }));
-    // Counted by attribute rather than by role: a role query computes an accessible name for
-    // each of a thousand lists, which is the slow part of a jsdom run and asserts nothing more.
-    await waitFor(async () => {
-      await expect(dialog.querySelectorAll('ul[aria-label^="Token "]')).toHaveLength(
-        SCALE_TOKENS,
-      );
-    });
-  },
 };

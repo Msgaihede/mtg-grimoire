@@ -460,8 +460,9 @@ export interface FakeWishlistFolder {
    * User schema v54's `managed_tokens` — **this folder is the deck's `Tokens` subfolder** rather
    * than the deck's own managed folder (managed tokens spec §3.8). The subfolder's identity is this
    * column and never its name, and it carries the deck's {@link managedDeckId} too, so every guard
-   * on a managed folder covers it; absent or `false` is every other folder. Not on the DTO: the
-   * page tells the two apart by `parentId`, and nothing it draws depends on which is which.
+   * on a managed folder covers it; absent or `false` is every other folder. **On the DTO** as
+   * {@link WishlistFolder.managedTokens} (`toWishlistFolder` answers `false` for absent): a list of
+   * managed folders by name leaves these out, and an empty one says its own sentence.
    */
   managedTokens?: boolean;
 }
@@ -5872,13 +5873,15 @@ function frontFaceImageUris(db: FakeDb, cardId: string | null): DeckTokenRow["im
 /**
  * `deck_tokens::deck_token_rows` — one list's tokens as the read answers them, **one row per
  * entry**: every token the list derives (its entries, or its one implicit entry), by name then
- * oracle id, and after them the `manual` tokens nothing derives, which answer **only the entries
+ * oracle id, and after them the stored tokens nothing derives, which answer **only the entries
  * this list holds** (managed tokens spec §3.4, `a_hand_added_token_is_drawn_only_in_a_list_that_
  * holds_an_entry_of_it`) — a token nothing makes has no default printing for an implicit row to
  * stand for, so a list with none of it draws nothing of it.
  *
- * **The state is passed through and filters nothing**, `hidden` included: whether a row is drawn
- * is the page's question, and since managed tokens the page draws every one.
+ * **That tail is any state but `auto`** (Task 1's fix round): a `hidden` row an older peer synced
+ * in for a token nothing makes is the reader's as a `manual` one is, and is drawn where it holds an
+ * entry. Otherwise **the state is passed through and filters nothing**: whether a row is drawn is
+ * the page's question, and since managed tokens the page draws every one.
  */
 function deckTokenRows(
   db: FakeDb,
@@ -5894,7 +5897,7 @@ function deckTokenRows(
   );
   const derivedIds = new Set(derived.map((d) => d.token.oracleId));
   const manual = db.deckTokens
-    .filter((t) => t.deckId === deckId && t.state === "manual" && !derivedIds.has(t.oracleId))
+    .filter((t) => t.deckId === deckId && t.state !== "auto" && !derivedIds.has(t.oracleId))
     // A stored row whose oracle id names no token in the corpus is dropped rather than drawn as a
     // hole — the empty `flatMap` arm is what drops one, and it is the same call the resolver
     // makes about an `all_parts` id `cards` has no row for.
@@ -13463,6 +13466,25 @@ function writeTokenState(
   });
 }
 
+/**
+ * `deck_tokens::settle_hidden` (Task 1's fix round) — **a write to a dismissed token settles its
+ * state**: `auto` where the written list makes the token, `manual` where it does not, which is
+ * {@link addTokenPrinting}'s own rule. Nothing reads `hidden` since managed tokens, and a v54
+ * launch retires every one it holds, but an older peer can still sync one in; the first write
+ * after that puts it right. Called inside the write's {@link journalTokens} closure, so the change
+ * rides that write's history row and undo step. Any other state is left alone.
+ */
+function settleHiddenToken(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  oracleId: string,
+): void {
+  if (storedToken(db, deckId, oracleId)?.state !== "hidden") return;
+  const here = derivedPrintingOf(db, deckId, variant, oracleId) !== undefined;
+  writeTokenState(db, deckId, oracleId, here ? "auto" : "manual");
+}
+
 /** The printing a list's derivation names for one token, or `undefined` where the list does not
  *  make it — `deck_tokens::derived_printing`. */
 function derivedPrintingOf(
@@ -15455,10 +15477,15 @@ function tokenDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[]
     const short = quantity - (live.get(k) ?? 0);
     if (short <= 0) continue;
     const finish: DeckFinish = row.finish === "nonfoil" ? null : row.finish;
-    const take = Math.min(short, pool.get(row.oracleId) ?? 0);
-    pool.set(row.oracleId, (pool.get(row.oracleId) ?? 0) - take);
+    // **An entry whose printing has left the corpus** answers no set code, and is the crate's
+    // `oracle_id: None`: still a row — the plan is short of it — but no oracle card to pin a wish
+    // to and no pool to draw from, so the Send press and the managed settle both pass over it
+    // (`oracleId === null`) rather than throwing on a card that is not there.
+    const gone = row.setCode === null;
+    const take = gone ? 0 : Math.min(short, pool.get(row.oracleId) ?? 0);
+    if (!gone) pool.set(row.oracleId, (pool.get(row.oracleId) ?? 0) - take);
     rows.push({
-      oracleId: row.oracleId,
+      oracleId: gone ? null : row.oracleId,
       row: {
         cardId: row.cardId,
         name: row.name,
@@ -19556,6 +19583,7 @@ export function writeHandlers(db: FakeDb) {
         const others = tokenEntries(db, args.deckId, variant, args.oracleId).length - 1;
         if (quantity === 0 && others > 0) dropTokenEntry(db, args.deckId, target);
         else putTokenEntry(db, args.deckId, { ...target, quantity });
+        settleHiddenToken(db, args.deckId, variant, args.oracleId);
         return tokenChange("quantity", target.quantity, quantity, target);
       });
     },
@@ -19608,6 +19636,8 @@ export function writeHandlers(db: FakeDb) {
           quantity: (held?.quantity ?? 0) + source.quantity,
         };
         putTokenEntry(db, args.deckId, landed);
+        // After the real swap only — the no-op above returns before it, as the crate's does.
+        settleHiddenToken(db, args.deckId, variant, args.oracleId);
         return tokenChange(
           "swap",
           tokenEntryFacts(db, source),
@@ -19674,6 +19704,9 @@ export function writeHandlers(db: FakeDb) {
         if (held === undefined) throw refuse(TOKEN_ENTRY_GONE);
         const row = entryRowOf(held);
         dropTokenEntry(db, args.deckId, row);
+        // A dismissed token settles first, as in the crate — the check below can still send it
+        // on to `auto`.
+        settleHiddenToken(db, args.deckId, variant, args.oracleId);
         // A token with no entry left in either list, which **this** list does not make, is
         // nothing of the reader's: back to `auto`, which deletes an otherwise empty row. The
         // crate asks about this list alone — where the other list makes the token, `auto` draws

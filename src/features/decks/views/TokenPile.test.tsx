@@ -60,7 +60,6 @@ function token(over: Partial<DeckTokenView> = {}): DeckTokenView {
     sources: [{ cardId: "c-smothering-tithe", name: "Smothering Tithe" }],
     derived: true,
     state: "auto",
-    overridden: false,
     subtitle: "Colorless · {T}, Sacrifice this token: Add one mana of any color.",
     imageUrl: null,
     imageUris: null,

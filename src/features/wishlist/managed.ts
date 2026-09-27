@@ -71,14 +71,17 @@ export function managedIds(folders: readonly WishlistFolder[]): ReadonlySet<numb
  *
  * **`tokens` since user schema v54** (managed tokens spec §3.8) is the one view whose folder is
  * *always* empty of its own: it files the plan's missing tokens in a `Tokens` folder inside it and
- * no card in itself, so its sentence says where the wishes are rather than that there are none.
+ * no card in itself, so its sentence says where the wishes go rather than that there are none —
+ * *a* Tokens folder, since there is none while the deck is short of nothing.
  */
 export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> = {
   all: "The two lists agree — everything this deck's plan asks for is already in the deck.",
   missing: "Nothing missing — this deck has every card its plan asks for.",
   other: "No substitutions — nothing in this deck stands in for a printing its plan asks for.",
+  // "*a* Tokens folder": the settle drops that folder when the deck is short of no token, so the
+  // sentence must not point at one as though it were always there.
   tokens:
-    "This folder follows the plan's tokens and holds no card itself — any token the deck is short of is in the Tokens folder inside it.",
+    "This folder follows the plan's tokens and holds no card itself — any token the deck is short of is filed in a Tokens folder inside it.",
 };
 
 /**

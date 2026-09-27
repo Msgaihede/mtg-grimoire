@@ -784,10 +784,21 @@ function starterWishes(): FakeWish[] {
       notes: "The reprint is announced; this is the pile that waits for it.",
     }),
     // --- Deck 4's managed wishlist: what its Compare dialog lists, theory less live ------------
-    // Written by the deck and not the reader, so every row here is one Rust would have written
-    // at rest — {@link testbedDeckCards}' plan against its sleeved list. The foil `sld 913` Sol
-    // Ring is the `Different printing` row and keeps its finish; the Black Lotus is short because
-    // the live copy sits in the switched-off Cut list; the other three are plain `Missing`.
+    // Written by the deck and not the reader — {@link testbedDeckCards}' plan against its sleeved
+    // list. The Black Lotus is short because the live copy sits in the switched-off Cut list; it
+    // and the three after it are plain `Missing`, which is the view deck 4 follows.
+    //
+    // ⚠️ **The foil `sld 913` Sol Ring is NOT what a settle leaves here, and it is kept on
+    // purpose.** It is the `Different printing` row — short one, and that one held as the deck's
+    // two `c21 263` copies — so `missing` wants none of it (its quantity less `heldAsOtherPrinting`
+    // is 0), and the first press that settles deck 4's folder in the fake drops it: a token write,
+    // a `deck_update` to the name, the theory switch, the kind or the mode, a delete, an undo or a
+    // redo. It predates issue #512's per-view quantity, when the folder held every row of the diff.
+    // **Kept because the seeded wishlist is counted with it in**: `WishlistValueWidget`'s stories
+    // read *thirteen wishes*, with this row among the copies no marketplace quotes (the corpus's
+    // `sld 913` carries no price), and `db.test.ts`'s Compare-send test names it as the managed
+    // row its own assertion steps around. Settling the seed would move those counts for a row no
+    // story presses; a story that does settle deck 4 sees the folder `missing` really holds.
     pinnedWish(next(), printing("sld", "913"), 1, {
       folderId: MANAGED_TESTBED_FOLDER,
       preferredFinish: "foil",

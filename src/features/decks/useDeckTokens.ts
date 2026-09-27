@@ -224,8 +224,8 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
     /** Add one copy of a printing in a finish to this list — the band's *Add printing*, from the
      *  deck's own tokens or, with `All tokens`, from every token in the game. */
     addPrinting,
-    /** **Remove printing**: one stored entry of this list, deleted — the affordance
-     *  `DeckTokenView.overridden` draws. */
+    /** **Remove printing**: one stored entry of this list, deleted — drawn on every entry that
+     *  is not `DeckTokenView.implicit`. */
     remove,
   };
 }
