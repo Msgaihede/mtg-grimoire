@@ -5341,7 +5341,7 @@ fn prune_user_backups(backups: &std::path::Path) {
             Some((n, entry.path()))
         })
         .collect();
-    copies.sort_by(|a, b| b.0.cmp(&a.0));
+    copies.sort_by_key(|c| std::cmp::Reverse(c.0));
     for (_, path) in copies.into_iter().skip(USER_BACKUPS_KEPT) {
         let _ = std::fs::remove_file(path);
     }
