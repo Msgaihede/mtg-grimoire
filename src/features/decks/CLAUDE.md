@@ -93,6 +93,27 @@ Full record, with every measurement and the provenance of each rung:
 - **The name is the user's; the kind is what the rules read.** `deck_cards.category_id` points at
   a row the user names, reorders, switches off and deletes; the fixed word survives only as that
   row's `kind` — `main | side | commander | companion | maybe`, narrowed in TS as `CategoryKind`.
+- **A pile belongs to one list — Theory or Actual — and nothing about it crosses to the other**
+  (user schema v53, [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561)).
+  `deck_categories.variant` is the same two words as `deck_cards.variant`, and every card is
+  filed into a pile of its own list; Rust refuses the other list's pile in words. The two lists
+  are separate versions of the deck, so a pile, its name, its order and its switch are each
+  list's own — a reader can switch the Sideboard off in the plan and leave it on in the deck they
+  own, or keep a "Cut candidates" pile in one only. **The comparison is the only link between the
+  two** (`TheoryDiffDialog`, `deck_theory::theory_diff`), and it matches cards, never piles. The
+  bug this replaced: one pile set per deck, so a `user` pile made on the Theory tab drew — empty —
+  on the Actual one, because `drawsWhenEmpty` draws every `user` pile. Three things follow:
+  - **Only one press carries piles across, and it pours one list into the other.** Switching the
+    plan on moves the live cards into theory and **clones** each live pile for them (the live
+    piles stay, empty), and its undo takes the clones away again. (The other writer this sentence
+    named, `deck_theory_copy_from_live`, was removed on 2026-09-27 for having no caller.)
+  - **`decks.default_category_id` is still one deck setting, and it names a _live_ pile** — Deck
+    settings mounts the live list. On the Theory tab `defaultPileFor` resolves it by id, then by
+    that pile's **name** among the plan's piles, else Auto: the setting is a place, and "my
+    Sideboard" is a place both lists have.
+  - **v53 cloned every pile of every deck with a plan**, so the day after the upgrade each Theory
+    tab looks exactly as it did the day before — and from then on the two diverge only when the
+    reader makes them.
 - **`origin` is a second fact of exactly that kind, and it says who _made_ the pile.**
   `deck_categories.origin` (schema v15) is `'auto'` where the app invented a column while filing a
   card and `'user'` where the reader pressed "New category" — the four seeded zones included, which
@@ -307,12 +328,14 @@ reader to configure the deck they had just made; it now asks all of them.
   `TIGHT_HEADER_PX`, so a control pressed once a season would be paid for in width by the ones
   pressed all day. This dialog is opened deliberately, read, and shut, which is the shape of press
   a whole-list clear wants.
-  **Both counts come off the read this dialog already makes, and a second `useDeck` is the fix to
-  refuse.** `Settings` mounts `useDeck(deckId)` — the **live** list — and a `DeckCategory` carries
-  two counts: `cardCount` is that pile in the variant that was asked for, `cardCountAllVariants` is
-  the same pile across both lists whichever variant asked. So `liveCount` is `Σ cardCount`,
-  `theoryCount` is `Σ cardCountAllVariants − liveCount`, and mounting `useDeck(deckId, "theory")`
-  beside it buys a second `deck_get` for a number already in hand.
+  **The live count comes off the read this dialog already makes, and a second `useDeck` is the fix
+  to refuse.** `Settings` mounts `useDeck(deckId)` — the **live** list — so `liveCount` is
+  `Σ cardCount` over its piles. **The theory count is one `deckCategoryList(deckId, "theory")`**,
+  enabled only on `theoryEnabled` and summed the same way. It used to be a subtraction —
+  `Σ cardCountAllVariants − liveCount` — off the one pile set both lists shared, and user schema
+  v53 (issue #561) is what ended that: a pile now belongs to one list, so a live read can no
+  longer see a theory copy at all. A pile list is still far cheaper than the second `deck_get`
+  that mounting `useDeck(deckId, "theory")` would buy.
   **The live button is unconditional and the theory one is drawn only on `theoryEnabled`**: every
   deck has a live list — **a Virtual one included, which is why this whole section survives on a
   deck where the shortfall section above it does not** — but a deck with the plan switched off has
@@ -844,11 +867,11 @@ layer.
   header, with a refusal on the fourth column leaving half the deck gone and nothing able to say
   so. [decks-storage.md](../../../docs/reference/decks-storage.md) carries the rest, including the
   copies a **live** clear files back into `Recently removed` at either scope.
-  **Both are scoped to one variant**, which is the exact reverse of `deleteCategory`: that one
-  cascades through both lists, so its confirmation quotes `cardCountAllVariants`, while a clear's
-  quotes the count of the list it is emptying and says in words that the other list is untouched.
-  Getting those two numbers the wrong way round in a confirmation mis-states a destructive press,
-  which is the one direction a confirmation must never be wrong in.
+  **Both are scoped to one variant, and since user schema v53 so is `deleteCategory`** — a pile
+  belongs to one list (issue #561), so all three confirmations quote `cardCount`. Until then a
+  delete cascaded through both lists and quoted `cardCountAllVariants`, a field that is gone:
+  getting the two numbers the wrong way round mis-stated a destructive press, and the cure was to
+  make there be only one number.
   **`clearDeck` takes the variant as a mutation _argument_, and it is the one write in `useDeck`
   that does not use the hook's own** — `DeckSettingsDialog` mounts `useDeck(deckId)`, which reads
   **live**, and one of the two presses it draws empties _theory_. A `clearDeck` reading the hook's
@@ -2312,8 +2335,8 @@ layer.
   `format_key` has left the seed — and `?? false` is the deliberate answer to both: no format
   opinion, no empty command zone, and the zone appears the moment it holds a card.
 - **`drawsWhenEmpty` takes a `Pick<CardGroup, "kind" | "isAuto">` and an `EmptyGroupRules`, and
-  still structurally cannot read the name.** `deck_category_create` takes `(deck_id, name)` and no
-  kind, so `commander` and `companion` can only ever be the two seeded zones, while a pile a reader
+  still structurally cannot read the name.** `deck_category_create` takes `(deck_id, variant, name)` and
+  no kind, so `commander` and `companion` can only ever be the two seeded zones, while a pile a reader
   called "Sideboard" is a `main` like every other pile of theirs — and `categoryGroup` is the one
   place a name is consulted at all. Three tests and the three classes: companion, commander, then
   `!isAuto`. **`isPredefined` is not among them any more.** It was the whole of this rule once —
@@ -2787,7 +2810,7 @@ layer.
 - **The Sideboard and the Maybeboard are a rail pinned to the right of the flow, and neither is
   ever packed.** `splitRail` in `views/columns.ts` takes them out before the pack runs, on
   **`kind === "side" || kind === "maybe"` and nothing else** — the name is the user's
-  (`DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so any pile may be called "Sideboard"), and the kind
+  (`DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)`, so any pile may be called "Sideboard"), and the kind
   is what the rules read. Both were the greedy pack's worst case: a category like any other, so each
   landed wherever the run put it, which on a long sideways run was off the right-hand edge. **The
   Maybeboard is there for the same three reasons the Sideboard is** — it is played _beside_ the deck

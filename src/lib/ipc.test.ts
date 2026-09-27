@@ -1269,10 +1269,9 @@ describe("ipc argument names match the Rust command signatures", () => {
   it("sends every category command under the name its command declares", async () => {
     invoke.mockResolvedValue([]);
     await ipc.deckCategoryList(4, "theory", "manapool");
-    // The variant scopes the two **counts** on each row and nothing else — the list of
-    // categories is the same either way, which is what keeps the editor's columns still while
-    // the reader switches lists. The marketplace scopes one of those two numbers: `totalPrice`
-    // is a sum *at* a marketplace, and two of them are not conversions of each other.
+    // The variant picks which list's piles come back — each list has its own since user schema
+    // v53 (issue #561). The marketplace scopes one of the two numbers on each: `totalPrice` is a
+    // sum *at* a marketplace, and two of them are not conversions of each other.
     expect(invoke).toHaveBeenCalledWith("deck_category_list", {
       deckId: 4,
       variant: "theory",
@@ -1280,8 +1279,13 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
 
     invoke.mockResolvedValue({ id: 7 });
-    await ipc.deckCategoryCreate(4, "Ramp");
-    expect(invoke).toHaveBeenCalledWith("deck_category_create", { deckId: 4, name: "Ramp" });
+    await ipc.deckCategoryCreate(4, "theory", "Ramp");
+    // A pile is made in one list — the variant is part of its grain, not a filter on its counts.
+    expect(invoke).toHaveBeenCalledWith("deck_category_create", {
+      deckId: 4,
+      variant: "theory",
+      name: "Ramp",
+    });
 
     await ipc.deckCategoryRename(7, "Acceleration");
     // `id`, not `deckId`: a category names its own deck, so a rename does not.
@@ -4662,9 +4666,11 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     expect([...tsPredicate].sort()).toEqual([...rustPredicate].sort());
 
     const fields = rustVariants(cardFiltersRs, "PredicateField").map(variantName);
-    expect(fields).toHaveLength(12);
+    expect(fields).toHaveLength(13);
     expect(fields).toContain("typeLine");
     expect(fields).toContain("cmc");
+    // The one field no keyword names — a leading `-` on free text (issue #571).
+    expect(fields).toContain("name");
     expect([...tsUnion(ipcSource, "PredicateField")].sort()).toEqual([...fields].sort());
 
     const ops = rustVariants(cardFiltersRs, "PredicateOp").map(variantName);

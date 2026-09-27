@@ -313,8 +313,8 @@ pub fn prune_activity_log(conn: &Connection) -> rusqlite::Result<usize> {
 /// At launch, beside the sync's and the feed refresh's own calls, so that the first launch after
 /// an upgrade already has a baseline day — see [`crate::price_history`]. It is idempotent per day
 /// (each snapshot replaces the marketplace's whole day), so a launch that follows a sync the same
-/// afternoon costs one delete and one insert per marketplace and leaves the day describing the
-/// collection as it stands now.
+/// afternoon leaves the day describing the collection as it stands now — and writes only the rows
+/// that changed in between, which is usually none.
 pub fn snapshot_prices(conn: &Connection) -> rusqlite::Result<usize> {
     crate::price_history::snapshot(conn)
 }

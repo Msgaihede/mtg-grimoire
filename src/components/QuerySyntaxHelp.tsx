@@ -94,10 +94,12 @@ export function QuerySyntaxHelp() {
       {/* The one thing the table cannot say: what happens when a reader types two terms. It is
           first because it is true of every row under it, and it is the only prose here — a
           second paragraph restating the keywords in sentences is the drift this component's
-          whole shape refuses. */}
+          whole shape refuses. The name exclusion is here rather than in the table because it
+          has no keyword to be a row under: it is a `-` on plain words and nothing else. */}
       <p className="text-xs leading-5 text-dim">
         Terms narrow together. A leading <code className={LITERAL}>-</code> excludes one:{" "}
-        <code className={LITERAL}>-t:land</code>
+        <code className={LITERAL}>-t:land</code>, or a name:{" "}
+        <code className={LITERAL}>{'-"lightning bolt"'}</code>
       </p>
 
       <div className="mt-3">

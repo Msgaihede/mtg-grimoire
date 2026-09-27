@@ -13,8 +13,8 @@ import worker, { type Env } from "./index";
  * suite that called the handlers would pass unchanged with the gate deleted.
  *
  * There is no test runner for workerd in this tree, deliberately —
- * `@cloudflare/vitest-pool-workers` drags wrangler and workerd into a suite pinned to vitest
- * 4.1.10, and `vite.config.ts` says so. These handlers are therefore plain functions over an
+ * `@cloudflare/vitest-pool-workers` drags wrangler and workerd into the tree and peers on a
+ * vitest older than this suite's, and `vite.config.ts` says so. These handlers are therefore plain functions over an
  * injected `Env`, and `fakeD1`'s SQL evaluator is the whole of what they need: D1 and nothing
  * else. The blob half is R2 and is Task 5's, in its own file.
  */

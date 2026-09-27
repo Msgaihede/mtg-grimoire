@@ -429,10 +429,10 @@ function category(
     isActive: kind !== "maybe",
     origin: "user",
     sortOrder: id - 1,
-    // The heading counts the rows it was handed, so these three are read by nothing here.
+    variant: "live",
+    // The heading counts the rows it was handed, so these two are read by nothing here.
     cardCount: 0,
     totalPrice: null,
-    cardCountAllVariants: over.cardCount ?? 0,
     ...over,
   };
 }
@@ -5339,7 +5339,7 @@ describe("DeckEditor drag and drop", () => {
       await userEvent.type(field, "Removal");
       await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
-      await waitFor(() => expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Removal"));
+      await waitFor(() => expect(deckCategoryCreate).toHaveBeenCalledWith(4, "live", "Removal"));
       // The id the create answered with, not the name — the second write addresses a row.
       await waitFor(() =>
         expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", 9, null, "live", null, 1),
@@ -7066,10 +7066,10 @@ describe("DeckEditor — a category's menu", () => {
   /**
    * The deck the fixtures build has `cardCount: 0` on every pile, so `Clear stack…` is greyed
    * there — this is the deck the four cases below need: a Main deck holding four copies of one
-   * card in the live list, and one in the theory list it must not reach.
+   * card in the live list.
    */
   function withCardsInMain() {
-    const main = category(1, "Main deck", "main", { cardCount: 4, cardCountAllVariants: 5 });
+    const main = category(1, "Main deck", "main", { cardCount: 4 });
     const categories = [main, ...CATEGORIES.slice(1)];
     deckGet.mockResolvedValue(detail({}, [bolt()], categories));
     deckCategoryList.mockResolvedValue(categories);
@@ -7110,15 +7110,14 @@ describe("DeckEditor — a category's menu", () => {
   });
 
   /**
-   * **The question counts the list on screen and says the other one is safe.**
+   * **The question counts the pile, names the list on screen, and says nothing about the other.**
    *
-   * `cardCount` is variant-scoped and `cardCountAllVariants` is not, so the difference is the
-   * copies in the list the reader is *not* looking at — and a clear cannot reach them. Quoting
-   * the wrong one of the two here would overstate a destructive press, which is the one
-   * direction a confirmation must never be wrong in. (The delete confirmation quotes the other
-   * number, correctly, because that command cascades through both lists.)
+   * A pile belongs to one list since user schema v53 (issue #561), so its `cardCount` is every
+   * copy it holds and the other list has nothing filed here to reassure the reader about. The
+   * sentence that used to say "…filed here in the other list is untouched" must not come back:
+   * it would be a promise about cards that cannot be in this pile.
    */
-  it("counts the variant on screen and says the other list is untouched", async () => {
+  it("counts the pile on screen and says nothing about the other list", async () => {
     withCardsInMain();
     await open();
     await rightClickGroup(MAIN);
@@ -7128,12 +7127,7 @@ describe("DeckEditor — a category's menu", () => {
     await waitFor(() =>
       expect(within(dialog).getByText(/4 cards in it leave the actual list/)).toBeVisible(),
     );
-    // **Through the verb, not up to it.** `/1 card filed here in the other list/` passed against
-    // "…other list are untouched" as readily as against the "is" that agrees with one card, so
-    // the assertion could not fail for the thing it looks like it is checking.
-    expect(
-      within(dialog).getByText(/1 card filed here in the other list is untouched/),
-    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/in the other list/)).not.toBeInTheDocument();
   });
 
   /** A refused clear is said **inside** the dialog, for the reason the delete's refusal is: the

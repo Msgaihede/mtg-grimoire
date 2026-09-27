@@ -46,7 +46,7 @@ function category(
     sortOrder,
     cardCount: 0,
     totalPrice: null,
-    cardCountAllVariants: 0,
+    variant: "live",
     ...over,
   };
 }

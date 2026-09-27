@@ -313,11 +313,26 @@ impl Cell {
 #[serde(rename_all = "camelCase")]
 pub struct CategoryRow {
     pub id: i64,
+    /// Which list the pile belongs to — `live` or `theory` (user schema v53, issue #561).
+    ///
+    /// **`#[serde(default)]` to `live`, because a step is a serialised format** and every step
+    /// written before v53 carries no such field. Every pile *was* a live one then — the rung
+    /// clones theory piles under fresh ids and leaves the originals where they stood — so `live`
+    /// is not a guess about an old step, it is what that step meant. [`patch_category`] never
+    /// writes it: a pile does not change lists, and [`categories_hold`] comparing it is what
+    /// refuses a step that would.
+    #[serde(default = "live_variant")]
+    pub variant: String,
     pub name: String,
     pub kind: String,
     pub is_active: bool,
     pub sort_order: i64,
     pub origin: String,
+}
+
+/// [`CategoryRow::variant`]'s default — the list every pile belonged to before user schema v53.
+fn live_variant() -> String {
+    crate::schema::DECK_VARIANTS[0].to_owned()
 }
 
 /// One `deck_labels` row, as a step carries it.
@@ -657,9 +672,10 @@ pub fn record_step(
 /// read here, from the same transaction, after it. Both sides name the same scope, which is
 /// what makes the pair reversible in either direction: undo deletes the scope and puts `before`
 /// back, redo deletes it and puts `after` back.
-/// `made` is the deck's category ids **before** the write, for the two commands that can invent
-/// a pile — [`crate::deck::add_card`]'s name arm and the importer, both through
-/// `category_for_name`. `None` where the command cannot create one, which skips the diff.
+/// `made` is the deck's category ids **before** the write, for the commands that can invent a
+/// pile — [`crate::deck::add_card`]'s and [`crate::deck::move_card`]'s name arms and the
+/// importer, all through `category_for_name`.
+/// `None` where the command cannot create one, which skips the diff.
 /// Without it, undoing a quick add that invented `Ramp` puts the card back and leaves the
 /// column standing: harmless on screen, because TypeScript hides an empty `auto` pile, and a
 /// lie about what the deck contained a moment ago.
@@ -741,7 +757,12 @@ pub(crate) fn push_removed_tokens(
 /// delete CASCADEs whatever is still in it. On the redo side the restore goes *first*, because
 /// `deck_cards.category_id` is a real foreign key and the cards have nowhere to land until the
 /// pile is back.
-fn push_made_categories(
+///
+/// `pub(crate)` for `deck::update_deck`'s theory switch, the one step built by hand that can
+/// invent piles: since user schema v53 a pile belongs to one list, so switching the plan on
+/// clones the live piles into it, and an undo that left those clones standing would leave the
+/// Theory tab with columns the reader never made.
+pub(crate) fn push_made_categories(
     tx: &Connection,
     deck_id: i64,
     made: Option<Vec<i64>>,
@@ -971,7 +992,7 @@ fn card_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CardRow> {
 /// One `deck_categories` row, for the "before" side of a category step.
 pub fn read_category(conn: &Connection, id: i64) -> Result<Option<CategoryRow>, String> {
     conn.query_row(
-        "SELECT id, name, kind, is_active, sort_order, origin
+        "SELECT id, name, kind, is_active, sort_order, origin, variant
            FROM deck_categories WHERE id = ?1",
         params![id],
         |r| {
@@ -982,6 +1003,7 @@ pub fn read_category(conn: &Connection, id: i64) -> Result<Option<CategoryRow>, 
                 is_active: r.get(3)?,
                 sort_order: r.get(4)?,
                 origin: r.get(5)?,
+                variant: r.get(6)?,
             })
         },
     )
@@ -993,7 +1015,7 @@ pub fn read_category(conn: &Connection, id: i64) -> Result<Option<CategoryRow>, 
 pub fn read_categories(conn: &Connection, deck_id: i64) -> Result<Vec<CategoryRow>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, kind, is_active, sort_order, origin
+            "SELECT id, name, kind, is_active, sort_order, origin, variant
                FROM deck_categories WHERE deck_id = ?1 ORDER BY id",
         )
         .map_err(|e| e.to_string())?;
@@ -1006,6 +1028,7 @@ pub fn read_categories(conn: &Connection, deck_id: i64) -> Result<Vec<CategoryRo
                 is_active: r.get(3)?,
                 sort_order: r.get(4)?,
                 origin: r.get(5)?,
+                variant: r.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1781,7 +1804,7 @@ fn categories_hold<'a>(
     for row in rows {
         let now = tx
             .query_row(
-                "SELECT id, name, kind, is_active, sort_order, origin
+                "SELECT id, name, kind, is_active, sort_order, origin, variant
                    FROM deck_categories WHERE id = ?1 AND deck_id = ?2",
                 params![row.id, deck_id],
                 |r| {
@@ -1792,6 +1815,7 @@ fn categories_hold<'a>(
                         is_active: r.get(3)?,
                         sort_order: r.get(4)?,
                         origin: r.get(5)?,
+                        variant: r.get(6)?,
                     })
                 },
             )
@@ -2124,8 +2148,9 @@ fn restore_category(
         let fresh: i64 = tx
             .query_row(
                 "INSERT INTO deck_categories
-                    (deck_id, name, kind, is_active, sort_order, origin, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch(), unixepoch())
+                    (deck_id, name, kind, is_active, sort_order, origin, variant,
+                     created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), unixepoch())
                  RETURNING id",
                 params![
                     deck_id,
@@ -2133,7 +2158,8 @@ fn restore_category(
                     row.kind,
                     row.is_active,
                     row.sort_order,
-                    row.origin
+                    row.origin,
+                    row.variant
                 ],
                 |r| r.get(0),
             )
@@ -2142,8 +2168,9 @@ fn restore_category(
     } else {
         tx.execute(
             "INSERT INTO deck_categories
-                (id, deck_id, name, kind, is_active, sort_order, origin, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), unixepoch())",
+                (id, deck_id, name, kind, is_active, sort_order, origin, variant,
+                 created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, unixepoch(), unixepoch())",
             params![
                 row.id,
                 deck_id,
@@ -2151,7 +2178,8 @@ fn restore_category(
                 row.kind,
                 row.is_active,
                 row.sort_order,
-                row.origin
+                row.origin,
+                row.variant
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -2662,8 +2690,17 @@ mod tests {
         .id
     }
 
+    /// The live pile of that name, found or made — the list every fixture here files into
+    /// unless it says otherwise.
     fn category(conn: &Connection, deck_id: i64, name: &str) -> i64 {
-        crate::deck_meta::category_for_name(conn, deck_id, name).unwrap()
+        category_in(conn, deck_id, "live", name)
+    }
+
+    /// The pile of that name in one list, found or made. **Since user schema v53 each list keeps
+    /// its own piles** and every card write refuses a pile of the other list, so a theory card is
+    /// filed through this with `"theory"` and never through [`category`].
+    fn category_in(conn: &Connection, deck_id: i64, variant: &str, name: &str) -> i64 {
+        crate::deck_meta::category_for_name(conn, deck_id, variant, name).unwrap()
     }
 
     fn quantity(conn: &Connection, deck_id: i64, category_id: i64, card_id: &str) -> i64 {
@@ -2690,6 +2727,11 @@ mod tests {
     /// restored the right count in the wrong object — the assertion would be there and would be
     /// checking nothing. A column added to `deck_cards` that a reader can see is owed a place
     /// here in the same commit.
+    ///
+    /// **A pile's `variant` is read for the same reason** (user schema v53): each list keeps its
+    /// own piles, and a reversal that put a pile back into the wrong list would otherwise restore
+    /// the right name, kind and order and pass — while the Theory tab lost a column and the
+    /// Actual tab gained one.
     fn snapshot(conn: &Connection, deck_id: i64) -> Vec<String> {
         let mut out = Vec::new();
         let mut cards = conn
@@ -2723,19 +2765,20 @@ mod tests {
         );
         let mut cats = conn
             .prepare(
-                "SELECT name, kind, is_active, sort_order, origin
+                "SELECT variant, name, kind, is_active, sort_order, origin
                    FROM deck_categories WHERE deck_id = ?1",
             )
             .unwrap();
         out.extend(
             cats.query_map(params![deck_id], |r| {
                 Ok(format!(
-                    "category {}|{}|{}|{}|{}",
+                    "category {}|{}|{}|{}|{}|{}",
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(2)?,
                     r.get::<_, i64>(3)?,
-                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, String>(5)?,
                 ))
             })
             .unwrap()
@@ -2838,14 +2881,20 @@ mod tests {
 
     /// A deck with two piles, a label and some cards in it — enough state that a step which
     /// dropped a column would show up in [`snapshot`] rather than comparing two empty decks.
+    ///
+    /// **The theory card has a `Ramp` of its own** (user schema v53): a pile belongs to one list,
+    /// so the plan's `Ramp` is a second row beside the live one, and filing `bolt-m10` into the
+    /// live pile is refused. Two same-named piles in two lists is also what makes a reversal that
+    /// restored a pile into the wrong list show up in [`snapshot`].
     fn fresh() -> (Connection, i64) {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let ramp = category(&conn, id, "Ramp");
         let draw = category(&conn, id, "Draw");
+        let plan = category_in(&conn, id, "theory", "Ramp");
         crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", None, 2).unwrap();
         crate::deck::add_card(&conn, id, "serra-lea", Some(draw), None, "live", None, 1).unwrap();
-        crate::deck::add_card(&conn, id, "bolt-m10", Some(ramp), None, "theory", None, 3).unwrap();
+        crate::deck::add_card(&conn, id, "bolt-m10", Some(plan), None, "theory", None, 3).unwrap();
         let label = crate::deck_meta::create_label(&conn, Some(id), "Cut candidate", "amber")
             .unwrap()
             .id;
@@ -2860,6 +2909,12 @@ mod tests {
 
     fn draw(conn: &Connection, deck_id: i64) -> i64 {
         category(conn, deck_id, "Draw")
+    }
+
+    /// The plan's own `Ramp`, which [`fresh`] files its theory card into — [`ramp`] is the live
+    /// list's, and a theory write naming it is refused.
+    fn plan_ramp(conn: &Connection, deck_id: i64) -> i64 {
+        category_in(conn, deck_id, "theory", "Ramp")
     }
 
     /// The card commands, each driven once over the same fixture.
@@ -3179,7 +3234,33 @@ mod tests {
                 // The one deck-row write that moves cards. The audit row says
                 // `{field:"theory",from:false,to:true}` and nothing anywhere else records which
                 // rows were live — this case is why the journal exists at all.
+                //
+                // **The plan is emptied first**, because [`fresh`] starts one and a started plan
+                // is the arm that moves nothing. And since user schema v53 the move also clones
+                // every live pile into the plan and files each card into its clone, so the undo
+                // has to take those clones away with the cards — [`snapshot`] reads every pile
+                // with its list, which is what holds the step to that.
                 "deck_update (theory on, which moves the live list)",
+                |c, id| {
+                    crate::deck::clear_variant(c, id, "theory").unwrap();
+                },
+                |c, id| {
+                    crate::deck::update_deck(
+                        c,
+                        id,
+                        &crate::deck::DeckPatch {
+                            theory_enabled: Some(true),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                },
+            ),
+            (
+                // The arm that moves nothing — a plan already started, which is [`fresh`]'s — and
+                // still writes piles since user schema v53: the plan's four rules zones, which it
+                // has none of until the switch makes them. Undo takes them away again.
+                "deck_update (theory on over a plan already started)",
                 nothing,
                 |c, id| {
                     crate::deck::update_deck(
@@ -3323,8 +3404,17 @@ mod tests {
     fn meta_write_cases() -> Vec<Case> {
         vec![
             ("deck_category_create", nothing, |c, id| {
-                crate::deck_meta::create_category(c, id, "Removal").unwrap();
+                crate::deck_meta::create_category(c, id, "live", "Removal").unwrap();
             }),
+            (
+                // The Theory tab's press: the pile is made in the plan alone (user schema v53), so
+                // a redo that restored it without its list would put it on the Actual tab.
+                "deck_category_create (in the plan)",
+                nothing,
+                |c, id| {
+                    crate::deck_meta::create_category(c, id, "theory", "Removal").unwrap();
+                },
+            ),
             ("deck_category_rename", nothing, |c, id| {
                 crate::deck_meta::rename_category(c, ramp(c, id), "Acceleration").unwrap();
             }),
@@ -3332,18 +3422,22 @@ mod tests {
                 crate::deck_meta::set_category_active(c, ramp(c, id), false).unwrap();
             }),
             ("deck_category_reorder", nothing, |c, id| {
+                // One list's piles: each list orders its own since user schema v53, and a reorder
+                // naming both is refused. [`fresh`] has piles in both.
                 let ids: Vec<i64> = crate::deck_undo::read_categories(c, id)
                     .unwrap()
                     .into_iter()
+                    .filter(|cat| cat.variant == "live")
                     .rev()
                     .map(|cat| cat.id)
                     .collect();
                 crate::deck_meta::reorder_categories(c, id, &ids).unwrap();
             }),
             (
-                // The CASCADE case: the pile goes and takes its cards, in **both** variants.
-                // Its history row says `cards: 7` and calls that "the only part of a deleted
-                // category a reader cannot get back".
+                // The CASCADE case: the pile goes and takes its cards. Its history row says
+                // `cards: 7` and calls that "the only part of a deleted category a reader cannot
+                // get back". **One list's cards since user schema v53** — the pile holds nothing
+                // else — so the setup gives it a second printing rather than a theory row.
                 "deck_category_delete (cascading its cards)",
                 |c, id| {
                     crate::deck::add_card(
@@ -3352,7 +3446,7 @@ mod tests {
                         "serra-lea",
                         Some(ramp(c, id)),
                         None,
-                        "theory",
+                        "live",
                         None,
                         2,
                     )
@@ -3360,6 +3454,16 @@ mod tests {
                 },
                 |c, id| {
                     crate::deck_meta::delete_category(c, ramp(c, id), None).unwrap();
+                },
+            ),
+            (
+                // The same over the plan's `Ramp`, which shares its name with a live pile: the
+                // undo has to bring it back **into the plan**, which is `CategoryRow::variant`'s
+                // whole job, and the theory card with it.
+                "deck_category_delete (a plan's pile, cascading its cards)",
+                nothing,
+                |c, id| {
+                    crate::deck_meta::delete_category(c, plan_ramp(c, id), None).unwrap();
                 },
             ),
             (
@@ -3629,7 +3733,8 @@ mod tests {
                 },
             ),
             (
-                // The second: a pile deleted takes its cards with it, in both lists.
+                // The second: a pile deleted takes its cards with it — its own list's, which since
+                // user schema v53 is the only list a pile holds.
                 "deck_category_delete (the maker's pile)",
                 two_treasures,
                 |c, id| {
@@ -4135,7 +4240,7 @@ mod tests {
         crate::deck_meta::delete_category(&conn, ramp, None).unwrap();
 
         // The reader makes another pile, which takes the freed rowid.
-        let usurper = crate::deck_meta::create_category(&conn, id, "Draw")
+        let usurper = crate::deck_meta::create_category(&conn, id, "live", "Draw")
             .unwrap()
             .id;
         assert_eq!(
@@ -5221,6 +5326,16 @@ mod tests {
         );
     }
 
+    /// How many piles the deck's plan has.
+    fn plan_piles(conn: &Connection, deck_id: i64) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM deck_categories WHERE deck_id = ?1 AND variant = 'theory'",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
     /// **The view state is not a reason to refuse.** Turning theory on with an empty plan moves
     /// the live list into it and `last_variant` to `theory`, and switching tabs afterwards moves
     /// that again through `set_view_state`, which files no step. The deck has not been *edited*
@@ -5228,6 +5343,10 @@ mod tests {
     ///
     /// **Not [`fresh`]**: its plan already holds a card, so the switch moves nothing and leaves
     /// `last_variant` alone — and this case would pass with the view columns compared.
+    ///
+    /// **And the plan's piles go with the undo** (user schema v53): the move cloned every live
+    /// pile into the plan, and a Ctrl+Z that put the flag and the cards back while leaving those
+    /// clones would leave theory piles on a deck with no plan.
     #[test]
     fn switching_tabs_after_turning_theory_on_does_not_block_its_undo() {
         let conn = seeded();
@@ -5256,6 +5375,10 @@ mod tests {
             (1, "theory".to_owned()),
             "the press moved the view, or this case proves nothing"
         );
+        assert!(
+            plan_piles(&conn, id) > 0,
+            "the press cloned the live piles into the plan, or the last assertion proves nothing"
+        );
         crate::deck::set_view_state(
             &conn,
             id,
@@ -5273,6 +5396,11 @@ mod tests {
             quantity(&conn, id, ramp, "bolt-lea"),
             2,
             "and the list is live again"
+        );
+        assert_eq!(
+            plan_piles(&conn, id),
+            0,
+            "and the piles the switch cloned into the plan went with it"
         );
     }
 
@@ -5426,10 +5554,13 @@ mod tests {
         );
     }
 
-    /// The deck's piles by name — whether a pile of that name is there, and how many.
+    /// The deck's live piles by name — whether a pile of that name is there, and how many.
+    /// **The live list's only**: since user schema v53 [`fresh`]'s plan has a `Ramp` of its own,
+    /// and the cases below are about the live one.
     fn piles_named(conn: &Connection, deck_id: i64, name: &str) -> i64 {
         conn.query_row(
-            "SELECT count(*) FROM deck_categories WHERE deck_id = ?1 AND name = ?2",
+            "SELECT count(*) FROM deck_categories
+              WHERE deck_id = ?1 AND variant = 'live' AND name = ?2",
             params![deck_id, name],
             |r| r.get(0),
         )
@@ -5469,13 +5600,13 @@ mod tests {
 
     /// The same over a pile's name: a pile deleted with a step and made again with none — the
     /// Collection tab's filing by name makes one — passes the check and then fails the
-    /// `(deck_id, name)` index on every press.
+    /// `(deck_id, variant, name)` index on every press.
     #[test]
     fn undoing_a_pile_delete_after_the_pile_was_made_again_is_retired() {
         let (conn, id) = fresh();
         let below = next_undo(&conn, id).unwrap().unwrap();
         crate::deck_meta::delete_category(&conn, ramp(&conn, id), None).unwrap();
-        crate::deck_meta::category_for_name(&conn, id, "Ramp").unwrap();
+        crate::deck_meta::category_for_name(&conn, id, "live", "Ramp").unwrap();
 
         assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
         assert_eq!(piles_named(&conn, id, "Ramp"), 1);
@@ -5489,7 +5620,7 @@ mod tests {
     #[test]
     fn undoing_a_new_pile_is_retired_once_a_card_was_filed_into_it_without_a_step() {
         let (conn, id) = fresh();
-        let pile = crate::deck_meta::create_category(&conn, id, "Removal")
+        let pile = crate::deck_meta::create_category(&conn, id, "live", "Removal")
             .unwrap()
             .id;
         conn.execute(
