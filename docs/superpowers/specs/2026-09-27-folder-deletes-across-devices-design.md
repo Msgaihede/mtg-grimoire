@@ -116,6 +116,11 @@ CREATE TABLE sync_gone (
   `INSERT OR IGNORE INTO sync_gone SELECT DISTINCT tbl, uid FROM sync_ops WHERE kind = 'del' AND
   tbl IN (<the seven, frozen in the rung>)`, so every delete `gone` could see yesterday it still
   sees. Deletes applied from peers before the upgrade left no row anywhere and are not recovered.
+- **A delete of a row this device never held tombstones too** *(amended 2026-09-27, at Task D)*:
+  a parent created and deleted on a third device between two of this device's pulls arrives as a
+  put and a `del` folding to deleted, writes no row and so fires no trigger — `write_group`'s delete
+  arm records the tombstone itself where the table is a parent and no local row was found, or a
+  child of it on a later page would wait out the bound.
 - **Nothing clears it.** Leaving a group keeps it, as it keeps `sync_ops`; a resurrected parent
   is found by `resolve_parent` before `gone` is ever asked, so a stale tombstone is never read.
 - **A new user table owes its sites** (sync.md's list): `USER_SCHEMA_SQL` and `UNDO_V53`,
@@ -166,10 +171,17 @@ Every `DELETE` `apply` issues — `write_group`'s delete arm and the moot delete
 - **Why wait rather than merge at once.** Merging on the first attempt would fold a copy the
   sender has itself just merged onto the root, and the sender's own `+n` for the twin would then
   add it a second time.
-- **Why only on a collision.** A delete that clears copies onto free grains is left in its place:
-  `SET NULL` keeps each copy's uid, so the sender's own move of it applies afterwards either way,
-  and keeping the delete in stamp order keeps a folder deleted and re-made at the same grain in
-  one page right (§3.5).
+- **Every delete that would clear rows waits, not only a colliding one** *(amended 2026-09-27, at
+  Task B's review; the approved text deferred only on a collision)*. Only on a collision left two
+  losses: a sender that makes a new root copy and then deletes a binder whose copy folds into it
+  sends the peer a delete that does not collide yet (the root copy has not landed) — the copy is
+  re-homed, the new copy's insert grain-matches it, and the counts part; and a folder deleted and
+  re-made at the same grain in one page lost the re-made row where its delete waited
+  (`reset::clear_collection` re-makes `Recently removed` and every deck group in one write — an
+  ordinary press, not a corner). So a delete whose doomed set is non-empty waits for the retry, and
+  **a grain match onto a row this page deletes adopts the incoming uid rather than `min`**
+  (`find_row`): the sender retired the old uid, so the re-made row keeps the new one, and the
+  retried delete finds nothing to take.
 - **The backstop.** Every `DELETE` `apply` issues runs inside the group's savepoint, and a refusal
   rolls it back and becomes `Why::Unbuildable(<the constraint's words>)` — dropped and recorded,
   or held where the sender is newer — never `?`. The moot delete already did this; the ordinary
@@ -190,11 +202,12 @@ waits.
 
 ### 3.5 What is left
 
-- **A folder deleted and re-made at the same grain in one page, whose delete also had to wait,
-  loses the re-made row where its uid sorts higher.** The re-made row's put grain-matches the old
-  row the waiting delete is about to take, keeps the old uid, and the retry deletes it. The one
-  real case is a deck switched to Virtual and back between two pulls, with a copy in its group the
-  root also holds.
+- ~~A folder deleted and re-made at the same grain in one page loses the re-made row~~ — closed by
+  §3.3's amendment (the incoming uid wins a grain match onto a row the page deletes).
+- **A copy re-homed onto a twin the sender never had can leave one `error_log` row describing no
+  fault**: the sender's own later move of it names the uid that lost the fold, finds no row, and is
+  skipped. Counts and identity still converge (the sender adopts the twin's uid when the twin's put
+  reaches it). Read off the code and unmeasured.
 - **Provenance can differ after a concurrent merge.** The re-homing coalesces the survivor's price,
   date, source and notes over the source's; the sender's grain match takes each field by
   last-writer-wins. Counts and identity converge; a field both rows carried may not.
