@@ -305,7 +305,6 @@ were not sharing one database — the second had silently been given a different
 - **The commands `COMMANDS` does not name** — `node scripts/routed-census.mjs` lists them by
   file — and the modules in the right-hand column above. (This line read **132** from the PR-10
   era, then **41** from 2026-09-08, and stopped carrying a number on 2026-09-27.)
-- **The image cache.** On web it is Cache Storage, which is a rewrite rather than a port.
 - **The price feeds**, and **Mana Pool is unavailable on web at all** (spec §5.3): it sends no
   `Access-Control-Allow-Origin`. Card Kingdom does. *(PR 11 built the path; the CORS finding
   stands, so Mana Pool's export is expected to fail in a browser.)*
@@ -313,9 +312,16 @@ were not sharing one database — the second had silently been given a different
   `ToWorker` case the app does not have, and adding one only to measure would have been
   scaffolding rather than a path the app has. Not measured, deliberately. *(PR 11 added the
   `ToWorker` case. It still has not been run in a browser.)*
-- **The PWA shell** — manifest, service worker, update bar, evicted-corpus recovery. PR 5.
 - **Sync, pairing, the relay.** Phase 3.
 - **Mobile layout.** Phase 5.
+
+**Two lines left this list on 2026-09-27, both long since built.** *The image cache* — on web it
+is the service worker's `grimoire-images` Cache Storage bucket with its own ledger, capped and
+cleared from Settings, and `images.rs` stays gated out of the crate because it was rewritten
+rather than ported. *The PWA shell* — manifest, service worker, update bar and evicted-corpus
+recovery. Both are recorded in [pwa-shell.md](pwa-shell.md), and the cache clear in
+[the 2026-08-31 section](#2026-08-31-the-last-control-on-settings--the-cache-clear-works-in-a-browser)
+below.
 
 ## The toolchain
 

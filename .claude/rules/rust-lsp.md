@@ -38,11 +38,13 @@ symbol's whole range, so `pub fn open` at `db.rs:113` is reported as **line 106*
 cite a `documentSymbol` line number as a declaration site**; confirm with `workspaceSymbol` or a
 read.
 
-**Only `src-tauri` is loaded. The `spike/` crates are not.** They are the only `.rs` outside
-`src-tauri/`, and rust-analyzer resolves nothing in them: a hover there returns empty and moves
-the CPU counter by 0.0s on an idle server. That is expected — they are throwaway wasm probes with
-their own standalone `[workspace]`. Use grep and read them directly; an empty LSP answer in
-`spike/` is not a broken server.
+**Only `src-tauri` is loaded as a workspace.** The one crate with `.rs` outside it is
+`crates/card-scanner`, which is deliberately not a workspace member (its own `Cargo.toml` says
+why) but is a path dependency of `src-tauri`, so rust-analyzer reaches it through that dependency
+rather than as a workspace of its own. How the server answers inside it has not been measured
+here; if a query there comes back empty, confirm with grep and a read before calling the server
+broken. (The `spike/` wasm probes that this paragraph used to describe were deleted on
+2026-09-27; they had their own standalone `[workspace]` and resolved nothing.)
 
 **A `rust-analyzer.toml` in this repo does nothing — do not add one.** Verified across two clean
 restarts, at both the repo root and `src-tauri/`, with every path spelling: `files.exclude` naming

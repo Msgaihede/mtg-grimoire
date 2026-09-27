@@ -14895,48 +14895,13 @@ function createDeckGroup(db: FakeDb, deckId: number, name: string): FakeCollecti
 }
 
 /**
- * `deck_theory::seed_from_live` — copy the live list into the theory one, leaving whatever
- * theory already holds alone.
- *
- * `ON CONFLICT … DO NOTHING` on the grain rather than a fold, and the distinction is the whole
- * point: a theory row the user already made is *their plan for that card*, and topping it up
- * with the live count would silently overwrite the very edit the theory list exists to hold.
- * So this is a seed that can also top up — idempotent, never destructive.
- *
- * `labelId` and `needsReview` travel with the copy. A label is the user's word about this card in
- * this deck and a plan inherits it; the flag says the printing left the card database, which is
- * as true of the copy as of the original.
- *
- * **Moves no copies**, and must not: what a deck holds is where its rows physically sit, and a
- * plan that took a card out of a binder would be reserving something nobody has sleeved up.
- *
- * Answers the number of **rows** written, which is what `execute` counts — never copies.
- */
-function seedFromLive(db: FakeDb, deckId: number): number {
-  let rows = 0;
-  for (const live of db.deckCards.filter((dc) => dc.deckId === deckId && dc.variant === LIVE)) {
-    const held = db.deckCards.some(
-      (dc) =>
-        dc.deckId === deckId &&
-        dc.variant === "theory" &&
-        dc.categoryId === live.categoryId &&
-        dc.cardId === live.cardId,
-    );
-    if (held) continue;
-    db.deckCards.push({ ...live, id: nextId(db.deckCards), variant: "theory" });
-    rows += 1;
-  }
-  return rows;
-}
-
-/**
  * `deck_theory::move_live_to_theory` — what switching the plan **on** does, and it is a move
  * rather than a copy.
  *
  * The deck the reader built *becomes* the plan: every `live` row changes variant, and the live
- * list is left **empty**. That is the whole difference from {@link seedFromLive}, which copies
- * and leaves both lists holding the same cards — and it is a difference about what the two
- * lists mean rather than about rows. Enabling the switch is the moment a reader says "this is
+ * list is left **empty**. That is the whole difference from a copy, which would leave both lists
+ * holding the same cards — and it is a difference about what the two lists mean rather than
+ * about rows. Enabling the switch is the moment a reader says "this is
  * what I am working toward, not what is sleeved up"; a copy would leave a live list nobody had
  * decided was real, and every count on the gallery tile would go on claiming copies for it.
  *
@@ -14980,7 +14945,13 @@ function moveLiveTokensToTheory(db: FakeDb, deckId: number): void {
   }
 }
 
-/** `deck_theory::theory_copies` — copies, not rows. Two printings at 2 and 3 is 5 cards. */
+/**
+ * Copies the theory list holds, summed — copies, not rows. Two printings at 2 and 3 is 5 cards.
+ *
+ * Its one reader is the theory switch's emptiness guard, where `=== 0` stands in for
+ * `deck_theory::theory_is_empty`. The crate's own copy-counting twin went on 2026-09-27 with the
+ * copy-from-live command that was its only caller.
+ */
 function theoryCopies(db: FakeDb, deckId: number): number {
   return db.deckCards
     .filter((dc) => dc.deckId === deckId && dc.variant === "theory")
@@ -17552,8 +17523,9 @@ export function writeHandlers(db: FakeDb) {
      * **Two guards on that move, and both are about not destroying an edit.** It happens only on
      * the false→true *transition*, and only when the theory list is **empty** — a plan the reader
      * has already started is not something a re-press of the switch may pour the live deck over.
-     * A reader who wants the deck copied into a plan they have already begun asks for it by name:
-     * {@link deck_theory_copy_from_live} still copies, and still skips rather than folding.
+     * Nothing else copies one list into the other either: the explicit copy-from-live command
+     * that used to sit beside this switch never had a caller and was removed on 2026-09-27, so a
+     * plan already begun grows only through the ordinary card writes.
      *
      * **And the third kind, schema v40.** `virtualOnly` and `theoryEnabled` are one three-way
      * choice wearing two columns, so setting either **clears the other in the same write** —
@@ -19728,37 +19700,6 @@ export function writeHandlers(db: FakeDb) {
         if (deck.folderId !== null && doomed.has(deck.folderId)) {
           deck.folderId = null;
         }
-    },
-
-    /**
-     * `deck_theory::copy_from_live` — seed the theory list from the live one, answering how many
-     * **rows** were written.
-     *
-     * **The one command that still copies**, and the reason it is worth having beside
-     * {@link moveLiveToTheory}: switching the plan on *moves* the deck into it, while this
-     * duplicates a live list that stays exactly where it is. It is what a reader reaches for to
-     * start a plan again from what is sleeved up, and it is the only way to fill a plan that
-     * already has something in it — the switch refuses to touch one of those on purpose.
-     *
-     * It folds nothing and overwrites nothing: a theory row the reader already made is their
-     * plan for that card.
-     *
-     * **Records exactly one history row**, kind `deck`, field `theory`, carrying the *copies* it
-     * added in both the payload and `delta` — which makes it the one `deck`-kind row that can
-     * move the day header's arithmetic, by up to ninety-nine. One row and not one per card: N
-     * `add` rows would read as a deck somebody typed out.
-     */
-    deck_theory_copy_from_live: (args: { deckId: number }): number => {
-      refuseIfBusy(db);
-      const deck = requireDeck(db, args.deckId);
-      // Measured either side of the insert rather than derived from its row count: a row is a
-      // line and a copy is a card, and this app counts decks in cards everywhere else.
-      const before = theoryCopies(db, deck.id);
-      const rows = seedFromLive(db, deck.id);
-      const copied = theoryCopies(db, deck.id) - before;
-      record(db, deck.id, "theory", "deck", null, { field: "theory", copied }, copied);
-      deck.updatedAt = stamp(db);
-      return rows;
     },
 
     /**

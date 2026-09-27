@@ -1900,8 +1900,8 @@ Full detail, with the measurements and the traps behind each rule, is in
   rows fold in the SQL with it** — `GROUP BY dc.card_id, dc.finish`, which is `group_key`'s own
   grain: two `Vec` entries spelling one key were harmless while the caller built a set out of
   them and would be a silently halved plan now.
-  `deck_theory_copy_from_live` still means "copy what is sleeved up into the plan" and is no
-  longer what the switch does.
+  The explicit copy-from-live command that used to sit beside the switch was removed on
+  2026-09-27: it never had a caller, so nothing in the crate copies one list into the other now.
 - **There are three deck kinds, they are two booleans, and nothing may add a third column or an
   enum** (schema v40, [issue #401](https://github.com/Msgaihede/mtg-grimoire/issues/401)).
   `theory_enabled`/`virtual_only` reads `0/0` regular, `1/0` theory-and-actual and `0/1`
