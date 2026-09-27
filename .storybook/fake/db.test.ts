@@ -12998,6 +12998,7 @@ describe("categories, labels, folders, history and the plan", () => {
         {
           id: 99,
           deckId: 1,
+          variant: "live",
           name: "Doomed",
           kind: "main",
           isActive: true,
