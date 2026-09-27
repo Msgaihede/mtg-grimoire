@@ -76,6 +76,16 @@ pub struct SearchRequest {
     /// Card-type chips — [`crate::cardtypes::TYPE_KEYS`] entries, ORed with each other. See
     /// [`crate::filters::CardFilters::types`].
     pub types: Option<Vec<String>>,
+    /// Border chips — [`crate::filters::BORDER_KEYS`] entries (`regular`/`borderless`/
+    /// `fullart`), ORed with each other. `regular` is neither of the other two, and a
+    /// borderless full-art printing answers both of them. See
+    /// [`crate::filters::CardFilters::borders`].
+    pub borders: Option<Vec<String>>,
+    /// Finish chips over the **printing** — [`crate::filters::FINISH_KEYS`] entries, "is this
+    /// printing published in this finish", ORed with each other. `printedFinishes` on the wire,
+    /// because the collection's query has a `finishes` of its own for the copy's finish. See
+    /// [`crate::filters::CardFilters::printed_finishes`].
+    pub printed_finishes: Option<Vec<String>>,
     /// The cheapest and dearest a printing may cost at [`Self::marketplace`] and still match.
     ///
     /// Inclusive on both ends, either half usable alone, and **an unpriced printing matches
@@ -220,6 +230,8 @@ impl SearchRequest {
             rarity: self.rarity.clone(),
             rarities: self.rarities.clone(),
             types: self.types.clone(),
+            borders: self.borders.clone(),
+            printed_finishes: self.printed_finishes.clone(),
             paper_only: self.paper_only,
             playable_only: self.playable_only,
             art_tags: self.art_tags.clone(),

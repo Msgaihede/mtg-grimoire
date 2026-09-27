@@ -10,6 +10,15 @@ deliberately**: no screenshots are stored.
 
 ## Rules for the fake
 
+- **Every command `generate_handler!` registers has a handler in `allHandlers`, and
+  `fake/parity.test.ts` is the fence** (issue #559, 2026-09-27). It reads `src-tauri/src/desktop.rs`
+  as text, takes the macro's last-segment names, and fails on a Rust command the fake does not
+  answer **and** on a fake handler for a command Rust no longer registers (the `plugin:…|…` three
+  aside). Before it, a missing handler was a runtime `No fake handler registered` in whichever
+  story reached it — or nothing, when the caller swallowed the rejection. **A command the fake
+  deliberately leaves unanswered goes in its `ABSENT` map with a reason**, and the map is held
+  exact: an entry the fake has since answered, or Rust has since dropped, fails too. It compares
+  **names only** — arguments and payload shapes are still `ipc.ts`'s mirror and the stories'.
 - **`main.ts` aliases four specifiers** — `@tauri-apps/api/core`, `@tauri-apps/api/event`,
   `@tauri-apps/api/window` and `@/lib/images` — to `.storybook/fake/`. **The fake sits _under_
   `src/lib/ipc.ts`, not in place of it**, and that is the point: `ipc.ts` is a hand-written mirror
@@ -371,8 +380,9 @@ deliberately**: no screenshots are stored.
 - **CSS is `.storybook/preview.css`, never `src/index.css` directly** — that file declares
   `@source "../.storybook"` itself, because `@source` resolves relative to the declaring file.
   Declaring it in `src/index.css` shipped Storybook's utilities to users.
-- **`npm run build-storybook` runs in CI's `frontend` job, and it is the only gate `DesignSystem.mdx`
-  has** — `tsc` reads only `.ts`/`.tsx` and ESLint ignores the file.
+- **`npm run build-storybook` runs in CI's `storybook` job, and it is the only gate `DesignSystem.mdx`
+  has** — `tsc` reads only `.ts`/`.tsx` and ESLint ignores the file. (It was the last step of
+  `frontend` until 2026-09-27.)
 
 ## Rules that bite from outside
 

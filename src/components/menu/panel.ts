@@ -20,20 +20,24 @@ import type { MenuPosition } from "./types";
  * type exists to make.
  */
 
-/** Marks one menu surface — the root panel, or any open submenu's panel. */
-export const PANEL_ATTR = "data-menu-panel";
-/** How deep that panel is: `0` is the root, `1` its submenu, and so on. */
+/** How deep a menu panel is: `0` is the root, `1` its submenu, and so on. */
 export const DEPTH_ATTR = "data-menu-depth";
 /** Marks a row's outer box, which for a submenu row also contains that submenu's panel. */
 export const ROW_ATTR = "data-menu-row";
-/** Marks the focusable control inside a row box, as against anything nested below it. */
-export const ROW_BUTTON_ATTR = "data-menu-row-button";
 
 /**
- * The four attribute spellings above, as selectors.
+ * The attributes a menu marks its panels and rows with, as selectors: `data-menu-panel` is one
+ * menu surface — the root panel, or any open submenu's — `data-menu-row` a row's outer box, and
+ * `data-menu-row-button` the focusable control inside that box, as against anything nested below
+ * it.
  *
- * Written out rather than built from the constants so that a `querySelector` string is a string
- * the browser and a reader can both parse at a glance. The pair is two lines apart on purpose.
+ * Written out rather than built from constants so that a `querySelector` string is a string the
+ * browser and a reader can both parse at a glance. **Only one of the three has an `_ATTR`
+ * constant beside it, and that is not an oversight.** `ContextMenu.tsx` and `Submenu.tsx` render
+ * every one of these as a JSX literal, and the panel and row-button spellings are only ever read
+ * back through the selectors here — so the `PANEL_ATTR` and `ROW_BUTTON_ATTR` that used to stand
+ * above named nothing any file imported, and went on 2026-09-27. `ROW_ATTR` stays because
+ * `folderMenu.tsx` reads it, and {@link DEPTH_ATTR} because {@link depthOf} does.
  */
 export const PANEL_SELECTOR = "[data-menu-panel]";
 export const ROW_SELECTOR = "[data-menu-row]";

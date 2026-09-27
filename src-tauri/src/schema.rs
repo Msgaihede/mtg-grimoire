@@ -4964,8 +4964,11 @@ fn create_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()> 
 /// ladder's rather than carrying `IF NOT EXISTS`: [`migrate_corpus`] guards it on a version of
 /// **0**, which is what an unshaped file reads as and the only version this can survive. Every
 /// statement in [`CORPUS_SCHEMA_SQL`] is a bare `CREATE TABLE`, so calling this on a corpus that
-/// has any shape at all raises `table cards already exists` and stops the launch — which is why
-/// corpus schema 2 is [`rebuild_combo_tables`] and not a second call to this function.
+/// has any shape at all raises `table cards already exists` — which is why corpus schema 2 is
+/// [`rebuild_combo_tables`] and not a second call to this function. **That state is no longer
+/// reachable by a kill** — the build and its stamp share one transaction since issue #550 — and a
+/// file that is in it anyway (one the old ladder left behind) is replaced by
+/// [`prepare_database`] rather than stopping the launch.
 pub fn create_corpus_schema(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
     conn.execute_batch(&on_schema(schema, CORPUS_SCHEMA_SQL))?;
     create_combo_tables(conn, schema)?;
@@ -5048,8 +5051,20 @@ fn create_fts_in(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
 /// does need a `VACUUM` runs after a sync instead, once per database: see
 /// [`crate::maintenance::convert_to_incremental`].
 pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
-    migrate_user(conn)?;
-    migrate_corpus(conn)?;
+    migrate_user(conn).map_err(|e| in_file(e, "your collection (user.db)"))?;
+    // **A corpus that will not migrate is a corpus to replace, not a launch to stop** (issue
+    // #550). Everything in it comes back from a feed, so the price of a rebuild is a resync —
+    // and the price of stopping was an app that would not start, with a message naming the
+    // reader's own collection file, over a file the app could have thrown away. The one
+    // failure this does not cover is one that says nothing about the file: see
+    // [`says_nothing_about_the_file`].
+    if let Err(e) = migrate_corpus(conn) {
+        if says_nothing_about_the_file(&e) {
+            return Err(in_file(e, "the card database (corpus.db)"));
+        }
+        replace_attached_corpus(conn, e)
+            .map_err(|e| in_file(e, "the card database (corpus.db)"))?;
+    }
     // **Fatal, like the two migrations above and unlike the two repairs below.** A device whose
     // capture triggers are missing goes on working perfectly and records nothing, so its edits
     // reach no other device — silently, for as long as it is used. There is no message this
@@ -5139,6 +5154,210 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Prefix a migration's error with the file it came from, keeping its SQLite code.
+///
+/// **Because the launch's refusal is read by a person deciding which file to touch**, and until
+/// issue #550 a corpus failure reached them under a sentence naming `user.db` — the one file in
+/// the folder that cannot be rebuilt. The code survives so [`says_nothing_about_the_file`] can
+/// still be asked of it; only an `SqliteFailure` carries a message to prefix, and every other
+/// variant passes through unlabelled rather than being turned into something it was not.
+fn in_file(e: rusqlite::Error, file: &str) -> rusqlite::Error {
+    match e {
+        rusqlite::Error::SqliteFailure(code, message) => rusqlite::Error::SqliteFailure(
+            code,
+            Some(format!(
+                "{file}: {}",
+                message.unwrap_or_else(|| code.to_string())
+            )),
+        ),
+        other => other,
+    }
+}
+
+/// Whether a failed [`migrate_corpus`] said nothing about the corpus file itself — a busy or
+/// locked database, a read-only or full disk, a file that could not be opened, an I/O error, no
+/// memory. **Those stop the launch as before rather than deleting 800 MB**: a false positive
+/// costs the reader a whole resync, and on a full or read-only stick the rebuild could not
+/// succeed anyway. It is [`classify_check_error`]'s caution applied from the other side: that
+/// function names what *is* damage, this one what is *not*, because a migration fails in more
+/// ways than a read — `table cards already exists`, `no such column`, a constraint — and every
+/// one of those is a fact about a file the app is free to throw away.
+fn says_nothing_about_the_file(e: &rusqlite::Error) -> bool {
+    use rusqlite::ffi::ErrorCode;
+    matches!(
+        e.sqlite_error_code(),
+        Some(
+            ErrorCode::DatabaseBusy
+                | ErrorCode::DatabaseLocked
+                | ErrorCode::ReadOnly
+                | ErrorCode::DiskFull
+                | ErrorCode::CannotOpen
+                | ErrorCode::SystemIoFailure
+                | ErrorCode::PermissionDenied
+                | ErrorCode::OutOfMemory
+                | ErrorCode::NoLargeFileSupport
+        )
+    )
+}
+
+/// Throw away the attached corpus that [`migrate_corpus`] could not climb, and build an empty
+/// one at head in its place — `DETACH`, delete, `ATTACH`, migrate, which is the reason the user
+/// file is `main` (see [`crate::db::open_write`]).
+///
+/// **Answers `failed` unchanged when there is no file to delete**: an in-memory corpus (the
+/// test pairs) and the web target, whose OPFS pool is not a filesystem `std::fs` can reach. Both
+/// stop the launch exactly as before this existed.
+///
+/// A delete that fails puts the corpus back and answers `failed` too, so the launch stops over
+/// the original error rather than over a half-replaced file — and the next launch tries again,
+/// since nothing was stamped.
+fn replace_attached_corpus(conn: &Connection, failed: rusqlite::Error) -> rusqlite::Result<()> {
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = conn;
+        Err(failed)
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let file: String = conn.query_row(
+            &format!("SELECT file FROM pragma_database_list WHERE name = '{CORPUS}'"),
+            [],
+            |r| r.get(0),
+        )?;
+        if file.is_empty() {
+            return Err(failed);
+        }
+        let path = std::path::PathBuf::from(file);
+        // A cached statement naming the corpus would hold it open and fail the `DETACH` with
+        // `database corpus is locked`.
+        conn.flush_prepared_statement_cache();
+        conn.execute_batch(&format!("DETACH DATABASE {CORPUS}"))?;
+        let deleted = remove_database_files(&path);
+        let attach = |conn: &Connection| -> rusqlite::Result<()> {
+            conn.execute(
+                &format!("ATTACH DATABASE ?1 AS {CORPUS}"),
+                [path.to_string_lossy().as_ref()],
+            )?;
+            crate::db::apply_pragmas(conn, Some(CORPUS)).map(|_| ())
+        };
+        if let Err(why) = deleted {
+            eprintln!(
+                "the card database could not be migrated ({failed}) and could not be deleted to                  be rebuilt: {why}"
+            );
+            attach(conn)?;
+            return Err(failed);
+        }
+        attach(conn)?;
+        migrate_corpus(conn)?;
+        eprintln!(
+            "the card database could not be migrated ({failed}) and has been replaced; the next              sync will rebuild it. Nothing in your collection, decks or wishlist was touched."
+        );
+        Ok(())
+    }
+}
+
+/// Delete a database file and its two journals, answering the first failure that was not "it
+/// was not there". **`NotFound` is success**: the file this was asked to remove is gone, which
+/// is the whole of what a caller wants to know.
+///
+/// **Not gated to the desktop**, though only the desktop has files to delete: [`prepare_data_dir`]
+/// compiles on every target and calls it.
+fn remove_database_files(path: &std::path::Path) -> std::io::Result<()> {
+    let mut first = Ok(());
+    for suffix in ["", "-wal", "-shm"] {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        match std::fs::remove_file(&name) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound && first.is_ok() => first = Err(e),
+            _ => {}
+        }
+    }
+    first
+}
+
+/// The folder beside `user.db` that [`back_up_user_file`] writes into.
+pub const USER_BACKUPS_DIR: &str = "backups";
+
+/// How many pre-upgrade copies of `user.db` [`back_up_user_file`] keeps. Three upgrades back is
+/// long enough for a bug in a rung to be noticed, and at ~1.35 MB a copy it bounds the folder
+/// on a USB stick where one per update forever would not be.
+#[cfg(not(target_family = "wasm"))]
+const USER_BACKUPS_KEPT: usize = 3;
+
+/// Copy `user.db` to `backups/user.v{from}.db` before [`migrate_user`] climbs from `from`, and
+/// answer the path written — `None` when there is nothing to copy to or a copy is already there.
+///
+/// **Issue #550: every rung commits with its stamp, but nothing could undo a rung that was
+/// wrong.** `migrate_user` refuses a newer file and the updater deletes the old exe, so a rung
+/// that moves data — the v25 conversion, the v35 rebuild, the v36 sweep, a `DROP COLUMN` — was
+/// one bug away from a collection nobody could get back. `VACUUM INTO` writes a consistent,
+/// compacted copy through SQLite itself, so it is correct under WAL, where a byte copy of the
+/// file alone is not; the user file is ~1.35 MB and the copy costs milliseconds.
+///
+/// **Never overwritten.** A launch whose migration failed and is retried finds the copy the
+/// first attempt took — the older state, which is the one worth having. The oldest copies past
+/// [`USER_BACKUPS_KEPT`] are removed after a new one is written.
+///
+/// An in-memory `main` (the tests) has no path and is skipped, and so is the web target, whose
+/// OPFS pool is not a filesystem this can make a folder in.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn back_up_user_file(
+    conn: &Connection,
+    from: i64,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let file: String = conn
+        .query_row(
+            "SELECT file FROM pragma_database_list WHERE name = 'main'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let Some(dir) = std::path::Path::new(&file)
+        .parent()
+        .filter(|_| !file.is_empty())
+    else {
+        return Ok(None);
+    };
+    let backups = dir.join(USER_BACKUPS_DIR);
+    let dest = backups.join(format!("user.v{from}.db"));
+    if dest.exists() {
+        return Ok(None);
+    }
+    std::fs::create_dir_all(&backups).map_err(|e| e.to_string())?;
+    if let Err(e) = conn.execute("VACUUM main INTO ?1", [dest.to_string_lossy().as_ref()]) {
+        // A half-written copy is worse than none: it would be kept, and never overwritten.
+        let _ = std::fs::remove_file(&dest);
+        return Err(e.to_string());
+    }
+    prune_user_backups(&backups);
+    Ok(Some(dest))
+}
+
+/// Keep the newest [`USER_BACKUPS_KEPT`] `user.v{N}.db` copies by `N`, and leave every other
+/// file in the folder alone — a reader may keep their own copies there.
+#[cfg(not(target_family = "wasm"))]
+fn prune_user_backups(backups: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(backups) else {
+        return;
+    };
+    let mut copies: Vec<(i64, std::path::PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let n = name
+                .strip_prefix("user.v")?
+                .strip_suffix(".db")?
+                .parse()
+                .ok()?;
+            Some((n, entry.path()))
+        })
+        .collect();
+    copies.sort_by_key(|c| std::cmp::Reverse(c.0));
+    for (_, path) in copies.into_iter().skip(USER_BACKUPS_KEPT) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Bring `main` — the reader's own file — to [`USER_SCHEMA_VERSION`].
 ///
 /// **It is a ladder now.** It was a version check and nothing else until v28, because every
@@ -5204,6 +5423,19 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         // This matters most to whoever adds rung 29: it goes **below**, it will not run on a fresh
         // file, and it does not need to.
         return Ok(());
+    }
+
+    // **A copy before the first owed rung** (issue #550), and before it only: a file already at
+    // head owes nothing and is not copied on every launch. Logged and never fatal — a full disk
+    // that cannot take 1.35 MB of copy should not also cost the reader their launch, and every
+    // rung below is still its own transaction with its stamp.
+    #[cfg(not(target_family = "wasm"))]
+    if v < USER_SCHEMA_VERSION {
+        if let Err(e) = back_up_user_file(conn, v) {
+            eprintln!(
+                "the collection could not be copied to {USER_BACKUPS_DIR}/ before upgrading from                  schema {v}: {e}\nThe upgrade goes ahead without a copy."
+            );
+        }
     }
 
     if v < 28 {
@@ -7082,6 +7314,16 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// [`combos_are_at_head`] exists to repair.
 pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))?;
+    // **One transaction around the build or every owed rung, and the stamp inside it** — issue
+    // #550, and [`migrate_user`]'s rule arriving on this side at last. Until 2026-09-27 the v0
+    // build ran bare `CREATE`s as autocommits and stamped afterwards, so a kill between the two
+    // left a shaped file at version 0 and every later launch died on `table cards already
+    // exists`; and rung 5 was four autocommits, so a kill after its `ALTER` left every card at
+    // `type_mask` 0 with the shape gate satisfied and never firing again. Inside one
+    // transaction a kill leaves the file exactly as it was, and the gates ask again next launch.
+    // `conn` rather than `tx` below, on purpose: `Transaction` derefs to it, and every helper
+    // here takes `&Connection` so the rungs read the same whether or not a transaction is open.
+    let tx = conn.unchecked_transaction()?;
     if v == 0 {
         create_corpus_schema(conn, CORPUS)?;
     } else {
@@ -7129,6 +7371,7 @@ pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
             "PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
         ))?;
     }
+    tx.commit()?;
     conn.execute_batch(&on_schema(CORPUS, TAG_INDEXES_SQL))
 }
 
@@ -7423,19 +7666,19 @@ fn add_keywords(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
 /// implicit `DELETE`, so the other order drags every child row through a cascade on the way to
 /// dropping that table too.
 ///
-/// One transaction, so a launch killed halfway leaves either the old three tables or the new
-/// ones and never a `combos` that is simply gone.
+/// **Inside [`migrate_corpus`]'s transaction and never one of its own** since issue #550 put
+/// the whole ladder in one — SQLite refuses a `BEGIN` inside an open transaction — so a launch
+/// killed halfway still leaves either the old three tables or the new ones and never a `combos`
+/// that is simply gone, and now also never the new ones under the old version stamp.
 fn rebuild_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
-    let tx = conn.unchecked_transaction()?;
-    tx.execute_batch(&format!(
+    conn.execute_batch(&format!(
         "DROP TABLE IF EXISTS {schema}.combo_cards_staging;
          DROP TABLE IF EXISTS {schema}.combos_staging;
          DROP TABLE IF EXISTS {schema}.combo_cards;
          DROP TABLE IF EXISTS {schema}.combos;
          DROP TABLE IF EXISTS {schema}.combo_meta;"
     ))?;
-    create_combo_tables(&tx, schema)?;
-    tx.commit()
+    create_combo_tables(conn, schema)
 }
 
 /// Bring `data_dir` to a state the app can open: convert if a single file is there, and
@@ -7456,8 +7699,18 @@ pub fn prepare_data_dir(data_dir: &std::path::Path) -> Result<bool, String> {
     if !marked && corpus_is_readable(data_dir) {
         return Ok(converted);
     }
-    for suffix in ["", "-wal", "-shm"] {
-        let _ = std::fs::remove_file(data_dir.join(format!("{}{suffix}", crate::db::CORPUS_DB)));
+    // **The mark goes only when the corpus did** (issue #550). A delete refused by a sharing
+    // violation — antivirus or the indexer holding the file for a moment, on Windows — used to
+    // clear the mark anyway and log that the corpus had been replaced, which left the damaged
+    // file in place with nothing left to say so until the background check found it again. Kept,
+    // the mark is read again next launch, when whatever held the file has usually let go.
+    if let Err(e) = remove_database_files(&data_dir.join(crate::db::CORPUS_DB)) {
+        eprintln!(
+            "the card database needs replacing but could not be deleted: {e}\nIt will be \
+             tried again at the next launch. Nothing in your collection, decks or wishlist was \
+             touched."
+        );
+        return Ok(converted);
     }
     // After the corpus and never before it: a crash between the two leaves a mark over a missing
     // file, which the next launch deletes again for nothing, where the other order could leave a
@@ -8159,6 +8412,211 @@ pub(crate) mod tests {
         assert!(
             dir.path().join(crate::db::USER_DB).is_file(),
             "the reader's file is untouched"
+        );
+    }
+
+    /// A data folder as a launch leaves it: converted, opened and migrated, with one row the
+    /// reader wrote and one card a sync wrote. Answers the folder; the connection is closed.
+    fn launched_pair() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        prepare_data_dir(dir.path()).unwrap();
+        let conn = crate::db::open_write(dir.path()).unwrap();
+        prepare_database(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO app_meta (key, value) VALUES ('reader_wrote', 'this');
+             INSERT INTO cards (id, oracle_id, name, set_code, set_name, collector_number, lang,
+                                layout, raw)
+               VALUES ('bolt', 'o1', 'Lightning Bolt', 'lea', 'Alpha', '161', 'en', 'normal',
+                       '{}');",
+        )
+        .unwrap();
+        crate::db::checkpoint_truncate(&conn).unwrap();
+        dir
+    }
+
+    fn corpus_version(conn: &Connection) -> i64 {
+        conn.query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// Issue #550, the state the old ladder could leave behind: every corpus table built, the
+    /// stamp never written. It used to stop every launch on `table cards already exists`; now it
+    /// is replaced, and the reader's file is not touched.
+    #[test]
+    fn a_corpus_shaped_under_version_zero_is_replaced_and_the_launch_goes_on() {
+        let dir = launched_pair();
+        {
+            let conn = crate::db::open_write(dir.path()).unwrap();
+            conn.execute_batch(&format!("PRAGMA {CORPUS}.user_version = 0;"))
+                .unwrap();
+        }
+
+        let conn = crate::db::open_write(dir.path()).unwrap();
+        prepare_database(&conn).expect("the launch must go on");
+        assert_eq!(corpus_version(&conn), CORPUS_SCHEMA_VERSION);
+        let cards: i64 = conn
+            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            cards, 0,
+            "the corpus was rebuilt empty, for the next sync to fill"
+        );
+        let kept: String = conn
+            .query_row(
+                "SELECT value FROM app_meta WHERE key = 'reader_wrote'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, "this", "and the reader's own file was not touched");
+    }
+
+    /// Issue #550, rung 5's half: a rung that fails after its `ALTER` must take the `ALTER` back
+    /// with it, or the shape gate is satisfied and never fires again over a column of zeroes.
+    /// The `UPDATE` fails here because this `cards` has no `type_line` to read.
+    #[test]
+    fn a_rung_that_fails_halfway_leaves_the_corpus_exactly_as_it_was() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "ATTACH DATABASE ':memory:' AS {CORPUS};
+             CREATE TABLE {CORPUS}.cards (id TEXT PRIMARY KEY, name TEXT);
+             PRAGMA {CORPUS}.user_version = 4;"
+        ))
+        .unwrap();
+
+        assert!(migrate_corpus(&conn).is_err());
+        let names: Vec<String> = conn
+            .prepare(&format!("PRAGMA {CORPUS}.table_info(cards)"))
+            .unwrap()
+            .query_map([], |r| r.get(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            names,
+            ["id", "name"],
+            "no rung's column survived the failure"
+        );
+        assert_eq!(corpus_version(&conn), 4, "and the stamp did not move");
+        let combos: i64 = conn
+            .query_row(
+                &format!("SELECT count(*) FROM {CORPUS}.sqlite_master WHERE name = 'combos'"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            combos, 0,
+            "the combo rebuild earlier in the same launch rolled back too"
+        );
+        assert!(conn.is_autocommit(), "and no transaction was left open");
+    }
+
+    /// Only a failure that is a fact about the file may cost the reader a resync.
+    #[test]
+    fn a_full_or_locked_disk_is_never_a_reason_to_replace_the_corpus() {
+        let failure = |code| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None);
+        for code in [
+            rusqlite::ffi::SQLITE_FULL,
+            rusqlite::ffi::SQLITE_BUSY,
+            rusqlite::ffi::SQLITE_READONLY,
+            rusqlite::ffi::SQLITE_IOERR,
+        ] {
+            assert!(says_nothing_about_the_file(&failure(code)), "{code}");
+        }
+        for code in [rusqlite::ffi::SQLITE_ERROR, rusqlite::ffi::SQLITE_CORRUPT] {
+            assert!(!says_nothing_about_the_file(&failure(code)), "{code}");
+        }
+        let labelled = in_file(
+            failure(rusqlite::ffi::SQLITE_FULL),
+            "the card database (corpus.db)",
+        );
+        assert!(labelled
+            .to_string()
+            .starts_with("the card database (corpus.db): "));
+        assert!(
+            says_nothing_about_the_file(&labelled),
+            "the label keeps the code"
+        );
+    }
+
+    /// Issue #550: a copy of the reader's file before a rung moves anything, never overwritten,
+    /// and only the newest three kept — beside a file of the reader's own that is left alone.
+    #[test]
+    fn the_user_file_is_copied_before_an_upgrade_and_only_three_copies_are_kept() {
+        let dir = launched_pair();
+        let conn = crate::db::open_write(dir.path()).unwrap();
+        let backups = dir.path().join(USER_BACKUPS_DIR);
+
+        let copy = back_up_user_file(&conn, 40)
+            .unwrap()
+            .expect("a copy is written");
+        assert_eq!(copy, backups.join("user.v40.db"));
+        let read = Connection::open(&copy).unwrap();
+        let kept: String = read
+            .query_row(
+                "SELECT value FROM app_meta WHERE key = 'reader_wrote'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, "this");
+        let has_cards: i64 = read
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'cards'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            has_cards, 0,
+            "the copy is the user file alone, not the corpus"
+        );
+        drop(read);
+
+        assert_eq!(
+            back_up_user_file(&conn, 40).unwrap(),
+            None,
+            "an existing copy is never overwritten"
+        );
+
+        std::fs::write(backups.join("mine.db"), b"the reader's own").unwrap();
+        for from in [41, 42, 43] {
+            back_up_user_file(&conn, from).unwrap().unwrap();
+        }
+        let mut left: Vec<String> = std::fs::read_dir(&backups)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            ["mine.db", "user.v41.db", "user.v42.db", "user.v43.db"]
+        );
+    }
+
+    /// Issue #550: a corpus that could not be deleted keeps its mark, so the next launch tries
+    /// again rather than living with a damaged file nothing remembers. A directory in the file's
+    /// place is a delete that fails on every platform.
+    #[test]
+    fn a_corpus_that_could_not_be_deleted_keeps_its_damage_mark() {
+        let dir = launched_pair();
+        let corpus = dir.path().join(crate::db::CORPUS_DB);
+        std::fs::remove_file(&corpus).unwrap();
+        std::fs::create_dir(&corpus).unwrap();
+        mark_corpus_damaged(dir.path(), "*** in database main ***").unwrap();
+
+        assert!(
+            !prepare_data_dir(dir.path()).unwrap(),
+            "nothing was replaced, and it does not say so"
+        );
+        assert!(dir.path().join(CORPUS_DAMAGED_MARK).exists());
+
+        std::fs::remove_dir(&corpus).unwrap();
+        assert!(prepare_data_dir(dir.path()).unwrap());
+        assert!(
+            !dir.path().join(CORPUS_DAMAGED_MARK).exists(),
+            "once the delete succeeds, the mark goes"
         );
     }
 

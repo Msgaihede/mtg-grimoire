@@ -72,6 +72,24 @@ pub struct FacetResponse {
     /// `Plane`, so the sum reads low). Either direction alone would be a caveat; both at once
     /// mean the relationship to `total` is not a direction at all.
     pub types: BTreeMap<String, i64>,
+    /// Keyed by [`crate::filters::BORDER_KEYS`] entry — `regular`/`borderless`/`fullart`. Plain
+    /// counts, and **all three are sent on every ready response**, zeros included, for
+    /// [`Self::types`]' reason.
+    ///
+    /// **These do not sum to [`Self::total`]**: a borderless full-art printing is counted under
+    /// both of those chips, so the sum reads high. They never read low — `regular` is defined as
+    /// "neither of the other two", so every printing is under at least one.
+    pub borders: BTreeMap<String, i64>,
+    /// Keyed by [`crate::filters::FINISH_KEYS`] entry — `nonfoil`/`foil`/`etched`: how many
+    /// printings are **published** in each finish. Plain counts, all three on every ready
+    /// response, zeros included.
+    ///
+    /// **These do not sum to [`Self::total`] and do not bound it**: a nonfoil-and-foil printing
+    /// is under two chips (51 628 of the 109 254 paper printings, measured 2026-09-27), and a
+    /// printing with no finish list is under none. Named `finishes` here and not
+    /// `printedFinishes`, because nothing flattens this struct and there is no copy's finish
+    /// beside it to collide with.
+    pub finishes: BTreeMap<String, i64>,
     /// Keyed by set code. Plain counts, and **every code in the corpus is sent, zeros
     /// included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
     /// filters are. A cold one sends this map empty, which is the point of [`Self::ready`].
@@ -106,19 +124,23 @@ enum Skip {
     Formats,
     Rarities,
     Types,
+    Borders,
+    Finishes,
     Owned,
 }
 
-/// The four dimensions whose bitset costs a walk to build, built once for the whole request.
+/// The six dimensions whose bitset costs a walk to build, built once for the whole request.
 ///
-/// [`base`] is called eight times and none of these depends on which dimension is being
-/// skipped, so building them per call would walk the corpus seven more times than the answer
+/// [`base`] is called ten times and none of these depends on which dimension is being
+/// skipped, so building them per call would walk the corpus nine more times than the answer
 /// needs — and the set walk carries a `set_codes` lookup per picked code on top.
 struct Prepared {
     sets: Option<BitSet>,
     mana: Option<BitSet>,
     rarities: Option<BitSet>,
     types: Option<BitSet>,
+    borders: Option<BitSet>,
+    finishes: Option<BitSet>,
 }
 
 /// The result set under every filter except `skip`'s.
@@ -229,6 +251,16 @@ fn base(
     }
     if skip != Skip::Types {
         if let Some(u) = prep.types.as_ref() {
+            b = b.and(u);
+        }
+    }
+    if skip != Skip::Borders {
+        if let Some(u) = prep.borders.as_ref() {
+            b = b.and(u);
+        }
+    }
+    if skip != Skip::Finishes {
+        if let Some(u) = prep.finishes.as_ref() {
             b = b.and(u);
         }
     }
@@ -384,6 +416,42 @@ fn union_types(ix: &CardIndex, types: Option<&[String]>) -> Option<BitSet> {
     Some(u)
 }
 
+/// The border chips as one bitset, or `None` when the request names none.
+///
+/// OR within, which is what `push_card_filters` emits as one parenthesised group — so a
+/// union, like [`union_types`], and a borderless full-art printing is reached by either chip
+/// without being counted twice in the total.
+///
+/// **Narrowed by exactly [`crate::filters::picked_borders`]' list**, which validates the way
+/// [`crate::filters::picked_types`] does: an unknown word is dropped before either side sees
+/// it, this returns `None`, and the SQL pushes no clause — both answer **no filter**.
+fn union_borders(ix: &CardIndex, borders: Option<&[String]>) -> Option<BitSet> {
+    let picked = crate::filters::picked_borders(borders?);
+    union_of(ix, &picked, &crate::filters::BORDER_KEYS, &ix.borders)
+}
+
+/// The printed-finish chips as one bitset, or `None` when the request names none —
+/// [`union_borders`]' shape and rules, over [`crate::filters::picked_finishes`].
+fn union_finishes(ix: &CardIndex, finishes: Option<&[String]>) -> Option<BitSet> {
+    let picked = crate::filters::picked_finishes(finishes?);
+    union_of(ix, &picked, &crate::filters::FINISH_KEYS, &ix.finishes)
+}
+
+/// The union of the bitsets `picked` names, each looked up by its position in `keys`; `None`
+/// for an empty pick, which is no filter.
+fn union_of(ix: &CardIndex, picked: &[String], keys: &[&str], sets: &[BitSet]) -> Option<BitSet> {
+    if picked.is_empty() {
+        return None;
+    }
+    let mut u = BitSet::new(ix.capacity);
+    for p in picked {
+        if let Some(i) = keys.iter().position(|k| k == p) {
+            sets[i].for_each(|d| u.set(d));
+        }
+    }
+    Some(u)
+}
+
 /// The set dimension as one bitset, or `None` when the request names no set.
 ///
 /// **`setCode` and `sets` are one dimension here, and they intersect rather than union.**
@@ -462,8 +530,9 @@ fn union_sets(ix: &CardIndex, req: &SearchRequest) -> Option<BitSet> {
 /// row — but it is a machine-shaped number, not a corpus-shaped one.
 ///
 /// **Read those four figures as a floor.** They were taken over six bases and seven dimensions;
-/// the type chips added an eighth base and a ninth `and_count` loop, and strict colours an
-/// `and` per picked letter, and nobody has re-run `facet_timing` since. The budget they were
+/// the type chips added an eighth base and a ninth `and_count` loop, the border and finish
+/// chips a ninth and tenth base with a loop apiece, and strict colours an `and` per picked
+/// letter, and nobody has re-run `facet_timing` since. The budget they were
 /// measured against has two orders of magnitude of headroom, which is why this is a note rather
 /// than a blocker — but a figure nobody re-took is not this pass's cost.
 ///
@@ -494,6 +563,8 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, narrow: Option<&BitSet>) -> 
         mana: union_mana(ix, req.mana_values.as_deref(), req.mana_x.unwrap_or(false)),
         rarities: union_rarities(ix, req.rarities.as_deref()),
         types: union_types(ix, req.types.as_deref()),
+        borders: union_borders(ix, req.borders.as_deref()),
+        finishes: union_finishes(ix, req.printed_finishes.as_deref()),
     };
     let base = |skip| base(ix, req, narrow, &prep, skip);
 
@@ -556,6 +627,23 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, narrow: Option<&BitSet>) -> 
         out.types.insert(
             (*key).to_owned(),
             i64::from(types_base.and_count(&ix.types[i])),
+        );
+    }
+
+    // Borders and printed finishes: the type chips' rule, one base apiece that drops its own
+    // question, every key emitted whatever the search is.
+    let borders_base = base(Skip::Borders);
+    for (i, key) in crate::filters::BORDER_KEYS.iter().enumerate() {
+        out.borders.insert(
+            (*key).to_owned(),
+            i64::from(borders_base.and_count(&ix.borders[i])),
+        );
+    }
+    let finishes_base = base(Skip::Finishes);
+    for (i, key) in crate::filters::FINISH_KEYS.iter().enumerate() {
+        out.finishes.insert(
+            (*key).to_owned(),
+            i64::from(finishes_base.and_count(&ix.finishes[i])),
         );
     }
 
@@ -1005,7 +1093,7 @@ pub async fn facet_cards(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::fixtures::{doc, own, seeded, state_with_seeded_cards, typed};
+    use crate::index::fixtures::{doc, framed, own, seeded, state_with_seeded_cards, typed};
     use crate::search::SearchRequest;
 
     /// The fixture's four rows hold a mono-R, an RW and a colourless printing; strict colour
@@ -1728,6 +1816,140 @@ mod tests {
         );
     }
 
+    /// The fixture's four rows — every one of them `regular`, with no finish list — plus four
+    /// framed printings: a white border, a borderless one, a black full-art one, and the
+    /// borderless full-art row every overlap assertion turns on. Seven paper printings.
+    fn with_frames() -> rusqlite::Connection {
+        let conn = seeded();
+        framed(&conn, "5", Some("white"), false, r#"["nonfoil"]"#);
+        framed(&conn, "6", Some("borderless"), false, r#"["foil"]"#);
+        framed(&conn, "7", Some("black"), true, r#"["nonfoil","foil"]"#);
+        framed(&conn, "8", Some("borderless"), true, r#"["foil","etched"]"#);
+        conn
+    }
+
+    /// The border chips are a dimension of their own — **counted over a base that drops the
+    /// whole border question**, so picking `borderless` does not grey `regular` — and all three
+    /// keys arrive whatever the search is, zeros included.
+    ///
+    /// **They overlap**: the borderless full-art row is under two chips, so the three sum to
+    /// eight over seven printings, which is why nothing may derive a total from them.
+    #[test]
+    fn border_counts_exclude_their_own_filter_and_overlap_on_borderless_full_art() {
+        let ix = crate::index::CardIndex::build(&with_frames()).unwrap();
+
+        let none = compute(&ix, &req(|_| {}), None);
+        assert_eq!(none.total, 7);
+        assert_eq!(none.borders.len(), 3, "all three keys, always");
+        assert_eq!(
+            none.borders.get("regular").copied(),
+            Some(4),
+            "the three fixture paper rows, whose NULL border is a border, and the white one"
+        );
+        assert_eq!(none.borders.get("borderless").copied(), Some(2));
+        assert_eq!(none.borders.get("fullart").copied(), Some(2));
+        assert_eq!(
+            none.borders.values().sum::<i64>(),
+            8,
+            "one more than the total — the borderless full-art row is counted twice"
+        );
+
+        let picked = compute(
+            &ix,
+            &req(|r| r.borders = Some(vec!["borderless".into()])),
+            None,
+        );
+        assert_eq!(picked.total, 2);
+        assert_eq!(
+            picked.borders, none.borders,
+            "still offered, still counted — the dimension skips its own filter"
+        );
+    }
+
+    /// …and every other dimension **does** narrow by it, and two chips OR rather than AND.
+    #[test]
+    fn other_dimensions_narrow_by_the_border_filter_and_two_chips_or() {
+        let ix = crate::index::CardIndex::build(&with_frames()).unwrap();
+
+        let f = compute(
+            &ix,
+            &req(|r| r.borders = Some(vec!["borderless".into()])),
+            None,
+        );
+        assert_eq!(f.finishes.get("nonfoil").copied(), Some(0));
+        assert_eq!(f.finishes.get("foil").copied(), Some(2));
+        assert_eq!(f.finishes.get("etched").copied(), Some(1));
+        assert_eq!(f.sets.get("rav").copied(), Some(0), "Helix is regular");
+
+        let both = compute(
+            &ix,
+            &req(|r| r.borders = Some(vec!["borderless".into(), "fullart".into()])),
+            None,
+        );
+        assert_eq!(
+            both.total, 3,
+            "a union — the borderless full-art row is one printing in the total, not two"
+        );
+
+        for unknown in [vec![], vec!["shiny".to_owned()], vec!["black".to_owned()]] {
+            let f = compute(&ix, &req(|r| r.borders = Some(unknown.clone())), None);
+            assert_eq!(f.total, 7, "{unknown:?} is no filter at all");
+        }
+    }
+
+    /// The printed-finish chips follow the same rule: their own counts ignore their own filter,
+    /// every other dimension narrows by it, and a nonfoil-and-foil printing is under both
+    /// chips while a printing with no finish list is under none — so the three neither sum to
+    /// the total nor bound it.
+    #[test]
+    fn finish_counts_exclude_their_own_filter_and_narrow_every_other_dimension() {
+        let ix = crate::index::CardIndex::build(&with_frames()).unwrap();
+
+        let none = compute(&ix, &req(|_| {}), None);
+        assert_eq!(none.finishes.len(), 3, "all three keys, always");
+        assert_eq!(none.finishes.get("nonfoil").copied(), Some(2));
+        assert_eq!(
+            none.finishes.get("foil").copied(),
+            Some(3),
+            "never the nonfoil-only white row"
+        );
+        assert_eq!(none.finishes.get("etched").copied(), Some(1));
+
+        let foil = compute(
+            &ix,
+            &req(|r| r.printed_finishes = Some(vec!["foil".into()])),
+            None,
+        );
+        assert_eq!(foil.total, 3);
+        assert_eq!(
+            foil.finishes, none.finishes,
+            "the dimension skips its own filter"
+        );
+        assert_eq!(
+            foil.borders.get("regular").copied(),
+            Some(0),
+            "and the border chips narrow by it — no regular printing here is foil"
+        );
+        assert_eq!(foil.borders.get("fullart").copied(), Some(2));
+
+        let either = compute(
+            &ix,
+            &req(|r| r.printed_finishes = Some(vec!["nonfoil".into(), "etched".into()])),
+            None,
+        );
+        assert_eq!(
+            either.total, 3,
+            "OR within: the white, full-art and etched rows"
+        );
+
+        let unknown = compute(
+            &ix,
+            &req(|r| r.printed_finishes = Some(vec!["glossy".into()])),
+            None,
+        );
+        assert_eq!(unknown.total, 7, "an unknown finish is no filter at all");
+    }
+
     /// The frontend mirrors these names by hand in `src/lib/ipc.ts`; a rename here that is
     /// not mirrored there is a silently `undefined` field in the UI. Whole-value equality,
     /// so a field added and never mirrored fails as loudly as a rename.
@@ -1744,6 +1966,8 @@ mod tests {
         f.formats.insert("modern".into(), 3);
         f.rarities.insert("rare".into(), 6);
         f.types.insert("Creature".into(), 7);
+        f.borders.insert("fullart".into(), 8);
+        f.finishes.insert("etched".into(), 9);
         f.sets.insert("lea".into(), 4);
         f.owned = OwnedFacets {
             owned: 1,
@@ -1762,6 +1986,10 @@ mod tests {
                 // `crate::cardtypes::TYPE_KEYS` holds the words the UI sends — the rename is
                 // on the field, never on what is inside it.
                 "types": {"Creature": 7},
+                "borders": {"fullart": 8},
+                // `finishes` and not `printedFinishes`, unlike the request field it counts:
+                // nothing flattens this struct, so there is no copy's finish to collide with.
+                "finishes": {"etched": 9},
                 "sets": {"lea": 4},
                 "owned": {"owned": 1, "missing": 2},
                 "total": 3,
@@ -2405,6 +2633,8 @@ mod tests {
             playable: BitSet::new(cap),
             rarity: std::array::from_fn(|_| BitSet::new(cap)),
             types: std::array::from_fn(|_| BitSet::new(cap)),
+            borders: std::array::from_fn(|_| BitSet::new(cap)),
+            finishes: std::array::from_fn(|_| BitSet::new(cap)),
             set_ord: vec![0; cap],
             set_codes: (0..1047).map(|i| format!("s{i}")).collect(),
             owned: BitSet::new(cap),
@@ -2458,6 +2688,29 @@ mod tests {
                 if d % 7 == 0 {
                     ix.types[((d + 3) % 8) as usize].set(d);
                 }
+            }
+            // Borders and finishes, roughly the live corpus's shape: about one printing in twelve
+            // borderless and one in fifty full art, overlapping where both hold; about half
+            // published in nonfoil and foil both, a tenth in foil alone.
+            let borderless = d % 12 == 0;
+            let full_art = d % 50 == 0;
+            if borderless {
+                ix.borders[1].set(d);
+            }
+            if full_art {
+                ix.borders[2].set(d);
+            }
+            if !borderless && !full_art {
+                ix.borders[0].set(d);
+            }
+            if d % 10 != 0 {
+                ix.finishes[0].set(d);
+            }
+            if d % 2 == 0 {
+                ix.finishes[1].set(d);
+            }
+            if d % 120 == 7 {
+                ix.finishes[2].set(d);
             }
             if d % 100 == 0 {
                 ix.owned.set(d);
