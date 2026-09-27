@@ -132,7 +132,6 @@ export default defineConfig({
         "src/**/*.test.{ts,tsx}",
         "src/test-setup.ts",
         "src/test-drag.ts",
-        "src/test-viewport.ts",
         // Stories are the Storybook workbench, not app code. They *do* run — through
         // `src/stories.test.tsx` — so leaving them in would count the workbench's own
         // coverage of itself as product coverage.

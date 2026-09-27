@@ -45,11 +45,12 @@ export interface NavEntry {
  * for the taxonomy that view browses, and the page's own heading below it still says what it
  * does in a sentence.
  *
- * **This is a module rather than a const inside `AppShell` because the rail is no longer the
- * only thing that draws it.** A bottom tab bar copying a column of labels out of the rail is
- * exactly the drift the paragraph above forbids. What deliberately did *not* move is the **row**: a rail
- * entry is a full-width button with a left-anchored icon and a tooltip when narrow, and a tab is
- * a square with its word under the glyph — two drawings, not one component with a flag.
+ * **This is a module rather than a const inside `AppShell` because the rail is not its only
+ * reader.** The keyboard map (`KeyMap`) heads each view's shortcuts with this label, and Settings'
+ * opening-view picker (`StartViewPanel`) offers these destinations — each imports the list rather
+ * than copying a column of labels out of the rail, which is exactly the drift the paragraph above
+ * forbids. What stays in `AppShell` is the **row**: a full-width button with a left-anchored icon
+ * and a tooltip while the rail is collapsed.
  */
 export const NAV: readonly NavEntry[] = [
   // The page the app opens on, and therefore the row a reader looks for first — `store.ts`'s
