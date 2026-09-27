@@ -156,11 +156,11 @@ export const ReorderedFromTheKeyboard: Story = {
  * with the category by cascade — so the question defaults to a move, spells the outcome out in a
  * sentence, and changes the confirm button's own words with the answer.
  *
- * **The numbers here are the bug this question was fixed for, drawn on the deck that had it.**
- * Deck 4's "Ramp" holds **2** copies in the live list and **5** in the theory list, and the row
- * above the dialog says 2 because 2 is what the reader is editing. The delete takes all **7** —
- * `deck_cards.category_id` is `ON DELETE CASCADE` and a category is not per-variant — so the
- * confirmation quotes 7 and says in words that both lists are in scope. It said 2 before.
+ * **Deck 4, the deck this question was once wrong on.** Its "Ramp" holds **2** copies in the
+ * live list and the plan has a "Ramp" of its own holding **5**. Until user schema v53 those were
+ * one pile, the delete took all 7, and the confirmation had to quote 7 and name both lists. A pile
+ * belongs to one list now (issue #561), so the row, the question and the cascade all count the
+ * same 2 — and the plan's Ramp is not touched.
  */
 export const DeletingACategory: Story = {
   play: async ({ canvas }) => {
@@ -170,27 +170,27 @@ export const DeletingACategory: Story = {
     await userEvent.click(within(ramp).getByRole("button", { name: "Delete" }));
 
     const dialog = await canvas.findByRole("group", { name: "Delete Ramp" });
-    await expect(within(dialog).getByText(/Nothing is lost/)).toHaveTextContent(
+    await expect(within(dialog).getByText(/Nothing is lost/)).not.toHaveTextContent(
       "both the theory and actual lists",
     );
     await expect(
-      within(dialog).getByRole("button", { name: "Move 7 cards and delete" }),
+      within(dialog).getByRole("button", { name: "Move 2 cards and delete" }),
     ).toBeInTheDocument();
   },
 };
 
 /** The same question after the reader has chosen the other outcome: red, and saying so — over the
- *  same seven copies, which is the arm where undercounting would have cost the most. */
+ *  same two copies, which is every copy the pile holds. */
 export const DeletingACategoryAndItsCards: Story = {
   play: async ({ canvas }) => {
     const ramp = (await canvas.findByText("Ramp")).closest("li") as HTMLElement;
     await userEvent.click(within(ramp).getByRole("button", { name: "Delete" }));
 
     const dialog = await canvas.findByRole("group", { name: "Delete Ramp" });
-    await pickOption(userEvent.setup(), "Its 7 cards", "go with it");
+    await pickOption(userEvent.setup(), "Its 2 cards", "go with it");
     await expect(
       within(dialog).getByText(/Any copies you own go back to Recently removed/),
-    ).toHaveTextContent("The 7 cards in it go with it");
+    ).toHaveTextContent("The 2 cards in it go with it");
     await expect(within(dialog).getByRole("button", { name: "Delete “Ramp”" })).toBeInTheDocument();
   },
 };
@@ -227,8 +227,8 @@ export const AutoCategorised: Story = {
   },
 };
 
-/** A refusal, in the backend's own words: the grain is `(deckId, name)`, so a second "Ramp" is
- *  not a second pile. */
+/** A refusal, in the backend's own words: the grain is `(deckId, variant, name)`, so a second
+ *  "Ramp" in the same list is not a second pile. */
 export const RefusedByName: Story = {
   play: async ({ canvas }) => {
     await canvas.findByText("Ramp");
@@ -237,7 +237,7 @@ export const RefusedByName: Story = {
 
     await waitFor(async () => {
       await expect(await canvas.findByRole("alert")).toHaveTextContent(
-        "This deck already has a category with that name.",
+        "This list already has a category with that name.",
       );
     });
   },

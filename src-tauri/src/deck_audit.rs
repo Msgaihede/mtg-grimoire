@@ -69,8 +69,13 @@ pub const DECK: &str = crate::schema::AUDIT_KINDS[8];
 /// `deck_audit.variant` is `NOT NULL` with a CHECK over the two, so a category rename, a label
 /// write, a folder move and a deck rename all have to carry *something* — and none of them is
 /// a fact about one variant's cards. They carry `live`, which is the column's own DDL default
-/// and the variant the editor opens on. `deck_meta::READBACK_VARIANT` says the same thing for
-/// the same reason one layer up.
+/// and the variant the editor opens on.
+///
+/// **A category write still carries this, even though a pile belongs to one list since user
+/// schema v53** (issue #561). Nothing reads the column for one: the history drawer lists both
+/// lists unfiltered (`useDeckAudit`) and `auditText`'s category sentence names the pile and never
+/// the list, so recording the pile's own variant would change no line anybody sees while making
+/// `live` stop meaning "about no card list" for one kind in nine.
 ///
 /// Read from [`crate::schema::DECK_VARIANTS`] by index rather than spelled, so this and the
 /// CHECK cannot drift.
@@ -395,13 +400,16 @@ mod tests {
         .id
     }
 
+    /// The live list's pile of that name — every write here files into the live list unless it
+    /// says otherwise, and a pile belongs to one list since user schema v53.
     fn category(conn: &Connection, deck_id: i64, name: &str) -> i64 {
-        crate::deck_meta::category_for_name(conn, deck_id, name).unwrap()
+        crate::deck_meta::category_for_name(conn, deck_id, "live", name).unwrap()
     }
 
     fn kind_of(conn: &Connection, deck_id: i64, kind: &str) -> i64 {
         conn.query_row(
-            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND kind = ?2",
+            "SELECT id FROM deck_categories
+              WHERE deck_id = ?1 AND variant = 'live' AND kind = ?2",
             params![deck_id, kind],
             |r| r.get(0),
         )
@@ -732,14 +740,14 @@ mod tests {
                 "deck_category_create",
                 1,
                 Box::new(|| {
-                    crate::deck_meta::create_category(&conn, id, "Ramp").unwrap();
+                    crate::deck_meta::create_category(&conn, id, "live", "Ramp").unwrap();
                 }),
             ),
             (
                 "deck_category_rename",
                 1,
                 Box::new(|| {
-                    let cat = crate::deck_meta::create_category(&conn, id, "Value")
+                    let cat = crate::deck_meta::create_category(&conn, id, "live", "Value")
                         .unwrap()
                         .id;
                     clear(&conn);
@@ -750,7 +758,7 @@ mod tests {
                 "deck_category_set_active",
                 1,
                 Box::new(|| {
-                    let cat = crate::deck_meta::create_category(&conn, id, "Off")
+                    let cat = crate::deck_meta::create_category(&conn, id, "live", "Off")
                         .unwrap()
                         .id;
                     clear(&conn);
@@ -768,7 +776,7 @@ mod tests {
                 "deck_category_delete",
                 1,
                 Box::new(|| {
-                    let cat = crate::deck_meta::create_category(&conn, id, "Doomed")
+                    let cat = crate::deck_meta::create_category(&conn, id, "live", "Doomed")
                         .unwrap()
                         .id;
                     clear(&conn);
@@ -1353,7 +1361,7 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
 
-        let cat = crate::deck_meta::create_category(&conn, id, "Value")
+        let cat = crate::deck_meta::create_category(&conn, id, "live", "Value")
             .unwrap()
             .id;
         let (row, payload) = newest(&conn, id);
@@ -1386,17 +1394,39 @@ mod tests {
         );
 
         // A delete says how many copies went with it, which is the number the confirm dialog
-        // warned about and the only part of the category a reader cannot get back.
+        // warned about and the only part of the category a reader cannot get back. A pile holds
+        // one list's cards since user schema v53, so the theory list's own `Ramp` is another
+        // pile: it is neither counted nor taken.
         let main = category(&conn, id, "Ramp");
+        let theory_ramp = crate::deck_meta::category_for_name(&conn, id, "theory", "Ramp").unwrap();
         crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 4).unwrap();
-        crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "theory", None, 3).unwrap();
+        crate::deck::add_card(&conn, id, "serra-lea", Some(main), None, "live", None, 3).unwrap();
+        crate::deck::add_card(
+            &conn,
+            id,
+            "serra-lea",
+            Some(theory_ramp),
+            None,
+            "theory",
+            None,
+            2,
+        )
+        .unwrap();
         crate::deck_meta::delete_category(&conn, main, None).unwrap();
         let (_, payload) = newest(&conn, id);
         assert_eq!(
             payload,
             json!({ "action": "delete", "name": "Ramp", "cards": 7 }),
-            "copies, both variants — everything the CASCADE took"
+            "the pile's copies — everything the CASCADE took, and none of the other list's"
         );
+        let theory_left: i64 = conn
+            .query_row(
+                "SELECT coalesce(sum(quantity), 0) FROM deck_cards WHERE category_id = ?1",
+                params![theory_ramp],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(theory_left, 2, "the theory list's Ramp is untouched");
     }
 
     #[test]

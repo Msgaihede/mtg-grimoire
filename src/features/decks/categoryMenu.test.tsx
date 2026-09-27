@@ -16,7 +16,7 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
     sortOrder: 0,
     cardCount: 0,
     totalPrice: null,
-    cardCountAllVariants: 0,
+    variant: "live",
     ...over,
   };
 }
@@ -103,7 +103,7 @@ describe("buildCategoryMenu", () => {
 
   /**
    * The three writes escalate: switching a pile off is reversible in one press, clearing it takes
-   * its cards out of the list on screen, and deleting it takes the pile and both lists' cards.
+   * its cards out of the list on screen, and deleting it takes the pile with them.
    * A reader who slips one row lands on the smaller destruction, never the larger.
    */
   it("orders the destructive rows from reversible to irreversible", () => {
@@ -252,13 +252,12 @@ describe("buildCategoryMenu", () => {
    * with `aria-disabled` rather than `disabled` so it is still readable and still in the tab
    * order.
    *
-   * `cardCount` is the number consulted and never `cardCountAllVariants`, which is the reverse of
-   * what the delete confirmation quotes: a clear is scoped to the list on screen, so a pile
-   * holding nothing here and three copies in the theory list is a pile with nothing to clear.
+   * `cardCount` is the number consulted — a pile belongs to one list (user schema v53), so it is
+   * every copy the pile holds and zero means there is nothing to clear.
    */
-  it("greys the clear on a pile that is empty in the variant on screen", () => {
+  it("greys the clear on a pile that is empty", () => {
     const askClear = vi.fn();
-    const emptyHere = { ...REMOVAL, cardCount: 0, cardCountAllVariants: 3 };
+    const emptyHere = { ...REMOVAL, cardCount: 0 };
     const row = find(buildCategoryMenu(emptyHere, deps({ askClear })), "Clear stack…") as MenuAction;
 
     expect(row.disabled).toBe(true);
