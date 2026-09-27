@@ -188,6 +188,17 @@ card**, so the narrower column is wrong in a worse direction, and the extra matc
 text a reader searching rules text would mostly want. A clean `oracle_all` FTS column is a
 possible later rung and is deliberately not this change.
 
+**It also holds every name the printing was _printed_ under** since
+[issue #580](https://github.com/Msgaihede/mtg-grimoire/issues/580): Scryfall's `flavor_name`
+and `printed_name`, top level and per face (`card_row::print_names`). So *Earth Rumble Triumph*
+finds *Return of the Wildspeaker* — and, because `search_text` is per printing, finds it **by
+TLE 44 alone**, which is what makes a collapsed search (the wall, the deck editor's quick add)
+offer that printing rather than the card's usual representative. Scryfall's own free-text search
+answers the same query the same way (1 card, checked 2026-09-27). Two costs, both accepted: `o:`
+now matches a word in a printed name, on that printing only; and a corpus ingested before the
+change has no printed names in its index until the next daily bulk sync re-ingests it, because
+the fields live in the gzip `raw` and no rung can read them back out.
+
 **Negation needs care, because FTS5's `NOT` is binary.** A query that is *only* `-t:goblin` has
 no left operand and is a syntax error as a MATCH string, so a purely negative text term compiles
 to `c.rowid NOT IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)` instead. Mixed queries
