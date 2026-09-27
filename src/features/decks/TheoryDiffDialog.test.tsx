@@ -118,6 +118,8 @@ function row(over: Partial<TheoryDiffRow> = {}): TheoryDiffRow {
     finish: null,
     ownedSpare: 0,
     heldAsOtherPrinting: 0,
+    // A card row unless a case says otherwise — the token rows are spelled out below.
+    isToken: false,
     ...over,
   };
 }
@@ -176,6 +178,42 @@ const SUBSTITUTED = row({
 /** One of each reading: pure missing, both, pure substitution. Every filter claim below is
  *  about these three, and `2 + 2 > 3` is the overlap the band's note exists to explain. */
 const MIXED = [row(), PARTIAL, SUBSTITUTED];
+
+/**
+ * **A token the plan counts more of than the deck** (managed tokens spec §3.7): three Treasures of
+ * one printing, filed under `Tokens & Emblems` as `deck_theory_diff` files every token row.
+ */
+const TREASURE = row({
+  cardId: "treasure-thob",
+  name: "Treasure",
+  categoryName: "Tokens & Emblems",
+  quantity: 3,
+  unitPrice: 0.25,
+  setCode: "thob",
+  collectorNumber: "13",
+  isToken: true,
+});
+
+/**
+ * A token row that **would** be in both card readings — a copy left to find and one the deck
+ * already plays as another printing — which is exactly what makes it the case that proves
+ * `Missing` and `Different printing` leave token rows out by the flag rather than by the numbers.
+ * Unpriced, so the Tokens view's caption has a hole to count.
+ */
+const CONSTRUCT = row({
+  cardId: "construct-tbro",
+  name: "Construct",
+  categoryName: "Tokens & Emblems",
+  quantity: 2,
+  unitPrice: null,
+  setCode: "tbro",
+  collectorNumber: "20",
+  heldAsOtherPrinting: 1,
+  isToken: true,
+});
+
+/** The card rows' three readings and two token rows — every claim about the Tokens view. */
+const WITH_TOKENS = [...MIXED, TREASURE, CONSTRUCT];
 
 let client: QueryClient;
 function wrap(ui: ReactElement) {
@@ -657,6 +695,119 @@ describe("the theory difference dialog", () => {
 
     expect(screen.getByText(/Nothing here is missing/)).toBeVisible();
     expect(screen.queryByText(/The two lists agree/)).not.toBeInTheDocument();
+  });
+
+  // --- the Tokens view (managed tokens spec §3.7) ------------------------------------------
+
+  /**
+   * **Four rungs, and the fourth is a different kind of reading.** `Tokens` is the token rows
+   * alone and `All` is every row, tokens included — while `Missing` and `Different printing` are
+   * questions about *cards* and draw no token row, even `CONSTRUCT`, whose numbers would put it
+   * under both of them if it were one.
+   */
+  it("offers a Tokens view, and keeps tokens out of Missing and Different printing", async () => {
+    const user = userEvent.setup();
+    deckTheoryDiff.mockResolvedValue(WITH_TOKENS);
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    // The ladder's order, which is deliberate: the widest reading, the two card readings, and
+    // then the token one.
+    expect(
+      within(screen.getByRole("radiogroup")).getAllByRole("radio").map((r) => r.textContent),
+    ).toEqual(["All5", "Missing2", "Different printing2", "Tokens2"]);
+
+    expect(shownNames()).toEqual([
+      "Lightning Bolt",
+      "Sol Ring",
+      "Jace, the Mind Sculptor",
+      "Treasure",
+      "Construct",
+    ]);
+
+    await user.click(rung("Tokens", 2));
+    expect(rung("Tokens", 2)).toHaveAttribute("aria-checked", "true");
+    expect(shownNames()).toEqual(["Treasure", "Construct"]);
+
+    await user.click(rung("Missing", 2));
+    expect(shownNames()).toEqual(["Lightning Bolt", "Sol Ring"]);
+
+    await user.click(rung("Different printing", 2));
+    expect(shownNames()).toEqual(["Sol Ring", "Jace, the Mind Sculptor"]);
+  });
+
+  /** The strip follows the rung here too: three Treasures at $0.25 and two unpriced Constructs. */
+  it("captions the Tokens view with the token rows alone", async () => {
+    const user = userEvent.setup();
+    deckTheoryDiff.mockResolvedValue(WITH_TOKENS);
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(rung("Tokens", 2));
+
+    const copies = screen.getByText("Copies to find").closest("div")!;
+    expect(copies).toHaveTextContent("5");
+    expect(copies).toHaveTextContent("2 cards");
+    const cost = screen.getByText("Cost to build (USD)").closest("div")!;
+    expect(cost).toHaveTextContent("$0.75");
+    expect(cost).toHaveTextContent("2 unpriced");
+  });
+
+  /**
+   * **Review focus 4: a plan that counts no tokens.** Every untouched token reads 0 since the
+   * default moved (spec §3.1), so this is the ordinary deck — and its `All` is exactly the card
+   * rows, while `Tokens` says in words that there is nothing there rather than drawing a blank
+   * panel or borrowing the sentence about two lists agreeing, which they do not.
+   */
+  it("says so in words when the plan counts no tokens, and All is the card rows", async () => {
+    const user = userEvent.setup();
+    deckTheoryDiff.mockResolvedValue(MIXED);
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(rung("All", 3)).toHaveAttribute("aria-checked", "true");
+    expect(shownNames()).toEqual(["Lightning Bolt", "Sol Ring", "Jace, the Mind Sculptor"]);
+
+    await user.click(rung("Tokens", 0));
+
+    expect(screen.queryAllByRole("listitem")).toHaveLength(0);
+    expect(screen.getByText("The plan counts no tokens the deck is short of.")).toBeVisible();
+    expect(screen.queryByText(/The two lists agree/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A token row's press is the card row's press: the same command, with the row's own key — the
+   * printing and the finish — so the backend files one wish pinned to that printing.
+   */
+  it("sends a token row's key from its own Wishlist button", async () => {
+    const user = userEvent.setup();
+    deckTheoryDiff.mockResolvedValue(WITH_TOKENS);
+    wrap(<TheoryDiffDialog {...props} />);
+
+    const treasure = await rowFor("Treasure");
+    await user.click(within(treasure).getByRole("button", { name: "Wishlist 3 more Treasure" }));
+
+    await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1));
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(4, ["treasure-thob|"], null);
+  });
+
+  /** The footer's press from the Tokens view carries the token rows and nothing else —
+   *  selected ∧ visible, the rule every rung already follows. */
+  it("sends only the token rows from the Tokens view's footer", async () => {
+    const user = userEvent.setup();
+    deckTheoryDiff.mockResolvedValue(WITH_TOKENS);
+    wrap(<TheoryDiffDialog {...props} />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(rung("Tokens", 2));
+    await user.click(screen.getByRole("button", { name: "Send 2 of 5 selected to wishlist" }));
+
+    await waitFor(() => expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1));
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledWith(
+      4,
+      ["treasure-thob|", "construct-tbro|"],
+      null,
+    );
   });
 
   // --- the writes ---------------------------------------------------------------------------

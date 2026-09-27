@@ -71,13 +71,22 @@ const VIEW_NOTE =
 /**
  * Which half of the difference the list is showing.
  *
- * **Two overlapping questions and the union of them, never three buckets.** `missing` is
- * "copies I would have to find", `other` is "copies the deck is already playing as something
- * else", and a row can answer both — theory 2× art A against live 1× art B is one copy to find
- * and one already on the table. Partitioning them would force that row into one answer and make
- * the other one a lie.
+ * **Two overlapping questions about cards and the union of them, never three buckets.**
+ * `missing` is "copies I would have to find", `other` is "copies the deck is already playing as
+ * something else", and a row can answer both — theory 2× art A against live 1× art B is one copy
+ * to find and one already on the table. Partitioning them would force that row into one answer
+ * and make the other one a lie.
+ *
+ * **`tokens` is a different axis, not a third reading of those two** (managed tokens spec §3.7,
+ * 2026-09-27). `deck_theory_diff` answers a row per token printing the plan counts more of than
+ * the deck, flagged {@link TheoryDiffRow.isToken}; `tokens` is those rows alone, and `all` — the
+ * whole difference — is every row, tokens included. `missing` and `other` stay questions about
+ * **cards** and draw no token row, even one whose numbers would qualify: a token is not a card
+ * the deck plays, so "the deck has not got it in any printing" and "the deck plays it as another
+ * printing" are sentences about something else, and the reader asked for their tokens in a view
+ * of their own.
  */
-type DiffView = "all" | "missing" | "other";
+type DiffView = "all" | "missing" | "other" | "tokens";
 
 /**
  * The control's rungs, in the order it draws them — **and deliberately not through
@@ -85,22 +94,33 @@ type DiffView = "all" | "missing" | "other";
  * one: `All` is the whole difference and the two beside it are readings of it, so the row is a
  * widening ladder rather than an alphabet. Sorting it would put `Different printing` first and
  * make the group read as three peers.
+ *
+ * **`Tokens` goes last**, after the two card readings rather than among them: it is the part of
+ * `All` that is not a card rather than a narrower view of the cards, so the ladder reads the
+ * whole, then the cards two ways, then what is not a card. An alphabet happens to put it last
+ * too, which is exactly the kind of agreement this order must not rest on.
  */
-const VIEWS: readonly DiffView[] = ["all", "missing", "other"];
+const VIEWS: readonly DiffView[] = ["all", "missing", "other", "tokens"];
 
 const VIEW_LABEL: Record<DiffView, string> = {
   all: "All",
   missing: "Missing",
   other: "Different printing",
+  tokens: "Tokens",
 };
 
 /**
  * What "nothing here" means, which is a different sentence for each rung.
  *
  * The unfiltered one is the answer this dialog was written for — the two lists agree — and it is
- * the only one that is about the *deck*. The other two are about the **filter**: rows exist and
+ * the only one that is about the *deck*. The other three are about the **filter**: rows exist and
  * this reading of them is empty, which is a fact worth telling apart from a plan that is fully
  * built. One sentence for both would be wrong on whichever case it was not written for.
+ *
+ * **The `tokens` sentence is the ordinary one, not the edge case** (managed tokens spec §3.7):
+ * every untouched token reads 0 since the default moved (§3.1), so a plan counts tokens only where
+ * the reader has counted them, and most decks opened here have card rows and no token row. It
+ * says what is true of the plan rather than of the two lists, which may well disagree about cards.
  */
 const NOTHING_SHOWN: Record<DiffView, string> = {
   all: "The two lists agree. Everything the plan asks for is already in the deck.",
@@ -109,21 +129,28 @@ const NOTHING_SHOWN: Record<DiffView, string> = {
     "printing.",
   other:
     "No substitutions. Every copy the plan asks for is one the deck has not got in any printing.",
+  tokens: "The plan counts no tokens the deck is short of.",
 };
 
 /**
  * Whether a row belongs to a reading of the difference.
  *
- * Both tests are against {@link TheoryDiffRow.heldAsOtherPrinting}, which the backend answers
- * per row and this file re-derives nothing of — the same rule the whole surface follows about
- * `deck_theory_diff`'s arithmetic. `quantity > heldAsOtherPrinting` is "at least one copy left
- * to find"; `heldAsOtherPrinting > 0` is "at least one copy already on the table". A row where
- * both hold shows under both, at its full quantity.
+ * **The token flag is read first**, because it decides which question the row can answer at all:
+ * a token row is in `tokens` and `all` and in neither card reading, whatever its numbers say —
+ * see {@link DiffView}. `isToken` is the backend's, like everything else a row carries.
+ *
+ * The two card tests are against {@link TheoryDiffRow.heldAsOtherPrinting}, which the backend
+ * answers per row and this file re-derives nothing of — the same rule the whole surface follows
+ * about `deck_theory_diff`'s arithmetic. `quantity > heldAsOtherPrinting` is "at least one copy
+ * left to find"; `heldAsOtherPrinting > 0` is "at least one copy already on the table". A row
+ * where both hold shows under both, at its full quantity.
  */
 function inView(row: TheoryDiffRow, view: DiffView): boolean {
+  if (view === "all") return true;
+  if (view === "tokens") return row.isToken;
+  if (row.isToken) return false;
   if (view === "missing") return row.quantity > row.heldAsOtherPrinting;
-  if (view === "other") return row.heldAsOtherPrinting > 0;
-  return true;
+  return row.heldAsOtherPrinting > 0;
 }
 
 /**
@@ -407,6 +434,12 @@ export interface TheoryDiffDialogProps {
  * how a reader picks one; {@link VIEW_NOTE} is the sentence that keeps the counts from reading
  * as arithmetic that does not add up.
  *
+ * **And tokens, since 2026-09-27** (managed tokens spec §3.7): the plan's token printings the
+ * deck is short of arrive as rows of their own, under `Tokens & Emblems`, and are drawn by `All`
+ * and by a fourth rung, `Tokens`, and by neither card reading — {@link DiffView} has why. A token
+ * row is otherwise an ordinary line: the same key, the same price and spare copies at its
+ * printing and finish, and the same press, which files a wish pinned to that printing.
+ *
  * **A real modal, like every other surface that paints a scrim.** The card pane, the validation
  * panel and the set picker are anchored, non-`aria-modal` layers over a page that stays live,
  * because they are things a reader consults *while* editing and nothing covers what is behind
@@ -613,6 +646,7 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
       all: rows.length,
       missing: rows.filter((row) => inView(row, "missing")).length,
       other: rows.filter((row) => inView(row, "other")).length,
+      tokens: rows.filter((row) => inView(row, "tokens")).length,
     }),
     [rows],
   );
@@ -940,7 +974,7 @@ function ListControls({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-      {/* A real radio group rather than three buttons: one of three is chosen, exactly one is
+      {/* A real radio group rather than four buttons: one of four is chosen, exactly one is
           true at a time, and `aria-checked` is the only thing that says so to a reader who
           cannot see which one is gold. `ExportDialog`'s format row, at this dialog's own control
           size. */}

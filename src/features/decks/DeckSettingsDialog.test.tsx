@@ -687,7 +687,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    await userEvent.click(screen.getByRole("switch", { name: /Different printing/ }));
+    await userEvent.click(screen.getByRole("switch", { name: /Any printing/ }));
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryMarkName: false }));
 
     await userEvent.click(screen.getByRole("switch", { name: /Matching printing/ }));
@@ -712,39 +712,21 @@ describe("DeckSettingsDialog", () => {
   });
 
   /**
-   * The token mode (token stacks spec §4.5, user schema v52): drawn here, where a `deck_update`
-   * can carry it, and written in the one act that settles it — one field, one write. It replaced
-   * the `Show Tokens & Emblems in the deck` switch, which is asserted gone rather than assumed.
+   * **No token mode, even over a deck stored `hidden`** (managed tokens spec §3.9). The column
+   * stays and nothing reads it, so this dialog draws no `Managed | Hide` row — nor the
+   * `Show Tokens & Emblems in the deck` switch it replaced — and no press here can write it.
    */
-  it("draws the Tokens mode control and writes tokenMode on the press", async () => {
-    deckGet.mockResolvedValue(detail());
-    open();
-    await loaded();
-
-    expect(screen.queryByRole("switch", { name: /tokens & emblems/i })).toBeNull();
-    const group = screen.getByRole("group", { name: "Tokens" });
-    expect(within(group).getByRole("button", { name: "Managed" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await userEvent.click(within(group).getByRole("button", { name: "Hide" }));
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { tokenMode: "hidden" }));
-    expect(deckUpdate).toHaveBeenCalledTimes(1);
-  });
-
-  /** A deck whose pile is hidden reads `Hide`, and the press puts it back to `managed`. */
-  it("reads the stored token mode off the deck row", async () => {
+  it("draws no token mode control, whatever the deck row stores", async () => {
     deckGet.mockResolvedValue(detail({ tokenMode: "hidden" }));
     open();
     await loaded();
 
-    const group = screen.getByRole("group", { name: "Tokens" });
-    expect(within(group).getByRole("button", { name: "Hide" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await userEvent.click(within(group).getByRole("button", { name: "Managed" }));
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { tokenMode: "managed" }));
+    // The form is there, so an absence below is the control's rather than the panel's.
+    expect(screen.getByRole("group", { name: "Deck kind" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Tokens" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /tokens & emblems/i })).toBeNull();
+    expect(deckUpdate).not.toHaveBeenCalled();
   });
 
   /** And a deck with no plan is offered none of them, for the reason it is offered no theory
@@ -757,7 +739,7 @@ describe("DeckSettingsDialog", () => {
     // failed to draw at all.
     expect(screen.getByRole("group", { name: "Deck kind" })).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /Matching printing/ })).toBeNull();
-    expect(screen.queryByRole("switch", { name: /Different printing/ })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /Any printing/ })).toBeNull();
     expect(screen.queryByRole("switch", { name: /Not in the theory list/ })).toBeNull();
   });
 

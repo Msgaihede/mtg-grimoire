@@ -478,15 +478,19 @@ describe("TokenStackPile", () => {
   });
 
   it("wears the plan's mark when the pile is given one", () => {
-    renderStack({ ...pileOf([token()]), theoryMark: () => ({ tier: "exact", delta: 0 }) });
+    renderStack({
+      ...pileOf([token()]),
+      theoryMark: () => ({ tier: "exact", delta: 0, anyPrinting: false }),
+    });
     expect(document.querySelector(`[${THEORY_MATCH_ATTR}]`)).not.toBeNull();
   });
 
   it("says the plan's mark in the art press's own name, since the mark itself is aria-hidden", () => {
-    renderStack({ ...pileOf([token()]), theoryMark: () => ({ tier: "exact", delta: 0 }) });
+    const mark = { tier: "exact", delta: 0, anyPrinting: false } as const;
+    renderStack({ ...pileOf([token()]), theoryMark: () => mark });
     const press = screen.getByRole("button", { name: /^Change the art for Treasure/ });
     expect(press).toHaveAccessibleName(
-      `${tokenEntryName("Change the art for", token())}, ${theoryMatchLabel("exact", 0).toLowerCase()}`,
+      `${tokenEntryName("Change the art for", token())}, ${theoryMatchLabel(mark).toLowerCase()}`,
     );
   });
 

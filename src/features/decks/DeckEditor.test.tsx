@@ -4433,10 +4433,12 @@ describe("DeckEditor", () => {
     }
     // And in words, which is the other half of the switch reaching the screen: the tier is drawn
     // as a colour, so `deckCardName` is the only place a reader who cannot see one is told which
-    // of the two statements this mark is making.
-    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
-      expect.stringContaining("art mismatch"),
-    );
+    // of the two statements this mark is making. **`match`, not `art mismatch`** (managed tokens
+    // spec §3.10): the reader switched printings off, so the row — the very printing the plan
+    // names — must not be called a mismatch of one.
+    const press = screen.getByRole("button", { name: /^Lightning Bolt/ });
+    expect(press).toHaveAccessibleName(expect.stringMatching(/, match(,|$)/));
+    expect(press).toHaveAccessibleName(expect.not.stringContaining("mismatch"));
   });
 
   /**

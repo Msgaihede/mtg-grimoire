@@ -1,6 +1,7 @@
 /**
  * `CardMarks.tsx`'s subjects a suite can hold honestly: the **quantity tag**, the **three theory
- * marks**, and — since 2026-09-10 — the **note mark** the row views draw.
+ * marks**, since 2026-09-10 the **note mark** the row views draw, and since 2026-09-27 the
+ * **word-mark box** `RULE BREAK` shares with a hand-added token's `NOT MADE BY DECK`.
  *
  * The rest of that file is geometry drawn on a card face, which jsdom lays out not at all — the
  * stack's marks are pinned through `CardStack.test.tsx`, where they are rendered on a real row.
@@ -82,6 +83,8 @@ import {
   NOTE_MARK_LABEL,
   NoteMark,
   QuantityTag,
+  RuleBreakMark,
+  THEORY_MATCH_ANY_LABEL,
   THEORY_MATCH_ATTR,
   THEORY_MATCH_NAME_LABEL,
   THEORY_UNPLANNED_LABEL,
@@ -90,6 +93,8 @@ import {
   theoryDeltaText,
   theoryMatchLabel,
 } from "./CardMarks";
+import { NotMadeByDeckMark } from "./NotMadeByDeckMark";
+import type { TheoryTier } from "./theoryMatch";
 
 /** The one element either component draws, found the way a live probe finds it. */
 function drawMark(ui: ReactElement): HTMLElement {
@@ -118,14 +123,31 @@ async function tooltipOf(anchor: Element): Promise<HTMLElement> {
 }
 
 describe("theoryMatchLabel", () => {
+  /** A mark as `theoryMatchMark` answers one, with the exact switch **on** unless a case says
+   *  otherwise — which is every deck's default and the only state the older cases knew. */
+  const label = (tier: TheoryTier, delta: number, anyPrinting = false) =>
+    theoryMatchLabel({ tier, delta, anyPrinting });
+
   it("names the exact tier Exact Match", () => {
-    expect(theoryMatchLabel("exact", 0)).toBe("Exact Match");
+    expect(label("exact", 0)).toBe("Exact Match");
   });
 
   it("says which one a name match is", () => {
-    expect(theoryMatchLabel("name", 0)).toBe("Art Mismatch");
+    expect(label("name", 0)).toBe("Art Mismatch");
     // The constant is the same name — issue #502 named the three tiers in the reader's words.
     expect(THEORY_MATCH_NAME_LABEL).toBe("Art Mismatch");
+  });
+
+  /**
+   * **With `Matching printing` off the name tier says `Match`** (managed tokens spec §3.10): the
+   * reader has asked not to be told printings apart, so "Art Mismatch" would be telling them the
+   * one thing they switched off. The count clause is the tier's and follows it unchanged.
+   */
+  it("says Match on the name tier when the deck asks for any printing", () => {
+    expect(label("name", 0, true)).toBe("Match");
+    expect(THEORY_MATCH_ANY_LABEL).toBe("Match");
+    expect(label("name", 2, true)).toBe("Match · 2 to add");
+    expect(label("name", -1, true)).toBe("Match · 1 to remove");
   });
 
   /**
@@ -134,14 +156,10 @@ describe("theoryMatchLabel", () => {
    * tiers, because a `Math.abs` with the words swapped would pass half of these.
    */
   it("words the count as the action to take, after the tier's own clause, on both tiers", () => {
-    expect(theoryMatchLabel("exact", 2)).toBe("Exact Match · 2 to add");
-    expect(theoryMatchLabel("exact", -3)).toBe("Exact Match · 3 to remove");
-    expect(theoryMatchLabel("name", 6)).toBe(
-      "Art Mismatch · 6 to add",
-    );
-    expect(theoryMatchLabel("name", -1)).toBe(
-      "Art Mismatch · 1 to remove",
-    );
+    expect(label("exact", 2)).toBe("Exact Match · 2 to add");
+    expect(label("exact", -3)).toBe("Exact Match · 3 to remove");
+    expect(label("name", 6)).toBe("Art Mismatch · 6 to add");
+    expect(label("name", -1)).toBe("Art Mismatch · 1 to remove");
   });
 
   /** The glyph and the sentence must point the same way: the characters the mark draws for a
@@ -161,9 +179,9 @@ describe("theoryMatchLabel", () => {
    * component or a story that hands it something else must still get the one sentence.
    */
   it("says the third tier's one sentence at every count", () => {
-    expect(theoryMatchLabel("unplanned", 0)).toBe("No Match");
-    expect(theoryMatchLabel("unplanned", 3)).toBe("No Match");
-    expect(theoryMatchLabel("unplanned", -8)).toBe("No Match");
+    expect(label("unplanned", 0)).toBe("No Match");
+    expect(label("unplanned", 3)).toBe("No Match");
+    expect(label("unplanned", -8)).toBe("No Match");
     // The constant is the same literal, and never assembled out of the exact tier's name.
     expect(THEORY_UNPLANNED_LABEL).toBe("No Match");
   });
@@ -245,6 +263,38 @@ describe("TheoryMatchMark", () => {
     expect(exact.querySelector("svg")).toBeNull();
     expect(exact.textContent).toBe("+3");
     expect(drawMark(<TheoryMatchMark tier="exact" delta={0} />).querySelector("svg")).not.toBeNull();
+  });
+
+  /**
+   * **The tooltip is the mark's sentence, so it moves with `anyPrinting`** (managed tokens spec
+   * §3.10). Both components, because the card faces draw one and the row views the other, and a
+   * reader pointing at either must read what a screen reader hears from the card's name. Anchored,
+   * because a substring match passes a sentence with the old word still in it.
+   */
+  it("says Match in a name-tier mark's tooltip on a deck that asks for any printing", async () => {
+    for (const Mark of [TheoryMatchMark, TheoryMatchBadge]) {
+      const { container, unmount } = render(
+        <TooltipProvider>
+          <Mark tier="name" delta={2} anyPrinting />
+        </TooltipProvider>,
+      );
+      const el = container.querySelector(`[${THEORY_MATCH_ATTR}]`)!;
+      // The attribute is the tier, and the tier did not move — only its words did.
+      expect(el.getAttribute(THEORY_MATCH_ATTR)).toBe("name");
+      expect(await tooltipOf(el)).toHaveTextContent(/^Match · 2 to add$/);
+      unmount();
+    }
+  });
+
+  it("keeps Art Mismatch in the tooltip with the exact switch on", async () => {
+    const { container } = render(
+      <TooltipProvider>
+        <TheoryMatchMark tier="name" />
+      </TooltipProvider>,
+    );
+    expect(await tooltipOf(container.querySelector(`[${THEORY_MATCH_ATTR}]`)!)).toHaveTextContent(
+      /^Art Mismatch$/,
+    );
   });
 });
 
@@ -855,5 +905,33 @@ describe("NoteMark", () => {
     const glyph = container.querySelector("svg") as SVGElement;
     expect(glyph.getAttribute("class")).toContain("size-3");
     expect(glyph.getAttribute("class")).not.toContain("--mark-scale");
+  });
+});
+
+/**
+ * **`RULE BREAK` and `NOT MADE BY DECK` are one box** (managed tokens spec §3.5). The reader asked
+ * for a token nothing in the deck makes to be marked the way a rule-break card is, and the badge
+ * landed as a copy of this file's classes; both draw `WordMark` now, so the pair can only differ in
+ * their words and in the one class the longer badge adds to stay on one line. Compared class by
+ * class rather than against a spelled-out list, because the claim is that they agree — whatever
+ * the box is made of this year.
+ */
+describe("WordMark", () => {
+  const classesOf = (ui: ReactElement) => {
+    const { container, unmount } = render(<TooltipProvider>{ui}</TooltipProvider>);
+    const el = container.querySelector("[aria-hidden='true']") as HTMLElement;
+    const found = { text: el.textContent, classes: [...el.classList] };
+    unmount();
+    return found;
+  };
+
+  it("draws the not-made-by-deck badge in the rule break's own box", () => {
+    const rule = classesOf(<RuleBreakMark text="Banned in Modern" className="absolute" />);
+    const token = classesOf(<NotMadeByDeckMark name="Treasure" className="absolute" />);
+
+    expect(rule.text).toBe("RULE BREAK");
+    expect(token.text).toBe("NOT MADE BY DECK");
+    expect(token.classes.filter((c) => c !== "whitespace-nowrap")).toEqual(rule.classes);
+    expect(rule.classes).toContain("text-destructive");
   });
 });

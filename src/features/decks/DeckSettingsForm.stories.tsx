@@ -135,8 +135,6 @@ function Body({
     // `AUTO_CATEGORY` for a deck that does not exist — the column's own `DEFAULT 0`, and the
     // only answer a deck with no categories could honestly give.
     defaultCategoryId: row?.defaultCategoryId ?? AUTO_CATEGORY,
-    // `managed` for a deck that does not exist — `decks.token_mode`'s `DEFAULT 'managed'`.
-    tokenMode: row?.tokenMode ?? "managed",
   }));
   /**
    * The cover, and **the artist goes with the card rather than surviving it**.
@@ -200,9 +198,6 @@ function Body({
         }}
         categories={categories}
         canSetTheoryMarks={canSetTheoryMarks}
-        // One flag serves both in this workbench, because both answer "is there a deck row to
-        // write to" and a story's deck either exists or does not. The form keeps them two props.
-        canSetTokenMode={canSetTheoryMarks}
         cover={coverProps}
         idPrefix={id}
       />
@@ -304,7 +299,8 @@ export const NewDeck: Story = {
     await expect(args.onSubmit).toHaveBeenCalledTimes(1);
     // One press, one event: the field is not blurred, so nothing commits alongside it.
     await expect(args.onCommit).not.toHaveBeenCalled();
-    // A deck that does not exist has no row for the token mode to be written to.
+    // No token mode on either host since 2026-09-27 — and never one here, where there was no deck
+    // row for it to be written to.
     await expect(canvas.queryByRole("group", { name: "Tokens" })).toBeNull();
     await expect(name).toHaveFocus();
   },
@@ -466,7 +462,9 @@ export const KindTheoryAndActual: Story = {
     );
     await expect(canvas.getByText(DECK_KIND_HINT.theory)).toBeVisible();
     await expect(canvas.getByRole("switch", { name: /matching printing/i })).toBeInTheDocument();
-    await expect(canvas.getByRole("switch", { name: /different printing/i })).toBeInTheDocument();
+    // `Any printing` since 2026-09-27 — with green off the blue mark is on every printing of a
+    // planned card and says `Match`, so the switch is named for what it lets through.
+    await expect(canvas.getByRole("switch", { name: /any printing/i })).toBeInTheDocument();
     await expect(
       canvas.getByRole("switch", { name: /not in the theory list/i }),
     ).toBeInTheDocument();
@@ -474,41 +472,37 @@ export const KindTheoryAndActual: Story = {
 };
 
 /**
- * **The token mode** (token stacks spec §4.5, user schema v52) — `Managed` or `Hide`, drawn on
- * the edit shape only.
+ * **The managed wishlist's `Tokens` mode** (managed tokens spec §3.8, user schema v54) — the
+ * Compare dialog's fourth view, last in the group as it is last in the dialog.
  *
- * It replaced the `Show Tokens & Emblems in the deck` switch, and every deck starts `Managed`:
- * the deck's four views draw one more pile — the tokens the band under the desk lists — and that
- * pile counts toward nothing, not the deck's size, not a total, not validation. `Hide` takes the
- * pile out of all four views and leaves the band, and every stepper on it, where it was. The
- * third word, `Collection`, arrives with the custody it means in PR 3; a button for it now would
- * behave exactly like `Managed`. **New deck** draws no control, because `DeckInput` has no field
- * to carry the answer.
+ * Its caption is the one that names the `Tokens` subfolder its wishes are filed in, inside the
+ * deck's managed folder: the token printings the plan is short of, and nothing in the parent.
+ *
+ * **The token mode's `Managed | Hide` row, which stood lower on this panel, is gone** — from here
+ * and from the band (§3.9) — because with every token at 0 until the reader counts it the pile
+ * draws only what is used, and a mode had nothing left to decide. The play asserts it absent.
  */
-export const TokensAndEmblems: Story = {
+export const ManagedWishlistTokens: Story = {
+  args: { kind: "theory" },
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
 
     await canvas.findByLabelText("Name");
-    await expect(canvas.queryByRole("switch", { name: /tokens & emblems/i })).toBeNull();
-    const group = canvas.getByRole("group", { name: "Tokens" });
-    await expect(within(group).getByRole("button", { name: "Managed" })).toHaveAttribute(
+    // The retired control, asserted gone rather than assumed.
+    await expect(canvas.queryByRole("group", { name: "Tokens" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Hide" })).toBeNull();
+
+    const group = canvas.getByRole("group", { name: "Managed wishlist" });
+    await userEvent.click(within(group).getByRole("button", { name: "Tokens" }));
+
+    await expect(args.onChange).toHaveBeenLastCalledWith({ managedWishlist: "tokens" });
+    await expect(within(group).getByRole("button", { name: "Tokens" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    await expect(within(group).queryByRole("button", { name: /collection/i })).toBeNull();
-
-    await userEvent.click(within(group).getByRole("button", { name: "Hide" }));
-
-    await expect(args.onChange).toHaveBeenLastCalledWith({ tokenMode: "hidden" });
-    await expect(within(group).getByRole("button", { name: "Hide" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    // The selected mode's sentence follows the press, under the control.
     await expect(
       canvas.getByText(
-        "No token pile in the deck's views. The Tokens & Emblems band under the deck still keeps every token.",
+        "A wishlist folder named after this deck, with a Tokens subfolder that holds the token printings the plan is short of. It follows the deck and can't be edited by hand.",
       ),
     ).toBeVisible();
     // A press settles in one act, so nothing commits beside it.

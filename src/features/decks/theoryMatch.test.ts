@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { DeckFinish, TheorySlot } from "@/lib/ipc";
+import { theoryMatchLabel } from "./CardMarks";
 import {
+  THEORY_TIER_NAMES,
   theoryMatchMark,
   theoryMatchPlan,
   theoryNameKey,
   theoryProgress,
   theorySlot,
+  theoryTier,
   type TheoryMarkSwitches,
 } from "./theoryMatch";
 
@@ -97,7 +100,7 @@ describe("the three tiers", () => {
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt" })),
-    ).toEqual({ tier: "exact", delta: 0 });
+    ).toEqual({ tier: "exact", delta: 0, anyPrinting: false });
   });
 
   it("draws the loose tier for another printing of the same card", () => {
@@ -108,7 +111,7 @@ describe("the three tiers", () => {
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-m10", finish: null, name: "Lightning Bolt" })),
-    ).toEqual({ tier: "name", delta: 0 });
+    ).toEqual({ tier: "name", delta: 0, anyPrinting: false });
   });
 
   it("draws the loose tier for the same printing in the wrong finish", () => {
@@ -119,7 +122,7 @@ describe("the three tiers", () => {
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt" })),
-    ).toEqual({ tier: "name", delta: 0 });
+    ).toEqual({ tier: "name", delta: 0, anyPrinting: false });
   });
 
   /**
@@ -137,7 +140,7 @@ describe("the three tiers", () => {
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "ring-c11", finish: null, name: "Sol Ring" })),
-    ).toEqual({ tier: "unplanned", delta: 0 });
+    ).toEqual({ tier: "unplanned", delta: 0, anyPrinting: false });
   });
 
   /** A live row holding four copies of a card nothing plans is still `0`: the number would be an
@@ -150,7 +153,7 @@ describe("the three tiers", () => {
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "ring-c11", finish: null, name: "Sol Ring" })),
-    ).toEqual({ tier: "unplanned", delta: 0 });
+    ).toEqual({ tier: "unplanned", delta: 0, anyPrinting: false });
   });
 });
 
@@ -173,11 +176,11 @@ describe("the number's grain follows the tier", () => {
     const marks = printings.map((cardId) =>
       theoryMatchMark(plan, card({ cardId, finish: null, name: "Forest" })),
     );
-    expect(marks[0]).toEqual({ tier: "exact", delta: 6 });
+    expect(marks[0]).toEqual({ tier: "exact", delta: 6, anyPrinting: false });
     expect(marks.slice(1)).toEqual([
-      { tier: "name", delta: 0 },
-      { tier: "name", delta: 0 },
-      { tier: "name", delta: 0 },
+      { tier: "name", delta: 0, anyPrinting: false },
+      { tier: "name", delta: 0, anyPrinting: false },
+      { tier: "name", delta: 0, anyPrinting: false },
     ]);
     expect(marks.every((m) => m !== null)).toBe(true);
   });
@@ -194,7 +197,7 @@ describe("the number's grain follows the tier", () => {
     // Two live, four planned, at the card's grain: two to add.
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-m10", finish: "foil", name: "Lightning Bolt" })),
-    ).toEqual({ tier: "name", delta: 2 });
+    ).toEqual({ tier: "name", delta: 2, anyPrinting: false });
   });
 
   /** The plan's own half of the loose sum: two printings of one card in the plan are one order
@@ -209,6 +212,7 @@ describe("the number's grain follows the tier", () => {
     expect(theoryMatchMark(plan, card({ cardId: "bolt-2xm", name: "Lightning Bolt" }))).toEqual({
       tier: "name",
       delta: 3,
+      anyPrinting: false,
     });
   });
 });
@@ -226,9 +230,10 @@ describe("the switches", () => {
     // Blue, and blue's number: eight live against eight planned, not two against eight. And
     // **not** the third tier, with the third switch on: the row is in the plan's exact map, so
     // the exact switch being off silences a statement rather than making the card unplanned.
+    // `anyPrinting`, because the switch is off — which is what words it `Match` (see below).
     expect(
       theoryMatchMark(plan, card({ cardId: "forest-a", finish: null, name: "Forest" })),
-    ).toEqual({ tier: "name", delta: 0 });
+    ).toEqual({ tier: "name", delta: 0, anyPrinting: true });
   });
 
   it("draws nothing for a loose row when the loose mark is off, and keeps the exact one", () => {
@@ -243,7 +248,7 @@ describe("the switches", () => {
     });
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt" })),
-    ).toEqual({ tier: "exact", delta: 0 });
+    ).toEqual({ tier: "exact", delta: 0, anyPrinting: false });
     // Silenced, and **not** unplanned: the other printing's name is in the plan, so the card is
     // asked for even though this row's own tier is switched off.
     expect(
@@ -284,7 +289,7 @@ describe("the switches", () => {
     ).toBeNull();
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-lea", finish: null, name: "Lightning Bolt" })),
-    ).toEqual({ tier: "exact", delta: 0 });
+    ).toEqual({ tier: "exact", delta: 0, anyPrinting: false });
   });
 
   /** All three off is still a real answer and is not a second spelling of the theory switch
@@ -307,6 +312,96 @@ describe("the switches", () => {
   });
 });
 
+/**
+ * **What the name tier is called depends on the exact switch** (managed tokens spec §3.10). With
+ * `Matching printing` off the reader has asked not to be told printings apart, so a row resolved
+ * on the name tier is not an "Art Mismatch" — whether it is the printing the plan named, falling
+ * through, or genuinely another one. `anyPrinting` is the mark's own record of that, and the
+ * words are read off it; the tier, the number and the colour do not move.
+ */
+describe("the name tier with the exact switch off", () => {
+  /** Two of the planned printing and two of another, against four planned — so the name tier's
+   *  number is `0` and the exact one's `+2`, and a row that answered the wrong tier would say so. */
+  const plan = (switches: TheoryMarkSwitches) =>
+    theoryMatchPlan(
+      [slot("bolt-lea|", "Lightning Bolt", 4)],
+      [
+        card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 2 }),
+        card({ cardId: "bolt-m10", name: "Lightning Bolt", quantity: 2 }),
+      ],
+      switches,
+    );
+  const EXACT_OFF: TheoryMarkSwitches = { exact: false, name: true, unplanned: true };
+  const planned = card({ cardId: "bolt-lea", name: "Lightning Bolt" });
+  const other = card({ cardId: "bolt-m10", name: "Lightning Bolt" });
+
+  it("resolves the printing the plan names on the name tier, worded Match", () => {
+    const mark = theoryMatchMark(plan(EXACT_OFF), planned);
+
+    expect(mark).toEqual({ tier: "name", delta: 0, anyPrinting: true });
+    expect(theoryMatchLabel(mark!)).toBe("Match");
+  });
+
+  /** "Whether or not its printing matches": the genuine other printing is a match too, because
+   *  the reader has asked for any printing of the card to count as the card. */
+  it("words a genuinely different printing Match too", () => {
+    const mark = theoryMatchMark(plan(EXACT_OFF), other);
+
+    expect(mark).toEqual({ tier: "name", delta: 0, anyPrinting: true });
+    expect(theoryMatchLabel(mark!)).toBe("Match");
+  });
+
+  /** The count clause is the tier's own and follows the new word unchanged. */
+  it("keeps the count clause after Match", () => {
+    const short = theoryMatchPlan(
+      [slot("bolt-lea|", "Lightning Bolt", 4)],
+      [card({ cardId: "bolt-lea", name: "Lightning Bolt", quantity: 1 })],
+      EXACT_OFF,
+    );
+    const mark = theoryMatchMark(short, planned);
+
+    expect(mark).toEqual({ tier: "name", delta: 3, anyPrinting: true });
+    expect(theoryMatchLabel(mark!)).toBe("Match · 3 to add");
+  });
+
+  /** With the switch on, a name-tier row is a genuine different printing and says so — and the
+   *  exact row beside it is the exact tier, which never carries the flag. */
+  it("keeps Art Mismatch for a name-tier row with the switch on", () => {
+    const loose = theoryMatchMark(plan(ALL), other);
+    const exact = theoryMatchMark(plan(ALL), planned);
+
+    expect(loose).toEqual({ tier: "name", delta: 0, anyPrinting: false });
+    expect(theoryMatchLabel(loose!)).toBe("Art Mismatch");
+    expect(exact).toEqual({ tier: "exact", delta: 2, anyPrinting: false });
+    expect(theoryMatchLabel(exact!)).toBe("Exact Match · 2 to add");
+  });
+
+  /** The third tier is about a card the plan does not ask for, which no printing switch can
+   *  reach — so it never carries the flag either, whatever the exact switch says. */
+  it("never marks the unplanned tier as any printing", () => {
+    const unplanned = card({ cardId: "ring-c11", name: "Sol Ring" });
+
+    expect(theoryMatchMark(plan(EXACT_OFF), unplanned)).toEqual({
+      tier: "unplanned",
+      delta: 0,
+      anyPrinting: false,
+    });
+  });
+
+  /** The `Matches theory` grouping buckets by the plan, whatever the switches say: its headings
+   *  are the three tier names, unchanged, and the exact row stays under `Exact Match`. */
+  it("leaves the grouping's headings and buckets as they were", () => {
+    expect(THEORY_TIER_NAMES).toEqual({
+      exact: "Exact Match",
+      name: "Art Mismatch",
+      unplanned: "No Match",
+    });
+    const off = plan(EXACT_OFF)!;
+    expect(theoryTier(off, planned)).toBe("exact");
+    expect(theoryTier(off, other)).toBe("name");
+  });
+});
+
 describe("the name key", () => {
   it("folds case on both sides", () => {
     const plan = theoryMatchPlan(
@@ -316,7 +411,7 @@ describe("the name key", () => {
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-m10", finish: null, name: "LIGHTNING BOLT" })),
-    ).toEqual({ tier: "name", delta: 0 });
+    ).toEqual({ tier: "name", delta: 0, anyPrinting: false });
   });
 
   /**
@@ -339,6 +434,7 @@ describe("the name key", () => {
     expect(theoryMatchMark(plan, card({ cardId: "other", finish: null, name: "Forest" }))).toEqual({
       tier: "unplanned",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -358,7 +454,7 @@ describe("the name key", () => {
         plan,
         card({ cardId: "gone", finish: null, name: "Whatever the row remembers" }),
       ),
-    ).toEqual({ tier: "exact", delta: 0 });
+    ).toEqual({ tier: "exact", delta: 0, anyPrinting: false });
   });
 
   /** The same orphan with the exact mark switched off: silenced, never unplanned. The name tier
@@ -400,10 +496,12 @@ describe("the exact tier's arithmetic", () => {
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
       tier: "exact",
       delta: 0,
+      anyPrinting: false,
     });
     expect(theoryMatchMark(plan, card({ cardId: "ring-c21", name: "Sol Ring" }))).toEqual({
       tier: "exact",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -421,7 +519,7 @@ describe("the exact tier's arithmetic", () => {
 
     expect(
       theoryMatchMark(plan, card({ cardId: "ring-c21", name: "Sol Ring", finish: "foil" })),
-    ).toEqual({ tier: "exact", delta: 0 });
+    ).toEqual({ tier: "exact", delta: 0, anyPrinting: false });
     expect(theoryMatchMark(plan, card({ cardId: "ring-c21", name: "Sol Ring" }))?.tier).toBe("name");
   });
 
@@ -439,6 +537,7 @@ describe("the exact tier's arithmetic", () => {
     expect(theoryMatchMark(plan, card({ cardId: "ring-c21", name: "Sol Ring" }))).toEqual({
       tier: "exact",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -455,6 +554,7 @@ describe("the exact tier's arithmetic", () => {
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
       tier: "unplanned",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -471,6 +571,7 @@ describe("the exact tier's arithmetic", () => {
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
       tier: "exact",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -485,6 +586,7 @@ describe("the exact tier's arithmetic", () => {
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
       tier: "exact",
       delta: 2,
+      anyPrinting: false,
     });
   });
 
@@ -500,6 +602,7 @@ describe("the exact tier's arithmetic", () => {
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
       tier: "exact",
       delta: -2,
+      anyPrinting: false,
     });
   });
 
@@ -519,6 +622,7 @@ describe("the exact tier's arithmetic", () => {
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
       tier: "exact",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -536,10 +640,11 @@ describe("the exact tier's arithmetic", () => {
     expect(theoryMatchMark(plan, card({ cardId: "ring-c21", name: "Sol Ring" }))).toEqual({
       tier: "exact",
       delta: 2,
+      anyPrinting: false,
     });
     expect(
       theoryMatchMark(plan, card({ cardId: "ring-c21", name: "Sol Ring", finish: "foil" })),
-    ).toEqual({ tier: "exact", delta: 0 });
+    ).toEqual({ tier: "exact", delta: 0, anyPrinting: false });
   });
 });
 
@@ -559,6 +664,7 @@ describe("an inactive pile counts on neither side of either tier", () => {
     expect(theoryMatchMark(plan, card({ cardId: "bolt-lea", name: "Lightning Bolt" }))).toEqual({
       tier: "exact",
       delta: 3,
+      anyPrinting: false,
     });
   });
 
@@ -575,6 +681,7 @@ describe("an inactive pile counts on neither side of either tier", () => {
     expect(theoryMatchMark(plan, card({ cardId: "bolt-m10", name: "Lightning Bolt" }))).toEqual({
       tier: "name",
       delta: 3,
+      anyPrinting: false,
     });
   });
 });
@@ -593,7 +700,7 @@ describe("the difference floor", () => {
     );
     expect(
       theoryMatchMark(plan, card({ cardId: "ring-ltr", finish: null, name: "Sol Ring" })),
-    ).toEqual({ tier: "name", delta: 0 });
+    ).toEqual({ tier: "name", delta: 0, anyPrinting: false });
   });
 
   /** The issue's own exclusion, on the exact tier: never a difference where neither side is
@@ -610,6 +717,7 @@ describe("the difference floor", () => {
     expect(theoryMatchMark(plan, card({ cardId: "sol-c21", name: "Sol Ring" }))).toEqual({
       tier: "exact",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -625,6 +733,7 @@ describe("the difference floor", () => {
     expect(theoryMatchMark(plan, card({ cardId: "sol-c21", name: "Sol Ring" }))).toEqual({
       tier: "exact",
       delta: 2,
+      anyPrinting: false,
     });
   });
 
@@ -641,11 +750,13 @@ describe("the difference floor", () => {
     expect(theoryMatchMark(plan, card({ cardId: "forest-a", name: "Forest" }))).toEqual({
       tier: "exact",
       delta: 0,
+      anyPrinting: false,
     });
     // Loose: two planned against one live — above one, so the number: one to add.
     expect(theoryMatchMark(plan, card({ cardId: "forest-c", name: "Forest" }))).toEqual({
       tier: "name",
       delta: 1,
+      anyPrinting: false,
     });
   });
 });

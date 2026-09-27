@@ -33,8 +33,8 @@ interface PileHostProps {
   planMarks?: boolean;
 }
 
-const EXACT: TheoryMark = { tier: "exact", delta: 0 };
-const UNPLANNED: TheoryMark = { tier: "unplanned", delta: 0 };
+const EXACT: TheoryMark = { tier: "exact", delta: 0, anyPrinting: false };
+const UNPLANNED: TheoryMark = { tier: "unplanned", delta: 0, anyPrinting: false };
 
 /**
  * The pile as a view is handed it: **one `useDeckTokens` answer**, the same one the band draws,

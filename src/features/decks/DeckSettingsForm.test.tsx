@@ -55,8 +55,6 @@ const VALUE: DeckSettingsValue = {
   managedWishlist: "off",
   folderId: null,
   defaultCategoryId: AUTO_CATEGORY,
-  // `decks.token_mode`'s `DEFAULT 'managed'` — every deck, from v52 on, until a reader asks.
-  tokenMode: "managed",
 };
 
 /**
@@ -141,8 +139,6 @@ function Harness({
       // absent is the create dialog, which is one case rather than the ordinary one. A test that
       // wants that case passes `false` and says so.
       canSetTheoryMarks={rest.canSetTheoryMarks ?? true}
-      // The edit host's answer again, for the same reason.
-      canSetTokenMode={rest.canSetTokenMode ?? true}
       cover={rest.cover ?? COVER}
       idPrefix={rest.idPrefix ?? "s"}
     />
@@ -490,7 +486,7 @@ describe("DeckSettingsForm", () => {
     form();
 
     expect(screen.queryByRole("switch", { name: /matching printing/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: /different printing/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /any printing/i })).not.toBeInTheDocument();
     // The red tier is gated on the same switch as the other two and for the same reason: *not in
     // the theory list* is still a statement about a list, so with no plan every row would wear
     // it. Asserted by the heading rather than by the caption, because the heading is what names
@@ -500,18 +496,22 @@ describe("DeckSettingsForm", () => {
     await userEvent.click(screen.getByRole("button", { name: "Theory + Actual" }));
 
     expect(screen.getByRole("switch", { name: /matching printing/i })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: /different printing/i })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: /any printing/i })).toBeInTheDocument();
+    // Renamed rather than joined (managed tokens spec §3.10): `Different printing` is a Compare
+    // view's word and the managed wishlist's, and no switch says it any more.
+    expect(screen.queryByRole("switch", { name: /different printing/i })).not.toBeInTheDocument();
     expect(screen.getByRole("switch", { name: /not in the theory list/i })).toBeInTheDocument();
     expect(screen.getByText("Not in the theory list")).toBeInTheDocument();
     expect(
       screen.getByText("A green mark on a card that is the exact printing your plan names."),
     ).toBeInTheDocument();
     // The half a reader cannot see coming: switching the strict mark off does not leave the card
-    // unmarked, it draws the loose one instead. Unsaid, a reader who turns green off and still
-    // sees marks reads the control as broken.
+    // unmarked, it draws the loose one instead — on every printing, the named one included, and
+    // worded as a match. Unsaid, a reader who turns green off and still sees marks reads the
+    // control as broken.
     expect(
       screen.getByText(
-        "A blue mark on a card your plan asks for in a different printing. Turning the green one off draws this one instead.",
+        "A blue mark on a card your plan asks for in a printing it does not name. Turning the green one off draws this one on every printing instead, as a match.",
       ),
     ).toBeInTheDocument();
     // And the red one's own half: it is not a third answer to *which printing*, so the caption
@@ -539,76 +539,31 @@ describe("DeckSettingsForm", () => {
     // away and never the choice that would make them mean something.
     expect(pressedKind()).toBe("Theory + Actual");
     expect(screen.queryByRole("switch", { name: /matching printing/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: /different printing/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /any printing/i })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("switch", { name: /not in the theory list/i }),
     ).not.toBeInTheDocument();
   });
 
   /**
-   * **The switch is gone and the mode is here** (token stacks spec §4.5, user schema v52).
-   * `Show Tokens & Emblems in the deck` was a yes-or-no; `decks.token_mode` is a choice out of a
-   * closed set, so it is drawn as one — a group of `aria-pressed` buttons named by the word beside
-   * them — and it reports one field, never anything a text field's commit would carry.
+   * **`Managed | Hide` is gone, and nothing took its place** (managed tokens spec §3.9). With
+   * every token at 0 until the reader counts it, the pile draws only what they use, so a mode
+   * had nothing left to decide. `decks.token_mode` stays in the schema and nothing reads it —
+   * so no host, on any kind of deck, draws a control or sends the field.
    */
-  it("draws the Tokens mode control in place of the old switch, and reports tokenMode", async () => {
-    const { onChange, onCommit } = form();
+  it("draws no token mode control on any kind of deck", async () => {
+    const { onChange } = form();
 
-    expect(screen.queryByRole("switch", { name: /tokens & emblems/i })).toBeNull();
-    const group = screen.getByRole("group", { name: "Tokens" });
-    expect(
-      within(group)
-        .getAllByRole("button")
-        .map((b) => [b.textContent, b.getAttribute("aria-pressed")]),
-    ).toEqual([
-      ["Managed", "true"],
-      ["Hide", "false"],
-    ]);
-    // The selected mode's sentence under the control, as the kind group draws its kind's.
-    expect(
-      screen.getByText(
-        "A Tokens & Emblems pile in Stacks, Grid, Text and Table. Tokens never count toward the deck's card total.",
-      ),
-    ).toBeInTheDocument();
-
-    await userEvent.click(within(group).getByRole("button", { name: "Hide" }));
-
-    expect(onChange).toHaveBeenLastCalledWith({ tokenMode: "hidden" });
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(within(group).getByRole("button", { name: "Hide" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    // …and the sentence follows the press.
-    expect(
-      screen.getByText(
-        "No token pile in the deck's views. The Tokens & Emblems band under the deck still keeps every token.",
-      ),
-    ).toBeInTheDocument();
-  });
-
-  /**
-   * Not tied to the deck's kind: a Regular, a Theory + Actual and a Virtual deck all make tokens,
-   * so the control is there on each.
-   */
-  it("draws the Tokens mode control whatever the deck's kind", async () => {
-    form();
     for (const kind of Object.values(DECK_KIND_LABEL)) {
       await userEvent.click(screen.getByRole("button", { name: kind }));
-      expect(screen.getByRole("group", { name: "Tokens" })).toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Tokens" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Managed" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Hide" })).not.toBeInTheDocument();
     }
-  });
-
-  /**
-   * The create host's half: `DeckInput` carries no `tokenMode`, so a press there would reach
-   * nothing and the deck would be born `managed` whatever it said — `canSetTheoryMarks`'
-   * argument, and `defaultCategoryId`'s before it.
-   */
-  it("draws no Tokens mode control for a host that cannot write it", () => {
-    form({ canSetTokenMode: false });
-
-    expect(screen.queryByRole("group", { name: "Tokens" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Tokens & Emblems/)).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ tokenMode: expect.anything() }),
+    );
   });
 
   /**
@@ -620,7 +575,7 @@ describe("DeckSettingsForm", () => {
   it("reports each switch on its own", async () => {
     const { onChange, onCommit } = form({ value: { ...VALUE, theoryEnabled: true } });
 
-    await userEvent.click(screen.getByRole("switch", { name: /different printing/i }));
+    await userEvent.click(screen.getByRole("switch", { name: /any printing/i }));
 
     expect(onChange).toHaveBeenCalledWith({ theoryMarkName: false });
     expect(onChange).not.toHaveBeenCalledWith(
@@ -643,8 +598,8 @@ describe("DeckSettingsForm", () => {
   /**
    * The managed wishlist (issue #512) sits under both of the marks' gates — it keeps a view of
    * the difference between the two lists, so a deck with no plan has nothing for it to hold, and
-   * the create host has no column to write it to — and is a four-way choice: `Off` and the
-   * Compare dialog's three views.
+   * the create host has no column to write it to — and is a five-way choice: `Off` and the
+   * Compare dialog's four views, `Tokens` last since user schema v54 (managed tokens spec §3.8).
    */
   it("draws the managed wishlist group only for a Theory + Actual deck in the edit host", async () => {
     form({ value: { ...VALUE, theoryEnabled: false } });
@@ -663,10 +618,12 @@ describe("DeckSettingsForm", () => {
       "All",
       "Missing",
       "Different Printing",
+      "Tokens",
     ]);
     // `off` is the default, and the only pressed one.
     expect(buttons.map((b) => b.getAttribute("aria-pressed"))).toEqual([
       "true",
+      "false",
       "false",
       "false",
       "false",
@@ -677,6 +634,16 @@ describe("DeckSettingsForm", () => {
     expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "missing" });
     await userEvent.click(within(group).getByRole("button", { name: "Different Printing" }));
     expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "other" });
+    // The token rows' own folder, and its caption under the group — a `Tokens` subfolder the
+    // reader would otherwise meet in the wishlist with nothing here having named it.
+    await userEvent.click(within(group).getByRole("button", { name: "Tokens" }));
+    expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "tokens" });
+    expect(within(group).getByRole("button", { name: "Tokens" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const tokensCaption = /with a Tokens subfolder that holds the token printings/;
+    expect(screen.getByText(tokensCaption)).toBeVisible();
     expect(onCommit).not.toHaveBeenCalled();
   });
 
@@ -849,7 +816,7 @@ describe("DeckSettingsForm", () => {
 
     expect(pressedKind()).toBe("Virtual");
     expect(screen.queryByRole("switch", { name: /matching printing/i })).toBeNull();
-    expect(screen.queryByRole("switch", { name: /different printing/i })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /any printing/i })).toBeNull();
     expect(screen.queryByRole("switch", { name: /not in the theory list/i })).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Theory + Actual" }));

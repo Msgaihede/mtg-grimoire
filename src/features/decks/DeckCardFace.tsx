@@ -502,7 +502,12 @@ export function DeckCardFace({
             stacking offset**: the tile used to push this mark down by the chip's own measured box
             on the cards that drew one, and there is no chip here to clear. */}
         {theoryMark !== null && (
-          <TheoryMatchMark tier={theoryMark.tier} delta={theoryMark.delta} className="ml-auto" />
+          <TheoryMatchMark
+            tier={theoryMark.tier}
+            delta={theoryMark.delta}
+            anyPrinting={theoryMark.anyPrinting}
+            className="ml-auto"
+          />
         )}
       </span>
 

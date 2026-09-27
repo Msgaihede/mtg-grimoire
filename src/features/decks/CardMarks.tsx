@@ -100,7 +100,7 @@ import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { labelColorCss, labelFgCss } from "./labelColors";
-import { THEORY_TIER_NAMES, type TheoryTier } from "./theoryMatch";
+import { THEORY_TIER_NAMES, type TheoryMark, type TheoryTier } from "./theoryMatch";
 
 /**
  * The one label a card wears, as an 8px chip in its own colour with the name one hover away.
@@ -391,6 +391,20 @@ export const THEORY_MATCH_LABEL = THEORY_TIER_NAMES.exact;
 export const THEORY_MATCH_NAME_LABEL = THEORY_TIER_NAMES.name;
 
 /**
+ * The loose tier said in words **on a deck that asks for any printing** — `Matching printing`
+ * switched off, so every name-tier mark is {@link TheoryMark.anyPrinting} (managed tokens spec
+ * §3.10, 2026-09-27).
+ *
+ * The reader has asked not to be told printings apart, so {@link THEORY_MATCH_NAME_LABEL} would be
+ * telling them the one thing they switched off — over the very printing the plan names, which
+ * falls through to this tier with the switch off. `Match` is the statement that is left: the card
+ * is the planned one. It is **not** one of `THEORY_TIER_NAMES`, because it is not a tier — the
+ * `Matches theory` headings bucket by the plan and keep their three words whatever the switches
+ * say — so it lives here, beside the three constants that *are* those names read out.
+ */
+export const THEORY_MATCH_ANY_LABEL = "Match";
+
+/**
  * The third tier said in words — a live row the plan does not ask for at all (2026-09-08).
  *
  * It carries **no count clause ever**, unlike the other two: there is no order to be short of or
@@ -432,10 +446,23 @@ export const THEORY_UNPLANNED_LABEL = THEORY_TIER_NAMES.unplanned;
  * and the early return is what makes the sentence true of a caller that passes something else —
  * a story, a Storybook control, a future arm that computes a number for a different reason.
  * "No Match · 3 to add" would be a sentence about an order the plan does not carry.
+ *
+ * **It takes the whole mark since 2026-09-27**, when the name tier's word came to depend on the
+ * deck's exact switch as well as on the tier: {@link TheoryMark.anyPrinting} words it
+ * {@link THEORY_MATCH_ANY_LABEL} rather than {@link THEORY_MATCH_NAME_LABEL} (managed tokens spec
+ * §3.10). Three positional arguments would have been a boolean nobody could read at a call site,
+ * and the three callers that say this sentence in words — the card's name, the table's `sr-only`
+ * twin, the token pile's press — already hold the mark `theoryMatchMark` answered, so they hand it
+ * over whole and cannot forget the third half. The count clause is the tier's, after either word.
  */
-export function theoryMatchLabel(tier: TheoryTier, delta: number): string {
+export function theoryMatchLabel({ tier, delta, anyPrinting }: TheoryMark): string {
   if (tier === "unplanned") return THEORY_UNPLANNED_LABEL;
-  const base = tier === "exact" ? THEORY_MATCH_LABEL : THEORY_MATCH_NAME_LABEL;
+  const base =
+    tier === "exact"
+      ? THEORY_MATCH_LABEL
+      : anyPrinting
+        ? THEORY_MATCH_ANY_LABEL
+        : THEORY_MATCH_NAME_LABEL;
   if (delta === 0) return base;
   return delta > 0 ? `${base} · ${delta} to add` : `${base} · ${-delta} to remove`;
 }
@@ -679,6 +706,7 @@ const THEORY_PAINT: Readonly<Record<TheoryTier, { fill: string; fg: string }>> =
 export function TheoryMatchMark({
   tier,
   delta = 0,
+  anyPrinting = false,
   className,
 }: {
   /**
@@ -711,6 +739,19 @@ export function TheoryMatchMark({
    * has always drawn. The tier above deliberately has no such default.
    */
   delta?: number;
+  /**
+   * `theoryMatch.ts`'s `TheoryMark.anyPrinting` — a name-tier row on a deck with `Matching
+   * printing` off, whose tooltip says `Match` rather than `Art Mismatch` (managed tokens spec
+   * §3.10). **Words only**: the fill, the glyph and the attribute are the tier's, untouched.
+   *
+   * Defaulted to `false`, {@link delta}'s arrangement rather than {@link tier}'s, because what a
+   * default costs here is a word and never a colour or a glyph: a caller that has not heard of the
+   * switch draws the name tier's own sentence, which is what every mark said before it — the
+   * Settings preview, which has no deck, is that caller. Every surface that draws a *deck's* mark
+   * passes the mark's own field, and `theoryMatchLabel`, which the card's name is worded by, takes
+   * the whole mark so that half cannot be left out.
+   */
+  anyPrinting?: boolean;
   className?: string;
 }) {
   const paint = THEORY_PAINT[tier];
@@ -724,10 +765,10 @@ export function TheoryMatchMark({
       // The tier as the value, which is how a test and a live probe tell the three marks apart
       // without reading a colour — see {@link THEORY_MATCH_ATTR}.
       {...{ [THEORY_MATCH_ATTR]: tier }}
-      // Redundant with `deckCardName`'s own clause (`theoryMatchLabel(tier, delta)`) — the words
-      // are already the whole of what a keyboard reader gets from the button this sits inside, so
+      // Redundant with `deckCardName`'s own clause (`theoryMatchLabel(mark)`) — the words are
+      // already the whole of what a keyboard reader gets from the button this sits inside, so
       // `describes: false` leaves `aria-describedby` unset.
-      {...tip(theoryMatchLabel(tier, delta), { describes: false })}
+      {...tip(theoryMatchLabel({ tier, delta, anyPrinting }), { describes: false })}
       style={{
         // Mirrored — **reflected** across the vertical axis, not rotated 180°, which is the whole
         // of issue #182 — because this sits in the card's **right**-hand corner; see the constant.
@@ -852,6 +893,7 @@ export function TheoryMatchMark({
 export function TheoryMatchBadge({
   tier,
   delta = 0,
+  anyPrinting = false,
   className,
 }: {
   /** See {@link TheoryMatchMark.tier} — required for that component's reason, and the whole of
@@ -860,6 +902,9 @@ export function TheoryMatchBadge({
   /** See {@link TheoryMatchMark.delta} — `0` is the row that matches, and the tick; ignored
    *  entirely on the `unplanned` tier, which has no order to be short of. */
   delta?: number;
+  /** See {@link TheoryMatchMark.anyPrinting} — the tooltip's word on a deck that asks for any
+   *  printing, and nothing else about the glyph. */
+  anyPrinting?: boolean;
   className?: string;
 }) {
   const tip = useTooltip();
@@ -871,7 +916,7 @@ export function TheoryMatchBadge({
       // The tier as the value — see {@link THEORY_MATCH_ATTR}.
       {...{ [THEORY_MATCH_ATTR]: tier }}
       // Redundant with `deckCardName`'s own clause, exactly as `TheoryMatchMark`'s is.
-      {...tip(theoryMatchLabel(tier, delta), { describes: false })}
+      {...tip(theoryMatchLabel({ tier, delta, anyPrinting }), { describes: false })}
       // The text colour only — there is no fill to print on, which is why this takes `fill` out
       // of {@link THEORY_PAINT} and never the `-fg` beside it.
       style={{ color: THEORY_PAINT[tier].fill }}
@@ -913,15 +958,50 @@ export function TheoryMatchBadge({
  * stack's card and the Grid view's tile — are card faces the reader can zoom, so both read that
  * card's `--mark-scale` (`lib/cardZoom.ts`). The border, the radius and the vertical padding stay
  * where they are: all three are one pixel or three, and a hairline is a hairline at every size.
+ * All of that is {@link WordMark}'s, which is the box this and `NOT MADE BY DECK` share.
  */
 export function RuleBreakMark({ text, className }: { text: string; className?: string }) {
+  // The hint is redundant with `deckCardName`'s own `rule break: ${text}` clause — the button
+  // beside this mark already says the finding in full to a keyboard reader.
+  return <WordMark word="RULE BREAK" hint={text} className={className} />;
+}
+
+/**
+ * A word spelled out over a card's art in the destructive colour, boxed, with its sentence one
+ * hover away — **the one recipe {@link RuleBreakMark} and `NotMadeByDeckMark` both draw**, so the
+ * two cannot come to disagree about what that corner's mark looks like.
+ *
+ * `NOT MADE BY DECK` (managed tokens spec §3.5, 2026-09-27) is a token nothing in the deck makes,
+ * and the reader asked for it to be marked the way a rule-break card is: *that* mark's place and
+ * *that* mark's style. It landed as a copy of the classes below while this file belonged to
+ * another change, which its own header called a debt; this is the fold that pays it. One
+ * component rather than an exported class string, because the box is not all the two share —
+ * `aria-hidden`, the tooltip binding and `describes: false` are the same decision made twice.
+ *
+ * Everything but the box's geometry is the caller's: the word, the sentence, and the place (a
+ * `className`, like every mark here). The two still differ in words, which is the separation
+ * this file's header asks every pair of marks to keep — and a token never breaks a rule, so the
+ * two are never drawn on one card.
+ */
+export function WordMark({
+  word,
+  hint,
+  className,
+}: {
+  /** What the box spells, in capitals — a mark's whole visible statement. */
+  word: string;
+  /** The full sentence, for a pointer. `aria-hidden` below, so a keyboard reader gets it from the
+   *  name of the button the mark sits in, which every caller words itself. */
+  hint: string;
+  className?: string;
+}) {
   const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      // Redundant with `deckCardName`'s own `rule break: ${text}` clause — the button beside
-      // this mark already says the finding in full to a keyboard reader.
-      {...tip(text, { describes: false })}
+      // `describes: false`: the words are already the button's, so an `aria-describedby` would say
+      // them twice — and this span is `aria-hidden`, so it could not usefully carry one anyway.
+      {...tip(hint, { describes: false })}
       className={cn(
         "rounded-[3px] border border-destructive/50 bg-bg/85 py-px",
         "px-[calc(0.25rem*var(--mark-scale,1))]",
@@ -929,7 +1009,7 @@ export function RuleBreakMark({ text, className }: { text: string; className?: s
         className,
       )}
     >
-      RULE BREAK
+      {word}
     </span>
   );
 }

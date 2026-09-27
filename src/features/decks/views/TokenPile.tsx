@@ -482,7 +482,7 @@ function TokenFace({
         aria-label={
           mark === null
             ? name
-            : `${name}, ${theoryMatchLabel(mark.tier, mark.delta).toLowerCase()}`
+            : `${name}, ${theoryMatchLabel(mark).toLowerCase()}`
         }
         // What separates two same-named tokens, for a pointer: the subtitle, under the hand. The
         // name already carries it, so this describes nothing further.

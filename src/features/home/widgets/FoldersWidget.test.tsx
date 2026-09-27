@@ -528,5 +528,46 @@ describe("FoldersWidget", () => {
 
       expect(onConfig).toHaveBeenCalledWith({ wishlistFolderIds: [12, 10] });
     });
+
+    /**
+     * **Every deck's managed Tokens child is called `Tokens`** (managed tokens spec §3.8), so a
+     * picker that named folders by their own name drew one identical `Tokens (managed)` row per
+     * deck. Such a folder is named by the deck folder it sits in instead — the path a reader
+     * would say out loud — and the deck folders themselves keep their own label.
+     */
+    it("names a managed Tokens folder by the deck folder it sits in", async () => {
+      const user = userEvent.setup();
+      const managed = (over: Partial<WishlistFolder> & Pick<WishlistFolder, "id" | "name">) => ({
+        parentId: null,
+        sortOrder: 0,
+        managedDeckId: null,
+        managedTokens: false,
+        ...over,
+      });
+      /** A deck's managed folder at the root, and its `Tokens` child inside it. */
+      const deckFolders = (id: number, name: string, deckId: number) => [
+        managed({ id, name, managedDeckId: deckId }),
+        managed({
+          id: id + 1,
+          name: "Tokens",
+          parentId: id,
+          managedDeckId: deckId,
+          managedTokens: true,
+        }),
+      ];
+      renderWith(
+        { wishlist: [...WISHES, ...deckFolders(20, "Burn", 3), ...deckFolders(22, "Elves", 4)] },
+        <FoldersWidgetSettings widget={widget(null)} onConfig={vi.fn()} />,
+      );
+
+      await openDropdown(user, "Wishlist folders");
+
+      expect(screen.getByRole("option", { name: "Burn (managed)" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Burn › Tokens (managed)" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Elves › Tokens (managed)" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "Tokens (managed)" })).toBeNull();
+      // A reader's own folder is drawn by its own name, nested or not.
+      expect(screen.getByRole("option", { name: "Staples" })).toBeInTheDocument();
+    });
   });
 });

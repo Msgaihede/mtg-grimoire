@@ -941,9 +941,12 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     // like its two siblings rather than the column's `theory_mark_unplanned`.
     //
     // **The reader's words, not the columns'.** The three switches are labelled *Matching
-    // printing*, *Different printing* and *Not in the theory list* in the deck's settings, so
-    // that is what the history says — a line reading "turned theory_mark_exact on" would be
-    // naming a column at somebody who pressed a switch with a name.
+    // printing*, *Any printing* and *Not in the theory list* in the deck's settings, so that is
+    // what the history says — a line reading "turned theory_mark_exact on" would be naming a
+    // column at somebody who pressed a switch with a name. (The second was *Different printing*
+    // until 2026-09-27, managed tokens spec §3.10, and its sentence below still says "a different
+    // printing": that is what the switch adds on a deck whose green mark is on, which is every
+    // deck's default, where "marking cards in any printing" would read as marking every card.)
     //
     // **Three arms rather than one**, `record_deck_edit`'s own reason: the switches are
     // independent and one Save can move all of them, so three rows is what happened and a single

@@ -314,12 +314,17 @@ const MARKS: readonly MarkRow[] = [
     key: "theoryName",
     tier: "name",
     id: "theory-name",
-    title: "Different printing",
+    // **`Any printing`, and `Different printing` until 2026-09-27** — the Deck settings switch this
+    // colour belongs to was renamed (managed tokens spec §3.10), and {@link MarkRow.subject}'s
+    // rule is one name in all three places. The blurb says both of what the mark covers: another
+    // printing, and — on a deck with `Matching printing` off — every printing, as a match.
+    title: "Any printing",
     blurb:
       "The same card, in a printing the theory list does not name — the proxy or the spare copy " +
-      "standing in until the one you meant arrives.",
-    noun: "different-printing mark",
-    subject: "Different printing colour",
+      "standing in until the one you meant arrives. On a deck that does not ask for the matching " +
+      "printing, every printing of the card, marked as a match.",
+    noun: "any-printing mark",
+    subject: "Any printing colour",
     fill: "--color-theory-name",
   },
   {
@@ -328,7 +333,7 @@ const MARKS: readonly MarkRow[] = [
     id: "theory-unplanned",
     // The heading is the mark's own sentence — `CardMarks.tsx`'s `THEORY_UNPLANNED_LABEL`, which
     // is what the mark's tooltip and `deckCardName`'s clause both say. The other two rows are
-    // named for the *distinction* they draw (a matching printing, a different one), which is a
+    // named for the *distinction* they draw (the matching printing, any printing), which is a
     // thing only the theory list can say; this one is named for what a reader sees on the card,
     // because "no printing" and "no card" are not phrases anybody would recognise.
     title: "Not in the theory list",

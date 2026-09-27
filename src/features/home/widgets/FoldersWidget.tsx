@@ -293,6 +293,29 @@ function collectionKind(folder: CollectionFolder): {
   };
 }
 
+/**
+ * A wishlist folder's row in the settings picker — its own name, and a deck's managed list saying
+ * so, as {@link collectionKind}'s `(deck)` does one picker up: a shortcut may point at one.
+ *
+ * **A managed `Tokens` child is named by the deck folder it sits in** — `Burn › Tokens (managed)`
+ * (managed tokens spec §3.8, user schema v54). Every theory deck whose managed wishlist follows
+ * `All` or `Tokens` has one, and every one of them is called `Tokens`, so naming it by itself drew
+ * a column of identical rows a reader could not tell apart. `›` is `folderPaths`' separator in
+ * Deck settings, the path read the way a reader says it; the parent is found in the list this
+ * picker already holds, and a child whose parent it does not carry keeps its own name rather than
+ * inventing one.
+ */
+function wishlistFolderOption(folder: WishlistFolder, all: readonly WishlistFolder[]): string {
+  if (!isManaged(folder)) return folder.name;
+  const parent =
+    folder.managedTokens && folder.parentId !== null
+      ? all.find((each) => each.id === folder.parentId)
+      : undefined;
+  return parent === undefined
+    ? `${folder.name} (managed)`
+    : `${parent.name} › ${folder.name} (managed)`;
+}
+
 /** One row, whichever cabinet it came out of — already worded, so drawing it decides nothing. */
 interface FolderRowModel {
   key: string;
@@ -674,8 +697,7 @@ export function FoldersWidgetSettings({ widget, onConfig }: WidgetSettingsProps)
           label="Wishlist folders"
           options={wishlist.folders.map((each) => ({
             value: String(each.id),
-            // A shortcut may point at a deck's managed list, and says so — `(deck)` above.
-            label: isManaged(each) ? `${each.name} (managed)` : each.name,
+            label: wishlistFolderOption(each, wishlist.folders),
           }))}
           selected={config.wishlistFolderIds}
           onToggle={(value) => toggle("wishlistFolderIds", value)}
