@@ -181,7 +181,12 @@ Every `DELETE` `apply` issues — `write_group`'s delete arm and the moot delete
   ordinary press, not a corner). So a delete whose doomed set is non-empty waits for the retry, and
   **a grain match onto a row this page deletes adopts the incoming uid rather than `min`**
   (`find_row`): the sender retired the old uid, so the re-made row keeps the new one, and the
-  retried delete finds nothing to take.
+  retried delete finds nothing to take. **And a group whose own uid the page deletes finds its row
+  by uid alone, never by grain** (amended again at the scoped re-review): the sender made and
+  discarded that row, so its delete can only take a row wearing its own uid — without the rule, a
+  collection cleared twice between two pulls (or a deck toggled Virtual on, off, on, off) had its
+  middle folder grain-match the one re-made after it and delete it, and a copy made and removed on
+  the sender deleted a local twin the peer had made on its own.
 - **The backstop.** Every `DELETE` `apply` issues runs inside the group's savepoint, and a refusal
   rolls it back and becomes `Why::Unbuildable(<the constraint's words>)` — dropped and recorded,
   or held where the sender is newer — never `?`. The moot delete already did this; the ordinary
@@ -204,6 +209,10 @@ waits.
 
 - ~~A folder deleted and re-made at the same grain in one page loses the re-made row~~ — closed by
   §3.3's amendment (the incoming uid wins a grain match onto a row the page deletes).
+- **A row the peer filed concurrently into a folder the sender re-made follows the rename there and
+  lands at the root on the sender** (its folder is a delete on the sender, and the key is
+  `SET NULL`). Counts and identity converge; placement does not. Read off the code at the scoped
+  re-review, unmeasured.
 - **A copy re-homed onto a twin the sender never had can leave one `error_log` row describing no
   fault**: the sender's own later move of it names the uid that lost the fold, finds no row, and is
   skipped. Counts and identity still converge (the sender adopts the twin's uid when the twin's put
