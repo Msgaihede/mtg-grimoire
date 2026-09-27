@@ -25,10 +25,12 @@ import { cn } from "@/lib/utils";
 export const PREVIEW_DWELL_MS = 250;
 
 /**
- * How the preview finds the box it is positioned in and clipped by — the card pane.
+ * How the preview finds the box it is positioned in and clipped by — the printings list's own
+ * scroller in the card modal (`CardModalPrintings`). It was the whole docked card pane until that
+ * pane was deleted on 2026-09-03 (`f1a9e828`), and the rest of this file still calls it "the pane".
  *
  * An attribute rather than a ref chain, because the preview is two components away from the
- * pane and owns none of it — the same reason `DropIndicator`'s `DROP_LINE_ATTR` and the deck
+ * box and owns none of it — the same reason `DropIndicator`'s `DROP_LINE_ATTR` and the deck
  * views' `DECK_GROUP_ATTR` are attributes. One mark for both
  * jobs, because they are one box: the pane is `relative`, so absolute coordinates are the
  * pane's own, and it is the scroller, so it is also what would cut a picture in half.
@@ -39,9 +41,11 @@ export const PREVIEW_FRAME_ATTR = "data-preview-frame";
  * How wide the picture is drawn at most, capped further by the row it hangs off and by the room
  * the pane leaves above or below that row (see the measurement).
  *
- * 240px is a little over two-thirds of the pane's 352px content column: wide enough to read an
- * illustration by, and narrow enough that the rarity, set and collector number of the rows it
- * covers stay legible down its left edge.
+ * 240px was chosen as a little over two-thirds of the retired docked pane's 352px content column:
+ * wide enough to read an illustration by, and narrow enough that the rarity, set and collector
+ * number of the rows it covers stay legible down its left edge. The card modal's list is about
+ * that same width at its 1200px rung (`CardDetailModal`'s grid comment says so) and a different
+ * one at every other, which the cap by the row's own width below is what absorbs.
  */
 const PREVIEW_WIDTH = 240;
 
@@ -263,7 +267,7 @@ export function PrintingPreview({
    * `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme with a browser,
    * so `cardArtSrc` needs both candidates — and only one of them can be built from an id. This
    * component is handed an *id* by `usePrintingDwell`, which knows nothing about printings; the
-   * rows it hangs off are `CardDetailPane`'s, and that is the one place holding the `Printing`
+   * rows it hangs off are `CardModalPrintings`', and that is the one place holding the `Printing`
    * the id names. So the URL comes from there, beside the id, and the hook stays a timer.
    *
    * Absent or `null` is "no picture": the frame draws nothing, which is exactly what it already

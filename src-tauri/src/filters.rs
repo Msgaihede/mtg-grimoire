@@ -1049,12 +1049,13 @@ fn predicate_clause(
             ],
         ),
 
-        // **The one predicate here that scans.** There is no artist FTS column and
-        // `cards.artist` carries no b-tree index, so this is an `instr` — acceptable where
-        // `t:`/`o:` were not, because it is ANDed into a statement the FTS join, the format
-        // mask or the collapse index has usually already narrowed. A bare `a:` on an otherwise
-        // empty box is the worst case; if it ever lands above ~250 ms the fallback is an index
-        // on `cards.artist`, which is cheap and additive.
+        // **The one predicate here that scans.** There is no artist FTS column, and `instr`
+        // is not sargable, so no index can seek it — acceptable where `t:`/`o:` were not,
+        // because it is ANDed into a statement the FTS join, the format mask or the collapse
+        // index has usually already narrowed. A bare `a:` on an otherwise empty box is the
+        // worst case, and `idx_cards_artist` (in `schema::CARDS_INDEXES`) is what keeps it
+        // cheap: the scan reads that narrow index instead of the row heap, ~16 ms against
+        // 466–510 ms without it on the 117,738-printing corpus.
         //
         // `instr(NULL, …)` is NULL, so an orphan fails this exactly as it fails the format and
         // rarity arms.
