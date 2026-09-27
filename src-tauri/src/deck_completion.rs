@@ -300,15 +300,17 @@ mod tests {
         .id
     }
 
-    // deck.rs:6605-6607 (`main_of`) — a pile by name, made on first ask.
-    fn pile(conn: &Connection, deck_id: i64, name: &str) -> i64 {
-        crate::deck_meta::category_for_name(conn, deck_id, name).unwrap()
+    // deck.rs's `main_of` — a pile by name in one list, made on first ask. A pile belongs to
+    // one list since user schema v53, so a theory card needs the plan's own pile.
+    fn pile(conn: &Connection, deck_id: i64, variant: &str, name: &str) -> i64 {
+        crate::deck_meta::category_for_name(conn, deck_id, variant, name).unwrap()
     }
 
-    // deck.rs:6590-6597 (`kind_of`) — a seeded pile by kind.
+    // deck.rs's `kind_of` — a seeded live pile by kind.
     fn seeded_pile(conn: &Connection, deck_id: i64, kind: &str) -> i64 {
         conn.query_row(
-            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND kind = ?2",
+            "SELECT id FROM deck_categories
+              WHERE deck_id = ?1 AND variant = 'live' AND kind = ?2",
             params![deck_id, kind],
             |r| r.get(0),
         )
@@ -471,9 +473,9 @@ mod tests {
         let e = make_deck(&conn, "Empty", false, false);
 
         // A — the live list, measured against its own group.
-        let a_main = pile(&conn, a, "Main deck");
+        let a_main = pile(&conn, a, LIVE, "Main deck");
         let a_side = seeded_pile(&conn, a, "side");
-        let a_cuts = pile(&conn, a, "Cuts");
+        let a_cuts = pile(&conn, a, LIVE, "Cuts");
         crate::deck_meta::set_category_active(&conn, a_cuts, false).unwrap();
         put(&conn, a, a_main, LIVE, "bolt", None, 3);
         put(&conn, a, a_main, LIVE, "bolt", Some("foil"), 2);
@@ -487,19 +489,20 @@ mod tests {
         put(&conn, a, a_cuts, LIVE, "bolt", None, 1);
 
         // B — the plan is measured; its one live row is not.
-        let b_main = pile(&conn, b, "Main deck");
+        let b_main = pile(&conn, b, THEORY, "Main deck");
+        let b_live = pile(&conn, b, LIVE, "Main deck");
         put(&conn, b, b_main, THEORY, "bolt", None, 4);
         put(&conn, b, b_main, THEORY, "ring", None, 1);
         put(&conn, b, b_main, THEORY, "angel", None, 1);
         put(&conn, b, b_main, THEORY, "bolt", Some("foil"), 1);
-        put(&conn, b, b_main, LIVE, "bird", None, 1);
+        put(&conn, b, b_live, LIVE, "bird", None, 1);
 
         // C — complete, and its group holds copies B may not count.
-        let c_main = pile(&conn, c, "Main deck");
+        let c_main = pile(&conn, c, LIVE, "Main deck");
         put(&conn, c, c_main, LIVE, "ring", None, 2);
 
         // V — virtual, and answers no row whatever it lists.
-        let v_main = pile(&conn, v, "Main deck");
+        let v_main = pile(&conn, v, LIVE, "Main deck");
         put(&conn, v, v_main, LIVE, "bird", None, 2);
 
         // The collection: every refiled copy first, then the reader's folders, then the root.
@@ -645,8 +648,8 @@ mod tests {
         assert_eq!(review_count(&conn).unwrap(), 0, "an empty database");
         let live = make_deck(&conn, "Live", false, false);
         let plan = make_deck(&conn, "Plan", true, false);
-        let live_main = pile(&conn, live, "Main deck");
-        let plan_main = pile(&conn, plan, "Main deck");
+        let live_main = pile(&conn, live, LIVE, "Main deck");
+        let plan_main = pile(&conn, plan, THEORY, "Main deck");
         put(&conn, live, live_main, LIVE, "bolt", None, 1);
         put(&conn, live, live_main, LIVE, "ring", None, 1);
         put(&conn, plan, plan_main, THEORY, "angel", None, 1);

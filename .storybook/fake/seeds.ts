@@ -266,6 +266,12 @@ function anyPrintingWish(
  * tell you.** Decks 1–3 are all `user`: four predefined seeds plus the pile v8's migration
  * built, which the v15 backfill deliberately leaves alone. Deck 4 has one of each class, so a
  * story can see all three answers at once — see the tuples below.
+ *
+ * **Decks 3 and 4 carry a second set, for their plans** (user schema v53, issue #561). A pile
+ * belongs to one list, and those two decks have `theoryEnabled` — so each has a clone of every
+ * live pile in the `theory` variant, same name, kind, switch, order and origin, which is exactly
+ * what the v53 rung writes for a deck with a plan. They come **after** every live pile, so the
+ * live ids above keep the numbers every test and story already names.
  */
 function starterCategories(): FakeDeckCategory[] {
   const next = ids();
@@ -273,6 +279,7 @@ function starterCategories(): FakeDeckCategory[] {
     DECK_CATEGORIES.map((c) => ({
       id: next(),
       deckId,
+      variant: "live" as const,
       name: c.name,
       kind: c.kind,
       isActive: c.isActive,
@@ -297,8 +304,9 @@ function starterCategories(): FakeDeckCategory[] {
     ["side", "Sideboard", true, "user"],
     ["companion", "Companion", true, "user"],
     ["maybe", "Maybeboard", false, "user"],
-    // Made by the add path, and holding cards in both lists — so it is drawn in both, and what
-    // its `auto` says is only that emptying it would take the heading with it.
+    // Made by the add path, and holding cards in both lists — each list's own `Ramp`, since v53
+    // — so it is drawn in both, and what its `auto` says is only that emptying it would take the
+    // heading with it.
     ["main", "Ramp", true, "auto"],
     ["main", "Card advantage", true, "user"],
     // **The point of the whole fixture.** A pile the *reader* made and switched off, which
@@ -312,11 +320,12 @@ function starterCategories(): FakeDeckCategory[] {
     // pile in that state would not be drawn at all.
     ["main", "Cut list", false, "user"],
   ];
-  return [
+  const live: FakeDeckCategory[] = [
     ...migrated,
     ...testbed.map(([kind, name, isActive, origin], sortOrder) => ({
       id: next(),
       deckId: 4,
+      variant: "live" as const,
       name,
       kind,
       isActive,
@@ -324,30 +333,46 @@ function starterCategories(): FakeDeckCategory[] {
       origin,
     })),
   ];
+  // The two plans' own piles — every live pile of decks 3 and 4, cloned into `theory`, which is
+  // the v53 rung's move for a deck with a plan. Everything but the id and the variant is the
+  // original's.
+  const plans = live
+    .filter((c) => c.deckId === 3 || c.deckId === 4)
+    .map((c) => ({ ...c, id: next(), variant: "theory" as const }));
+  return [...live, ...plans];
 }
 
-/** One deck's category of a given kind. Decks 1–3 have exactly one of each of the five, which
- *  is why this throws rather than taking the first match of many — deck 4 owns three `main`
- *  categories and is addressed with {@link categoryNamed} instead. */
+/** One list's category of a given kind. Decks 1–3 have exactly one of each of the five per
+ *  list, which is why this throws rather than taking the first match of many — deck 4 owns
+ *  three `main` categories and is addressed with {@link categoryNamed} instead. `variant` is
+ *  which list's pile (v53); a card is filed into its own list's. */
 function categoryOf(
   categories: FakeDeckCategory[],
   deckId: number,
   kind: CategoryKind,
+  variant: DeckVariant = "live",
 ): FakeDeckCategory {
-  const found = categories.filter((c) => c.deckId === deckId && c.kind === kind);
-  if (found.length !== 1) throw new Error(`Deck ${deckId} has ${found.length} ${kind} categories`);
+  const found = categories.filter(
+    (c) => c.deckId === deckId && c.variant === variant && c.kind === kind,
+  );
+  if (found.length !== 1) {
+    throw new Error(`Deck ${deckId} has ${found.length} ${variant} ${kind} categories`);
+  }
   return found[0];
 }
 
-/** One deck's category by name — `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so this is exact
- *  wherever {@link categoryOf} is ambiguous. */
+/** One list's category by name — `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)`, so this
+ *  is exact wherever {@link categoryOf} is ambiguous. */
 function categoryNamed(
   categories: FakeDeckCategory[],
   deckId: number,
   name: string,
+  variant: DeckVariant = "live",
 ): FakeDeckCategory {
-  const found = categories.find((c) => c.deckId === deckId && c.name === name);
-  if (!found) throw new Error(`Deck ${deckId} has no category called ${name}`);
+  const found = categories.find(
+    (c) => c.deckId === deckId && c.variant === variant && c.name === name,
+  );
+  if (!found) throw new Error(`Deck ${deckId} has no ${variant} category called ${name}`);
   return found;
 }
 
@@ -1127,9 +1152,15 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
       [printing("lea", "161"), 4],
       [printing("lea", "288"), 16],
     ].map(([card, quantity]) =>
-      deckCard(next(), 3, card as FakeCard, categoryOf(categories, 3, "main"), quantity as number, {
-        variant: "theory",
-      }),
+      deckCard(
+        next(),
+        3,
+        card as FakeCard,
+        // The plan's own Main deck (v53) — a theory row is filed into a theory pile.
+        categoryOf(categories, 3, "main", "theory"),
+        quantity as number,
+        { variant: "theory" },
+      ),
     ),
   ];
 }
@@ -1175,7 +1206,11 @@ function testbedDeckCards(
     quantity: number,
     variant: DeckVariant,
     over: Partial<FakeDeckCard> = {},
-  ) => deckCard(id++, 4, card, categoryNamed(categories, 4, name), quantity, { variant, ...over });
+  ) =>
+    deckCard(id++, 4, card, categoryNamed(categories, 4, name, variant), quantity, {
+      variant,
+      ...over,
+    });
 
   return [
     // --- live: what is sleeved up -------------------------------------------------------
@@ -2506,6 +2541,8 @@ function bracketMismatchSeed(): FakeDb {
     db.deckCategories.push({
       id: (nextCategory += 1),
       deckId: BRACKET_DECK,
+      // Live only: the deck is born without a plan, so its theory list has no piles to seed.
+      variant: "live",
       name: c.name,
       kind: c.kind,
       isActive: c.isActive,
@@ -2864,6 +2901,8 @@ function virtualDeckSeed(): FakeDb {
     db.deckCategories.push({
       id: (nextCategory += 1),
       deckId: VIRTUAL_DECK,
+      // Live only, for the same reason — a virtual deck has no plan.
+      variant: "live",
       name: c.name,
       kind: c.kind,
       isActive: c.isActive,

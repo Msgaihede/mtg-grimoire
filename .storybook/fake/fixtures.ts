@@ -125,7 +125,7 @@ export const DECK_CATEGORIES: readonly {
  * across every deck in the store; these are the ids of a deck that is the only deck there is.
  *
  * `cardCount` and `totalPrice` default to an empty column. They are read off the world in a
- * story that has one — `deck_get` computes all three over the variant *and the marketplace* it
+ * story that has one — `deck_get` computes both over the variant *and the marketplace* it
  * was asked for — so a story building a `DeckDetail` by hand is the caller that has to say.
  * **One total, not the pair this used to carry**: the marketplace is a query parameter now, so a
  * category row has exactly one sum on it and whose it is was decided before the row was built.
@@ -133,9 +133,12 @@ export const DECK_CATEGORIES: readonly {
 export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {}): DeckCategory {
   const category = DECK_CATEGORIES.find((c) => c.kind === kind);
   if (!category) throw new Error(`No fixture category of kind ${kind}`);
-  const row = {
+  return {
     id: category.sortOrder + 1,
     deckId: 1,
+    // The live list's, which is the list a story draws unless it says otherwise — a fixture for
+    // the plan's pile says `variant: "theory"` in its overrides (user schema v53).
+    variant: "live",
     name: category.name,
     kind: category.kind,
     isActive: category.isActive,
@@ -150,11 +153,6 @@ export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {
     totalPrice: null,
     ...over,
   };
-  // Both lists, defaulting to the one-list count — so a fixture that says nothing is a deck
-  // with nothing in its theory list, and the two numbers differ only where a test means them
-  // to. They must never be defaulted independently: a total *below* the variant-scoped count
-  // is a shape the backend cannot produce, and the delete confirmation reads the total.
-  return { ...row, cardCountAllVariants: over.cardCountAllVariants ?? row.cardCount };
 }
 
 /**

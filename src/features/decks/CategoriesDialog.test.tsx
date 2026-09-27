@@ -69,13 +69,15 @@ import { MARKER_WORDS } from "./views/GroupHeader";
 /* --------------------------------------------------------------------- fixtures ------- */
 
 function category(over: Partial<DeckCategory> & { id: number; name: string }): DeckCategory {
-  const row = {
+  return {
     deckId: 1,
     kind: "main" as const,
     isActive: true,
     sortOrder: over.id,
     cardCount: 0,
     totalPrice: null,
+    // The list these fixtures are mounted on; a test about the plan's piles says so.
+    variant: "live",
     // The reader's, unless a test says otherwise. `create_category` and the four seeds both
     // write `'user'`; `'auto'` is the app filing a card, and the one test below that cares
     // passes it — this drawer draws all three classes alike and nothing here reads the field
@@ -83,10 +85,6 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
     origin: "user" as const,
     ...over,
   };
-  // Both lists, defaulting to the one-list count: these fixtures are single-list decks unless
-  // a test says otherwise, and the ones that say otherwise are the point — see
-  // `quotes the copies in both lists…`.
-  return { ...row, cardCountAllVariants: over.cardCountAllVariants ?? row.cardCount };
 }
 
 /**
@@ -536,8 +534,9 @@ describe("categories", () => {
     await user.type(field, "  Draw  ");
     await user.click(screen.getByRole("button", { name: "Add" }));
 
-    // Trimmed: `(deckId, name)` is the grain, and " Draw" and "Draw" would be two piles.
-    expect(deckCategoryCreate).toHaveBeenCalledWith(1, "Draw");
+    // Trimmed: `(deckId, variant, name)` is the grain, and " Draw" and "Draw" would be two piles.
+    // Made in the list the dialog was opened on, which is `live` here.
+    expect(deckCategoryCreate).toHaveBeenCalledWith(1, "live", "Draw");
     await waitFor(() => expect(field).toHaveValue(""));
   });
 
@@ -721,8 +720,7 @@ describe("categories", () => {
       within(dialog).getByRole("button", { name: "Its 12 cards" }),
     ).toHaveTextContent("move to “Commander”");
     expect(within(dialog).getByText(/move to “Commander”\. Nothing is lost/)).toBeInTheDocument();
-    // One list in this deck, so no sentence about a second one: the words appear only where
-    // there are copies the reader cannot see.
+    // A pile belongs to one list, so there is never a sentence about a second one.
     expect(within(dialog).queryByText(/both the theory and actual lists/)).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Move 12 cards and delete" }));
 
@@ -730,36 +728,22 @@ describe("categories", () => {
   });
 
   /**
-   * The confirmation counts **both lists**, because the delete takes both.
+   * **The confirmation quotes the pile's own count, and it is the whole of what goes.**
    *
-   * `deck_cards.category_id` is `ON DELETE CASCADE` and a category is not per-variant, so the
-   * live rows and the theory rows go together — and the move arm moves both. A dialog quoting
-   * the variant-scoped `cardCount` promised less than it took, and promised least on the arm
-   * that destroys. Found by a reviewer on the fake's seeded deck 4, where a "Ramp" offering to
-   * move 2 cards moved 7.
-   *
-   * **The fixture makes the two numbers differ on purpose.** Every other delete test here has
-   * them equal, which is exactly why none of them saw this: a deck with an empty theory list
-   * cannot tell the two fields apart, so a test built on one proves nothing about which was
-   * read.
+   * Until user schema v53 a pile was shared by both lists, so the delete's cascade reached cards
+   * the reader could not see and this dialog quoted a second, all-lists count with a sentence
+   * naming "both the theory and actual lists". A pile belongs to one list now (issue #561), so
+   * `cardCount` is every copy the delete reaches, and the row and the question agree.
    */
-  it("quotes the copies in both lists, not just the one on screen", async () => {
+  it("quotes the pile's own count and says nothing about another list", async () => {
     deckCategoryList.mockResolvedValue([
       CATEGORIES[0],
-      category({
-        id: 2,
-        name: "Ramp",
-        sortOrder: 1,
-        cardCount: 2,
-        cardCountAllVariants: 7,
-      }),
+      category({ id: 2, name: "Ramp", sortOrder: 1, cardCount: 2 }),
     ]);
     mount();
     await screen.findByText("Ramp");
     const user = userEvent.setup();
 
-    // The row is still the list being edited, and is right to be: that is what the reader is
-    // looking at. Only the confirmation changes scope.
     expect(within(row("Ramp")).getByText("2 cards")).toBeInTheDocument();
 
     await user.click(within(row("Ramp")).getByRole("button", { name: "Delete" }));
@@ -767,17 +751,38 @@ describe("categories", () => {
 
     // Anchored on the sentence's own opening: `move to “Commander”` alone also matches the
     // picker's own row saying the same thing, which is a different control.
-    expect(within(dialog).getByText(/^The 7 cards in it move to “Commander”/)).toHaveTextContent(
-      "both the theory and actual lists",
-    );
+    expect(within(dialog).getByText(/^The 2 cards in it move to “Commander”/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/both the theory and actual lists/)).not.toBeInTheDocument();
 
-    await pickOption(user, "Its 7 cards", "go with it");
-    expect(within(dialog).getByText(/^The 7 cards in it go with it/)).toHaveTextContent(
-      "both the theory and actual lists, not just the one on screen",
-    );
+    await pickOption(user, "Its 2 cards", "go with it");
+    expect(within(dialog).getByText(/^The 2 cards in it go with it/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Delete “Ramp”" }));
 
     expect(deckCategoryDelete).toHaveBeenCalledWith(2, null);
+  });
+
+  /**
+   * **A theory pile's destructive arm promises no folder.** The plan holds no copies, so the
+   * cascade takes `deck_cards` rows and nothing the reader owns — `Recently removed` would be a
+   * promise about cards that were never there. The same middle arm `ClearCategory` draws.
+   */
+  it("promises no Recently removed when the pile is the plan's", async () => {
+    deckCategoryList.mockResolvedValue([
+      category({ ...CATEGORIES[0], variant: "theory" }),
+      category({ id: 2, name: "Ramp", sortOrder: 1, cardCount: 3, variant: "theory" }),
+    ]);
+    mount({ variant: "theory" });
+    await screen.findByText("Ramp");
+    const user = userEvent.setup();
+
+    await user.click(within(row("Ramp")).getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("group", { name: "Delete Ramp" });
+    await pickOption(user, "Its 3 cards", "go with it");
+
+    expect(
+      within(dialog).getByText(/go with it\. A theory list holds no copies, so nothing else moves/),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Recently removed/)).not.toBeInTheDocument();
   });
 
   /**

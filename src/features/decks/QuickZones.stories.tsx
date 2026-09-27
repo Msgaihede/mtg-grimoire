@@ -24,7 +24,7 @@ const CATEGORIES: DeckCategory[] = (
   sortOrder: over.id,
   cardCount: 0,
   totalPrice: null,
-  cardCountAllVariants: 0,
+  variant: "live" as const,
   ...over,
 }));
 
@@ -374,8 +374,8 @@ export const NamingTheNewPile: StoryObj<typeof QuickCategoryDialog> = {
 };
 
 /**
- * The one refusal that actually happens: the grain is `(deck_id, name)`, so a name the deck
- * already has comes back refused rather than as a second pile.
+ * The one refusal that actually happens: the grain is `(deck_id, variant, name)`, so a name the
+ * list already has comes back refused rather than as a second pile.
  *
  * **Said inside the dialog**, which is not a duplicate of the editor's banner — that banner
  * draws behind this dialog's own `LAYER.overlay` scrim, so this is the only place the sentence

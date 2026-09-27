@@ -62,13 +62,13 @@ export const META_SUBMIT = cn(
  * reader has not decided yet and a stray Enter must not decide for them.
  *
  * It is a recipe rather than a component, and the reason is what the three questions say rather
- * than how they look. **A clear is scoped to the list on screen and quotes `cardCount`; a delete
- * cascades through both lists and quotes `cardCountAllVariants`** — `ClearCategory.tsx`'s doc and
- * this folder's `CLAUDE.md` both say that getting the two the wrong way round mis-states a
- * destructive press, and a shared shell taking a `count` prop is precisely the shape that lets it
- * happen. `DeleteCategory`'s colouring is not even constant across one render: it follows
- * `losing` as the reader works its picker. So the words, the numbers and the colour decision stay
- * at each site and only the chrome is here.
+ * than how they look. Each has its own sentence about where the cards end up, and until user
+ * schema v53 each quoted a different count — a clear the list on screen, a delete both lists,
+ * because a pile was shared — which is exactly the mistake a shared shell taking a `count` prop
+ * invites. A pile belongs to one list now (issue #561) and the two counts are one, but the words
+ * still differ, and `DeleteCategory`'s colouring is not even constant across one render: it
+ * follows `losing` as the reader works its picker. So the words, the numbers and the colour
+ * decision stay at each site and only the chrome is here.
  *
  * The rest of the pairing — `tabIndex={-1}`, `role="group"`, the `aria-label` and the mount
  * effect that puts the caret on the box — is {@link useConfirmFocus}'s, because a class recipe

@@ -1047,10 +1047,15 @@ pub fn commit_import(
                     // Asked *before* the find-or-create, because afterwards there is no way to
                     // tell a category that was made from one that was already there — and "3
                     // new categories" is a sentence the preview promises.
+                    //
+                    // **In the list being imported into**, as the find-or-create below is (user
+                    // schema v53): an import onto the Theory tab files into the plan's piles, so
+                    // a `Ramp` only the live list has is a pile this import makes.
                     let existed = tx
                         .query_row(
-                            "SELECT 1 FROM deck_categories WHERE deck_id = ?1 AND name = ?2",
-                            params![deck_id, category_name],
+                            "SELECT 1 FROM deck_categories
+                              WHERE deck_id = ?1 AND variant = ?2 AND name = ?3",
+                            params![deck_id, variant, category_name],
                             |_| Ok(()),
                         )
                         .optional()
@@ -1059,7 +1064,8 @@ pub fn commit_import(
                     // **by name** — so a `Sideboard` line lands on the seeded `side` row and
                     // nothing is made. See `category_for_name`'s doc for why the lookup cannot
                     // be narrowed to `main`.
-                    let id = crate::deck_meta::category_for_name(&tx, deck_id, category_name)?;
+                    let id =
+                        crate::deck_meta::category_for_name(&tx, deck_id, variant, category_name)?;
                     if existed.is_none() && item.inactive {
                         // Straight to the column rather than through `deck_meta::set_category_active`:
                         // that one opens a transaction of its own, writes a history row and
@@ -2085,7 +2091,7 @@ mod tests {
     fn a_replace_leaves_the_categories_alone() {
         let conn = seeded();
         let id = deck(&conn);
-        let ramp = crate::deck_meta::create_category(&conn, id, "Ramp")
+        let ramp = crate::deck_meta::create_category(&conn, id, "live", "Ramp")
             .unwrap()
             .id;
         crate::deck_meta::set_category_active(&conn, ramp, false).unwrap();
@@ -2149,7 +2155,7 @@ mod tests {
 
     /// A `Sideboard` section lands on the seeded `side` category rather than making a second
     /// pile with the same word on it — `category_for_name` looks up by name alone, which is
-    /// what `DECK_CATEGORY_GRAIN` (one name per deck) requires of it.
+    /// what `DECK_CATEGORY_GRAIN` (one name per list) requires of it.
     /// A pile the import **creates** for a `{noDeck}` line arrives switched off.
     ///
     /// Archidekt's `{noDeck}` is "counts toward nothing", which is this schema's `is_active = 0`.
@@ -2198,7 +2204,7 @@ mod tests {
     fn an_import_never_switches_off_a_pile_the_reader_already_had() {
         let conn = seeded();
         let id = deck(&conn);
-        let keepers = crate::deck_meta::create_category(&conn, id, "Keepers")
+        let keepers = crate::deck_meta::create_category(&conn, id, "live", "Keepers")
             .unwrap()
             .id;
 

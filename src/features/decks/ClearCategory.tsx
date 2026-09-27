@@ -13,20 +13,14 @@
  * different gesture (`Move to`, on each card), so a picker here would offer a choice this
  * command cannot make. What is left is a count, a sentence and two buttons.
  *
- * ## The two numbers, and why the smaller one is the subject
+ * ## One number, since a pile stopped being shared
  *
- * A delete cascades: `deck_cards.category_id` is `ON DELETE CASCADE`, so it reaches the live
- * list and the theory list alike, which is why that dialog quotes `cardCountAllVariants` and
- * says so out loud. **A clear is variant-scoped**, like every other card command — so this one
- * quotes `cardCount`, the list on screen, and mentions the other list precisely to say that it
- * is *not* being touched. Getting these two the wrong way round in either dialog understates or
- * overstates a destructive press, which is the one direction a confirmation must never be wrong
- * in.
- *
- * A theory-enabled deck is the only place the two differ, so the second sentence appears only
- * when there is something in the other list to reassure the reader about — `> 0` is exactly that
- * condition, and a deck with one list would otherwise read a sentence about a list it has not
- * got.
+ * Until user schema v53 a pile was the deck's and held both lists' cards, so this dialog quoted
+ * `cardCount` — the list on screen — and added a sentence saying the other list's copies filed
+ * here were untouched. **A pile belongs to one list now** (issue #561): the Theory tab's piles
+ * are the plan's and the Actual tab's are the deck's, so `cardCount` is every copy the pile
+ * holds and there is no other list for a sentence to reassure the reader about. A clear and a
+ * delete now quote the same number, which is the whole of why they stopped disagreeing.
  *
  * ## Where the cards go, which is not "nowhere"
  *
@@ -86,10 +80,6 @@ export function ClearCategory({
   const confirm = useConfirmFocus(`Clear ${category.name}`);
 
   const here = category.cardCount;
-  /** Copies in the list the reader is **not** looking at, and the whole of what the second
-   *  sentence is for. A clear cannot reach them; saying so is what makes the first sentence
-   *  safe to read quickly. */
-  const elsewhere = category.cardCountAllVariants - here;
 
   return (
     <div {...confirm}>
@@ -109,12 +99,6 @@ export function ClearCategory({
             ? "Any copies you own go back to Recently removed."
             : "A theory list holds no copies, so nothing else moves."}
       </p>
-      {elsewhere > 0 && (
-        <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-          The {plural(elsewhere, "card")} filed here in the other list{" "}
-          {verb(elsewhere, "is", "are")} untouched.
-        </p>
-      )}
 
       <div className="mt-2 flex gap-2">
         <button
