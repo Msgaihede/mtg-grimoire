@@ -7739,6 +7739,18 @@ export const ipc = {
     invoke<EntryChange>("collection_set_quantity", { id, quantity }),
   collectionUpdate: (id: number, patch: EntryPatch) =>
     invoke<EntryChange>("collection_update", { id, patch }),
+  /**
+   * Move one row's copies onto another printing of the same card — the one write that reaches
+   * `collection_entries.card_id` after the row exists (issue #564). `set_code`,
+   * `collector_number` and `lang` follow from `cards`, because they describe the printing.
+   *
+   * **Merges rather than fails on a collision**, {@link ipc.collectionUpdate}'s rule: a row
+   * already holding the new printing at the same finish, condition and folder takes these copies,
+   * and the answer's `id` names *that* row — so a caller following the edit reads the id off the
+   * answer and never keeps the one it sent. A printing of a different card is refused.
+   */
+  collectionSetPrinting: (id: number, cardId: string) =>
+    invoke<EntryChange>("collection_set_printing", { id, cardId }),
   collectionRemove: (id: number) => invoke<EntryChange>("collection_remove", { id }),
   collectionList: (query: CollectionQuery) => invoke<CollectionPage>("collection_list", { query }),
   /** The aggregate header, over the same filters as the list it captions. */

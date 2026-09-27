@@ -12613,6 +12613,8 @@ const BUSY = "The card database is busy finishing a sync. Try that again in a mo
 const CACHE_SYNCING = "a card update is running — clear the cache once it has finished";
 /** `collection::GONE` — what an *adjustment* says when the row it names is not there. */
 const ENTRY_GONE = "That collection entry is not there any more.";
+/** `collection::NO_PRINTING` — what a printing change says when it was handed no printing. */
+const NO_PRINTING = "Changing a printing needs the printing to change it to.";
 /** `wishlist::set_wish_quantity`'s twin of {@link ENTRY_GONE}. */
 const WISH_GONE = "That wishlist entry is not there any more.";
 /** `deck::GONE`. */
@@ -15871,6 +15873,65 @@ export function writeHandlers(db: FakeDb) {
         return foldEntry(db, target, row);
       }
       Object.assign(row, next);
+      return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /**
+     * `collection::set_entry_printing` — which printing a collection entry *is*, and the one
+     * write that reaches `cardId` after the row exists (issue #564). {@link collection_update}'s
+     * patch deliberately names neither `cardId` nor `lang`, so until this the way to correct a
+     * Bolt filed under the wrong set was to delete it and add it again, and lose what the reader
+     * paid and when.
+     *
+     * **All four printing columns move together and three come from the card**, not the caller —
+     * `setCode`, `collectorNumber` and `lang` off {@link requireCard}, whose refusal is
+     * `collection_add`'s sentence for the same fact. A blank id is refused in words of its own,
+     * and the printing the row already holds is answered as it stands, writing nothing.
+     *
+     * **Another printing of the same card, never another card** — `deck_swap_printing`'s fence and
+     * not `wishlist_set_printing`'s, because a row here is cardboard: repointing four Bolts at a
+     * Black Lotus would be a collection claiming four Lotuses. Both sides must resolve for there
+     * to be a comparison, so a row whose printing has left `cards` is let through; repointing it
+     * is the cure its `needsReview` asks for.
+     *
+     * **The finish is not re-checked against the new printing's `finishes`**, because
+     * `collection_add` does not check it either — a second, stricter rule here would refuse a row
+     * the table already holds.
+     *
+     * **A repoint onto a taken grain folds** through {@link foldEntry}, on every term of
+     * {@link collectionGrain} — the folder included, so a matching row in another binder is not
+     * the row in the way — and answers the **survivor's** id. `needsReview` is cleared on the
+     * path that keeps the row, because choosing a printing *is* the review; on the folding path
+     * the survivor's flag is its own and is left alone.
+     */
+    collection_set_printing: (args: { id: number; cardId: string }): EntryChange => {
+      refuseIfBusy(db);
+      const cardId = nonblank(args.cardId);
+      if (cardId === null) throw refuse(NO_PRINTING);
+      const row = db.collectionEntries.find((e) => e.id === args.id);
+      if (!row) throw refuse(ENTRY_GONE);
+      if (row.cardId === cardId) return { id: row.id, quantity: row.quantity, removed: false };
+      const card = requireCard(db, cardId);
+      const from = cardById(db, row.cardId);
+      if (from !== null && from.oracleId !== card.oracleId) {
+        throw refuse(
+          `\`${card.name}\` is not another printing of \`${from.name}\`. Changing a printing ` +
+            `changes which printing these copies are, never which card they are.`,
+        );
+      }
+      const next: FakeEntry = {
+        ...row,
+        cardId,
+        setCode: card.setCode,
+        collectorNumber: card.collectorNumber,
+        lang: card.lang,
+      };
+      const key = collectionGrain(next);
+      const target = db.collectionEntries.find(
+        (e) => e.id !== row.id && collectionGrain(e) === key,
+      );
+      if (target) return foldEntry(db, target, row);
+      Object.assign(row, next, { needsReview: null, updatedAt: stamp(db) });
       return { id: row.id, quantity: row.quantity, removed: false };
     },
 
@@ -19140,13 +19201,9 @@ export function writeHandlers(db: FakeDb) {
       if (args.moveToCategoryId !== null) {
         const target = args.moveToCategoryId;
         for (const dc of held) {
-          const landed = db.deckCards.find(
-            (row) =>
-              row.deckId === dc.deckId &&
-              row.variant === dc.variant &&
-              row.categoryId === target &&
-              row.cardId === dc.cardId,
-          );
+          // {@link deckCardAt}, the grain in full: until 2026-09-27 this was a hand-written
+          // `find` without `finish`, so a moved foil summed into the target's regular row.
+          const landed = deckCardAt(db, dc.deckId, dc.cardId, target, dc.variant, dc.finish);
           if (landed) landed.quantity += dc.quantity;
           else dc.categoryId = target;
         }

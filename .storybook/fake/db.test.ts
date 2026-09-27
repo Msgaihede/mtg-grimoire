@@ -3275,6 +3275,85 @@ describe("the collection grain", () => {
 });
 
 /**
+ * `collection_set_printing` — issue #564, `collection::set_entry_printing`'s own tests one side
+ * over: repoint and refresh, the two refusals, the no-op, and the fold that respects the folder.
+ */
+describe("collection_set_printing", () => {
+  it("repoints a row, refreshes its set, number and language, and clears its review", () => {
+    const db = makeDb({
+      collectionEntries: [entry({ id: 1, quantity: 2, needsReview: "Scryfall merged this" })],
+    });
+
+    const change = writeHandlers(db).collection_set_printing({ id: 1, cardId: BOLT_JA.id });
+
+    expect(change).toEqual({ id: 1, quantity: 2, removed: false });
+    expect(db.collectionEntries[0]).toMatchObject({
+      cardId: BOLT_JA.id,
+      setCode: BOLT_JA.setCode,
+      collectorNumber: BOLT_JA.collectorNumber,
+      lang: BOLT_JA.lang,
+      needsReview: null,
+    });
+  });
+
+  it("refuses a blank id, an unknown card, a missing row and another card", () => {
+    const other = CARDS.find((c) => c.oracleId !== BOLT.oracleId)!;
+    const db = makeDb({ collectionEntries: [entry({ id: 1 })] });
+    const w = writeHandlers(db);
+
+    expect(() => w.collection_set_printing({ id: 1, cardId: "  " })).toThrow(/needs the printing/);
+    expect(() => w.collection_set_printing({ id: 1, cardId: "no-such-card" })).toThrow(
+      /no card with the id/,
+    );
+    expect(() => w.collection_set_printing({ id: 9, cardId: BOLT_2X2.id })).toThrow(
+      /not there any more/,
+    );
+    expect(() => w.collection_set_printing({ id: 1, cardId: other.id })).toThrow(
+      /is not another printing of `Lightning Bolt`/,
+    );
+    expect(db.collectionEntries[0].cardId).toBe(BOLT.id);
+  });
+
+  it("moves a row whose printing has left the card database", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: "gone" })] });
+    writeHandlers(db).collection_set_printing({ id: 1, cardId: BOLT_2X2.id });
+    expect(db.collectionEntries[0]).toMatchObject({
+      cardId: BOLT_2X2.id,
+      setCode: BOLT_2X2.setCode,
+    });
+  });
+
+  it("answers the printing the row already holds as it stands", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, quantity: 3 })] });
+    expect(writeHandlers(db).collection_set_printing({ id: 1, cardId: BOLT.id })).toEqual({
+      id: 1,
+      quantity: 3,
+      removed: false,
+    });
+    expect(db.collectionEntries[0].updatedAt).toBe(WHEN);
+  });
+
+  it("folds onto the row the grain already holds, and only in the same folder", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, quantity: 2, notes: "from the shop" }),
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 3 }),
+        entry({ id: 3, cardId: BOLT_2X2.id, quantity: 5, folderId: 7 }),
+      ],
+    });
+
+    const change = writeHandlers(db).collection_set_printing({ id: 1, cardId: BOLT_2X2.id });
+
+    expect(change).toEqual({ id: 2, quantity: 5, removed: false });
+    expect(db.collectionEntries.map((e) => [e.id, e.quantity])).toEqual([
+      [2, 5],
+      [3, 5],
+    ]);
+    expect(db.collectionEntries[0].notes).toBe("from the shop");
+  });
+});
+
+/**
  * **A condition that says nothing** — schema v35's sixth value, and the fake's half of
  * `collection::DEFAULT_CONDITION`.
  *
@@ -10840,7 +10919,9 @@ describe("the busy fault", () => {
     // 123 when the two met on 2026-09-27 — read from `left` after the merge, never added to.
     // 123 → 122 the same day, when the theory list's copy-from-live command left the fake with
     // its Rust twin: it never had a caller, and its handler was one of the plain writes here.
-    expect(names).toHaveLength(122);
+    // 122 → 123 when `collection_set_printing` (issue #564) met that removal — the parse's answer
+    // over the merged table, not either side's literal plus one.
+    expect(names).toHaveLength(123);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -12967,6 +13048,45 @@ describe("categories, labels, folders, history and the plan", () => {
     ).toEqual([
       ["live", 6],
       ["theory", 3],
+    ]);
+  });
+
+  /** `finish` is the grain's fifth term, and the fold matched on the other four until
+   *  2026-09-27 — so a moved foil summed into the target's regular row and the deck lost it. */
+  it("folds a moved card only into a row of its own finish", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, categoryId: 99, finish: "foil", quantity: 1 }),
+        deckCard({ id: 3, categoryId: 99, finish: "etched", quantity: 4 }),
+      ],
+      deckCategories: [
+        ...categoriesOf([deck({ id: 1 })]),
+        {
+          id: 99,
+          deckId: 1,
+          variant: "live",
+          name: "Doomed",
+          kind: "main",
+          isActive: true,
+          sortOrder: 9,
+          origin: "user",
+        },
+      ],
+    });
+
+    writeHandlers(db).deck_category_delete({
+      id: 99,
+      moveToCategoryId: categoryId(1, "main"),
+    });
+
+    expect(
+      db.deckCards.map((dc) => [dc.finish ?? "", dc.quantity]).sort((a, b) => cmpRow(a, b)),
+    ).toEqual([
+      ["", 2],
+      ["etched", 4],
+      ["foil", 1],
     ]);
   });
 
