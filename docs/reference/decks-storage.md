@@ -3774,6 +3774,11 @@ an ordinary token at 0, its printings kept.* `deck_tokens::retire_hidden`, per t
   at all. One the deck provably still makes is retired whatever else in the deck is unreadable.
 - **One savepoint per token**, `convert_legacy_picks`' shape: a token whose derivation or write fails
   is rolled back to its own savepoint, written to stderr and left `hidden` for the next launch.
+- **One edge case says something not literally true, and was accepted.** A token dismissed while
+  the deck still made it, whose maker is then cut before the next launch, is kept by the reconcile
+  (a `hidden` token is not the deck's to take) and retired as `manual` at 0, so it wears the
+  `NOT MADE BY DECK` badge — whose tooltip, *It was added by hand.*, the reader never did. Its
+  count and printings are right; only that sentence is loose.
 
 ### The chin and the price, since 2026-09-26
 
@@ -4026,6 +4031,17 @@ because `main` shipped its own v50 first — `price_snapshots.copies`. It rides
   matches each against the one key in `only`. It needs pre-reroute data *and* an entry on the same
   grain, so it is rare; no code is owed until a reader has it. The fix, when one is, is to keep
   the two arms' keys apart (a token key the card arm cannot spell) rather than to fold the rows.
+- **A write that settles a dismissal leaves the *other* list's stored entries at their old
+  counts** (found by the re-review of v55's final fix wave, 2026-09-28; parked). `settle_hidden`
+  and `add_printing_in`'s hidden → auto clear the legacy count (`clear_legacy_count`), but the
+  entries the token holds in the list the write does not name keep the counts they had when it was
+  dismissed — which `retire_hidden`'s step 1 would have zeroed, and now never will, because the
+  state is no longer `hidden` for the pass to find. Example: the plan holds a dismissed Treasure at
+  3, and in the gap before the next launch the reader steps the live one to 1 — Compare then wants
+  2, and a deck whose managed wishlist follows All or Tokens files them as wishes. **Not fixed
+  because** zeroing them inside the write needs an undo step covering both lists, where every token
+  write's step today covers the one it names; and it happens only in the gap between a pre-v55
+  dismissal arriving and the launch that retires it.
 
 ### A stale comment found on the way, and deliberately not fixed here
 

@@ -2181,8 +2181,11 @@ layer.
   2026-08-22, which reversed what stood here (*wishes stay oracle-grained and finish-blind: a
   shopping list is not a printing preference*). A plan naming a printing is a plan for that
   cardboard, so `deck_theory_missing_to_wishlist` files one wish per line on the wishlist's own
-  grain — the line's `cardId`, its oracle card, and its finish, **the regular copy of a card
-  pinning none** (`deck_cards.finish` is NULL for it) while `foil` and `etched` pass through. Two
+  grain — the line's `cardId`, its oracle card, and the finish the row **plays**
+  (`deck_theory::played_finish`, issue #563): **the regular copy of a card pins none**
+  (`deck_cards.finish` is NULL for it) — except a row that states no finish for a printing sold
+  only in foil or etched, which plays that sole finish and pins it — while `foil` and `etched`
+  rows pass through. Two
   lines of one card in two finishes are two wishes, and the diff's grain and the wishlist's now
   agree. **A token line (v55) is pinned the same way with one difference**: its finish is spelled
   out, **`nonfoil` included** (`deck_theory::wish_finish`), because a token entry always names its
@@ -4398,6 +4401,10 @@ already effective, and `viewOf` copies them.
   Rust's `deck_tokens::retire_hidden` turns each one back at the next launch — its entries at 0 in
   both lists, its printings kept, `auto` where the deck still makes it and `manual` where it holds
   something nothing makes — which is the choice the retired `restore` made, by the same derivation.
+  **One edge case says something loose, and was accepted**: a token dismissed while the deck still
+  made it, whose maker is then cut before the next launch, is retired `manual` at 0 and so wears
+  `NOT MADE BY DECK` — whose tooltip, *It was added by hand.*, the reader never did. The count and
+  printings are right.
 - **One read, one picker, two drawings** (2026-09-24, issue #507). `DeckEditor` calls
   `useDeckTokens(deckId, variant)` **once** and hands the answer to the band as a prop, and — once
   the deck row has answered (`tokenPileDrawn`), on every deck — to the four views as `tokenPile`,
