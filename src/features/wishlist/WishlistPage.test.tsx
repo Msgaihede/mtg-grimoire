@@ -5075,6 +5075,54 @@ describe("a deck's managed wishlist", () => {
   });
 
   /**
+   * **Standing inside a deck's Tokens subfolder, the note names the deck and not the folder**
+   * (user schema v55, the final review's I1). The child carries the deck's id, so it is a managed
+   * folder the reader can stand in — and it is named `Tokens` on every deck, so a note reading its
+   * own name said *Follows the deck "Tokens"*. The deck's name is its parent's: Rust names the deck's
+   * own folder after the deck and renames it with it.
+   */
+  it("names the deck, never the folder, inside a deck's Tokens subfolder", async () => {
+    const TOKENS: WishlistFolder = {
+      id: 10,
+      parentId: MANAGED.id,
+      name: "Tokens",
+      sortOrder: 0,
+      managedDeckId: MANAGED.managedDeckId,
+      managedTokens: true,
+    };
+    const TREASURE: WishRow = {
+      ...COPTER,
+      id: 31,
+      folderId: TOKENS.id,
+      name: "Treasure",
+      cardId: "c-treasure",
+      artCardId: "c-treasure",
+      setCode: "tlci",
+      collectorNumber: "21",
+      quantity: 3,
+    };
+    wishlistList.mockReset().mockImplementation(listByShelves([BOLT, COPTER, TREASURE]));
+    wishlistFolderList.mockResolvedValue([...FOLDERS, MANAGED, TOKENS]);
+    wishlistFolderSummary.mockResolvedValue([
+      ...SUMMARY,
+      { folderId: MANAGED.id, wishes: 1, copies: 2, cost: 6, unpriced: 0 },
+      { folderId: TOKENS.id, wishes: 1, copies: 3, cost: 9, unpriced: 0 },
+    ]);
+    wrap(<WishlistPage />);
+    await openManaged();
+
+    await findHeading(TOKENS.id);
+    await userEvent.click(titleOf(TOKENS.id, "Tokens"));
+    await waitFor(() => expect(levelAsked()).toBe(TOKENS.id));
+    await screen.findByText("Treasure");
+
+    expect(screen.getByText(/Follows the deck “Rhystic Testbed”/)).toBeInTheDocument();
+    expect(screen.queryByText(/Follows the deck “Tokens”/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Open deck" }));
+    expect(useAppStore.getState().openDeckId).toBe(4);
+  });
+
+  /**
    * **An empty managed folder says the sentence for the Compare view its deck follows — once, and
    * the same in both views** (live pass §13). It said `missing`'s sentence under every folder
    * whatever it followed — `Nothing missing — …` under a folder following `all` — and only in the

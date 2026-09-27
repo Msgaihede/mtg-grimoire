@@ -1056,6 +1056,20 @@ export function WishlistPage() {
     folderId !== null && managed.has(folderId)
       ? (folders.folders.find((folder) => folder.id === folderId) ?? null)
       : null;
+  /**
+   * The name of the deck {@link managedHere} follows — **its own name, except inside a deck's
+   * Tokens subfolder** (user schema v55), which carries the deck's id but is named `Tokens` on every
+   * deck: there the deck's name is its parent's, the deck's own managed folder, which Rust names
+   * after the deck and renames with it. The same source the note has always read, one folder up.
+   * A child whose parent is not in the list keeps its own name rather than inventing one.
+   */
+  const managedDeckName =
+    managedHere === null
+      ? null
+      : managedHere.managedTokens
+        ? (folders.folders.find((folder) => folder.id === managedHere.parentId)?.name ??
+          managedHere.name)
+        : managedHere.name;
   const isManagedWish = useCallback(
     (row: WishRow) => row.folderId !== null && managed.has(row.folderId),
     [managed],
@@ -2333,7 +2347,7 @@ export function WishlistPage() {
               a rule rather than as a broken wall. */}
           {managedHere !== null && managedHere.managedDeckId !== null && (
             <ManagedFolderNote
-              deckName={managedHere.name}
+              deckName={managedDeckName ?? managedHere.name}
               onOpenDeck={() => openDeck(managedHere.managedDeckId!)}
             />
           )}

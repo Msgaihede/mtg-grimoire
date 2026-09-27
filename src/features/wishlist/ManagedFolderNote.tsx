@@ -13,8 +13,9 @@ import { cn } from "@/lib/utils";
  *
  * Said once here rather than as a greyed stepper on every tile — the wishes inside draw no editing
  * controls at all, and this sentence is what makes that absence read as a rule rather than as a
- * broken wall. The deck's name is the folder's own: Rust names the folder after the deck and
- * renames it with the deck.
+ * broken wall. The deck's name is the deck's own managed folder's: Rust names that folder after the
+ * deck and renames it with the deck — so inside its Tokens subfolder (user schema v55), which is
+ * named `Tokens` on every deck, the host hands the parent's name rather than the child's.
  */
 export function ManagedFolderNote({
   deckName,
