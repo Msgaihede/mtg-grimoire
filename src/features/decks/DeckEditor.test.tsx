@@ -1793,6 +1793,36 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **Each view keeps its own place on the page** (issue #567). All four views scroll one box —
+   * `AppShell`'s `main` — so a switch used to carry the departing view's `scrollTop` into the
+   * arriving one. The page here is a box with an **inline** `overflow-y`, because jsdom applies no
+   * stylesheet and the editor finds its scroller by computed style; without it the hook finds
+   * nothing and this case would pass over a no-op. `useScrollPerView.test.tsx` has the hook's own
+   * cases — this one proves the picker parks the position before it switches.
+   */
+  it("keeps a scroll position per view, so scrolling one does not scroll another", async () => {
+    const user = userEvent.setup();
+    wrap(
+      <div data-testid="page" style={{ overflowY: "auto" }}>
+        <DeckEditor deckId={4} />
+      </div>,
+    );
+    await screen.findByLabelText("Deck name");
+    const page = screen.getByTestId("page");
+
+    page.scrollTop = 1200;
+    await pickOption(user, "View", "Grid");
+    expect(page.scrollTop).toBe(0);
+
+    page.scrollTop = 300;
+    await pickOption(user, "View", "Stacks");
+    expect(page.scrollTop).toBe(1200);
+
+    await pickOption(user, "View", "Grid");
+    expect(page.scrollTop).toBe(300);
+  });
+
+  /**
    * The deck's own filter, which narrows the rows **before** they are grouped — so a heading's
    * count is a count of what is under it. A heading saying 6 over one visible card is a heading
    * lying about the only thing it is for.

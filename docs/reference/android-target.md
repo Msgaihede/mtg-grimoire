@@ -311,8 +311,9 @@ that reads the config still green. Verified by mutation: with the Gradle at 24 a
 `the_generated_gradle_carries_the_floor_the_config_asked_for` goes red. **Changing either field
 means re-running `npx tauri android init` and reviewing the diff.** Read that diff
 carefully rather than accepting it: the manifest below now carries a hand-edit
-(`android:allowBackup="false"`) that a re-init reverts, and it is the only file in
-`gen/android/` that does.
+(`android:allowBackup="false"`) that a re-init reverts, and so does
+`res/xml/file_paths.xml` (the `FileProvider` narrowing below). Those are the only two files in
+`gen/android/` that do.
 
 `versionCode` is left unset; Tauri derives it as `major*1000000 + minor*1000 + patch`.
 
@@ -321,6 +322,15 @@ permission (the document picker grants access per URI), no location, no camera. 
 test, because a permission here is a permission a Play listing has to justify. The template also
 adds Android TV support (`LEANBACK_LAUNCHER`, `android.software.leanback` non-required) and a
 `FileProvider`; neither is a permission and both were left.
+
+**The `FileProvider` stays but its paths were narrowed on 2026-09-27.** The template's
+`res/xml/file_paths.xml` shared `external-path "."` and `cache-path "."` — all of shared external
+storage and the whole cache. The only `getUriForFile` in the build is wry's
+(`RustWebChromeClient.createImageFileUri`, wry 0.55), which serves an `<input type="file"
+capture>` photo by writing a temp file into `getExternalFilesDir(DIRECTORY_PICTURES)`, so the
+file now names `external-files-path` + `Pictures/` and nothing else. No page in this app renders
+such an input, so nothing reaches the provider today; deleting it instead would turn a future one
+into an `IllegalArgumentException` rather than a camera. Not driven on a phone.
 
 `usesCleartextTraffic` is a manifest placeholder: `false` in `defaultConfig`, **`true` in the
 debug build type**, which is what lets `adb reverse` serve the dev server over

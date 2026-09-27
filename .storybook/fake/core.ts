@@ -40,8 +40,9 @@ export function commandScope(commands: CommandTable) {
 
 /**
  * Rejects with an `Error`, which is what the *IPC layer* throws. A Rust command's own
- * refusal is a bare string — all 30 `#[tauri::command]` functions return
- * `Result<_, String>` — and a handler models that by throwing an `Error` whose message is
+ * refusal is a bare string — every `#[tauri::command]` that can refuse returns
+ * `Result<_, String>`, and the ones that cannot (preference reads such as `list_view`)
+ * return a bare value — and a handler models that by throwing an `Error` whose message is
  * the string, because `ipcError` renders both (`typeof e === "string"` and
  * `e instanceof Error` are its first two branches) and the distinction is invisible past it.
  *

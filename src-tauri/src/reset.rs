@@ -34,16 +34,22 @@
 //! ## The fourth is not destructive, and the difference is the point
 //!
 //! [`cache_clear`] deletes only bytes the app can fetch again with no user action:
-//! `data/images/`, the picture cache, and `data/tmp/`, where the three bulk downloads land.
+//! `data/images/`, the picture cache, and `data/tmp/`, where every bulk download lands.
 //! **Those two directories are the whole of its reach, and the list is now exhaustive rather
 //! than illustrative**: `data/covers/` was the third directory in this folder and the one thing
 //! this button was documented as never touching, because a deck cover was a picture the reader
 //! had chosen and the file was the only record that they had. Custom covers went on 2026-08-31,
 //! so there is no such folder to spare and no such promise left to keep. It never touches a
 //! table other than `image_cache`, whose rows are bookkeeping for exactly the files it swept.
-//! The marketplace and Oracle Tag tables stay: those re-download on a *button*, not on demand,
-//! so emptying them would leave every price an em dash until the reader noticed and pressed
-//! something. That is a different promise from "self-healing" and is not this button's.
+//! The price, Tagger and combo tables stay: those re-download on a schedule or a *button*, not
+//! on demand, so emptying them would leave every price an em dash until the next refresh came
+//! round or the reader noticed and pressed something. That is a different promise from
+//! "self-healing" and is not this button's.
+//!
+//! **What it does not share with the other three is the write lock.** Those hold it for their
+//! whole statement, which is milliseconds; this one holds it for its one `DELETE` and walks the
+//! directories after releasing it, and refuses outright while anything is downloading into
+//! `tmp/` — see [`clear_cache`] and [`cache_clear`].
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -482,12 +488,21 @@ pub fn clear_decks(conn: &Connection) -> Result<DecksCleared, String> {
 ///
 /// **Order is load-bearing, and it is: rows, then files, then the owed queue.**
 ///
-/// * The rows go first, under the write connection this is handed. A row that outlived its file
-///   is already a supported state — [`crate::images::Cache::get`] reads "cached" from the row,
-///   fails to read the file, and treats it as a miss — so the window between the two statements
-///   is a window in which the cache is merely slow.
-/// * The files go second, unlocked, because a 5 500-file walk is not something to hold the
-///   app-wide write mutex across.
+/// * The rows go first, through `forget_rows` — which in the app is
+///   `|| with_write(&state, forget_image_rows)`, and in a test the same function over a bare
+///   connection. A row that outlived its file is already a supported state —
+///   [`crate::images::Cache::get`] reads "cached" from the row, fails to read the file, and
+///   treats it as a miss — so the window between the two is a window in which the cache is
+///   merely slow. **An `Err` from it sweeps nothing**: a `BUSY` answer leaves the rows and the
+///   files both standing, which is a consistent cache and a button the reader can press again.
+/// * The files go second, **after `forget_rows` has returned and so after the write mutex is
+///   released**. A 5 500-file walk is not something to hold the app-wide write lock across:
+///   until 2026-09-27 the whole of this function ran inside the command's `with_write`, so for
+///   as long as a large sweep took, every other press in the app waited out
+///   [`crate::db::WRITE_LOCK_WAIT`] and then answered [`crate::db::BUSY`] — a sentence about a
+///   *sync*, which nothing was running. Taking the rows as a closure rather than a
+///   `&Connection` is what makes that shape the only one this function can be called in, and
+///   what lets the tests run the production order rather than a copy of it.
 /// * [`crate::images::Cache::forget_pending`] goes **last**, and it is the half a first draft
 ///   gets wrong. That queue holds `image_cache` rows *owed* for bytes already on disk, waiting
 ///   for a write connection; every one of them describes a file this sweep just deleted, and
@@ -496,7 +511,11 @@ pub fn clear_decks(conn: &Connection) -> Result<DecksCleared, String> {
 ///   noticing.
 ///
 /// An image fetched *after* this returns writes its own file and its own row together and is
-/// consistent on both counts, which is why nothing here needs to stop the world.
+/// consistent on both counts, which is why nothing here needs to stop the world. One fetched
+/// *during* the walk can now also flush its row — the lock is free — and have its file swept
+/// a moment later: that is a row without its file, the first bullet's supported state, and it
+/// heals at the next request for that picture.
+///
 /// **The one thing in this file the web target does not get, and [`crate::images`] is the
 /// whole reason.** The `cache` parameter is that module's type; on web the byte cache is
 /// Cache Storage rather than a directory, which is a rewrite and not a port, and its own
@@ -504,14 +523,12 @@ pub fn clear_decks(conn: &Connection) -> Result<DecksCleared, String> {
 /// which is why the other three clears are routed and this one is not.
 #[cfg(not(target_family = "wasm"))]
 pub fn clear_cache(
-    conn: &Connection,
+    forget_rows: impl FnOnce() -> Result<i64, String>,
     images: &Path,
     tmp: &Path,
     cache: &crate::images::Cache,
 ) -> Result<CacheCleared, String> {
-    let rows = conn
-        .execute("DELETE FROM image_cache", [])
-        .map_err(|e| e.to_string())?;
+    let rows = forget_rows()?;
     let mut swept = Swept::default();
     sweep_dir(images, &mut swept);
     sweep_dir(tmp, &mut swept);
@@ -519,14 +536,57 @@ pub fn clear_cache(
     Ok(CacheCleared {
         files: swept.files,
         bytes: swept.bytes,
-        rows: rows as i64,
+        rows,
         failed: swept.failed,
     })
+}
+
+/// The one statement of [`clear_cache`] that needs the write connection.
+///
+/// A function of its own rather than a closure at the call site so that the command and the
+/// tests hand [`clear_cache`] the same statement — the command under `with_write`, a test over
+/// its own connection.
+#[cfg(not(target_family = "wasm"))]
+fn forget_image_rows(conn: &Connection) -> Result<i64, String> {
+    conn.execute("DELETE FROM image_cache", [])
+        .map(|n| n as i64)
+        .map_err(|e| e.to_string())
 }
 
 /// Refused when a sync is in flight, in the reader's words.
 #[cfg(not(target_family = "wasm"))]
 const SYNCING: &str = "a card update is running — clear the cache once it has finished";
+
+/// Refused when a feed is downloading into `data/tmp/`, in the reader's words.
+///
+/// One sentence for all five feeds rather than one per feed: the reader did not necessarily
+/// start any of them — every one of them can run at launch without a press — and what they
+/// need to know is that the press will work in a minute, not which file was in the way.
+#[cfg(not(target_family = "wasm"))]
+const DOWNLOADING: &str =
+    "a price, tag or combo download is running — clear the cache once it has finished";
+
+/// Why [`cache_clear`] must not run right now, or `None` when it may.
+///
+/// **Every download that lands in `data/tmp/` has a second phase that reopens the file**, and a
+/// sweep between the two phases fails the job. The corpus sync is `syncing`; the two price
+/// feeds, the two Tagger datasets and the combo feed are each module's own refresh claim, held
+/// from before the download until the temp file is deleted — which is exactly the span a sweep
+/// must not land in. The sync is asked first only because its sentence is the more specific
+/// one when both are true.
+#[cfg(not(target_family = "wasm"))]
+fn cache_clear_refusal(syncing: bool) -> Option<&'static str> {
+    if syncing {
+        return Some(SYNCING);
+    }
+    if crate::marketplace_feed::any_refresh_running()
+        || crate::tags::any_refresh_running()
+        || crate::combos::any_refresh_running()
+    {
+        return Some(DOWNLOADING);
+    }
+    None
+}
 
 // ── The command wrappers, and only they, are the desktop's ───────────────────────────────
 //
@@ -582,27 +642,49 @@ pub async fn decks_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<Decks
 
 /// Empty the picture cache and the download scratch directory.
 ///
-/// **Refused outright while a sync is running**, which is the one guard this command needs and
-/// the reason it is checked here rather than inside [`clear_cache`]. `data/tmp/` is where the
-/// corpus download puts `default-cards.jsonl.gz` — 77 MB that an ingest then reads back — so a
-/// sweep landing between the write and the read fails a 90-second job the reader is watching a
-/// progress bar for. A refusal they can retry in a minute is the better trade, and it is the
-/// only state in which this command can do harm.
+/// **Refused outright while anything is downloading into `data/tmp/`**, which is the one guard
+/// this command needs and the reason it is checked here rather than inside [`clear_cache`].
+/// Every download there has a second phase that reads the file back: the corpus sync puts
+/// `default-cards.jsonl.gz` there — 77 MB that an ingest then reads back — and the two price
+/// feeds, the two Tagger datasets and the combo feed each download to a temp file and reopen
+/// it to ingest. A sweep landing between the write and the read fails the job: for the sync, a
+/// 90-second job the reader is watching a progress bar for; for the combo feed, another 27.5 MB
+/// at the next launch. A refusal they can retry in a minute is the better trade, and
+/// [`cache_clear_refusal`] is the whole list.
 ///
-/// The price-feed and Oracle Tag downloads use the same directory and are *not* fenced: each is
-/// a single button the reader pressed, each re-downloads on the next press, and neither has a
-/// second phase that reads the file back after closing it.
+/// **This said the opposite about the feeds until 2026-09-27**: that the price-feed and Oracle
+/// Tag downloads were *not* fenced, because each was a single button the reader pressed and
+/// neither read its file back after closing it. Both halves had stopped being true — every one
+/// of them ingests from the file it just closed, and the tag and combo refreshes run uninvited
+/// at launch, which is exactly when a reader is likeliest to be in Settings.
+///
+/// **One narrow race is left, and it is accepted rather than missed.** The check is a read of
+/// the flags, not a claim on them, so a refresh that *starts* after it and before the sweep
+/// finishes can still have its temp file taken. The corpus sync's check has always had the
+/// same window. Closing it would mean the sweep taking all five feeds' claims and the sync's
+/// flag for its duration — refusing a launch refresh because the reader was clearing a cache —
+/// to guard a collision that needs a launch task to start inside the few seconds of a sweep.
+/// What it costs when it happens is one failed refresh, written to `error_log` with the
+/// previous rows untouched, and retried at the next launch or press.
+///
+/// **The write lock is held for the `DELETE` and released before the sweep** — see
+/// [`clear_cache`] for why, and for why it is that function's shape and not a habit here.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn cache_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<CacheCleared, String> {
     let state = state.inner().clone();
-    if state.syncing.load(Ordering::Relaxed) {
-        return Err(SYNCING.to_owned());
+    if let Some(refusal) = cache_clear_refusal(state.syncing.load(Ordering::Relaxed)) {
+        return Err(refusal.to_owned());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let images = state.images.dir().to_path_buf();
         let tmp = state.data_dir.join("tmp");
-        with_write(&state, |c| clear_cache(c, &images, &tmp, &state.images))
+        clear_cache(
+            || with_write(&state, forget_image_rows),
+            &images,
+            &tmp,
+            &state.images,
+        )
     })
     .await
     .map_err(|e| format!("the cache could not be cleared: {e}"))?
@@ -993,7 +1075,7 @@ mod tests {
         .unwrap();
         let cache = crate::images::Cache::new(images.clone());
 
-        let out = clear_cache(&conn, &images, &tmp, &cache).unwrap();
+        let out = clear_cache(|| forget_image_rows(&conn), &images, &tmp, &cache).unwrap();
 
         assert_eq!(out.files, 3);
         assert_eq!(out.bytes, 17);
@@ -1002,6 +1084,119 @@ mod tests {
         assert_eq!(count(&conn, "image_cache"), 0);
         assert!(images.is_dir() && tmp.is_dir());
         assert!(!shard.exists(), "an emptied shard directory goes with it");
+    }
+
+    /// **The rows go first and the walk starts only once they have returned** — which is the
+    /// whole of what keeps the sweep out from under the write lock, because in the app the
+    /// closure *is* `with_write` and its guard drops as it returns. So the closure looks at the
+    /// disk and the owed queue from inside: nothing swept yet, nothing forgotten yet. A
+    /// `clear_cache` that walked first, or that took a connection and ran everything under the
+    /// caller's lock again, would fail one of these two ways — the files already gone when the
+    /// rows are asked for, or no closure to hand the lock to at all.
+    #[test]
+    fn the_cache_rows_go_before_the_sweep_and_the_sweep_waits_for_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let images = dir.path().join("images");
+        let tmp = dir.path().join("tmp");
+        fs::create_dir_all(&images).unwrap();
+        fs::create_dir_all(&tmp).unwrap();
+        let picture = images.join("abcd-0.webp");
+        fs::write(&picture, b"1234").unwrap();
+        let cache = crate::images::Cache::new(images.clone());
+        cache.queue_record_for_test(
+            "3f2c9a1e-0000-4000-8000-000000000001",
+            "https://cards.scryfall.io/x.webp?1",
+            4,
+        );
+        let conn = db();
+        conn.execute(
+            "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
+             VALUES ('abcd', 0, 'thumb', 'https://cards.scryfall.io/x.webp?1', 4, 0)",
+            [],
+        )
+        .unwrap();
+
+        let out = clear_cache(
+            || {
+                assert!(picture.is_file(), "the walk must not have started yet");
+                assert_eq!(
+                    cache.pending_records(),
+                    1,
+                    "nor the owed queue been dropped"
+                );
+                forget_image_rows(&conn)
+            },
+            &images,
+            &tmp,
+            &cache,
+        )
+        .unwrap();
+
+        assert_eq!(
+            out.rows, 1,
+            "the count is the closure's, reported as it answered"
+        );
+        assert_eq!(out.files, 1);
+        assert!(!picture.exists());
+        assert_eq!(cache.pending_records(), 0);
+    }
+
+    /// **A row delete that could not run sweeps nothing.** In the app that is `with_write`
+    /// answering `BUSY` because a write held the connection for five seconds, and the press
+    /// has to leave a cache that is still consistent — rows and files both standing — rather
+    /// than files gone under rows that still vouch for them.
+    #[test]
+    fn a_busy_row_delete_leaves_the_cache_exactly_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let images = dir.path().join("images");
+        let tmp = dir.path().join("tmp");
+        fs::create_dir_all(&images).unwrap();
+        fs::create_dir_all(&tmp).unwrap();
+        let picture = images.join("abcd-0.webp");
+        fs::write(&picture, b"1234").unwrap();
+        let cache = crate::images::Cache::new(images.clone());
+        cache.queue_record_for_test(
+            "3f2c9a1e-0000-4000-8000-000000000001",
+            "https://cards.scryfall.io/x.webp?1",
+            4,
+        );
+
+        let err =
+            clear_cache(|| Err(crate::db::BUSY.to_owned()), &images, &tmp, &cache).unwrap_err();
+
+        assert_eq!(err, crate::db::BUSY);
+        assert!(picture.is_file(), "no file may go when the rows could not");
+        assert_eq!(
+            cache.pending_records(),
+            1,
+            "and the owed queue is untouched"
+        );
+    }
+
+    /// **A feed downloading into `tmp/` refuses the press**, and so does a sync, which wins
+    /// when both are true. Each feed module's claim is taken under a name no real feed uses,
+    /// because the registries are process-wide and the suites run in parallel — a test here
+    /// holding `"cardkingdom"` would make that module's own refresh tests answer "already being
+    /// refreshed". The combo feed is a single flag with no names, so it is not claimed here for
+    /// the same reason; its `any_refresh_running` is asserted beside its own guard in `combos`.
+    ///
+    /// Only the refusing direction is asserted. "Nothing is running, so `None`" would be true
+    /// or false depending on which other test happened to be mid-refresh in another thread.
+    #[test]
+    fn the_cache_clear_is_refused_while_a_feed_is_downloading() {
+        {
+            let _prices = crate::marketplace_feed::hold_refresh_for_test("reset-test-prices");
+            assert_eq!(cache_clear_refusal(false), Some(DOWNLOADING));
+            assert_eq!(
+                cache_clear_refusal(true),
+                Some(SYNCING),
+                "a sync is the more specific sentence"
+            );
+        }
+        {
+            let _tags = crate::tags::hold_refresh_for_test("reset-test-tags");
+            assert_eq!(cache_clear_refusal(false), Some(DOWNLOADING));
+        }
     }
 
     /// The queue that would otherwise re-assert rows for the files just deleted. Drained last,
@@ -1022,7 +1217,7 @@ mod tests {
         assert_eq!(cache.pending_records(), 1);
         let conn = db();
 
-        clear_cache(&conn, &images, &tmp, &cache).unwrap();
+        clear_cache(|| forget_image_rows(&conn), &images, &tmp, &cache).unwrap();
 
         assert_eq!(cache.pending_records(), 0);
     }
@@ -1037,7 +1232,7 @@ mod tests {
         let cache = crate::images::Cache::new(images.clone());
         let conn = db();
 
-        let out = clear_cache(&conn, &images, &tmp, &cache).unwrap();
+        let out = clear_cache(|| forget_image_rows(&conn), &images, &tmp, &cache).unwrap();
 
         assert_eq!(out.files, 0);
         assert_eq!(out.bytes, 0);
@@ -1067,7 +1262,7 @@ mod tests {
         let cache = crate::images::Cache::new(images.clone());
         let conn = db();
 
-        clear_cache(&conn, &images, &tmp, &cache).unwrap();
+        clear_cache(|| forget_image_rows(&conn), &images, &tmp, &cache).unwrap();
 
         assert!(bystander.is_file(), "a sibling directory is out of reach");
         assert!(images.is_dir(), "and both roots themselves survive");
@@ -1095,7 +1290,13 @@ mod tests {
         let cache = crate::images::Cache::new(images.clone());
         let conn = db();
 
-        clear_cache(&conn, &images, &dir.path().join("tmp"), &cache).unwrap();
+        clear_cache(
+            || forget_image_rows(&conn),
+            &images,
+            &dir.path().join("tmp"),
+            &cache,
+        )
+        .unwrap();
 
         assert!(kept.exists(), "the link's target must survive");
         assert!(!images.join("link.txt").exists(), "the link itself must go");

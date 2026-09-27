@@ -16,6 +16,7 @@ import { COLD_POLL_MS } from "./useCardFacets";
 import {
   activeFilterCount,
   ANY_CARD,
+  bordersParam,
   CARD_TYPES,
   cycleTriState,
   DEBOUNCE_MS,
@@ -47,6 +48,8 @@ describe("activeFilterCount", () => {
     owned: undefined,
     rarities: [],
     types: [],
+    borders: [],
+    finishes: [],
     priceMin: undefined,
     priceMax: undefined,
   };
@@ -98,6 +101,17 @@ describe("activeFilterCount", () => {
     // And a kind of its own beside the rarities, rather than folded in with them: two chip rows
     // pressed is two things Reset all would clear.
     expect(activeFilterCount({ ...none, types: ["Creature"], rarities: ["rare"] })).toBe(2);
+  });
+
+  /**
+   * The border and finish chips (issue #573) are a kind each, for the type row's reason — and a
+   * kind *each*, so a reader who pressed both rows is told two.
+   */
+  it("counts the border chips and the finish chips as one kind each", () => {
+    expect(activeFilterCount({ ...none, borders: ["borderless"] })).toBe(1);
+    expect(activeFilterCount({ ...none, borders: ["borderless", "fullart", "regular"] })).toBe(1);
+    expect(activeFilterCount({ ...none, finishes: ["foil", "etched"] })).toBe(1);
+    expect(activeFilterCount({ ...none, borders: ["fullart"], finishes: ["foil"] })).toBe(2);
   });
 
   /** Whitespace is not a search. */
@@ -199,6 +213,10 @@ const READY: FacetResponse = {
     Battle: 1,
     Land: 1,
   },
+  // Overlapping like the types: a borderless full-art printing is in two border counts, and a
+  // printing published in nonfoil and foil in two finish counts.
+  borders: { regular: 1, borderless: 1, fullart: 1 },
+  finishes: { nonfoil: 1, foil: 1, etched: 1 },
   sets: { lea: 1 },
   owned: { owned: 1, missing: 0 },
   total: 1,
@@ -629,6 +647,127 @@ describe("the Exact toggle and the type chips", () => {
     expect(result.current.activeCount).toBe(2);
     act(() => result.current.toggleColorsStrict());
     expect(result.current.activeCount).toBe(2);
+  });
+});
+
+/** Canonicalised in the chips' own order rather than alphabetically — `regular` first — so the
+ *  request reads the way the row does, and still one key per set. */
+describe("bordersParam", () => {
+  it("orders the picked borders as BORDERS does and answers nothing for none", () => {
+    expect(bordersParam([])).toBeUndefined();
+    expect(bordersParam(["fullart", "regular"])).toEqual(["regular", "fullart"]);
+    expect(bordersParam(["fullart", "borderless"])).toEqual(
+      bordersParam(["borderless", "fullart"]),
+    );
+  });
+});
+
+/**
+ * The border and finish chips (issue #573) — the type chips' shape, and the same query-key risk.
+ *
+ * **The finish half has one trap of its own**: on this hook the Finish cell asks which finishes a
+ * *printing* is published in, and the wire field for that is `printedFinishes`. `finishes` is the
+ * collection's word for the finish one *copy* is in, so a payload that sent it here would be a
+ * field the search command does not read — a chip that filters nothing — or, on a flattened
+ * payload, the other question entirely. Both payloads are asserted to carry the one and never the
+ * other.
+ */
+describe("the border and finish chips", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  it("is absent from both payloads until a chip is pressed", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    await waitFor(() => expect(facetCards).toHaveBeenCalled());
+
+    expect(result.current.borders).toEqual([]);
+    expect(result.current.finishes).toEqual([]);
+    // `undefined` and not `[]`, the rule every optional list on this payload follows.
+    expect(lastSearchRequest().borders).toBeUndefined();
+    expect(lastSearchRequest().printedFinishes).toBeUndefined();
+    expect(lastFacetRequest().borders).toBeUndefined();
+    expect(lastFacetRequest().printedFinishes).toBeUndefined();
+    expect("finishes" in lastSearchRequest()).toBe(false);
+  });
+
+  it("sends the border chips as `borders`, with a key segment of their own", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const asked = searchCards.mock.calls.length;
+    const key = result.current.searchKey;
+
+    act(() => result.current.toggleBorder("fullart"));
+
+    await waitFor(() => expect(searchCards.mock.calls.length).toBeGreaterThan(asked));
+    expect(result.current.searchKey).not.toBe(key);
+    expect(lastSearchRequest().borders).toEqual(["fullart"]);
+    await waitFor(() => expect(lastFacetRequest().borders).toEqual(["fullart"]));
+
+    // In the chips' order whatever the press order, so the second press is one known request.
+    act(() => result.current.toggleBorder("regular"));
+    await waitFor(() => expect(lastSearchRequest().borders).toEqual(["regular", "fullart"]));
+  });
+
+  it("sends the finish chips as `printedFinishes` and never as `finishes`", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const asked = searchCards.mock.calls.length;
+    const key = result.current.searchKey;
+
+    act(() => result.current.toggleFinish("etched"));
+    act(() => result.current.toggleFinish("foil"));
+
+    await waitFor(() => expect(searchCards.mock.calls.length).toBeGreaterThan(asked));
+    expect(result.current.searchKey).not.toBe(key);
+    expect(result.current.finishes).toEqual(["etched", "foil"]);
+    // `FINISHES` order on the wire — nonfoil, foil, etched — not the press order.
+    await waitFor(() => expect(lastSearchRequest().printedFinishes).toEqual(["foil", "etched"]));
+    expect("finishes" in lastSearchRequest()).toBe(false);
+    await waitFor(() => expect(lastFacetRequest().printedFinishes).toEqual(["foil", "etched"]));
+    expect("finishes" in lastFacetRequest()).toBe(false);
+  });
+
+  it("counts each as one kind, narrows `unfiltered`, and clears on resetAll", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const fresh = result.current.searchKey;
+
+    act(() => result.current.toggleBorder("borderless"));
+    expect(result.current.unfiltered).toBe(false);
+    act(() => result.current.toggleBorder("fullart"));
+    expect(result.current.activeCount).toBe(1);
+    act(() => result.current.toggleFinish("foil"));
+    act(() => result.current.toggleFinish("nonfoil"));
+    expect(result.current.activeCount).toBe(2);
+
+    act(() => result.current.resetAll());
+
+    expect(result.current.borders).toEqual([]);
+    expect(result.current.finishes).toEqual([]);
+    expect(result.current.activeCount).toBe(0);
+    expect(result.current.unfiltered).toBe(true);
+    expect(result.current.searchKey).toBe(fresh);
+  });
+
+  /** `showOnlySet` clears every filter `resetAll` does — a border left standing would answer a
+   *  narrower question than the Set chip claims. */
+  it("is cleared by showOnlySet", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.toggleBorder("regular"));
+    act(() => result.current.toggleFinish("etched"));
+    act(() => result.current.showOnlySet("lea"));
+
+    expect(result.current.borders).toEqual([]);
+    expect(result.current.finishes).toEqual([]);
+    await waitFor(() => expect(lastSearchRequest().sets).toEqual(["lea"]));
+    expect(lastSearchRequest().borders).toBeUndefined();
+    expect(lastSearchRequest().printedFinishes).toBeUndefined();
   });
 });
 
@@ -1757,6 +1896,26 @@ describe("useCardSearch, reading typed predicates out of the box", () => {
     await waitFor(() => expect(lastSearchRequest().predicates).toEqual([
       { field: "cmc", op: "gte", value: "3", negated: true },
     ]));
+  });
+
+  /**
+   * **`-"lightning bolt"` is a name to exclude, not two words to search for** — issue #571,
+   * where the `-` was tokenised away and the box searched *for* the card the reader asked to be
+   * rid of. The free text beside it stays free text, and the term draws a chip like any other.
+   */
+  it("sends a dash on a phrase as a name exclusion beside the free text", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText('lightning -"lightning bolt"'));
+
+    await waitFor(() => expect(lastSearchRequest().predicates).toEqual([
+      { field: "name", op: "colon", value: "lightning bolt", negated: true },
+    ]));
+    expect(lastSearchRequest().text).toBe("lightning");
+    expect(result.current.predicateChips).toEqual([
+      { key: "name|colon|lightning bolt", label: '"lightning bolt"', mode: "exclude" },
+    ]);
   });
 
   /** Naming a filter the box does not hold leaves the query alone rather than rewriting it into

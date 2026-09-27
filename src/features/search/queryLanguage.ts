@@ -17,6 +17,20 @@ import type { TagNamespace } from "@/lib/ipc";
  * `index/facets.rs` — materially more work than this whole feature. A reader who types `or`
  * gets it as free text.
  *
+ * # A `-` on a bare word or a quoted phrase excludes a *name*, since 2026-09-27
+ *
+ * `-bolt` and `-"lightning bolt"` are Scryfall's name exclusions (issue #571). Until then they
+ * fell through to free text with the `-` read as punctuation, so `-bolt` searched *for* bolt —
+ * the opposite of what was typed, and with nothing on screen to say so. They are now a negated
+ * `name` predicate, the one field no keyword names. **Name only, never every column free text
+ * matches**, and the two directions differ on purpose: a positive bare word still matches the
+ * name, the type line and the rules text, while Scryfall's `-bolt` is `-name:bolt` — measured
+ * live 2026-09-27, `t:instant -bolt` and `t:instant -name:bolt` both answer 3,891 of 3,909. On
+ * this corpus `goblin` is 969 printings by name and 2,224 across every column, so reading the
+ * wider set would take every Goblin *creature* out of a reader who only asked to lose the ones
+ * called Goblin. A positive name has no spelling here, which is why its chip's include press
+ * leaves plain free text behind — see {@link excludedName}.
+ *
  * # `a:` and `o:` are Scryfall's again, since 2026-09-22
  *
  * From 2026-08-22 (`81251d3b`) to 2026-09-22 this module read `a:` as the *art taxonomy* and
@@ -50,8 +64,13 @@ import type { TagNamespace } from "@/lib/ipc";
  * FTS5 MATCH string instead, because `LIKE` over the real corpus measured 80–250× slower than a
  * column-filtered MATCH. They travel in the same list as the rest anyway, so the parser has one
  * answer rather than two, and `push_card_filters` skips them by name.
+ *
+ * `name` is a third that rides the MATCH, and the only field with **no row in
+ * {@link QUERY_KEYWORDS}**: it is what a leading `-` on free text becomes, and nothing else
+ * produces it. See {@link excludedName}.
  */
 export type PredicateField =
+  | "name"
   | "typeLine"
   | "oracleText"
   | "keyword"
@@ -420,6 +439,9 @@ function unquote(value: string): string {
  * `colour`, `keyword`, `identity` and every single letter are all keywords, so a reader who
  * types `power` looking for *Power Conduit* would be shown their whole collection instead. Free
  * text answers that keystroke with the cards they asked for.
+ *
+ * Every chunk that would have been `"text"` is asked one more question on the way out — does it
+ * start with `-`? — by {@link excludedName}, which is where `-bolt` stops being free text.
  */
 function tokenFrom(
   chunk: string,
@@ -427,11 +449,11 @@ function tokenFrom(
   end: number,
 ): TagToken | PredicateToken | "partial" | "text" {
   const m = TERM.exec(chunk);
-  if (!m) return "text";
+  if (!m) return excludedName(chunk, start, end);
   const spec = SPEC_BY_KEYWORD.get(keywordKey(m[2]));
-  if (!spec) return "text";
+  if (!spec) return excludedName(chunk, start, end);
   const sign = m[3];
-  if (!spec.ops.includes(OP_BY_SIGN[sign])) return "text";
+  if (!spec.ops.includes(OP_BY_SIGN[sign])) return excludedName(chunk, start, end);
   const value = unquote(m[4]).trim();
   if (value === "") return "partial";
   const negated = m[1] === "-";
@@ -439,11 +461,45 @@ function tokenFrom(
     return { namespace: spec.target.tag, value, negated, start, end };
   }
   const canonical = predicateValue(spec.target, value);
-  if (canonical === null) return "text";
+  if (canonical === null) return excludedName(chunk, start, end);
   // `:` is the one sign that does not mean itself: each row states what a bare colon asks, and
-  // for eight of the twelve fields that is a comparison rather than a match.
+  // for eight of the twelve fields a keyword names that is a comparison rather than a match.
   const op = sign === ":" ? spec.defaultOp : OP_BY_SIGN[sign];
   return { field: spec.target, op, value: canonical, negated, start, end };
+}
+
+/** A letter or a digit in any script — what `filters::fts_query` keeps, since Rust's
+ *  `char::is_alphanumeric` is Unicode-aware too. */
+const INDEXABLE = /[\p{L}\p{N}]/u;
+
+/**
+ * A chunk that is not a term, read once more for a leading `-`: Scryfall's `-bolt` and
+ * `-"lightning bolt"`, which exclude a card **by its name**.
+ *
+ * Anything else stays `"text"`, so a *positive* bare word is exactly the free text it has always
+ * been. The rule is "whatever free text would have been, negated" rather than a grammar of its
+ * own, which is why an unparseable term negates too: `-cmc>=banana` was the words `cmc banana`
+ * and is now a name that cannot contain them — Scryfall reads it the same way.
+ *
+ * **A value with nothing indexable in it is `"partial"`, not a term.** A lone `-` is what the
+ * box holds on the way to `-bolt`, and `-"` on the way to `-"lightning bolt"`; as a term either
+ * would draw a chip that narrows nothing, because the FTS builder drops a value that tokenises to
+ * no word. The same guard keeps `--` and `-!!!` from drawing one.
+ *
+ * **Its chip is the one whose include press does not keep it.** Flipping `-bolt` writes `bolt`,
+ * which is free text and draws no chip — there is no positive name to flip *to* without a keyword
+ * nobody typed, and `name:` is Scryfall's but not this box's. The wall answers the press the way
+ * the reader asked; only the chip goes.
+ */
+function excludedName(
+  chunk: string,
+  start: number,
+  end: number,
+): PredicateToken | "partial" | "text" {
+  if (!chunk.startsWith("-")) return "text";
+  const value = unquote(chunk.slice(1)).trim();
+  if (!INDEXABLE.test(value)) return "partial";
+  return { field: "name", op: "colon", value, negated: true, start, end };
 }
 
 /**

@@ -9825,7 +9825,7 @@ mod tests {
             "a deck one statement old has no live cards to seed from"
         );
         // Cards added afterwards stay in the variant they were added to: enabling at create
-        // hooks nothing up to `deck_theory::seed_from_live`.
+        // leaves nothing behind that would carry a later live add into the plan.
         add(&conn, born_on.id, "bolt-lea", main_of(&conn, born_on.id), 4);
         assert_eq!(theory_rows(born_on.id), 0);
 

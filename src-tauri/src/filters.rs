@@ -45,6 +45,36 @@ pub const MANA_VALUE_OPEN_ENDED: u8 = 8;
 /// called*.
 pub const VARIABLE_COST_LIKE: &str = "%{X}%";
 
+/// The border chips, in the order the filter row draws them — the ids
+/// `src/features/card/printingFilters.ts` already used before they became a filter.
+///
+/// **A vocabulary over two columns, not a column's own values.** `cards.border_color` holds six
+/// words (measured 2026-09-27 on the dev corpus's 109 254 paper printings: black 93 029,
+/// borderless 8 947, white 5 149, gold 1 373, silver 666, yellow 90) and only one of them is a
+/// chip; `fullart` is `cards.full_art` (2 264); and `regular` is a printing that is neither
+/// (98 878). So black, white, gold, silver and yellow are all `regular` — the colour of a
+/// border is not what this row asks about, whether there is one is.
+///
+/// [`picked_borders`] validates against this list and [`crate::index::CardIndex::borders`] is
+/// indexed by it, so the SQL and the bitsets run out of vocabulary together.
+pub const BORDER_KEYS: [&str; 3] = ["regular", "borderless", "fullart"];
+
+/// The printed-finish chips — **[`crate::schema::FINISHES`] itself, under the name the filter
+/// row reads it by**, and never a respelling of it: that constant is the one finish vocabulary
+/// (`nonfoil`/`foil`/`etched`), and a fourth finish is a migration step that must reach this
+/// list without anybody remembering it is here.
+///
+/// Matched against `cards.finishes`, a JSON array stored as text. Measured 2026-09-27 on the
+/// dev corpus's 109 254 paper printings: `["nonfoil","foil"]` 51 628, `["nonfoil"]` 44 019,
+/// `["foil"]` 12 389, `["etched"]` 892, the rest small — so the chips overlap exactly as the
+/// border chips do, and a nonfoil-and-foil printing answers both.
+pub const FINISH_KEYS: [&str; 3] = crate::schema::FINISHES;
+
+/// The value `cards.border_color` holds for a printing with no border — the one word of its
+/// six that is a chip. **Bound, never interpolated**, so the module note's list of what reaches
+/// the SQL text stays four items long.
+const BORDERLESS: &str = "borderless";
+
 /// One taxonomy's tag chips: the tags a row must carry, and the tags it must not.
 ///
 /// **`include` INTERSECTS.** A themed deck asks for dogs AND snow, so each included slug gets a
@@ -73,19 +103,24 @@ pub const ART_WEIGHT_FLOOR_STRONG: &str = "strong";
 
 /// What one [`QueryPredicate`] is a statement about.
 ///
-/// **[`Self::TypeLine`] and [`Self::OracleText`] ride in the same list as the other ten and
-/// are emitted by [`fts_match`], never by [`push_card_filters`].** `LIKE` over either column
-/// measured **80x to 250x** slower than the FTS5 column filter they take instead, on the real
-/// corpus (spec §5.2), and a box that fires on a debounce cannot pay that. So the match in
-/// `push_card_filters` names all twelve variants and has no `_` arm: **a field handled by
-/// neither side is a filter that silently does nothing**, which is the one failure this split
-/// can produce and the reason there is a test per side.
+/// **[`Self::Name`], [`Self::TypeLine`] and [`Self::OracleText`] ride in the same list as the
+/// other ten and are emitted by [`fts_match`], never by [`push_card_filters`].** `LIKE` over
+/// either text column measured **80x to 250x** slower than the FTS5 column filter they take
+/// instead, on the real corpus (spec §5.2), and a box that fires on a debounce cannot pay that.
+/// So the match in `push_card_filters` names all thirteen variants and has no `_` arm: **a
+/// field handled by neither side is a filter that silently does nothing**, which is the one
+/// failure this split can produce and the reason there is a test per side.
 ///
 /// Closed, so the boundary is type-checked rather than stringly typed; the camelCase serde
 /// names are the contract `src/lib/ipc.ts` mirrors and `ipc.test.ts` fences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PredicateField {
+    /// The card's name and nothing else — Scryfall's `-bolt` and `-"lightning bolt"` (issue
+    /// #571). **No keyword produces it**: the grammar sends it only for a leading `-` on free
+    /// text, so it arrives negated, while a *positive* bare word stays [`CardFilters::text`] and
+    /// matches every FTS column. The two directions differ on purpose — see [`fts_match`].
+    Name,
     TypeLine,
     OracleText,
     Keyword,
@@ -200,6 +235,26 @@ pub struct CardFilters {
     /// (`Land Creature — Forest Dryad`) answers both `Land` and `Creature` — which is what a
     /// filter means and what `autoCategory.ts`'s one-bucket rule deliberately does not.
     pub types: Option<Vec<String>>,
+    /// The border chips — [`BORDER_KEYS`] entries. OR within, AND without, exactly like
+    /// [`Self::types`].
+    ///
+    /// **Three chips over two columns, and they overlap.** `borderless` reads
+    /// `cards.border_color`, `fullart` reads `cards.full_art`, and `regular` is the printing that
+    /// is **neither** — so a borderless full-art printing (835 of the 2 264 full-art paper
+    /// printings, measured 2026-09-27 on the dev corpus of 109 254) answers both of the first two
+    /// chips and not the third. That is the types' "does this card have this" reading rather than
+    /// a partition, and it is why the counts do not sum to a total.
+    pub borders: Option<Vec<String>>,
+    /// The finish chips over the **printing** — [`FINISH_KEYS`] entries, "is this printing
+    /// published in this finish", which is Scryfall's `is:foil`. OR within, AND without.
+    ///
+    /// **Not the collection's `finishes`**, which is the finish one *copy* is in and lives on
+    /// [`crate::collection::CollectionQuery`] beside this struct's flattened fields. The two
+    /// would collide on that flattened payload under one name, which is the whole reason this
+    /// one is `printedFinishes` on the wire; the two AND with each other if both are sent, and
+    /// they are different questions — a nonfoil copy of a printing that also exists in foil
+    /// answers `printedFinishes: ["foil"]` and fails `finishes: ["foil"]`.
+    pub printed_finishes: Option<Vec<String>>,
     /// Omitted means true in the search and false in the collection: a search offers cards
     /// to own, a collection lists cards that are owned.
     pub paper_only: Option<bool>,
@@ -240,8 +295,8 @@ pub struct CardFilters {
     /// field is two terms rather than one overwriting the other — which is the whole reason
     /// this is a list. See [`QueryPredicate`].
     ///
-    /// **Two of the twelve fields add no SQL here at all** and are picked up by [`fts_match`]
-    /// instead; [`PredicateField`] says which and why.
+    /// **Three of the thirteen fields add no SQL here at all** and are picked up by
+    /// [`fts_match`] instead; [`PredicateField`] says which and why.
     pub predicates: Option<Vec<QueryPredicate>>,
 }
 
@@ -281,12 +336,37 @@ impl Predicates {
 /// boundaries. Deleting punctuation inside a word would weld its halves into a token
 /// nothing indexes — `Ajani's` → `ajanis`, `God-Pharaoh` → `godpharaoh`.
 pub fn fts_query(text: &str) -> Option<String> {
-    let toks: Vec<String> = text
-        .split(|c: char| !c.is_alphanumeric())
+    let toks = fts_tokens(text);
+    (!toks.is_empty()).then(|| toks.join(" "))
+}
+
+/// [`fts_query`]'s tokens as one **ordered phrase** — `"lightning"* + "bolt"*` — or `None`
+/// when nothing indexable is left.
+///
+/// FTS5's `+` joins phrases into one whose tokens must stand adjacent and in order, and each
+/// keeps its own `*`. That is Scryfall's reading of a quoted name, measured live 2026-09-27:
+/// `t:instant -"lightning bolt"` drops 2 of 3,909 instants while `-"bolt lightning"` drops
+/// none. The unordered [`fts_query`] would drop Lightning Bolt for both. Measured on the dev
+/// corpus the same day, `name : ("guide"* + "goblin"*)` finds nothing where the unordered form
+/// finds Goblin Guide. Only [`PredicateField::Name`] reads this; `t:` and `o:` keep the
+/// unordered form they shipped with. A single word is the same string either way.
+///
+/// **One edge it cannot see**: a double-faced card's `name` is `Front // Back`, and `//` is not
+/// a token, so `"bolt" + "lightning"*` finds `Lightning Bolt // Lightning Bolt` across the
+/// seam. Scryfall's substring would not. Harmless in the direction it errs — it removes a card
+/// that *does* carry both words.
+pub fn fts_phrase(text: &str) -> Option<String> {
+    let toks = fts_tokens(text);
+    (!toks.is_empty()).then(|| toks.join(" + "))
+}
+
+/// The quoted, prefix-matched tokens both builders above join — the splitting rule and the
+/// reason for it are [`fts_query`]'s.
+fn fts_tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
         .map(|t| format!("\"{t}\"*"))
-        .collect();
-    (!toks.is_empty()).then(|| toks.join(" "))
+        .collect()
 }
 
 /// The FTS side of a parsed query: the positive `MATCH` string, and one `MATCH` string per
@@ -311,6 +391,14 @@ pub fn fts_query(text: &str) -> Option<String> {
 /// (15 359 against 14 753 for `draw`) because it holds every face's name, type line and text —
 /// and it is the right column anyway, because `cards.oracle_text` is NULL for every
 /// double-faced card and the narrower column is wrong in a worse direction.
+///
+/// **[`PredicateField::Name`] is `name` alone, as an ordered phrase ([`fts_phrase`]), while the
+/// free text beside it has no column filter at all** — so `bolt` matches a name, a type line or
+/// rules text and `-bolt` removes only the names. That asymmetry is Scryfall's: `-bolt` is
+/// `-name:bolt` there (`t:instant` 3,909, both negations 3,891, measured 2026-09-27). Reading
+/// every column would make `-goblin` remove 2,224 printings on the dev corpus rather than the
+/// 969 actually called Goblin, taking every Goblin creature and every card that makes one with
+/// them.
 pub fn fts_match(text: Option<&str>, preds: &[QueryPredicate]) -> (Option<String>, Vec<String>) {
     let mut positive: Vec<String> = Vec::new();
     let mut negative: Vec<String> = Vec::new();
@@ -322,18 +410,19 @@ pub fn fts_match(text: Option<&str>, preds: &[QueryPredicate]) -> (Option<String
     }
 
     for pred in preds {
-        let column = match pred.field {
-            PredicateField::TypeLine => "type_line",
-            PredicateField::OracleText => "search_text",
+        let (column, query) = match pred.field {
+            PredicateField::Name => ("name", fts_phrase(&pred.value)),
+            PredicateField::TypeLine => ("type_line", fts_query(&pred.value)),
+            PredicateField::OracleText => ("search_text", fts_query(&pred.value)),
             // Every other field is SQL, and `push_card_filters` is where it is emitted.
             _ => continue,
         };
-        let Some(query) = fts_query(&pred.value) else {
+        let Some(query) = query else {
             continue;
         };
-        // FTS5's column filter, over the prefix-matched phrase list `fts_query` builds. The
-        // parentheses are what make `type_line : ("a"* "b"*)` two terms *in that column*
-        // rather than one term in it and one anywhere.
+        // FTS5's column filter, over the prefix-matched phrase list `fts_query` builds (or the
+        // one phrase `fts_phrase` does). The parentheses are what make `type_line : ("a"* "b"*)`
+        // two terms *in that column* rather than one term in it and one anywhere.
         let term = format!("{column} : ({query})");
         if pred.negated {
             negative.push(term);
@@ -599,6 +688,73 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
         }
     }
 
+    // OR within, AND without, as one parenthesised group — the mana arm's shape, because the
+    // three chips read two columns and so cannot be one `IN (…)`. A list naming nothing this
+    // build knows adds no SQL, which is [`picked_types`]' rule.
+    //
+    // **`regular` is "neither", spelled out.** A NULL `border_color` is read as a border rather
+    // than as its absence — `coalesce(…, '')` — because the column is nullable in the schema and
+    // a printing Scryfall published no border for has not been published *borderless*: the one
+    // chip that asks for the missing border must see the word. `full_art` is `NOT NULL DEFAULT
+    // 0`, so on a card row it is never the NULL here.
+    //
+    // `{alias}.…` with no `rows` fallback, like the type and rarity arms: a frame is a claim only
+    // a card row can make, so an orphaned collection entry fails every chip — `NULL = ?` and
+    // `NULL = 1` are NULL, and `regular`'s `AND NULL = 0` is NULL even though its `coalesce`
+    // half is true.
+    if let Some(borders) = f.borders.as_deref() {
+        let picked = picked_borders(borders);
+        if !picked.is_empty() {
+            let mut alternatives: Vec<String> = Vec::new();
+            for border in &picked {
+                match border.as_str() {
+                    "borderless" => {
+                        alternatives.push(format!("{alias}.border_color = ?"));
+                        p.params.push(Box::new(BORDERLESS));
+                    }
+                    "fullart" => alternatives.push(format!("{alias}.full_art = 1")),
+                    "regular" => {
+                        alternatives.push(format!(
+                            "(coalesce({alias}.border_color, '') <> ? AND {alias}.full_art = 0)"
+                        ));
+                        p.params.push(Box::new(BORDERLESS));
+                    }
+                    // `picked_borders` validated against `BORDER_KEYS`, whose three words are
+                    // the three arms above — this arm is a fence against that list growing
+                    // without this match learning the new word, and it adds nothing rather
+                    // than matching nothing.
+                    _ => {}
+                }
+            }
+            if !alternatives.is_empty() {
+                p.wheres.push(format!("({})", alternatives.join(" OR ")));
+            }
+        }
+    }
+
+    // The printing's **published** finishes, OR within and AND without. `cards.finishes` is a
+    // JSON array stored as text (`["nonfoil","foil"]`), and the needle carries its quotes, so
+    // `"foil"` cannot match inside `"nonfoil"` — the delimiter is the whole of what separates
+    // them, which is `kw:`'s wrapped `|flying|` argument one column over. `instr` rather than
+    // `json_each`, because a table-valued function per row is a correlated subquery and this
+    // column's shape is written by this app's own ingest, one word per finish.
+    //
+    // Bound rather than interpolated, although every needle comes out of [`FINISH_KEYS`].
+    //
+    // `{alias}.finishes` with no `rows` fallback: the finishes a printing is *published* in are
+    // a claim only a card row can make — the collection entry's own `finish` is the copy's, and
+    // a different question. An orphan fails every chip: `instr(NULL, ?)` is NULL.
+    if let Some(finishes) = f.printed_finishes.as_deref() {
+        let picked = picked_finishes(finishes);
+        if !picked.is_empty() {
+            let alternatives = vec![format!("instr({alias}.finishes, ?) > 0"); picked.len()];
+            p.wheres.push(format!("({})", alternatives.join(" OR ")));
+            for finish in picked {
+                p.params.push(Box::new(format!("\"{finish}\"")));
+            }
+        }
+    }
+
     if f.paper_only.unwrap_or(true) {
         p.wheres.push(format!("{alias}.is_paper = 1"));
     }
@@ -752,7 +908,7 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // The typed query terms, ANDed with each other and with everything above — `t:goblin
     // cmc>=3 -a:rebecca` is three of them and all three must hold.
     //
-    // **Two of the twelve fields come out of here as nothing at all**, because the FTS builder
+    // **Three of the thirteen fields come out of here as nothing at all**, because the FTS builder
     // owns them; [`predicate_clause`] returns `None` for those and [`PredicateField`] says
     // why. Every other `None` it can answer is a blank value, which is [`nonblank`]'s rule
     // one shape along: a term with nothing after its operator is no filter, never a filter
@@ -794,7 +950,8 @@ const RARITY_ORDER: [&str; 4] = ["common", "uncommon", "rare", "mythic"];
 /// fields whose default really is `:` return it unchanged and are matched by their own arms.
 fn default_op(field: PredicateField) -> PredicateOp {
     match field {
-        PredicateField::TypeLine
+        PredicateField::Name
+        | PredicateField::TypeLine
         | PredicateField::OracleText
         | PredicateField::Keyword
         | PredicateField::Artist => PredicateOp::Colon,
@@ -981,8 +1138,9 @@ fn numeric_clause(
 ///
 /// There are exactly **two** ways to get `None` and they are different facts:
 ///
-/// * [`PredicateField::TypeLine`] and [`PredicateField::OracleText`] are the FTS builder's,
-///   and [`fts_match`] emits them. This is the `None` that is a hand-off rather than a gap.
+/// * [`PredicateField::Name`], [`PredicateField::TypeLine`] and [`PredicateField::OracleText`]
+///   are the FTS builder's, and [`fts_match`] emits them. This is the `None` that is a
+///   hand-off rather than a gap.
 /// * A **blank** value is no filter, which is [`nonblank`]'s rule and every other arm of
 ///   [`push_card_filters`] follows it: a term the reader has not finished typing must not
 ///   empty the wall under them.
@@ -1006,11 +1164,13 @@ fn predicate_clause(
         pred.op
     };
 
-    // **All twelve, and no `_` arm.** A thirteenth field added to the enum must fail this
+    // **All thirteen, and no `_` arm.** A fourteenth field added to the enum must fail this
     // match to compile rather than fall through into a filter that quietly does nothing.
     let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = match pred.field {
-        // The FTS builder's two — see [`PredicateField`] and [`fts_match`].
-        PredicateField::TypeLine | PredicateField::OracleText => return None,
+        // The FTS builder's three — see [`PredicateField`] and [`fts_match`].
+        PredicateField::Name | PredicateField::TypeLine | PredicateField::OracleText => {
+            return None
+        }
 
         // **The two-arm bridge, and the measurement is what licenses it.** `cards.keywords`
         // is corpus schema 5 and reads NULL on every row until the next full ingest, so a
@@ -1049,12 +1209,13 @@ fn predicate_clause(
             ],
         ),
 
-        // **The one predicate here that scans.** There is no artist FTS column and
-        // `cards.artist` carries no b-tree index, so this is an `instr` — acceptable where
-        // `t:`/`o:` were not, because it is ANDed into a statement the FTS join, the format
-        // mask or the collapse index has usually already narrowed. A bare `a:` on an otherwise
-        // empty box is the worst case; if it ever lands above ~250 ms the fallback is an index
-        // on `cards.artist`, which is cheap and additive.
+        // **The one predicate here that scans.** There is no artist FTS column, and `instr`
+        // is not sargable, so no index can seek it — acceptable where `t:`/`o:` were not,
+        // because it is ANDed into a statement the FTS join, the format mask or the collapse
+        // index has usually already narrowed. A bare `a:` on an otherwise empty box is the
+        // worst case, and `idx_cards_artist` (in `schema::CARDS_INDEXES`) is what keeps it
+        // cheap: the scan reads that narrow index instead of the row heap, ~16 ms against
+        // 466–510 ms without it on the 117,738-printing corpus.
         //
         // `instr(NULL, …)` is NULL, so an orphan fails this exactly as it fails the format and
         // rarity arms.
@@ -1204,6 +1365,41 @@ pub fn picked_types(types: &[String]) -> Vec<String> {
         .filter(|t| crate::cardtypes::TYPE_KEYS.contains(&t.as_str()))
         .cloned()
         .collect()
+}
+
+/// The border chips a request really filters on: trimmed, lower-cased, anything outside
+/// [`BORDER_KEYS`] dropped, sorted and deduplicated.
+///
+/// **An empty answer means "no border filter", never "match nothing"** — [`picked_types`]'
+/// rule, and for its reason: the list is validated, so `["shiny"]` leaves nothing and both the
+/// SQL and [`crate::index::facets`] read that as no filter at all. A shared function for
+/// [`picked_rarities`]' reason — the facet index narrows by exactly this list, and a facet
+/// counted over a chip the search dropped reports an option live that the search cannot reach.
+///
+/// Lower-cased where [`picked_types`] matches exactly, because these ids are lower-case words
+/// the way [`picked_rarities`]' are, and a padded or capitalised id from a hand-built payload
+/// costs nothing to read as the reader meant it.
+pub fn picked_borders(borders: &[String]) -> Vec<String> {
+    picked_from(borders, &BORDER_KEYS)
+}
+
+/// The printed-finish chips a request really filters on — [`picked_borders`]' rules against
+/// [`FINISH_KEYS`], shared with [`crate::index::facets`] for the same reason.
+pub fn picked_finishes(finishes: &[String]) -> Vec<String> {
+    picked_from(finishes, &FINISH_KEYS)
+}
+
+/// Trim, lower-case, keep what `vocabulary` names, sort, deduplicate — the one body both
+/// [`picked_borders`] and [`picked_finishes`] are.
+fn picked_from(values: &[String], vocabulary: &[&str]) -> Vec<String> {
+    let mut picked: Vec<String> = values
+        .iter()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| vocabulary.contains(&v.as_str()))
+        .collect();
+    picked.sort();
+    picked.dedup();
+    picked
 }
 
 pub fn picked_sets(sets: &[String]) -> Vec<String> {
@@ -1940,8 +2136,9 @@ mod tests {
         }
     }
 
-    /// Every one of the twelve, so a census can walk them without naming them twice.
-    const EVERY_FIELD: [PredicateField; 12] = [
+    /// Every one of the thirteen, so a census can walk them without naming them twice.
+    const EVERY_FIELD: [PredicateField; 13] = [
+        PredicateField::Name,
         PredicateField::TypeLine,
         PredicateField::OracleText,
         PredicateField::Keyword,
@@ -2616,7 +2813,8 @@ mod tests {
                 {"field":"artist","op":"colon","value":"rebecca"},
                 {"field":"colors","op":"gte","value":"rg"},
                 {"field":"rarity","op":"eq","value":"rare"},
-                {"field":"format","op":"eq","value":"modern"}
+                {"field":"format","op":"eq","value":"modern"},
+                {"field":"name","op":"colon","value":"lightning bolt","negated":true}
             ]"#,
         )
         .expect("every name here is what the TypeScript mirror sends");
@@ -2710,10 +2908,49 @@ mod tests {
         // Every non-text field is the SQL builder's and contributes nothing here.
         let preds: Vec<QueryPredicate> = EVERY_FIELD
             .iter()
-            .filter(|f| !matches!(f, PredicateField::TypeLine | PredicateField::OracleText))
+            .filter(|f| {
+                !matches!(
+                    f,
+                    PredicateField::Name | PredicateField::TypeLine | PredicateField::OracleText
+                )
+            })
             .map(|f| pred(*f, PredicateOp::Colon, "goblin"))
             .collect();
         assert_eq!(fts_match(None, &preds), (None, Vec::new()));
+    }
+
+    /// **`-"lightning bolt"` is an ordered phrase on `name` alone, and the free text beside it
+    /// keeps reading every column** — issue #571, and the asymmetry is Scryfall's: `-bolt` is
+    /// `-name:bolt` there (both 3,891 of 3,909 instants, measured live 2026-09-27).
+    ///
+    /// The `+` is the whole of the ordering: `"lightning"* "bolt"*` would also remove a card
+    /// called *Bolt of Lightning*, while Scryfall's `-"bolt lightning"` removes nothing that
+    /// `-"lightning bolt"` does. `search::tests::a_negated_name_excludes_by_name_alone` hands
+    /// this string to a real index, which is what a shape assertion like this one cannot do.
+    #[test]
+    fn a_name_term_is_an_ordered_phrase_on_the_name_column_alone() {
+        let (m, neg) = fts_match(
+            Some("goblin"),
+            &[negated(
+                PredicateField::Name,
+                PredicateOp::Colon,
+                "Lightning Bolt",
+            )],
+        );
+        assert_eq!(
+            m.as_deref(),
+            Some("\"goblin\"*"),
+            "the free text has no column"
+        );
+        assert_eq!(neg, vec!["name : (\"Lightning\"* + \"Bolt\"*)"]);
+        // One word is the same string either builder would make.
+        assert_eq!(fts_phrase("bolt"), fts_query("bolt"));
+        // And the apostrophe splits rather than welds, as it does for the free text.
+        assert_eq!(
+            fts_phrase("God-Pharaoh's Gift").as_deref(),
+            Some("\"God\"* + \"Pharaoh\"* + \"s\"* + \"Gift\"*")
+        );
+        assert_eq!(fts_phrase("-!!"), None, "nothing indexable is no phrase");
     }
 
     /// All-punctuation leaves nothing to match on, and the answer is **no term**, not an
@@ -3112,5 +3349,250 @@ mod tests {
             vec!["Creature"]
         );
         assert!(picked_types(&[]).is_empty());
+    }
+
+    /// One printing per shape the border and finish chips have to tell apart, with the columns
+    /// the ingest writes spelled as it writes them: `border_color` is Scryfall's word (or NULL,
+    /// which the schema allows), `full_art` is `0`/`1`, and `finishes` is the JSON array as text.
+    ///
+    /// The borderless full-art row is the overlap every chip test turns on, the white-bordered
+    /// one is `regular` in a colour that is not black, the NULL one is what a missing border
+    /// word reads as, and the nonfoil-only one is what `"foil"` must not find inside
+    /// `"nonfoil"`.
+    fn corpus_with_frames() -> rusqlite::Connection {
+        let conn = crate::schema::memory_pair();
+        // (id, border_color, full_art, finishes)
+        let rows: [(&str, Option<&str>, i64, &str); 7] = [
+            ("black", Some("black"), 0, r#"["nonfoil","foil"]"#),
+            ("white", Some("white"), 0, r#"["nonfoil"]"#),
+            ("unknown", None, 0, r#"["nonfoil"]"#),
+            ("borderless", Some("borderless"), 0, r#"["foil"]"#),
+            ("fullart", Some("black"), 1, r#"["nonfoil","foil"]"#),
+            ("both", Some("borderless"), 1, r#"["foil","etched"]"#),
+            ("etched", Some("black"), 0, r#"["etched"]"#),
+        ];
+        for (id, border, full_art, finishes) in rows {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw,
+                                    border_color,full_art,finishes)
+                 VALUES (?1,?1,'tst',?1,'en','normal',1,'{}',?2,?3,?4)",
+                rusqlite::params![id, border, full_art, finishes],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    fn of_borders(borders: &[&str]) -> CardFilters {
+        CardFilters {
+            borders: Some(owned(borders)),
+            ..Default::default()
+        }
+    }
+
+    fn of_finishes(finishes: &[&str]) -> CardFilters {
+        CardFilters {
+            printed_finishes: Some(owned(finishes)),
+            ..Default::default()
+        }
+    }
+
+    /// The border chips are **OR within and AND without**, one parenthesised group over two
+    /// columns — and an empty or unknown list is *no filter*, never a filter matching nothing,
+    /// which is the rarity chips' rule and the one every list filter here has been bitten by.
+    #[test]
+    fn the_border_chips_or_within_and_an_empty_list_is_no_filter() {
+        let sql = |f: CardFilters| {
+            let mut p = Predicates::default();
+            push_card_filters(&mut p, &f, "c", None);
+            p.where_sql()
+        };
+        for f in [
+            CardFilters::default(),
+            of_borders(&[]),
+            of_borders(&["", "  "]),
+            of_borders(&["shiny"]),
+        ] {
+            let s = sql(f);
+            assert!(
+                !s.contains("border_color") && !s.contains("full_art"),
+                "no border filter: {s}"
+            );
+        }
+
+        let mut p = Predicates::default();
+        push_card_filters(
+            &mut p,
+            &of_borders(&["fullart", "borderless", "regular"]),
+            "c",
+            None,
+        );
+        let border: Vec<&String> = p
+            .wheres
+            .iter()
+            .filter(|w| w.contains("border_color") || w.contains("full_art"))
+            .collect();
+        assert_eq!(
+            border,
+            vec![
+                "(c.border_color = ? OR c.full_art = 1 OR \
+                 (coalesce(c.border_color, '') <> ? AND c.full_art = 0))"
+            ],
+            "one group, ORed, in `picked_borders`' sorted order"
+        );
+        assert_eq!(p.params.len(), 2, "`borderless` is bound, twice");
+    }
+
+    /// `regular` is the printing that is **neither** borderless nor full art — whatever colour
+    /// its border is, and whether or not Scryfall named one — and a borderless full-art
+    /// printing answers **both** of the other chips, which is what makes these a filter rather
+    /// than a partition.
+    #[test]
+    fn regular_is_neither_and_a_borderless_full_art_printing_answers_both_chips() {
+        let conn = corpus_with_frames();
+        assert_eq!(
+            search_ids(&conn, of_borders(&["regular"])),
+            owned(&["black", "etched", "unknown", "white"]),
+            "black and white alike, and a NULL border is a border rather than its absence"
+        );
+        assert_eq!(
+            search_ids(&conn, of_borders(&["borderless"])),
+            owned(&["borderless", "both"])
+        );
+        assert_eq!(
+            search_ids(&conn, of_borders(&["fullart"])),
+            owned(&["both", "fullart"]),
+            "the same row answers both chips"
+        );
+        assert_eq!(
+            search_ids(&conn, of_borders(&["borderless", "fullart"])),
+            owned(&["borderless", "both", "fullart"]),
+            "a union, and `both` is one row rather than two"
+        );
+        assert_eq!(
+            search_ids(&conn, of_borders(&[" Regular ", "REGULAR"])),
+            search_ids(&conn, of_borders(&["regular"])),
+            "trimmed and lower-cased, like the rarities"
+        );
+    }
+
+    /// `"foil"` is quoted in the needle, so it cannot match inside `"nonfoil"` — without the
+    /// quotes the nonfoil-only rows would answer the foil chip, and 44 019 paper printings would
+    /// claim a foil nobody printed.
+    #[test]
+    fn the_finish_chips_match_the_quoted_word_and_foil_does_not_match_nonfoil() {
+        let conn = corpus_with_frames();
+        assert_eq!(
+            search_ids(&conn, of_finishes(&["foil"])),
+            owned(&["black", "borderless", "both", "fullart"]),
+            "never `white` or `unknown`, whose only finish is nonfoil"
+        );
+        assert_eq!(
+            search_ids(&conn, of_finishes(&["nonfoil"])),
+            owned(&["black", "fullart", "unknown", "white"])
+        );
+        assert_eq!(
+            search_ids(&conn, of_finishes(&["etched", "nonfoil"])),
+            owned(&["black", "both", "etched", "fullart", "unknown", "white"]),
+            "OR within"
+        );
+        assert_eq!(
+            search_ids(
+                &conn,
+                CardFilters {
+                    printed_finishes: Some(owned(&["etched"])),
+                    borders: Some(owned(&["borderless"])),
+                    ..Default::default()
+                }
+            ),
+            owned(&["both"]),
+            "and AND without"
+        );
+
+        let mut p = Predicates::default();
+        push_card_filters(&mut p, &of_finishes(&["foil", "etched"]), "c", None);
+        let finish: Vec<&String> = p.wheres.iter().filter(|w| w.contains("finishes")).collect();
+        assert_eq!(
+            finish,
+            vec!["(instr(c.finishes, ?) > 0 OR instr(c.finishes, ?) > 0)"]
+        );
+        let all = search_ids(&conn, no_filters());
+        for f in [of_finishes(&[]), of_finishes(&["shiny", " "])] {
+            assert_eq!(search_ids(&conn, f), all, "no finish filter at all");
+        }
+    }
+
+    /// An orphaned collection entry — a NULL card alias over the LEFT JOIN — fails **every**
+    /// border and finish chip, `regular` included, whose `coalesce` half is true for a NULL
+    /// border and whose `full_art = 0` half is what stops it: a frame and a finish list are
+    /// claims only a card row can make, the rule the type and rarity arms state.
+    #[test]
+    fn an_orphan_fails_every_border_and_finish_chip() {
+        let conn = crate::schema::memory_pair();
+        let orphans = |f: CardFilters| -> i64 {
+            // `paper_only` off, as the collection sends it — left on, `c.is_paper = 1` would
+            // fail the orphan by itself and every assertion below would pass over nothing.
+            let f = CardFilters {
+                paper_only: Some(false),
+                ..f
+            };
+            let mut p = Predicates::default();
+            // `Some("e")`, as the collection sends it: nothing here falls back to the entry.
+            push_card_filters(&mut p, &f, "c", Some("e"));
+            // One orphaned row: every `c.` column is NULL, as the LEFT JOIN hands it over.
+            let sql = format!(
+                "SELECT count(*) FROM (SELECT NULL AS id, 'tst' AS set_code) e \
+                 LEFT JOIN cards c ON c.id = e.id WHERE {}",
+                p.where_sql()
+            );
+            conn.query_row(
+                &sql,
+                rusqlite::params_from_iter(p.params.iter().map(|b| b.as_ref())),
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(orphans(no_filters()), 1, "the orphan is there to be failed");
+        for f in [
+            of_borders(&["regular"]),
+            of_borders(&["borderless"]),
+            of_borders(&["fullart"]),
+            of_finishes(&["nonfoil"]),
+            of_finishes(&["foil", "etched"]),
+        ] {
+            let asked = format!("{:?} {:?}", f.borders, f.printed_finishes);
+            assert_eq!(orphans(f), 0, "{asked}");
+        }
+    }
+
+    /// Both normalisers trim, lower-case, validate, sort and deduplicate — and they are what
+    /// [`crate::index::facets`] narrows by, for [`picked_rarities`]' reason.
+    #[test]
+    fn picked_borders_and_finishes_validate_lower_case_sort_and_deduplicate() {
+        assert_eq!(
+            picked_borders(&owned(&[" FullArt ", "regular", "shiny", "", "regular"])),
+            vec!["fullart", "regular"]
+        );
+        assert!(
+            picked_borders(&owned(&["black"])).is_empty(),
+            "a colour is not a chip"
+        );
+        assert_eq!(
+            picked_finishes(&owned(&["Foil", "nonfoil", "glossy", "foil"])),
+            vec!["foil", "nonfoil"]
+        );
+        assert!(picked_finishes(&[]).is_empty());
+    }
+
+    /// The wire names are `borders` and `printedFinishes`, and the second one is **not**
+    /// `finishes` — [`crate::collection::CollectionQuery`] flattens this struct beside a
+    /// `finishes` of its own, and the collision test lives there.
+    #[test]
+    fn the_border_and_finish_wire_names_are_camel_case() {
+        let f: CardFilters =
+            serde_json::from_str(r#"{"borders":["fullart"],"printedFinishes":["etched"]}"#)
+                .unwrap();
+        assert_eq!(f.borders, Some(vec!["fullart".to_owned()]));
+        assert_eq!(f.printed_finishes, Some(vec!["etched".to_owned()]));
     }
 }

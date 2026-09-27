@@ -48,10 +48,15 @@ const TILE_BASE = 150;
  * - **`decks` in their place**, which is the one cell no other surface has and the whole of what
  *   this tab is for. See `FilterBar`'s own note on it.
  *
- * `set`, `format`, `rarity` and `price` are the card search's, drawn here over the reader's own
- * binder — the first three were already on the wire (`CollectionQuery extends CardFilters`) and
- * the band is `collection::scope`'s, banding the copy's own finish rather than the printing's
- * fallback chain.
+ * `set`, `format`, `rarity`, `type`, `border` and `price` are the card search's, drawn here over
+ * the reader's own binder — the filters ride the wire as `CardFilters` (`CollectionQuery extends
+ * CardFilters`), a copy has its printing's frame, and the band is `collection::scope`'s, banding
+ * the copy's own finish rather than the printing's fallback chain.
+ *
+ * **`finish` is the collection page's and not the card search's** (issue #573): it asks which
+ * finish this copy *is*, the question a reader filing a foil into a deck is asking, where the card
+ * search's Finish cell asks what the printing was published in. Last, after the printing cells, as
+ * it is on the collection page.
  */
 const COLLECTION_TRAY: readonly TrayCell[] = [
   "exact",
@@ -60,7 +65,9 @@ const COLLECTION_TRAY: readonly TrayCell[] = [
   "decks",
   "rarity",
   "type",
+  "border",
   "price",
+  "finish",
 ];
 
 /**
