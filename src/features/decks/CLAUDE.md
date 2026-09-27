@@ -636,7 +636,7 @@ layer.
     the sum *is* the number the press files, and what the old rule shipped was `Quick add 1 copy`
     under `Add 11 cards to`, filing one card and ignoring ten. A blocked member is passed over,
     and the rows grey only when no member can be pressed. A set's two quick adds are one
-    `deck_missing_to_collection` write (`missingPicks` folds rows on `pullKey`), with
+    `deck_missing_to_collection` write (`missingPicks` folds rows on `deckCardPullKey`, the finish each plays), with
     `clearWishes` on for the unwish row — so only unambiguous wishes are cleared and nothing is
     asked, `Add missing to collection`'s own rule. A set's pull is `choosePullFor`: silent when
     every member has one answer, and the dialog over the whole set when any one does not.
@@ -730,7 +730,14 @@ layer.
   foil row is answered only by foil copies of *that* printing and an Alpha Bolt in the pool no
   longer counts toward an M10 line. (**The _grain_ is what this paragraph is about and it did not
   move on 2026-09-09**; what moved is which copies are in the pool at all, and only for a theory
-  row — issue #435, and the shortage bullet further down carries it.) **Condition and language are still ignored**, so that half of
+  row — issue #435, and the shortage bullet further down carries it.) **The finish on each side is
+  the one the row _plays_ since 2026-09-27** — `playedFinish`'s rule, spelled in Rust as
+  `deck::entry_finish` — so an unsaid row of a printing sold only in foil is answered by foil
+  copies, and the pull and missing plans report that row as `foil`. That is why a `DeckCard` is
+  matched against those plans with `pullPlan.ts`' `deckCardPullKey` and never with `pullKey` on
+  its stored finish, which misses every such row.
+  [decks-storage.md](../../../docs/reference/decks-storage.md) has the decision and the sites.
+  **Condition and language are still ignored**, so that half of
   the old sentence survives intact. What the narrowing closed is a disagreement inside one screen:
   `deck_pull::CANDIDATE_SQL` already matched at this grain, so a deck could read *N missing* with
   nothing its own pull dialog could fill. **What it costs is in
@@ -1239,7 +1246,8 @@ layer.
   here and listed on the Compare dialog, the wishlist press and the managed wishlist at once. For a
   printing sold in both finishes nothing moved: `soleFinish` answers `null` there, an unsaid row
   is still the regular copy, and a plan's foil is still not answered by it. Rust's
-  `deck_theory::played_finish` is the plan's half and `theoryMatch.ts`' `theorySlot` the live
+  `deck::played_finish` (it moved out of `deck_theory` when owned/missing began reading it too)
+  is the plan's half and `theoryMatch.ts`' `theorySlot` the live
   row's; **`TheoryAddress` makes `finishes` required** so a caller cannot leave it out and
   silently key every unsaid foil-only row as the regular copy — a token entry, whose finish is
   always stated, passes `null` and says so.
