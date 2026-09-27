@@ -75,6 +75,10 @@ pub const COMMANDS: &[&str] = &[
     // reaches nothing a browser lacks: it inflates `cards.raw` and walks `all_parts`, which is
     // `card_meld_parts`' trick and compiles on every target for the same reason.
     "deck_tokens",
+    // Every paper token and emblem printing in the corpus — Add printing's All tokens (user
+    // schema v54). Not a deck read at all, but the token picker's, filed beside the deck's own
+    // token read: one statement over `cards`, which a browser has.
+    "token_printings",
     // The Notes band's read, and the one note read that is not deck-scoped at all: every note in
     // **every** deck naming one card, which is what the card modal's `Notes` row asks. Both are
     // pure reads over two user tables with one `LEFT JOIN` into the corpus for a card's name, so
@@ -119,15 +123,15 @@ pub const COMMANDS: &[&str] = &[
     "deck_theory_missing_to_wishlist",
     "deck_undo_apply",
     "deck_redo_apply",
-    // The five token writes (user schema v52, which retired `deck_token_set`, `deck_token_clear`
-    // and `deck_token_add`). Plain `sync::with_write` on the other side — nothing here moves a
+    // The four token writes (user schema v52, which retired `deck_token_set`, `deck_token_clear`
+    // and `deck_token_add`; v54 retired `deck_token_state` and `deck_token_reset` for
+    // `deck_token_remove`). Plain `sync::with_write` on the other side — nothing here moves a
     // copy across the collection boundary, so none of them is one of the four that owe
     // `with_write_owned`.
     "deck_token_set_quantity",
     "deck_token_swap",
     "deck_token_add_printing",
-    "deck_token_state",
-    "deck_token_reset",
+    "deck_token_remove",
     // The six note writes. Plain `sync::with_write` on the other side, for the token writes'
     // reason: a note names a card by oracle id and moves no copy anywhere, so none of these is
     // one of the writes that owe `collection_source::with_write_owned`.
@@ -1187,16 +1191,27 @@ pub fn call(
             )
         }
 
-        // The five writes. **Every argument is the wire's camelCase**, read off the
+        // Every paper token and emblem printing, for Add printing's All tokens — one statement
+        // over `cards`, priced the way `card_printings` below prices, and read off the same
+        // `marketplace` argument through `Marketplace::from_opt`.
+        "token_printings" => {
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_tokens::list_token_printings(&conn, marketplace)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The four writes. **Every argument is the wire's camelCase**, read off the
         // `#[tauri::command]` wrappers rather than chosen here. `entry` and `from` are
-        // `{ cardId, finish }` or `null` — the implicit entry — so both are `optional`; `to` is
-        // always a printing and a finish, so it is `field`. `finish` on an add is `optional`: the
-        // wrapper takes an `Option`, and a `null` is the printing's default rather than a
-        // missing argument.
-        //
-        // **`state` is the token's state on the wire and in the column**, since v52 retired
-        // `deck_token_set` and the `tokenState` rename it needed: the desktop wrapper calls the
-        // managed `AppState` `app` instead, which Tauri injects by type rather than by name.
+        // `{ cardId, finish }` or `null` — the implicit entry — so both are `optional`, except on
+        // a remove, whose `entry` is always a stored one and so is `field`; `to` is always a
+        // printing and a finish, so it is `field`. `finish` on an add is `optional`: the wrapper
+        // takes an `Option`, and a `null` is the printing's default rather than a missing
+        // argument.
         "deck_token_set_quantity" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let variant: String = field(command, args, "variant")?;
@@ -1256,27 +1271,15 @@ pub fn call(
             )
         }
 
-        "deck_token_state" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
-            let oracle_id: String = field(command, args, "oracleId")?;
-            let token_state: String = field(command, args, "state")?;
-            encode(
-                command,
-                crate::sync::with_write(state, |c| {
-                    crate::deck_tokens::set_state(c, deck_id, &oracle_id, &token_state)
-                })
-                .map_err(RouteError::Failed)?,
-            )
-        }
-
-        "deck_token_reset" => {
+        "deck_token_remove" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let variant: String = field(command, args, "variant")?;
             let oracle_id: String = field(command, args, "oracleId")?;
+            let entry: crate::deck_tokens::TokenEntryKey = field(command, args, "entry")?;
             encode(
                 command,
                 crate::sync::with_write(state, |c| {
-                    crate::deck_tokens::reset(c, deck_id, &variant, &oracle_id)
+                    crate::deck_tokens::remove_entry(c, deck_id, &variant, &oracle_id, &entry)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -4388,30 +4391,34 @@ mod tests {
         }
     }
 
-    /// **The five token writes, routed and advertised, and the three they retired gone from
-    /// both** (user schema v52) — the notebook's pin below, for the token cluster: membership
-    /// in `COMMANDS` beside the wire names each arm reads, driven through a write and a read back
-    /// so an arm that parsed its arguments and wrote nothing would still go red.
-    ///
-    /// **`state` is the wire key of `deck_token_state`**, where the retired `deck_token_set`
-    /// needed `tokenState` because the desktop wrapper's `state` was the managed `AppState`.
+    /// **The four token writes and the two reads, routed and advertised, and the five commands
+    /// they retired gone from both** (user schema v52, and v54's state and reset) — the
+    /// notebook's pin below, for the token cluster: membership in `COMMANDS` beside the wire names
+    /// each arm reads, driven through a write and a read back so an arm that parsed its arguments
+    /// and wrote nothing would still go red.
     #[test]
     fn the_token_commands_are_both_routed_and_advertised() {
         let s = state("web-route-deck-token-writes");
         for name in [
             "deck_tokens",
+            "token_printings",
             "deck_token_set_quantity",
             "deck_token_swap",
             "deck_token_add_printing",
-            "deck_token_state",
-            "deck_token_reset",
+            "deck_token_remove",
         ] {
             assert!(
                 COMMANDS.contains(&name),
                 "`{name}` is an arm the page is never told about"
             );
         }
-        for retired in ["deck_token_set", "deck_token_clear", "deck_token_add"] {
+        for retired in [
+            "deck_token_set",
+            "deck_token_clear",
+            "deck_token_add",
+            "deck_token_state",
+            "deck_token_reset",
+        ] {
             assert!(!COMMANDS.contains(&retired), "`{retired}` was retired");
             assert_eq!(
                 call(&s, retired, &json!({})).unwrap_err(),
@@ -4477,47 +4484,32 @@ mod tests {
         .unwrap();
         assert_eq!(wall(&s)[0]["finish"], json!("nonfoil"));
 
+        let every = call(&s, "token_printings", &json!({ "marketplace": null })).unwrap();
+        assert_eq!(every.as_array().unwrap().len(), 1, "{every}");
+        assert_eq!(every[0]["id"], json!("tok"));
+        assert_eq!(every[0]["oracleId"], json!("o-tok"));
+        assert_eq!(every[0]["finishPrices"]["nonfoil"], json!(0.25));
+
+        // `entry` is required on a remove — a stored entry, never the implicit one — so an
+        // omitted one is an argument error rather than a remove of nothing.
+        let err = call(
+            &s,
+            "deck_token_remove",
+            &json!({ "deckId": id, "variant": "live", "oracleId": "o-tok" }),
+        )
+        .unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
         call(
             &s,
-            "deck_token_state",
-            &json!({ "deckId": id, "oracleId": "o-tok", "state": "hidden" }),
+            "deck_token_remove",
+            &json!({ "deckId": id, "variant": "live", "oracleId": "o-tok",
+                     "entry": { "cardId": "tok", "finish": "nonfoil" } }),
         )
         .unwrap();
         assert_eq!(
             wall(&s).as_array().unwrap().len(),
             0,
-            "a hidden token nothing derives is off the wall — only `manual` keeps one there"
-        );
-        call(
-            &s,
-            "deck_token_state",
-            &json!({ "deckId": id, "oracleId": "o-tok", "state": "manual" }),
-        )
-        .unwrap();
-
-        call(
-            &s,
-            "deck_token_reset",
-            &json!({ "deckId": id, "variant": "live", "oracleId": "o-tok" }),
-        )
-        .unwrap();
-        let out = wall(&s);
-        assert_eq!(
-            out[0]["implicit"],
-            json!(true),
-            "back to the implicit entry"
-        );
-        assert_eq!(out[0]["quantity"], json!(1));
-
-        let err = call(
-            &s,
-            "deck_token_state",
-            &json!({ "deckId": id, "oracleId": "o-tok", "tokenState": "hidden" }),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(&err, RouteError::Args { .. }),
-            "the retired spelling is not read: {err:?}"
+            "a hand-added token's last entry anywhere takes it off the wall"
         );
     }
 
@@ -4727,6 +4719,10 @@ mod tests {
         //
         // **189 when token stacks met the shelves branch** — `awk` over the merged array, not
         // 187 plus or minus either side's change.
+        //
+        // **Still 189 at user schema v54**, and counted rather than reasoned to: managed tokens,
+        // improved, routed `deck_token_remove` and `token_printings` and retired
+        // `deck_token_state` and `deck_token_reset`.
         assert_eq!(
             COMMANDS.len(),
             189,

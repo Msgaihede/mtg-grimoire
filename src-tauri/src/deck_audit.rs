@@ -498,8 +498,9 @@ mod tests {
         /// how to drive it.
         type Case<'a> = (&'a str, i64, Box<dyn Fn() + 'a>);
 
-        // A token maker and two printings of its Treasure, for the five token writes (user
-        // schema v52) — `Smothering Tithe`'s `all_parts` shape, in plain-text `raw`.
+        // A token maker and two printings of its Treasure, for the four token writes (user
+        // schema v52, and v54's remove) — `Smothering Tithe`'s `all_parts` shape, in plain-text
+        // `raw`.
         conn.execute(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                     rarity,type_line,prices,raw)
@@ -986,9 +987,9 @@ mod tests {
                     crate::collection_alloc::deck_to_collection(&conn, landed, 2).unwrap();
                 }),
             ),
-            // **The five token writes** (user schema v52). Each is a deck write and owes one
-            // row — kind `deck`, `field: "token"`, never a tenth kind (see below) — which is the
-            // rule `deck_tokens` broke until then, when token writes recorded nothing.
+            // **The four token writes** (user schema v52, and v54's remove). Each is a deck write
+            // and owes one row — kind `deck`, `field: "token"`, never a tenth kind (see below) —
+            // which is the rule `deck_tokens` broke until then, when token writes recorded nothing.
             (
                 "deck_token_set_quantity",
                 1,
@@ -1036,23 +1037,24 @@ mod tests {
                 }),
             ),
             (
-                "deck_token_state",
+                "deck_token_remove",
                 1,
                 Box::new(|| {
-                    let (tokens, _) = token_deck(&conn, "Tokens (state)");
-                    clear(&conn);
-                    crate::deck_tokens::set_state(&conn, tokens, "o-treasure", "hidden").unwrap();
-                }),
-            ),
-            (
-                "deck_token_reset",
-                1,
-                Box::new(|| {
-                    let (tokens, _) = token_deck(&conn, "Tokens (reset)");
+                    let (tokens, _) = token_deck(&conn, "Tokens (remove)");
                     crate::deck_tokens::set_quantity(&conn, tokens, "live", "o-treasure", None, 3)
                         .unwrap();
                     clear(&conn);
-                    crate::deck_tokens::reset(&conn, tokens, "live", "o-treasure").unwrap();
+                    crate::deck_tokens::remove_entry(
+                        &conn,
+                        tokens,
+                        "live",
+                        "o-treasure",
+                        &crate::deck_tokens::TokenEntryKey {
+                            card_id: "treasure-a".to_owned(),
+                            finish: "nonfoil".to_owned(),
+                        },
+                    )
+                    .unwrap();
                 }),
             ),
             (

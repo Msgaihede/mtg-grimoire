@@ -359,6 +359,52 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).map(str::to_owned)
 }
 
+/// The columns [`printing_row`] reads, in its order, for a query whose `cards` is aliased `c` —
+/// [`list_printings`]' select list, and `deck_tokens::list_token_printings`' after that query's
+/// own columns, so the All tokens picker draws the very rows the printings picker does.
+///
+/// **The picture columns are last**, and how many there are is
+/// [`crate::image_uri::LIST_VARIANTS`]' answer rather than a constant, so a caller that adds
+/// columns of its own puts them *in front* and hands [`printing_row`] where this list starts.
+pub(crate) fn printing_columns(market: Marketplace) -> String {
+    format!(
+        "c.id, c.set_code, c.set_name, c.collector_number, c.released_at, c.rarity,
+                c.illustration_id, c.artist, c.lang, c.finishes, c.promo, c.full_art,
+                c.frame_effects, c.border_color, c.layout, c.promo_types, {prices},
+                {images}",
+        prices = finish_price_columns(market),
+        images = crate::image_uri::front_face_selects("c").join(", ")
+    )
+}
+
+/// One [`Printing`], read from [`printing_columns`]' list starting at column `at` — `0` for
+/// [`list_printings`], past its own columns for a caller that selected some in front.
+pub(crate) fn printing_row(r: &rusqlite::Row, at: usize) -> rusqlite::Result<Printing> {
+    Ok(Printing {
+        id: r.get(at)?,
+        set_code: r.get(at + 1)?,
+        set_name: r.get(at + 2)?,
+        collector_number: r.get(at + 3)?,
+        released_at: r.get(at + 4)?,
+        rarity: r.get(at + 5)?,
+        illustration_id: r.get(at + 6)?,
+        artist: r.get(at + 7)?,
+        lang: r.get(at + 8)?,
+        finishes: r.get(at + 9)?,
+        finish_prices: read_finish_prices(r, at + 16)?,
+        // 16 fixed columns from `at`, then the three prices at `at + 16..=at + 18`, and the
+        // pictures after them.
+        image_uris: crate::image_uri::front_face_map(|i| r.get::<_, Option<String>>(at + 19 + i))
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?,
+        promo: r.get(at + 10)?,
+        promo_types: r.get(at + 15)?,
+        full_art: r.get(at + 11)?,
+        frame_effects: r.get(at + 12)?,
+        border_color: r.get(at + 13)?,
+        layout: r.get(at + 14)?,
+    })
+}
+
 /// Every **paper** printing of one oracle card, newest first, plus how many there are.
 ///
 /// A blank `oracle_id` returns nothing rather than matching. The column is NULLABLE, and a
@@ -393,44 +439,15 @@ pub fn list_printings(
         return Ok(PrintingsResponse::default());
     }
     let sql = format!(
-        "SELECT c.id, c.set_code, c.set_name, c.collector_number, c.released_at, c.rarity,
-                c.illustration_id, c.artist, c.lang, c.finishes, c.promo, c.full_art,
-                c.frame_effects, c.border_color, c.layout, c.promo_types, {prices},
-                {images}
+        "SELECT {columns}
          FROM cards c WHERE {PRINTINGS_WHERE}
          ORDER BY released_at DESC, set_code ASC, collector_number ASC, id ASC
          LIMIT ?2",
-        prices = finish_price_columns(market),
-        images = crate::image_uri::front_face_selects("c").join(", ")
+        columns = printing_columns(market),
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![oracle_id, page_size(limit)], |r| {
-            Ok(Printing {
-                id: r.get(0)?,
-                set_code: r.get(1)?,
-                set_name: r.get(2)?,
-                collector_number: r.get(3)?,
-                released_at: r.get(4)?,
-                rarity: r.get(5)?,
-                illustration_id: r.get(6)?,
-                artist: r.get(7)?,
-                lang: r.get(8)?,
-                finishes: r.get(9)?,
-                finish_prices: read_finish_prices(r, 16)?,
-                // 16 fixed columns, then the three prices at 16..18.
-                image_uris: crate::image_uri::front_face_map(|i| {
-                    r.get::<_, Option<String>>(19 + i)
-                })
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?,
-                promo: r.get(10)?,
-                promo_types: r.get(15)?,
-                full_art: r.get(11)?,
-                frame_effects: r.get(12)?,
-                border_color: r.get(13)?,
-                layout: r.get(14)?,
-            })
-        })
+        .query_map(params![oracle_id, page_size(limit)], |r| printing_row(r, 0))
         .map_err(|e| e.to_string())?;
     let items = rows
         .collect::<rusqlite::Result<Vec<_>>>()
