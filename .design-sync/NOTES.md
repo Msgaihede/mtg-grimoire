@@ -123,10 +123,11 @@ Three repo files carry sync state. All three look incidental and none is:
   All three had stories before the 2026-09-08 sync and were dropped as `[TITLE_UNMAPPED]` with no
   module in the barrel. The tooltip is a provider and a hook with no `Tooltip` component, so
   `titleMap` sends `Tooltip` to `TooltipProvider` and the barrel exports `useTooltip` beside it.
-  **Six other `src/components` titles are still out, and that was the decision, not an oversight**
-  — offered and declined the same day: `BottomTabBar` (mobile), `CardChin`, `FolderNameField`,
-  `KeyMap`, `ParentFolderCard`, and `Dropdown/PlacementProbe` (see skipped stories). Do not
-  re-raise them unless one becomes a general-purpose primitive.
+  **Five other `src/components` titles are still out, and that was the decision, not an oversight**
+  — offered and declined the same day: `CardChin`, `FolderNameField`, `KeyMap`,
+  `ParentFolderCard`, and `Dropdown/PlacementProbe` (see skipped stories). Do not re-raise them
+  unless one becomes a general-purpose primitive. (`BottomTabBar` was a sixth until #604 deleted
+  the phone layout.)
 - **Four owned previews exist only to re-enact a `play`**: `TooltipProvider`, `CardZoomIndicator`,
   `ContextMenu`, and the `Flanked` half of `Dialog`. The rule they follow is under "Stories with a
   `play`" below. `TooltipProvider` is `cardMode: "single"`, `primaryStory: "Interactive"`, because
