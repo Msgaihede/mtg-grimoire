@@ -155,6 +155,33 @@ using it.
   the eight `and_count`s are one more dimension on a pass this page measures at 1.8 ms unfiltered
   (release, synthetic corpus, and already a floor since the `mana_x` overlay), and nobody has
   re-run it.
+- **Border and printed finish are two more dimensions of `types`' shape (2026-09-27, issue #573),
+  three bitsets apiece** — `CardIndex.borders` over `filters::BORDER_KEYS` (`regular`,
+  `borderless`, `fullart`) and `CardIndex.finishes` over `FINISH_KEYS` (`nonfoil`, `foil`,
+  `etched`), each with a `Skip` of its own so a press never greys its own row, and each narrowed
+  by the search's own normaliser (`picked_borders`/`picked_finishes`: trim, lower-case,
+  validate) for `picked_types`' reason. `FacetResponse` gains `borders` and `finishes`, all three
+  keys on every ready response, zeros included; `indexCold` sends both as `{}`.
+  **Both overlap, so neither sums to `total`.** Border is three words over *two* columns —
+  `borderless` is a `border_color` value, `fullart` the separate `full_art` boolean, and `regular`
+  is **neither** (a NULL `border_color` reads as a border) — so a borderless full-art printing is
+  in two bitsets. `finishes` is what a printing is **published** in, read off the `cards.finishes`
+  array with the quotes on (`"foil"` must not match inside `"nonfoil"`), so a nonfoil-and-foil
+  printing is in two. The **dev corpus** on 2026-09-27, 109,254 paper printings:
+
+  | Border | Printings | | Published finishes | Printings |
+  | --- | --- | --- | --- | --- |
+  | `regular` | 98,878 | | `["nonfoil","foil"]` | 51,628 |
+  | `borderless` | 8,947 | | `["nonfoil"]` | 44,019 |
+  | `fullart` | 2,264 (835 also borderless) | | `["foil"]` | 12,389 |
+  | | | | `["etched"]` | 892 |
+  | | | | `["nonfoil","foil","etched"]` | 245 |
+  | | | | `["nonfoil","etched"]` | 41 |
+  | | | | `["foil","etched"]` | 40 |
+
+  **Printed finish is not the collection's `finishes`**, which asks which finish one *copy* is;
+  the wire keeps them apart as `printedFinishes` against `finishes`, and a collection query
+  carrying both ANDs them. Nothing here has been timed either.
 - **Strict colours have no dimension of their own — they change what `apply_colors` means, and
   that function has two call sites.** The tray’s `Exact` toggle is a *modifier* on the colour filter
   rather than a filter beside it, so `FacetResponse` grows no field for it and `Skip` grows no variant: the
