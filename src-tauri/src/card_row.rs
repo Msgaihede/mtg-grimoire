@@ -240,6 +240,44 @@ fn delimited_keywords(v: &Value) -> String {
     }
 }
 
+/// The names a printing carries on the cardboard that are not its Oracle name.
+///
+/// Two Scryfall fields, at the top level and on every face: **`flavor_name`** (Godzilla,
+/// Secret Lair, the Avatar reprints — TLE 44 is *Return of the Wildspeaker* printed as
+/// *Earth Rumble Triumph*) and **`printed_name`**, which English cards carry too since the
+/// September 2025 Omenpaths change (OM1 1 is *Spectacular Spider-Man* printed as *Ademi of the
+/// Silkchutes*); a localised printing's translated name comes along with it. Both verified
+/// against `api.scryfall.com` on 2026-09-27, including a double-faced Secret Lair whose two
+/// `flavor_name`s live on its faces and nowhere else.
+///
+/// Split on `" // "` and de-duplicated case-insensitively, and **anything that is already one
+/// of the card's own names is dropped** — a printed name that merely repeats the Oracle one
+/// would only double that word's weight in `bm25`.
+fn print_names(v: &Value, faces: Option<&Vec<Value>>) -> Vec<String> {
+    let objects = || std::iter::once(v).chain(faces.into_iter().flatten());
+    let mut seen: Vec<String> = objects()
+        .filter_map(|o| o.get("name").and_then(Value::as_str))
+        .flat_map(|n| n.split(" // "))
+        .map(str::to_lowercase)
+        .collect();
+    let mut out = Vec::new();
+    for o in objects() {
+        for k in ["flavor_name", "printed_name"] {
+            let Some(names) = o.get(k).and_then(Value::as_str) else {
+                continue;
+            };
+            for n in names.split(" // ").map(str::trim).filter(|n| !n.is_empty()) {
+                let folded = n.to_lowercase();
+                if !seen.contains(&folded) {
+                    seen.push(folded);
+                    out.push(n.to_owned());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Store an object/array field verbatim as compact JSON. Used for the fields whose
 /// shape grows over time (`legalities` gained formats; `promo_types` is open-ended),
 /// so a new Scryfall key never needs a migration.
@@ -336,6 +374,13 @@ impl CardRow {
                     }
                 }
             }
+        }
+        // And the names this *printing* was printed under, so "Earth Rumble Triumph" finds
+        // the TLE Return of the Wildspeaker — issue #580. Per printing by construction, which
+        // is what lets a collapsed search offer the printing that bears the name.
+        for alt in print_names(v, faces) {
+            search_text.push(' ');
+            search_text.push_str(&alt);
         }
 
         Some(CardRow {
@@ -813,6 +858,41 @@ mod tests {
         // 2.64:1 measured across 5 828 real bulk lines (gzip's header alone is 18 bytes),
         // so all that is checked here is that compression happened at all.
         assert!(row.raw.len() < line.len(), "compressed, not merely wrapped");
+    }
+
+    /// Issue #580: a printing is findable by every name printed on it. The three shapes are
+    /// Scryfall's own, verified 2026-09-27 — a top-level `flavor_name` (TLE 44), an English
+    /// `printed_name` (OM1 1), and a double-faced Secret Lair whose `flavor_name`s are on the
+    /// faces only and repeat one another.
+    #[test]
+    fn every_printed_name_is_searchable_and_the_oracle_name_is_not_repeated() {
+        let tle = parse(
+            r#"{"object":"card","id":"tle44","name":"Return of the Wildspeaker","flavor_name":"Earth Rumble Triumph","lang":"en","layout":"normal","set":"tle","collector_number":"44","oracle_text":"Choose one"}"#,
+        );
+        assert_eq!(tle.search_text, "Choose one Earth Rumble Triumph");
+
+        let om1 = parse(
+            r#"{"object":"card","id":"om1-1","name":"Spectacular Spider-Man","printed_name":"Ademi of the Silkchutes","lang":"en","layout":"normal","set":"om1","collector_number":"1"}"#,
+        );
+        assert!(om1.search_text.contains("Ademi of the Silkchutes"));
+
+        let sld = parse(
+            r#"{"object":"card","id":"sld1079","name":"Blightsteel Colossus // Blightsteel Colossus","lang":"en","layout":"reversible_card","set":"sld","collector_number":"1079","card_faces":[{"name":"Blightsteel Colossus","flavor_name":"Megatron"},{"name":"Blightsteel Colossus","flavor_name":"Megatron"}]}"#,
+        );
+        assert_eq!(
+            sld.search_text.matches("Megatron").count(),
+            1,
+            "two faces printing one name add it once: {}",
+            sld.search_text
+        );
+
+        let plain = parse(
+            r#"{"object":"card","id":"bolt","name":"Lightning Bolt","printed_name":"lightning bolt","lang":"en","layout":"normal","set":"lea","collector_number":"161","oracle_text":"Deal 3 damage."}"#,
+        );
+        assert_eq!(
+            plain.search_text, "Deal 3 damage.",
+            "a printed name that is the Oracle name adds nothing"
+        );
     }
 
     /// Corpus schema 5's storage form, stated as the exact string because two other files
