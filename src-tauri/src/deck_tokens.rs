@@ -5504,6 +5504,13 @@ mod tests {
         report
     }
 
+    /// What a pull left unwritten: `(deferred, dropped)`. **Both**, because a row the peer
+    /// cannot build — the sparse step these tests are about, landing on no row — is skipped as
+    /// `dropped` rather than held, and a check on `deferred` alone passes over it.
+    fn unwritten(report: crate::sync_engine::apply::ApplyReport) -> (usize, usize) {
+        (report.deferred, report.dropped)
+    }
+
     /// Every entry's name and count on one device, `(uid, quantity)`, in name order.
     fn counts(conn: &Connection) -> Vec<(String, i64)> {
         conn.prepare("SELECT sync_uid, quantity FROM deck_token_printings ORDER BY sync_uid")
@@ -5559,10 +5566,14 @@ mod tests {
         .unwrap();
 
         let (to_a, to_b) = (since(&b, &mut mb), since(&a, &mut ma));
-        assert_eq!(pulled(&a, &to_a).deferred, 0, "B's step finds A's row");
         assert_eq!(
-            pulled(&b, &to_b).deferred,
-            0,
+            unwritten(pulled(&a, &to_a)),
+            (0, 0),
+            "B's step finds A's row"
+        );
+        assert_eq!(
+            unwritten(pulled(&b, &to_b)),
+            (0, 0),
             "and A's announcements find B's"
         );
         let (on_a, on_b) = (named_entries(&a), named_entries(&b));
@@ -5613,11 +5624,11 @@ mod tests {
         convert_legacy_picks_at_launch(&b).unwrap();
         let (to_a, to_b) = (since(&b, &mut mb), since(&a, &mut ma));
         assert_eq!(
-            pulled(&b, &to_b).deferred,
-            0,
+            unwritten(pulled(&b, &to_b)),
+            (0, 0),
             "A's step finds the row A announced"
         );
-        assert_eq!(pulled(&a, &to_a).deferred, 0);
+        assert_eq!(unwritten(pulled(&a, &to_a)), (0, 0));
         assert_eq!(named_entries(&a), named_entries(&b));
         assert_eq!(named_entries(&b).len(), 2, "B holds both of A's entries");
     }
@@ -5665,10 +5676,10 @@ mod tests {
 
         // B climbs: its launch, then its first pull at v52, which brings A's batch.
         convert_legacy_picks_at_launch(&b).unwrap();
-        assert_eq!(pulled(&b, &to_b).deferred, 0);
+        assert_eq!(unwritten(pulled(&b, &to_b)), (0, 0));
         // Both ways, until each has heard everything the other said.
-        assert_eq!(pulled(&a, &since(&b, &mut mb)).deferred, 0);
-        assert_eq!(pulled(&b, &since(&a, &mut ma)).deferred, 0);
+        assert_eq!(unwritten(pulled(&a, &since(&b, &mut mb))), (0, 0));
+        assert_eq!(unwritten(pulled(&b, &since(&a, &mut ma))), (0, 0));
 
         let want = vec![
             ("u-pick-live".to_owned(), 5),
@@ -5781,7 +5792,11 @@ mod tests {
             ["deck_token_printings", "deck_token_printings"],
             "the two entries announced, and no clear for a name no peer holds"
         );
-        assert_eq!(apply(&b, &ops).unwrap().deferred, 0, "the peer builds both");
+        assert_eq!(
+            unwritten(apply(&b, &ops).unwrap()),
+            (0, 0),
+            "the peer builds both"
+        );
         assert_eq!(named_entries(&b), named_entries(&a));
     }
 

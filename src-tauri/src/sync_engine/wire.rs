@@ -83,6 +83,11 @@ fn aad(group: &str, device: &str, epoch: i64) -> Vec<u8> {
 /// `device` is this device's id, and it travels in the clear because the relay orders by it and
 /// a device must not be handed back its own rows. It is bound into the AAD, so a relay that
 /// relabelled a batch produces one that will not open.
+///
+/// **Every op is stamped with this build's user schema here, and only here** ([`Op::schema`]).
+/// Sealing is the one function every path that sends ops goes through — the push and the
+/// baselines alike — and stamping at capture instead would leave an outbox written by an older
+/// build saying the older schema after the upgrade that is actually sending it.
 pub fn seal_batch(group: &Group, device: &str, ops: &[Op]) -> Result<Envelope, WireError> {
     if ops.is_empty() {
         return Err(WireError::Empty);
@@ -90,7 +95,16 @@ pub fn seal_batch(group: &Group, device: &str, ops: &[Op]) -> Result<Envelope, W
     if ops.len() > BATCH {
         return Err(WireError::TooBig(ops.len()));
     }
-    let plaintext = serde_json::to_vec(ops).map_err(|e| WireError::Malformed(e.to_string()))?;
+    let stamped: Vec<Op> = ops
+        .iter()
+        .cloned()
+        .map(|mut op| {
+            op.schema = Some(crate::schema::USER_SCHEMA_VERSION);
+            op
+        })
+        .collect();
+    let plaintext =
+        serde_json::to_vec(&stamped).map_err(|e| WireError::Malformed(e.to_string()))?;
     let sealed = crypto::seal(
         &group.group_key,
         &aad(&group.group_id, device, group.epoch),
@@ -224,6 +238,7 @@ mod tests {
             // The ordinary op this file measures: a delta out of the outbox, not a claim.
             baseline: false,
             horizon: None,
+            schema: None,
         }
     }
 
@@ -231,12 +246,50 @@ mod tests {
         (0..n).map(realistic).collect()
     }
 
+    /// Everything but the schema stamp comes back as it went, and the stamp is the one
+    /// [`seal_batch`] adds — which the test below is about.
     #[test]
     fn a_batch_round_trips() {
         let g = group(0);
         let sent = ops(3);
         let envelope = seal_batch(&g, "dev-a", &sent).unwrap();
-        assert_eq!(open_batch(&g, &envelope).unwrap(), sent);
+        let stamped: Vec<Op> = sent
+            .iter()
+            .cloned()
+            .map(|mut op| {
+                op.schema = Some(crate::schema::USER_SCHEMA_VERSION);
+                op
+            })
+            .collect();
+        assert_eq!(open_batch(&g, &envelope).unwrap(), stamped);
+    }
+
+    /// **Every op sealed says which schema wrote it, and an op from before the field reads as
+    /// not newer.** The stamp goes on at sealing and never at capture, so an outbox an older
+    /// build wrote is stamped by the build that sends it; and a receiver compares
+    /// `op.schema > Some(USER_SCHEMA_VERSION)`, which an absent key never is.
+    #[test]
+    fn a_sealed_op_carries_this_builds_schema_and_an_old_op_reads_as_none() {
+        let g = group(0);
+        let sent = ops(2);
+        assert!(
+            sent.iter().all(|op| op.schema.is_none()),
+            "the outbox never holds a stamp"
+        );
+        let opened = open_batch(&g, &seal_batch(&g, "dev-a", &sent).unwrap()).unwrap();
+        for op in &opened {
+            assert_eq!(op.schema, Some(crate::schema::USER_SCHEMA_VERSION));
+        }
+
+        // What every build before this one put on the wire: no `schema` key at all.
+        let old: Op = serde_json::from_str(
+            r#"{"table":"decks","uid":"u1","kind":"put","at":{"ms":1,"ctr":0,"device":"d"}}"#,
+        )
+        .unwrap();
+        assert_eq!(old.schema, None);
+        // ...and an unstamped op keeps that shape, so a peer that reads it changes nothing.
+        let json = serde_json::to_string(&sent[0]).unwrap();
+        assert!(!json.contains("\"schema\""), "{json}");
     }
 
     /// The envelope's stamp is the **last** op's, which is the relay's ordering key.

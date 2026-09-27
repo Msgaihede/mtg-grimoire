@@ -68,6 +68,15 @@ fn add_copy(conn: &Connection) {
     .unwrap();
 }
 
+/// What an apply left unwritten: `(deferred, dropped)`.
+///
+/// **Both, and never `deferred` alone.** A row this database cannot build — the insert a
+/// missing grain sends into a unique index — is skipped as `dropped` rather than held, so a check
+/// on `deferred` passes over exactly the failure it was written to catch.
+fn unwritten(report: ApplyReport) -> (usize, usize) {
+    (report.deferred, report.dropped)
+}
+
 fn qty(conn: &Connection) -> (i64, i64) {
     conn.query_row(
         "SELECT count(*), coalesce(sum(quantity), 0) FROM collection_entries",
@@ -1065,7 +1074,7 @@ fn a_whole_deck_crosses_intact() {
     .unwrap();
 
     let report = apply(&b, &outbox(&a)).unwrap();
-    assert_eq!(report.deferred, 0, "nothing may be left behind");
+    assert_eq!(unwritten(report), (0, 0), "nothing may be left behind");
 
     let counts: Vec<i64> = [
         "SELECT count(*) FROM deck_folders",
@@ -1095,9 +1104,9 @@ fn a_whole_deck_crosses_intact() {
 ///
 /// A device still on user schema v42 goes on emitting `decks` ops carrying `notes`. This build's
 /// `decks` spec has no such field: v43 dropped the column and put `deck_notes` /
-/// `deck_note_cards` in its place. The op must **apply**. A deferral here would hold that
-/// device's watermark and stop its whole stream — which is what an unknown *table* costs and
-/// what a dropped *column* must not.
+/// `deck_note_cards` in its place. The op must **apply**. A deferral here would either hold that
+/// device's stream or skip the op — which is what an unknown *table* costs, held from a newer
+/// device and skipped from an older one — and a dropped *column* must cost neither.
 ///
 /// The mechanism is `super::updates` and `super::creations`, which walk the **local**
 /// spec's field list and look each name up in the incoming op, so a field the op carries and
@@ -1131,7 +1140,11 @@ fn a_field_this_build_no_longer_syncs_is_skipped_rather_than_stalling() {
     let uid = insert[0].uid.clone();
 
     let report = apply(&b, &insert).unwrap();
-    assert_eq!(report.deferred, 0, "a dropped column deferred the op");
+    assert_eq!(
+        unwritten(report),
+        (0, 0),
+        "a dropped column deferred the op"
+    );
     assert_eq!(report.applied, 1);
     let name: String = b
         .query_row("SELECT name FROM decks WHERE sync_uid = ?1", [&uid], |r| {
@@ -1167,7 +1180,8 @@ fn a_field_this_build_no_longer_syncs_is_skipped_rather_than_stalling() {
 
     let report = apply(&b, &edit).unwrap();
     assert_eq!(
-        report.deferred, 0,
+        unwritten(report),
+        (0, 0),
         "an op naming nothing but a dropped column deferred"
     );
     assert_eq!(report.applied, 1);
@@ -1215,7 +1229,7 @@ fn clearing_the_collection_crosses_without_two_holding_areas() {
     .unwrap();
     add_copy(&a);
     let report = apply(&b, &since(&a, &mut ma)).unwrap();
-    assert_eq!(report.deferred, 0);
+    assert_eq!(unwritten(report), (0, 0));
     let (ua, ub): (String, String) = (
         a.query_row(
             "SELECT sync_uid FROM collection_folders WHERE kind = 'removed'",
@@ -1237,8 +1251,9 @@ fn clearing_the_collection_crosses_without_two_holding_areas() {
 
     let report = apply(&b, &since(&a, &mut ma)).unwrap();
     assert_eq!(
-        report.deferred, 0,
-        "a folder rebuild must not stall the stream"
+        unwritten(report),
+        (0, 0),
+        "a folder rebuild must neither stall the stream nor be skipped"
     );
 
     let (removed, groups): (i64, i64) = b
@@ -1296,10 +1311,11 @@ fn two_devices_rebuilding_a_deck_group_end_with_one() {
 
     let rb = apply(&b, &since(&a, &mut ma)).unwrap();
     let ra = apply(&a, &since(&b, &mut mb)).unwrap();
-    // **Deferred is the shape of the failure this grain prevents**, not a crash: without it the
-    // insert hits `idx_collection_folder_deck`, the savepoint rolls back, and each device
-    // quietly keeps its own group forever while the counts still read 1.
-    assert_eq!((ra.deferred, rb.deferred), (0, 0));
+    // **A skip is the shape of the failure this grain prevents**, not a crash: without it the
+    // insert hits `idx_collection_folder_deck`, the savepoint rolls back, the op is dropped as a
+    // row this database cannot build, and each device quietly keeps its own group forever while
+    // the counts still read 1.
+    assert_eq!((unwritten(ra), unwritten(rb)), ((0, 0), (0, 0)));
 
     for (who, c) in [("a", &a), ("b", &b)] {
         let groups: i64 = c
@@ -1496,9 +1512,8 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
 /// **Two devices adding one printing of one token to one list end with one entry** (user schema
 /// v52) — the grain `META` restates, driven the way it fails: each device inserts its own row
 /// under its own uid, and without the grain the far op is an insert that hits
-/// `idx_deck_token_printings_grain`, rolls the savepoint back and defers the op — which the client
-/// today drops, with the rest of that device's page (`sync.md`, *Deferred ops are dropped, not
-/// held*).
+/// `idx_deck_token_printings_grain`, rolls the savepoint back, and is skipped as a row this
+/// database cannot build.
 ///
 /// The deck crosses first, so both entries hang off one deck uid. **The count is a field**, so
 /// the two devices' `2` and `3` do not sum: last writer wins, and both devices agree on which.
@@ -1532,9 +1547,9 @@ fn two_devices_adding_one_token_printing_end_with_one_entry() {
     let to_b = since(&a, &mut ma);
     let to_a = since(&b, &mut mb);
     let report = apply(&b, &to_b).unwrap();
-    assert_eq!(report.deferred, 0, "the grain must find b's own row");
+    assert_eq!(unwritten(report), (0, 0), "the grain must find b's own row");
     let report = apply(&a, &to_a).unwrap();
-    assert_eq!(report.deferred, 0, "and a's, the other way");
+    assert_eq!(unwritten(report), (0, 0), "and a's, the other way");
 
     let read = |conn: &Connection| -> Vec<(String, i64, String)> {
         let mut stmt = conn
@@ -1806,6 +1821,7 @@ fn baseline_ops(conn: &Connection, device: &str) -> Vec<Op> {
                 },
                 baseline: true,
                 horizon: None,
+                schema: None,
             })
         })
         .unwrap()
@@ -2030,4 +2046,675 @@ fn every_synced_table_has_a_parents_first_rank() {
     for spec in &capture::TABLES {
         assert!(order_of(spec.table).is_some(), "{} has no rank", spec.table);
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Why a group deferred, and whether that holds its device — spec 2026-09-27 §3.2
+// ---------------------------------------------------------------------------------------
+
+/// A schema one rung above this build's, which is what a newer device's sealed ops carry.
+fn newer() -> Option<i64> {
+    Some(crate::schema::USER_SCHEMA_VERSION + 1)
+}
+
+/// `error_log` as a skip writes it: `(source, operation, message, detail, count)`.
+fn skips(conn: &Connection) -> Vec<(String, String, String, Option<String>, i64)> {
+    let mut stmt = conn
+        .prepare("SELECT source, operation, message, detail, count FROM error_log ORDER BY id")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// `device`'s watermark on `conn`, as `(ms, ctr)`.
+fn mark_of(conn: &Connection, device: &str) -> Option<(i64, i64)> {
+    peers(conn)
+        .into_iter()
+        .find(|(d, _, _)| d == device)
+        .map(|(_, ms, ctr)| (ms, ctr))
+}
+
+/// A page from `a`: an op on a table this build does not know, then an ordinary `+1`.
+///
+/// **The first is a real captured op, relabelled**, so its stamp is one `a`'s clock issued and
+/// sits between `a`'s others — a hand-written stamp would be a guess about where that is.
+fn a_future_op_then_a_copy(a: &Connection, mark: &mut i64, schema: Option<i64>) -> Vec<Op> {
+    a.execute(
+        "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Soon', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    add_copy(a);
+    let mut page = since(a, mark);
+    assert_eq!(page.len(), 2, "one folder insert and one +1: {page:?}");
+    page[0].table = "future_table".to_owned();
+    for op in &mut page {
+        op.schema = schema;
+    }
+    page
+}
+
+/// **A newer device's op that defers is held, and its device's later ops wait behind it** — the
+/// one deferral that must hold the stream, because upgrading this device is what resolves it.
+/// Skipping it would lose that device's change for good: its later ops apply, the watermark
+/// passes it, and nothing ever offers it again.
+#[test]
+fn a_newer_devices_op_that_defers_is_held_and_blocks_its_later_ops() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    // One op `b` applies first, so `a` has a watermark and "below the held op" is a stamp.
+    a.execute(
+        "INSERT INTO deck_labels (name, name_key, color, created_at, updated_at)
+         VALUES ('Ramp', 'ramp', '#0f0', unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let first = since(&a, &mut ma);
+    apply(&b, &first).unwrap();
+    let before = first.last().unwrap().at.clone();
+
+    let page = a_future_op_then_a_copy(&a, &mut ma, newer());
+    for delivery in ["first", "second"] {
+        let report = apply(&b, &page).unwrap();
+        assert_eq!(
+            (report.held_newer, report.deferred),
+            (2, 2),
+            "{delivery}: the unknown table and the +1 behind it are both held: {report:?}"
+        );
+        assert_eq!(
+            (
+                report.held_waiting,
+                report.moot,
+                report.dropped,
+                report.applied
+            ),
+            (0, 0, 0, 0),
+            "{delivery}: {report:?}"
+        );
+        assert_eq!(
+            qty(&b),
+            (0, 0),
+            "{delivery}: the +1 behind the block landed"
+        );
+        assert_eq!(
+            mark_of(&b, "dev-a"),
+            Some((before.ms, before.ctr)),
+            "{delivery}: the watermark stepped over the held op"
+        );
+    }
+    assert!(
+        skips(&b).is_empty(),
+        "a hold is the panel's to say: {:?}",
+        skips(&b)
+    );
+}
+
+/// **The same op from a device on this build is skipped at once, recorded, and takes nothing
+/// with it.** A same-version sender naming a table this build does not know is an older device's
+/// renamed table — `deck_tags` at v33 — and no upgrade of this device will ever resolve it, so
+/// holding the stream on it would pin the relay's log for good.
+#[test]
+fn a_same_version_unknown_table_is_dropped_recorded_and_does_not_block() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    let page = a_future_op_then_a_copy(&a, &mut ma, None);
+
+    let report = apply(&b, &page).unwrap();
+    assert_eq!(report.dropped, 1, "{report:?}");
+    assert_eq!(report.applied, 1, "the +1 behind it must apply: {report:?}");
+    assert_eq!(
+        (
+            report.deferred,
+            report.held_newer,
+            report.held_waiting,
+            report.moot
+        ),
+        (0, 0, 0, 0),
+        "{report:?}"
+    );
+    assert_eq!(qty(&b), (1, 1));
+    let last = page.last().unwrap();
+    assert_eq!(
+        mark_of(&b, "dev-a"),
+        Some((last.at.ms, last.at.ctr)),
+        "a's watermark must pass both"
+    );
+    let logged = skips(&b);
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    let (source, operation, message, detail, count) = &logged[0];
+    assert_eq!((source.as_str(), operation.as_str()), ("relay", "apply"));
+    assert!(message.contains("future_table"), "{message}");
+    assert!(
+        detail.as_deref().is_some_and(|d| d.contains(&page[0].uid)),
+        "{detail:?}"
+    );
+    assert_eq!(*count, 1);
+
+    // A re-delivery skips both and records nothing new.
+    let again = apply(&b, &page).unwrap();
+    assert_eq!((again.skipped, again.dropped), (2, 0), "{again:?}");
+    assert_eq!(skips(&b)[0].4, 1, "a re-delivered skip was recorded twice");
+    assert_eq!(qty(&b), (1, 1));
+
+    // **A skipped op is consumed even when it is its device's last**, which the page above
+    // cannot show: there the `+1` after it carries the watermark past it on its own.
+    a.execute(
+        "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Later', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let mut lone = since(&a, &mut ma);
+    lone[0].table = "future_table".to_owned();
+    assert_eq!(apply(&b, &lone).unwrap().dropped, 1);
+    assert_eq!(
+        mark_of(&b, "dev-a"),
+        Some((lone[0].at.ms, lone[0].at.ctr)),
+        "the watermark stopped below a skipped op, so it will be skipped again"
+    );
+    assert_eq!(skips(&b)[0].4, 2, "one row for one table, counted twice");
+    let again = apply(&b, &lone).unwrap();
+    assert_eq!((again.skipped, again.dropped), (1, 0), "{again:?}");
+    assert_eq!(
+        skips(&b)[0].4,
+        2,
+        "a re-delivered lone skip was recorded again"
+    );
+}
+
+/// A deck and its one pile on `a`, applied to every one of `to`.
+fn a_deck_everywhere(a: &Connection, mark: &mut i64, to: &[&Connection]) {
+    a.execute(
+        "INSERT INTO decks (name, format_key, created_at, updated_at)
+         VALUES ('A', 'commander', unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    a.execute(
+        "INSERT INTO deck_categories
+            (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+         VALUES (1, 'Main', 'main', 1, 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let ops = since(a, mark);
+    for c in to {
+        apply(c, &ops).unwrap();
+    }
+}
+
+/// One card filed in the only deck and pile `conn` holds.
+fn file_a_card(conn: &Connection) {
+    conn.execute(
+        "INSERT INTO deck_cards
+            (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
+             quantity, created_at, updated_at)
+         VALUES ((SELECT id FROM decks), (SELECT id FROM deck_categories), 'live', 'c1', 'lea',
+                 '1', 'en', 'Bolt', 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+}
+
+fn deck_cards(conn: &Connection) -> i64 {
+    conn.query_row("SELECT count(*) FROM deck_cards", [], |r| r.get(0))
+        .unwrap()
+}
+
+/// The shared half of the two own-tombstone tests: `b` deletes the deck, `a` files a card in it
+/// without having heard, then adds a copy to its binder. Answers the page `a` sends.
+fn a_card_in_a_deck_b_deleted(a: &Connection, b: &Connection, schema: Option<i64>) -> Vec<Op> {
+    let mut ma = 0;
+    a_deck_everywhere(a, &mut ma, &[b]);
+    b.execute("DELETE FROM decks", []).unwrap();
+    file_a_card(a);
+    add_copy(a);
+    let mut page = since(a, &mut ma);
+    for op in &mut page {
+        op.schema = schema;
+    }
+    page
+}
+
+/// **A child of a parent this device deleted is moot**: consumed silently, because it is the
+/// convergent outcome — the parent is gone here, so the child has nowhere to be — and nothing
+/// can ever arrive that would let it apply. Held, it would pin the relay; recorded, it would put
+/// a reader's own delete in the error log as a fault.
+#[test]
+fn a_child_of_a_parent_this_device_deleted_is_moot() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let page = a_card_in_a_deck_b_deleted(&a, &b, None);
+
+    let report = apply(&b, &page).unwrap();
+    assert_eq!(report.moot, 1, "{report:?}");
+    assert_eq!(
+        (report.deferred, report.dropped, report.applied),
+        (0, 0, 1),
+        "{report:?}"
+    );
+    assert_eq!(qty(&b), (1, 1), "a's later op must apply");
+    assert_eq!(deck_cards(&b), 0);
+    assert!(skips(&b).is_empty(), "moot is not a fault: {:?}", skips(&b));
+    let last = page.last().unwrap();
+    assert_eq!(mark_of(&b, "dev-a"), Some((last.at.ms, last.at.ctr)));
+}
+
+/// **...and so is a child whose parent's delete arrives in the same batch**, from a third device.
+/// `b` deleted nothing, so its own log cannot say the deck is gone; the page itself does.
+#[test]
+fn a_child_whose_parent_is_deleted_in_the_same_batch_is_moot() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    a_deck_everywhere(&a, &mut ma, &[&b, &c]);
+
+    // `c` files a card in the deck while `a` deletes it; neither has heard of the other.
+    file_a_card(&c);
+    add_copy(&c);
+    a.execute("DELETE FROM decks", []).unwrap();
+    let mut page = since(&a, &mut ma);
+    page.extend(since(&c, &mut mc));
+
+    let report = apply(&b, &page).unwrap();
+    assert_eq!(report.moot, 1, "{report:?}");
+    assert_eq!((report.deferred, report.dropped), (0, 0), "{report:?}");
+    let decks: i64 = b
+        .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!((decks, deck_cards(&b)), (0, 0));
+    assert_eq!(qty(&b), (1, 1), "c's later op must apply");
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+    let own_dels: i64 = b
+        .query_row(
+            "SELECT count(*) FROM sync_ops WHERE kind = 'del'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(own_dels, 0, "b's own log must not be what decided it");
+}
+
+/// **...but only a parent whose delete would have taken the child with it makes it moot.** A
+/// binder is `ON DELETE SET NULL` from its entries: deleting it moves every card in it to the
+/// root, and that is what `a` does to its own copy when `b`'s delete reaches it. Consumed as
+/// moot on `b`, the copy would be a card `a` holds and `b` never will — so `b` writes it as the
+/// foreign key would have left it, at the root, and the two devices agree.
+#[test]
+fn a_child_of_a_folder_this_device_deleted_lands_at_the_root_on_both() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    a.execute(
+        "INSERT INTO collection_folders (name, kind, sort_order, created_at, updated_at)
+         VALUES ('Trades', 'user', 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    // `b` throws the binder away while `a`, which has not heard, files a copy in it.
+    b.execute("DELETE FROM collection_folders WHERE name = 'Trades'", [])
+        .unwrap();
+    a.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+             created_at,updated_at)
+         VALUES ('c1','lea','1','en','nonfoil','NM',1,
+                 (SELECT id FROM collection_folders WHERE name = 'Trades'),
+                 unixepoch(),unixepoch())",
+        [],
+    )
+    .unwrap();
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(
+        (rb.applied, rb.moot, rb.dropped, rb.deferred),
+        (1, 0, 0, 0),
+        "{rb:?}"
+    );
+    apply(&a, &since(&b, &mut mb)).unwrap();
+
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 1), "{who} lost the copy");
+        let (folder, binders): (Option<i64>, i64) = c
+            .query_row(
+                "SELECT (SELECT folder_id FROM collection_entries),
+                        (SELECT count(*) FROM collection_folders WHERE name = 'Trades')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (folder, binders),
+            (None, 0),
+            "{who} disagrees about where it is"
+        );
+    }
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+}
+
+/// **A newer device's child of a deleted parent is moot, never a permanent newer hold** (review
+/// focus 2). Moot is asked first because it is a fact about *this* device that no upgrade
+/// changes: held as newer, the child would wait for an update that cannot help it, and pin the
+/// relay's log until then.
+#[test]
+fn a_newer_devices_child_of_a_deleted_parent_is_moot_not_held() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let page = a_card_in_a_deck_b_deleted(&a, &b, newer());
+
+    let report = apply(&b, &page).unwrap();
+    assert_eq!(report.moot, 1, "{report:?}");
+    assert_eq!(
+        (report.held_newer, report.deferred, report.dropped),
+        (0, 0, 0),
+        "{report:?}"
+    );
+    assert_eq!(qty(&b), (1, 1), "a's later op must apply");
+    let last = page.last().unwrap();
+    assert_eq!(mark_of(&b, "dev-a"), Some((last.at.ms, last.at.ctr)));
+}
+
+/// **A re-delivered page still makes a child of its own delete moot**, although the delete is
+/// below its sender's watermark by then and no longer fresh.
+///
+/// First contact is the shape: `x` pushes a deck filed in a folder `b` has not received — the
+/// baseline carrying it comes a page later — then files a card in `a`'s deck, which `a` deletes.
+/// The first delivery applies the delete and holds `x` at the waiting deck, the card behind it.
+/// The client's held cursor hands the same page back with the folder added; the delete is now
+/// skipped as seen, and the card is attempted for the first time. Asking only the fresh ops
+/// which rows were deleted would call its deck merely missing, and hold `x` again for a parent
+/// that is never coming.
+#[test]
+fn a_redelivered_page_still_makes_a_child_of_its_delete_moot() {
+    let (a, b, x) = (paired("dev-a"), paired("dev-b"), paired("dev-x"));
+    let (mut ma, mut mx) = (0, 0);
+    a_deck_everywhere(&a, &mut ma, &[&b, &x]);
+
+    x.execute(
+        "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Shelf', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let folder = since(&x, &mut mx);
+    x.execute(
+        "INSERT INTO decks (name, format_key, folder_id, created_at, updated_at)
+         VALUES ('E', 'commander', (SELECT id FROM deck_folders), unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    x.execute(
+        "INSERT INTO deck_cards
+            (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
+             quantity, created_at, updated_at)
+         SELECT d.id, c.id, 'live', 'c1', 'lea', '1', 'en', 'Bolt', 1, unixepoch(), unixepoch()
+           FROM decks d JOIN deck_categories c ON c.deck_id = d.id
+          WHERE d.name = 'A'",
+        [],
+    )
+    .unwrap();
+    a.execute("DELETE FROM decks", []).unwrap();
+
+    let mut page = since(&a, &mut ma);
+    page.extend(since(&x, &mut mx));
+    let first = apply(&b, &page).unwrap();
+    assert_eq!(
+        (first.held_waiting, first.moot),
+        (2, 0),
+        "the deck waits and the card waits behind it: {first:?}"
+    );
+
+    page.extend(folder);
+    let second = apply(&b, &page).unwrap();
+    assert_eq!(second.moot, 1, "{second:?}");
+    assert_eq!((second.deferred, second.dropped), (0, 0), "{second:?}");
+    let decks: Vec<String> = {
+        let mut stmt = b.prepare("SELECT name FROM decks ORDER BY name").unwrap();
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert_eq!(decks, ["E"], "x's deck lands and a's stays deleted");
+    assert_eq!(deck_cards(&b), 0);
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+}
+
+/// **An unknown parent waits — and, released, is skipped with its collateral applied exactly
+/// once.** The parent was never sent, so no later page can bring it; the client's bound is what
+/// gives up, and the release is how it does. A counter behind the block is the case that would
+/// show a double count: it must end at its one delta across the hold, the release and every
+/// re-delivery after it.
+#[test]
+fn an_unknown_parent_waits_then_release_drops_it_and_applies_its_collateral_once() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    a.execute(
+        "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Binder', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let _never_sent = since(&a, &mut ma);
+    a.execute(
+        "INSERT INTO decks (name, format_key, folder_id, created_at, updated_at)
+         VALUES ('A', 'commander', 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    add_copy(&a);
+    let page = since(&a, &mut ma);
+    assert_eq!(page.len(), 2, "{page:?}");
+
+    let held = apply(&b, &page).unwrap();
+    assert_eq!(
+        (held.held_waiting, held.deferred),
+        (2, 2),
+        "the deck and the +1 behind it wait: {held:?}"
+    );
+    assert_eq!((held.held_newer, held.dropped, held.applied), (0, 0, 0));
+    assert_eq!(qty(&b), (0, 0));
+    assert!(
+        skips(&b).is_empty(),
+        "a wait is recorded only when released"
+    );
+    assert_eq!(
+        mark_of(&b, "dev-a"),
+        None,
+        "the watermark stepped over a wait"
+    );
+
+    let released = apply_with(&b, &page, Waiting::Release).unwrap();
+    assert_eq!(released.dropped, 1, "{released:?}");
+    assert_eq!(
+        (released.applied, released.deferred, released.held_waiting),
+        (1, 0, 0),
+        "{released:?}"
+    );
+    assert_eq!(qty(&b), (1, 1), "the collateral applied, once");
+    let logged = skips(&b);
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    assert!(logged[0].2.contains("decks"), "{logged:?}");
+
+    // Every re-delivery after the release is below the watermark.
+    let again = apply(&b, &page).unwrap();
+    assert_eq!(again.skipped, 2, "{again:?}");
+    apply_with(&b, &page, Waiting::Release).unwrap();
+    assert_eq!(qty(&b), (1, 1), "the collateral was counted twice");
+    assert_eq!(skips(&b)[0].4, 1, "the release was recorded twice");
+}
+
+/// **A grain match that would rename a row onto a uid another local row wears skips the group
+/// instead of failing the whole apply.** `find_row` adopts `min(theirs, ours)`, and the rename
+/// used to run before the group's savepoint with nothing asking whether the lower uid was free
+/// — so `idx_deck_labels_uid` failed, the `?` unwound the batch, and the same page failed the
+/// same way on every pull, stopping every device's stream.
+///
+/// The collision is the ordinary one: `a` renames its Draw label to Ramp while `b` holds a Ramp
+/// of its own, and a label rename is a sparse op that still carries `name_key`, the grain's
+/// only term.
+#[test]
+fn a_uid_rename_onto_a_taken_uid_drops_the_group_instead_of_failing_the_apply() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    let (low, high) = (
+        "00000000000000000000000000000001",
+        "ffffffffffffffffffffffffffffffff",
+    );
+    a.execute(
+        "INSERT INTO deck_labels (name, name_key, color, sync_uid, created_at, updated_at)
+         VALUES ('Draw', 'draw', '#00f', ?1, unixepoch(), unixepoch())",
+        [low],
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute(
+        "INSERT INTO deck_labels (name, name_key, color, sync_uid, created_at, updated_at)
+         VALUES ('Ramp', 'ramp', '#0f0', ?1, unixepoch(), unixepoch())",
+        [high],
+    )
+    .unwrap();
+
+    a.execute(
+        "UPDATE deck_labels SET name = 'Ramp', name_key = 'ramp'",
+        [],
+    )
+    .unwrap();
+    add_copy(&a);
+    let page = since(&a, &mut ma);
+    assert_eq!(page[0].uid, low, "{page:?}");
+
+    let report = apply(&b, &page).expect("a taken uid must not fail the whole apply");
+    assert_eq!(report.dropped, 1, "{report:?}");
+    assert_eq!((report.applied, report.deferred), (1, 0), "{report:?}");
+    assert_eq!(qty(&b), (1, 1), "the rest of the batch must apply");
+
+    // Nothing was renamed, not even for the length of the failed group.
+    let mut stmt = b
+        .prepare("SELECT sync_uid, name_key FROM deck_labels ORDER BY sync_uid")
+        .unwrap();
+    let labels: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            (low.to_owned(), "draw".to_owned()),
+            (high.to_owned(), "ramp".to_owned())
+        ]
+    );
+    let logged = skips(&b);
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    assert!(
+        logged[0]
+            .3
+            .as_deref()
+            .is_some_and(|d| d.contains("uid taken")),
+        "{logged:?}"
+    );
+}
+
+/// A full insert of one `collection_entries` row, `+1`, by hand — the only way to build a page
+/// whose blocks cascade through more devices than the round cap allows.
+fn entry_put(uid: &str, card: &str, device: &str, ms: i64) -> Op {
+    let mut fields: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    for (k, v) in [
+        ("card_id", serde_json::json!(card)),
+        ("set_code", serde_json::json!("lea")),
+        ("collector_number", serde_json::json!("1")),
+        ("lang", serde_json::json!("en")),
+        ("finish", serde_json::json!("nonfoil")),
+        ("condition", serde_json::json!("NM")),
+        ("altered", serde_json::json!(0)),
+        ("signed", serde_json::json!(0)),
+        ("proxy", serde_json::json!(0)),
+        ("misprint", serde_json::json!(0)),
+        ("serial_number", serde_json::Value::Null),
+        ("grading", serde_json::Value::Null),
+    ] {
+        fields.insert(k.to_owned(), v);
+    }
+    let mut parents: BTreeMap<String, Option<String>> = BTreeMap::new();
+    parents.insert("folder".to_owned(), None);
+    Op {
+        table: "collection_entries".to_owned(),
+        uid: uid.to_owned(),
+        kind: Kind::Put,
+        fields,
+        counters: BTreeMap::from([("quantity".to_owned(), 1)]),
+        parents,
+        at: Hlc {
+            ms,
+            ctr: 0,
+            device: device.to_owned(),
+        },
+        baseline: false,
+        horizon: None,
+        schema: None,
+    }
+}
+
+/// **At the round cap the watermarks come from the blocks the committed pass ran under.**
+///
+/// The page is a chain: `d0` is held by a newer op, and each row `u{k}` carries one op from
+/// `d{k-1}` and a later one from `d{k}`, so each round's held row blocks the next device and
+/// finds one more block than the round before. Ten groups cap the loop at eight rounds, and the
+/// ninth block — `d8`'s — is found only in the round that commits. `d8` wrote one more row,
+/// `h`, which that pass applied. Advancing `d8`'s watermark by the block the pass did *not* run
+/// under leaves `h` above it, and the next delivery of the same page adds its `+1` again.
+///
+/// `d9` is the other half: its one op sits in the last held row and it wrote nothing the pass
+/// applied, so its watermark must not move at all — stepped past, that op is lost.
+#[test]
+fn the_round_cap_advances_watermarks_by_the_committed_passes_blocks() {
+    let b = paired("dev-b");
+    let dev = |k: i64| format!("d{k}");
+    let mut page: Vec<Op> = Vec::new();
+    let mut held = entry_put("u0", "card0", "d0", 1_000);
+    held.table = "future_table".to_owned();
+    held.schema = newer();
+    page.push(held);
+    for k in 1..=8_i64 {
+        let (uid, card) = (format!("u{k}"), format!("card{k}"));
+        page.push(entry_put(
+            &uid,
+            &card,
+            &dev(k - 1),
+            1_000 + 10 * (k - 1) + 5,
+        ));
+        page.push(entry_put(&uid, &card, &dev(k), 1_000 + 10 * k));
+    }
+    page.push(entry_put("u8", "card8", "d9", 1_085));
+    page.push(entry_put("h", "cardH", "d8", 5_000));
+
+    let h = |conn: &Connection| -> Option<i64> {
+        conn.query_row(
+            "SELECT quantity FROM collection_entries WHERE card_id = 'cardH'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    };
+    let first = apply(&b, &page).unwrap();
+    assert_eq!(
+        first.held_newer, 18,
+        "the whole chain must be held behind d0, or the fixture never reached the cap: \
+         {first:?}"
+    );
+    assert_eq!(h(&b), Some(1), "the committed pass applied h once");
+    assert_eq!(
+        mark_of(&b, "d9"),
+        None,
+        "d9's only op is held, and was stepped past"
+    );
+
+    apply(&b, &page).unwrap();
+    assert_eq!(h(&b), Some(1), "a re-delivery added h's +1 a second time");
 }

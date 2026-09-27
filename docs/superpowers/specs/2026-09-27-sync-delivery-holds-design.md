@@ -77,7 +77,8 @@ before this build is.
 | The group | Class | Blocks its device? | Recorded? |
 | --- | --- | --- | --- |
 | Any reason, and an op in it is from a **newer** schema | **held · newer** | yes | no — the panel says it |
-| Unknown parent, and this device **deleted** that parent (a `del` for its uid in this device's own `sync_ops`, via `idx_sync_ops_row`) or the parent's delete is **in this batch** | **moot** | no | no — the convergent outcome |
+| Unknown parent, and this device **deleted** that parent (a `del` for its uid in this device's own `sync_ops`, via `idx_sync_ops_row`) or the parent's delete is **in this batch** (below its sender's watermark included, so a re-delivered page still counts), and the parent's foreign key **cascades** | **moot** | no | no — the convergent outcome |
+| The same, but the foreign key is **`SET NULL`** (`collection_entries.folder_id`, `wishlist_entries.folder_id`, `decks.folder_id`, `deck_cards.label_id`) | **written without that parent** | no | no — what the deleting device's own cascade did *(amended 2026-09-27: consuming these lost a copy measured at `(0,0)` against `(1,1)`, and would lose a whole deck for `decks.folder_id`)* |
 | Unknown parent, otherwise (same/older sender) | **held · waiting** | yes | only when released |
 | Unknown table, or unbuildable, from a same/older sender | **skipped** | no | yes |
 | Collateral behind a held block | follows its block | — | — |

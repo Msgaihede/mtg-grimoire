@@ -80,6 +80,16 @@ pub struct Op {
     /// The receiver unions whatever it finds. Spec §9.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub horizon: Option<Horizon>,
+    /// The user schema of the build that **sent** this op — stamped by
+    /// [`super::wire::seal_batch`] on every op it seals and never at capture, so an outbox an
+    /// older build wrote is stamped by the build that pushes it, and `sync_ops` has no column
+    /// for it. What a receiver asks of it is one question: `op.schema >
+    /// Some(USER_SCHEMA_VERSION)` is a **newer** sender, whose deferral this build's upgrade can
+    /// resolve and which [`super::apply`] therefore holds rather than skips. Absent — every op a
+    /// build before this one sent — is not newer. An older receiver ignores the key: nothing on
+    /// the wire is `deny_unknown_fields`. Spec 2026-09-27 §3.1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<i64>,
 }
 
 /// What a set of ops about one row adds up to.
@@ -243,6 +253,7 @@ mod tests {
             at: at(ms, dev),
             baseline: false,
             horizon: None,
+            schema: None,
         }
     }
 
