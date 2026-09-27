@@ -412,6 +412,7 @@ export function CardModalPrintings({
                 printing={printing}
                 dwell={dwell.rowProps(printing.id)}
                 deck={scope.deck}
+                editsCopy={scope.copy !== null}
                 current={printing.id === card.id}
                 busy={busy}
                 marketplace={marketplace}
@@ -455,6 +456,7 @@ function PrintingRow({
   printing,
   dwell,
   deck,
+  editsCopy,
   current,
   busy,
   marketplace,
@@ -465,6 +467,8 @@ function PrintingRow({
   dwell: DwellRowProps;
   /** The deck row behind the modal, or `null` — read for the row's name, never for its write. */
   deck: CardModalScope["deck"];
+  /** A collection copy is being edited, so a press moves it — read for the name, as `deck` is. */
+  editsCopy: boolean;
   /** This is the printing the panel is drawing. */
   current: boolean;
   /** A write is in flight somewhere in the list. */
@@ -489,8 +493,14 @@ function PrintingRow({
    * without re-anchoring it.
    */
   const swapInto = deck !== null && printing.id !== deck.cardId ? deck.categoryName : null;
-  /** Out of reach while a write runs — every row that would swap, not only the pressed one. */
-  const inert = swapInto !== null && busy;
+  /**
+   * A press here moves the collection copy being edited onto this printing (issue #564). Only
+   * ever true on a row that draws a button — the current printing draws none — and never beside
+   * `swapInto`, because a scope names a deck row or a copy and not both.
+   */
+  const movesCopy = swapInto === null && editsCopy;
+  /** Out of reach while a write runs — every row that would write, not only the pressed one. */
+  const inert = (swapInto !== null || movesCopy) && busy;
 
   const label = `${printing.setCode.toUpperCase()} · ${printing.collectorNumber}${
     printing.releasedAt ? ` · ${printing.releasedAt.slice(0, 4)}` : ""
@@ -551,7 +561,11 @@ function PrintingRow({
             aria-label={
               swapInto !== null
                 ? `Use this printing (${printing.setCode.toUpperCase()} ${printing.collectorNumber}) in ${swapInto}`
-                : `Show ${label}`
+                : movesCopy
+                  ? `Change this copy to ${printing.setCode.toUpperCase()} ${
+                      printing.collectorNumber
+                    }`
+                  : `Show ${label}`
             }
             // Greyed and refused, never removed from the tab order — see {@link inert}.
             aria-disabled={inert}

@@ -138,6 +138,7 @@ const searchScope: CardModalScope = {
   deck: null,
   quantity: null,
   deckControls: false,
+  copy: null,
 };
 
 async function openPane(printings: PrintingsResponse = PRINTINGS) {
