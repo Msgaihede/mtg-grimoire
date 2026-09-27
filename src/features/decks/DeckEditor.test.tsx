@@ -3943,7 +3943,6 @@ describe("DeckEditor", () => {
         finish: null,
         short: 1,
         categories: ["Main deck"],
-        imageUris: null,
         wishes: [],
       },
     ]);
@@ -6618,7 +6617,6 @@ describe("DeckEditor — the Collection submenu", () => {
       finish: null,
       short: 4,
       categories: ["Main deck"],
-      imageUris: null,
       candidates: entryIds.map((entryId) => ({
         entryId,
         quantity: 4,

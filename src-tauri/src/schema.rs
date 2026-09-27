@@ -6602,7 +6602,8 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // **Appended at the end**, which is what keeps `deck.rs`'s positional reads honest: every
     // `r.get(n)` over `DECK_SELECT` is an index into this column order, and an `INTEGER`
     // inserted anywhere but last hands one column's value to another with nothing going red.
-    // `deck::IMAGE_COL` moves one further along with it.
+    // `deck::IMAGE_COL` moved one further along with it (the image tail it counted is gone since
+    // 2026-09-27).
     //
     // **`decks` is in [`SYNCED_TABLES`] and this column travels — but only because it was put
     // on the capture spec by hand**, v38's note verbatim: `sync_engine::capture`'s `Spec` for
@@ -6659,7 +6660,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // **Appended at the end**, which is what keeps `deck.rs`'s positional reads honest, and this
     // is the ninth time that sentence has been owed: every `r.get(n)` over `DECK_SELECT` is an
     // index into this column order, and an `INTEGER` inserted anywhere but last hands one
-    // column's value to another with nothing going red. `deck::IMAGE_COL` moves 25 → 26 with it.
+    // column's value to another with nothing going red. `deck::IMAGE_COL` moved 25 → 26 with it.
     // The trap here is v39's read one grain sharper still: the column it most reads like a
     // neighbour of is `theory_enabled`, which is the *other half of the same pair*, so an index
     // that landed there would swap a deck's kind for its own opposite and every field would

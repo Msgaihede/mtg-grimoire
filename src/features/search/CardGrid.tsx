@@ -35,7 +35,6 @@ import { keepCaretForCard } from "@/lib/caretWalk";
 import type { Finish } from "@/lib/finish";
 import type { Treatment } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
-import type { ImageVariant } from "@/lib/images";
 import { LAYER } from "@/lib/layers";
 import {
   SHELF_INDENT_PX,
@@ -100,14 +99,6 @@ export interface GridCard {
   setCode: string;
   collectorNumber: string;
   rarity: string | null;
-  /**
-   * The front face's picture on `cards.scryfall.io`, by variant, as the row carries it.
-   *
-   * **Nothing on this wall draws it**: a tile draws the local cache over `mtgimg://` through
-   * `CardArt`, and a wall that drew this instead would refetch over the network a screenful of
-   * art the cache already holds. Optional, and `undefined` is a real answer rather than a gap.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**

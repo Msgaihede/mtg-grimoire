@@ -1024,21 +1024,6 @@ pub struct DeckRow {
     /// all conclusions and all TypeScript's; this is the stored fact and the four signals the
     /// rule reads are supplied separately.
     pub bracket: i64,
-    /// **The cover printing's picture, not the deck's** — the row [`Self::cover_card_id`] names,
-    /// read off the same `LEFT JOIN cards` [`Self::cover_artist`] comes from. A deck is not a
-    /// card and has no images of its own; this is the one field on this struct that describes a
-    /// *different* row, which is why it is worth saying twice.
-    ///
-    /// The key a tile wants is [`crate::image_uri::ART_VARIANT`]. A deck's cover is a crop
-    /// rather than a card face, and it is the only cover mechanism there is since custom covers
-    /// went — so `display` is here because [`crate::image_uri::LIST_VARIANTS`] emits the pair
-    /// and not because anything on a gallery reads it.
-    ///
-    /// `None` for a deck with no cover, for a cover whose printing has left `cards`, and for a
-    /// printing with no fetchable image — three states the tile draws identically, because from
-    /// the reader's side they are one: nothing to show yet. The first two heal on the next sync,
-    /// which is [`Self::cover_artist`]'s own note.
-    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// A name a gallery can show. A deck with no name is a nameless tile, and `decks.name` has
@@ -1282,16 +1267,7 @@ fn category_name(conn: &Connection, category_id: i64) -> Result<Option<String>, 
 /// `the_gallery_count_reads_only_live_rows_in_active_categories` is what keeps the literal
 /// honest, and `an_active_maybeboard_is_part_of_the_deck_and_an_inactive_one_is_not` is what
 /// keeps the kind list in step with `SIZE_KINDS`.
-///
-/// **A `LazyLock<String>` rather than a `const`, and the `LEFT JOIN cards` is why.** That join
-/// was here for `c.artist` alone; [`crate::image_uri::front_face_selects`] reads the same row
-/// for the cover printing's picture, and the variants it emits come from
-/// [`crate::image_uri::LIST_VARIANTS`] rather than from anything spellable in a `const`. The
-/// `format!` is spent once per process — `OWNED_SPARE_SQL`'s arrangement one file over, for the
-/// same reason: a live read has to mean whatever the constant means today.
-static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!(
-        "SELECT d.id, d.name, d.format_key, fs.display_name, d.description,
+const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d.description,
             d.cover_card_id, d.cover_kind, c.artist, d.archived,
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
                         JOIN deck_categories cat ON cat.id = dc.category_id
@@ -1304,48 +1280,12 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             d.virtual_only, d.stats_open, d.notes_open, d.token_mode, d.managed_wishlist_mode,
-            d.token_rail_index,
-            {images}
+            d.token_rail_index
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
-       LEFT JOIN cards c ON c.id = d.cover_card_id",
-        images = crate::image_uri::front_face_selects("c").join(", ")
-    )
-});
+       LEFT JOIN cards c ON c.id = d.cover_card_id";
 
 fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
-    /// Where `DECK_SELECT`'s image columns start — one past `d.notes_open`, the
-    /// last named column. Named rather than inlined for `deck_card_select`'s reason: the
-    /// pairing arithmetic below is `front_face_map`'s and only the *offset* is this function's.
-    ///
-    /// **It moves with every column added to the end of the named list**, and it has moved
-    /// five times: it read 21 until schema v37 put `tokens_open` there, 22 until v38
-    /// appended the first two theory marks, 24 until v39 appended the third, 25 until v40
-    /// appended the deck kind, and 26 until v42 appended the stats disclosure. Forgetting to
-    /// move it is not silent for `tokens_open`'s
-    /// kind of column — the image reads are `Option<String>` and an `INTEGER` beside them makes
-    /// rusqlite refuse the conversion rather than answer a plausible URL — but it *is* silent
-    /// the other way round, which is what the comment on the image read itself describes.
-    ///
-    /// ⚠️ **v43 moved it twice and left it here, which is the one entry in that list that is
-    /// not a number changing.** The rung dropped `notes` out of the *middle* — position 12,
-    /// pulling every index above it down by one — and appended `notes_open` at the end, pushing
-    /// them back up. The two cancel exactly, so this constant reads 27 before and after and
-    /// every `r.get(n)` below it moved anyway. A reader checking the migration against this
-    /// number alone would conclude nothing had to change; the fourteen reads between
-    /// `theory_enabled` and `stats_open` are what actually shifted.
-    ///
-    /// User schema v47 moved it to 28, appending `token_stack` after `notes_open`.
-    ///
-    /// User schema v48 moved it to 29, appending the managed-wishlist column.
-    ///
-    /// User schema v51 moved it to 30, appending `token_rail_index`.
-    ///
-    /// User schema v52 left it at 30, and unlike v43 — which also left it where it was, while
-    /// fourteen reads under it moved — nothing else moved either: `token_mode` took
-    /// `token_stack`'s slot at 27 rather than being appended. See the read at 27 for what that
-    /// swap costs instead.
-    const IMAGE_COL: usize = 30;
     Ok(DeckRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -1477,20 +1417,6 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // hand the pile's slot to a bracket and type out perfectly; only the position tells them
         // apart.
         token_rail_index: r.get(29)?,
-        // **From 30**, last of all, for the reason written twelve comments up — the
-        // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
-        // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
-        //
-        // This read carries a failure the twenty-seven above it do not. Every one of those is
-        // caught by a value of the wrong *kind* turning up in a field; here the pair is
-        // (top-level, face) and `for_face` prefers the face, so a read one column out still
-        // answers a perfectly real URL — the right picture from the wrong slot, or the crop
-        // where the card belongs. No fixture carrying a single column can tell the two apart;
-        // `image_uri`'s `meld` row, which disagrees with itself in both columns and for both
-        // variants, is the shape that can.
-        image_uris: crate::image_uri::front_face_map(|i| {
-            r.get::<_, Option<String>>(IMAGE_COL + i)
-        })?,
     })
 }
 
@@ -1498,7 +1424,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
 /// caller gets back is the row the gallery would have read.
 pub(crate) fn read_deck(conn: &Connection, id: i64) -> Result<Option<DeckRow>, String> {
     conn.query_row(
-        &format!("{} WHERE d.id = ?1", *DECK_SELECT),
+        &format!("{DECK_SELECT} WHERE d.id = ?1"),
         params![id],
         deck_row,
     )
@@ -3783,10 +3709,7 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
 
 /// The gallery, archived decks last and most recently touched first.
 pub fn list_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
-    let sql = format!(
-        "{} ORDER BY d.archived ASC, d.updated_at DESC, d.id DESC",
-        *DECK_SELECT
-    );
+    let sql = format!("{DECK_SELECT} ORDER BY d.archived ASC, d.updated_at DESC, d.id DESC");
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], deck_row).map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -3902,8 +3825,8 @@ pub fn pip_costs(conn: &Connection) -> Result<Vec<DeckPipCosts>, String> {
 /// filters on [`Self::category_active`], dedupes on [`Self::name`], counts
 /// [`Self::game_changer`], and its `textOf` reads [`Self::oracle_text`] and [`Self::faces`]. That
 /// is every field it touches, so this row is its input exactly and not a narrowed [`DeckCardRow`]
-/// — which carries thirty-odd columns, a price expression and four image URLs per card, none of
-/// which a bracket estimate has any use for.
+/// — which carries thirty-odd columns and a price expression per card, none of which a bracket
+/// estimate has any use for.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BracketCardRow {
@@ -5301,17 +5224,6 @@ pub struct DeckCardRow {
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
     /// still holds — so a collection that shrank under a stored claim reads honestly.
     pub owned_quantity: i64,
-    /// The front face's picture on `cards.scryfall.io`, by variant, and `None` when this
-    /// printing has none worth fetching.
-    ///
-    /// [`crate::search::CardSummary::image_uris`] carries the argument in full: one variant
-    /// ([`crate::image_uri::LIST_VARIANT`], which is what `DECK_CARD_VARIANT` is on the other
-    /// side), face 0, the face-first precedence and the `soon.jpg` fence, every one of them
-    /// [`crate::image_uri::front_face_map`]'s and none of them respelled here.
-    ///
-    /// `None` for an orphan, whose printing has left `cards` — the same answer as every other
-    /// card fact on this row, and the state `CardArt` already draws "No card" for.
-    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// One deck and everything in it: the gallery's row, one variant's cards, and **every**
@@ -5399,10 +5311,6 @@ pub struct FormatSpecRow {
 ///
 /// The `ORDER BY` is [`read_deck_cards`]'s contract; see its doc for why it lives in SQL.
 fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
-    // The front face's picture, off the `cards` row this select already joins. Built by
-    // `image_uri::front_face_selects` so the precedence between the two columns stays that
-    // module's, rather than being respelled as a `COALESCE` here.
-    let image_uris = crate::image_uri::front_face_selects("c").join(", ");
     format!(
         "SELECT dc.id, dc.card_id,
             dc.category_id, cat.name, cat.kind, cat.is_active,
@@ -5434,12 +5342,7 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
             -- — a Sol Ring reading as colourless-identity, a Bolt's R reading as a mana source
             -- — with every field still holding a string of legal colour letters and nothing
             -- anywhere going red.
-            c.produced_mana,
-            -- From 37, last of all, for the reason written above `dc.finish`: this read is
-            -- positional and a column added anywhere else shifts every index after it into a
-            -- field of the same SQLite type, silently. As many columns as
-            -- `image_uri::FRONT_FACE_COLUMNS` says — two per variant a list row carries.
-            {image_uris}
+            c.produced_mana
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
        LEFT JOIN deck_labels t ON t.id = dc.label_id
@@ -5528,11 +5431,6 @@ fn read_deck_cards(
     variant: &str,
     marketplace: crate::sorting::Marketplace,
 ) -> Result<Vec<DeckCardRow>, String> {
-    // Where the image pair begins — the count of every column before it, which is what makes
-    // it last. Written down rather than spelled inside the closure, for the reason
-    // `deck_card_select`'s own comment gives.
-    const IMAGE_COL: usize = 37;
-
     let sql = deck_card_select(marketplace);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -5580,12 +5478,6 @@ fn read_deck_cards(
                 // wrong index is hardest to see, because `colors` at 21 and `color_identity`
                 // at 22 hold strings of the same letters. See the column's own comment.
                 produced_mana: r.get(36)?,
-                // From 37 — the (top-level, face) pairs `front_face_selects` added, one per
-                // variant, folded back up by the module that added them, face-first precedence
-                // and `soon.jpg` fence included.
-                image_uris: crate::image_uri::front_face_map(|i| {
-                    r.get::<_, Option<String>>(IMAGE_COL + i)
-                })?,
                 // Filled by `attribute_owned`, once the claims are known.
                 owned_quantity: 0,
             })
@@ -6026,11 +5918,6 @@ pub struct ShortfallRow {
     /// and never for the arithmetic**: no caller of [`live_shortfall`] writes a `deck_cards` row,
     /// so there is no pile for anything to land in and nothing here is an argument to anything.
     pub categories: Vec<String>,
-    /// The printing's picture, front face — **taken off the deck row rather than queried
-    /// again**, so [`crate::image_uri::front_face_map`]'s precedence keeps its one home. One per
-    /// row, because every copy folded into a row is the same printing. `None` for an orphan,
-    /// whose card has left `cards`.
-    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// Everything the **live** list is short of, folded at `(card_id, finish)`, in the deck's order.
@@ -6117,7 +6004,6 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
                     finishes: card.finishes.clone(),
                     short,
                     categories: vec![card.category_name.clone()],
-                    image_uris: card.image_uris.clone(),
                 });
             }
         }
@@ -9170,121 +9056,6 @@ mod tests {
         assert_eq!(decks[1].card_count, 0);
     }
 
-    /// **A deck row carries the *cover printing's* picture.**
-    ///
-    /// It is the one field on `DeckRow` that describes a different row, and the join it comes
-    /// off is `LEFT JOIN cards c ON c.id = d.cover_card_id` — the same one `cover_artist` uses.
-    /// So the failure this guards is not only an off-by-one: it is also reading the *deck's*
-    /// own row, which has no images at all and would answer `None` for every deck, silently,
-    /// with a suite full of decks that have no cover anyway.
-    ///
-    /// **`bolt-m10` is shaped like a `meld` printing and carries all four variants in both
-    /// columns, every one a different URL**, which is the only shape where every way of getting
-    /// this wrong gives a different answer rather than the right one by luck: face-first
-    /// precedence reversed answers `top.webp`, a pair read one column out answers the other
-    /// variant's, and a widening back to four answers extra keys that are real URLs.
-    ///
-    /// Four states, and three of them are the *same* blank frame to a reader: no cover at all,
-    /// a cover whose printing has left `cards`, and a printing whose only URL is Scryfall's
-    /// error page. `DeckTile` draws all three as "No cover" rather than as a failure.
-    #[test]
-    fn a_deck_row_carries_the_cover_printings_art() {
-        let conn = seeded();
-        conn.execute(
-            "UPDATE cards SET
-                 image_uris = json_object(
-                     'thumb','https://cards.scryfall.io/thumb/top.webp?4',
-                     'grid','https://cards.scryfall.io/grid/top.webp?4',
-                     'display','https://cards.scryfall.io/display/top.webp?4',
-                     'art','https://cards.scryfall.io/art/top.webp?4'),
-                 face_image_uris = json_array(json_object(
-                     'thumb','https://cards.scryfall.io/thumb/face0.webp?4',
-                     'grid','https://cards.scryfall.io/grid/face0.webp?4',
-                     'display','https://cards.scryfall.io/display/face0.webp?4',
-                     'art','https://cards.scryfall.io/art/face0.webp?4'))
-             WHERE id = 'bolt-m10'",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE cards SET image_uris = json_object(
-                 'art','https://errors.scryfall.com/soon.jpg')
-             WHERE id = 'bolt-jp'",
-            [],
-        )
-        .unwrap();
-
-        let cover = |card_id: &str| {
-            let deck = create_deck(&conn, &input(card_id, "commander")).unwrap();
-            update_deck(
-                &conn,
-                deck.id,
-                &DeckPatch {
-                    cover_card_id: Some(card_id.to_owned()),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-            deck.id
-        };
-        let art = cover("bolt-m10");
-        let poisoned = cover("bolt-jp");
-        let orphan = cover("gone-from-the-corpus");
-        let bare = create_deck(&conn, &input("No cover", "commander"))
-            .unwrap()
-            .id;
-
-        // Through `list_decks` *and* `read_deck`: both go through `deck_row`, and this is what
-        // says so rather than the call graph.
-        for reader in ["list", "read"] {
-            let of = |id: i64| -> Option<BTreeMap<String, String>> {
-                if reader == "list" {
-                    list_decks(&conn)
-                        .unwrap()
-                        .into_iter()
-                        .find(|d| d.id == id)
-                        .unwrap()
-                        .image_uris
-                } else {
-                    read_deck(&conn, id).unwrap().unwrap().image_uris
-                }
-            };
-
-            let uris = of(art).unwrap_or_else(|| panic!("the cover has a picture ({reader})"));
-            assert_eq!(
-                uris[crate::image_uri::ART_VARIANT],
-                "https://cards.scryfall.io/art/face0.webp?4",
-                "the tile's crop, from the face and not the top-level blob ({reader})"
-            );
-            assert_eq!(
-                uris[crate::image_uri::LIST_VARIANT],
-                "https://cards.scryfall.io/display/face0.webp?4",
-                "and the card, at its own offset ({reader})"
-            );
-            // Spelled out rather than read off `LIST_VARIANTS`: an assertion that reads the
-            // constant it is fencing can never fail when that constant moves, and the cover
-            // printing here carries all four variants, so a widening comes back as real URLs
-            // under real keys. A widening has to come here and say so.
-            assert_eq!(
-                uris.keys().map(String::as_str).collect::<Vec<_>>(),
-                ["art", "display"],
-                "what a list row carries and nothing else ({reader})"
-            );
-
-            assert_eq!(
-                of(poisoned),
-                None,
-                "an error page is a gap, not a cover ({reader})"
-            );
-            assert_eq!(
-                of(orphan),
-                None,
-                "a cover whose printing has left `cards` draws nothing ({reader})"
-            );
-            assert_eq!(of(bare), None, "and a deck with no cover ({reader})");
-        }
-    }
-
     /// The gallery's caption is about the deck the user has, and two things are not it: a
     /// **theory** row, which is a plan, and a row in a category that has been switched
     /// **off**, which counts toward nothing at all. Neither is a kind check — a main-deck
@@ -10781,20 +10552,6 @@ mod tests {
             // every deck carries and would read correct on a field that never left Rust. `2`
             // and not `3`, so it cannot be mistaken for `bracket` beside it.
             token_rail_index: 2,
-            // Two keys, both real URLs, because this is the one field on the row whose *shape*
-            // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
-            // TypeScript as an object of variant keys and not as a list or a bare string, and
-            // the deck tile reads `art` out of it by name.
-            image_uris: Some(BTreeMap::from([
-                (
-                    "art".to_owned(),
-                    "https://cards.scryfall.io/art/front/0/0/bolt.webp?17".to_owned(),
-                ),
-                (
-                    "display".to_owned(),
-                    "https://cards.scryfall.io/display/front/0/0/bolt.webp?17".to_owned(),
-                ),
-            ])),
         })
         .unwrap();
         assert_eq!(
@@ -10868,13 +10625,7 @@ mod tests {
                 // views read this key to know where to draw the pile, and a snake-cased one would
                 // be `undefined` — which `tokenRail.tsx` reads as *last*, so the pile would snap
                 // back on every open with no type error anywhere.
-                "tokenRailIndex": 2,
-                // The cover printing's picture, spelled out key by key: it is a map rather than
-                // a URL because `LIST_VARIANTS` decides what a row carries.
-                "imageUris": {
-                    "art": "https://cards.scryfall.io/art/front/0/0/bolt.webp?17",
-                    "display": "https://cards.scryfall.io/display/front/0/0/bolt.webp?17"
-                }
+                "tokenRailIndex": 2
             })
         );
 
@@ -11531,10 +11282,6 @@ mod tests {
             ("hidden", "off", true),
             "…including through `DECK_SELECT`'s positional reads, the neighbours untouched"
         );
-        assert!(
-            read.image_uris.is_none(),
-            "and `IMAGE_COL` did not move — a deck with no cover reads no picture"
-        );
 
         let payloads: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 20)
             .unwrap()
@@ -11975,10 +11722,6 @@ mod tests {
             (read.token_rail_index, read.managed_wishlist.as_str()),
             (1, "off"),
             "…including through `DECK_SELECT`'s positional reads, the neighbour untouched"
-        );
-        assert!(
-            read.image_uris.is_none(),
-            "and `IMAGE_COL` moved with it — a deck with no cover reads no picture"
         );
 
         let payloads: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 20)
@@ -15093,118 +14836,6 @@ mod tests {
     // Undoing a game change is `deck_undo.rs`'s `deck_update (game)` case, driven there over
     // the same sweep every other deck-level column goes through.
 
-    /// **A deck card carries the front face's image URL.**
-    ///
-    /// **`bolt-m10` is the row that makes the offset visible at all.** The pair starts directly
-    /// after `c.promo_types`, and with only top-level pictures in the fixture a read one column
-    /// early lands the top-level URL in the `face` slot and answers correctly anyway — the
-    /// mutation survived exactly that way. A `meld`-shaped row carrying **both** columns is the
-    /// only shape where the shifted read gives a different, wrong answer, and it pins the
-    /// face-first precedence in the same breath.
-    ///
-    /// **Both variants, since 2026-08-31**, and the second one is a second way for the offset
-    /// to be wrong rather than more of the same: with `display` and `art` the select list is
-    /// four expressions, and a read that pairs them up wrong hands the crop back under
-    /// `display` — still a URL, still on the image host, still versioned, and the wrong
-    /// picture. Every row here therefore carries a *different* URL per variant per column.
-    #[test]
-    fn a_deck_card_carries_the_front_faces_image_url() {
-        let conn = seeded();
-        conn.execute(
-            "UPDATE cards SET image_uris = json_object(
-                 'thumb','https://cards.scryfall.io/thumb/front/0/0/x.webp?17',
-                 'grid','https://cards.scryfall.io/grid/front/0/0/x.webp?17',
-                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17',
-                 'art','https://cards.scryfall.io/art/front/0/0/x.webp?17')
-             WHERE id = 'bolt-lea'",
-            [],
-        )
-        .unwrap();
-        // Scryfall's own error page: a URL with nothing to invalidate, on a host that does not
-        // serve card art. It must read as *no picture*, not as a URL a browser will request.
-        conn.execute(
-            "UPDATE cards SET image_uris = json_object(
-                 'display','https://errors.scryfall.com/soon.jpg')
-             WHERE id = 'bolt-jp'",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE cards SET
-                 image_uris = json_object(
-                     'display','https://cards.scryfall.io/display/top.webp?1',
-                     'art','https://cards.scryfall.io/art/top.webp?1'),
-                 face_image_uris = json_array(json_object(
-                     'display','https://cards.scryfall.io/display/face0.webp?1',
-                     'art','https://cards.scryfall.io/art/face0.webp?1'))
-             WHERE id = 'bolt-m10'",
-            [],
-        )
-        .unwrap();
-        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        let main = main_of(&conn, deck.id);
-        add(&conn, deck.id, "bolt-lea", main, 4);
-        add(&conn, deck.id, "bolt-jp", main, 1);
-        add(&conn, deck.id, "bolt-m10", main, 1);
-        // `serra-lea` carries neither image column, which is the ordinary state of 162 of the
-        // live corpus's 117 606 rows.
-        add(&conn, deck.id, "serra-lea", main, 1);
-
-        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
-        let row = card_row(&detail, "bolt-lea", main);
-        let art = row
-            .image_uris
-            .as_ref()
-            .expect("a versioned URL on the image host is a picture");
-        assert_eq!(
-            art[crate::image_uri::LIST_VARIANT],
-            "https://cards.scryfall.io/display/front/0/0/x.webp?17"
-        );
-        assert_eq!(
-            art[crate::image_uri::ART_VARIANT],
-            "https://cards.scryfall.io/art/front/0/0/x.webp?17",
-            "the crop, under its own key — a pairing read wrong swaps these two"
-        );
-        // Spelled out rather than read off `LIST_VARIANTS`, for the reason
-        // `a_deck_row_carries_the_cover_printings_art` gives: a widening has to edit a test.
-        assert_eq!(
-            art.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["art", "display"],
-            "every variant a list row carries, and nothing else"
-        );
-        // The two columns an off-by-one would have reached, both still plausible strings.
-        assert_eq!(row.promo_types, None, "the column directly before the pair");
-        assert_eq!(row.finish, None);
-
-        // The precedence **and** the offset, for both variants. See the doc above for why no
-        // other row here can fail when the pair is read a column early.
-        let meld = card_row(&detail, "bolt-m10", main)
-            .image_uris
-            .as_ref()
-            .expect("a meld-shaped printing has a front face");
-        assert_eq!(
-            meld[crate::image_uri::LIST_VARIANT],
-            "https://cards.scryfall.io/display/face0.webp?1",
-            "the face wins over the top-level blob, and the pair is read at its own offset"
-        );
-        assert_eq!(
-            meld[crate::image_uri::ART_VARIANT],
-            "https://cards.scryfall.io/art/face0.webp?1",
-            "and the second variant's pair is read at its own offset too"
-        );
-
-        assert_eq!(
-            card_row(&detail, "bolt-jp", main).image_uris,
-            None,
-            "an error page is a gap, not a picture"
-        );
-        assert_eq!(
-            card_row(&detail, "serra-lea", main).image_uris,
-            None,
-            "a printing with neither image column carries nothing"
-        );
-    }
-
     #[test]
     fn deck_card_and_format_spec_json_use_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(DeckCardRow {
@@ -15254,10 +14885,6 @@ mod tests {
             // A `None` here would pin the key's spelling and nothing about the three states.
             produced_mana: Some(String::new()),
             owned_quantity: 3,
-            image_uris: Some(BTreeMap::from([(
-                crate::image_uri::LIST_VARIANT.to_owned(),
-                "https://cards.scryfall.io/display/front/0/0/x.webp?17".to_owned(),
-            )])),
         })
         .unwrap();
         assert_eq!(
@@ -15277,10 +14904,7 @@ mod tests {
                 "everUncommon": false, "unitPrice": 400.0, "finish": "foil",
                 "promoTypes": "[\"surgefoil\"]",
                 "producedMana": "",
-                "ownedQuantity": 3,
-                "imageUris": {
-                    "display": "https://cards.scryfall.io/display/front/0/0/x.webp?17"
-                }
+                "ownedQuantity": 3
             })
         );
 

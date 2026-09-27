@@ -82,7 +82,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 /// What [`from_collection`] says when it was handed an empty list.
 ///
@@ -160,17 +160,6 @@ pub struct PullRow {
     /// and never for the write**: a pull changes no `deck_cards` row, so there is no pile for the
     /// copies to land in and nothing here is an argument to anything.
     pub categories: Vec<String>,
-    /// The printing's picture, front face — **taken off the deck row rather than queried again**.
-    ///
-    /// [`crate::deck::DeckCardRow::image_uris`] is already
-    /// [`crate::image_uri::front_face_map`]'s answer over
-    /// [`crate::image_uri::front_face_selects`]' columns, face-first precedence and `soon.jpg`
-    /// fence included, and this plan is built from those very rows. A second select would be a
-    /// second chance to respell a precedence that has one home.
-    ///
-    /// One per row rather than one per candidate, because every candidate for a row *is* the
-    /// same printing. `None` for an orphan, whose card has left `cards`.
-    pub image_uris: Option<BTreeMap<String, String>>,
     /// Every copy that could fill the hole, best first — see [`PullCandidate`]. **Never empty**:
     /// a row that reaches a caller with no candidates is a row the dialog could only draw as an
     /// apology, so [`plan`] drops it instead.
@@ -357,7 +346,6 @@ pub fn plan(conn: &Connection, deck_id: i64) -> Result<Vec<PullRow>, String> {
             finish: s.finish,
             short: s.short,
             categories: s.categories,
-            image_uris: s.image_uris,
             candidates,
         });
     }

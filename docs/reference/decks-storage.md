@@ -1200,12 +1200,9 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `update_deck`'s `SET` list — read them off the code, for the reason `separate_x_group`'s bullet
   gives — and are deliberately **not on `DeckInput`**: they are a reading preference, and a deck
   being born has not been read yet, so they take their DDL default like the columns beside them.
-  `DECK_SELECT` puts them last of the deck's own columns and `deck_row`'s `IMAGE_COL` is one past
-  `d.theory_mark_unplanned` — **it moved one further along when v39 appended the third** — which
-  is that positional trap read one grain finer: all three are `INTEGER` among the row's other
-  `INTEGER`s, so a column inserted anywhere but last hands a bracket to a bool and nothing goes
-  red — while `IMAGE_COL` left behind is loud, because the image reads are `Option<String>` and
-  rusqlite refuses an `INTEGER` there.
+  `DECK_SELECT` put them last of the deck's own columns, which is that positional trap read one
+  grain finer: all three are `INTEGER` among the row's other `INTEGER`s, so a column inserted
+  anywhere but last hands a bracket to a bool and nothing goes red.
   **Three columns rather than one enumerated one**, and the reason is expressive rather than
   tidy: `none | exact | both` cannot spell blue *without* green, and blue without green is a real
   answer — a reader who cares that a card is present and not which printing it is. The third
@@ -3668,7 +3665,7 @@ The token-stacks work ([the spec](../superpowers/specs/2026-09-26-token-stacks-d
 draws a token in a deck view's pile with the deck card's own `DeckCardFace` and `CardChin`, so a
 row has to say what a deck card's chin says. `DeckTokenRow` gained six fields, **every one of them
 about the effective printing** — `card_id` where the reader picked art, `default_card_id`
-otherwise, the precedence `image_uris` already followed. **Since v52 that is simply the entry's
+otherwise, the precedence the row's picture already followed. **Since v52 that is simply the entry's
 printing**: a row is one entry, `card_id` is always its printing (the resolver's default for an
 implicit entry), and the row also carries the entry's `finish`, its effective `quantity`, its
 `implicit` flag and the token's effective `state` (`auto` where `deck_tokens` holds no row). The
@@ -3733,13 +3730,6 @@ not a style preference: that read is positional, and a column added anywhere but
 every later index into a field of the same SQLite type, silently — which is how `finish` (TEXT)
 once landed in `needs_review` (TEXT).
 
-**And the named list has a tail after it, so a column added here owes a second edit.**
-`DECK_SELECT` interpolates `image_uri::front_face_selects` past the named columns, and `deck_row`'s
-`IMAGE_COL` is where they start — it read **21** until v36 and reads **22** now. Forgetting to move
-it is one of the few positional mistakes in this file that is *not* silent: the image reads are
-`Option<String>` and the column they would land on is an `INTEGER`, so rusqlite refuses the
-conversion rather than answering a plausible URL.
-
 **It writes no `deck_audit` row and no undo step, and it is not on `deck_undo::DECK_FIELDS`.**
 `record_deck_edit` names the fields a history row is worth writing for and this is not one of
 them — a disclosure triangle is not an edit to the deck — and with no history row `update_deck`
@@ -3754,9 +3744,8 @@ User schema **v42** (2026-09-10, [issue #389](https://github.com/Msgaihede/mtg-g
 is `decks.stats_open INTEGER NOT NULL DEFAULT 1` — whether the editor's **Deck stats** band is
 expanded. Everything in the section above applies to it unchanged and by construction: it is on the
 `decks` capture `Spec`, it rides `DeckPatch` / `DeckRow` / `DECK_SELECT` with no per-field arm, it
-is the last *named* column of that select and the last positional read in `deck_row`, it moves
-`IMAGE_COL` one further along, it writes no `deck_audit` row and no undo step, and it moves
-`updated_at` like every other `update_deck` write.
+is the last *named* column of that select and the last positional read in `deck_row`, it writes no
+`deck_audit` row and no undo step, and it moves `updated_at` like every other `update_deck` write.
 
 **The default is the whole of the difference, and it is a decision rather than a copy that drifted.**
 `tokens_open` is `DEFAULT 0`: that band was new when its column landed, so a collapsed default cost
@@ -3879,7 +3868,7 @@ because `main` shipped its own v50 first — `price_snapshots.copies`. It rides
   `d.managed_wishlist_mode`; `deck_row` reads it at **29**, and `IMAGE_COL` moved **29 → 30**.
   `DeckBefore` — the before-image `update_deck` audits against — reads it at **17**, and
   `update_deck` binds it as `?23`. `token_rail_index_round_trips_audits_and_undoes` pins the
-  default, the read beside its neighbour, `IMAGE_COL`, the exact audit payload, the no-op re-send,
+  default, the read beside its neighbour, the exact audit payload, the no-op re-send,
   the duplicate and the undo; a mutation that took the column off `DECK_FIELDS` failed it at the
   Ctrl+Z assertion.
 - **How the page spends it** — Stacks' drag and grip, Grid and Text inserting the pile at that
@@ -3927,14 +3916,15 @@ holds.
 Added 2026-09-20 with the band's redesign, so that a note card can draw a **44×32 `art` crop** of
 each card it names. `attachments_by_note` resolves a **representative printing** per attachment —
 the printing **this deck holds** where it holds one, and any printing the corpus has otherwise —
-and `DeckNoteCard` carries `cardId` and `imageUris` beside the oracle id and the name.
+and `DeckNoteCard` carries its `cardId` beside the oracle id and the name. (It carried `imageUris`
+too until 2026-09-27; the crop is drawn through `mtgimg://` off `cardId` alone.)
 
-**Both are answers and never keys.** Never matched on, never written, never synced, and
+**It is an answer and never a key.** Never matched on, never written, never synced, and
 **honestly different between two reads of one row**: which printing wins moves with the deck's own
 list, so swapping a printing changes the picture a note draws without changing anything the note
 stores. `cardId: null` is the **orphan** — an oracle id the corpus knows no printing of at all —
 and it draws the empty frame rather than a broken image. A card merely **cut from the deck** is
-not that case and keeps both, because the fallback arm searches the whole corpus.
+not that case and keeps its printing, because the fallback arm searches the whole corpus.
 
 **No migration, and that is the point.** `deck_note_cards` is unchanged — the same columns, the
 same `idx_deck_note_cards_grain` on `(note_id, oracle_id)` — so the synced-table census, its
@@ -3957,19 +3947,19 @@ LEFT JOIN cards p ON p.id = (
 )
 ```
 
-**The aggregate form is what the design document drew, and it has a real defect.** The spec's §5
+**The aggregate form is what the design document drew, and it had a real defect.** The spec's §5
 keeps the `GROUP BY nc.note_id, nc.oracle_id` the statement already had and picks each column with
 an aggregate of its own — `coalesce(min(c.name), nc.oracle_id)` beside
 `coalesce(min(CASE WHEN dc.card_id IS NOT NULL THEN c.id END), min(c.id))`. **Those two agree by
 luck rather than by construction**: every printing of one oracle card shares its name, so the name
 aggregate cannot disagree with anything, and the spec is right that the `GROUP BY` costs no rows.
-The picture is where the luck runs out, and it runs out on the **third** column rather than on
-either of these. `min(json_extract(c.image_uris, '$.art'))` is a `min()` over a *different* column
-of the same joined group, so it is free to answer **one printing's id beside another printing's
-art**: one card's identity under a different card's picture, out of a query that returns a row for
-every attachment and errors on none, with nothing in either build able to see it. A subquery that
-answers a single `id` makes that unrepresentable rather than unlikely, and the `GROUP BY` goes
-away with it.
+The picture was where the luck ran out, on the **third** column: `min(json_extract(c.image_uris,
+'$.art'))` was a `min()` over a *different* column of the same joined group, free to answer **one
+printing's id beside another printing's art**, with nothing in either build able to see it. The
+picture columns left the read on 2026-09-27 with `DeckNoteCard.imageUris`, so what it selects now
+is only the pair the aggregates would have agreed on — and the subquery stays, because a single `id`
+makes that mismatch unrepresentable for whatever column is next taken off `p`, and the `GROUP BY`
+goes away with it.
 
 Four more things about it:
 
@@ -3996,23 +3986,6 @@ Four more things about it:
 the near side rather than cosmetic: `NoteCard` draws the **first three** crops and counts the rest
 as `+N more`, so the order decides which three a reader sees. An orphan sorts by its own oracle id,
 which is the same string it is named by.
-
-### ⚠️ This statement has an `IMAGE_COL` of its own, and it is **4** rather than 27
-
-Not to be confused with `DECK_SELECT`'s, which the *`IMAGE_COL` stays at 27* subsection below is
-about: that is a different statement in a different module, and the two numbers have nothing to do
-with each other beyond the name. Here it is *one past `p.id`*, the last named column, and
-`crate::image_uri::front_face_selects("p")` appends the rest.
-
-The failure it fences is the one `card.rs`'s `fixture_with_both_image_columns` exists for, and it
-is worse than an error: the appended columns are **(top-level, face) pairs**, one pair per
-`image_uri::LIST_VARIANTS` entry, and `for_face` prefers the face — so a read one column *early*
-puts the top-level URL into the face slot and answers a **perfectly real URL**, the right crop on
-the right host, versioned. A fixture carrying one column, or one variant, cannot tell that from a
-correct read. Only a distinct URL in every one of `FRONT_FACE_COLUMNS`' slots can, which is what
-`an_attachment_names_the_printing_this_deck_holds` seeds: two printings of one oracle card, each
-with a different picture in each slot, and **the printing the deck holds sorting *second* by id**
-so that the preference is the only thing that could have chosen it.
 
 ### The two tables, and why only one has a grain
 
@@ -4056,18 +4029,17 @@ and nine in the before-image mapper down by one, and moves `update_deck`'s `?9`�
 `IMAGE_COL` reads **27** before and after. The one constant a reader would check to decide whether
 the read had moved is the one number that did not.
 
-**This is `deck.rs`'s `DECK_SELECT` and it is not the only `IMAGE_COL` in the crate** — every
-statement that appends `image_uri::front_face_selects` declares one of its own, and
-`grep -rn "const IMAGE_COL" src-tauri/src/` is the census rather than a number written here.
-`attachments_by_note`'s is **4**; see *…and draws one by `card_id`* above. Same name, same kind of
-fence, unrelated statements: no one of them constrains another, and reading one subsection's
-figure into another's statement is a read that answers real URLs for the wrong printing.
+**`deck.rs`'s `IMAGE_COL` is gone since 2026-09-27**, with the image tail it pointed at and every
+list DTO's `imageUris`, so each `IMAGE_COL` figure this page records for `DECK_SELECT` is a rung's
+history rather than a constant to read. The statements that still append
+`image_uri::front_face_selects` declare their own, and `grep -rn "const IMAGE_COL" src-tauri/src/`
+is the census.
 
 ### The eight commands
 
 | Command | Answers |
 | --- | --- |
-| `deck_notes(deckId)` | every note on the deck in `sort_order`, each with the oracle ids it names and — per id — a card name, a representative printing and that printing's image urls |
+| `deck_notes(deckId)` | every note on the deck in `sort_order`, each with the oracle ids it names and — per id — a card name and a representative printing |
 | `deck_note_create(deckId, title, body, oracleIds)` | the new row |
 | `deck_note_update(deckId, id, title?, body?)` | the updated row |
 | `deck_note_delete(deckId, id)` | — |

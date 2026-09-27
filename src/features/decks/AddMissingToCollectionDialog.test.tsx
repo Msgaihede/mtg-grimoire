@@ -41,7 +41,6 @@ function row(over: Partial<DeckMissingRow> = {}): DeckMissingRow {
     finish: null,
     short: 3,
     categories: ["Removal"],
-    imageUris: null,
     wishes: [],
     ...over,
   };

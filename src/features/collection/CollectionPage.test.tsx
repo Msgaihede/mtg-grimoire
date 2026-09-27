@@ -6836,23 +6836,13 @@ describe("walking up to a level nothing has cached", () => {
 });
 
 describe("the collection wall's art", () => {
-  /** One key, because `WALL_CARD_VARIANT` is the one size any wall draws. */
-  const SCRYFALL = { display: "https://cards.scryfall.io/display/front/c/1/c1.webp?1706230661" };
-
-  /**
-   * The row carries a Scryfall URL, so the claim is that the local cache still wins, not that
-   * nothing was passed. A wall that preferred the row's URL would refetch a screenful of art the
-   * cache already holds, over the network and at Scryfall's expense, and it would still draw
-   * cards — so there would be nothing to see.
-   */
-  it("keeps drawing the cached protocol picture for a row that carries a URL", async () => {
+  it("draws the cached protocol picture", async () => {
     useAppStore.setState({ collectionView: "grid" });
-    collectionList.mockResolvedValue(page([{ ...BOLT, imageUris: SCRYFALL }]));
+    collectionList.mockResolvedValue(page([BOLT]));
     wrap(<CollectionPage />);
 
     const src = (await screen.findByAltText("Lightning Bolt")).getAttribute("src");
     expect(src).toContain("mtgimg");
-    expect(src).not.toContain("scryfall.io");
   });
 });
 

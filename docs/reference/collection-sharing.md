@@ -227,10 +227,10 @@ rotation through four sets, three finishes and five grades.
 > second.**
 
 The same fixture round produced a second lesson of its own: the plan's fixture keyed `image_uris`
-on `'normal'`, a key this app does not store (`image_uri::LIST_VARIANT` is `display`). Every `img`
-would have been **silently absent**, all nine planned tests would still have passed, and the
-41.3 B/card figure would have been measured over a document missing its longest field. **A fixture
-can make a whole column untested without failing anything.**
+on `'normal'`, a key this app does not store (`image_uri::FRONT_FACE_VARIANT` is `display`).
+Every `img` would have been **silently absent**, all nine planned tests would still have passed,
+and the 41.3 B/card figure would have been measured over a document missing its longest field.
+**A fixture can make a whole column untested without failing anything.**
 
 ---
 

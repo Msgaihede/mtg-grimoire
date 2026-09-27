@@ -1194,10 +1194,6 @@ export function CollectionPage() {
         setCode: row.setCode,
         collectorNumber: row.collectorNumber,
         rarity: row.rarity,
-        // Carried across with the row's other card facts, and drawn by nothing here — see
-        // `GridCard.imageUris`. Off the group's first row like `unitPrice` below, and for the same
-        // reason: every row behind this tile names the same printing.
-        imageUris: row.imageUris,
         copies: copies.get(key) ?? 0,
         // Narrowed against `FINISHES` rather than cast, for the reason the key above is *not*
         // narrowed: `finish` is TEXT with a CHECK rather than an enum this side knows, so a word
@@ -2267,9 +2263,9 @@ export function CollectionPage() {
    *
    * # Which row, and what the floor is
    *
-   * **The first row behind the art** — the same row {@link tiles} takes `id`, `name`, `unitPrice`
-   * and `imageUris` from, so the tile's identity and the tile's writes address one entry rather
-   * than two. "First" is the query's **current sort order** and is therefore not stable across a
+   * **The first row behind the art** — the same row {@link tiles} takes `id`, `name` and
+   * `unitPrice` from, so the tile's identity and the tile's writes address one entry rather than
+   * two. "First" is the query's **current sort order** and is therefore not stable across a
    * re-sort: the same picture can address a different entry after the reader presses a column
    * header. That is the accepted cost of the decision rather than an oversight — the alternative
    * is a dialog per press (which is what a *drag* gets, because a drag is already a question), and

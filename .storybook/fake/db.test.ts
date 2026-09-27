@@ -9042,44 +9042,14 @@ describe("deck notes", () => {
       oracleIds: ["o-not-in-the-corpus"],
     });
     // **`cardId: null` is the orphan and is the other half of the same sentence**: there is no
-    // printing to name, so the card draws an empty frame rather than a broken image, and the
-    // picture is `null` with it rather than an empty map.
+    // printing to name, so the card draws an empty frame rather than a broken image.
     expect(note.cards).toEqual([
       {
         oracleId: "o-not-in-the-corpus",
         name: "o-not-in-the-corpus",
         cardId: null,
-        imageUris: null,
       },
     ]);
-  });
-
-  /**
-   * **The picture, pinned on a card that has one** — the half the null arm below cannot see.
-   *
-   * `imageUris` is folded rather than passed through by every reader of it (a note card's
-   * thumbnail, `deckTokenViews`, `CombosDialog`), so a fake answering `null` throughout would
-   * make the workbench the one place each of those resolutions is never exercised — which is
-   * exactly what {@link frontFaceImageUris}' own comment warns about. Asserted **against the
-   * fixture's own row** rather than against a pasted URL: a hard-coded string would go stale with
-   * the generated corpus and would pass a `frontFaceImageUris` that had stopped reading the card.
-   */
-  it("draws the picture of the printing it named, and not an empty map", () => {
-    const db = notesDb();
-    const note = writeHandlers(db).deck_note_create({
-      deckId: 1,
-      title: "t",
-      body: "b",
-      oracleIds: [BOLT_ORACLE],
-    });
-    const [attached] = note.cards;
-    const printing = db.cards.find((c) => c.id === attached.cardId);
-
-    expect(printing).toBeDefined();
-    expect(printing?.normalUrl).toBeTruthy();
-    expect(attached.imageUris).not.toBeNull();
-    expect(attached.imageUris?.display).toBe(printing?.normalUrl);
-    expect(attached.imageUris?.art).toBe(printing?.artCropUrl);
   });
 
   it("names the deck's own printing where the deck holds one, and any printing otherwise", () => {
@@ -14802,33 +14772,16 @@ describe("the combos one card is in", () => {
    * reader's `cards` table are two downloads on two schedules, so this is an ordinary state and
    * the fixture reaches it on purpose. The name is the whole of what the row can draw.
    *
-   * The piece beside it is the control: a printing id off the corpus and the *real* Scryfall URL
-   * off that row. A handler that fell back to the oracle id for `cardId`, or that minted a URL
-   * out of one, passes nothing here.
+   * The piece beside it is the control: a printing id off the corpus. A handler that fell back
+   * to the oracle id for `cardId` passes nothing here.
    */
   it("addresses a piece by a printing, and answers null for a card the corpus lacks", () => {
     const pieces = ask(seed("starter")).combos.find((c) => c.id === "1183-3587")!.pieces;
 
     expect(pieces.map((p) => p.name)).toEqual(["Boros Reckoner", "Blasphemous Act"]);
     expect(pieces[0].cardId).toBe(RECKONER.id);
-    expect(pieces[0].imageUris?.display).toBe(RECKONER.normalUrl);
     expect(pieces[1].cardId).toBeNull();
-    expect(pieces[1].imageUris).toBeNull();
     expect(pieces[1].owned).toBe(0);
-  });
-
-  /**
-   * `imageUrisMissing` is a corpus whose `image_uris` column is null throughout, and what it costs
-   * is the **picture** and not the printing: a piece with no art is still a piece a reader can
-   * press. A handler that nulled `cardId` alongside the URLs would make the whole row inert.
-   */
-  it("loses the pictures and keeps the printings under imageUrisMissing", () => {
-    const db = { ...seed("starter"), fault: "imageUrisMissing" as const };
-
-    const piece = ask(db).combos[0].pieces[0];
-
-    expect(piece.imageUris).toBeNull();
-    expect(piece.cardId).toBe(RECKONER.id);
   });
 
   /**
@@ -15094,34 +15047,14 @@ describe("deck tokens", () => {
   });
 
   /**
-   * **The picture is the entry's printing**, and the starter world is the fixture that can tell
-   * the entry from the resolver apart: deck 1's Treasure entry is the older art while the resolver
-   * names the newer, so a row taking the resolver's would draw the art the reader chose against.
+   * **The chin's facts are the entry's printing's** — `drawn_for` in `deck_tokens.rs` reads them
+   * off the printing `cardId` names, and the starter world is the fixture that can tell the entry
+   * from the resolver apart: deck 1's Treasure entry is the older art while the resolver names the
+   * newer, so a row taking the resolver's would caption the art the reader chose against.
    *
-   * The URLs are read back off `CARDS` rather than written out: they are the fixture's own real
-   * Scryfall ones, and an assertion quoting them would pin a generated file's contents.
+   * Read back off `CARDS` rather than written out: an assertion quoting them would pin a
+   * generated file's contents.
    */
-  it("carries the picture of the entry's printing", () => {
-    const byId = new Map(CARDS.map((c) => [c.id, c]));
-    const picture = (id: string) => ({
-      display: byId.get(id)!.normalUrl,
-      art: byId.get(id)!.artCropUrl,
-    });
-    const rows = tokensOf(seed("starter"), 1);
-
-    const treasure = rows.find((r) => r.name === "Treasure")!;
-    // Not vacuous: the two have to name different printings for the precedence to be visible.
-    expect(treasure.cardId).not.toBe(treasure.defaultCardId);
-    expect(treasure.imageUris).toEqual(picture(treasure.cardId));
-
-    // And an implicit entry is the resolver's printing.
-    const construct = rows.find((r) => r.name === "Construct")!;
-    expect(construct.imageUris).toEqual(picture(construct.defaultCardId));
-  });
-
-  /** **The chin's facts are the entry's printing's** — `drawn_for` in `deck_tokens.rs` reads the
-   *  picture and the chin off that one printing. Read back off `CARDS` for the picture test's
-   *  reason. */
   it("carries the chin facts of the entry's printing", () => {
     const byId = new Map(CARDS.map((c) => [c.id, c]));
     const chin = (id: string) => {
@@ -15261,15 +15194,6 @@ describe("deck tokens", () => {
       finishes: null,
       unitPrice: null,
     });
-  });
-
-  /** The `imageUrisMissing` fault is the whole corpus with both URL columns empty, so every
-   *  token answers `null`. */
-  it("answers no picture at all under the imageUrisMissing fault", () => {
-    const rows = tokensOf({ ...seed("starter"), fault: "imageUrisMissing" }, 1);
-
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((r) => r.imageUris === null)).toBe(true);
   });
 
   /** A dismissal is still a derived row: whether `hidden` is *drawn* is `deckTokenViews`'

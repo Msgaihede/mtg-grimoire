@@ -44,7 +44,6 @@ const BOLT: DeckMissingRow = {
   finish: null,
   short: 3,
   categories: ["Removal"],
-  imageUris: null,
   wishes: [],
 };
 
@@ -58,7 +57,6 @@ const BOROS_CHARM: DeckMissingRow = {
   finish: null,
   short: 2,
   categories: ["Burn", "Sideboard"],
-  imageUris: null,
   wishes: [wish({ id: 11, quantity: 4, folderId: 3, folderName: "Buy soon" })],
 };
 
@@ -76,7 +74,6 @@ const SWORDS: DeckMissingRow = {
   finish: "foil",
   short: 2,
   categories: ["Removal"],
-  imageUris: null,
   wishes: [
     wish({ id: 21, quantity: 2 }),
     wish({ id: 22, quantity: 1, folderId: 3, folderName: "Buy soon" }),

@@ -84,7 +84,7 @@ use crate::sorting::Marketplace;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 /// The `all_parts` `component` values that name a token outright.
 ///
@@ -246,22 +246,9 @@ pub struct DeckTokenRow {
     /// Whether this is the implicit entry of a token with no entries in this list — the one the
     /// first write to it materialises (rule 2).
     pub implicit: bool,
-    /// Where the picture of **this entry's printing** is, per variant.
-    ///
-    /// **[`Self::card_id`]'s printing and never the resolver's**, which is the whole of
-    /// [`drawn_for`]: the two are the same row for an implicit entry and different for exactly
-    /// the entries the reader picked, so taking the resolver's would describe the deck's default
-    /// Treasure on a tile the reader chose the other Treasure for — a wrong picture rather than
-    /// a missing one.
-    ///
-    /// Built by [`crate::image_uri::front_face_map`] rather than read off `image_uris`
-    /// directly, because a `double_faced_token` carries **no** top-level blob — all 120 such
-    /// rows in the corpus keep their URLs on `card_faces[0]` alone — and face-first precedence
-    /// is that module's rule rather than one respelled here.
-    pub image_uris: Option<BTreeMap<String, String>>,
-    /// This entry's printing's set code — the printing [`Self::image_uris`] describes. **All six
-    /// chin fields below are `None` together when the printing has left the corpus**, the
-    /// picture's own answer for that case.
+    /// This entry's printing's set code — [`Self::card_id`]'s printing and never the resolver's,
+    /// which is the whole of [`drawn_for`]. **All six chin fields below are `None` together when
+    /// the printing has left the corpus.**
     pub set_code: Option<String>,
     /// This entry's printing's collector number.
     pub collector_number: Option<String>,
@@ -300,10 +287,6 @@ struct Printing {
     set_name: Option<String>,
     rarity: Option<String>,
     finishes: Option<String>,
-    /// The front face's picture per variant, folded up by
-    /// [`crate::image_uri::front_face_map`]. Read here rather than at [`row_of`] so that the
-    /// derived row and the hand-added one cannot resolve it two ways.
-    image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// The columns [`Printing`] reads, in its own order.
@@ -312,23 +295,10 @@ struct Printing {
 /// fetched once to answer the `emblem` half of the keep rule and once more would be a second query
 /// per `all_parts` entry for fields that arrived with the first.
 ///
-/// **A `LazyLock<String>` rather than a `const`, for [`crate::deck`]'s `DECK_SELECT` reason**: the
-/// picture columns come from [`crate::image_uri::front_face_selects`], and how many there are is
-/// [`crate::image_uri::LIST_VARIANTS`]' answer rather than anything spellable in a `const`. The
-/// `format!` is spent once per process.
-///
-/// **The image expressions are last and every named column stands in front of them**, which is
-/// [`crate::deck`]'s `deck_row` rule and holds here for the same reason: [`printing_from`] reads by
-/// position, so a column added anywhere but the end shifts every later index into a field of the
-/// same SQLite type, silently. Both queries below are a bare `FROM cards`, so `cards` is the alias
-/// the expressions qualify with.
-static PRINTING_COLUMNS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!(
-        "id, oracle_id, name, type_line, layout, power, toughness, colors,
-     oracle_text, released_at, set_code, collector_number, set_name, rarity, finishes, {images}",
-        images = crate::image_uri::front_face_selects("cards").join(", ")
-    )
-});
+/// [`printing_from`] reads by position, so a column added anywhere but the end shifts every later
+/// index into a field of the same SQLite type, silently — [`crate::deck`]'s `deck_row` rule.
+const PRINTING_COLUMNS: &str = "id, oracle_id, name, type_line, layout, power, toughness, colors,
+     oracle_text, released_at, set_code, collector_number, set_name, rarity, finishes";
 
 /// A [`Printing`], or `None` when the row carries no `oracle_id` and so cannot be grained.
 ///
@@ -336,13 +306,6 @@ static PRINTING_COLUMNS: std::sync::LazyLock<String> = std::sync::LazyLock::new(
 /// one** (debug corpus, 2026-09-07) — so this is a fence around a case that does not currently
 /// occur, written the way [`crate::card::list_printings`] fences the blank.
 fn printing_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Printing>> {
-    /// Where [`PRINTING_COLUMNS`]' image expressions start - one past `finishes`, the last named
-    /// column. Named rather than inlined for `deck::deck_row`'s reason: the pairing arithmetic
-    /// below is [`crate::image_uri::front_face_map`]'s and only the *offset* is this function's.
-    /// It moves with every column added to the named list: 12 until the chin's three columns
-    /// (2026-09-26) put `set_name`, `rarity` and `finishes` in front of the pictures.
-    const IMAGE_COL: usize = 15;
-
     let oracle_id: Option<String> = r.get(1)?;
     let Some(oracle_id) = oracle_id.filter(|o| !o.trim().is_empty()) else {
         return Ok(None);
@@ -365,17 +328,6 @@ fn printing_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Printing>> {
         set_name: r.get(12)?,
         rarity: r.get(13)?,
         finishes: r.get(14)?,
-        // **From 15**, one past `finishes`, the last named column — the
-        // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
-        // the (top-level, face) pairs `front_face_map` folds back up.
-        //
-        // This read carries the failure `deck::deck_row` records: the pair is (top-level,
-        // face) and `for_face` prefers the face, so a read one column out still answers a
-        // perfectly real URL - the right picture from the wrong slot, or the crop where the
-        // card belongs.
-        image_uris: crate::image_uri::front_face_map(|i| {
-            r.get::<_, Option<String>>(IMAGE_COL + i)
-        })?,
     }))
 }
 
@@ -484,8 +436,7 @@ fn derive(conn: &Connection, deck_id: i64, variant: &str) -> Result<Derivation, 
 
     let mut printings = conn
         .prepare(&format!(
-            "SELECT {columns} FROM cards WHERE id = ?1",
-            columns = *PRINTING_COLUMNS
+            "SELECT {PRINTING_COLUMNS} FROM cards WHERE id = ?1"
         ))
         .map_err(|e| e.to_string())?;
     let mut blobs = conn
@@ -751,8 +702,7 @@ fn str_field(v: &serde_json::Value, key: &str) -> Option<String> {
 /// printing, finish, quantity and drawing beside them.
 ///
 /// `drawn` is [`drawn_for`]'s answer for the entry's printing and is passed in rather than taken
-/// off the token's printing, because the two disagree for exactly the entries the reader picked —
-/// see [`DeckTokenRow::image_uris`].
+/// off the token's printing, because the two disagree for exactly the entries the reader picked.
 fn row_of(
     token: &Token<'_>,
     drawn: Drawn,
@@ -780,7 +730,6 @@ fn row_of(
         finish,
         quantity,
         implicit,
-        image_uris: drawn.image_uris,
         set_code: drawn.set_code,
         collector_number: drawn.collector_number,
         set_name: drawn.set_name,
@@ -790,11 +739,10 @@ fn row_of(
     }
 }
 
-/// What a tile draws of the printing it **addresses** — the picture, and the chin and price
-/// beneath it. All `None` ([`Default`]) for a printing that has left the corpus.
+/// What a tile draws beneath the printing it **addresses** — the chin and the price. All `None`
+/// ([`Default`]) for a printing that has left the corpus.
 #[derive(Debug, Default)]
 struct Drawn {
-    image_uris: Option<BTreeMap<String, String>>,
     set_code: Option<String>,
     collector_number: Option<String>,
     set_name: Option<String>,
@@ -803,18 +751,16 @@ struct Drawn {
     unit_price: Option<f64>,
 }
 
-/// What an entry's tile draws: `card_id`'s picture, chin and price, the price at `finish`.
+/// What an entry's tile draws: `card_id`'s chin and price, the price at `finish`.
 ///
 /// **The entry's printing and never the resolver's**, and getting it the other way round is a
-/// *wrong* picture rather than a missing one — the deck's default Treasure drawn on the tile the
-/// reader chose the other Treasure for. The chin under it would then name a set the art is not
-/// from, and the pile heading would sum the wrong printing's price.
+/// *wrong* chin rather than a missing one — the tile draws `card_id`'s art, so the chin under it
+/// would name a set the art is not from, and the pile heading would sum the wrong printing's price.
 ///
 /// The extra row read is skipped whenever the entry *is* the resolver's printing, which is every
 /// implicit entry; the price is one read either way. **A printing that has left the corpus
 /// answers all `None` rather than falling back to the resolver's**: the tile is addressing that
-/// printing, so art, a chin or a price from a different one would be this function inventing a
-/// card.
+/// printing, so a chin or a price from a different one would be this function inventing a card.
 fn drawn_for(
     conn: &Connection,
     printing: &Printing,
@@ -826,7 +772,6 @@ fn drawn_for(
         return picked_printing(conn, card_id, finish, market);
     }
     Ok(Drawn {
-        image_uris: printing.image_uris.clone(),
         set_code: Some(printing.set_code.clone()),
         collector_number: Some(printing.collector_number.clone()),
         set_name: printing.set_name.clone(),
@@ -836,25 +781,19 @@ fn drawn_for(
     })
 }
 
-/// One picked printing's picture and chin, and then its price — the columns a tile needs rather
-/// than a second whole [`Printing`], and no `oracle_id` fence, because the pick is addressed by
-/// id and was never grained.
+/// One picked printing's chin, and then its price — the columns a tile needs rather than a second
+/// whole [`Printing`], and no `oracle_id` fence, because the pick is addressed by id and was never
+/// grained.
 fn picked_printing(
     conn: &Connection,
     card_id: &str,
     finish: &str,
     market: Marketplace,
 ) -> Result<Drawn, String> {
-    /// Where the image expressions start — one past `finishes`, [`printing_from`]'s `IMAGE_COL`
-    /// rule for a list of its own.
-    const IMAGE_COL: usize = 5;
     let found = conn
         .query_row(
-            &format!(
-                "SELECT set_code, collector_number, set_name, rarity, finishes, {images}
-                   FROM cards WHERE id = ?1",
-                images = crate::image_uri::front_face_selects("cards").join(", ")
-            ),
+            "SELECT set_code, collector_number, set_name, rarity, finishes
+               FROM cards WHERE id = ?1",
             params![card_id],
             |r| {
                 Ok(Drawn {
@@ -863,9 +802,6 @@ fn picked_printing(
                     set_name: r.get(2)?,
                     rarity: r.get(3)?,
                     finishes: r.get(4)?,
-                    image_uris: crate::image_uri::front_face_map(|i| {
-                        r.get::<_, Option<String>>(IMAGE_COL + i)
-                    })?,
                     unit_price: None,
                 })
             },
@@ -1018,10 +954,9 @@ fn stored_entries(
 fn newest_printing(conn: &Connection, oracle_id: &str) -> Result<Option<Printing>, String> {
     conn.query_row(
         &format!(
-            "SELECT {columns} FROM cards WHERE oracle_id = ?1
+            "SELECT {PRINTING_COLUMNS} FROM cards WHERE oracle_id = ?1
               ORDER BY released_at DESC, set_code ASC, collector_number ASC, id ASC
-              LIMIT 1",
-            columns = *PRINTING_COLUMNS
+              LIMIT 1"
         ),
         params![oracle_id],
         printing_from,
@@ -1035,10 +970,7 @@ fn newest_printing(conn: &Connection, oracle_id: &str) -> Result<Option<Printing
 /// the reader picked and has to learn its token from it.
 fn printing_by_id(conn: &Connection, card_id: &str) -> Result<Printing, String> {
     conn.query_row(
-        &format!(
-            "SELECT {columns} FROM cards WHERE id = ?1",
-            columns = *PRINTING_COLUMNS
-        ),
+        &format!("SELECT {PRINTING_COLUMNS} FROM cards WHERE id = ?1"),
         params![card_id],
         printing_from,
     )
@@ -2616,7 +2548,6 @@ pub async fn deck_token_reset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image_uri::IMAGE_HOST;
     use rusqlite::{params, Connection};
     use serde_json::json;
 
@@ -3058,30 +2989,6 @@ mod tests {
         .unwrap();
     }
 
-    /// The two picture columns, written onto a row already inserted.
-    ///
-    /// Separate from [`Card::insert_raw`] rather than two more fields on the fixture: 3.7% of
-    /// printings carry no top-level blob and the rest carry no faces, so every existing fixture
-    /// would have had to say `None` twice to keep saying nothing.
-    fn pictures(conn: &Connection, id: &str, top: Option<&str>, faces: Option<&str>) {
-        conn.execute(
-            "UPDATE cards SET image_uris = ?2, face_image_uris = ?3 WHERE id = ?1",
-            params![id, top, faces],
-        )
-        .unwrap();
-    }
-
-    /// A `display` URL that passes `image_uri::is_fetchable` — the host allowlist and the
-    /// `?<epoch>` cache-buster both, since a URL failing either is dropped rather than carried.
-    fn display_uri(tag: &str) -> String {
-        format!("{IMAGE_HOST}normal/front/{tag}/{tag}.jpg?1757200000")
-    }
-
-    /// [`display_uri`]'s crop twin, so the two variants a list row carries can be told apart.
-    fn art_uri(tag: &str) -> String {
-        format!("{IMAGE_HOST}art_crop/front/{tag}/{tag}.jpg?1757200000")
-    }
-
     /// The live list, which is what every test below but one is about — priced at TCGplayer,
     /// `Marketplace::from_opt`'s default, since most of them are not about the price.
     fn rows(conn: &Connection, deck: i64) -> Vec<DeckTokenRow> {
@@ -3261,8 +3168,8 @@ mod tests {
         );
     }
 
-    /// **The chin follows the entry's printing, as the picture does** — and a printing that has
-    /// left the corpus has no chin, rather than the resolver's printing wearing its place.
+    /// **The chin follows the entry's printing** — and a printing that has left the corpus has no
+    /// chin, rather than the resolver's printing wearing its place.
     #[test]
     fn an_entrys_printing_brings_its_own_chin_and_price() {
         let conn = open();
@@ -3303,7 +3210,7 @@ mod tests {
                 gone.unit_price,
             ),
             (None, None, None, None, None, None),
-            "a printing that has left the corpus has no chin, the way it has no picture"
+            "a printing that has left the corpus has no chin"
         );
     }
 
@@ -6109,7 +6016,6 @@ mod tests {
                 "derived",
                 "finish",
                 "finishes",
-                "imageUris",
                 "implicit",
                 "layout",
                 "name",
@@ -6174,163 +6080,5 @@ mod tests {
             json!({ "card_id": "c-1", "finish": "foil" })
         )
         .is_err());
-    }
-
-    /// **The picture reaches the wire from both columns, and from both entrances.**
-    ///
-    /// Three things at once, because each is a separate way to get it wrong:
-    ///
-    /// 1. **The derived row**, resolved through the tie-break, off the top-level blob.
-    /// 2. **The hand-added row**, resolved through [`newest_printing`] — a second query, so a
-    ///    fix applied to one and not the other leaves a `manual` token blank beside a derived
-    ///    one that draws.
-    /// 3. **A `double_faced_token` with no top-level blob at all**, which is what
-    ///    `front_face_selects`/`front_face_map` are here for rather than a bare read of
-    ///    `image_uris`: all 120 such rows in the corpus keep their URLs on `card_faces[0]`
-    ///    alone, so a top-level-only read answers `null` for every one of them.
-    #[test]
-    fn a_tokens_picture_reaches_the_wire_from_both_columns_and_both_entrances() {
-        let conn = open();
-        tithe().insert(&conn);
-        treasure().insert(&conn);
-        pictures(
-            &conn,
-            treasure().id,
-            Some(&json!({ "display": display_uri("t"), "art": art_uri("t") }).to_string()),
-            None,
-        );
-
-        // A hand-added emblem whose printing carries its pictures on the face alone.
-        elspeth_emblem().insert(&conn);
-        pictures(
-            &conn,
-            elspeth_emblem().id,
-            None,
-            Some(
-                &json!([{ "display": display_uri("e"), "art": art_uri("e") }, serde_json::Value::Null])
-                    .to_string(),
-            ),
-        );
-
-        let (deck, main, _) = deck_with_piles(&conn);
-        play(&conn, deck, main, &tithe(), "live");
-        add_printing(&conn, deck, "live", elspeth_emblem().id, None).unwrap();
-
-        let out = rows(&conn, deck);
-        assert_eq!(
-            names(&out),
-            vec!["Treasure", "Elspeth, Sun's Champion Emblem"],
-            "the Treasure is the derived row and the emblem the hand-added tail"
-        );
-        let map = |row: &DeckTokenRow| -> Vec<(String, String)> {
-            row.image_uris
-                .clone()
-                .expect("a printing with a picture answers a map, never None")
-                .into_iter()
-                .collect()
-        };
-        assert_eq!(
-            map(&out[0]),
-            vec![
-                ("art".to_owned(), art_uri("t")),
-                ("display".to_owned(), display_uri("t")),
-            ],
-            "the derived row carries both variants off the top-level blob"
-        );
-        assert_eq!(
-            map(&out[1]),
-            vec![
-                ("art".to_owned(), art_uri("e")),
-                ("display".to_owned(), display_uri("e")),
-            ],
-            "and the hand-added row carries the front face's, out of the column a \
-             `double_faced_token` is the only place with one"
-        );
-    }
-
-    /// **The picture follows the entry's printing, not the printing the resolver named.**
-    ///
-    /// Those two are the same row for every implicit entry, so the only fixture that can tell
-    /// them apart is one holding a second printing with a picture of its own — and the failure is
-    /// a *wrong* picture rather than a missing one.
-    #[test]
-    fn an_entrys_printing_brings_its_own_picture() {
-        let conn = open();
-        let (deck, _, _) = tithe_deck(&conn);
-        pictures(
-            &conn,
-            treasure().id,
-            Some(&json!({ "display": display_uri("resolver") }).to_string()),
-            None,
-        );
-        pictures(
-            &conn,
-            treasure_older().id,
-            Some(&json!({ "display": display_uri("picked") }).to_string()),
-            None,
-        );
-
-        let out = rows(&conn, deck);
-        assert_eq!(
-            out[0].image_uris.as_ref().and_then(|m| m.get("display")),
-            Some(&display_uri("resolver")),
-            "the implicit entry draws the resolver's printing"
-        );
-
-        seed_entry(&conn, deck, "live", &treasure_older(), "nonfoil", 1);
-        let out = rows(&conn, deck);
-        assert_eq!(
-            out[0].default_card_id,
-            treasure().id,
-            "the resolver still names its own printing — the entry is beside it"
-        );
-        assert_eq!(
-            out[0].image_uris.as_ref().and_then(|m| m.get("display")),
-            Some(&display_uri("picked"))
-        );
-
-        // An entry whose printing has left the corpus draws the no-art frame rather than the
-        // resolver's art: the tile is still addressing the printing that has gone.
-        conn.execute(
-            "UPDATE deck_token_printings SET card_id = 'c-vanished' WHERE deck_id = ?1",
-            params![deck],
-        )
-        .unwrap();
-        assert_eq!(rows(&conn, deck)[0].image_uris, None);
-    }
-
-    /// A URI this app would refuse to fetch is **not** on the wire, which is the half a
-    /// present-key check would pass while handing a browser a URL that answers 200 with
-    /// something that is not the card.
-    ///
-    /// Two refusals, both `image_uri::is_fetchable`'s and neither respelled here: a host that
-    /// is not `cards.scryfall.io`, and a URL with no `?<epoch>` cache-buster — which is what
-    /// Scryfall's `soon.jpg` placeholder is.
-    #[test]
-    fn a_uri_this_app_will_not_fetch_never_reaches_the_wire() {
-        let conn = open();
-        tithe().insert(&conn);
-        treasure().insert(&conn);
-        pictures(
-            &conn,
-            treasure().id,
-            Some(
-                &json!({
-                    "display": "https://cards.scryfall.io.evil.test/normal/front/a.jpg?123",
-                    "art": format!("{IMAGE_HOST}art_crop/front/soon.jpg"),
-                })
-                .to_string(),
-            ),
-            None,
-        );
-        let (deck, main, _) = deck_with_piles(&conn);
-        play(&conn, deck, main, &tithe(), "live");
-
-        assert_eq!(
-            rows(&conn, deck)[0].image_uris,
-            None,
-            "an off-host URL and one with no cache-buster are both dropped, and a row left \
-             with nothing answers None rather than an empty map"
-        );
     }
 }

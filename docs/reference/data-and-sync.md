@@ -209,11 +209,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   it, 146.6 ms against 145 ms, so the with-and-without pair is not being read against a corpus
   that has drifted somewhere else entirely.
 
-  **To a reader, the pictures are free.** A collapsed browse is ~147 ms carrying them and ~150 ms
-  without; the wall's own request is ~137 ms either way. Those differences sit under the IPC hop
+  **To a reader, the pictures were free.** A collapsed browse was ~147 ms carrying them and ~150 ms
+  without; the wall's own request ~137 ms either way. Those differences sat under the IPC hop
   and the paint that follow them. The 123 B a row bought the browser build a wall that could draw
   art at all, since `mtgimg://` is a Tauri protocol; that build was removed on 2026-09-27, and
-  the field now travels with the row unread until a follow-up takes it out.
+  the field went with it the same day — the next bullet closes the record.
 
 - **2026-08-31 doubled those two `json_extract`s to four, and the query cost was *not*
   re-measured.** `image_uri::LIST_VARIANTS` gained `art` beside `display`, because a deck cover,
@@ -226,13 +226,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   2026-08-29's four-variant figure exactly (+21 600 B, +93.1 %), which is what makes the two
   comparable.
 
-  **The stopwatch half is a gap and is written down as one.** The shape is unchanged — the
-  `json_extract`s read a `cards` row the query is already holding, for the 50 rows the page
-  produces, and the collapsed column is dominated by the count walking to `TOTAL_CAP` — so a
-  cost that could not be resolved at two columns is not going to resolve at four; but "predicted"
-  is not "measured", and the table above is a measurement. What would settle it is that table's
-  own method: two release binaries from one tree, `FRONT_FACE_COLUMNS`' expressions replaced by
-  `NULL` in one, run alternately, medians of the pooled samples.
+  **Removed on 2026-09-27, with the browser build that was the field's only reader.** The desktop
+  draws every picture through `mtgimg://` by printing id, so `imageUris` left every list DTO and
+  `LIST_VARIANTS`, `ART_VARIANT` and `front_face_map` left `image_uri` with it; the share snapshot
+  is the one list reader left, on a single `display` URL
+  ([collection-sharing.md](collection-sharing.md)). Measured that day (node:sqlite, read-only,
+  the dev `corpus.db`, 118 610 printings, 162 with no fetchable picture): the field —
+  `,"imageUris":{"art":…,"display":…}` — averaged **223.7 B a row** over the corpus and
+  **224.0 B** over both the reader's 277 collection entries and 699 deck cards, which is the
+  page above to the byte: **34 396 B → 23 196 B, −32.6 %**.
+
+  **The stopwatch half was a gap, and the removal closed it without a measurement.** A cost that
+  could not be resolved at two columns was never going to resolve at four — the `json_extract`s
+  read a `cards` row the query already held, for the 50 rows a page produces, under a count
+  walking to `TOTAL_CAP` — and with all four gone from every read a page makes there is no longer
+  a with-and-without pair to time.
 
   **One caveat, because it nearly became a fiction.** The first with-and-without pair taken this
   session read 28.4 / 146.6 against 61.4 / 318.9 — a 2× "regression" that reproduced on a second
