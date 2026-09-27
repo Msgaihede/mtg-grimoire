@@ -930,11 +930,15 @@ pub fn call(
         // ── Categories, labels and folders ──────────────────────────────────────────
         "deck_category_create" => {
             let deck_id: i64 = field(command, args, "deckId")?;
+            // The list the pile is made in (user schema v53) — required, as the desktop
+            // command's parameter is: a pile belongs to one list, and there is no default that
+            // would not be a guess about which tab the reader pressed "New category" on.
+            let variant: String = field(command, args, "variant")?;
             let name: String = field(command, args, "name")?;
             encode(
                 command,
                 crate::sync::with_write(state, |c| {
-                    crate::deck_meta::create_category(c, deck_id, &name)
+                    crate::deck_meta::create_category(c, deck_id, &variant, &name)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -3078,7 +3082,7 @@ mod tests {
             let conn = crate::db::lock_blocking(&s.db);
             conn.execute("UPDATE cards SET mana_cost = '{R}' WHERE id = '1'", [])
                 .unwrap();
-            let cat = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            let cat = crate::deck_meta::category_for_name(&conn, id, "live", "Main deck").unwrap();
             crate::deck::add_card(&conn, id, "1", Some(cat), None, "live", None, 3).unwrap();
             // A second card with no printed cost, which must not reach the page at all.
             crate::deck::add_card(&conn, id, "2", Some(cat), None, "live", None, 1).unwrap();
@@ -3104,7 +3108,7 @@ mod tests {
         let id = make_deck(&s, "Bracketed");
         {
             let conn = crate::db::lock_blocking(&s.db);
-            let cat = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            let cat = crate::deck_meta::category_for_name(&conn, id, "live", "Main deck").unwrap();
             crate::deck::add_card(&conn, id, "1", Some(cat), None, "live", None, 1).unwrap();
         }
 
@@ -4103,7 +4107,7 @@ mod tests {
         let id = make_deck(&s, "Web Deck");
         {
             let conn = crate::db::lock_blocking(&s.db);
-            let main = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            let main = crate::deck_meta::category_for_name(&conn, id, "live", "Main deck").unwrap();
             crate::deck::add_card(&conn, id, "1", Some(main), None, "live", None, 2).unwrap();
         }
         let out = call(&s, "deck_completion", &json!({ "marketplace": "manapool" })).unwrap();
@@ -4129,7 +4133,7 @@ mod tests {
         let id = make_deck(&s, "Web Deck");
         {
             let conn = crate::db::lock_blocking(&s.db);
-            let main = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            let main = crate::deck_meta::category_for_name(&conn, id, "live", "Main deck").unwrap();
             crate::deck::add_card(&conn, id, "1", Some(main), None, "live", None, 1).unwrap();
             crate::deck::add_card(&conn, id, "3", Some(main), None, "live", None, 1).unwrap();
             conn.execute(

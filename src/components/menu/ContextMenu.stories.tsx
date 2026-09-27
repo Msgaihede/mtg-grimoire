@@ -215,10 +215,10 @@ const WISH_FOLDERS: WishlistFolder[] = [
  *  rather than reached by index, because two stories are *about* which of the two they are. */
 const COMMANDER_ZONE: DeckCategory = deckCategory("commander");
 /**
- * **`cardCount` is spelled out because `Clear stack…` reads it**, and it is the count of the
- * variant on screen — the reverse of what the delete confirmation quotes. A pile at zero draws a
- * greyed row, which is {@link EmptyPileCannotBeCleared}'s subject; this one holds cards, so the
- * row is live here.
+ * **`cardCount` is spelled out because `Clear stack…` reads it** — every copy this pile holds,
+ * which since user schema v53 is one list's and the same number the delete confirmation quotes.
+ * A pile at zero draws a greyed row, which is {@link EmptyPileCannotBeCleared}'s subject; this
+ * one holds cards, so the row is live here.
  */
 const RAMP_PILE: DeckCategory = {
   ...deckCategory("main"),
@@ -226,7 +226,6 @@ const RAMP_PILE: DeckCategory = {
   name: "Ramp",
   sortOrder: 5,
   cardCount: 7,
-  cardCountAllVariants: 7,
 };
 
 /**
@@ -997,16 +996,15 @@ export const PredefinedZone: Story = {
  * left it, and carries `aria-disabled` rather than `disabled` so it stays readable and stays in
  * the tab order.
  *
- * The count consulted is `cardCount`, **the variant on screen** — never `cardCountAllVariants`,
- * which is what the delete confirmation quotes. This pile holds three copies in the theory list
- * and none here, and a clear cannot reach them.
+ * The count consulted is `cardCount`, which is every copy the pile holds — a pile belongs to one
+ * list since user schema v53 (issue #561), so zero here means there is nothing anywhere to clear.
  */
 export const EmptyPileCannotBeCleared: Story = {
   args: {
     label: "Ramp",
     build: (act) =>
       buildCategoryMenu(
-        { ...RAMP_PILE, cardCount: 0, cardCountAllVariants: 3 },
+        { ...RAMP_PILE, cardCount: 0 },
         categoryDeps(act),
       ),
   },

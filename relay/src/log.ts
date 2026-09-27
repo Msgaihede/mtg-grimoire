@@ -3,8 +3,8 @@
  *
  * **Why this file exists at all, rather than the logic sitting in the Durable Object.**
  * `@cloudflare/vitest-pool-workers` would run the real `Group` class in workerd and let its
- * storage calls be asserted against, but it pulls wrangler and workerd into a tree pinned to
- * vitest 4.1.10 whose support it does not advertise. Compaction, the thirty-day tail and the
+ * storage calls be asserted against, but it pulls wrangler and workerd into the tree and peers
+ * on a vitest older than the one this suite runs. Compaction, the thirty-day tail and the
  * pull cursor are all pure functions of a row list, so they live here and are tested by the
  * vitest this repo already runs. What is left in `group.ts` is storage calls and routing —
  * the part where a bug is a 500 in a log rather than a reader's data quietly disappearing.

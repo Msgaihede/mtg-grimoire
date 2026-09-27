@@ -1425,9 +1425,10 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     /** Every card of the variant this hook was opened on, in category `sortOrder`, then by the
      *  name the row carries, then by row id. */
     cards: query.data?.cards ?? NONE,
-    /** **Every** category of the deck in `sortOrder`, empty and inactive ones included — the
-     *  editor's columns are this list, not the categories that happen to hold a card. The list
-     *  is the same in both variants; only the counts on each row are scoped. */
+    /** **Every** category of the list this hook reads, in `sortOrder`, empty and inactive ones
+     *  included — the editor's columns are this list, not the categories that happen to hold a
+     *  card. Each list has piles of its own since user schema v53 (issue #561), so the Theory
+     *  tab's columns are the plan's and never the Actual list's. */
     categories: query.data?.categories ?? NO_CATEGORIES,
     /** Every label this list is wearing — the palette a row's mark is drawn from. */
     labels: query.data?.labels ?? NO_LABELS,
