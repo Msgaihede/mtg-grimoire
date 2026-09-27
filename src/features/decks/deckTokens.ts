@@ -144,8 +144,15 @@ export interface DeckTokenView {
   /** This entry's finish — never `null`, the collection's own three words. What the chin names,
    *  what the sheen is drawn for and what {@link unitPrice} was read at. */
   finish: Finish;
-  /** `true` when this list holds no entry of the token and this is the one Rust drew for it. A
-   *  write aimed at it sends `null` for the entry, and Rust materialises it (spec §4.2 rule 2). */
+  /**
+   * `true` when this list holds no entry of the token and this is the one Rust drew for it. A
+   * write aimed at it sends `null` for the entry, and Rust materialises it (spec §4.2 rule 2).
+   *
+   * **It is also the whole of whether Remove printing is drawn** (managed tokens spec §3.4), on
+   * the band and the pile alike: `deck_token_remove` deletes one stored entry, and an implicit
+   * one is not stored, so a Remove over it would be a press that changes nothing. The token's
+   * state is no part of that.
+   */
   implicit: boolean;
   /**
    * The tile's identity — `tileKeyOf(printingId, finish)`, the collection wall's own spelling,
@@ -166,14 +173,6 @@ export interface DeckTokenView {
    * launch pass retires it (managed tokens spec §3.3).
    */
   state: DeckTokenState;
-  /**
-   * True when this list holds this entry as a stored row — `!implicit`, named for what it means
-   * to the reader: this entry is theirs, and it is exactly what `deck_token_remove` deletes. An
-   * implicit entry is not stored, so **Remove printing** (managed tokens spec §3.4) is drawn on
-   * every entry but that one — a Remove over it would be a press that changes nothing. The
-   * token's state is no part of it.
-   */
-  overridden: boolean;
   /** {@link tokenSubtitle}'s line, or `null` where there is nothing to say. */
   subtitle: string | null;
   /**
@@ -332,9 +331,6 @@ function viewOf(row: DeckTokenRow): DeckTokenView {
     sources: row.sources,
     derived: row.derived,
     state: row.state,
-    // "There is something to remove": `deck_token_remove` deletes one stored entry, so an
-    // implicit entry is the one state it has nothing to do to.
-    overridden: !row.implicit,
     subtitle: tokenSubtitle(row),
     // `??` for the absent key as well as for the null: `imageUris` is `Partial`, so a printing
     // that publishes only some variants has no entry at all for the rest.

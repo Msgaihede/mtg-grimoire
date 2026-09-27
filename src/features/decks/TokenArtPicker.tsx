@@ -331,7 +331,9 @@ function SwapBody({
  * tokens spec §3.6) — {@link EveryTokenWall}, one read of `token_printings` behind the same box
  * and the same grouping. **Off by default and held here**, so every open starts on the deck's own
  * tokens (the dialog mounts this body afresh each time), and a search typed in one state narrows
- * the other when the reader flips it — one box, one question.
+ * the other when the reader flips it — one box, one question. **On from the start where the deck
+ * has no token of its own** (fix round 1): the band offers Add printing on a deck that makes
+ * nothing, and the deck's own wall would open there on a sentence and a toggle to go and find.
  */
 function AddBody({
   tokens,
@@ -344,7 +346,9 @@ function AddBody({
 }) {
   const findId = useId();
   const [find, setFind] = useState("");
-  const [everyToken, setEveryToken] = useState(false);
+  // Read once, at mount: the body is keyed and mounted afresh per open, and a deck gaining its
+  // first token while the dialog is up must not flip the wall under the reader's pointer.
+  const [everyToken, setEveryToken] = useState(() => tokens.length === 0);
 
   return (
     <>

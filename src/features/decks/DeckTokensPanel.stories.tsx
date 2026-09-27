@@ -367,7 +367,9 @@ export const RemoveFallsBack: Story = {
  * heading is set in type with no disclosure under it, and the sentence says which of the two
  * silences this is — "this deck makes nothing" is only written once the read has landed.
  *
- * **Add printing is not drawn** — the picker opens on the deck's own tokens, and there are none.
+ * **Add printing is still drawn** (fix round 1): a deck whose cards make nothing is the spec's
+ * own case for a token added by hand, and the picker opens there on every token in the game —
+ * {@link AddToADeckThatMakesNothing} presses it.
  */
 export const NothingToMake: Story = {
   args: { deckId: 3 },
@@ -381,7 +383,47 @@ export const NothingToMake: Story = {
     await expect(canvas.queryByRole("button", { name: TOKENS_HEADING })).toBeNull();
     // No count either: a `0` pill beside a sentence saying so is the same fact twice.
     await expect(canvas.queryByText(tokenCountWords(0))).toBeNull();
-    await expect(canvas.queryByRole("button", { name: "Add printing" })).toBeNull();
+    await expect(canvas.getByRole("button", { name: "Add printing" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * **Add printing on a deck that makes nothing opens on every token** (managed tokens spec §1.3,
+ * §3.6; fix round 1). The picker comes up with `All tokens` already pressed — the deck has no token
+ * of its own to offer — and a pick adds that token by hand: the band grows its first tile, marked
+ * `NOT MADE BY DECK`, at one copy.
+ */
+export const AddToADeckThatMakesNothing: Story = {
+  args: { deckId: 3 },
+  play: async ({ canvas, canvasElement }) => {
+    await canvas.findByText("Nothing in this deck makes a token or an emblem.");
+    await userEvent.click(canvas.getByRole("button", { name: "Add printing" }));
+
+    const dialog = await within(canvasElement.ownerDocument.body).findByRole("dialog", {
+      name: "Add a printing",
+    });
+    await expect(within(dialog).getByRole("button", { name: "All tokens" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.type(
+      within(dialog).getByRole("searchbox", { name: /find a printing/i }),
+      "plst",
+    );
+    await userEvent.click(
+      await within(dialog).findByRole("button", {
+        name: /^Start Your Engines! \/\/ Max Speed — PLST · TDFT-14/,
+      }),
+    );
+
+    const region = await canvas.findByRole("region", { name: TOKENS_HEADING });
+    const art = await within(region).findByRole("button", {
+      name: /^Change the art for Start Your Engines! \/\/ Max Speed.*, not made by deck$/,
+    });
+    const tile = art.closest("li") as HTMLElement;
+    await expect(within(tile).getByText("NOT MADE BY DECK")).toBeInTheDocument();
+    await expect(within(tile).getByRole("spinbutton")).toHaveValue(1);
+    await expect(canvas.queryByText("Nothing in this deck makes a token or an emblem.")).toBeNull();
   },
 };
 

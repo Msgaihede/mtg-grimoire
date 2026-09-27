@@ -4681,7 +4681,6 @@ function tokenView(over: Partial<DeckTokenView> = {}): DeckTokenView {
     sources: [{ cardId: "c-Sol Ring", name: "Sol Ring" }],
     derived: true,
     state: "auto",
-    overridden: false,
     subtitle: "Colorless · {T}, Sacrifice this token: Add one mana of any color.",
     imageUrl: null,
     imageUris: null,
@@ -4837,7 +4836,6 @@ describe("StackView token pile", () => {
               sources: [],
               derived: false,
               state: "manual",
-              overridden: true,
               subtitle: null,
             }),
           ])}

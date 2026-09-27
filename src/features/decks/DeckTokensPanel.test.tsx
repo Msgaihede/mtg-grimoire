@@ -45,7 +45,6 @@ function entry(over: Partial<DeckTokenView> = {}): DeckTokenView {
     sources: [{ cardId: "c-tithe", name: "Smothering Tithe" }],
     derived: true,
     state: "auto",
-    overridden: true,
     subtitle: TREASURE_TEXT,
     imageUrl: null,
     imageUris: null,
@@ -69,7 +68,6 @@ const WURM = entry({
   entryKey: "p-tsom-9:nonfoil",
   finish: "nonfoil",
   implicit: true,
-  overridden: false,
   quantity: 0,
   subtitle: "Colorless 3/3 · Deathtouch",
   setCode: "tsom",
@@ -267,18 +265,50 @@ describe("DeckTokensPanel", () => {
   });
 
   /**
-   * **The header draws on a deck that makes nothing**, and says so in words. What is not drawn is
-   * Add printing — there is no token of the deck's to add a printing of, and a control that spends
-   * the whole deck refusing is the band's own argument against a greyed one — and since managed
-   * tokens spec §3.9, no mode control either.
+   * **The header draws on a deck that makes nothing**, and says so in words — and since fix round
+   * 1, **it still offers Add printing**: a deck whose cards make nothing is the spec's own case
+   * for a token added by hand (§1.3, §3.6), and the picker opens on every token in the game for it.
+   * What is not drawn is the disclosure (there is no wall to open) or, since managed tokens spec
+   * §3.9, a mode control.
    */
-  it("keeps the header on a deck that makes no tokens", () => {
-    band({ tokens: tokensOf([]) });
+  it("keeps the header on a deck that makes no tokens, and offers Add printing there", async () => {
+    const { onAddPrinting } = band({ tokens: tokensOf([]), open: false });
 
     expect(screen.getByText("Nothing in this deck makes a token or an emblem.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Add printing" })).toBeNull();
     expect(screen.queryByRole("button", { name: TOKENS_HEADING })).toBeNull();
     expect(screen.queryByRole("group", { name: "Tokens" })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add printing" }));
+    expect(onAddPrinting).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **Add printing waits for an answer** — the ruling's `answered && readFailure === null`. A read
+   * in flight has no deck to add to yet, and a refused one has already said so in its alert; a
+   * button beside either would be a press the band cannot stand behind.
+   */
+  it("offers no Add printing before the read answers, or when it is refused", () => {
+    const pending = {
+      ...tokensOf([]),
+      query: { data: undefined, isSuccess: false, isError: false, isPending: true, error: null },
+    } as unknown as DeckTokens;
+    band({ tokens: pending, open: false });
+    expect(screen.queryByRole("button", { name: "Add printing" })).toBeNull();
+    cleanup();
+
+    const refused = {
+      ...tokensOf([]),
+      query: {
+        data: undefined,
+        isSuccess: false,
+        isError: true,
+        isPending: false,
+        error: "Database is busy.",
+      },
+    } as unknown as DeckTokens;
+    band({ tokens: refused, open: false });
+    expect(screen.getByRole("alert")).toHaveTextContent("Database is busy.");
+    expect(screen.queryByRole("button", { name: "Add printing" })).toBeNull();
   });
 
   /**

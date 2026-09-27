@@ -37,7 +37,6 @@ function entry(over: Partial<DeckTokenView> = {}): DeckTokenView {
     sources: [{ cardId: "c-tithe", name: "Smothering Tithe" }],
     derived: true,
     state: "auto",
-    overridden: true,
     subtitle: TREASURE_TEXT,
     imageUrl: null,
     imageUris: null,
@@ -436,6 +435,28 @@ describe("TokenArtPicker — All tokens", () => {
     const toggle = screen.getByRole("button", { name: "All tokens" });
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(tokenPrintings).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Opened on a deck that makes nothing, it opens on every token** (fix round 1's ruling) — the
+   * spec's own case (§1.3, §3.6): a token the deck does not make is added by hand, and with no
+   * token of the deck's to offer, the deck's own wall would open on a sentence and a toggle the
+   * reader has to find. The toggle is still there, pressed, and turning it off says the sentence.
+   */
+  it("opens with All tokens pressed when the deck has no token of its own", async () => {
+    renderPicker({ mode: { kind: "add", tokens: [] } });
+
+    const toggle = await screen.findByRole("button", { name: "All tokens" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await screen.findByRole("list", { name: "Soldier, White 1/1" });
+    expect(tokenPrintings).toHaveBeenCalledWith("tcgplayer");
+    expect(cardPrintings).not.toHaveBeenCalled();
+
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByText("This deck makes no token or emblem to add a printing of."),
+    ).toBeInTheDocument();
   });
 
   /** A swap is about one token's printings, so there is nothing for the toggle to widen. */
