@@ -5,6 +5,7 @@ import {
   type WishlistQuery,
   type WishOptimizeApplyItem,
 } from "@/lib/ipc";
+import { refreshCardSearches } from "@/lib/searchMarks";
 
 /**
  * The question the sweep is asked — every field of the list's own query except the paging and the
@@ -91,7 +92,7 @@ export function useWishlistOptimize(query: OptimizeQuery, open: boolean) {
     mutationFn: (items: WishOptimizeApplyItem[]) => ipc.wishlistOptimizeApply(items),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
   });
 

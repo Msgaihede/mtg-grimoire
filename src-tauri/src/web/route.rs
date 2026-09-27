@@ -35,6 +35,9 @@ use serde_json::Value;
 pub const COMMANDS: &[&str] = &[
     "sync_status",
     "search_cards",
+    // The badges of a loaded search's rows, re-read after a write so the page can patch them in
+    // rather than refetch every page it scrolled through (issue #552).
+    "search_marks",
     "list_sets",
     "facet_cards",
     // Decks, read path. The write path is a separate PR: a read that answers the wrong rows
@@ -466,6 +469,13 @@ pub fn call(
             let req: crate::search::SearchRequest = field(command, args, "req")?;
             let conn = crate::sync::lock_db_read(state);
             let out = crate::search::run_search(&conn, &req).map_err(RouteError::Failed)?;
+            encode(command, out)
+        }
+
+        "search_marks" => {
+            let req: crate::search::MarksRequest = field(command, args, "req")?;
+            let conn = crate::sync::lock_db_read(state);
+            let out = crate::search::run_search_marks(&conn, &req).map_err(RouteError::Failed)?;
             encode(command, out)
         }
 
@@ -2989,6 +2999,18 @@ mod tests {
     }
 
     #[test]
+    fn search_marks_takes_its_request_under_the_key_the_command_uses() {
+        let s = state("web-route-marks");
+        let found = call(&s, "search_cards", &json!({ "req": { "text": "bolt" } })).unwrap();
+        let id = found["items"][0]["id"].clone();
+        let out = call(&s, "search_marks", &json!({ "req": { "ids": [id] } })).unwrap();
+        // camelCase, because the page patches these exact keys onto a `CardSummary`.
+        assert_eq!(out[0]["id"], id);
+        assert_eq!(out[0]["ownedQuantity"], json!(0));
+        assert_eq!(out[0]["wishlisted"], json!(false));
+    }
+
+    #[test]
     fn search_cards_takes_its_request_under_the_key_the_command_uses() {
         let s = state("web-route-search");
         let out = call(&s, "search_cards", &json!({ "req": { "text": "bolt" } })).unwrap();
@@ -4743,9 +4765,13 @@ mod tests {
         //
         // **189 when that met issue #564's `collection_set_printing`** — the card modal's printing
         // change on a collection row. `awk` over the merged array, not 188 plus one on faith.
+        //
+        // **And 189 on the issue #552 branch too, with `search_marks`** — the same next value off
+        // the same 188, the collision this paragraph keeps predicting. The merge of the two is
+        // taken from `left`: **190**.
         assert_eq!(
             COMMANDS.len(),
-            189,
+            190,
             "update this number when a command is added"
         );
     }

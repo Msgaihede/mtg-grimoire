@@ -396,6 +396,7 @@ pub fn run() {
             sync_run,
             sync_status,
             search::search_cards,
+            search::search_marks,
             search::list_sets,
             index::facets::facet_cards,
             card::card_detail,

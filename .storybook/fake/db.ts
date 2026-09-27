@@ -142,6 +142,7 @@ import type {
   CardFace,
   CardFilters,
   CardHoldings,
+  CardMarks,
   CardNote,
   CardSummary,
   CardTags,
@@ -210,6 +211,7 @@ import type {
   ImportResolveRow,
   InstallKind,
   MarketplaceFeedStatus,
+  MarksRequest,
   MeldRelation,
   MirrorStatus,
   MoveOutcome,
@@ -9188,6 +9190,29 @@ export function readHandlers(db: FakeDb) {
         total: Math.min(counted, TOTAL_CAP),
         totalIsCapped: counted > TOTAL_CAP,
       };
+    },
+
+    /**
+     * `search::run_search_marks` — the badges `search_cards` would answer for these rows, at the
+     * grain and scope the page was fetched with, and nothing else. Out of the same two helpers
+     * and the same {@link collapseKey} grouping, so a patched badge and a fetched one agree.
+     */
+    search_marks: (args: { req: MarksRequest }) => {
+      const { ids, collapse, availableForDeck: forDeck } = args.req;
+      return ids.flatMap((id): CardMarks[] => {
+        const card = db.cards.find((c) => c.id === id);
+        if (!card) return [];
+        const group = collapse
+          ? db.cards.filter((c) => collapseKey(c) === collapseKey(card))
+          : [card];
+        return [
+          {
+            id,
+            ownedQuantity: group.reduce((n, c) => n + ownedOfPrinting(db, c.id, forDeck), 0),
+            wishlisted: group.some((c) => wishlisted(db, c)),
+          },
+        ];
+      });
     },
 
     /**
