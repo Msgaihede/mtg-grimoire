@@ -23,12 +23,7 @@ import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { dragData } from "@/features/decks/dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
-import {
-  CardGrid,
-  PHONE_TILE_WIDTH,
-  type GridCard,
-  type GridSections,
-} from "@/features/search/CardGrid";
+import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
 import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
@@ -73,7 +68,6 @@ import { tileKeyOf } from "@/lib/tileKey";
 import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
-import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
@@ -593,10 +587,11 @@ const COLLECTION_LABELS: FilterLabels = {
  *
  * The deck's floor is 192 because that is one stack column. This page's list was a *pair* of walls
  * stacked vertically until folder shelves (2026-09-26) — the cabinet's folder cards above, each
- * cell `minmax(180px, 1fr)`, and the card grid or table below — and both landed near the same
- * figure, since the wall draws `PHONE_TILE_WIDTH` tiles at the narrow rung. The shelved wall is one
- * wall now and its headings fill whatever width the wall has, so 192 still holds a column of tiles
- * with the page's own padding off it, which is why the deck's number is reused rather than a
+ * cell `minmax(180px, 1fr)`, and the card grid or table below — and 192 held a folder cell with the
+ * page's own padding off it. The shelved wall is one wall now and its headings fill whatever width
+ * the wall has, so what 192 has to hold is a column of tiles, and it does: a wall too narrow for a
+ * whole 170px tile draws it at the wall's own width instead (`CardGrid`'s `tileWidthFor`), so the
+ * column narrows rather than overflowing. That is why the deck's number is reused rather than a
  * second one invented.
  *
  * **Measured in the shipped window on 2026-09-07** (`npm run tauri dev`, a debug build, against a
@@ -674,9 +669,6 @@ export function CollectionPage() {
   const { query, figures, rows, total, marketplace, folderId, requestedFolderId } = collection;
   const view = useAppStore((s) => s.collectionView);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
-  // What the wall below is sized by — see its `baseTileWidth`. A consumer of the app's one
-  // viewport branch rather than a second one; the hook argues for itself at its own site.
-  const narrowWindow = useNarrowWindow();
   /**
    * The wall's own opener, and the finish it last opened the pane as.
    *
@@ -3241,11 +3233,6 @@ export function CollectionPage() {
               onExport={() => setExporting(true)}
               importLabel="Import cards"
               exportLabel="Export collection"
-              // **Glyphs below the phone fold**, which is this pair's own rule applied by the
-              // caller: what it competes with for the line is the sharing group beside it, and
-              // worded the two came to 421.67px in the phone's 335px row. `ShareFolderMenu` reads
-              // the same fold for the same reason and carries the argument.
-              compact={narrowWindow}
             />
           </div>
         }
@@ -3550,12 +3537,6 @@ export function CollectionPage() {
                 // letterbox with a scrollbar of its own an inch from the page's — and nothing on
                 // screen said which one a wheel would turn.
                 grow
-                // **A phone gets a narrower card, so the binder is two columns rather than one.**
-                // The same width the search wall takes and for the same arithmetic: 324px of wall
-                // at 390, where 170 floors to one column. `PHONE_TILE_WIDTH` carries the
-                // derivation, the 160 that looks like a fix and is not, and the decision that the
-                // chin does not scale with it.
-                baseTileWidth={narrowWindow ? PHONE_TILE_WIDTH : undefined}
                 // This wall's own zoom, kept apart from the search's: the two views are the same
                 // component over different rows, and a reader who peers at one printing's art in
                 // search is not asking for a binder at 2× as well. `CardGrid`'s `zoomSection`
