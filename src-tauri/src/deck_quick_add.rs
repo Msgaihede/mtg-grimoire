@@ -96,12 +96,6 @@ pub const WISH_WRONG_CARD: &str = "That wishlist line is not for this card.";
 /// of its own — see [`quick_add`].
 const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 
-/// `FINISHES[0]` — the word [`crate::deck::normalise_finish`] maps *away* on a deck row and the
-/// one `collection_entries.finish` and `wishlist_entries.preferred_finish` store for a plain
-/// copy. Reading it back is the whole of the translation between the deck's spelling and the
-/// other two tables', and it is not respelled anywhere else in this module.
-const NONFOIL: &str = crate::schema::FINISHES[0];
-
 /// One wishlist line the copies about to be recorded could take down.
 ///
 /// The hand-written mirror of `DeckQuickAddWish` in `src/lib/ipc.ts`, field for field.
@@ -235,17 +229,17 @@ fn wish_select(tail: &str) -> String {
 /// Run one of the two wish reads for a printing and finish.
 ///
 /// The finish arrives in the **deck row's** spelling, where `None` is the regular copy, and is
-/// translated through [`crate::deck::normalise_finish`] and [`NONFOIL`] into the word the
-/// wishlist stores — the same one-line translation [`crate::deck_pull`]'s own candidate read
-/// makes into the collection's column. An unknown finish is refused there rather than matching
-/// nothing here.
+/// translated through [`crate::deck::entry_finish_for`] into the word the wishlist stores — the
+/// finish the row *plays*, so a NULL on a printing sold only in foil matches the foil wishes the
+/// copies can fill (2026-09-27), where it matched `nonfoil`. An unknown finish is refused there
+/// rather than matching nothing here.
 fn run_wishes(
     conn: &Connection,
     tail: &str,
     card_id: &str,
     finish: Option<&str>,
 ) -> Result<Vec<QuickAddWish>, String> {
-    let finish = crate::deck::normalise_finish(finish)?.unwrap_or_else(|| NONFOIL.to_owned());
+    let finish = crate::deck::entry_finish_for(conn, card_id, finish)?;
     let mut stmt = conn
         .prepare(&wish_select(tail))
         .map_err(|e| e.to_string())?;
@@ -381,8 +375,11 @@ pub fn quick_add(
     // The deck's spelling into the collection's, once, and read by both halves below — the
     // `collection_entries.finish` this writes and the `wishlist_entries.preferred_finish` the
     // wish is re-checked against are the same vocabulary, and a second translation is a second
-    // thing to drift.
-    let finish = crate::deck::normalise_finish(finish)?.unwrap_or_else(|| NONFOIL.to_owned());
+    // thing to drift. **The finish the row plays**, [`crate::deck::entry_finish_for`]: the menu
+    // sends the deck card's own NULL, and on a printing sold only in foil that is the foil — this
+    // recorded a `nonfoil` copy of a card nobody sells until 2026-09-27. Read on `conn` before the
+    // transaction opens, like the quantity check above it: the printing is not this write's.
+    let finish = crate::deck::entry_finish_for(conn, card_id, finish)?;
 
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
@@ -447,8 +444,8 @@ pub fn quick_add(
 /// construction.
 ///
 /// The finish arrives already translated into the **collection's** spelling — the caller has run
-/// [`crate::deck::normalise_finish`] and defaulted to [`NONFOIL`] — because both callers need that
-/// word for their wishlist half too and a second translation is a second thing to drift.
+/// [`crate::deck::entry_finish_for`] — because both callers need that word for their wishlist half
+/// too and a second translation is a second thing to drift.
 ///
 /// `condition` is an [`Option`] and stays one: `collection::valid_condition` already turns an
 /// absent grade into [`crate::collection::DEFAULT_CONDITION`], so a caller that was never told one
@@ -615,6 +612,10 @@ mod tests {
     use super::*;
     use crate::schema::tests::{deck as seed_deck, seed_card};
     use serde_json::Value;
+
+    /// `FINISHES[0]`, the collection's word for a plain copy. The module itself no longer spells
+    /// it: [`crate::deck::entry_finish_for`] is the translation.
+    const NONFOIL: &str = crate::schema::FINISHES[0];
 
     /// **`foreign_keys` is ON**, as [`crate::db::open`] sets it for every connection the app
     /// hands out — [`crate::deck_pull`]'s suite opens the same way and for the same reason:
@@ -812,6 +813,53 @@ mod tests {
         );
         assert_eq!(row.1, "NM");
         assert_eq!(row.2, crate::deck::deck_group(&conn, deck).unwrap());
+    }
+
+    /// **A deck row's `None` on a printing sold only in foil is the foil** (issue #563's
+    /// follow-up). The menu sends the deck card's own finish, which is NULL wherever the add named
+    /// none; translated to `nonfoil`, the press recorded a copy nobody sells, beside a line the
+    /// rest of the editor draws as foil. And the wish read answers the foil the copies are: a
+    /// wish pinned to the foil is offered, where the `nonfoil` read never matched it.
+    #[test]
+    fn an_unsaid_row_of_a_foil_only_printing_records_foil_copies() {
+        let (conn, deck, cat) = fixture();
+        conn.execute(
+            "UPDATE cards SET finishes = '[\"foil\"]' WHERE id = 'bolt'",
+            [],
+        )
+        .unwrap();
+        live_card(&conn, deck, cat, "bolt", 1);
+        let wish = seed_wish(&conn, Some("bolt"), Some("foil"), 1, None);
+
+        let offered: Vec<i64> = wishes(&conn, "bolt", None)
+            .unwrap()
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        assert_eq!(
+            offered,
+            vec![wish],
+            "the foil wish is the one these copies fill"
+        );
+
+        let out = quick_add(&conn, deck, "bolt", None, None, 1, Some(wish)).unwrap();
+        let finish: String = conn
+            .query_row(
+                "SELECT finish FROM collection_entries WHERE id = ?1",
+                params![out.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(finish, "foil");
+        assert_eq!(wish_quantity(&conn, wish), None, "and the wish is down");
+        let owned: i64 = crate::deck::get_deck(&conn, deck, LIVE, Default::default())
+            .unwrap()
+            .unwrap()
+            .cards
+            .iter()
+            .map(|c| c.owned_quantity)
+            .sum();
+        assert_eq!(owned, 1, "the deck counts what it just recorded");
     }
 
     #[test]

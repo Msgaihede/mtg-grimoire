@@ -349,21 +349,37 @@ fn take_from_deck_list(
     finish: Option<&str>,
     quantity: i64,
 ) -> Result<(), String> {
+    // **The rows the copy was backing, by the finish each plays** — [`crate::deck::entry_finish`]
+    // on both sides, which is how [`crate::deck::attribute_owned`] handed the copy to them in the
+    // first place. On a printing sold only in foil an unsaid row and a `foil` row are both the
+    // foil, and the copy leaving is that foil; matched on the raw column the walk found no `foil`
+    // row behind an unsaid one, and the deck went on listing a card whose only copy had just left
+    // (2026-09-27). Filtered in Rust rather than in the `WHERE` so the rule has one spelling.
+    let finishes = crate::deck::printing_finishes(tx, card_id)?;
+    let leaving = crate::deck::entry_finish(finish, finishes.as_deref());
     let rows: Vec<(i64, i64, String, Option<String>)> = tx
         .prepare(
-            "SELECT d.id, d.quantity, d.name, c.name FROM deck_cards d
+            "SELECT d.id, d.quantity, d.name, c.name, d.finish FROM deck_cards d
                LEFT JOIN deck_categories c ON c.id = d.category_id
               WHERE d.deck_id = ?1 AND d.variant = ?2 AND d.card_id = ?3
-                AND coalesce(d.finish, '') = coalesce(?4, '')
               ORDER BY d.id",
         )
         .and_then(|mut s| {
-            s.query_map(params![deck_id, LIVE, card_id, finish], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            s.query_map(params![deck_id, LIVE, card_id], |r| {
+                Ok((
+                    (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?),
+                    r.get::<_, Option<String>>(4)?,
+                ))
             })?
-            .collect()
+            .collect::<rusqlite::Result<Vec<_>>>()
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|(_, stored)| {
+            crate::deck::entry_finish(stored.as_deref(), finishes.as_deref()) == leaving
+        })
+        .map(|(row, _)| row)
+        .collect();
 
     let mut left = quantity;
     for (id, held, name, category) in rows {
@@ -1321,6 +1337,77 @@ mod tests {
         );
         assert_eq!(deck_copies(&conn, b, "bolt"), 1);
         assert_eq!(group_copies(&conn, a, "bolt"), 0);
+    }
+
+    /// A copy in a named finish, filed where it is told — [`seed_entry`] one axis over.
+    fn seed_foil_entry(
+        conn: &Connection,
+        card_id: &str,
+        quantity: i64,
+        folder: Option<i64>,
+    ) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                 (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                  folder_id, created_at, updated_at)
+             VALUES (?1, 'lea', '161', 'en', 'foil', 'NM', ?2, ?3, unixepoch(), unixepoch())
+             RETURNING id",
+            params![card_id, quantity, folder],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Make both of [`fixture`]'s printings ones Scryfall sells **only** in foil — issue #563's
+    /// Palantír, HOC 85, is one.
+    fn foil_only(conn: &Connection) {
+        conn.execute(
+            "UPDATE cards SET finishes = '[\"foil\"]' WHERE id IN ('bolt', 'bolt-m10')",
+            [],
+        )
+        .unwrap();
+    }
+
+    /// **A foil copy leaving a deck takes that deck's unsaid row of a foil-only printing with it**
+    /// (issue #563's follow-up). The row's NULL can only be the foil, so the copy is what backed
+    /// it; matched on the raw column the walk found no `foil` row, and Deck A went on listing a
+    /// card whose only copy had just walked into Deck B.
+    #[test]
+    fn a_foil_copy_leaving_a_deck_takes_its_unsaid_foil_only_row_with_it() {
+        let (conn, a, cat_a) = fixture();
+        let (b, cat_b) = second_deck(&conn);
+        foil_only(&conn);
+        plays(&conn, b, cat_b);
+        add_deck_card(&conn, a, cat_a, "bolt", 1);
+        let group_a = crate::deck::deck_group(&conn, a).unwrap();
+        let filed = seed_foil_entry(&conn, "bolt", 1, group_a);
+
+        let out = collection_to_deck(&conn, filed, b, Pile::Id(cat_b), 1).unwrap();
+
+        assert_eq!(out.from_deck.as_deref(), Some("Deck A"));
+        assert_eq!(
+            deck_copies(&conn, a, "bolt"),
+            0,
+            "the first deck lost the card"
+        );
+        assert_eq!(group_copies(&conn, b, "bolt"), 1);
+    }
+
+    /// And the cut: **an unsaid foil-only row gives its foil copy back** rather than leaving it
+    /// filed under a deck that no longer lists the card.
+    #[test]
+    fn cutting_an_unsaid_foil_only_row_gives_its_foil_copy_back() {
+        let (conn, deck, cat) = fixture();
+        foil_only(&conn);
+        let dc = add_deck_card(&conn, deck, cat, "bolt", 1);
+        let group = crate::deck::deck_group(&conn, deck).unwrap();
+        seed_foil_entry(&conn, "bolt", 1, group);
+
+        let out = deck_to_collection(&conn, dc, 1).unwrap();
+
+        assert_eq!(out.quantity, 1);
+        assert_eq!(removed_copies(&conn, "bolt"), 1);
+        assert_eq!(group_copies(&conn, deck, "bolt"), 0);
     }
 
     #[test]
