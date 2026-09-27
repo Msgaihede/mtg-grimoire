@@ -1,5 +1,4 @@
 import { SquareArrowRightEnter, SquareArrowRightExit } from "lucide-react";
-import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 
@@ -18,12 +17,6 @@ import { cn } from "@/lib/utils";
  * each one opens carries a control called `Import`, and two buttons with one name on screen at
  * once is a pair a screen reader can only tell apart by position.
  *
- * ## Why the words collapse, and why the buttons never do
- *
- * `compact` drops both words and leaves two 36px glyphs with the name on a tooltip. That is the
- * deck header's rule — *the word gives way as the column narrows, never the control* — and it is
- * the caller's to apply, because only the caller knows what it is competing with for the line.
- *
  * ## Why the deck editor still has its own copy
  *
  * Its two buttons are `aria-expanded` over a layer state and open through `openLayer`, which hands
@@ -36,21 +29,16 @@ export function ImportExportPair({
   onExport,
   importLabel,
   exportLabel,
-  compact = false,
   className,
 }: {
   onImport: () => void;
   onExport: () => void;
-  /** The accessible name and tooltip for the left button. Names *what is being moved*, so it is
-   *  never a bare `Import` — see the component's own note. */
+  /** The accessible name for the left button. Names *what is being moved*, so it is never a bare
+   *  `Import` — see the component's own note. */
   importLabel: string;
   exportLabel: string;
-  /** Glyphs only, with the name on a tooltip. The caller decides, because only it knows what the
-   *  row is competing with. */
-  compact?: boolean;
   className?: string;
 }) {
-  const tip = useTooltip();
   const buttons = [
     { label: importLabel, word: "Import", Icon: SquareArrowRightEnter, onClick: onImport },
     { label: exportLabel, word: "Export", Icon: SquareArrowRightExit, onClick: onExport },
@@ -71,24 +59,19 @@ export function ImportExportPair({
           onClick={onClick}
           aria-haspopup="dialog"
           aria-label={label}
-          // Bound exactly when the word is not there to be read — a tooltip repeating a word
-          // already on the button is a second copy of it under the pointer. `describes: false`,
-          // because it is identical to the `aria-label` above.
-          {...(compact ? tip(label, { describes: false }) : {})}
           className={cn(
-            "inline-flex h-9 shrink-0 items-center justify-center whitespace-nowrap",
-            "text-xs text-dim",
+            "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap",
+            "px-2.5 text-xs text-dim",
             // The hairline between them, and it is the second button's own border rather than a
             // divider element: a `<div>` between two flex children would be a third child for the
             // group's `aria-label` to have to be about.
             at === 1 && "border-l border-border",
-            compact ? "w-9 px-0" : "gap-1.5 px-2.5",
             "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
             FOCUS,
           )}
         >
           <Icon className="size-4 shrink-0" aria-hidden="true" />
-          {!compact && word}
+          {word}
         </button>
       ))}
     </div>

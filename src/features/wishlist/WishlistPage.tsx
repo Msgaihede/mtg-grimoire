@@ -139,8 +139,10 @@ const ROOT_TARGET = 0;
  * by.
  *
  * The deck's floor is 192 because that is one stack column. This page's list is one wall of
- * shelves since the folder band went (2026-09-26), and it draws `PHONE_TILE_WIDTH` tiles at the
- * narrow rung. `CollectionPage` spells the same number for the same arithmetic; the
+ * shelves since the folder band went (2026-09-26), and 192 holds a column of its tiles: a wall too
+ * narrow for a whole 170px tile draws it at the wall's own width instead (`CardGrid`'s
+ * `tileWidthFor`), so the column narrows rather than overflowing. `CollectionPage` spells the same
+ * number for the same arithmetic; the
  * two pages have the identical work column, which is the whole reason this sidebar was one change
  * rather than two.
  *
