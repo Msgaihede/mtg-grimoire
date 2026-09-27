@@ -552,7 +552,9 @@ Every one of these has its measurement and its story in
   condition, needs review) is behind one `Filters`
   disclosure, with the filters that are **on** stated as 26px chips on a line under the bar that is
   drawn only while something is on — `Reset all` sits at the bar's own far end, greyed at zero, since
-  2026-09-27. Thresholds are
+  2026-09-27. The collection and the wishlist pass `statesFilters={false}` and draw the same chips
+  with `StatedFiltersLine` in their path row, beside the shelf toolbar, so filtering there costs the
+  wall no height. Thresholds are
   640 / 900 / 1500 and each is where a *line's own contents* stop fitting, not a device.
   **The right-hand end of that row's first line belongs to the grid-or-table pair**, on every
   surface that has two layouts — which is where a reader now looks for it on all four card views,

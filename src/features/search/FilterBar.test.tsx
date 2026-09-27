@@ -13,7 +13,7 @@ import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import { LAYER } from "@/lib/layers";
 import { stubNarrowWindow } from "@/test-viewport";
 import type { TagToken } from "./queryLanguage";
-import { FilterBar } from "./FilterBar";
+import { FilterBar, StatedFiltersLine } from "./FilterBar";
 import { ANY_CARD, FORMATS } from "./useCardSearch";
 
 const search = (over: Record<string, unknown> = {}) =>
@@ -2733,10 +2733,29 @@ describe("FilterBar, the filters it states", () => {
     render(<FilterBar search={search({ colors: ["U"], rarities: ["rare"], activeCount: 2 })} />);
 
     const reset = screen.getByRole("button", { name: /^Reset all/ });
-    const row =screen.getByLabelText("Search cards").parentElement!;
+    const row = screen.getByLabelText("Search cards").parentElement!;
     expect(row).toContainElement(reset);
     expect(screen.getByText("Filtering by").parentElement).not.toContainElement(reset);
     expect(screen.getAllByRole("button", { name: /^Reset all/ })).toHaveLength(1);
+  });
+
+  /**
+   * **`statesFilters={false}` hands the chips to the page** — the collection and the wishlist draw
+   * them in their path row with `StatedFiltersLine`, so the bar must draw none of its own or the
+   * page would state every filter twice.
+   */
+  it("draws no line of chips when the page states them itself", () => {
+    render(
+      <FilterBar
+        search={search({ colors: ["U"], rarities: ["rare"], activeCount: 2 })}
+        statesFilters={false}
+      />,
+    );
+
+    expect(screen.queryByText("Filtering by")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remove filter/ })).toBeNull();
+    // Reset all is the bar's, not the line's, so it stays.
+    expect(screen.getByRole("button", { name: /^Reset all/ })).toBeInTheDocument();
   });
 
   /**
@@ -2997,5 +3016,46 @@ describe("FilterBar, its condition chips", () => {
     );
 
     expect(chipLabels()).toEqual([`Condition: ${CONDITION_LABEL.NONE}, LP`]);
+  });
+});
+
+/**
+ * **The chips a page places itself** — the collection's and the wishlist's path row (2026-09-27).
+ * The row is a fixed height, so the line has to scroll rather than wrap, and it is the one copy
+ * above the phone width only: on a phone the strip's second line states them.
+ */
+describe("StatedFiltersLine", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("states each filter kind as a removable chip, on one scrolling line", async () => {
+    const toggleColor = vi.fn();
+    render(
+      <StatedFiltersLine
+        search={search({ colors: ["U"], rarities: ["rare"], activeCount: 2, toggleColor })}
+      />,
+    );
+
+    expect(screen.getByText("Filtering by")).toBeInTheDocument();
+    const chip = screen.getByRole("button", { name: "Remove filter — Colour: Blue" });
+    expect(screen.getByRole("button", { name: /^Remove filter — Rarity/ })).toBeInTheDocument();
+    const { classList } = chip.parentElement!;
+    expect(classList.contains("overflow-x-auto")).toBe(true);
+    expect(classList.contains("flex-wrap")).toBe(false);
+
+    await userEvent.click(chip);
+    expect(toggleColor).toHaveBeenCalledWith("U");
+  });
+
+  it("draws nothing while nothing is filtered", () => {
+    const { container } = render(<StatedFiltersLine search={search()} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("draws nothing on a phone, where the strip states the filters", () => {
+    stubNarrowWindow(true);
+    const { container } = render(
+      <StatedFiltersLine search={search({ colors: ["U"], activeCount: 1 })} />,
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 });

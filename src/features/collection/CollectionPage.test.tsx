@@ -7502,9 +7502,12 @@ describe("a needs-review hand-off over a filed cabinet", () => {
       expect(screen.getByText("Mox Pearl")).toBeInTheDocument();
       expect(screen.getByText("Mox Sapphire")).toBeInTheDocument();
     });
-    expect(
-      onPage(screen.getAllByRole("button", { name: "Remove filter — Needs review" })),
-    ).toBeInTheDocument();
+    const chip = onPage(screen.getAllByRole("button", { name: "Remove filter — Needs review" }));
+    // Stated in the path row, beside the shelf toolbar — not on a line of its own under the bar
+    // (2026-09-27): the chip's line and the toolbar share one row.
+    expect(chip.parentElement!.parentElement).toContainElement(
+      screen.getByRole("group", { name: "Shelves" }),
+    );
     await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
     expect(setShelfFolds).not.toHaveBeenCalled();
   });

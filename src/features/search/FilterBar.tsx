@@ -672,6 +672,7 @@ export function FilterBar<SortKey extends string>({
   labels = SEARCH_LABELS,
   layoutToggle = true,
   layoutFor = "search",
+  statesFilters = true,
 }: {
   search: FilterSurface<SortKey>;
   /** What this surface calls its search box, and the `id` stem its labels bind through — see
@@ -722,6 +723,17 @@ export function FilterBar<SortKey extends string>({
    * list rather than a third opinion beside it.
    */
   layoutFor?: ListSection;
+  /**
+   * Whether the bar draws its own line of stated filters under itself, above the phone width.
+   *
+   * `false` on a page that states them somewhere of its own with {@link StatedFiltersLine} — the
+   * collection and the wishlist, which put the chips in their path row beside the shelf toolbar
+   * so that filtering costs the wall no height (2026-09-27, the header redesign). Never a second
+   * copy: the line below is not drawn when this is off, and {@link StatedFiltersLine} draws
+   * nothing on a phone, where the strip's second line is the one copy. Defaults to `true`, so the
+   * search page, the Tags page and the docked panels keep the line under the bar.
+   */
+  statesFilters?: boolean;
 }) {
   /**
    * Whether the tray is open, and **this component's own state rather than the store's.**
@@ -1563,7 +1575,7 @@ export function FilterBar<SortKey extends string>({
             all is at the bar's far end. **On a phone they are the strip's second line instead**,
             with Reset all beside them — mounted up there rather than here, one copy in one of two
             places, and in the sheet neither. See {@link statedFiltersStrip}. */}
-        {!narrow && statedFilters}
+        {!narrow && statesFilters && statedFilters}
 
         {/* The chips a typed `otag:ramp` produces, and the note an unknown tag name gets. Under the
             stated filters rather than among them: these are the *query's* own terms, which the box
@@ -2258,4 +2270,56 @@ function ViewToggle({ section }: { section: ListSection }) {
     wishlist: setWishlistView,
   }[section];
   return <LayoutToggle view={view} onChange={onChange} />;
+}
+
+/**
+ * **The stated filters as one line a page places itself** — the collection's and the wishlist's
+ * path row, beside the shelf toolbar, where the row's left side was empty (2026-09-27, the header
+ * redesign). The bar it stands in for is told `statesFilters={false}`, so there is one copy.
+ *
+ * **One scrolling line and never a wrapped one**, for the phone strip's reason: the path row is a
+ * fixed height, and a row that grew a line each time a filter went on would be the wall moving
+ * under a reader who is narrowing it. `-m-1.5` against {@link DROP_MARK_ROOM} for the strip's
+ * reason too — a scroller clips at its padding box, so the room is what keeps a chip's focus ring
+ * whole — and the negative margin on *both* axes is what keeps the 38px scroller from making the
+ * 28px row taller.
+ *
+ * **No scrollbar, and a fade at the right edge instead.** The phone's strip scrolls under an
+ * overlay bar that takes no room; a desktop's classic bar is 15px of layout, and the first chip
+ * that overflowed put it under the line and grew the path row from 28px to 41px — measured in
+ * Storybook on 2026-09-27 at a 700px story width with three kinds on. That is the wall moving
+ * under the reader who is narrowing it, the one thing this line exists to avoid, so the bar is
+ * hidden and the chips still scroll by trackpad, Shift+wheel, and Tab (a focused chip is scrolled
+ * into view). The last 1.5rem fades so a line that runs on says so; it paints over nothing while
+ * the chips fit, because the line is `grow`n wider than them.
+ *
+ * **Nothing on a phone**, where the strip under the search box already states them; nothing at
+ * all while nothing is filtered, because `Filtering by` over an empty line is a caption with
+ * nothing after it.
+ */
+export function StatedFiltersLine<SortKey extends string>({
+  search,
+  className,
+}: {
+  search: FilterSurface<SortKey>;
+  className?: string;
+}) {
+  const narrow = useNarrowWindow();
+  const chips = activeChips(search, search.marketplace.currency);
+  if (narrow || chips.length === 0) return null;
+  return (
+    <div
+      className={cn(
+        "-m-1.5 flex min-w-0 items-center gap-2 overflow-x-auto [&::-webkit-scrollbar]:hidden",
+        "[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]",
+        DROP_MARK_ROOM,
+        className,
+      )}
+    >
+      <span className={cn(FILTER_LABEL, "shrink-0")}>Filtering by</span>
+      {chips.map((chip) => (
+        <ActiveFilterChip key={chip.label} label={chip.label} onRemove={chip.remove} />
+      ))}
+    </div>
+  );
 }

@@ -29,7 +29,7 @@ import {
   type GridCard,
   type GridSections,
 } from "@/features/search/CardGrid";
-import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
+import { FilterBar, StatedFiltersLine, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
 import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
 import { useFoldAnchor } from "@/features/shelves/useFoldAnchor";
@@ -3302,6 +3302,8 @@ export function CollectionPage() {
         sortRows={collection.sortRows}
         tray={COLLECTION_TRAY}
         layoutFor="collection"
+        // The chips are stated in the path row instead — see `StatedFiltersLine` there.
+        statesFilters={false}
       />
 
       {/* **The row the list and the search column share** (design §4), and the one thing on this
@@ -3379,12 +3381,18 @@ export function CollectionPage() {
                 toolbar, and draws it large and centred where the wall would be. One element, so
                 the region is never remounted with its text and the sentence is never in the page
                 twice. */}
+            {/* The filters that are on, as chips, on this row's empty left side rather than on a
+                line of their own under the bar — so filtering costs the wall no height and the
+                first filter no longer moves it (2026-09-27). `basis-0` so the line never makes
+                the row wrap; it scrolls sideways instead. `grow-[3]` against the status line's 1,
+                so the chips get most of the room and the status sits by the toolbar. */}
+            <StatedFiltersLine search={collection} className="grow-[3] basis-0" />
             <p
               role="status"
               className={cn(
                 empty && status
                   ? "order-last basis-full py-16 text-center text-sm"
-                  : "min-w-0 flex-1 truncate text-xs",
+                  : "min-w-0 flex-1 basis-0 truncate text-right text-xs",
                 empty && failure ? "text-destructive" : "text-dim",
               )}
             >

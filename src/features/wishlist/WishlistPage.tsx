@@ -36,7 +36,7 @@ import { wishlistDestination } from "@/features/transfer/import/destinations/Wis
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { SearchCardDrag } from "@/features/search/searchCardDrag";
-import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
+import { FilterBar, StatedFiltersLine, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { count, plural, verb } from "@/lib/counts";
 import { useDragRecord } from "@/lib/dndTarget";
 import { readFolderDrag, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
@@ -2251,6 +2251,8 @@ export function WishlistPage() {
         sortRows={wishlist.sortRows}
         tray={WISHLIST_TRAY}
         layoutFor="wishlist"
+        // The chips are stated in the path row instead — see `StatedFiltersLine` there.
+        statesFilters={false}
       />
 
       {/* **The row the sidebar made necessary.** This page was `flex-col` from its root down, so
@@ -2326,12 +2328,18 @@ export function WishlistPage() {
                 toolbar, and draws it large and centred where the wall would be. One element, so
                 the region is never remounted with its text and the sentence is never in the page
                 twice. */}
+            {/* The filters that are on, as chips, on this row's empty left side rather than on a
+                line of their own under the bar — so filtering costs the wall no height and the
+                first filter no longer moves it (2026-09-27). `basis-0` so the line never makes
+                the row wrap; it scrolls sideways instead. `grow-[3]` against the status line's 1,
+                so the chips get most of the room and the status sits by the toolbar. */}
+            <StatedFiltersLine search={wishlist} className="grow-[3] basis-0" />
             <p
               role="status"
               className={cn(
                 empty && status
                   ? "order-last basis-full py-16 text-center text-sm"
-                  : "min-w-0 flex-1 truncate text-xs",
+                  : "min-w-0 flex-1 basis-0 truncate text-right text-xs",
                 empty && failure ? "text-destructive" : "text-dim",
               )}
             >

@@ -5231,7 +5231,12 @@ describe("a needs-review hand-off over a filed wishlist", () => {
     // The wall is the flagged wish alone now — the healthy root wishes filtered away.
     await waitFor(() => expect(within(wallOf()).queryByText("Lightning Bolt")).toBeNull());
     expect(within(wallOf()).getByText("Rhystic Study")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remove filter — Needs review" })).toBeInTheDocument();
+    const chip = screen.getByRole("button", { name: "Remove filter — Needs review" });
+    // Stated in the path row, beside the shelf toolbar — not on a line of its own under the bar
+    // (2026-09-27): the chip's line and the toolbar share one row.
+    expect(chip.parentElement!.parentElement).toContainElement(
+      screen.getByRole("group", { name: "Shelves" }),
+    );
     await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
   });
 
