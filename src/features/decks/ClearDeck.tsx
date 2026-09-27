@@ -27,15 +27,14 @@
  * **left alone**. Getting the two the wrong way round understates a destructive press, which is
  * the one direction a confirmation must never be wrong in: the button would offer to remove three
  * cards and take away twelve, while the reassurance promised safety to the very list it was about
- * to empty. `ClearCategory`'s doc argues the same rule from the other side of it, where the pair
- * is `cardCount` against `cardCountAllVariants` less `cardCount`. Here the host holds both totals
- * and hands them over already subtracted, so nothing in this file can *derive* the second number
- * backwards — it can only be **given** it backwards, which is what makes the test that swaps them
- * the one test in this suite that cannot be dropped.
+ * to empty. The host reads both totals — each list's own piles, summed — and hands them over, so
+ * nothing in this file can *derive* the second number backwards; it can only be **given** it
+ * backwards, which is what makes the test that swaps them the one test in this suite that cannot
+ * be dropped.
  *
  * A deck with theory switched off has one list, so the reassurance is drawn only where there is
- * something in the other one to be reassured about — `> 0`, exactly as it is one file over,
- * because a one-list deck would otherwise read a sentence about a list it has not got.
+ * something in the other one to be reassured about — `> 0`, because a one-list deck would
+ * otherwise read a sentence about a list it has not got.
  *
  * ## Where the cards go, which is not "nowhere"
  *

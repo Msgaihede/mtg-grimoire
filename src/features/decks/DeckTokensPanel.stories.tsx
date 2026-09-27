@@ -423,8 +423,8 @@ export const DismissedRevealed: Story = {
  *
  * A tile is `stackCardWidth(cardZoom.deck)` — the stacked card's own width, read at the number
  * the reader set on the deck beside it — so the tokens a deck makes are drawn the size of the
- * cards that make them. `cardZoom.deck` is one key for **both** deck views for the reason
- * `cardZoom.ts` gives, and this band is a third thing on the same desk; what it is emphatically
+ * cards that make them. `cardZoom.deck` is the Stacks desk's key (Grid has had `deckGrid` of
+ * its own since issue #567), and this band is a third thing on the same desk; what it is emphatically
  * not is `deckSearch`, the docked column, which is why that record holds a number per section.
  *
  * **Everything on the tile moves with it**, through `cardScaleVars`: the name, the subtitle, the

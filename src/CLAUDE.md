@@ -719,8 +719,10 @@ Every one of these has its measurement and its story in
   its number as a **CSS `zoom` on the grid box** rather than as a multiplier on a tile's width —
   the only section that does, because a widget is a box of type and a bigger box at the same type
   size shows *more* small rows rather than reading as a zoom. See `features/home/HomePage.tsx` and
-  [home-page.md](../docs/reference/home-page.md) §4. `deck` is one key for **both** deck views, because Stacks and Grid
-  are two drawings of the same pile and switching view must not resize the cards. Each starts at
+  [home-page.md](../docs/reference/home-page.md) §4. `deck` is the deck editor's **Stacks** and `deckGrid` its
+  **Grid** — one key until issue #567 (2026-09-27), when the reader asked for the two views to zoom
+  apart; what keeps them looking alike is the tile's marks scaling off its width
+  (`features/decks/CardStack.tsx`'s `deckCardScale`), not a shared number. Each starts at
   `DEFAULT_ZOOM`, each is stepped along the same ladder, and each is handed back when the reader
   returns to that section.
   **This reverses the single shared `cardZoom` that was here until 2026-08-14**, whose argument was
@@ -964,7 +966,10 @@ Every one of these has its measurement and its story in
   wall in the hook rather than at each call site, because `keepPreviousData` would otherwise leave
   the *previous* search's cards on screen under a query that asked something else, while a
   *predicate* must never gate, since a predicate that matches nothing is a search with no results
-  rather than a name nobody knows.
+  rather than a name nobody knows. **And a `-` on plain words excludes a *name*** (`-bolt`,
+  `-"lightning bolt"`, issue #571): a keywordless `name` predicate reading that column alone,
+  while the positive free text beside it reads every column — Scryfall's asymmetry, measured, and
+  the reason `-goblin` does not take every Goblin creature with it.
 - **Global actions (Refresh, sync status, settings) live in the top ribbon, not in views**, and a
   long job registers an `Activity` (`src/lib/activity.ts`) rather than wiring itself in.
   Registration is declarative: pass the job or `null` every render.

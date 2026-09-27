@@ -38,6 +38,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
+import { deckCardScale } from "../CardStack";
 import { DeckCardFace } from "../DeckCardFace";
 import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
 import { DropIndicator } from "../DropIndicator";
@@ -147,24 +148,23 @@ export function GridView({
   // One read for the whole wall, passed down rather than read per tile: a hundred-card deck is a
   // hundred `GridCard`s, and a hundred store subscriptions to answer one number they all share.
   //
-  // **`deck`, which is `StackView`'s key too, and the sharing is the decision.** This view and
-  // that one are one deck drawn two ways — every card at once here, a stack per pile there — so a
-  // reader who sizes the deck in Stacks and presses `Grid` must find it the size they left it. A
-  // section each would make the toolbar's view switch a resize, and changing drawings is not a
-  // request for bigger cards. What is *not* shared is the docked search column beside the desk
-  // (`deckSearch`): that wall and this one are on screen together answering different questions,
-  // which is why `cardZoom` holds a number per section at all.
-  const cardZoom = useAppStore((s) => s.cardZoom.deck);
+  // **`deckGrid`, a section of this view's own — and it was `StackView`'s `deck` until issue
+  // #567.** The argument for sharing was that the two views are one deck drawn two ways, so the
+  // toolbar's view switch should not be a resize. The reader asked for the opposite: a wall of
+  // every card and a desk of piles are sized for different jobs — how much of the deck fits on
+  // one screen, against how legible one pile is — and a size settled on one was being imposed on
+  // the other. What still makes the two views *look* alike is that the tile is the stacked card
+  // in proportion (`deckCardScale`), not that they share a number.
+  const cardZoom = useAppStore((s) => s.cardZoom.deckGrid);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Ctrl+wheel, on this element because this is the one that scrolls — the group sections and
   // the tiles inside it do not, and a wheel over the gap between two groups belongs to neither.
   // The hook attaches a native non-passive listener, which is the only kind that may
   // `preventDefault`; without that WebView2 zooms the whole window on top of the wall.
   //
-  // `"deck"` again, and it has to be the literal the read above uses and the one `StackView`
-  // passes: a gesture writing one section while the geometry read another would step a number
-  // this wall never draws.
-  useCardZoomGesture(scrollRef, "deck");
+  // `"deckGrid"` again, and it has to be the literal the read above uses: a gesture writing one
+  // section while the geometry read another would step a number this wall never draws.
+  useCardZoomGesture(scrollRef, "deckGrid");
 
   // **The command zone, then the deck, then everything played beside it** — `splitRail`'s three
   // runs, concatenated back into one list of full-width wrapping groups.
@@ -439,8 +439,8 @@ function GridCard({
    *  `key`, so adding the same card twice replays the fade. */
   landedKey: number | undefined;
   /** How large the reader is drawing cards. The tile's width is the only thing it decides
-   *  outright — the face's height follows from it by `cardFaceHeight`, and the chin follows by
-   *  `chinHeight` inside `CardChin`. */
+   *  outright — the face's height follows from it by `cardFaceHeight`, and every mark, control
+   *  and the chin follow from that width through `deckCardScale`. */
   zoom: number;
 }) {
   const tip = useTooltip();
@@ -453,6 +453,13 @@ function GridCard({
   // because the two views are one card. The virtual guard is the deck's rather than the row's
   // and cannot be read off `card`, which is why it arrives as a prop.
   const short = deckCardShort(card, tracksCollection);
+  const width = scaled(TILE_WIDTH, zoom);
+  // **Everything on the tile is the stacked card's, at the tile's width against that card's** —
+  // `deckCardScale`, about 0.71 at every stop. It was `zoom` until issue #567, which drew a
+  // 210px card's marks on a 150px one: the quantity tag and the plan's tick overran the title bar
+  // they sit in, the chin was a stacked card's height under a smaller face, and the stepper
+  // column took half the card. The zoom still decides the width; it no longer decides the marks.
+  const scale = deckCardScale(width);
 
   return (
     <li
@@ -470,7 +477,7 @@ function GridCard({
       // card — the copy count, the label, the rule break, the gem, the stepper — sizes itself
       // against them rather than taking a prop, because each of those marks is also drawn in the
       // table and text views, where nothing zooms. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
-      style={{ width: scaled(TILE_WIDTH, zoom), ...cardScaleVars(zoom) }}
+      style={{ width, ...cardScaleVars(scale) }}
       // The tile is the card's whole body, so a press on the chin under the card or on the
       // control bar over it — both siblings of the button rather than part of it — does not read
       // as a click on the desk. See `cardControl`'s `CARD_BODY_ATTR`.
@@ -539,7 +546,7 @@ function GridCard({
             `<li>` above publishes. */}
         <DeckCardFace
           card={card}
-          width={scaled(TILE_WIDTH, zoom)}
+          width={width}
           ruleBreakText={ruleBreakText}
           theoryMark={theoryMark}
           noted={noted}
@@ -571,7 +578,9 @@ function GridCard({
           still a press on *this card* rather than on the desk behind it, and a right-click there
           still asks about this card. */}
       <CardChin
-        zoom={zoom}
+        // The card's scale rather than the wall's zoom, so the foot is the stacked card's foot in
+        // the same proportion as the face above it.
+        zoom={scale}
         rarity={card.rarity}
         setCode={card.setCode}
         collectorNumber={card.collectorNumber}

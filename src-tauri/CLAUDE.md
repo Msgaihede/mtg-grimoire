@@ -5,7 +5,9 @@ protocol). **TS owns domain logic** (deck validation, import/export parsing). Ru
 _facts_; TypeScript draws _conclusions_. Keep that boundary.
 
 `cargo test` and `cargo clippy -D warnings` run from here; `npm run verify` at the root runs
-both plus the frontend.
+both, `cargo fmt --check` and the frontend. (It ran neither `clippy` nor `fmt` until 2026-09-27,
+while this line said it ran the first.) The toolchain is `rust-toolchain.toml`'s pin — rustup
+picks it up from any directory under the root.
 
 ## Hard rules — database
 
@@ -74,9 +76,13 @@ both plus the frontend.
   (`PredicateField`, `PredicateOp`, a value and `negated`), and one match arm per field in
   `push_card_filters` is what reaches **all three** card searches — `search_cards`,
   `collection_list` and `wishlist_list` already call that one function with the same `"c"` alias,
-  so a predicate costs one edit rather than three. **Two of the twelve fields emit no SQL at
-  all**: `TypeLine` and `OracleText` ride the FTS `MATCH` string instead, because `LIKE` measured
-  82× and 277× slower on the two warm probes. Their arms are **explicit skips with a comment** —
+  so a predicate costs one edit rather than three. **Three of the thirteen fields emit no SQL at
+  all**: `Name`, `TypeLine` and `OracleText` ride the FTS `MATCH` string instead, because `LIKE`
+  measured 82× and 277× slower on the two warm probes. **`Name` has no keyword** — it is what a
+  `-` on free text becomes (`-bolt`, `-"lightning bolt"`, issue #571), an ordered phrase on the
+  `name` column alone, while the positive free text beside it still reads every column; and the
+  wishlist answers it with a `LIKE` over its own name, for its free text's orphan reason, rather
+  than through `cards_fts`. Their arms are **explicit skips with a comment** —
   a bare `_ => {}` would hide the next field somebody forgets, and a field handled by neither
   side is a filter that silently does nothing. **FTS5's `NOT` is binary**, so a purely negative
   text term cannot ride the `MATCH` at all and becomes `rowid NOT IN (SELECT … MATCH ?)`. An
@@ -147,6 +153,15 @@ both plus the frontend.
   mean `main`, which after the split is a 1.3 MB file — measured, `page_count` 323 against
   `corpus.page_count` 192 149 — so `needs_conversion` and `freelist_pages` take a schema
   argument and `vacuum_into_incremental` runs `VACUUM corpus`.
+- **Both ladders commit each rung with its version stamp in one transaction** — the corpus one
+  since [issue #550](https://github.com/Msgaihede/mtg-grimoire/issues/550), which found a kill
+  between its bare `CREATE`s and the stamp stopping every later launch on `table cards already
+  exists`. **A `migrate_corpus` failure no longer stops a launch**: `prepare_database` detaches the
+  corpus, deletes it and builds it again at head (a resync, nothing the reader wrote) — unless the
+  error says nothing about the file (busy, locked, read-only, full, I/O), which stops the launch
+  as before. **`migrate_user` copies `user.db` to `backups/user.v{N}.db` with `VACUUM INTO` before
+  its first owed rung**, never overwriting a copy and keeping the newest three; a failed copy is
+  logged and the climb goes on.
 - Only `schema::migrate_user` / `migrate_corpus` may stop a launch. `prepare_database`'s other
   steps (an FTS rebuild an interrupted compaction owed; the staging table an interrupted ingest
   left; `managed_wishlist::settle_all`; and v52's pair, `deck_tokens::convert_legacy_picks_at_launch`
@@ -156,7 +171,8 @@ both plus the frontend.
   meanwhile, because a conversion before the device has heard its group reverted a peer's later
   edits; the repair after it and suppressed) are logged and left owing — their likeliest cause is a full
   or read-only disk,
-  and `init_state` turns any error into "move it aside", which that disk cannot do. **A corpus
+  and `init_state` turns any error into a refusal to start, which does that disk no good (it no
+  longer says "move it aside": `user.db` is the one file nothing can rebuild). **A corpus
   that will not open is not one of those failures**: it is deleted and rebuilt, and the
   collection is untouched — `split::tests::a_destroyed_corpus_costs_a_resync_and_nothing_else`.
 - **`card_migrations` is on the user side and that is a correctness requirement.** Its rows are
@@ -195,8 +211,31 @@ both plus the frontend.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v52**
-  (2026-09-26, the token-stacks spec §4) makes a token's printings **entries** —
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v53**
+  (2026-09-27, [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561)) gives
+  `deck_categories` a **`variant`**, so a deck's Theory and Actual lists stop sharing one pile set
+  — `NOT NULL DEFAULT 'live'` and no `CHECK` (`origin`'s precedent; `deck_meta::valid_variant` is
+  the fence), both unique indexes widened to `(deck_id, variant, …)`, and `variant` on the capture
+  spec and in both apply grains. The rung drops the six capture triggers on `deck_categories` and
+  `deck_cards` first, then `schema::split_theory_piles` clones **every** pile of every deck with a
+  plan (`theory_enabled`, or any theory row) into the theory list with the original's fields and
+  **stamps**, repoints the deck's theory cards, and deletes those decks' `deck_undo` rows (every
+  step names a theory card by the pile it has just left). `split::convert` runs the same function,
+  because a converted legacy file stamps head and never climbs. **The clone's uid is derived** —
+  `schema::theory_pile_uid`, SHA-256 of `deck_categories/theory/<original uid>` cut to 32 hex — so
+  every device that climbs names the same clone the same way, and `deck_meta::counterpart_in`
+  names a plan pile it makes at runtime the same way when the name is free. ⚠️ **What the rung
+  cannot reach is a v52 peer's writes after this device climbed**, v52's lesson one table over:
+  such a peer files its plan's cards into the one pile set it knows, so they arrive here in a
+  *live* pile, where neither tab draws them. `deck_meta::refile_stray_theory_cards` is the net —
+  captured, after `capture::install`, gated like `convert_legacy_picks` (a paired device waits for
+  `THEORY_PILES_READY`, set behind the first advancing pull; `client::pull` runs it behind every
+  such pull), moving each stray into the plan's pile of that name and **folding** it into a row
+  already there. A v52 peer still misreads what this device sends — it ignores `variant`, so a
+  theory pile's insert lands on its `(deck_id, name)` grain and merges into the live pile of that
+  name — **so every device in a group is updated before it syncs across v53**, the rule v52 set.
+  That is one above **v52**
+  (2026-09-26, the token-stacks spec §4), which makes a token's printings **entries** —
   `deck_token_printings`, the thirty-first user table and the **seventeenth synced** one, one
   printing in one finish in one list with a quantity, grained on `DECK_TOKEN_PRINTING_GRAIN`
   (`deck_id, variant, card_id, finish`, `finish` NOT NULL so the unique index cannot hold one
@@ -553,7 +592,7 @@ shared_cell` walks both into two databases and compares them column by column.
   REFERENCES without a NULL default, and GENERATED STORED). It has none because no command
   parameter reaches it — and, unlike `last_variant`, **no Rust fence either**: no command
   parameter reaches this column, so there is no untrusted value to refuse. **The reason it is a
-  stored fact and not a name test**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)` and
+  stored fact and not a name test**: `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)` and
   `category_for_name` finds before it creates, so a reader's own "Ramp" keeps `'user'` forever
   even once the app files cards into it — and "Ramp"/"Draw"/"Removal"/"Land" are exactly what a
   person names their own piles. The v15 backfill is a **frozen one-time guess** (`kind = 'main'`

@@ -1,6 +1,8 @@
 // Type-only: `vite` is a devDependency and this import leaves nothing behind at runtime.
 import type { Plugin } from "vite";
-import { MANIFEST_PATH, manifestJson } from "./manifest";
+// With its extension, unlike the rest of `src/`: `vite.web.config.ts` imports this file, and
+// Vite's native config loader (planned as the default) resolves no extensionless import.
+import { MANIFEST_PATH, manifestJson } from "./manifest.ts";
 
 /** A PNG the config read off disk, with the name it should have in the bundle. */
 export interface IconFile {

@@ -82,6 +82,7 @@ import {
   ipcError,
   type CardDetail,
   type DeckFinish,
+  type DeckVariant,
   type LabelColor,
   type MeldRelation,
 } from "@/lib/ipc";
@@ -1363,9 +1364,18 @@ function Body({
   const settleDecks = () => {
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
   };
+  // **In the list the card was opened from** (issue #561): each list has piles of its own, so a
+  // pile made from a Theory row belongs to the plan and must not appear on the Actual tab.
   const createCategory = useMutation({
-    mutationFn: ({ deckId, name }: { deckId: number; name: string }) =>
-      ipc.deckCategoryCreate(deckId, name),
+    mutationFn: ({
+      deckId,
+      variant,
+      name,
+    }: {
+      deckId: number;
+      variant: DeckVariant;
+      name: string;
+    }) => ipc.deckCategoryCreate(deckId, variant, name),
     onSuccess: settleDecks,
     onError: settleDecks,
   });
@@ -1398,7 +1408,7 @@ function Body({
     createCategory
       // The pile's own name travels into the move, because the deck read behind the create is
       // racing it — see {@link pickCategory}'s `toName`.
-      .mutateAsync({ deckId: slot.deckId, name })
+      .mutateAsync({ deckId: slot.deckId, variant: slot.variant, name })
       .then((category) => pickCategory(category.id, category.name))
       .catch((e: unknown) => setRefusal(`Could not make that category — ${ipcError(e)}`));
   };

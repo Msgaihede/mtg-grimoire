@@ -82,10 +82,11 @@ const TAG_READ_REFUSED =
  * one `["decks"]` root, which is a prefix of every key here — both spellings of the label key
  * included — and of the editor's detail key.
  *
- * **`variant` scopes the two counts on each category row and nothing else.** Which categories
- * a deck has, what they are called, what order they are in and whether they are switched on are
- * facts about the deck, not about one of its two lists — so a Live/Theory switch changes the
- * numbers in the headings and never the headings themselves.
+ * **`variant` picks which list's piles these are** (user schema v53, issue #561). Which
+ * categories a list has, what they are called, what order they are in and whether they are
+ * switched on are facts about *that list*: Theory and Actual are separate versions of the deck,
+ * and the theory diff is the only thing that joins them. So a pile made, renamed, reordered or
+ * switched off here never reaches the other tab — until v53 it did, because a pile was the deck's.
  *
  * **For labels it scopes membership as well, and that asymmetry is deliberate.** Since schema
  * v21 a label belongs to no deck; what a deck has is cards, some of which wear one. So "this
@@ -98,12 +99,11 @@ const TAG_READ_REFUSED =
  * The label reads take no marketplace at all — a `DeckLabel` carries a count and no money —
  * which is why only one of the three key shapes below grew a segment.
  *
- * A known narrowing, and it is the backend's rather than this hook's: every **category** write
- * answers with the `live` variant's counts, because a rename carries no variant of its own. It
- * costs nothing here — the row a mutation answers with is its result and is never written into
- * the cache; the invalidation re-reads through this hook's own variant. The label writes stopped
- * having the problem at v21: an app-wide write answers the app-wide row, whose counts are not
- * scoped by a variant at all.
+ * Every **category** write answers with the counts of the pile's own list — a pile belongs to
+ * one since user schema v53, so a rename needs no variant of its own to know which. The row a
+ * mutation answers with is its result and is never written into the cache either way; the
+ * invalidation re-reads through this hook's own variant. The label writes answer the app-wide
+ * row, whose counts are not scoped by a variant at all.
  */
 export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAULT_VARIANT) {
   const queryClient = useQueryClient();
@@ -193,10 +193,11 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
   };
 
-  /** A new pile: always `kind: "main"`, always active, appended after the deck's last one.
-   *  Refused when the deck already has that name — the grain is `(deckId, name)`. */
+  /** A new pile **in this hook's list**: always `kind: "main"`, always active, appended after
+   *  that list's last one. Refused when the list already has that name — the grain is
+   *  `(deckId, variant, name)`, so the other list's "Ramp" is no obstacle and is not touched. */
   const createCategory = useMutation({
-    mutationFn: (name: string) => ipc.deckCategoryCreate(opened(deckId), name),
+    mutationFn: (name: string) => ipc.deckCategoryCreate(opened(deckId), variant, name),
     ...writes,
   });
 
@@ -217,8 +218,10 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
     ...writes,
   });
 
-  /** The new order, whole: `sortOrder` is written from position, so this takes **every** id and
-   *  not a move. An id that is not this deck's is skipped rather than failing the reorder. */
+  /** The new order, whole: `sortOrder` is written from position, so this takes **every** id of
+   *  this list and not a move. An id that is not this deck's is skipped rather than failing the
+   *  reorder; ids from both lists at once are refused, which this hook never sends because it
+   *  only ever holds one list's piles. */
   const reorderCategories = useMutation({
     mutationFn: (ids: number[]) => ipc.deckCategoryReorder(opened(deckId), ids),
     ...writes,
@@ -288,7 +291,7 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
    * * It leaves a card the rule cannot place where it is. `autoCategoryFor` answers
    *   {@link UNCATEGORIZED} for an orphan or a layout it has no word for, and moving those from
    *   one loose pile into another is churn dressed as work.
-   * * It creates a target pile only when the deck has none by that name, reading the deck's
+   * * It creates a target pile only when the list has none by that name, reading the list's
    *   **current** categories rather than this hook's cached list — a panel that was one write
    *   stale would otherwise try to create a category that exists and be refused by name.
    *
@@ -366,7 +369,7 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
         // A pile this deck has not got at all is made, and is active by construction —
         // `deck_category_create` seeds `is_active` true.
         if (!idByName.has(target) && !switchedOff.has(target)) {
-          idByName.set(target, (await ipc.deckCategoryCreate(deck, target)).id);
+          idByName.set(target, (await ipc.deckCategoryCreate(deck, variant, target)).id);
         }
       }
 
