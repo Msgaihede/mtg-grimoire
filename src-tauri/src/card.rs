@@ -187,13 +187,6 @@ pub struct CardDetail {
     pub image_status: Option<String>,
     /// Empty for a single-faced card.
     pub faces: Vec<CardFace>,
-    /// Where this printing's picture is on `cards.scryfall.io`, per variant.
-    ///
-    /// Built by [`crate::image_uri::front_face_selects`] and folded by `front_face_map`, which
-    /// is where the face-first precedence and the `soon.jpg` fence live. A printing carrying
-    /// neither column answers `None`, which is the frame's "no art" state and **never a URL to
-    /// build one from**.
-    pub image_uris: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// One row of the printings list.
@@ -227,13 +220,6 @@ pub struct Printing {
     pub frame_effects: Option<String>,
     pub border_color: Option<String>,
     pub layout: String,
-    /// Where this printing's picture is on `cards.scryfall.io`, per variant.
-    ///
-    /// Built by [`crate::image_uri::front_face_selects`] and folded by `front_face_map`, which
-    /// is where the face-first precedence and the `soon.jpg` fence live. A printing carrying
-    /// neither column answers `None`, which is the frame's "no art" state and **never a URL to
-    /// build one from**.
-    pub image_uris: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// A printings list and the size of the list it was taken from.
@@ -272,10 +258,9 @@ pub fn get_card(
         "SELECT c.id, c.oracle_id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
                 c.layout, c.lang, c.mana_cost, c.cmc, c.type_line, c.oracle_text,
                 c.illustration_id, c.artist, c.released_at, c.legalities, c.finishes,
-                c.image_status, c.faces, c.promo_types, {prices}, {images}
+                c.image_status, c.faces, c.promo_types, {prices}
          FROM cards c WHERE c.id = ?1",
-        prices = finish_price_columns(market),
-        images = crate::image_uri::front_face_selects("c").join(", ")
+        prices = finish_price_columns(market)
     );
     conn.query_row(&sql, params![id], |r| {
         let faces: Option<String> = r.get(19)?;
@@ -298,9 +283,6 @@ pub fn get_card(
             released_at: r.get(15)?,
             legalities: r.get(16)?,
             finish_prices: read_finish_prices(r, 21)?,
-            // 21 fixed columns, then the three `finish_price_columns` appended at 21..23.
-            image_uris: crate::image_uri::front_face_map(|i| r.get::<_, Option<String>>(24 + i))
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?,
             finishes: r.get(17)?,
             promo_types: r.get(20)?,
             image_status: r.get(18)?,
@@ -381,13 +363,11 @@ pub fn list_printings(
     let sql = format!(
         "SELECT c.id, c.set_code, c.set_name, c.collector_number, c.released_at, c.rarity,
                 c.illustration_id, c.artist, c.lang, c.finishes, c.promo, c.full_art,
-                c.frame_effects, c.border_color, c.layout, c.promo_types, {prices},
-                {images}
+                c.frame_effects, c.border_color, c.layout, c.promo_types, {prices}
          FROM cards c WHERE {PRINTINGS_WHERE}
          ORDER BY released_at DESC, set_code ASC, collector_number ASC, id ASC
          LIMIT ?2",
-        prices = finish_price_columns(market),
-        images = crate::image_uri::front_face_selects("c").join(", ")
+        prices = finish_price_columns(market)
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -404,11 +384,6 @@ pub fn list_printings(
                 lang: r.get(8)?,
                 finishes: r.get(9)?,
                 finish_prices: read_finish_prices(r, 16)?,
-                // 16 fixed columns, then the three prices at 16..18.
-                image_uris: crate::image_uri::front_face_map(|i| {
-                    r.get::<_, Option<String>>(19 + i)
-                })
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?,
                 promo: r.get(10)?,
                 promo_types: r.get(15)?,
                 full_art: r.get(11)?,
@@ -1686,13 +1661,6 @@ mod tests {
                     artist: Some("Nils Hamm".into()),
                 },
             ],
-            // A real payload for `promo_types`' reason: this is the field the whole web card
-            // pane draws from, and `None` would pin the shape while saying nothing about the
-            // name the frontend reads.
-            image_uris: Some(std::collections::BTreeMap::from([(
-                "display".to_owned(),
-                "https://cards.scryfall.io/display/dfc.jpg?1".to_owned(),
-            )])),
         })
         .unwrap();
 
@@ -1707,7 +1675,6 @@ mod tests {
                 "collectorNumber": "51",
                 "rarity": "common",
                 "layout": "transform",
-                "imageUris": { "display": "https://cards.scryfall.io/display/dfc.jpg?1" },
                 "lang": "en",
                 "manaCost": null,
                 // A `1` here would not compare equal: `cmc` is an `f64` on the wire, and
@@ -1783,12 +1750,6 @@ mod tests {
                 frame_effects: None,
                 border_color: Some("black".into()),
                 layout: "normal".into(),
-                // Alpha carries only the top-level column, which is the ordinary case; the
-                // face-first precedence is pinned by the two-column fixture instead.
-                image_uris: Some(std::collections::BTreeMap::from([(
-                    "display".to_owned(),
-                    "https://cards.scryfall.io/display/p1.jpg?1".to_owned(),
-                )])),
             }],
             // Larger than `items`, which is the whole signal that a list was truncated.
             total: 862,
@@ -1800,7 +1761,6 @@ mod tests {
             serde_json::json!({
                 "items": [{
                     "id": "p1",
-                    "imageUris": { "display": "https://cards.scryfall.io/display/p1.jpg?1" },
                     "setCode": "lea",
                     "setName": "Limited Edition Alpha",
                     "collectorNumber": "161",
@@ -1948,85 +1908,6 @@ mod tests {
         )
         .unwrap();
         conn
-    }
-
-    /// A row carrying **both** picture columns, holding **different** pictures.
-    ///
-    /// The shape is a meld or transform part: `face_image_uris` is the front face's own art and
-    /// `image_uris` is the card's. It exists because a fixture with only the top-level column
-    /// **cannot fail** if the read is off by one — `front_face_selects` orders the pair
-    /// (face, top-level) and `for_face` prefers the face, so a read one column early puts the
-    /// top-level url into the face slot and answers correctly by accident. Two different urls
-    /// are the only thing that tells a correct read from a shifted one.
-    ///
-    /// **Both variants since 2026-08-31**, and the second is a second way to be wrong rather
-    /// than more of the first: with `display` and `art` the select list is four expressions,
-    /// and a pairing read wrong hands the crop back under `display` -- a real URL, on the real
-    /// host, versioned, and the wrong picture.
-    fn fixture_with_both_image_columns(id: &str) -> Connection {
-        let conn = crate::schema::memory_pair();
-        conn.execute(
-            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout,
-                                image_uris, face_image_uris, raw)
-             VALUES (?1, 'Test Card', 'tst', '1', 'en', 'meld', ?2, ?3, '{}')",
-            rusqlite::params![
-                id,
-                r#"{"display":"https://cards.scryfall.io/display/CARD.jpg?1",
-                     "art":"https://cards.scryfall.io/art/CARD.jpg?1"}"#,
-                r#"[{"display":"https://cards.scryfall.io/display/FACE.jpg?1",
-                      "art":"https://cards.scryfall.io/art/FACE.jpg?1"}]"#,
-            ],
-        )
-        .unwrap();
-        conn
-    }
-
-    /// **The pane's own picture, and the column arithmetic behind it.**
-    ///
-    /// `card_detail` answers 21 fixed columns, then three prices, then this pair — so the read
-    /// is at 24 and a wrong constant is invisible without the fixture above.
-    #[test]
-    fn a_card_detail_carries_the_front_faces_image_url() {
-        let conn = fixture_with_both_image_columns("meld-1");
-
-        let card = get_card(&conn, "meld-1", Marketplace::Tcgplayer)
-            .unwrap()
-            .expect("the fixture's card");
-
-        let uris = card.image_uris.expect("both columns are present");
-        assert_eq!(
-            uris.get("display").map(String::as_str),
-            Some("https://cards.scryfall.io/display/FACE.jpg?1"),
-            "the face's own art wins over the card's — and a read one column early would \
-             answer the card's while looking correct"
-        );
-        assert_eq!(
-            uris.get("art").map(String::as_str),
-            Some("https://cards.scryfall.io/art/FACE.jpg?1"),
-            "and the second variant's pair is read at its own offset"
-        );
-    }
-
-    /// The printings list reads its pair at 19 — 16 fixed columns, then the three prices.
-    #[test]
-    fn a_printing_carries_the_front_faces_image_url() {
-        let conn = fixture_with_both_image_columns("meld-2");
-        conn.execute("UPDATE cards SET oracle_id = 'o-1' WHERE id = 'meld-2'", [])
-            .unwrap();
-
-        let out = list_printings(&conn, "o-1", Marketplace::Tcgplayer, None).unwrap();
-        let first = out.items.first().expect("one printing");
-
-        let uris = first.image_uris.as_ref().expect("both columns are present");
-        assert_eq!(
-            uris.get("display").map(String::as_str),
-            Some("https://cards.scryfall.io/display/FACE.jpg?1"),
-        );
-        assert_eq!(
-            uris.get("art").map(String::as_str),
-            Some("https://cards.scryfall.io/art/FACE.jpg?1"),
-            "and the second variant's pair is read at its own offset"
-        );
     }
 
     /// A card whose `image_uris` column is `NULL` — it carried none at all, as opposed to a

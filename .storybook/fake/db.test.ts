@@ -7475,6 +7475,258 @@ describe("adding a deck's missing copies to the collection", () => {
 });
 
 /**
+ * **A printing sold in only one finish, on both sides of the deck boundary** — issue #563's rule
+ * carried out of the theory diff into every read and write that compares a deck row with a copy.
+ *
+ * `deck_cards.finish` is `null` whenever a write named no finish — the search Add, a drag, a
+ * decklist line without `*F*` — while `collection_entries.finish` is never `null`. For the
+ * foil-only Sphinx an unsaid row can only be the foil, and the deck views already draw it that
+ * way, so the owned count, both plans, the quick add and every release of copies have to read it
+ * as the foil too. Before they did, a deck holding the foil copy read it as missing, the Pull
+ * dialog had no copy to offer against a "regular" hole nobody sells, a quick add recorded a
+ * regular copy of a card that has none, and the unclaimed sweep filed the deck's own foil copy
+ * away as nobody's.
+ *
+ * **A legacy `nonfoil` copy of the same printing reads as the foil as well** — the old quick add,
+ * add-missing and the imports all wrote one — so it goes on counting rather than being stranded.
+ * The last `it` is the control: a printing sold in both finishes is exactly as it was.
+ */
+describe("a printing sold only in foil, across the deck boundary", () => {
+  /**
+   * `Burn` lists three Sphinxes **unsaid** on its main pile, holds one foil copy in its group, and
+   * two more foil copies sit at the root.
+   */
+  const unsaid = (over: Partial<FakeDb> = {}) =>
+    makeDeckDb({
+      decks: [deck({ id: 1, name: "Burn" })],
+      deckCards: [deckCard({ id: 1, cardId: FOIL_ONLY.id, categoryKind: "main", quantity: 3 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: FOIL_ONLY.id, finish: "foil", quantity: 1, folderId: groupId(1) }),
+        entry({ id: 2, cardId: FOIL_ONLY.id, finish: "foil", quantity: 2 }),
+      ],
+      ...over,
+    });
+  /** A folder's rows of one card as `[finish, quantity]` — the finish is what this is about. */
+  const heldIn = (db: FakeDb, folderId: number | null, cardId = FOIL_ONLY.id) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId && e.cardId === cardId)
+      .map((e) => [e.finish, e.quantity]);
+
+  it("counts the group's foil copy, and a legacy nonfoil one, against an unsaid row", () => {
+    expect(liveDeck(unsaid())!.cards[0].ownedQuantity).toBe(1);
+
+    const legacy = unsaid({
+      collectionEntries: [
+        entry({ id: 1, cardId: FOIL_ONLY.id, finish: "foil", quantity: 1, folderId: groupId(1) }),
+        entry({
+          id: 3,
+          cardId: FOIL_ONLY.id,
+          finish: "nonfoil",
+          quantity: 1,
+          folderId: groupId(1),
+        }),
+      ],
+    });
+    expect(liveDeck(legacy)!.cards[0].ownedQuantity).toBe(2);
+    // The home widget counts through the same pools, so it says what the editor says.
+    expect(readHandlers(legacy).deck_completion({})[0]).toMatchObject({
+      wanted: 3,
+      owned: 2,
+      missing: 1,
+    });
+  });
+
+  /**
+   * **One plan row for the unsaid line and the `foil` line together**, reported as the foil: the
+   * two are one piece of cardboard, so they are one hole, and the copies at the root fill it.
+   * Pulling them in then reads as owned on the unsaid row, which is the loop closed.
+   */
+  it("files the Pull plan's row under the foil, one row for an unsaid and a foil line", () => {
+    const db = unsaid({
+      deckCards: [
+        deckCard({ id: 1, cardId: FOIL_ONLY.id, categoryKind: "main", quantity: 3 }),
+        deckCard({
+          id: 2,
+          cardId: FOIL_ONLY.id,
+          categoryKind: "side",
+          quantity: 1,
+          finish: "foil",
+        }),
+      ],
+    });
+    const rows = readHandlers(db).deck_pull_plan({ deckId: 1 });
+    expect(
+      rows.map((r) => [r.finish, r.short, r.categories, r.candidates.map((c) => c.entryId)]),
+    ).toEqual([["foil", 3, ["Main deck", "Sideboard"], [2]]]);
+
+    writeHandlers(db).deck_pull_from_collection({
+      deckId: 1,
+      picks: [{ entryId: 2, quantity: 2 }],
+    });
+    expect(liveDeck(db)!.cards.map((c) => c.ownedQuantity)).toEqual([3, 0]);
+  });
+
+  it("records a quick add that names no finish as the foil copy it can only be", () => {
+    const db = unsaid();
+    const out = writeHandlers(db).deck_quick_add_to_collection({
+      deckId: 1,
+      cardId: FOIL_ONLY.id,
+      finish: null,
+      quantity: 2,
+      wishId: null,
+    });
+    // Folded onto the group's own foil row rather than standing a regular twin beside it.
+    expect(out.entryId).toBe(1);
+    expect(heldIn(db, groupId(1))).toEqual([["foil", 3]]);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(3);
+  });
+
+  /**
+   * The Add-missing dialog: the row is the foil, the narrow wish read matches a wish for the foil,
+   * and a pick spelled either way — the unsaid `null` or the row's own `foil` — names the same
+   * cardboard, so the two sum against one shortfall and record one foil row.
+   */
+  it("offers the Add-missing row as the foil and records the foil either way it is picked", () => {
+    const db = unsaid({
+      collectionEntries: [
+        entry({ id: 1, cardId: FOIL_ONLY.id, finish: "foil", quantity: 1, folderId: groupId(1) }),
+      ],
+      wishlistEntries: [
+        wish({ id: 1, cardId: FOIL_ONLY.id, quantity: 1, preferredFinish: "foil" }),
+      ],
+    });
+    const rows = readHandlers(db).deck_missing_plan({ deckId: 1 });
+    expect(rows.map((r) => [r.finish, r.short, r.wishes.map((w) => w.id)])).toEqual([
+      ["foil", 2, [1]],
+    ]);
+
+    const out = writeHandlers(db).deck_missing_to_collection({
+      deckId: 1,
+      picks: [
+        { cardId: FOIL_ONLY.id, finish: null, quantity: 1 },
+        { cardId: FOIL_ONLY.id, finish: "foil", quantity: 1 },
+      ],
+      clearWishes: true,
+    });
+    expect(out).toEqual({ copies: 2, cards: 1, wishCopies: 1 });
+    expect(heldIn(db, groupId(1))).toEqual([["foil", 3]]);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(3);
+  });
+
+  /**
+   * **The sweep is the destructive half.** A swap anywhere in the deck re-reads the whole group
+   * against the whole list, and an unsaid row that claimed only a regular copy nobody sells would
+   * have filed the deck's own foil copy into `Recently removed`. A cut, on the other hand, gives
+   * back what the row claimed — the foil and the legacy regular copy both.
+   */
+  it("never sweeps the foil copies away as unclaimed, and gives them back on a cut", () => {
+    const db = unsaid({
+      deckCards: [
+        deckCard({ id: 1, cardId: FOIL_ONLY.id, categoryKind: "main", quantity: 3 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "main", quantity: 1 }),
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: FOIL_ONLY.id, finish: "foil", quantity: 1, folderId: groupId(1) }),
+        entry({
+          id: 3,
+          cardId: FOIL_ONLY.id,
+          finish: "nonfoil",
+          quantity: 1,
+          folderId: groupId(1),
+        }),
+        entry({ id: 4, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
+      ],
+    });
+    const w = writeHandlers(db);
+    w.deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT.id,
+      toCardId: BOLT_2X2.id,
+      categoryId: categoryId(1, "main"),
+      variant: "live",
+    });
+    // The Bolt nobody lists any more went; both Sphinx copies stayed.
+    expect(heldIn(db, REMOVED_FOLDER, BOLT.id)).toEqual([["nonfoil", 1]]);
+    expect(heldIn(db, groupId(1))).toEqual([
+      ["foil", 1],
+      ["nonfoil", 1],
+    ]);
+
+    const out = w.deck_to_collection({ deckCardId: 1, quantity: 2 });
+    expect(out.quantity).toBe(2);
+    expect(heldIn(db, groupId(1))).toEqual([]);
+  });
+
+  /** `collection_to_deck` out of another deck's group takes the copy off that deck's unsaid row. */
+  it("takes a copy moved out of another deck off that deck's unsaid row", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, name: "Deck A" }), deck({ id: 2, name: "Deck B" })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: FOIL_ONLY.id, quantity: 1 }),
+        deckCard({ id: 2, deckId: 2, cardId: FOIL_ONLY.id, quantity: 1 }),
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: FOIL_ONLY.id, finish: "foil", quantity: 1, folderId: groupId(1) }),
+      ],
+    });
+    const out = writeHandlers(db).collection_to_deck({
+      entryId: 1,
+      deckId: 2,
+      categoryId: categoryId(2, "main"),
+      quantity: 1,
+    });
+    expect(out.fromDeck).toBe("Deck A");
+    expect(db.deckCards.filter((dc) => dc.deckId === 1)).toEqual([]);
+  });
+
+  /** The plan's two owned figures — the row's own and the diff's spares — count a legacy copy. */
+  it("counts a legacy nonfoil copy for a plan's unsaid row, owned and spare", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true })],
+      deckCards: [deckCard({ id: 1, cardId: FOIL_ONLY.id, variant: "theory", quantity: 3 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: FOIL_ONLY.id, finish: "nonfoil", quantity: 1 }),
+        entry({ id: 2, cardId: FOIL_ONLY.id, finish: "foil", quantity: 1 }),
+      ],
+    });
+    const r = readHandlers(db);
+    expect(r.deck_get({ id: 1, variant: "theory" })!.cards[0].ownedQuantity).toBe(2);
+    expect(r.deck_theory_diff({ deckId: 1 })).toMatchObject([
+      { finish: "foil", quantity: 3, ownedSpare: 2 },
+    ]);
+  });
+
+  /**
+   * **The control.** `2x2 117` is sold in nonfoil and foil, so an unsaid row is the regular copy
+   * and nothing else: a foil copy in the group does not fill it, and a quick add naming no finish
+   * records a regular one.
+   */
+  it("leaves a printing sold in both finishes exactly as it was", () => {
+    const db = unsaid({
+      deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 2 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_2X2.id, finish: "foil", quantity: 1, folderId: groupId(1) }),
+      ],
+    });
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
+    expect(readHandlers(db).deck_pull_plan({ deckId: 1 })).toEqual([]);
+
+    writeHandlers(db).deck_quick_add_to_collection({
+      deckId: 1,
+      cardId: BOLT_2X2.id,
+      finish: null,
+      quantity: 1,
+      wishId: null,
+    });
+    expect(heldIn(db, groupId(1), BOLT_2X2.id)).toEqual([
+      ["foil", 1],
+      ["nonfoil", 1],
+    ]);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(1);
+  });
+});
+
+/**
  * `deck_clear` — the pile clear above with one filter dropped, so these are the same questions
  * asked of the whole list.
  *
@@ -8790,44 +9042,14 @@ describe("deck notes", () => {
       oracleIds: ["o-not-in-the-corpus"],
     });
     // **`cardId: null` is the orphan and is the other half of the same sentence**: there is no
-    // printing to name, so the card draws an empty frame rather than a broken image, and the
-    // picture is `null` with it rather than an empty map.
+    // printing to name, so the card draws an empty frame rather than a broken image.
     expect(note.cards).toEqual([
       {
         oracleId: "o-not-in-the-corpus",
         name: "o-not-in-the-corpus",
         cardId: null,
-        imageUris: null,
       },
     ]);
-  });
-
-  /**
-   * **The picture, pinned on a card that has one** — the half the null arm below cannot see.
-   *
-   * `imageUris` is folded rather than passed through by every reader of it (a note card's
-   * thumbnail, `deckTokenViews`, `CombosDialog`), so a fake answering `null` throughout would
-   * make the workbench the one place each of those resolutions is never exercised — which is
-   * exactly what {@link frontFaceImageUris}' own comment warns about. Asserted **against the
-   * fixture's own row** rather than against a pasted URL: a hard-coded string would go stale with
-   * the generated corpus and would pass a `frontFaceImageUris` that had stopped reading the card.
-   */
-  it("draws the picture of the printing it named, and not an empty map", () => {
-    const db = notesDb();
-    const note = writeHandlers(db).deck_note_create({
-      deckId: 1,
-      title: "t",
-      body: "b",
-      oracleIds: [BOLT_ORACLE],
-    });
-    const [attached] = note.cards;
-    const printing = db.cards.find((c) => c.id === attached.cardId);
-
-    expect(printing).toBeDefined();
-    expect(printing?.normalUrl).toBeTruthy();
-    expect(attached.imageUris).not.toBeNull();
-    expect(attached.imageUris?.display).toBe(printing?.normalUrl);
-    expect(attached.imageUris?.art).toBe(printing?.artCropUrl);
   });
 
   it("names the deck's own printing where the deck holds one, and any printing otherwise", () => {
@@ -14550,33 +14772,16 @@ describe("the combos one card is in", () => {
    * reader's `cards` table are two downloads on two schedules, so this is an ordinary state and
    * the fixture reaches it on purpose. The name is the whole of what the row can draw.
    *
-   * The piece beside it is the control: a printing id off the corpus and the *real* Scryfall URL
-   * off that row. A handler that fell back to the oracle id for `cardId`, or that minted a URL
-   * out of one, passes nothing here.
+   * The piece beside it is the control: a printing id off the corpus. A handler that fell back
+   * to the oracle id for `cardId` passes nothing here.
    */
   it("addresses a piece by a printing, and answers null for a card the corpus lacks", () => {
     const pieces = ask(seed("starter")).combos.find((c) => c.id === "1183-3587")!.pieces;
 
     expect(pieces.map((p) => p.name)).toEqual(["Boros Reckoner", "Blasphemous Act"]);
     expect(pieces[0].cardId).toBe(RECKONER.id);
-    expect(pieces[0].imageUris?.display).toBe(RECKONER.normalUrl);
     expect(pieces[1].cardId).toBeNull();
-    expect(pieces[1].imageUris).toBeNull();
     expect(pieces[1].owned).toBe(0);
-  });
-
-  /**
-   * `imageUrisMissing` is a corpus whose `image_uris` column is null throughout, and what it costs
-   * is the **picture** and not the printing: a piece with no art is still a piece a reader can
-   * press. A handler that nulled `cardId` alongside the URLs would make the whole row inert.
-   */
-  it("loses the pictures and keeps the printings under imageUrisMissing", () => {
-    const db = { ...seed("starter"), fault: "imageUrisMissing" as const };
-
-    const piece = ask(db).combos[0].pieces[0];
-
-    expect(piece.imageUris).toBeNull();
-    expect(piece.cardId).toBe(RECKONER.id);
   });
 
   /**
@@ -14842,34 +15047,14 @@ describe("deck tokens", () => {
   });
 
   /**
-   * **The picture is the entry's printing**, and the starter world is the fixture that can tell
-   * the entry from the resolver apart: deck 1's Treasure entry is the older art while the resolver
-   * names the newer, so a row taking the resolver's would draw the art the reader chose against.
+   * **The chin's facts are the entry's printing's** — `drawn_for` in `deck_tokens.rs` reads them
+   * off the printing `cardId` names, and the starter world is the fixture that can tell the entry
+   * from the resolver apart: deck 1's Treasure entry is the older art while the resolver names the
+   * newer, so a row taking the resolver's would caption the art the reader chose against.
    *
-   * The URLs are read back off `CARDS` rather than written out: they are the fixture's own real
-   * Scryfall ones, and an assertion quoting them would pin a generated file's contents.
+   * Read back off `CARDS` rather than written out: an assertion quoting them would pin a
+   * generated file's contents.
    */
-  it("carries the picture of the entry's printing", () => {
-    const byId = new Map(CARDS.map((c) => [c.id, c]));
-    const picture = (id: string) => ({
-      display: byId.get(id)!.normalUrl,
-      art: byId.get(id)!.artCropUrl,
-    });
-    const rows = tokensOf(seed("starter"), 1);
-
-    const treasure = rows.find((r) => r.name === "Treasure")!;
-    // Not vacuous: the two have to name different printings for the precedence to be visible.
-    expect(treasure.cardId).not.toBe(treasure.defaultCardId);
-    expect(treasure.imageUris).toEqual(picture(treasure.cardId));
-
-    // And an implicit entry is the resolver's printing.
-    const construct = rows.find((r) => r.name === "Construct")!;
-    expect(construct.imageUris).toEqual(picture(construct.defaultCardId));
-  });
-
-  /** **The chin's facts are the entry's printing's** — `drawn_for` in `deck_tokens.rs` reads the
-   *  picture and the chin off that one printing. Read back off `CARDS` for the picture test's
-   *  reason. */
   it("carries the chin facts of the entry's printing", () => {
     const byId = new Map(CARDS.map((c) => [c.id, c]));
     const chin = (id: string) => {
@@ -15009,15 +15194,6 @@ describe("deck tokens", () => {
       finishes: null,
       unitPrice: null,
     });
-  });
-
-  /** The `imageUrisMissing` fault is the whole corpus with both URL columns empty, so every
-   *  token answers `null`. */
-  it("answers no picture at all under the imageUrisMissing fault", () => {
-    const rows = tokensOf({ ...seed("starter"), fault: "imageUrisMissing" }, 1);
-
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((r) => r.imageUris === null)).toBe(true);
   });
 
   /** A dismissal is still a derived row: whether `hidden` is *drawn* is `deckTokenViews`'

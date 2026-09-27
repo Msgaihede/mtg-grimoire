@@ -5,18 +5,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
   `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
-  **not one file since schema 27**: the reader's **thirty-one** tables are `main` and the
-  rebuildable **twenty-five** are `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the
-  split itself; the user side is what has grown since, and this line said eighteen until user
-  schema v43, twenty-seven until v44, twenty-eight until v45, twenty-nine until v46 and thirty
-  until v52 — a count in prose that no build checks, which is the rot
-  this file's own header warns about. Both halves are
+  **not one file since schema 27**: the reader's tables are `main` and the rebuildable ones are
+  `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the split itself; the user side is what
+  has grown since, and this line carried the user figure and said eighteen until user schema v43,
+  twenty-seven until v44, twenty-eight until v45, twenty-nine until v46, thirty until v52 and
+  thirty-one until v54 — a count in prose that no build checks, which is the rot this file's own
+  header warns about, so it carries none now. Both halves are
   `grep -c '^\s*("[a-z_]*", Side::User),'` and the same with `Side::Corpus` over
-  `schema.rs` — re-run 2026-09-26 at v52: **31** and **25**; **a bare `grep -c 'Side::User'`
-  over-counts** — 36 against 31 at v52, because `mod tests` matches the enum by name five more
+  `schema.rs` — re-run 2026-09-27 at v54: **32** and **25**; **a bare `grep -c 'Side::User'`
+  over-counts** — 37 against 32 at v54, because `mod tests` matches the enum by name five more
   times (this said four until v52's stray-table test began asking the registry). Count them,
-  never add to the number above; `src/lib/userTables.json` is the same thirty-one and a Rust test
-  holds the two equal.)
+  never add to a number written here; `src/lib/userTables.json` holds the same list and a Rust
+  test holds the two equal.)
   A folder still holding a single
   `mtg.db` is converted at the next launch by `split::convert`, which never touches that
   file until the new one is safely renamed into place. Delete that `data/` folder to force
@@ -209,11 +209,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   it, 146.6 ms against 145 ms, so the with-and-without pair is not being read against a corpus
   that has drifted somewhere else entirely.
 
-  **To a reader, the pictures are free.** A collapsed browse is ~147 ms carrying them and ~150 ms
-  without; the wall's own request is ~137 ms either way. Those differences sit under the IPC hop
+  **To a reader, the pictures were free.** A collapsed browse was ~147 ms carrying them and ~150 ms
+  without; the wall's own request ~137 ms either way. Those differences sat under the IPC hop
   and the paint that follow them. The 123 B a row bought the browser build a wall that could draw
   art at all, since `mtgimg://` is a Tauri protocol; that build was removed on 2026-09-27, and
-  the field now travels with the row unread until a follow-up takes it out.
+  the field went with it the same day — the next bullet closes the record.
 
 - **2026-08-31 doubled those two `json_extract`s to four, and the query cost was *not*
   re-measured.** `image_uri::LIST_VARIANTS` gained `art` beside `display`, because a deck cover,
@@ -226,13 +226,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   2026-08-29's four-variant figure exactly (+21 600 B, +93.1 %), which is what makes the two
   comparable.
 
-  **The stopwatch half is a gap and is written down as one.** The shape is unchanged — the
-  `json_extract`s read a `cards` row the query is already holding, for the 50 rows the page
-  produces, and the collapsed column is dominated by the count walking to `TOTAL_CAP` — so a
-  cost that could not be resolved at two columns is not going to resolve at four; but "predicted"
-  is not "measured", and the table above is a measurement. What would settle it is that table's
-  own method: two release binaries from one tree, `FRONT_FACE_COLUMNS`' expressions replaced by
-  `NULL` in one, run alternately, medians of the pooled samples.
+  **Removed on 2026-09-27, with the browser build that was the field's only reader.** The desktop
+  draws every picture through `mtgimg://` by printing id, so `imageUris` left every list DTO and
+  `LIST_VARIANTS`, `ART_VARIANT` and `front_face_map` left `image_uri` with it; the share snapshot
+  is the one list reader left, on a single `display` URL
+  ([collection-sharing.md](collection-sharing.md)). Measured that day (node:sqlite, read-only,
+  the dev `corpus.db`, 118 610 printings, 162 with no fetchable picture): the field —
+  `,"imageUris":{"art":…,"display":…}` — averaged **223.7 B a row** over the corpus and
+  **224.0 B** over both the reader's 277 collection entries and 699 deck cards, which is the
+  page above to the byte: **34 396 B → 23 196 B, −32.6 %**.
+
+  **The stopwatch half was a gap, and the removal closed it without a measurement.** A cost that
+  could not be resolved at two columns was never going to resolve at four — the `json_extract`s
+  read a `cards` row the query already held, for the 50 rows a page produces, under a count
+  walking to `TOTAL_CAP` — and with all four gone from every read a page makes there is no longer
+  a with-and-without pair to time.
 
   **One caveat, because it nearly became a fiction.** The first with-and-without pair taken this
   session read 28.4 / 146.6 against 61.4 / 318.9 — a 2× "regression" that reproduced on a second
@@ -1202,6 +1210,42 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   re-pick, both mixed-version stalls, the reversion the gate closes and the per-pick savepoint by
   `deck_tokens.rs`'.
   [decks-storage.md](decks-storage.md) has the entries, the commands and the reconcile.
+  **v54 adds `sync_gone`, one tombstone per deleted row of a table other rows are filed under**
+  (2026-09-27,
+  [folder deletes across devices](../superpowers/specs/2026-09-27-folder-deletes-across-devices-design.md)
+  §3.1). A tombstone here is a row saying a parent went — not the `del` op in `sync_ops` that
+  [sync.md](sync.md) also calls one. **One table, `WITHOUT ROWID`** — `(tbl TEXT NOT NULL, uid
+  TEXT NOT NULL, PRIMARY KEY (tbl, uid))` — whose composite key is the table, so it brings no index
+  and no autoindex: the index figure does not move, and the table figure is the grep at the top of
+  this page, both re-counted off `USER_SCHEMA_SQL` in the landing commit rather than added. **Not
+  synced**, on no capture spec and with no `sync_uid`: which parents a device has seen deleted is a
+  fact about that device, and each writes its own. **Written by a trigger** — `capture::install`'s
+  `sync_gone_{table}`, `AFTER DELETE` on every table `capture::parent_tables()` reads off
+  `capture::TABLES`, gated on the row having a uid and **not** on the apply guard or on a group —
+  so this device's own delete, one applied from a peer and every cascade either sets off all land
+  there, where before only the first left anything `apply`'s `gone` could read, and a device in no
+  group still records what it deletes; **and by `apply::tombstone` for a row `apply` deletes
+  without ever having held it**, since a `DELETE` that finds nothing fires no trigger (a parent a
+  third device made and deleted between two pulls, a folder a peer made under one deleted here).
+  Nothing else writes it. **The rung backfills it from this device's own `del` ops**
+  for the seven parent tables of the day — `deck_folders`, `decks`, `deck_categories`,
+  `deck_labels`, `deck_notes`, `collection_folders` and `wishlist_folders`, spelled in the rung
+  because a rung is history while live code derives the list — so nothing `gone` answered the day
+  before stops answering. ⚠️ **A delete applied from a peer before the upgrade is not recovered**:
+  it ran behind the guard and recorded nothing anywhere. It owes its `USER_SCHEMA_SQL` lines and
+  **`UNDO_V54`**, for `UNDO_V37`'s loud reason (a bare `CREATE TABLE`), at the head of every
+  rewind chain, ahead of `UNDO_V53`. ⚠️ **`UNDO_V54` drops the table and leaves the `sync_gone_*`
+  triggers standing**, because they belong to the parent tables: a fixture that ran
+  `capture::install` and then rewinds finds a delete from any of those tables, and a `DROP COLUMN`
+  or `RENAME` on one, refused with `no such table: main.sync_gone` (measured against 3.53.0) — so
+  such a fixture may rewind v54 and nothing below it: `UNDO_V53` opens with a delete from
+  `deck_categories`, refused over `sync_gone_deck_categories` even when it matches no row
+  (measured against 3.53.0 on 2026-09-27). No production path drops the table. **It was written
+  as v53**, the number token stacks PR 3 had planned for a new `collection_folders.kind` word —
+  that PR was dropped the same day — **and renumbered to v54 at the merge with `main`**, whose
+  per-list piles (v53, above) had landed first. [sync.md](sync.md) *Held while it can resolve,
+  skipped when it cannot* has what reads the table, and the folder delete that shipped beside it —
+  one that would clear rows out of a folder waits for the page's retry and re-homes what is left.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

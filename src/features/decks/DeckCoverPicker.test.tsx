@@ -297,21 +297,13 @@ describe("DeckCoverPicker", () => {
     ).toBeNull();
   });
 
-  /**
-   * The local cache already holds the crop at the right size, so a row that carries a URL of its
-   * own is still drawn from the protocol. Asserted because a tile that preferred the row's URL
-   * would refetch every tile in the grid over the network, and nothing on screen would say so.
-   */
-  it("keeps drawing the protocol picture for a choice tile whose row carries a URL", () => {
-    const shivan = card({
-      name: "Shivan Dragon",
-      imageUris: { art: "https://cards.scryfall.io/art/x.webp?1" },
-    });
+  /** A choice tile draws the local cache's crop, which already holds it at the right size. */
+  it("draws the protocol picture for a choice tile", () => {
+    const shivan = card({ name: "Shivan Dragon" });
     picker({ deckCards: [shivan] });
 
     const img = screen.getByRole("button", { name: "Shivan Dragon" }).querySelector("img");
     expect(img).toHaveAttribute("src", cardImageUrl(shivan.cardId, 0, "art"));
-    expect(img!.getAttribute("src")).not.toContain("scryfall.io");
   });
 
   /**

@@ -8,12 +8,7 @@ import {
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { dragData } from "@/features/decks/dnd";
-import {
-  CardGrid,
-  PHONE_TILE_WIDTH,
-  type GridCard,
-  type GridSections,
-} from "@/features/search/CardGrid";
+import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
 import { isFinish, type Finish } from "@/lib/finish";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
@@ -22,7 +17,6 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
 import type { ShelfSection } from "@/lib/shelfLayout";
 import type { Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
-import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
 import { printingOf, wishLabel } from "./wish";
@@ -84,10 +78,6 @@ function toTile(wish: WishRow, managed: boolean): WishTile {
     setCode: wish.setCode ?? "",
     collectorNumber: wish.collectorNumber ?? "",
     rarity: wish.rarity,
-    // The image URLs of the printing this wish is *drawn as*, off the same join `artCardId` above
-    // came from. `GridCard` still carries the field; nothing draws it — the tile's picture is the
-    // `mtgimg` protocol's, built from `artCardId`.
-    imageUris: wish.imageUris,
     wish,
   };
 }
@@ -363,9 +353,6 @@ export function WishlistGrid({
   // has to know whether one is open, only which card is in it.
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
-  // What the wall below is sized by — see its `baseTileWidth`. A consumer of the app's one
-  // viewport branch rather than a second one; the hook argues for itself at its own site.
-  const narrowWindow = useNarrowWindow();
   const tip = useTooltip();
 
   /**
@@ -442,11 +429,6 @@ export function WishlistGrid({
       // disagree with. `CollectionPage` renders `CardGrid` directly and passes it there, which is
       // the same rule read from the other end.
       grow
-      // **A phone gets a narrower card, so the list is two columns rather than one.** The same
-      // width the search and collection walls take and for the same arithmetic: 324px of wall at
-      // 390, where 170 floors to one column. `PHONE_TILE_WIDTH` carries the derivation, the 160
-      // that looks like a fix and is not, and the decision that the chin does not scale with it.
-      baseTileWidth={narrowWindow ? PHONE_TILE_WIDTH : undefined}
       // This wall's own zoom, kept apart from the collection's and the search's: the three lists
       // are read one after the other, and a size settled on one is not an answer about another.
       zoomSection="wishlist"
@@ -615,8 +597,8 @@ export function WishlistGrid({
       // width and 41% of the height**, starting 24px down; on the deck's own 210×293 card the
       // same column is 15% and 34%. Both hold at **every** stop of the zoom ladder rather than
       // at rest alone: the tile's width, the art's height and the column are each linear in the
-      // same zoom, so those are constants and not readings taken at 1×. At `PHONE_TILE_WIDTH`'s
-      // 141 it is 22% of the width — the first figure to check if this column is ever made
+      // same zoom, so those are constants and not readings taken at 1×. And 170 is the only base
+      // this wall is drawn at, so 18% is the first figure to check if this column is ever made
       // bigger.
       column={(tile) =>
         // Nothing at all on a managed wish: the count it wants is still said in the corner, and

@@ -793,10 +793,19 @@ pub fn set_wish_folder(
 ///
 /// [`set_wish_folder`] is where the rule is argued; the paragraph above it is the one to read.
 ///
-/// **It records no [`crate::activity`] row**: its two callers are [`set_wish_folder`], which
-/// records the `move` itself, and [`delete_folder`], which records one `folder` line for the
-/// whole press rather than one per wish it re-filed.
-fn refile_wish(tx: &Connection, id: i64, folder_id: Option<i64>) -> Result<EntryChange, String> {
+/// **`pub(crate)` for a third caller, `sync_engine::apply::rehome`**, which re-homes the wishes a
+/// peer's folder delete would drop onto the root's grain — the same un-filing on the receiving
+/// side, where a second copy of the merge would be the disagreement this function exists to rule
+/// out.
+///
+/// **It records no [`crate::activity`] row**: of its callers, [`set_wish_folder`] records the
+/// `move` itself, [`delete_folder`] records one `folder` line for the whole press rather than one
+/// per wish it re-filed, and the re-homing is a consequence of a delete another device recorded.
+pub(crate) fn refile_wish(
+    tx: &Connection,
+    id: i64,
+    folder_id: Option<i64>,
+) -> Result<EntryChange, String> {
     // The three grain terms this write does *not* touch, plus the quantity the merge moves.
     // Read before anything is decided, because "is that wish still there?" is answered by the
     // same statement — an `UPDATE` that changed no rows cannot tell a missing row apart from a

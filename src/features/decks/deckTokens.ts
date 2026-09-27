@@ -23,7 +23,6 @@
  */
 
 import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
-import { WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import type { DeckTokenRow, DeckTokenState, TokenSource } from "@/lib/ipc";
 import { tileKeyOf } from "@/lib/tileKey";
 
@@ -161,21 +160,6 @@ export interface DeckTokenView {
   /** {@link tokenSubtitle}'s line, or `null` where there is nothing to say. */
   subtitle: string | null;
   /**
-   * The row's `cards.scryfall.io` picture at {@link WALL_CARD_VARIANT}, or `null` where it carries
-   * none.
-   *
-   * **Nothing draws it**: every token tile and the pile's face draw the local cache over
-   * `mtgimg://`. `null` is the honest answer for a printing the backend refused a URI for, and
-   * never a reason for a caller to build one.
-   */
-  imageUrl: string | null;
-  /**
-   * The row's whole picture map, passed through beside {@link DeckTokenView.imageUrl} and, like
-   * it, drawn by nothing. `null` for a row with none, and for a row from a build that predates the
-   * field.
-   */
-  imageUris: Partial<Record<ImageVariant, string>> | null;
-  /**
    * The entry's chin facts and price — {@link DeckTokenRow.setCode} and its five neighbours,
    * resolved by Rust off the printing {@link DeckTokenView.printingId} names and **passed through
    * untouched**. What the chin prints from them (the finish word, the em dash, the currency) is
@@ -307,12 +291,6 @@ function viewOf(row: DeckTokenRow): DeckTokenView {
     // implicit entry is the one state it has nothing to do to.
     overridden: !row.implicit,
     subtitle: tokenSubtitle(row),
-    // `??` for the absent key as well as for the null: `imageUris` is `Partial`, so a printing
-    // that publishes only some variants has no entry at all for the rest.
-    imageUrl: row.imageUris?.[WALL_CARD_VARIANT] ?? null,
-    // The map itself, folded only from *absent* to `null`: the field is optional on the wire,
-    // and one spelling of "no picture" is all a surface downstream should have to handle.
-    imageUris: row.imageUris ?? null,
     // Facts about the effective printing, copied as they came — see `DeckTokenView.setCode`.
     setCode: row.setCode,
     collectorNumber: row.collectorNumber,

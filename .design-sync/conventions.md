@@ -16,7 +16,8 @@ const { GrimoirePreviewProvider, Ribbon } = window.MtgGrimoire;
 ```
 
 It supplies three things this app cannot run without: a TanStack `QueryClient`, a seeded local
-backend standing in for the desktop IPC layer, and `class="dark"` on `<html>`. Without it,
+backend standing in for the desktop IPC layer, and `class="dark"` on `<html>`. It also installs
+the keyboard-modality listener every focus ring is gated on, so without it Tab draws no outline. Without it,
 `AppShell`, `Ribbon` and `SyncProgress` throw or render permanently empty — they read live sync
 state, not props alone. Pure presentational components (`RarityGem`, `ManaText`, `OwnedBadge`,
 `QuantityStepper`, `Figure`, `SortableHeader`) render fine unwrapped, but wrap anyway: it costs
@@ -61,6 +62,43 @@ Render mana cost or rules text with `ManaText` (it parses `{2}{W/U}{P}` and Phyr
 and snow symbols), the sync bar with `ManaLine`, rarity with `RarityGem`, and the filter chip
 family with `ToggleChip` / `ManaChip` / `ManaValueChips` / `LayoutToggle` / `ResetAll`. Do not
 hand-draw a mana pip.
+
+### Selects and hints — use the app's own
+
+- **A select is `Dropdown` (one value) or `MultiDropdown` (several), never a native `<select>`.**
+  Both are controlled: keep the value in `useState` and pass `value`/`onChange` (multi:
+  `selected`/`onToggle`, plus a `triggerLabel` you compute — a count like "2 formats", never a
+  value). Rows are `{ value, label, icon?, hint?, disabled?, title? }` — `title` is the reason a
+  disabled row gives. `size="sm"` in dense panes, `fill` to stretch into a grid cell, `searchable`
+  for long lists.
+- **A hint is `useTooltip()`'s spread, never a `title` attribute.** `const tip = useTooltip();`
+  then `<button {...tip("Sorted by release date")}>` — no wrapper element, so it cannot move a
+  layout. `{ interactive: true }` for a hint the reader acts on; `{ whenClipped: true }` on a
+  truncated cell whose tooltip is its own full text. Needs `GrimoirePreviewProvider`, which mounts
+  the one panel.
+
+```jsx
+const { Dropdown, useTooltip } = window.MtgGrimoire;
+
+function FormatPicker() {
+  const [format, setFormat] = React.useState("modern");
+  const tip = useTooltip();
+  return (
+    <div className="flex items-center gap-2">
+      <Dropdown
+        label="Format"
+        value={format}
+        onChange={setFormat}
+        options={[
+          { value: "standard", label: "Standard" },
+          { value: "modern", label: "Modern" },
+        ]}
+      />
+      <span className="text-dim text-sm" {...tip("Legality follows this format.")}>?</span>
+    </div>
+  );
+}
+```
 
 ### Where the truth is
 

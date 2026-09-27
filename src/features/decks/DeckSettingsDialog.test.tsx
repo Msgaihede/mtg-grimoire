@@ -157,7 +157,6 @@ function pullRow(over: Partial<DeckPullRow> = {}): DeckPullRow {
     finish: null,
     short: 3,
     categories: ["Sideboard"],
-    imageUris: null,
     candidates: [
       {
         entryId: 11,

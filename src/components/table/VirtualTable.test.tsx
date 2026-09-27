@@ -302,6 +302,33 @@ describe("VirtualTable told to grow", () => {
     draw(true);
     expect(screen.getByRole("table")).toHaveAttribute("aria-rowcount", "101");
   });
+
+  /**
+   * **Under `grow` the header pins at `--sticky-top`**, so a page with something of its own laid
+   * over its scroller's top edge — the deck editor's floating header bar (issue #577) — can hold
+   * the column names below it, and every other page reads the `0px` fallback. jsdom loads no
+   * stylesheet and resolves no `var()`, so the class is the fence; `classList.contains`, because
+   * it matches whole classes where a substring of `className` would not.
+   */
+  it("pins its header at the page's --sticky-top rather than at the scroller's edge", () => {
+    draw(true);
+    const header = screen.getAllByRole("row")[0];
+    expect(header.classList.contains("sticky")).toBe(true);
+    expect(header.classList.contains("top-[var(--sticky-top,0px)]")).toBe(true);
+    expect(header.classList.contains("top-0")).toBe(false);
+  });
+
+  /**
+   * A table that is its own scroller pins its header to its own top edge, which nothing outside
+   * it covers. A custom property inherits down the DOM, so the variable set on an ancestor would
+   * float that header down its own list instead — which is why only `grow` reads it.
+   */
+  it("keeps the header at its own edge while the table is its own scroller", () => {
+    draw(false);
+    const header = screen.getAllByRole("row")[0];
+    expect(header.classList.contains("top-0")).toBe(true);
+    expect(header.classList.contains("top-[var(--sticky-top,0px)]")).toBe(false);
+  });
 });
 
 type Props = ComponentProps<typeof VirtualTable<Row>>;

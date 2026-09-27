@@ -31,7 +31,6 @@ function piece(over: Partial<ComboPiece> = {}): ComboPiece {
     quantity: 1,
     mustBeCommander: false,
     cardId: RECKONER.id,
-    imageUris: null,
     owned: 1,
     ...over,
   };

@@ -243,31 +243,6 @@ describe("the printings list preview", () => {
     expect(preview()).toHaveAttribute("src", expect.stringContaining("/display/p2/0"));
   });
 
-  /**
-   * The local cache already holds the bytes at this exact size, so a row carrying a URL is still
-   * drawn from the protocol. A frame that preferred the row's own would refetch a 672×936 image
-   * over the network on every dwell.
-   */
-  it("keeps drawing the protocol picture when the row carries a URL of its own", async () => {
-    await openPane({
-      ...PRINTINGS,
-      items: [
-        PRINTINGS.items[0],
-        {
-          ...PRINTINGS.items[1],
-          imageUris: { display: "https://cards.scryfall.io/display/front/0/0/p2.webp?1" },
-        },
-        PRINTINGS.items[2],
-      ],
-    });
-
-    fireEvent.mouseEnter(rowOf("M10 146"));
-    tick(PREVIEW_DWELL_MS);
-
-    expect(preview()).toHaveAttribute("src", expect.stringContaining("/display/p2/0"));
-    expect(preview()!.getAttribute("src")).not.toContain("scryfall.io");
-  });
-
   it("never draws it for a pointer that left before the quarter second was up", async () => {
     await openPane();
     const row = rowOf("M10 146");
