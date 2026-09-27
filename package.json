@@ -45,7 +45,6 @@
     "@tiptap/pm": "^3.31.3",
     "@tiptap/react": "^3.31.3",
     "@tiptap/starter-kit": "^3.31.3",
-    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "jsqr": "^1.4.0",
     "keyrune": "^3.19.0",

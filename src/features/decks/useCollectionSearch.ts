@@ -9,6 +9,7 @@ import { COLLECTION_FIRST_DIR, nextOffset } from "@/features/collection/useColle
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import {
   activeFilterCount,
+  bordersParam,
   colorParam,
   DEBOUNCE_MS,
   formatParams,
@@ -30,6 +31,8 @@ import {
   type CollectionSortKey,
   type MoveOutcome,
 } from "@/lib/ipc";
+import type { Border } from "@/lib/border";
+import { FINISHES, type Finish } from "@/lib/finish";
 import type { SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { playKey, useDeckPlays } from "./useDeckPlays";
@@ -351,6 +354,16 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   // chips' shape exactly, and on the wire for free: `CollectionQuery extends CardFilters`, so
   // `push_card_filters` already emits them for this list.
   const [types, setTypes] = useState<readonly string[]>([]);
+  /**
+   * The Border and Finish cells, grown on 2026-09-27 (issue #573) — **and they ask two different
+   * kinds of question**. A border is a fact about the copy's *printing*, so it asks exactly what
+   * the All cards tab's chips ask. A finish here is the finish **this copy** is in —
+   * `CollectionQuery.finishes`, the collection page's own field and its own meaning — where the
+   * All cards tab beside it asks which finishes a printing is *published* in. The tray draws one
+   * Finish cell for both, and on this tab "foil" means a foil copy you can put in the deck.
+   */
+  const [borders, setBorders] = useState<readonly Border[]>([]);
+  const [finishes, setFinishes] = useState<readonly Finish[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   const [manaX, setManaX] = useState(false);
   /**
@@ -404,6 +417,11 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   // canonicalise this same list, and four copies of one normal form is four places for it to
   // drift.
   const typesParamValue = typesParam(types);
+  const bordersParamValue = bordersParam(borders);
+  // Ordered by the app's own vocabulary, as `useCollection` orders it, so the request reads the
+  // way the chips do and one set of finishes is one key.
+  const finishParam =
+    finishes.length > 0 ? FINISHES.filter((f) => finishes.includes(f)) : undefined;
 
   /**
    * The box, read as Scryfall's query syntax — the free text and the typed predicates.
@@ -435,6 +453,11 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     colorsStrict: strictParam || undefined,
     sets: setsParam,
     types: typesParamValue,
+    borders: bordersParamValue,
+    // **The copy's finish, as the collection page sends it** — `CollectionQuery.finishes`, and
+    // never `printedFinishes`, which asks what a printing is published in and would offer a
+    // nonfoil copy under `Foil`.
+    finishes: finishParam,
     rarities: raritiesParam,
     manaValues: manaParam,
     manaX: manaX || undefined,
@@ -502,6 +525,8 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     strictParam ? "strict" : "",
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
+    bordersParamValue?.join(",") ?? "",
+    finishParam?.join(",") ?? "",
     raritiesParam?.join(",") ?? "",
     manaParam?.join(",") ?? "",
     manaX ? "x" : "",
@@ -635,6 +660,14 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
      *  answers `Land` and `Artifact` both. */
     types,
     toggleType: (type: string) => setTypes((picked) => toggleIn(picked, type)),
+    /** The border chips, ORed with each other and ANDed with everything else — over the copy's
+     *  printing, so a borderless full-art copy answers two chips. */
+    borders,
+    toggleBorder: (border: Border) => setBorders((picked) => toggleIn(picked, border)),
+    /** The finish **this copy** is in — `useCollection`'s cell, not the All cards tab's. A
+     *  printing held in two finishes is two rows, and each answers only its own chip. */
+    finishes,
+    toggleFinish: (finish: Finish) => setFinishes((picked) => toggleIn(picked, finish)),
     rarities,
     toggleRarity: (rarity: string) => setRarities((picked) => toggleIn(picked, rarity)),
     priceMin,
@@ -705,11 +738,15 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
      *
      * **The search's `activeFilterCount` and no longer the collection page's** (2026-08-25). This
      * tab draws `FilterBar`'s tray now, so its kinds *are* the search's kinds — set, format,
-     * colour, mana value, rarity, price — and counting them against the definition the tray's own
-     * cells come from is what keeps the badge and the cells from drifting apart. The collection
-     * page's count is over a longer row (finishes, conditions, needs-review) this column has never
-     * offered a control for, and passing three empty arrays to it was a shape that only worked as
-     * long as nothing here grew.
+     * colour, mana value, rarity, type, border, finish, price — and counting them against the
+     * definition the tray's own cells come from is what keeps the badge and the cells from
+     * drifting apart. The collection page's count is over a longer row (conditions, needs-review)
+     * this column has never offered a control for, and passing empty arrays to it was a shape that
+     * only worked as long as nothing here grew.
+     *
+     * **`finishes` is the one kind whose meaning differs from the search's**: here it is the copy's
+     * finish, there the printing's published ones. `FilterState.finishes` is one field for both
+     * because the count asks only whether the cell is on, which is the same question either way.
      *
      * `owned` is `undefined` for the reason the tray has no Owned cell: every row here is a copy
      * the reader has, so it is not a question this list can ask.
@@ -735,6 +772,8 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
       owned: undefined,
       rarities,
       types,
+      borders,
+      finishes,
       priceMin,
       priceMax,
     }),
@@ -751,6 +790,8 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
       // asked for. `NO_COLORS` clears the row and the flag together.
       setSets([]);
       setTypes([]);
+      setBorders([]);
+      setFinishes([]);
       setRarities([]);
       setPriceMin(undefined);
       setPriceMax(undefined);

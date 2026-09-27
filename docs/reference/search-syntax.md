@@ -269,7 +269,11 @@ Scryfall ships it as an array of capitalised strings — verified live, Serra An
 substring: `kw:fly` answers *"All of your terms were ignored"*. So the column stores the
 keywords lowercased, delimited and wrapped — `|flying|vigilance|` — and the predicate is a
 boundary-anchored `instr` on `|flying|`, never a bare substring. A card with no keywords is
-`NULL`, **never** `"|"`: a bare delimiter would make every keywordless card match every `kw:`.
+the empty string `""` — **never** `"|"`, because a bare delimiter would make every keywordless
+card match every `kw:`, and **never `NULL`**, because NULL is what the bridge below reads as
+"predates the rung". It was NULL at first, and that cost the live pass of 2026-09-22 recorded
+under [the second defect](#the-second-defect-null-meant-two-things): the bridge fired on 68,808
+of 118,609 printings.
 
 ⚠️ **The delimiters fence the column arm and only the column arm, so `kw:fly` is not empty
 here.** An ingested row holding `|flying|` refuses `fly`, matching Scryfall. A row that

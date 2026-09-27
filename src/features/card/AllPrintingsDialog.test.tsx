@@ -202,8 +202,9 @@ beforeEach(() => {
   // Nobody has chosen a marketplace, which is what a fresh install reads.
   getMarketplace.mockReset().mockResolvedValue(null);
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
-  // No stored ordering: `usePrintingGroupBy` falls back to `artist`, whose sort is stable, so the
-  // wall below is in the order the fixtures were written in.
+  // No stored ordering: `usePrintingGroupBy` falls back to `released` (issue #568), whose sort is
+  // stable — and every fixture shares one `releasedAt`, so the wall below is in the order the
+  // fixtures were written in.
   printingGroupBy.mockReset().mockResolvedValue(null);
   setPrintingGroupBy.mockReset().mockResolvedValue(undefined);
   deckGet.mockReset().mockResolvedValue({ deck: { id: 4, name: "Burn" }, cards: [] });
@@ -389,6 +390,32 @@ describe("AllPrintingsDialog", () => {
     // line is about is *which card* it names.
     expect(await screen.findByRole("dialog", { name: /Sol Ring/ })).toBeInTheDocument();
     expect(await screen.findByText("2 printings")).toBeVisible();
+  });
+
+  /**
+   * **A reader who never picked an order sees the newest printing first** (issue #568). The
+   * fixtures arrive oldest first and by an artist who sorts *before* the newer one's, so either
+   * the old `artist` default or an order left as it came would put Alpha on top.
+   */
+  it("sorts by release date, newest first, when no order was ever chosen", async () => {
+    cardPrintings.mockResolvedValue(
+      page([
+        { ...p("old", "lea"), releasedAt: "1993-08-05", artist: "Anson Maddocks" },
+        { ...p("new", "m10"), releasedAt: "2009-07-17", artist: "Zoltan Boros" },
+      ]),
+    );
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
+
+    const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: /Sort printings by/ })).toHaveTextContent(
+        "Release date",
+      ),
+    );
+    const newer = await within(dialog).findByRole("button", { name: /M10/ });
+    const older = within(dialog).getByRole("button", { name: /LEA/ });
+    expect(newer.compareDocumentPosition(older) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   /**

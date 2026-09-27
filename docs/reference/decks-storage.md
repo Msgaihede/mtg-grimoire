@@ -210,8 +210,8 @@ preferred_finish`'s nullability one table over.
   right danger and the wrong half: nothing is ever deleted here, both lists being the same table,
   and what the copy actually produced was two identical lists with no way to tell which one was
   being edited. A reader who switches the theory list on is saying _what I have is the plan_.
-  **`deck_theory_copy_from_live` is unchanged** and still means "copy what is sleeved up into the
-  plan" — it is simply no longer what the switch does.
+  **The explicit copy-from-live command that outlived that rule was removed on 2026-09-27** — it
+  never had a caller in the app, so nothing copies one list into the other now.
 - **The empty-theory guard is now load-bearing twice, and the second reason is the one to know.**
   `variant` is _in_ `DECK_CARD_GRAIN`, and the move is a bare `UPDATE … SET variant` with no
   `ON CONFLICT` clause — so re-labelling a live row over a theory row of the same deck, category
@@ -904,8 +904,9 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `deck_theory::move_live_into_theory`, making the deck the reader already has into the plan and
   leaving live empty, and it does so only on the off → on _transition_. So a deck **born** with
   theory on has made that transition at birth, no later patch will ever move anything for it, and
-  the reader's route is `deck_theory_copy_from_live`, which is unchanged. The two routes differ in
-  what they _do_ and agree exactly on what a new deck ends up with. **(4)** `virtualOnly` at create
+  its plan fills through the ordinary card writes aimed at `theory` — the copy-from-live command
+  once named as this route never had a caller and was removed on 2026-09-27. The two routes
+  differ in what they _do_ and agree exactly on what a new deck ends up with. **(4)** `virtualOnly` at create
   is **not cross-checked against `theoryEnabled`**, where the patch route's `deck_kind` clears
   whichever half a press did not name: there is nothing to clear on a row that does not exist
   yet, and a create that silently rewrote one of the two fields it was handed would be answering

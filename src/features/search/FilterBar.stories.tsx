@@ -840,10 +840,60 @@ export const TypeChips: Story = {
 };
 
 /**
+ * **The border and finish cells** (issue #573) — two questions about the cardboard itself.
+ *
+ * Border is `Regular`, `Borderless`, `Full art`, in that order because the order is the
+ * information: the ordinary framed card first, then the two treatments that take the frame away.
+ * They overlap rather than partition — a borderless full-art printing answers both of the last
+ * two — so the counts in their tooltips do not sum to the search's.
+ *
+ * Finish on **this** surface asks what the printing was *published* in, Scryfall's `is:foil`: a
+ * printing can be nonfoil only, foil only, both or etched. The collection's tray draws the same
+ * cell and asks which finish a *copy* is; one cell, two questions, and the surface decides which.
+ */
+export const BorderAndFinish: Story = {
+  args: {
+    preset: (search) => {
+      search.toggleBorder?.("borderless");
+      search.toggleFinish?.("foil");
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await openTray(canvas);
+
+    const border = await canvas.findByRole("group", { name: "Border" });
+    // The text and not the name — the name carries a facet count wherever there is one.
+    await expect(
+      within(border)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Regular", "Borderless", "Full art"]);
+    await expect(
+      await within(border).findByRole("button", { name: /^Borderless\b/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    const finish = canvas.getByRole("group", { name: "Finish" });
+    await expect(
+      await within(finish).findByRole("button", { name: /^Foil\b/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    // One chip per kind under the rule, in the tray's words.
+    await expect(
+      canvas.getByRole("button", { name: "Remove filter — Border: Borderless" }),
+    ).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Remove filter — Finish: Foil" }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
  * **The tray, open — every filter that is not on the bar.**
  *
- * Seven fields in three columns: the set picker, the format ladder, the owned pair, the four
- * rarities, the eight card types, the price band and the printings mode. Four controls stay on
+ * Nine fields in three columns: the set picker, the format ladder, the owned pair, the four
+ * rarities, the eight card types, the three borders, the three finishes a printing can be
+ * published in, the price band and the printings mode. Four controls stay on
  * the bar above it at every width — the box you type in, the colours, the mana values and the
  * order the results come in — because those are the four a reader reaches for without looking.
  *
@@ -857,14 +907,24 @@ export const TrayOpen: Story = {
     const canvas = within(canvasElement);
     await openTray(canvas);
 
-    // The seven fields, by their captions — the tray's own vocabulary, which is the only place
+    // The nine fields, by their captions — the tray's own vocabulary, which is the only place
     // in the app a label sits above its control.
     //
-    // `getAllByText`, because two of the seven are said twice on purpose: `SetCombobox` and the
+    // `getAllByText`, because two of the nine are said twice on purpose: `SetCombobox` and the
     // format select each carry a name of their own for assistive tech (an `sr-only` span and a
     // `<label>`), and the tray's caption is the *visible* one above it. One control, two
     // spellings of one word, and the caption is the half a sighted reader reads.
-    for (const label of ["Set", "Format", "Owned", "Rarity", "Type", "Price (USD)", "Printings"]) {
+    for (const label of [
+      "Set",
+      "Format",
+      "Owned",
+      "Rarity",
+      "Type",
+      "Border",
+      "Finish",
+      "Price (USD)",
+      "Printings",
+    ]) {
       await expect(canvas.getAllByText(label).length).toBeGreaterThan(0);
     }
     // The money is the marketplace's, never a bare dollar: the caption reads `Price (USD)` on

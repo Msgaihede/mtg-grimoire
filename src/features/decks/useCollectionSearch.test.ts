@@ -428,6 +428,46 @@ describe("useCollectionSearch", () => {
   });
 
   /**
+   * **The Border and Finish cells (issue #573), and the finish is the collection page's, not the
+   * All cards tab's.** A border is a fact about the copy's printing, so it rides as `borders` the
+   * way it does on every surface. A finish here is the finish *this copy* is in — so it rides as
+   * `CollectionQuery.finishes`, and `printedFinishes` (which printings are *published* in foil)
+   * must never appear: that would offer a nonfoil copy under `Foil`.
+   */
+  it("sends borders and the copy's finish, each one kind, and keys the list on both", async () => {
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(lastQuery().borders).toBeUndefined();
+    expect(lastQuery().finishes).toBeUndefined();
+    const base = result.current.activeCount; // the deck's seeded format
+
+    let asked = collectionList.mock.calls.length;
+    act(() => result.current.toggleBorder("fullart"));
+    act(() => result.current.toggleBorder("borderless"));
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    // In `BORDERS` order, whatever the press order.
+    await waitFor(() => expect(lastQuery().borders).toEqual(["borderless", "fullart"]));
+    expect(result.current.activeCount).toBe(base + 1);
+
+    asked = collectionList.mock.calls.length;
+    act(() => result.current.toggleFinish("etched"));
+    act(() => result.current.toggleFinish("foil"));
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    // In `FINISHES` order on the wire, and under the copy's field rather than the printing's.
+    await waitFor(() => expect(lastQuery().finishes).toEqual(["foil", "etched"]));
+    expect(lastQuery().printedFinishes).toBeUndefined();
+    expect(result.current.activeCount).toBe(base + 2);
+
+    act(() => result.current.resetAll());
+
+    await waitFor(() => expect(result.current.activeCount).toBe(0));
+    expect(result.current.borders).toEqual([]);
+    expect(result.current.finishes).toEqual([]);
+    await waitFor(() => expect(lastQuery().borders).toBeUndefined());
+    expect(lastQuery().finishes).toBeUndefined();
+  });
+
+  /**
    * The direction arrow beside the sort picker, and **the one place this hook deliberately
    * differs from `useCardSearch`**.
    *
