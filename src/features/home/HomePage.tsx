@@ -245,8 +245,6 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <StickyNotesWidget {...props} />;
     case "deckCompletion":
       return <DeckCompletionWidget {...props} />;
-    // `ToReviewWidget` takes one prop the page never passes — `web`, which defaults to the build's
-    // own `isWebTarget()` and exists so a story can draw the browser build's face.
     case "toReview":
       return <ToReviewWidget {...props} />;
     case "wishlistSavings":

@@ -34,18 +34,16 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-use super::layout::{plan_files, Plan, Shape, Source};
+use super::layout::{plan_files, Plan, PlannedFile, Shape, Source};
 use super::paths::is_ours;
-use super::snapshot::render;
 use crate::sorting::Marketplace;
+use crate::transfer::fields::available_fields;
+use crate::transfer::write::format_export;
 use crate::transfer::{Card, Surface};
 
-/// **Re-exported from [`super::readme`], which is where they moved on 2026-08-31.**
-///
-/// They are the folder's fixed name and the folder's own words, and this module is the only
-/// thing that ever writes either — but the zip snapshot puts a README at the top of the archive
-/// too, and this module does not compile for the browser. Every spelling in the crate still
-/// resolves through here.
+/// **Re-exported from [`super::readme`].** They are the folder's fixed name and the folder's
+/// own words, and this module is the only thing that ever writes either, so every spelling in
+/// the crate resolves through here.
 pub use super::readme::{README, README_NAME};
 
 /// The record of what the last pass intended to exist: one root-relative path per line, `/`
@@ -273,6 +271,36 @@ pub fn run_pass(
         &mut report,
     );
     Ok(report)
+}
+
+/// One planned file's bytes, reading its list only when it is not the one already in hand.
+///
+/// Every optional field is on, which is exactly what [`available_fields`] already answers — a
+/// backup is the one place in this app where "what *can* this file say" and "what should it
+/// say" have the same answer.
+///
+/// The memo keeps the **previous** source on failure, so the next file of a list that would not
+/// read finds it stale and tries again rather than being handed the wrong deck's cards.
+fn render(
+    conn: &Connection,
+    file: &PlannedFile,
+    marketplace: Marketplace,
+    memo: &mut Option<(Source, Vec<Card>)>,
+) -> Result<String, String> {
+    let stale = match memo {
+        Some((source, _)) => source != &file.source,
+        None => true,
+    };
+    if stale {
+        let cards = super::read::cards_for(conn, &file.source, marketplace)?;
+        *memo = Some((file.source.clone(), cards));
+    }
+    let cards = memo.as_ref().map_or(&[][..], |(_, c)| c.as_slice());
+    Ok(format_export(
+        cards,
+        file.format,
+        &available_fields(file.format, file.surface),
+    ))
 }
 
 /// A change detector over the bytes, and deliberately not a security boundary.
@@ -907,6 +935,86 @@ mod tests {
         assert!(dir.path().join("README.txt").is_file());
         assert!(dir.path().join(MANIFEST_NAME).is_file());
         assert!(report.written > 0 && report.failed == 0, "{report:?}");
+    }
+
+    /// **What a pass writes is what [`render`] answers for that file, path for path.** The pass
+    /// renders through one memo shared across the whole plan; this renders every planned file on
+    /// its own, with a fresh memo, and compares the answer byte for byte with what the pass put
+    /// on disk. So the memo can change how often a list is read and never what a file says.
+    ///
+    /// **The tempdir is the whole of what this test writes to**, which is `src-tauri/CLAUDE.md`'s
+    /// standing rule for every filesystem test in this module: the mirror's default root is
+    /// `data_dir/export`, so a pass that forgot to name a root of its own would write into the
+    /// developer's own backup.
+    #[test]
+    fn every_file_the_pass_writes_is_byte_identical_to_what_render_answers() {
+        let (conn, dir, _) = seeded_db_and_temp_root();
+        pass(&conn, dir.path(), Dirty::ALL);
+
+        let decks = crate::deck::list_decks(&conn).unwrap();
+        let deck_folders = crate::deck_meta::list_folders(&conn).unwrap();
+        let collection_folders = crate::collection_folders::list_folders(&conn).unwrap();
+        let wishlist_folders = crate::wishlist_folders::list_folders(&conn).unwrap();
+        let plan = plan_files(&Shape {
+            decks: &decks,
+            deck_folders: &deck_folders,
+            collection_folders: &collection_folders,
+            wishlist_folders: &wishlist_folders,
+        });
+        let marketplace = Marketplace::from_id(&crate::marketplace::stored(&conn));
+
+        let mut compared = 0usize;
+        for file in &plan.files {
+            let text = render(&conn, file, marketplace, &mut None).unwrap();
+            let on_disk = std::fs::read_to_string(dir.path().join(&file.path))
+                .unwrap_or_else(|e| panic!("the pass wrote no {}: {e}", file.path));
+            assert_eq!(
+                text, on_disk,
+                "{} differs between the folder and render",
+                file.path
+            );
+            compared += 1;
+        }
+        // A deck (7) and its theory list (7), the collection (7), the wishlist (7) and the
+        // cabinet group schema v25 gives that deck (7). The floor is deliberately below the
+        // real number: what would make this test vacuous is comparing *nothing*, and pinning an
+        // exact count would make every layout change a failure here rather than in `layout.rs`.
+        assert!(compared >= 21, "only {compared} files were compared");
+    }
+
+    /// **Every optional column is on, and each list is asked about *its own* surface.**
+    ///
+    /// This is a rule the byte comparison above structurally cannot see: both sides call one
+    /// [`render`], so a change to which fields it asks for moves the folder and the answer
+    /// together and the comparison stays green. Measured by mutation on 2026-08-31 — replacing
+    /// `file.surface` with a fixed `Surface::Deck` left **all 140** `mirror` tests passing, which
+    /// is the gap this closes.
+    ///
+    /// A CSV header is what makes it checkable at all: `csv_header` writes
+    /// `available_fields(Csv, surface)` out in words, where the other six formats render seven
+    /// ids and would move no byte. `Condition` is a column the collection has and a deck does
+    /// not; `Category` is the reverse. Together they pin the axis in both directions, which one
+    /// of them alone would not.
+    #[test]
+    fn each_list_is_rendered_with_its_own_surfaces_columns() {
+        let (conn, dir, _) = seeded_db_and_temp_root();
+        pass(&conn, dir.path(), Dirty::ALL);
+        let header = |rel: &str| {
+            std::fs::read_to_string(dir.path().join(rel))
+                .unwrap_or_else(|e| panic!("the pass wrote no {rel}: {e}"))
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        };
+
+        let collection = header("Collection/Collection.csv");
+        assert!(collection.contains("Condition"), "{collection}");
+        assert!(!collection.contains("Category"), "{collection}");
+
+        let deck = header("Decks/Azula/Azula.csv");
+        assert!(deck.contains("Category"), "{deck}");
+        assert!(!deck.contains("Condition"), "{deck}");
     }
 
     #[test]

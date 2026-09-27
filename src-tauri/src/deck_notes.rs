@@ -3,9 +3,7 @@
 //!
 //! Shaped like [`crate::deck_meta`] and [`crate::deck_tokens`]: pure functions over a
 //! `Connection`, testable without a Tauri app, wrapped in `async` commands that sit in one block
-//! at the bottom behind `#[cfg(not(target_family = "wasm"))]`. Nothing above that block names
-//! `tauri::` at all, which is what lets [`crate::web::route`] call the same functions the desktop
-//! wrappers call.
+//! at the bottom.
 //!
 //! # A card reference is a pointer the note holds, never a place the note lives
 //!
@@ -62,13 +60,11 @@
 //!   step carrying a `patch` carries that note's complete attachment set beside it.
 
 use crate::schema::DECK_NOTE_CARD_GRAIN;
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What an adjustment to a note says when the id it names is not there — the asymmetry
@@ -103,7 +99,7 @@ const ACTION_REORDER: &str = "reorder";
 /// The `WHERE` [`attachments_by_note`] takes for a whole deck's notes.
 ///
 /// A literal from this module and never a caller's string, so the `format!` that splices it
-/// carries no injection risk — [`crate::deck_meta::owning_deck`]'s arrangement.
+/// carries no injection risk — nothing a caller sends ever reaches the statement's text.
 const NOTES_OF_DECK: &str = "n.deck_id = ?1";
 
 /// The same for one note. Named on `deck_note_cards` rather than on `deck_notes`, so the join to
@@ -213,7 +209,7 @@ fn valid_oracle_id(oracle_id: &str) -> Result<&str, String> {
 /// The note's title, having established it exists and belongs to `deck_id`.
 ///
 /// Two refusals rather than one, because "gone" and "not yours" are different things to be told
-/// and a stale editor can produce either — [`crate::deck_meta::owning_deck`] draws the same
+/// and a stale editor can produce either — [`crate::deck_meta::pile_owner`] draws the same
 /// distinction for a category's move target.
 fn require_note(conn: &Connection, deck_id: i64, id: i64) -> Result<String, String> {
     let row: Option<(i64, String)> = conn
@@ -903,7 +899,6 @@ pub fn notes_for_card(conn: &Connection, oracle_id: &str) -> Result<Vec<CardNote
 
 /// What a write here says when its worker thread died under it — never a user's problem, the
 /// write itself answers [`crate::db::BUSY`] when the database is busy.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck's notes could not be written: {e}")
 }
@@ -914,7 +909,6 @@ fn unfinished(e: tauri::Error) -> String {
 /// `deck_notes::deck_notes` registers as `deck_notes` — the module and the read wear the same
 /// name on purpose, exactly as `deck_tokens::deck_tokens` does, because the wire name is the one
 /// `src/lib/ipc.ts` invokes and `deck_notes_list` would be a second thing to remember.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_notes(
     state: tauri::State<'_, Arc<AppState>>,
@@ -928,7 +922,6 @@ pub async fn deck_notes(
     .map_err(|e| format!("the deck's notes could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -949,7 +942,6 @@ pub async fn deck_note_create(
 
 /// **Both fields are optional and an absent one means *leave it*.** Tauri fills a missing
 /// `Option` argument with `None`, so a page editing only the body sends only the body.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -968,7 +960,6 @@ pub async fn deck_note_update(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -983,7 +974,6 @@ pub async fn deck_note_delete(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_attach(
     state: tauri::State<'_, Arc<AppState>>,
@@ -999,7 +989,6 @@ pub async fn deck_note_attach(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_detach(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1015,7 +1004,6 @@ pub async fn deck_note_detach(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_reorder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1032,7 +1020,6 @@ pub async fn deck_note_reorder(
 
 /// **Read-only**, and the one command in this module with no deck id at all — see
 /// [`notes_for_card`].
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_notes(
     state: tauri::State<'_, Arc<AppState>>,

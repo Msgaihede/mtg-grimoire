@@ -35,6 +35,7 @@ import type { Border } from "@/lib/border";
 import { FINISHES, type Finish } from "@/lib/finish";
 import type { SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { refreshCardSearches } from "@/lib/searchMarks";
 import { playKey, useDeckPlays } from "./useDeckPlays";
 
 /**
@@ -614,7 +615,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
   });
 

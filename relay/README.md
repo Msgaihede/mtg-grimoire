@@ -102,7 +102,7 @@ entitlements(
 **Every `/claim` mints a fresh `refresh_secret` and records the claiming device in
 `refresh_device`** (an `ALTER` at the end of `schema.sql`). The secret opens `/token`'s refresh
 door, so it must not outlive its device's place in the group: an accepted rotation whose manifest
-omits `refresh_device` sets both to NULL, and a lost phone that pressed Connect stops minting
+omits `refresh_device` sets both to NULL, and a lost device that pressed Connect stops minting
 tokens for the group that removed it. A row with a secret and no recorded device was claimed
 before the column existed; the next accepted rotation retires it. **The secret opens no
 `/rotate`** — that route takes the group's current auth and nothing else.
@@ -185,7 +185,7 @@ protocol one.
 **The redirect lands on the relay and never on a loopback listener in the app.** The
 `client_secret` can only live server-side, so the exchange happens here whatever the app does; a
 listener would buy a listener and nothing else. This way the app runs no HTTP server, handles no
-redirect, needs no CSP change, and the flow is byte-identical on desktop, Android and web.
+redirect and needs no CSP change.
 
 **The claim code is twelve Crockford base32 characters**, reusing `sync_pair::invite`'s alphabet
 rather than inventing a second one — it omits `I`, `L`, `O` and `U` and folds the confusions a
@@ -375,8 +375,8 @@ a `PRIMARY_KEY` map so that an upsert conflicts the way D1 would. Import it; nev
 not consume a second slot" passes trivially against a table that cannot hold a duplicate anyway.
 
 **Why the split.** `@cloudflare/vitest-pool-workers` would run the real class in workerd, but it
-pulls wrangler and workerd into a tree pinned to vitest 4.1.10 whose support it does not
-advertise. Compaction, the pull window, the thirty-day tail, token minting, the status decision
+pulls wrangler and workerd into the tree and peers on `vitest ^4.1.0` (0.22.0, checked
+2026-09-27), which does not cover the vitest 5 this suite runs. Compaction, the pull window, the thirty-day tail, token minting, the status decision
 and the HMAC are all pure functions of their inputs, so they are testable without any of that, and
 what is left in the Durable Object and the handlers is SQL and routing — where a bug is a 500 in a
 log rather than a reader's data quietly disappearing.
@@ -536,10 +536,9 @@ on its own.
 
 1. **"`reqwest` has no WebSocket client, and `tokio-tungstenite` does not compile to
    `wasm32-unknown-unknown`."** True, and it turned out not to be the obstacle it looked like:
-   nothing on the wasm target names the crate. It sits in `Cargo.toml`'s existing
-   `[target.'cfg(not(target_family = "wasm"))'.dependencies]` block, and the one module that
-   touches it — `sync_engine::live` — carries that same gate on every line, not just the
-   dependency.
+   nothing on the wasm target named the crate — it and `sync_engine::live`, the one module that
+   touches it, were both gated to the other targets. The web and Android builds were removed on
+   2026-09-27, and those gates with them.
 2. **"A socket from the page would need the CSP widened."** It would not, and this is the half the
    record had backwards: `connect-src 'self' ipc: http://ipc.localhost` governs the **webview's**
    connections, and the socket that shipped is opened by `tokio-tungstenite` inside the app's Rust
@@ -555,6 +554,5 @@ on its own.
    measures — three times the manual figure at the busiest, and paid only when somebody edits
    rather than on every tick of a clock. The free plan and the ~70% notification stand.
 
-What changed: a phone's edit now reaches a connected desktop within a few seconds, rather than at
-the next **Sync now** press. What did not: the core still compiles to wasm and the CSP still
-grants nothing.
+What changed: one device's edit now reaches another connected device within a few seconds, rather
+than at the next **Sync now** press. What did not: the CSP still grants nothing.

@@ -44,12 +44,10 @@
 //! change what a pile is called and nothing about what is in it — now covers every write in the
 //! module.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What an *adjustment* to a category says when the id it names is not there — the same
@@ -58,9 +56,13 @@ pub const CATEGORY_GONE: &str = "That category is not there any more.";
 
 /// What [`create_category`] and [`rename_category`] say when the name they were asked to
 /// take is already spoken for. [`DECK_CATEGORY_GRAIN`](crate::schema::DECK_CATEGORY_GRAIN) —
-/// `deck_id, name` — is the unique index behind this: a caller that skipped this check would
-/// hit a raw "UNIQUE constraint failed" instead.
-pub const CATEGORY_NAME_TAKEN: &str = "This deck already has a category with that name.";
+/// `deck_id, variant, name` since user schema v53 — is the unique index behind this: a caller
+/// that skipped this check would hit a raw "UNIQUE constraint failed" instead.
+///
+/// **"This list", not "this deck"**, because that is the scope the grain holds: a theory pile
+/// may share a name with a live one, and a reader who meets this sentence on the Theory tab has
+/// collided with another *theory* pile.
+pub const CATEGORY_NAME_TAKEN: &str = "This list already has a category with that name.";
 
 /// What [`delete_category`] says when `moveToCategoryId` names a category of a *different*
 /// deck. Nothing in the DDL stops that INSERT — `deck_cards.category_id` only requires the
@@ -71,6 +73,21 @@ pub const CATEGORY_NAME_TAKEN: &str = "This deck already has a category with tha
 /// card write, and two spellings of one refusal is two sentences a reader could meet for one
 /// mistake.
 pub const CATEGORY_WRONG_DECK: &str = "That category belongs to a different deck.";
+
+/// What a write says when the pile it was handed is this deck's but belongs to the **other
+/// list** (user schema v53, issue #561). A deck's Theory and Actual lists are two versions of
+/// the deck with a pile set each, and a `deck_cards` row filed under the other list's pile would
+/// draw a column on one tab out of a card on the other. Nothing in the DDL can say so — the
+/// foreign key asks only that the pile exist, and `variant` is on both tables with no key
+/// between them — so this sentence is the fence, beside [`CATEGORY_WRONG_DECK`] and for its
+/// reason: "not yours" and "not this list's" are two mistakes a stale editor can make.
+pub const CATEGORY_WRONG_LIST: &str = "That category belongs to the other list.";
+
+/// What [`reorder_categories`] says when the ids it was handed are piles of **both** lists. The
+/// two lists order their piles independently since user schema v53, so a list naming both is
+/// not an order anybody drew — it is two panels' state stitched together, and writing positions
+/// out of it would interleave one list's `sort_order` with the other's.
+pub const CATEGORY_MIXED_LISTS: &str = "Those categories belong to two different lists.";
 
 /// What [`delete_category`] says when asked to move a category's cards into itself. Nothing
 /// downstream would fail loudly: the fold's `INSERT … SELECT … WHERE category_id = ?1` would
@@ -125,20 +142,22 @@ pub const FOLDER_CYCLE: &str = "A folder cannot be moved inside itself.";
 /// write. Deep enough that no filing anyone does by hand reaches it.
 const MAX_FOLDER_DEPTH: usize = 64;
 
-/// The variant a category or label write reads its own row back with, when the command that
-/// changed it carries no variant of its own to ask by (`create`, `rename`, `setActive`,
-/// `reorder`, every label write). `schema::DECK_VARIANTS[0]` spelled out rather than indexed,
-/// because a rename is a fact about the category itself and not about one variant's card
-/// list — "live" is simply the one the editor opens on by default.
-const READBACK_VARIANT: &str = "live";
-
-/// One category of one deck, with the two numbers that are read at the same moment a category
-/// panel would want them rather than in a second round trip.
+/// One category of one list of one deck, with the two numbers that are read at the same moment
+/// a category panel would want them rather than in a second round trip.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckCategoryRow {
     pub id: i64,
     pub deck_id: i64,
+    /// Which list the pile belongs to — `live` (drawn as *Actual*) or `theory` — one of
+    /// [`crate::schema::DECK_VARIANTS`] (user schema v53, issue #561).
+    ///
+    /// **A pile belongs to exactly one list**, and every other field here is that list's own:
+    /// each list has its four predefined zones, its own `is_active`, its own `sort_order`, its
+    /// own names. The two lists are separate versions of the deck and the theory diff is the only
+    /// thing that reads across them, which is why no write here reaches the other list's piles
+    /// and why a card write refuses a pile of the other list ([`CATEGORY_WRONG_LIST`]).
+    pub variant: String,
     pub name: String,
     pub kind: String,
     /// Settable on **every** category, `commander` included — deactivating it is a legal (if
@@ -157,8 +176,8 @@ pub struct DeckCategoryRow {
     /// CLAUDE.md's boundary — and this crate has no opinion at all about who gets drawn.
     ///
     /// **A stored fact rather than a name comparison, and that is the whole point.**
-    /// [`DECK_CATEGORY_GRAIN`](crate::schema::DECK_CATEGORY_GRAIN) is `(deck_id, name)`, so
-    /// [`category_for_name`] *finds* a pile the reader made rather than making a second one —
+    /// [`DECK_CATEGORY_GRAIN`](crate::schema::DECK_CATEGORY_GRAIN) is `(deck_id, variant, name)`,
+    /// so [`category_for_name`] *finds* a pile the reader made rather than making a second one —
     /// which means their own "Ramp" keeps `'user'` forever, even once the app starts filing
     /// ramp spells into it. Deciding from the name instead would flip that pile to hidden the
     /// first time it emptied, and "Ramp", "Draw", "Removal" and "Land" are exactly what a
@@ -169,30 +188,19 @@ pub struct DeckCategoryRow {
     /// [`ensure_predefined_categories`] and [`crate::deck::duplicate_deck`] — and no command
     /// parameter reaches it, so there is nothing untrusted to refuse.
     pub origin: String,
-    /// Copies filed here **in the one `variant` the caller asked by**, `sum(quantity)` and not
-    /// a row count — two different printings at 2 and 3 copies read 5, not 2.
+    /// Copies filed here, `sum(quantity)` and not a row count — two different printings at 2 and
+    /// 3 copies read 5, not 2.
     ///
-    /// This is the number a *list* row wants: a panel drawing the deck's columns is drawing the
-    /// list the reader is editing, and a heading that counted the other one would be counting
-    /// cards that are not on screen. It is **not** the number a delete confirmation wants — see
-    /// [`DeckCategoryRow::card_count_all_variants`], and read both docs before using either.
+    /// **It is also the number a delete confirmation quotes**, and until user schema v53 it was
+    /// not: a pile was shared by both lists, so this counted the one list asked by while the
+    /// CASCADE took both, and a sibling `card_count_all_variants` carried the other number. A pile
+    /// holds one list's cards now, so the two always agreed and the second field went. The
+    /// subquery still names `dc.variant = cat.variant` — the fence every card write holds, read
+    /// back rather than assumed, so a row some older build filed across the lists is not counted
+    /// on a tab that does not draw it.
     pub card_count: i64,
-    /// Copies filed here **across every [`crate::schema::DECK_VARIANTS`]**, live and theory
-    /// together — the number a destructive confirmation has to quote.
-    ///
-    /// A category is not per-variant. `deck_cards.category_id` is `ON DELETE CASCADE`, so
-    /// deleting one takes its rows out of **both** lists, and the move arm of
-    /// [`delete_category`] moves both for the same reason ("The move covers both variants" is
-    /// already that command's contract). A dialog quoting [`DeckCategoryRow::card_count`]
-    /// therefore understates what it is about to do on any theory-enabled deck — measured on
-    /// the fake's seeded deck 4, where a "Ramp" offering to move 2 cards moved 7.
-    ///
-    /// It **understates the destructive arm in particular** (`move_to = None`), which is the
-    /// shape that made this worth a schema-to-webview change rather than a note: a control that
-    /// lies about its scope lies in the direction of the reader pressing it.
-    pub card_count_all_variants: i64,
-    /// Unit price × copies at the marketplace the read was given, summed over the same
-    /// `variant`. `None` when nothing filed here has a price there — `deck.rs`'s own
+    /// Unit price × copies at the marketplace the read was given, summed over the same rows
+    /// [`DeckCategoryRow::card_count`] counts. `None` when nothing filed here has a price there — `deck.rs`'s own
     /// `unit_price` expression verbatim, [`crate::sorting::printing_price_by_finish_expr`], and
     /// never `cards.price_usd`, which is that same chain precomputed for the search's sort and
     /// is the column this crate does not sum. SQL's `sum()` already skips NULL terms, which is what
@@ -227,8 +235,7 @@ pub struct DeckLabelRow {
     /// variant into [`list_categories`] and not into [`list_labels`], so a Theory read came back
     /// with Theory category counts beside **Live** label counts. Nothing drew the number yet, so
     /// nothing was visibly wrong; the contract was, which is the cheaper thing to fix.
-    /// A write's own readback still uses [`READBACK_VARIANT`] — a rename carries no variant of
-    /// its own, and `live` is the one the editor opens on.
+    /// A label write's own readback is a [`GlobalLabel`] and needs no variant at all.
     pub card_count: i64,
 }
 
@@ -304,18 +311,33 @@ pub(crate) fn valid_variant(variant: &str) -> Result<&str, String> {
         })
 }
 
-/// Whether the row named `id` in `table` — always a literal table name from this module, never
-/// a caller-supplied string, so building the statement with `format!` carries no injection risk
-/// — belongs to `deck_id`. `None` when the row is not there at all, distinct from `Some` of the
-/// wrong deck, because [`delete_category`]'s move target and [`set_card_label`]'s label id each
-/// need to tell "gone" from "not yours" apart to answer the right sentence.
-fn owning_deck(conn: &Connection, table: &str, id: i64) -> Result<Option<i64>, String> {
+/// The deck and the list a pile belongs to, or `None` when it is not there at all — distinct
+/// from `Some` of the wrong deck or the wrong list, because [`delete_category`]'s move target and
+/// [`reorder_categories`]' ids each need to tell "gone", "not yours" and — since user schema
+/// v53 — "not this list's" ([`CATEGORY_WRONG_LIST`]) apart to answer the right sentence.
+///
+/// It replaced an `owning_deck(conn, table, id)` that answered the deck alone and served labels
+/// too until schema v21 took the deck off a label; the pile was its last caller.
+pub(crate) fn pile_owner(conn: &Connection, id: i64) -> Result<Option<(i64, String)>, String> {
     conn.query_row(
-        &format!("SELECT deck_id FROM {table} WHERE id = ?1"),
+        "SELECT deck_id, variant FROM deck_categories WHERE id = ?1",
         params![id],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?)),
     )
     .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// The position a new pile takes in one list: one past the last. Scoped to `(deck, variant)`
+/// since user schema v53, because each list orders its own piles and a pile made on the Theory
+/// tab should land at the end of *that* tab rather than after every live pile too.
+fn next_sort_order(conn: &Connection, deck_id: i64, variant: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT coalesce(max(sort_order), -1) + 1 FROM deck_categories
+          WHERE deck_id = ?1 AND variant = ?2",
+        params![deck_id, variant],
+        |r| r.get(0),
+    )
     .map_err(|e| e.to_string())
 }
 
@@ -323,8 +345,13 @@ fn owning_deck(conn: &Connection, table: &str, id: i64) -> Result<Option<i64>, S
 // Categories
 // ---------------------------------------------------------------------------------------
 
-/// Create the four non-`main` predefined categories a deck is missing, and leave the ones it
-/// already has untouched. Safe to call on any deck, as many times as asked.
+/// Create the four non-`main` predefined categories one list of a deck is missing, and leave the
+/// ones it already has untouched. Safe to call on any deck, as many times as asked.
+///
+/// **Per list since user schema v53** (issue #561): each list has its own Commander, Sideboard,
+/// Companion and Maybeboard, so a Sideboard switched off on the Theory tab stays on on the
+/// Actual one. [`crate::deck::create_deck`] seeds `live` always and `theory` when the deck is
+/// born with a plan; [`crate::deck::update_deck`] seeds `theory` when the plan is switched on.
 ///
 /// **Why a deck can be missing them at all**: the v8 migration's own backfill seeds these for
 /// every deck that existed *at* the migration (including one with no cards — a second pass
@@ -349,7 +376,12 @@ fn owning_deck(conn: &Connection, table: &str, id: i64) -> Result<Option<i64>, S
 /// between two of the four INSERTs, and the fix is never "wrap it internally," because a
 /// caller that already opened its own transaction (`create_deck`) must not have this open a
 /// second, nested one — `unchecked_transaction` does not nest.
-pub fn ensure_predefined_categories(conn: &Connection, deck_id: i64) -> Result<(), String> {
+pub fn ensure_predefined_categories(
+    conn: &Connection,
+    deck_id: i64,
+    variant: &str,
+) -> Result<(), String> {
+    let variant = valid_variant(variant)?;
     let deck_exists: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM decks WHERE id = ?1)",
@@ -361,19 +393,14 @@ pub fn ensure_predefined_categories(conn: &Connection, deck_id: i64) -> Result<(
         return Ok(());
     }
 
-    let mut next_order: i64 = conn
-        .query_row(
-            "SELECT coalesce(max(sort_order), -1) + 1 FROM deck_categories WHERE deck_id = ?1",
-            params![deck_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let mut next_order = next_sort_order(conn, deck_id, variant)?;
 
     for (kind, name, is_active) in crate::schema::PREDEFINED_CATEGORIES {
         let exists: bool = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM deck_categories WHERE deck_id = ?1 AND kind = ?2)",
-                params![deck_id, kind],
+                "SELECT EXISTS(SELECT 1 FROM deck_categories
+                                WHERE deck_id = ?1 AND variant = ?2 AND kind = ?3)",
+                params![deck_id, variant, kind],
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
@@ -387,9 +414,10 @@ pub fn ensure_predefined_categories(conn: &Connection, deck_id: i64) -> Result<(
         // to put a card rather than a heading about nothing.
         conn.execute(
             "INSERT INTO deck_categories
-                (deck_id, name, kind, is_active, sort_order, origin, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'user', unixepoch(), unixepoch())",
-            params![deck_id, name, kind, is_active, next_order],
+                (deck_id, variant, name, kind, is_active, sort_order, origin,
+                 created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'user', unixepoch(), unixepoch())",
+            params![deck_id, variant, name, kind, is_active, next_order],
         )
         .map_err(|e| e.to_string())?;
         next_order += 1;
@@ -397,20 +425,23 @@ pub fn ensure_predefined_categories(conn: &Connection, deck_id: i64) -> Result<(
     Ok(())
 }
 
-/// Every column of a [`DeckCategoryRow`] but `deck_id`'s WHERE clause, which each caller below
-/// supplies — [`crate::deck::DECK_SELECT`]'s shape. `?2` (the variant) is bound by every
-/// caller; `?1` is whichever id the appended clause filters by.
+/// Every column of a [`DeckCategoryRow`] but the WHERE clause, which each caller below
+/// supplies — [`crate::deck::DECK_SELECT`]'s shape.
+///
+/// **The counts are read in the pile's own list, `dc.variant = cat.variant`**, where until user
+/// schema v53 they were read in a variant the caller bound. A pile belongs to one list now, so
+/// the question "in which list do I count" has one answer and it is on the row — which is also
+/// what lets a write's readback ([`read_category`]) count a theory pile's theory cards without
+/// a variant of its own to ask by.
 fn category_select(marketplace: crate::sorting::Marketplace) -> String {
     format!(
-        "SELECT cat.id, cat.deck_id, cat.name, cat.kind, cat.is_active,
+        "SELECT cat.id, cat.deck_id, cat.variant, cat.name, cat.kind, cat.is_active,
             cat.sort_order, cat.origin,
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
-                       WHERE dc.category_id = cat.id AND dc.variant = ?2), 0),
+                       WHERE dc.category_id = cat.id AND dc.variant = cat.variant), 0),
             (SELECT sum(dc.quantity * ({price}))
                FROM deck_cards dc LEFT JOIN cards c ON c.id = dc.card_id
-              WHERE dc.category_id = cat.id AND dc.variant = ?2),
-            coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
-                       WHERE dc.category_id = cat.id), 0)
+              WHERE dc.category_id = cat.id AND dc.variant = cat.variant)
        FROM deck_categories cat",
         price = crate::sorting::printing_price_by_finish_expr(marketplace)
     )
@@ -420,48 +451,46 @@ fn category_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckCategoryRow> {
     Ok(DeckCategoryRow {
         id: r.get(0)?,
         deck_id: r.get(1)?,
-        name: r.get(2)?,
-        kind: r.get(3)?,
-        is_active: r.get(4)?,
-        sort_order: r.get(5)?,
-        origin: r.get(6)?,
-        card_count: r.get(7)?,
-        total_price: r.get(8)?,
-        // No `?2` in this one's subquery, and that is the whole of the difference: the CASCADE
-        // this number exists to describe does not know what variant anybody is looking at.
-        card_count_all_variants: r.get(9)?,
+        variant: r.get(2)?,
+        name: r.get(3)?,
+        kind: r.get(4)?,
+        is_active: r.get(5)?,
+        sort_order: r.get(6)?,
+        origin: r.get(7)?,
+        card_count: r.get(8)?,
+        total_price: r.get(9)?,
     })
 }
 
 /// The marketplace a **write's own readback** quotes: the stored setting.
 ///
-/// [`READBACK_VARIANT`]'s counterpart, and the opposite answer to it, because the two facts
-/// are different. A rename carries no variant of its own, so the readback names the one the
-/// editor opens on; it carries no marketplace either, but there *is* a right answer for that
-/// one — the setting the reader is looking at the deck through. A fixed default here would
-/// hand the panel a TCGplayer total the moment a Cardmarket user renamed a column.
+/// A rename carries no marketplace of its own, but there *is* a right answer for one — the
+/// setting the reader is looking at the deck through. A fixed default here would hand the panel
+/// a TCGplayer total the moment a Cardmarket user renamed a column. (The variant needs no such
+/// answer: since user schema v53 a pile's counts are read in its own list, see
+/// [`category_select`].)
 fn readback_marketplace(conn: &Connection) -> crate::sorting::Marketplace {
     crate::sorting::Marketplace::from_id(&crate::marketplace::stored(conn))
 }
 
-fn read_category(
-    conn: &Connection,
-    id: i64,
-    variant: &str,
-) -> Result<Option<DeckCategoryRow>, String> {
+fn read_category(conn: &Connection, id: i64) -> Result<Option<DeckCategoryRow>, String> {
     conn.query_row(
         &format!(
             "{} WHERE cat.id = ?1",
             category_select(readback_marketplace(conn))
         ),
-        params![id, variant],
+        params![id],
         category_row,
     )
     .optional()
     .map_err(|e| e.to_string())
 }
 
-/// Every category of one deck, in display order, in the variant asked for.
+/// Every category of one list of one deck, in display order.
+///
+/// **Only that list's piles** since user schema v53 (issue #561) — `variant` scoped only the
+/// counts before, and every pile was drawn on both tabs, so a pile made on the Theory tab
+/// appeared on the Actual one as an empty heading the reader had made on purpose.
 ///
 /// **A pure read** — it does not call [`ensure_predefined_categories`], and never has since
 /// the write it would need is [`crate::deck::create_deck`]'s job now (via the v8 migration for
@@ -476,7 +505,7 @@ pub fn list_categories(
 ) -> Result<Vec<DeckCategoryRow>, String> {
     let variant = valid_variant(variant)?;
     let sql = format!(
-        "{} WHERE cat.deck_id = ?1 ORDER BY cat.sort_order, cat.id",
+        "{} WHERE cat.deck_id = ?1 AND cat.variant = ?2 ORDER BY cat.sort_order, cat.id",
         category_select(marketplace)
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -487,17 +516,22 @@ pub fn list_categories(
         .map_err(|e| e.to_string())
 }
 
-/// Find a category by name, or make one — a **new one is always `kind = 'main'`**, but the
-/// lookup is by name alone and will happily answer with a predefined category. The add path's
+/// Find a category of one list by name, or make one there — a **new one is always
+/// `kind = 'main'`**, but the lookup is by name alone and will happily answer with a predefined
+/// category.
+///
+/// **`variant` is the list being written** (user schema v53, issue #561): a card filed into the
+/// theory list lands in the theory list's pile of that name, made there if the plan has none,
+/// and never in the live list's — the two lists keep separate piles. The add path's
 /// "find its card category or create it"; unlike [`create_category`], which refuses a name
 /// already taken, this is meant to be handed the same name over and over and answer the same
 /// id every time.
 ///
 /// **The lookup cannot be narrowed to `kind = 'main'`, and this is the trap.**
-/// [`DECK_CATEGORY_GRAIN`](crate::schema::DECK_CATEGORY_GRAIN) is `(deck_id, name)` — one name
-/// per deck, whatever its kind — so a `kind = 'main'` lookup would miss the deck's predefined
-/// `Sideboard` and then fail the INSERT below on a UNIQUE violation rather than answering an
-/// id. Finding it is the only thing this function *can* do.
+/// [`DECK_CATEGORY_GRAIN`](crate::schema::DECK_CATEGORY_GRAIN) is `(deck_id, variant, name)` —
+/// one name per list, whatever its kind — so a `kind = 'main'` lookup would miss the list's
+/// predefined `Sideboard` and then fail the INSERT below on a UNIQUE violation rather than
+/// answering an id. Finding it is the only thing this function *can* do.
 ///
 /// So a caller whose computed name collides with a predefined one files the card into that
 /// predefined category. For `Commander`, `Sideboard` and `Companion` that is arguably what the
@@ -516,12 +550,18 @@ pub fn list_categories(
 /// Deliberately takes no lock of its own and opens no transaction: it is a helper for a
 /// caller that already has both (the way [`crate::deck::printing_of`] is), never a command in
 /// its own right — it is not in this module's `#[tauri::command]` list.
-pub fn category_for_name(conn: &Connection, deck_id: i64, name: &str) -> Result<i64, String> {
+pub fn category_for_name(
+    conn: &Connection,
+    deck_id: i64,
+    variant: &str,
+    name: &str,
+) -> Result<i64, String> {
+    let variant = valid_variant(variant)?;
     let name = valid_name(name, "A category")?;
     if let Some(id) = conn
         .query_row(
-            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND name = ?2",
-            params![deck_id, name],
+            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND variant = ?2 AND name = ?3",
+            params![deck_id, variant, name],
             |r| r.get(0),
         )
         .optional()
@@ -529,13 +569,7 @@ pub fn category_for_name(conn: &Connection, deck_id: i64, name: &str) -> Result<
     {
         return Ok(id);
     }
-    let next_order: i64 = conn
-        .query_row(
-            "SELECT coalesce(max(sort_order), -1) + 1 FROM deck_categories WHERE deck_id = ?1",
-            params![deck_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let next_order = next_sort_order(conn, deck_id, variant)?;
     // **`'auto'`, and only on this branch** — the one the app reaches when it had to invent a
     // column for a card it was filing. The lookup above is what makes that safe to record as a
     // fact: a pile the *reader* made is found rather than re-made, so it keeps its `'user'`
@@ -543,29 +577,290 @@ pub fn category_for_name(conn: &Connection, deck_id: i64, name: &str) -> Result<
     // name-matching rule gets wrong and this gets right for free —
     // `category_for_name_leaves_an_existing_user_pile_alone` is the pin.
     conn.query_row(
-        "INSERT INTO deck_categories (deck_id, name, kind, is_active, sort_order, origin,
-                                       created_at, updated_at)
-         VALUES (?1, ?2, 'main', 1, ?3, 'auto', unixepoch(), unixepoch())
+        "INSERT INTO deck_categories (deck_id, variant, name, kind, is_active, sort_order,
+                                       origin, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'main', 1, ?4, 'auto', unixepoch(), unixepoch())
          RETURNING id",
-        params![deck_id, name, next_order],
+        params![deck_id, variant, name, next_order],
         |r| r.get(0),
     )
     .map_err(|e| e.to_string())
 }
 
-/// Make a new `kind = 'main'` category. Refuses a name the deck already has —
+/// The pile in list `variant` that stands for pile `source` of the other list — found, or made
+/// there as a copy of it. The rule the theory switch carries a card across the lists by, and
+/// [`refile_stray_theory_cards`]' too (user schema v53, issue #561), where until then the switch
+/// simply kept the card's `category_id`, because the two lists shared one pile set.
+///
+/// **Matched by kind for a predefined zone and by name for everything else**, and the
+/// difference is the two unique indexes: a list holds at most one pile of each non-`main` kind
+/// (`idx_deck_categories_kind`) and one pile of each name (`idx_deck_categories_grain`). So a
+/// live Sideboard lands in the plan's Sideboard whatever it is called, and a live "Ramp" in the
+/// plan's "Ramp" — including one the reader made on the Theory tab themselves, which is found and
+/// never made twice. A predefined zone the plan somehow lacks is looked for by name next, so a
+/// plan whose `main` pile happens to hold that name is used rather than colliding with it.
+///
+/// **A pile made here copies the source's kind, `is_active`, `sort_order` and `origin`** — a copy
+/// has the same shape as its original, [`crate::deck::duplicate_deck`]'s rule for this column,
+/// so an `auto` pile the app invented stays hidden when empty on the other tab too. It is one of
+/// the writers [`DeckCategoryRow::origin`] names, and like `duplicate_deck` it copies rather than
+/// deciding.
+///
+/// Takes the caller's transaction and records nothing: both callers file a step whose pile diff
+/// (`deck_undo::push_made_categories`) is what undoes the piles this made.
+pub(crate) fn counterpart_in(
+    conn: &Connection,
+    deck_id: i64,
+    variant: &str,
+    source: i64,
+) -> Result<i64, String> {
+    let variant = valid_variant(variant)?;
+    type Source = (String, String, bool, i64, String, Option<String>);
+    let (name, kind, is_active, sort_order, origin, source_uid): Source = conn
+        .query_row(
+            "SELECT name, kind, is_active, sort_order, origin, sync_uid FROM deck_categories
+              WHERE id = ?1 AND deck_id = ?2",
+            params![source, deck_id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| CATEGORY_GONE.to_owned())?;
+    if kind != "main" {
+        if let Some(id) = conn
+            .query_row(
+                "SELECT id FROM deck_categories
+                  WHERE deck_id = ?1 AND variant = ?2 AND kind = ?3",
+                params![deck_id, variant, kind],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(id);
+        }
+    }
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND variant = ?2 AND name = ?3",
+            params![deck_id, variant, name],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(id);
+    }
+    // **A plan pile made here is named after its original** —
+    // [`crate::schema::theory_pile_uid`], the v53 rung's derivation — unless a pile already holds
+    // that name (the one this made before and the reader has since renamed out of the name match
+    // above). Two devices that each carry the same live pile across then make the same row, and
+    // [`refile_stray_theory_cards`] finds it by that name. A NULL leaves the capture trigger's
+    // mint to name it, as for any other insert.
+    let derived = match (variant, &source_uid) {
+        (THEORY_VARIANT, Some(uid)) => Some(crate::schema::theory_pile_uid(uid)),
+        _ => None,
+    };
+    conn.query_row(
+        "INSERT INTO deck_categories (deck_id, variant, name, kind, is_active, sort_order,
+                                       origin, created_at, updated_at, sync_uid)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), unixepoch(),
+                 CASE WHEN EXISTS (SELECT 1 FROM deck_categories WHERE sync_uid = ?8)
+                      THEN NULL ELSE ?8 END)
+         RETURNING id",
+        params![deck_id, variant, name, kind, is_active, sort_order, origin, derived],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The `sync_state` key that opens [`refile_stray_theory_cards_at_launch`] on a paired device:
+/// set by [`refile_stray_theory_cards_after_pull`] behind the first pull at v53 that read
+/// everything. A device in no group never reads it. Its own key rather than v52's
+/// [`crate::deck_tokens::PICKS_READY`], which a device already set on v52 — before it had heard
+/// anything its group wrote at v53.
+pub const THEORY_PILES_READY: &str = "theory_piles_ready";
+
+/// The plan's list — `DECK_VARIANTS[1]` by index, [`crate::deck`]'s discipline.
+const THEORY_VARIANT: &str = crate::schema::DECK_VARIANTS[1];
+
+/// **Every theory card sitting in a live pile is refiled into the plan's pile of that name**,
+/// captured — user schema v53's net for a group whose devices did not all climb at once
+/// (issue #561).
+///
+/// The v53 rung splits the piles every device already held, uncaptured and under a uid derived
+/// from the original's ([`crate::schema::split_theory_piles`]). What it cannot reach is a
+/// **laggard's writes after this device climbed**: a peer still on v52 files its plan's cards
+/// into the one pile set it knows, so a theory card arrives here pointing at a live pile, and a
+/// pile the laggard made arrives live with no clone at all. Nothing here would ever show that
+/// card on the Theory tab, which lists the plan's piles only. This finds each such card and moves
+/// it into [`counterpart_in`]'s pile — by the derived uid first, so every device that repairs
+/// the same stray lands it in the same row — and **announces both writes**, the pile's insert
+/// whole and the card's move, so a peer that derived the same pile merges on the uid and one that
+/// did not builds it. v52's lesson (`convert_legacy_picks`' doc): a conversion kept to the rung
+/// cannot reach what arrives after it.
+///
+/// **A card already filed in the target pile is folded into it** rather than refused by the
+/// unique index — the stray row's copies are added to it, then the stray is deleted. That is the
+/// one arm that is not idempotent across devices, and it is why a paired device waits for a pull
+/// before repairing at launch: behind a pull it has heard a peer's fold of the same stray, and
+/// finds nothing left to fold.
+///
+/// Records no undo step and no history row, like every other backstop: nothing the reader did
+/// asked for it, and an undo that put a card back into the other list's pile would restore the
+/// one filing every write refuses. Answers the number of card rows it moved or folded.
+pub fn refile_stray_theory_cards(conn: &Connection) -> Result<usize, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let piles: Vec<(i64, i64, Option<String>)> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT DISTINCT cat.id, cat.deck_id, cat.sync_uid
+                   FROM deck_cards dc JOIN deck_categories cat ON cat.id = dc.category_id
+                  WHERE dc.variant = 'theory' AND cat.variant = 'live'
+                  ORDER BY cat.id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+    let mut moved = 0;
+    for (live, deck_id, uid) in piles {
+        let derived = uid.as_deref().map(crate::schema::theory_pile_uid);
+        let named: Option<i64> = match &derived {
+            Some(d) => tx
+                .query_row(
+                    "SELECT id FROM deck_categories
+                      WHERE sync_uid = ?1 AND deck_id = ?2 AND variant = 'theory'",
+                    params![d, deck_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?,
+            None => None,
+        };
+        let target = match named {
+            Some(id) => id,
+            // Found by kind or name, or made under the derived uid (`counterpart_in`'s insert).
+            None => counterpart_in(&tx, deck_id, THEORY_VARIANT, live)?,
+        };
+        let strays: Vec<(i64, String, Option<String>, i64)> = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, card_id, finish, quantity FROM deck_cards
+                      WHERE category_id = ?1 AND variant = 'theory' ORDER BY id",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![live], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|e| e.to_string())?;
+            rows
+        };
+        for (row, card_id, finish, quantity) in strays {
+            let filed: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM deck_cards
+                      WHERE deck_id = ?1 AND variant = 'theory' AND category_id = ?2
+                        AND card_id = ?3 AND coalesce(finish, '') = coalesce(?4, '')",
+                    params![deck_id, target, card_id, finish],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            match filed {
+                Some(into) => {
+                    tx.execute(
+                        "UPDATE deck_cards SET quantity = quantity + ?2, updated_at = unixepoch()
+                          WHERE id = ?1",
+                        params![into, quantity],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    tx.execute("DELETE FROM deck_cards WHERE id = ?1", params![row])
+                        .map_err(|e| e.to_string())?;
+                }
+                None => {
+                    tx.execute(
+                        "UPDATE deck_cards SET category_id = ?2, updated_at = unixepoch()
+                          WHERE id = ?1",
+                        params![row, target],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
+            moved += 1;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(moved)
+}
+
+/// The launch half of [`refile_stray_theory_cards`]' gate, `convert_legacy_picks_at_launch`'s
+/// shape: a device in no group repairs here, and a device in one only once
+/// [`THEORY_PILES_READY`] says a pull at v53 has landed — until then the pull repairs instead.
+/// Idempotent, so a launch with nothing stray costs one read.
+pub fn refile_stray_theory_cards_at_launch(conn: &Connection) -> Result<usize, String> {
+    let waits: bool = conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM sync_group)
+                    AND NOT EXISTS (SELECT 1 FROM sync_state WHERE key = ?1)",
+            [THEORY_PILES_READY],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if waits {
+        return Ok(0);
+    }
+    refile_stray_theory_cards(conn)
+}
+
+/// The pull half: what `sync_engine::client::pull` runs behind every pull that read everything
+/// and advanced its cursor, which is where a laggard's theory card first arrives. Sets
+/// [`THEORY_PILES_READY`] and repairs, **captured** — `apply` has returned.
+pub fn refile_stray_theory_cards_after_pull(conn: &Connection) -> Result<usize, String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO sync_state (key, value) VALUES (?1, '1')",
+        [THEORY_PILES_READY],
+    )
+    .map_err(|e| e.to_string())?;
+    refile_stray_theory_cards(conn)
+}
+
+/// Make a new `kind = 'main'` category in one list. Refuses a name that list already has —
 /// [`category_for_name`]'s opposite number, for the command a user presses "New category" on.
+///
+/// **`variant` is the tab the reader pressed it on** (user schema v53, issue #561): the pile is
+/// made in that list only, and the other list may already hold, or later make, a pile of the same
+/// name without either one refusing.
 pub fn create_category(
     conn: &Connection,
     deck_id: i64,
+    variant: &str,
     name: &str,
 ) -> Result<DeckCategoryRow, String> {
+    let variant = valid_variant(variant)?;
     let name = valid_name(name, "A category")?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let exists: bool = tx
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM deck_categories WHERE deck_id = ?1 AND name = ?2)",
-            params![deck_id, name],
+            "SELECT EXISTS(SELECT 1 FROM deck_categories
+                            WHERE deck_id = ?1 AND variant = ?2 AND name = ?3)",
+            params![deck_id, variant, name],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
@@ -576,24 +871,18 @@ pub fn create_category(
     // and resort the gallery over a write that never happened — `deck::swap_printing`'s
     // same-printing guard runs before its transaction for the same reason.
     crate::deck::touch_deck(&tx, deck_id)?;
-    let next_order: i64 = tx
-        .query_row(
-            "SELECT coalesce(max(sort_order), -1) + 1 FROM deck_categories WHERE deck_id = ?1",
-            params![deck_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let next_order = next_sort_order(&tx, deck_id, variant)?;
     // **`'user'`: this is the reader pressing "New category"**, which is the whole of what
     // separates this function from [`category_for_name`]. A pile made here draws whether or not
     // anything is in it — it was created with intent, and an empty one is where the next card
     // of that kind goes.
     let id: i64 = tx
         .query_row(
-            "INSERT INTO deck_categories (deck_id, name, kind, is_active, sort_order, origin,
-                                           created_at, updated_at)
-             VALUES (?1, ?2, 'main', 1, ?3, 'user', unixepoch(), unixepoch())
+            "INSERT INTO deck_categories (deck_id, variant, name, kind, is_active, sort_order,
+                                           origin, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'main', 1, ?4, 'user', unixepoch(), unixepoch())
              RETURNING id",
-            params![deck_id, name, next_order],
+            params![deck_id, variant, name, next_order],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
@@ -617,7 +906,7 @@ pub fn create_category(
         }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
-    read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
+    read_category(conn, id)?.ok_or_else(|| CATEGORY_GONE.to_owned())
 }
 
 /// One `category`-kind history row, with the four constants every caller here would otherwise
@@ -691,15 +980,17 @@ fn record_label(tx: &Connection, deck_id: i64, payload: &serde_json::Value) -> R
 }
 
 /// Rename a `kind = 'main'` category. Refuses a predefined one
-/// ([`predefined_refusal`]) and a name the deck already has ([`CATEGORY_NAME_TAKEN`]).
+/// ([`predefined_refusal`]) and a name another pile **of the same list** already has
+/// ([`CATEGORY_NAME_TAKEN`]) — a theory pile may take a name a live pile holds, since user
+/// schema v53, because the two lists keep separate piles.
 pub fn rename_category(conn: &Connection, id: i64, name: &str) -> Result<DeckCategoryRow, String> {
     let name = valid_name(name, "A category")?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let (deck_id, current_name, kind): (i64, String, String) = tx
+    let (deck_id, variant, current_name, kind): (i64, String, String, String) = tx
         .query_row(
-            "SELECT deck_id, name, kind FROM deck_categories WHERE id = ?1",
+            "SELECT deck_id, variant, name, kind FROM deck_categories WHERE id = ?1",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?
@@ -710,8 +1001,8 @@ pub fn rename_category(conn: &Connection, id: i64, name: &str) -> Result<DeckCat
     let exists: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM deck_categories
-                            WHERE deck_id = ?1 AND name = ?2 AND id <> ?3)",
-            params![deck_id, name, id],
+                            WHERE deck_id = ?1 AND variant = ?2 AND name = ?3 AND id <> ?4)",
+            params![deck_id, variant, name, id],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
@@ -750,7 +1041,7 @@ pub fn rename_category(conn: &Connection, id: i64, name: &str) -> Result<DeckCat
         }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
-    read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
+    read_category(conn, id)?.ok_or_else(|| CATEGORY_GONE.to_owned())
 }
 
 /// Flip `is_active`. Every category answers to this, `commander` included — see
@@ -768,15 +1059,15 @@ pub fn set_category_active(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // The name comes back with the deck id for the history's sake: a row that said only
     // "deactivated category 41" is a row nobody can read once the panel is closed.
-    let category: Option<(i64, String)> = tx
+    let category: Option<(i64, String, String)> = tx
         .query_row(
-            "SELECT deck_id, name FROM deck_categories WHERE id = ?1",
+            "SELECT deck_id, name, variant FROM deck_categories WHERE id = ?1",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let (deck_id, name) = category.ok_or_else(|| CATEGORY_GONE.to_owned())?;
+    let (deck_id, name, variant) = category.ok_or_else(|| CATEGORY_GONE.to_owned())?;
     crate::deck::touch_deck(&tx, deck_id)?;
     let before = category_step_row(&tx, id)?;
     tx.execute(
@@ -791,11 +1082,12 @@ pub fn set_category_active(
     let audit_id = record_category(&tx, deck_id, &json!({ "action": action, "name": name }))?;
     // **The token reconcile, by hand** — this step is built without `deck_undo::record_cells`,
     // which is where every other card write gets it. A pile switched off counts toward nothing,
-    // so its cards make no tokens, and a Treasure only they made loses its entries in both lists
-    // (a category is not variant-scoped). They ride this step, so switching the pile back on
-    // with Ctrl+Z brings the reader's Treasure printings back with it; switching it on by hand
-    // brings the Treasure back as its implicit entry, which is rule 7's own promise.
-    let removed = crate::deck_tokens::reconcile_in(&tx, deck_id, &crate::schema::DECK_VARIANTS)?;
+    // so its cards make no tokens, and a Treasure only they made loses its entries in that pile's
+    // list — only that one since user schema v53, because the pile holds one list's cards. They
+    // ride this step, so switching the pile back on with Ctrl+Z brings the reader's Treasure
+    // printings back with it; switching it on by hand brings the Treasure back as its implicit
+    // entry, which is rule 7's own promise.
+    let removed = crate::deck_tokens::reconcile_in(&tx, deck_id, &[variant.as_str()])?;
     let mut undo = vec![crate::deck_undo::Op::Categories {
         restore: vec![],
         patch: before,
@@ -811,12 +1103,17 @@ pub fn set_category_active(
     crate::deck_undo::push_removed_tokens(removed, &mut undo, &mut redo);
     record_category_step(&tx, audit_id, deck_id, undo, redo)?;
     tx.commit().map_err(|e| e.to_string())?;
-    read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
+    read_category(conn, id)?.ok_or_else(|| CATEGORY_GONE.to_owned())
 }
 
 /// Write `sort_order` from position in `ids`. An id that does not belong to `deck_id` — the
 /// wrong deck, or gone entirely — matches no row in the `WHERE id = ?1 AND deck_id = ?2` guard
 /// and is silently skipped rather than refusing the whole reorder over one stale entry.
+///
+/// **The ids must be piles of one list** (user schema v53, issue #561): each list orders its own
+/// piles, so a reorder naming this deck's live and theory piles together is refused with
+/// [`CATEGORY_MIXED_LISTS`] before anything is written, rather than writing one list's positions
+/// through the other's. The readback is that list's piles — the list the reorder was drawn from.
 pub fn reorder_categories(
     conn: &Connection,
     deck_id: i64,
@@ -824,11 +1121,37 @@ pub fn reorder_categories(
 ) -> Result<Vec<DeckCategoryRow>, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
-    // **Every pile, both sides.** The history row is a bare `{"action":"reorder"}` — it names no
-    // category *and no order*, deliberately, because the drawer records changes rather than
-    // state — so this is the one write whose reversal the audit log cannot even begin to
-    // describe. `read_categories` is in id order and each row carries its own `sort_order`.
-    let before = crate::deck_undo::read_categories(&tx, deck_id)?;
+    // The one list every id this deck owns belongs to. A stale id (gone, or another deck's) says
+    // nothing about the list and is skipped here as the UPDATE below skips it; an empty answer —
+    // nothing in `ids` is this deck's — reads back the live list, the one the editor opens on.
+    let mut list: Option<String> = None;
+    for id in ids {
+        if let Some((owner, variant)) = pile_owner(&tx, *id)? {
+            if owner != deck_id {
+                continue;
+            }
+            match &list {
+                Some(seen) if *seen != variant => return Err(CATEGORY_MIXED_LISTS.to_owned()),
+                Some(_) => {}
+                None => list = Some(variant),
+            }
+        }
+    }
+    let list = list.unwrap_or_else(|| crate::schema::DECK_VARIANTS[0].to_owned());
+    // **Every pile of the list, both sides.** The history row is a bare `{"action":"reorder"}` —
+    // it names no category *and no order*, deliberately, because the drawer records changes
+    // rather than state — so this is the one write whose reversal the audit log cannot even
+    // begin to describe. `read_categories` is in id order and each row carries its own
+    // `sort_order`. Narrowed to the reordered list since user schema v53: the other list's piles
+    // did not move, and carrying them would let an unstepped change over there (a sync pull)
+    // retire the undo of a reorder that never touched them.
+    let list_piles = |tx: &Connection| -> Result<Vec<crate::deck_undo::CategoryRow>, String> {
+        Ok(crate::deck_undo::read_categories(tx, deck_id)?
+            .into_iter()
+            .filter(|c| c.variant == list)
+            .collect())
+    };
+    let before = list_piles(&tx)?;
     for (order, id) in ids.iter().enumerate() {
         tx.execute(
             "UPDATE deck_categories SET sort_order = ?3, updated_at = unixepoch()
@@ -853,21 +1176,23 @@ pub fn reorder_categories(
         }],
         vec![crate::deck_undo::Op::Categories {
             restore: vec![],
-            patch: crate::deck_undo::read_categories(&tx, deck_id)?,
+            patch: list_piles(&tx)?,
             delete: vec![],
             default_category_id: None,
         }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
-    list_categories(conn, deck_id, READBACK_VARIANT, readback_marketplace(conn))
+    list_categories(conn, deck_id, &list, readback_marketplace(conn))
 }
 
 /// Delete a `kind = 'main'` category — refuses a predefined one, [`predefined_refusal`] again.
 ///
 /// **`moveToCategoryId: Some(id)` moves the cards first, in the same transaction**, folding on
 /// [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) — `deck_id, variant, category_id,
-/// card_id` — so a `live`-variant row and a `theory`-variant row of the same printing fold
-/// into their own matching row in the target and never into each other. `None` leaves the
+/// card_id` — into a target that must be a pile of **the same deck and the same list**
+/// ([`CATEGORY_WRONG_DECK`], [`CATEGORY_WRONG_LIST`]): since user schema v53 a pile holds one
+/// list's cards, and moving them under the other list's pile would file a theory card in a
+/// column only the Actual tab draws. `None` leaves the
 /// `ON DELETE CASCADE` on `deck_cards.category_id` to take the cards with the category, which
 /// is the DDL's own comment on that column: "deleting a category deletes the cards filed under
 /// it, which is what the confirm dialog says it will do."
@@ -886,8 +1211,8 @@ pub fn reorder_categories(
 /// wonders why a card they own is unavailable to every deck they have.
 ///
 /// The move arm moves nothing at all: those cards stay in this deck, one pile over, so the
-/// group is still the right place for the copies behind them. And the `theory` rows the CASCADE
-/// takes move nothing either, in either arm — a plan holds no cards
+/// group is still the right place for the copies behind them. And deleting a `theory` pile moves
+/// nothing either, in either arm — a plan holds no cards
 /// ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so there is nothing in any folder behind
 /// one.
 ///
@@ -904,11 +1229,11 @@ pub fn delete_category(
         return Err(CATEGORY_SELF_MOVE.to_owned());
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let (deck_id, name, kind): (i64, String, String) = tx
+    let (deck_id, variant, name, kind): (i64, String, String, String) = tx
         .query_row(
-            "SELECT deck_id, name, kind FROM deck_categories WHERE id = ?1",
+            "SELECT deck_id, variant, name, kind FROM deck_categories WHERE id = ?1",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?
@@ -917,17 +1242,18 @@ pub fn delete_category(
         return Err(predefined_refusal(&name));
     }
     if let Some(target) = move_to_category_id {
-        match owning_deck(&tx, "deck_categories", target)? {
-            Some(d) if d == deck_id => {}
+        match pile_owner(&tx, target)? {
+            Some((d, v)) if d == deck_id && v == variant => {}
+            Some((d, _)) if d == deck_id => return Err(CATEGORY_WRONG_LIST.to_owned()),
             Some(_) => return Err(CATEGORY_WRONG_DECK.to_owned()),
             None => return Err(CATEGORY_GONE.to_owned()),
         }
     }
     crate::deck::touch_deck(&tx, deck_id)?;
     // Counted **before** anything moves or cascades, and in copies rather than rows — two
-    // printings at 2 and 3 is 5 cards, which is what the confirm dialog warned about. Both
-    // variants, because the CASCADE takes both: a category is not variant-scoped, and a theory
-    // row filed here dies with it exactly as a live one does.
+    // printings at 2 and 3 is 5 cards, which is what the confirm dialog warned about. Every row
+    // under the pile, which since user schema v53 is one list's rows: a pile holds its own list's
+    // cards and no other's, so this is exactly the `cardCount` the dialog quoted.
     //
     // **This is a count of `deck_cards`, never of the copies that move.** The two can differ
     // wherever the group holds fewer copies than the list claims, and what the dialog warns
@@ -949,23 +1275,15 @@ pub fn delete_category(
     // its owned counts at zero until they file the copies again — the same place a cut card
     // leaves them, which has never been undoable either.
     //
-    // Four cells, not two: **both variants of the deleted pile and both of the target**, because
-    // the move arm folds on `DECK_CARD_GRAIN` into whatever the target already held. Without the
-    // target's own two, undoing a delete-with-move would put the deleted pile back and leave the
-    // folded copies in the target as well — the deck would gain cards by being un-deleted.
-    let mut cells = vec![
-        crate::deck_undo::Cell::pile(crate::schema::DECK_VARIANTS[0], id),
-        crate::deck_undo::Cell::pile(crate::schema::DECK_VARIANTS[1], id),
-    ];
+    // Two cells, not one: **the deleted pile and the target**, because the move arm folds on
+    // `DECK_CARD_GRAIN` into whatever the target already held. Without the target's own cell,
+    // undoing a delete-with-move would put the deleted pile back and leave the folded copies in
+    // the target as well — the deck would gain cards by being un-deleted. Both in the pile's own
+    // list, which since user schema v53 is the only list either pile holds cards of; this read
+    // four cells, one per list per pile, while a pile was shared by both.
+    let mut cells = vec![crate::deck_undo::Cell::pile(&variant, id)];
     if let Some(target) = move_to_category_id {
-        cells.push(crate::deck_undo::Cell::pile(
-            crate::schema::DECK_VARIANTS[0],
-            target,
-        ));
-        cells.push(crate::deck_undo::Cell::pile(
-            crate::schema::DECK_VARIANTS[1],
-            target,
-        ));
+        cells.push(crate::deck_undo::Cell::pile(&variant, target));
     }
     let cards_before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
     let category_before = category_step_row(&tx, id)?;
@@ -983,20 +1301,28 @@ pub fn delete_category(
     // where their copies belong — and it is fenced by this `if` rather than left to the move's
     // own DELETE having emptied the pile first, because that is an ordering an edit three
     // statements away can undo without meaning to.
+    //
+    // The pile's own variant is passed, and the helper's `live` fence does the rest: a theory
+    // pile's rows are a plan's, and a plan holds no copies to release.
     if move_to_category_id.is_none() {
-        crate::deck::release_live_copies(&tx, deck_id, crate::schema::DECK_VARIANTS[0], Some(id))?;
+        crate::deck::release_live_copies(&tx, deck_id, &variant, Some(id))?;
     }
     if let Some(target) = move_to_category_id {
         // `deck::move_card`'s INSERT … SELECT … ON CONFLICT shape verbatim, over categories
         // instead of zones. The `DO UPDATE` touches only `quantity`/`updated_at`: a row the
         // target already holds keeps its own `label_id` and `needs_review`, never the moved
         // row's — the same "the existing row wins a fold" rule `move_card`'s comment names.
+        //
+        // **Every column the row owns except the two this move rewrites** (`id`, which the
+        // INSERT mints, and `category_id`). `finish` is a `DECK_CARD_GRAIN` term, and until
+        // 2026-09-27 it was the one left out: the moved row took the column's NULL, so a foil
+        // became the regular copy and folded into the target's nonfoil row of that printing.
         let sql = format!(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                 name, label_id, quantity, needs_review, created_at, updated_at)
+                 name, label_id, finish, quantity, needs_review, created_at, updated_at)
              SELECT deck_id, ?2, variant, card_id, set_code, collector_number, lang, name,
-                    label_id, quantity, needs_review, unixepoch(), unixepoch()
+                    label_id, finish, quantity, needs_review, unixepoch(), unixepoch()
                FROM deck_cards WHERE category_id = ?1
              ON CONFLICT({grain}) DO UPDATE SET
                 quantity = deck_cards.quantity + excluded.quantity,
@@ -1054,11 +1380,11 @@ pub fn delete_category(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    // **The token reconcile, by hand, over both lists** — [`set_category_active`]'s reason, and
-    // the CASCADE's reach: the cards under the pile went in both variants, so a token only they
-    // made goes in both. Last on both sides of the step, after the pile and its cards, because
-    // nothing it restores points at either.
-    let removed = crate::deck_tokens::reconcile_in(&tx, deck_id, &crate::schema::DECK_VARIANTS)?;
+    // **The token reconcile, by hand, over the pile's list** — [`set_category_active`]'s reason,
+    // and the CASCADE's reach: the cards under the pile went, so a token only they made goes.
+    // One list since user schema v53, because the pile held one list's cards. Last on both sides
+    // of the step, after the pile and its cards, because nothing it restores points at either.
+    let removed = crate::deck_tokens::reconcile_in(&tx, deck_id, &[variant.as_str()])?;
     let mut undo = vec![
         crate::deck_undo::Op::Categories {
             restore: category_before,
@@ -1490,7 +1816,7 @@ pub fn remove_label_from_deck(
 /// touch a deck, write the `delete` history row or file an undo step — so those cards cannot be
 /// re-labelled by Ctrl+Z, and the `cards` count that row carries is never computed.
 pub fn delete_label(conn: &Connection, deck_id: Option<i64>, id: i64) -> Result<(), String> {
-    // Read rather than `owning_deck`, which no longer means anything for a label: the history
+    // Read rather than through a deck-owner lookup, which means nothing for a label: the history
     // needs the name, and this is the last statement in which it is knowable.
     let name: Option<String> = conn
         .query_row(
@@ -1933,14 +2259,12 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
 
 /// What a write here says when its worker thread died under it — never a user's problem, the
 /// write itself answers [`crate::db::BUSY`] when the database is busy.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck's categories, labels or folders could not be written: {e}")
 }
 
 /// The category panel. **Read-only connection** — see [`list_categories`]'s doc: it backfills
 /// nothing any more, so this never needs to contend for the write mutex.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1962,22 +2286,21 @@ pub async fn deck_category_list(
     .map_err(|e| format!("the deck's categories could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_create(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
+    variant: String,
     name: String,
 ) -> Result<DeckCategoryRow, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| create_category(c, deck_id, &name))
+        with_write(&state, |c| create_category(c, deck_id, &variant, &name))
     })
     .await
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_rename(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1992,7 +2315,6 @@ pub async fn deck_category_rename(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_set_active(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2007,7 +2329,6 @@ pub async fn deck_category_set_active(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_reorder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2022,7 +2343,6 @@ pub async fn deck_category_reorder(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2044,7 +2364,6 @@ pub async fn deck_category_delete(
 }
 
 /// **Read-only** connection, like every list in this module.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2066,7 +2385,6 @@ pub async fn deck_label_list(
 ///
 /// **Tauri fills a missing `Option` argument with `None`**, so the deck editor's existing calls,
 /// which send `deckId`, are unchanged.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2085,7 +2403,6 @@ pub async fn deck_label_create(
 /// `deck_id` is where the reader was standing, not what is being changed — see
 /// [`update_label`], which is app-wide. Optional, for [`deck_label_create`]'s reason: a rename
 /// made from Settings names no deck and records nothing.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2105,7 +2422,6 @@ pub async fn deck_label_update(
 /// Deletes the label **everywhere**, and answers nothing. `deck_id` is where the reader was, and
 /// is optional for [`deck_label_create`]'s reason — a deckless delete still un-labels every card,
 /// and writes no history and no undo step.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2122,7 +2438,6 @@ pub async fn deck_label_delete(
 
 /// Answers how many rows lost the label — see [`remove_label_from_deck`], which leaves the label
 /// itself alone.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_remove_from_deck(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2142,7 +2457,6 @@ pub async fn deck_label_remove_from_deck(
 
 /// **Read-only**, and the one command in this module with no deck id at all — see
 /// [`list_all_labels`]'s doc.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_all(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2155,7 +2469,6 @@ pub async fn deck_label_all(
     .map_err(|e| format!("the label list could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_card_set_label(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2185,7 +2498,6 @@ pub async fn deck_card_set_label(
 }
 
 /// **Read-only**, like every list in this module.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2196,7 +2508,6 @@ pub async fn deck_folder_list(
         .map_err(|e| format!("the deck folders could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2211,7 +2522,6 @@ pub async fn deck_folder_create(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_rename(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2226,7 +2536,6 @@ pub async fn deck_folder_rename(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_move(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2245,7 +2554,6 @@ pub async fn deck_folder_move(
 /// write. It answers the **whole** folder list rather than the rows it moved, like
 /// [`deck_category_reorder`]: every sibling's number changed, so a caller handed only the moved
 /// rows would have to guess at the rest.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_reorder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2260,7 +2568,6 @@ pub async fn deck_folder_reorder(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2314,6 +2621,21 @@ mod tests {
              VALUES (?1,?2,?3,?4,'lea','161','en','Lightning Bolt',?5,unixepoch(),unixepoch())
              RETURNING id",
             params![deck_id, category_id, variant, card_id, quantity],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// [`category`] for the **theory** list — the same raw insert with the variant spelled out.
+    /// A pile belongs to one list since user schema v53, so a fixture that files theory cards
+    /// needs a theory pile to file them under; `category` names no variant and takes the
+    /// column's `'live'` default.
+    fn theory_category(conn: &Connection, deck_id: i64, kind: &str, name: &str) -> i64 {
+        conn.query_row(
+            "INSERT INTO deck_categories
+                (deck_id, variant, name, kind, is_active, sort_order, created_at, updated_at)
+             VALUES (?1, 'theory', ?2, ?3, ?4, 0, unixepoch(), unixepoch()) RETURNING id",
+            params![deck_id, name, kind, i64::from(kind != "maybe")],
             |r| r.get(0),
         )
         .unwrap()
@@ -2410,7 +2732,7 @@ mod tests {
             "a legacy or freshly created deck starts with none"
         );
 
-        ensure_predefined_categories(&conn, deck_id).unwrap();
+        ensure_predefined_categories(&conn, deck_id, "live").unwrap();
 
         let mut stmt = conn
             .prepare("SELECT kind, is_active FROM deck_categories WHERE deck_id = ?1 ORDER BY kind")
@@ -2436,9 +2758,9 @@ mod tests {
     fn ensure_predefined_categories_is_idempotent() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        ensure_predefined_categories(&conn, deck_id).unwrap();
-        ensure_predefined_categories(&conn, deck_id).unwrap();
-        ensure_predefined_categories(&conn, deck_id).unwrap();
+        ensure_predefined_categories(&conn, deck_id, "live").unwrap();
+        ensure_predefined_categories(&conn, deck_id, "live").unwrap();
+        ensure_predefined_categories(&conn, deck_id, "live").unwrap();
 
         let n: i64 = conn
             .query_row(
@@ -2464,7 +2786,7 @@ mod tests {
         )
         .unwrap();
 
-        ensure_predefined_categories(&conn, deck_id).unwrap();
+        ensure_predefined_categories(&conn, deck_id, "live").unwrap();
 
         let (name, is_active): (String, bool) = conn
             .query_row(
@@ -2503,7 +2825,7 @@ mod tests {
             "list_categories must not write — a deck with no categories reads back none"
         );
 
-        ensure_predefined_categories(&conn, deck_id).unwrap();
+        ensure_predefined_categories(&conn, deck_id, "live").unwrap();
         let rows = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
         assert_eq!(
             rows.len(),
@@ -2517,8 +2839,8 @@ mod tests {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
 
-        let first = category_for_name(&conn, deck_id, "Removal").unwrap();
-        let second = category_for_name(&conn, deck_id, "Removal").unwrap();
+        let first = category_for_name(&conn, deck_id, "live", "Removal").unwrap();
+        let second = category_for_name(&conn, deck_id, "live", "Removal").unwrap();
         assert_eq!(first, second, "the same name must answer the same id");
 
         let n: i64 = conn
@@ -2566,15 +2888,15 @@ mod tests {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
 
-        let id = category_for_name(&conn, deck_id, "Removal").unwrap();
+        let id = category_for_name(&conn, deck_id, "live", "Removal").unwrap();
 
         assert_eq!(origin_of(&conn, id), "auto");
     }
 
     /// **The whole reason this is a stored fact and not a name comparison.**
     ///
-    /// [`DECK_CATEGORY_GRAIN`](crate::schema::DECK_CATEGORY_GRAIN) is `(deck_id, name)`, so a
-    /// reader who makes their own "Ramp" and later adds a ramp spell has that spell filed into
+    /// [`DECK_CATEGORY_GRAIN`](crate::schema::DECK_CATEGORY_GRAIN) is `(deck_id, variant, name)`,
+    /// so a reader who makes their own "Ramp" and later adds a ramp spell has that spell filed into
     /// *their* pile — [`category_for_name`] finds before it creates. The find arm must therefore
     /// touch nothing: were it to write `'auto'` over what it found, or were the drawing rule
     /// reading the name instead, their deliberate pile would silently start hiding itself the
@@ -2583,10 +2905,10 @@ mod tests {
     fn category_for_name_leaves_an_existing_user_pile_alone() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let mine = create_category(&conn, deck_id, "Ramp").unwrap();
+        let mine = create_category(&conn, deck_id, "live", "Ramp").unwrap();
         assert_eq!(origin_of(&conn, mine.id), "user", "the reader made it");
 
-        let found = category_for_name(&conn, deck_id, "Ramp").unwrap();
+        let found = category_for_name(&conn, deck_id, "live", "Ramp").unwrap();
 
         assert_eq!(found, mine.id, "the add path files into the pile they made");
         assert_eq!(
@@ -2602,7 +2924,7 @@ mod tests {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
 
-        let row = create_category(&conn, deck_id, "Flex slots").unwrap();
+        let row = create_category(&conn, deck_id, "live", "Flex slots").unwrap();
 
         assert_eq!(row.origin, "user", "on the row the command answers with");
         assert_eq!(origin_of(&conn, row.id), "user", "and in the table");
@@ -2620,7 +2942,7 @@ mod tests {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
 
-        ensure_predefined_categories(&conn, deck_id).unwrap();
+        ensure_predefined_categories(&conn, deck_id, "live").unwrap();
 
         let rows = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
         assert_eq!(rows.len(), 4);
@@ -2635,89 +2957,72 @@ mod tests {
 
     // -- card_count / total_price -----------------------------------------------------------
 
+    /// Copies, not rows — and **each list's pile counts its own list** (user schema v53). The
+    /// two lists' Commander zones are two piles now, so the live one reads 5 and the theory one
+    /// 7, and neither list lists the other's pile at all.
     #[test]
-    fn card_count_is_copies_not_rows_and_scoped_to_the_asked_variant() {
+    fn card_count_is_copies_not_rows_and_each_list_counts_its_own_pile() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "commander", "Commander");
+        let plan = theory_category(&conn, deck_id, "commander", "Commander");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         crate::schema::tests::seed_card(&conn, "bolt-m10", "m10", "146");
         // Two different printings in `live`, 2 and 3 copies: a row count would read 2.
         deck_card(&conn, deck_id, "bolt-lea", cat, 2);
         deck_card(&conn, deck_id, "bolt-m10", cat, 3);
-        // A `theory` copy that must not leak into the `live` count.
-        deck_card_variant(&conn, deck_id, "bolt-lea", cat, "theory", 7);
+        // The plan's own copy, under the plan's own pile.
+        deck_card_variant(&conn, deck_id, "bolt-lea", plan, "theory", 7);
 
         let live = list_categories(&conn, deck_id, "live", ANY_MARKET).unwrap();
-        let commander_live = live.iter().find(|c| c.id == cat).unwrap();
-        assert_eq!(commander_live.card_count, 5, "copies, not rows: 2 + 3");
+        assert_eq!(
+            live.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![cat],
+            "the live list lists the live pile and no other"
+        );
+        assert_eq!(live[0].card_count, 5, "copies, not rows: 2 + 3");
+        assert_eq!(live[0].variant, "live");
 
         let theory = list_categories(&conn, deck_id, "theory", ANY_MARKET).unwrap();
-        let commander_theory = theory.iter().find(|c| c.id == cat).unwrap();
-        assert_eq!(
-            commander_theory.card_count, 7,
-            "the theory variant is a separate count"
-        );
+        assert_eq!(theory.iter().map(|c| c.id).collect::<Vec<_>>(), vec![plan]);
+        assert_eq!(theory[0].card_count, 7, "the plan's pile counts the plan");
+        assert_eq!(theory[0].variant, "theory");
     }
 
-    /// The number a delete confirmation has to quote, and the reason it is a second field.
-    ///
-    /// The two counts are deliberately made to **differ** — 5 live, 7 theory — because a fixture
-    /// where they happen to agree proves nothing at all here: that is exactly the shape every
-    /// test had while the confirmation was undercounting, and it is why the bug reached a
-    /// reviewer rather than a suite.
+    /// **What the delete confirmation quotes is what the delete takes**, and since user schema
+    /// v53 that number is the one `card_count` — which is why `card_count_all_variants` went.
+    /// Deleting the live Ramp takes the live Ramp's five copies and leaves the plan's own Ramp,
+    /// and its seven, exactly where they were.
     #[test]
-    fn card_count_all_variants_counts_both_lists_where_card_count_counts_one() {
-        let conn = conn();
-        let deck_id = deck(&conn, "Burn");
-        let cat = category(&conn, deck_id, "commander", "Commander");
-        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
-        crate::schema::tests::seed_card(&conn, "bolt-m10", "m10", "146");
-        deck_card(&conn, deck_id, "bolt-lea", cat, 2);
-        deck_card(&conn, deck_id, "bolt-m10", cat, 3);
-        deck_card_variant(&conn, deck_id, "bolt-lea", cat, "theory", 7);
-
-        for (variant, scoped) in [("live", 5), ("theory", 7)] {
-            let rows = list_categories(&conn, deck_id, variant, ANY_MARKET).unwrap();
-            let row = rows.iter().find(|c| c.id == cat).unwrap();
-            assert_eq!(row.card_count, scoped, "{variant}: the one list asked for");
-            assert_eq!(
-                row.card_count_all_variants, 12,
-                "{variant}: both lists, and the same answer whichever one was asked by — a \
-                 category is not per-variant",
-            );
-        }
-    }
-
-    /// The claim the field exists to make true: **what the number quotes is what the delete
-    /// takes.** `deck_cards.category_id` is `ON DELETE CASCADE`, so the destructive arm reaches
-    /// both lists, and a dialog quoting `card_count` would have promised 5 while taking 12.
-    #[test]
-    fn deleting_a_category_takes_the_copies_card_count_all_variants_quoted() {
+    fn deleting_a_category_takes_the_copies_card_count_quoted_and_nothing_of_the_other_list() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "main", "Ramp");
+        let plan = theory_category(&conn, deck_id, "main", "Ramp");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         deck_card(&conn, deck_id, "bolt-lea", cat, 5);
-        deck_card_variant(&conn, deck_id, "bolt-lea", cat, "theory", 7);
+        deck_card_variant(&conn, deck_id, "bolt-lea", plan, "theory", 7);
 
         let quoted = list_categories(&conn, deck_id, "live", ANY_MARKET)
             .unwrap()
             .iter()
             .find(|c| c.id == cat)
             .unwrap()
-            .card_count_all_variants;
-        assert_eq!(quoted, 12);
+            .card_count;
+        assert_eq!(quoted, 5);
 
         delete_category(&conn, cat, None).unwrap();
-        let left: i64 = conn
-            .query_row(
-                "SELECT coalesce(sum(quantity), 0) FROM deck_cards WHERE deck_id = ?1",
-                params![deck_id],
+        let left = |variant: &str| -> i64 {
+            conn.query_row(
+                "SELECT coalesce(sum(quantity), 0) FROM deck_cards
+                  WHERE deck_id = ?1 AND variant = ?2",
+                params![deck_id, variant],
                 |r| r.get(0),
             )
-            .unwrap();
-        assert_eq!(left, 0, "all {quoted} copies went, across both lists");
+            .unwrap()
+        };
+        assert_eq!(left("live"), 0, "all {quoted} live copies went");
+        assert_eq!(left("theory"), 7, "and the plan's pile was never touched");
     }
 
     /// The heading's figure is `unit_price × copies` summed, and a card the marketplace does not
@@ -2916,22 +3221,22 @@ mod tests {
         let value = serde_json::to_value(DeckCategoryRow {
             id: 3,
             deck_id: 7,
+            variant: "theory".to_owned(),
             name: "Ramp".to_owned(),
             kind: "custom".to_owned(),
             is_active: true,
             sort_order: 2,
             origin: "auto".to_owned(),
             card_count: 5,
-            card_count_all_variants: 12,
             total_price: Some(41.5),
         })
         .unwrap();
         assert_eq!(
             value,
             serde_json::json!({
-                "id": 3, "deckId": 7, "name": "Ramp", "kind": "custom", "isActive": true,
-                "sortOrder": 2, "origin": "auto", "cardCount": 5,
-                "cardCountAllVariants": 12, "totalPrice": 41.5
+                "id": 3, "deckId": 7, "variant": "theory", "name": "Ramp", "kind": "custom",
+                "isActive": true, "sortOrder": 2, "origin": "auto", "cardCount": 5,
+                "totalPrice": 41.5
             })
         );
     }
@@ -2988,8 +3293,8 @@ mod tests {
     fn deck_category_create_refuses_a_duplicate_name() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        create_category(&conn, deck_id, "Removal").unwrap();
-        let err = create_category(&conn, deck_id, "Removal").unwrap_err();
+        create_category(&conn, deck_id, "live", "Removal").unwrap();
+        let err = create_category(&conn, deck_id, "live", "Removal").unwrap_err();
         assert_eq!(err, CATEGORY_NAME_TAKEN);
     }
 
@@ -2997,8 +3302,8 @@ mod tests {
     fn deck_category_rename_refuses_a_duplicate_name() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        create_category(&conn, deck_id, "Removal").unwrap();
-        let counters = create_category(&conn, deck_id, "Counters").unwrap();
+        create_category(&conn, deck_id, "live", "Removal").unwrap();
+        let counters = create_category(&conn, deck_id, "live", "Counters").unwrap();
         let err = rename_category(&conn, counters.id, "Removal").unwrap_err();
         assert_eq!(err, CATEGORY_NAME_TAKEN);
     }
@@ -3007,7 +3312,7 @@ mod tests {
     fn deck_category_rename_writes_the_new_name() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let counters = create_category(&conn, deck_id, "Counters").unwrap();
+        let counters = create_category(&conn, deck_id, "live", "Counters").unwrap();
 
         let returned = rename_category(&conn, counters.id, "Proliferate").unwrap();
         assert_eq!(returned.name, "Proliferate");
@@ -3036,8 +3341,9 @@ mod tests {
     /// **The split is the half worth seeding.** The group holds one row for the grain, four
     /// copies backing two piles, so deleting one may take three of them and no more.
     ///
-    /// **And the theory row's copies are not a thing**, which is the second claim: a plan holds
-    /// no cards, so the 5 theory copies the CASCADE also takes put nothing on the desk.
+    /// **And a theory pile's copies are not a thing**, which is the second claim: a plan holds
+    /// no cards, so deleting the plan's own Ramp and the 5 theory copies the CASCADE takes with
+    /// it puts nothing on the desk and takes nothing out of the group.
     #[test]
     fn deleting_a_category_files_its_copies_into_recently_removed() {
         let conn = conn();
@@ -3045,10 +3351,11 @@ mod tests {
         let group = group_for(&conn, deck_id, "Burn");
         let doomed = category(&conn, deck_id, "main", "Ramp");
         let kept = category(&conn, deck_id, "main", "Main deck");
+        let planned = theory_category(&conn, deck_id, "main", "Ramp");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         deck_card(&conn, deck_id, "bolt-lea", doomed, 3);
         deck_card(&conn, deck_id, "bolt-lea", kept, 1);
-        deck_card_variant(&conn, deck_id, "bolt-lea", doomed, "theory", 5);
+        deck_card_variant(&conn, deck_id, "bolt-lea", planned, "theory", 5);
         file_into(&conn, group, "bolt-lea", 4);
 
         delete_category(&conn, doomed, None).unwrap();
@@ -3063,6 +3370,14 @@ mod tests {
             1,
             "and the copy behind the pile that survived is still the deck's"
         );
+
+        delete_category(&conn, planned, None).unwrap();
+        assert_eq!(
+            folder_copies(&conn, removed_group(&conn), "bolt-lea"),
+            3,
+            "deleting the plan's pile files nothing"
+        );
+        assert_eq!(folder_copies(&conn, group, "bolt-lea"), 1);
     }
 
     /// The move arm moves **no copies at all**, and that is not an omission: those cards are
@@ -3086,18 +3401,24 @@ mod tests {
         assert_eq!(folder_copies(&conn, removed_group(&conn), "bolt-lea"), 0);
     }
 
+    /// The move folds on the grain into the target, **within one list**: a live pile moves into
+    /// a live pile and a theory pile into a theory pile, each summing into what its target
+    /// already held, and neither reaching the other list's rows (user schema v53).
     #[test]
-    fn deck_category_delete_with_a_move_target_folds_cards_per_variant() {
+    fn deck_category_delete_with_a_move_target_folds_cards_within_its_list() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let from = category(&conn, deck_id, "main", "Creatures");
         let to = category(&conn, deck_id, "main", "Main deck");
+        let plan_from = theory_category(&conn, deck_id, "main", "Creatures");
+        let plan_to = theory_category(&conn, deck_id, "main", "Main deck");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         // The target already holds this printing in `live` — the fold must sum into it.
         deck_card(&conn, deck_id, "bolt-lea", to, 2);
         deck_card(&conn, deck_id, "bolt-lea", from, 3);
-        // And a `theory` copy in the source with nothing to fold into.
-        deck_card_variant(&conn, deck_id, "bolt-lea", from, "theory", 5);
+        // And the plan's own pair, which the live delete must not touch.
+        deck_card_variant(&conn, deck_id, "bolt-lea", plan_to, "theory", 1);
+        deck_card_variant(&conn, deck_id, "bolt-lea", plan_from, "theory", 5);
 
         delete_category(&conn, from, Some(to)).unwrap();
 
@@ -3110,30 +3431,80 @@ mod tests {
             .unwrap();
         assert_eq!(gone, 0, "the source category itself is deleted");
 
-        let live_qty: i64 = conn
-            .query_row(
-                "SELECT quantity FROM deck_cards
-                  WHERE deck_id = ?1 AND card_id = 'bolt-lea' AND category_id = ?2 AND variant = 'live'",
-                params![deck_id, to],
+        let qty = |category: i64| -> i64 {
+            conn.query_row(
+                "SELECT coalesce(sum(quantity), 0) FROM deck_cards
+                  WHERE deck_id = ?1 AND card_id = 'bolt-lea' AND category_id = ?2",
+                params![deck_id, category],
                 |r| r.get(0),
             )
-            .unwrap();
+            .unwrap()
+        };
         assert_eq!(
-            live_qty, 5,
+            qty(to),
+            5,
             "2 already there + 3 moved in, folded on the grain"
         );
+        assert_eq!(
+            (qty(plan_from), qty(plan_to)),
+            (5, 1),
+            "the plan's piles are another list's and were never touched"
+        );
 
-        let theory_qty: i64 = conn
-            .query_row(
-                "SELECT quantity FROM deck_cards
-                  WHERE deck_id = ?1 AND card_id = 'bolt-lea' AND category_id = ?2 AND variant = 'theory'",
-                params![deck_id, to],
-                |r| r.get(0),
+        delete_category(&conn, plan_from, Some(plan_to)).unwrap();
+        assert_eq!(
+            qty(plan_to),
+            6,
+            "the plan's own move folds into the plan's target"
+        );
+        assert_eq!(qty(to), 5, "and leaves the live pile alone in turn");
+    }
+
+    /// **`finish` is a grain term, so the move has to carry it or it moves a different card.**
+    /// The INSERT … SELECT used to name every column but this one, which wrote the moved row
+    /// with the column's NULL — the regular copy — and let `DECK_CARD_GRAIN` fold a foil into
+    /// the target's own nonfoil row of the same printing. The deck kept its count and lost its
+    /// foils, with nothing to say so.
+    #[test]
+    fn deck_category_delete_with_a_move_target_keeps_each_row_on_its_own_finish() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let from = category(&conn, deck_id, "main", "Creatures");
+        let to = category(&conn, deck_id, "main", "Main deck");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        deck_card(&conn, deck_id, "bolt-lea", to, 2);
+        foil_deck_card(&conn, deck_id, "bolt-lea", from);
+        let etched = deck_card(&conn, deck_id, "bolt-lea", from, 4);
+        conn.execute(
+            "UPDATE deck_cards SET finish = 'etched', needs_review = 'printing' WHERE id = ?1",
+            params![etched],
+        )
+        .unwrap();
+
+        delete_category(&conn, from, Some(to)).unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT finish, quantity, needs_review FROM deck_cards
+                  WHERE deck_id = ?1 AND category_id = ?2 AND variant = 'live'
+                  ORDER BY coalesce(finish, '')",
             )
             .unwrap();
+        let rows: Vec<(Option<String>, i64, Option<String>)> = stmt
+            .query_map(params![deck_id, to], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
         assert_eq!(
-            theory_qty, 5,
-            "the theory copy moved on its own, never folded into live"
+            rows,
+            vec![
+                (None, 2, None),
+                (Some("etched".to_owned()), 4, Some("printing".to_owned())),
+                (Some("foil".to_owned()), 1, None),
+            ],
+            "the regular row is untouched and each moved row keeps its finish"
         );
     }
 
@@ -3198,6 +3569,567 @@ mod tests {
         let rows = reorder_categories(&conn, deck_id, &[c, a, b]).unwrap();
         let order: Vec<i64> = rows.iter().map(|r| r.id).collect();
         assert_eq!(order, vec![c, a, b]);
+    }
+
+    // -- Per-list piles (user schema v53, issue #561) ----------------------------------------
+    //
+    // A deck's Theory and Actual lists are two versions of the deck, each with its own piles. The
+    // theory diff is the only thing that reads across them, so nothing a reader does to one
+    // list's piles may show on the other — every test below is one way that used to leak.
+
+    /// A deck made the way the app makes one, with or without a plan — `create_deck` is what
+    /// seeds the rules zones, and these tests are about which list gets them.
+    fn new_deck(conn: &Connection, name: &str, theory: bool) -> i64 {
+        crate::deck::create_deck(
+            conn,
+            &crate::deck::DeckInput {
+                name: name.to_owned(),
+                format_key: "modern".to_owned(),
+                theory_enabled: Some(theory),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    /// The one pile of `kind` in one list.
+    fn pile_of_kind(conn: &Connection, deck_id: i64, variant: &str, kind: &str) -> i64 {
+        conn.query_row(
+            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND variant = ?2 AND kind = ?3",
+            params![deck_id, variant, kind],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One list's piles by name, in the order the tab draws them.
+    fn pile_names(conn: &Connection, deck_id: i64, variant: &str) -> Vec<String> {
+        list_categories(conn, deck_id, variant, ANY_MARKET)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect()
+    }
+
+    /// One list's piles by id — what "the other list is untouched" has to compare.
+    fn pile_ids(conn: &Connection, deck_id: i64, variant: &str) -> Vec<i64> {
+        list_categories(conn, deck_id, variant, ANY_MARKET)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect()
+    }
+
+    /// One list's cards as `(pile, card, copies)`, sorted — the rows a step has to put back.
+    fn list_rows(conn: &Connection, deck_id: i64, variant: &str) -> Vec<(i64, String, i64)> {
+        conn.prepare(
+            "SELECT category_id, card_id, quantity FROM deck_cards
+              WHERE deck_id = ?1 AND variant = ?2 ORDER BY category_id, card_id",
+        )
+        .unwrap()
+        .query_map(params![deck_id, variant], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+    }
+
+    /// The pile of `name` in one list, or `None` — never made on the way, unlike
+    /// [`category_for_name`].
+    fn find_pile(conn: &Connection, deck_id: i64, variant: &str, name: &str) -> Option<i64> {
+        conn.query_row(
+            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND variant = ?2 AND name = ?3",
+            params![deck_id, variant, name],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    fn undo_newest(conn: &Connection, deck_id: i64) -> i64 {
+        let audit = crate::deck_undo::next_undo(conn, deck_id).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(conn, deck_id, audit, true).unwrap();
+        audit
+    }
+
+    fn redo(conn: &Connection, deck_id: i64, audit: i64) {
+        crate::deck_undo::apply_reversal(conn, deck_id, audit, false).unwrap();
+    }
+
+    /// The bug the issue opened with: "New category" on the Theory tab drew an empty heading on
+    /// the Actual one, because a pile had no list and every pile was listed on both.
+    #[test]
+    fn a_pile_made_in_one_list_is_not_listed_in_the_other() {
+        let conn = conn();
+        let d = new_deck(&conn, "Burn", true);
+
+        let planned = create_category(&conn, d, "theory", "Burn spells").unwrap();
+        assert_eq!(
+            planned.variant, "theory",
+            "the readback says which list it is in"
+        );
+        assert!(pile_names(&conn, d, "theory").contains(&"Burn spells".to_owned()));
+        assert!(
+            !pile_names(&conn, d, "live").contains(&"Burn spells".to_owned()),
+            "a pile made on the Theory tab is not drawn on the Actual one"
+        );
+
+        let sleeved = create_category(&conn, d, "live", "Ramp").unwrap();
+        assert_eq!(sleeved.variant, "live");
+        assert!(pile_names(&conn, d, "live").contains(&"Ramp".to_owned()));
+        assert!(
+            !pile_names(&conn, d, "theory").contains(&"Ramp".to_owned()),
+            "and the other way round"
+        );
+
+        // The name arm is the list being written too.
+        category_for_name(&conn, d, "theory", "Draw").unwrap();
+        assert!(!pile_names(&conn, d, "live").contains(&"Draw".to_owned()));
+    }
+
+    /// A new pile goes to the end of **its own list**: each list orders its piles on its own, so
+    /// the plan's first pile of the reader's is not placed after every live one.
+    #[test]
+    fn a_new_pile_is_ordered_within_its_own_list() {
+        let conn = conn();
+        let d = deck(&conn, "Burn");
+        category(&conn, d, "main", "A");
+        create_category(&conn, d, "live", "B").unwrap();
+
+        let first_planned = create_category(&conn, d, "theory", "C").unwrap();
+        assert_eq!(first_planned.sort_order, 0, "the plan has no piles yet");
+        let second = category_for_name(&conn, d, "theory", "D").unwrap();
+        let order: i64 = conn
+            .query_row(
+                "SELECT sort_order FROM deck_categories WHERE id = ?1",
+                params![second],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(order, 1);
+    }
+
+    /// Each list is born with its own four rules zones: `live` always, `theory` when the deck
+    /// is born with a plan. A deck without one has no theory piles at all until it is switched on.
+    #[test]
+    fn a_deck_born_with_a_plan_has_rules_zones_in_both_lists() {
+        let conn = conn();
+        let planned = new_deck(&conn, "Planned", true);
+        let plain = new_deck(&conn, "Plain", false);
+
+        for variant in ["live", "theory"] {
+            let kinds: Vec<String> = list_categories(&conn, planned, variant, ANY_MARKET)
+                .unwrap()
+                .into_iter()
+                .map(|c| c.kind)
+                .collect();
+            assert_eq!(
+                kinds,
+                vec!["commander", "side", "companion", "maybe"],
+                "{variant}: its own four, in the seed's order"
+            );
+        }
+        assert_ne!(
+            pile_of_kind(&conn, planned, "live", "side"),
+            pile_of_kind(&conn, planned, "theory", "side"),
+            "two Sideboards, one per list"
+        );
+        assert_eq!(pile_names(&conn, plain, "live").len(), 4);
+        assert!(pile_names(&conn, plain, "theory").is_empty());
+
+        // And seeding one list is idempotent and leaves the other alone.
+        ensure_predefined_categories(&conn, planned, "theory").unwrap();
+        assert_eq!(pile_names(&conn, planned, "theory").len(), 4);
+        assert_eq!(pile_names(&conn, planned, "live").len(), 4);
+    }
+
+    /// The second leak the issue names: switching the Sideboard off on one tab switched it off
+    /// on the other, because it was one row.
+    #[test]
+    fn switching_the_theory_sideboard_off_leaves_the_live_one_on() {
+        let conn = conn();
+        let d = new_deck(&conn, "Burn", true);
+        let plan_side = pile_of_kind(&conn, d, "theory", "side");
+        let live_side = pile_of_kind(&conn, d, "live", "side");
+
+        let row = set_category_active(&conn, plan_side, false).unwrap();
+        assert!(!row.is_active);
+        assert_eq!(row.variant, "theory");
+
+        let live = list_categories(&conn, d, "live", ANY_MARKET).unwrap();
+        let side = live.iter().find(|c| c.id == live_side).unwrap();
+        assert!(
+            side.is_active,
+            "the Actual list's Sideboard is its own and still on"
+        );
+    }
+
+    /// Name uniqueness is per list: the plan may call a pile what a live pile is called — the
+    /// two are different piles on different tabs — but not what another *theory* pile is called.
+    #[test]
+    fn renaming_a_theory_pile_to_a_live_piles_name_is_allowed_and_to_a_theory_piles_is_not() {
+        let conn = conn();
+        let d = new_deck(&conn, "Burn", true);
+        create_category(&conn, d, "live", "Ramp").unwrap();
+        let burn = create_category(&conn, d, "theory", "Burn").unwrap();
+        let draw = create_category(&conn, d, "theory", "Draw").unwrap();
+
+        let renamed = rename_category(&conn, burn.id, "Ramp").unwrap();
+        assert_eq!(
+            renamed.name, "Ramp",
+            "a live pile's name is free in the plan"
+        );
+
+        assert_eq!(
+            rename_category(&conn, draw.id, "Ramp").unwrap_err(),
+            CATEGORY_NAME_TAKEN,
+            "but the plan already has a Ramp now"
+        );
+        assert_eq!(
+            create_category(&conn, d, "theory", "Ramp").unwrap_err(),
+            CATEGORY_NAME_TAKEN
+        );
+        create_category(&conn, d, "live", "Draw").expect("the live list has no Draw");
+    }
+
+    /// Every card write that takes a pile id refuses a pile of the other list, in words, and
+    /// writes nothing — the fence the DDL cannot hold, because `variant` is on both tables and
+    /// no key joins them.
+    #[test]
+    fn filing_a_card_into_the_other_lists_pile_is_refused() {
+        let conn = conn();
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        let d = new_deck(&conn, "Burn", true);
+        let live = category_for_name(&conn, d, "live", "Main deck").unwrap();
+        let plan = category_for_name(&conn, d, "theory", "Main deck").unwrap();
+        assert_ne!(live, plan, "one name, two piles");
+
+        let refused = |r: Result<(), String>, what: &str| {
+            assert_eq!(r.unwrap_err(), CATEGORY_WRONG_LIST, "{what}");
+        };
+        refused(
+            crate::deck::add_card(&conn, d, "bolt-lea", Some(live), None, "theory", None, 1)
+                .map(|_| ()),
+            "a theory card under a live pile",
+        );
+        refused(
+            crate::deck::add_card(&conn, d, "bolt-lea", Some(plan), None, "live", None, 1)
+                .map(|_| ()),
+            "a live card under a theory pile",
+        );
+
+        crate::deck::add_card(&conn, d, "bolt-lea", Some(plan), None, "theory", None, 2).unwrap();
+        let before = list_rows(&conn, d, "theory");
+        refused(
+            crate::deck::move_card(&conn, d, "bolt-lea", plan, Some(live), None, "theory", None)
+                .map(|_| ()),
+            "a move across the lists",
+        );
+        refused(
+            crate::deck::set_card_quantity(&conn, d, "bolt-lea", live, "theory", None, 3)
+                .map(|_| ()),
+            "a quantity addressed through the other list's pile",
+        );
+        refused(
+            crate::deck::clear_category(&conn, d, live, "theory").map(|_| ()),
+            "a clear of the other list's pile",
+        );
+        assert_eq!(list_rows(&conn, d, "theory"), before, "nothing was written");
+        assert!(list_rows(&conn, d, "live").is_empty());
+    }
+
+    /// The move-to target of a delete is a pile of the same list, or the delete is refused and
+    /// the pile stands.
+    #[test]
+    fn delete_with_a_move_refuses_a_target_in_the_other_list() {
+        let conn = conn();
+        let d = deck(&conn, "Burn");
+        let from = category(&conn, d, "main", "Creatures");
+        let other_list = theory_category(&conn, d, "main", "Main deck");
+
+        assert_eq!(
+            delete_category(&conn, from, Some(other_list)).unwrap_err(),
+            CATEGORY_WRONG_LIST
+        );
+        assert_eq!(
+            pile_ids(&conn, d, "live"),
+            vec![from],
+            "the refused delete wrote nothing"
+        );
+    }
+
+    /// A reorder names one list's piles: ids of both are refused before anything moves, and a
+    /// reorder of the plan answers the plan.
+    #[test]
+    fn reorder_refuses_a_list_of_both_lists_piles() {
+        let conn = conn();
+        let d = deck(&conn, "Burn");
+        let a = category(&conn, d, "main", "A");
+        let b = theory_category(&conn, d, "main", "B");
+        let c = theory_category(&conn, d, "main", "C");
+        conn.execute(
+            "UPDATE deck_categories SET sort_order = id WHERE deck_id = ?1",
+            params![d],
+        )
+        .unwrap();
+        let orders = || -> Vec<i64> {
+            conn.prepare("SELECT sort_order FROM deck_categories WHERE deck_id = ?1 ORDER BY id")
+                .unwrap()
+                .query_map(params![d], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        let was = orders();
+
+        assert_eq!(
+            reorder_categories(&conn, d, &[c, a, b]).unwrap_err(),
+            CATEGORY_MIXED_LISTS
+        );
+        assert_eq!(orders(), was, "the refused reorder wrote nothing");
+
+        let rows = reorder_categories(&conn, d, &[c, b]).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![c, b],
+            "the plan's reorder reads back the plan"
+        );
+    }
+
+    /// The deck's default pile is one setting and names an Actual pile; a theory pile is refused.
+    #[test]
+    fn the_default_category_refuses_a_theory_pile() {
+        let conn = conn();
+        let d = new_deck(&conn, "Burn", true);
+        let plan_side = pile_of_kind(&conn, d, "theory", "side");
+        let live_side = pile_of_kind(&conn, d, "live", "side");
+        let patch = |id| crate::deck::DeckPatch {
+            default_category_id: Some(id),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            crate::deck::update_deck(&conn, d, &patch(plan_side)).unwrap_err(),
+            CATEGORY_WRONG_LIST
+        );
+        let stored = crate::deck::update_deck(&conn, d, &patch(live_side))
+            .unwrap()
+            .default_category_id;
+        assert_eq!(stored, live_side);
+    }
+
+    /// **Switching the plan on clones the live piles into it**, and each moved card lands in its
+    /// clone: the deck the reader built is the plan, columns included. The live piles stay where
+    /// they were — empty, and from here on independent of the plan's. One Ctrl+Z takes the
+    /// clones away with the move, and Ctrl+Y brings both back.
+    #[test]
+    fn switching_the_plan_on_clones_the_live_piles_and_undo_takes_the_clones_away() {
+        let conn = conn();
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        crate::schema::tests::seed_card(&conn, "bolt-m10", "m10", "146");
+        let d = new_deck(&conn, "Burn", false);
+        let ramp = create_category(&conn, d, "live", "Ramp").unwrap().id;
+        let main = category_for_name(&conn, d, "live", "Main deck").unwrap();
+        let empty = create_category(&conn, d, "live", "Later").unwrap().id;
+        let side = pile_of_kind(&conn, d, "live", "side");
+        crate::deck::add_card(&conn, d, "bolt-lea", Some(ramp), None, "live", None, 2).unwrap();
+        crate::deck::add_card(&conn, d, "bolt-m10", Some(main), None, "live", None, 1).unwrap();
+        crate::deck::add_card(&conn, d, "bolt-lea", Some(side), None, "live", None, 1).unwrap();
+        set_category_active(&conn, side, false).unwrap();
+        let live_piles = pile_ids(&conn, d, "live");
+        let live_rows = list_rows(&conn, d, "live");
+
+        crate::deck::update_deck(
+            &conn,
+            d,
+            &crate::deck::DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            pile_ids(&conn, d, "live"),
+            live_piles,
+            "the live piles stay"
+        );
+        assert!(list_rows(&conn, d, "live").is_empty(), "and are empty");
+        assert_eq!(
+            pile_names(&conn, d, "theory"),
+            pile_names(&conn, d, "live"),
+            "the plan has a pile for every live one, the empty one included"
+        );
+        let plan = list_categories(&conn, d, "theory", ANY_MARKET).unwrap();
+        for pile in &plan {
+            assert!(
+                !live_piles.contains(&pile.id),
+                "{}: a clone, not the pile",
+                pile.name
+            );
+        }
+        let copy_of = |name: &str| plan.iter().find(|p| p.name == name).unwrap();
+        assert_eq!(
+            copy_of("Ramp").origin,
+            "user",
+            "the clone keeps its original's origin"
+        );
+        assert_eq!(copy_of("Main deck").origin, "auto");
+        assert!(!copy_of("Sideboard").is_active, "and its switch");
+        assert_eq!(copy_of("Sideboard").kind, "side", "and its kind");
+        assert_eq!(
+            list_rows(&conn, d, "theory"),
+            {
+                let mut want = vec![
+                    (copy_of("Ramp").id, "bolt-lea".to_owned(), 2),
+                    (copy_of("Main deck").id, "bolt-m10".to_owned(), 1),
+                    (copy_of("Sideboard").id, "bolt-lea".to_owned(), 1),
+                ];
+                want.sort();
+                want
+            },
+            "each moved card is filed into its pile's clone"
+        );
+        assert!(find_pile(&conn, d, "theory", "Later").is_some());
+        assert!(pile_ids(&conn, d, "live").contains(&empty));
+
+        // One switch in the Sideboard is now one list's: the lists are independent.
+        set_category_active(&conn, copy_of("Sideboard").id, true).unwrap();
+        let live_side_active: bool = conn
+            .query_row(
+                "SELECT is_active FROM deck_categories WHERE id = ?1",
+                params![side],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!live_side_active);
+        undo_newest(&conn, d);
+
+        let audit = undo_newest(&conn, d);
+        assert!(
+            pile_ids(&conn, d, "theory").is_empty(),
+            "the undo takes away every pile the switch made"
+        );
+        assert_eq!(
+            list_rows(&conn, d, "live"),
+            live_rows,
+            "and puts the cards back"
+        );
+        assert_eq!(pile_ids(&conn, d, "live"), live_piles);
+
+        redo(&conn, d, audit);
+        assert_eq!(pile_names(&conn, d, "theory"), pile_names(&conn, d, "live"));
+        assert!(list_rows(&conn, d, "live").is_empty());
+        assert_eq!(
+            list_rows(&conn, d, "theory").len(),
+            3,
+            "the redo files them again"
+        );
+        for (pile, _, _) in list_rows(&conn, d, "theory") {
+            assert_eq!(pile_owner(&conn, pile).unwrap().unwrap().1, "theory");
+        }
+    }
+
+    /// Switching the plan on over a plan already started moves nothing, and still gives the plan
+    /// its rules zones — a Theory tab with nowhere to put a sideboard card is the gap it closes.
+    #[test]
+    fn switching_the_plan_on_over_a_started_plan_still_seeds_its_rules_zones() {
+        let conn = conn();
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        let d = new_deck(&conn, "Burn", false);
+        let plan_main = category_for_name(&conn, d, "theory", "Main deck").unwrap();
+        crate::deck::add_card(
+            &conn,
+            d,
+            "bolt-lea",
+            Some(plan_main),
+            None,
+            "theory",
+            None,
+            1,
+        )
+        .unwrap();
+        let live_main = category_for_name(&conn, d, "live", "Main deck").unwrap();
+        crate::deck::add_card(&conn, d, "bolt-lea", Some(live_main), None, "live", None, 3)
+            .unwrap();
+
+        crate::deck::update_deck(
+            &conn,
+            d,
+            &crate::deck::DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            list_rows(&conn, d, "live"),
+            vec![(live_main, "bolt-lea".to_owned(), 3)]
+        );
+        for kind in ["commander", "side", "companion", "maybe"] {
+            pile_of_kind(&conn, d, "theory", kind);
+        }
+    }
+
+    /// A duplicate copies **both lists' piles**, each in its own list, and remaps both lists'
+    /// cards and the deck's default onto the copy's own piles — a live and a theory Ramp stay
+    /// two piles in the copy as in the original.
+    #[test]
+    fn duplicate_deck_copies_both_lists_piles_and_remaps_onto_them() {
+        let conn = conn();
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        let d = new_deck(&conn, "Burn", true);
+        let live_ramp = create_category(&conn, d, "live", "Ramp").unwrap().id;
+        let plan_ramp = create_category(&conn, d, "theory", "Ramp").unwrap().id;
+        create_category(&conn, d, "theory", "Plan only").unwrap();
+        crate::deck::add_card(&conn, d, "bolt-lea", Some(live_ramp), None, "live", None, 2)
+            .unwrap();
+        crate::deck::add_card(
+            &conn,
+            d,
+            "bolt-lea",
+            Some(plan_ramp),
+            None,
+            "theory",
+            None,
+            4,
+        )
+        .unwrap();
+        crate::deck::update_deck(
+            &conn,
+            d,
+            &crate::deck::DeckPatch {
+                default_category_id: Some(live_ramp),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let copy = crate::deck::duplicate_deck(&conn, d).unwrap();
+
+        for variant in ["live", "theory"] {
+            assert_eq!(
+                pile_names(&conn, copy.id, variant),
+                pile_names(&conn, d, variant),
+                "{variant}: the copy's list has the original's piles"
+            );
+        }
+        let copy_live_ramp = find_pile(&conn, copy.id, "live", "Ramp").unwrap();
+        let copy_plan_ramp = find_pile(&conn, copy.id, "theory", "Ramp").unwrap();
+        assert_ne!(copy_live_ramp, copy_plan_ramp, "still two piles");
+        assert_eq!(
+            list_rows(&conn, copy.id, "live"),
+            vec![(copy_live_ramp, "bolt-lea".to_owned(), 2)]
+        );
+        assert_eq!(
+            list_rows(&conn, copy.id, "theory"),
+            vec![(copy_plan_ramp, "bolt-lea".to_owned(), 4)],
+            "the theory card is remapped onto the copy's theory pile"
+        );
+        assert_eq!(copy.default_category_id, copy_live_ramp);
     }
 
     // -- Rule 3: deck_folder_move refuses a cycle -------------------------------------------
@@ -4000,7 +4932,7 @@ mod tests {
         let deck_id = deck(&conn, "Burn");
 
         backdate(&conn, deck_id);
-        let cat = create_category(&conn, deck_id, "Removal").unwrap();
+        let cat = create_category(&conn, deck_id, "live", "Removal").unwrap();
         assert!(updated_at(&conn, deck_id) > 0, "create moved the deck");
 
         backdate(&conn, deck_id);
@@ -4067,7 +4999,7 @@ mod tests {
     #[test]
     fn a_stale_deck_id_answers_gone_and_writes_nothing() {
         let conn = conn();
-        let err = create_category(&conn, 999_999, "Removal").unwrap_err();
+        let err = create_category(&conn, 999_999, "live", "Removal").unwrap_err();
         assert_eq!(err, crate::deck::GONE);
         let n: i64 = conn
             .query_row("SELECT count(*) FROM deck_categories", [], |r| r.get(0))
@@ -4173,6 +5105,140 @@ mod tests {
         assert_eq!(
             unchanged.sort_order, 1,
             "the row written before the stale id must have rolled back"
+        );
+    }
+
+    // ── v53's net: a theory card left in a live pile ──────────────────────────────────
+
+    /// A live pile under a uid the caller names, with one theory card filed in it — what a v52
+    /// peer's write leaves on a device that has already climbed v53. Answers `(deck, pile)`.
+    fn stray(conn: &Connection, uid: &str, quantity: i64) -> (i64, i64) {
+        let d = deck(conn, "Plan");
+        let pile = category(conn, d, "main", "Ramp");
+        conn.execute(
+            "UPDATE deck_categories SET sync_uid = ?2 WHERE id = ?1",
+            params![pile, uid],
+        )
+        .unwrap();
+        deck_card_variant(conn, d, "bolt", pile, "theory", quantity);
+        (d, pile)
+    }
+
+    /// Where each theory card of a deck is filed: `(pile name, pile variant, quantity)`.
+    fn theory_filing(conn: &Connection, deck_id: i64) -> Vec<(String, String, i64)> {
+        conn.prepare(
+            "SELECT cat.name, cat.variant, dc.quantity
+               FROM deck_cards dc JOIN deck_categories cat ON cat.id = dc.category_id
+              WHERE dc.deck_id = ?1 AND dc.variant = 'theory' ORDER BY dc.id",
+        )
+        .unwrap()
+        .query_map([deck_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    #[test]
+    fn a_theory_card_in_a_live_pile_is_refiled_into_a_plan_pile_named_after_it() {
+        let conn = conn();
+        let (d, live) = stray(&conn, "u-ramp", 3);
+
+        assert_eq!(refile_stray_theory_cards_at_launch(&conn).unwrap(), 1);
+        assert_eq!(
+            theory_filing(&conn, d),
+            [("Ramp".to_owned(), "theory".to_owned(), 3)]
+        );
+        let uid: String = conn
+            .query_row(
+                "SELECT sync_uid FROM deck_categories WHERE deck_id = ?1 AND variant = 'theory'",
+                [d],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            uid,
+            crate::schema::theory_pile_uid("u-ramp"),
+            "the pile a repair makes is named the way the rung names its clones"
+        );
+        let still: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM deck_categories WHERE id = ?1 AND variant = 'live')",
+                [live],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(still, "the actual list keeps its own pile");
+        assert_eq!(
+            refile_stray_theory_cards_at_launch(&conn).unwrap(),
+            0,
+            "idempotent: nothing is stray the second time"
+        );
+    }
+
+    #[test]
+    fn a_stray_the_plans_pile_already_holds_is_folded_into_it() {
+        let conn = conn();
+        let (d, _) = stray(&conn, "u-ramp", 3);
+        let plan = theory_category(&conn, d, "main", "Ramp");
+        deck_card_variant(&conn, d, "bolt", plan, "theory", 2);
+
+        assert_eq!(refile_stray_theory_cards(&conn).unwrap(), 1);
+        assert_eq!(
+            theory_filing(&conn, d),
+            [("Ramp".to_owned(), "theory".to_owned(), 5)],
+            "one row, the copies of both"
+        );
+    }
+
+    /// **A paired device waits for a pull**, `convert_legacy_picks_at_launch`'s gate: behind a
+    /// pull it has heard a peer's repair of the same stray, which is what keeps the fold from
+    /// adding the copies twice. And the repair is **captured**, so the pile it made reaches the
+    /// peers under the derived name.
+    #[test]
+    fn a_paired_device_refiles_behind_a_pull_and_announces_the_pile() {
+        let conn = conn();
+        crate::sync_engine::capture::install(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'dev-a', x'00', x'01', 'dev-a', 0);
+             INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+             VALUES (1, 'g', 0, x'02', 0);",
+        )
+        .unwrap();
+        let (d, _) = stray(&conn, "u-ramp", 3);
+        let before: i64 = conn
+            .query_row("SELECT coalesce(max(seq), 0) FROM sync_ops", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(refile_stray_theory_cards_at_launch(&conn).unwrap(), 0);
+        assert_eq!(
+            theory_filing(&conn, d),
+            [("Ramp".to_owned(), "live".to_owned(), 3)],
+            "a paired launch leaves it for the pull"
+        );
+        assert_eq!(refile_stray_theory_cards_after_pull(&conn).unwrap(), 1);
+        assert_eq!(
+            theory_filing(&conn, d),
+            [("Ramp".to_owned(), "theory".to_owned(), 3)]
+        );
+        let announced: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sync_ops
+                                WHERE seq > ?1 AND tbl = 'deck_categories' AND uid = ?2)",
+                params![before, crate::schema::theory_pile_uid("u-ramp")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            announced,
+            "the plan pile is announced under the derived name"
+        );
+        assert_eq!(
+            refile_stray_theory_cards_at_launch(&conn).unwrap(),
+            0,
+            "the pull opened the launch gate, and there is nothing left"
         );
     }
 }

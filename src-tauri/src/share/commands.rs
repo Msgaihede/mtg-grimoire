@@ -4,18 +4,10 @@
 //! `share::commands::share_create` is invoked as `"share_create"` — the rule the comment beside
 //! `collection_alloc::commands::collection_to_deck` in `desktop.rs` states, and the reason these
 //! functions carry the `share_` prefix inside a module already called `share`.
-//!
-//! **The module compiles on every target and the commands do not**, which is
-//! [`crate::collection_folders`]' shape rather than [`crate::sync_engine::commands`]'. The five
-//! wrappers are `#[cfg(not(target_family = "wasm"))]` because `tauri` is a desktop dependency;
-//! [`ShareRow`] is not, because [`crate::web::route`] answers `share_list` on the browser build
-//! and needs the type to say what it answered.
 
 use serde::Serialize;
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{self, AppState};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// One published share, as the page draws it.
@@ -27,9 +19,8 @@ use std::sync::Arc;
 ///
 /// **`url` is on it for the same kind of reason and one degree harder**: a share list with no
 /// links is not a share list, and this one has to be drawable with no network — so the link is a
-/// column of `collection_shares` rather than something rebuilt from `share::publish::SHARE_BASE`
-/// — spelled without a link, because that module does not exist on the browser build and this
-/// struct does. It is a placeholder until the Worker is deployed.
+/// column of `collection_shares` rather than something rebuilt from
+/// [`super::publish::SHARE_BASE`], which is a placeholder until the Worker is deployed.
 ///
 /// `published` is **this device's** stamp and the relay knows nothing about it: `None` means
 /// this device has never uploaded, which is what a second device in the group reads before it
@@ -82,7 +73,6 @@ impl From<ShareFieldsArg> for super::ShareFields {
 /// What a write here says when its worker thread died under it — never a reader's problem; the
 /// write itself answers [`crate::db::BUSY`] when the database is busy.
 /// [`crate::collection_folders`]' helper of the same name, named for this table instead.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the share list could not be written: {e}")
 }
@@ -93,7 +83,6 @@ fn unfinished(e: tauri::Error) -> String {
 /// write connection is behind a `Mutex`, so a guard on it cannot cross an `await` on a
 /// multi-threaded runtime; `spawn_blocking` moves the whole trip to a thread where a `block_on`
 /// is legal and the guard never has to be `Send`.
-#[cfg(not(target_family = "wasm"))]
 async fn on_the_write_connection<T: Send + 'static>(
     state: Arc<AppState>,
     work: impl FnOnce(&rusqlite::Connection, &tokio::runtime::Runtime) -> Result<T, String>
@@ -117,9 +106,6 @@ async fn on_the_write_connection<T: Send + 'static>(
 /// could.** Spec §4.3 has a second device inherit the owner's name from the relay's list, and
 /// every other `share_*` command needs an id or a name that device does not yet have. A failure
 /// — or no membership at all — answers the cache, which is what the cache is for.
-///
-/// **The browser build routes the cache read alone**; see [`crate::web::route`].
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn share_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<ShareRow>, String> {
     let state = state.inner().clone();
@@ -130,7 +116,6 @@ pub async fn share_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Sh
 }
 
 /// Publish a folder — or the whole collection, for a `null` `folderUid`.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn share_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -151,7 +136,6 @@ pub async fn share_create(
 }
 
 /// Upload a fresh snapshot for a share that already exists, keeping its link.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn share_refresh(
     state: tauri::State<'_, Arc<AppState>>,
@@ -165,7 +149,6 @@ pub async fn share_refresh(
 }
 
 /// Withdraw a share. Terminal, and the reader's own press.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn share_revoke(
     state: tauri::State<'_, Arc<AppState>>,
@@ -183,7 +166,6 @@ pub async fn share_revoke(
 /// **Needs no membership and sends no token** (spec §9): viewing is open to everyone, and the
 /// link is the whole of the capability. It still takes the write connection, because
 /// [`super::publish::open`] records a failure in `error_log` like every other network path here.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn share_open(
     state: tauri::State<'_, Arc<AppState>>,

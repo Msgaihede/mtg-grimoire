@@ -1,9 +1,7 @@
 //! Folding a name to the key two spellings of it share.
 //!
 //! Here rather than in [`crate::tags`] because the fold is a fact about a *slug*, and
-//! because `tags` does not compile for `wasm32-unknown-unknown` — it opens with
-//! `use tauri::Emitter` and owns two feed downloads — while [`crate::schema`], its one
-//! caller outside that module, must.
+//! [`crate::schema`] is its one caller outside that module.
 
 /// A tag name reduced to what Scryfall matches on: lowercase, every non-alphanumeric
 /// removed.

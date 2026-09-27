@@ -60,24 +60,6 @@ Three repo files carry sync state. All three look incidental and none is:
   its esbuild loaders to `.js`/`.json`, and `.storybook/preview.tsx` reaches
   `keyrune/css/keyrune.css`, whose `url()`s name a `.eot`. `cfg.provider` replaces it, which the
   skill wants before upload anyway. Do not spend time re-enabling the decorator path.
-- **[GENERAL] `__CORE__` is a Vite `define`, and esbuild is handed no defines — so every module
-  that reads it needs an alias in `.design-sync/tsconfig.json`.** Storybook never sees this:
-  `@storybook/react-vite` loads the root `vite.config.ts`, so a story gets the define for free.
-  The converter's esbuild does not, and the failure has **two shapes** because the two readers
-  differ in scope, which is why one shim was not enough:
-  - `src/lib/core/index.ts` reads `__CORE__` at **module scope**, so it throws
-    `ReferenceError: __CORE__` while still evaluating — before any preview renders.
-    `.design-sync/core-shim.ts` re-exports `tauriCore`, which is the implementation storybook
-    itself lands on, so the compare loop is comparing like with like.
-  - `src/pwa/target.ts`'s `isWebTarget()` reads it from **function** scope, so it survives module
-    evaluation and throws on first render. That one reaches the *shipped* bundle: `AppShell`
-    calls it, so every design built on claude.ai/design would have died the same way.
-    `.design-sync/target-shim.ts` sets the global (`"tauri"`, matching storybook) and re-exports
-    the real function.
-  Both aliases must sit **above** the `@/*` wildcard, same first-match rule as the other three.
-  **The cover is exactly the modules aliased, and no more** — a future `__CORE__` reader that no
-  aliased module pulls in fails again, loudly, as a `[RENDER]` root-empty with that
-  `ReferenceError` in `.render-check.json`. Remedy is another `paths` line, not a code change.
 - **[GENERAL] A story that imports a *hook* gets a second copy of it — and of the context the
   hook reads.** The converter's rule 2 redirects an import to `window.MtgGrimoire` only when it
   resolves to an exported **component's** module. `Tooltip.stories.tsx` imports `useTooltip` from
@@ -112,18 +94,22 @@ Three repo files carry sync state. All three look incidental and none is:
   centre = 450px with an 8px gap. `Dropdown` is immune, because `usePopupPlacement` measures a
   zero-size `fixed` probe and corrects for exactly this. Graded `close` with that note; do not
   "fix" it in the preview.
-- **`@/lib/core` is a *directory*, and that is a second trap in the same line.** The converter's
+- **`@/lib/core` is a *directory*, and the converter cannot resolve one.** Its
   `tsconfigPathsPlugin` tries the bare stem before `/index.ts`, and `existsSync` says yes to a
   folder — esbuild is handed a directory to read and fails with a Windows `Incorrect function`.
-  Aliasing to `core-shim.ts` steps over it. Any other `@/`-aliased directory-with-`index.ts`
-  lands in the same hole; today this is the only one in `src/`.
+  Aliasing to `core-shim.ts`, which re-exports the real module by its file, steps over it. The
+  alias must sit **above** the `@/*` wildcard, same first-match rule as the other four. Any other
+  `@/`-aliased directory-with-`index.ts` lands in the same hole; today this is the only one in
+  `src/`. (Until 2026-09-27 the shim also covered `__CORE__`, a Vite `define` esbuild was never
+  handed, and a second shim covered `@/pwa/target`; the define left with the web build.)
 
 ## Config decisions worth knowing
 
 - **Scope is deliberate**: the reusable primitives and the shell (no count here; see Re-sync
   risks for the command that answers it). Every other storybook title is either
-  `titleMap: null` or has no module in the barrel. The nulls are whole feature pages (`Search/Page`, `Decks/Editor`, …), which sync
-  fine but are near-useless as design-agent building blocks. `titleMap` keys are the title's
+  `titleMap: null` or has no module in the barrel. The nulls are whole feature pages
+  (`Search/Page`, `Decks/Editor`, …), which sync fine but are near-useless as design-agent
+  building blocks. `titleMap` keys are the title's
   **leaf segment**, so one `"Page": null` excludes all four `*/Page` titles at once.
 - **`FilterChips` → `ToggleChip`.** `src/components/FilterChips.tsx` is a family module
   (`ManaChip`, `ManaValueChips`, `ToggleChip`, `LayoutToggle`, `ResetAll`) with no component of
@@ -340,9 +326,9 @@ not `$?`.
   this bullet said "14 of 34" until 2026-09-08, when the build emitted 21 components against 104
   storybook titles and both halves were wrong. `find ds-bundle/components -mindepth 2 -maxdepth 2
   -type d | wc -l` answers the first; the reference storybook's `index.json` answers the second.
-- **`.design-sync/tsconfig.json`'s `paths` is the whole `__CORE__` fence.** Two of its five rules
-  point at shims that exist only for that define (see the trap above). Deleting one, or letting it
-  drift below the `@/*` wildcard, breaks previews *and* the shipped bundle.
+- **`.design-sync/tsconfig.json`'s `@/lib/core` rule is the whole directory fence.** It points at
+  a shim that exists only for that trap (see above). Deleting it, or letting it drift below the
+  `@/*` wildcard, breaks previews *and* the shipped bundle.
 - **`AppShell.tsx`'s owned preview copies `compose` verbatim from the generated wrapper.** If the
   converter's story composition changes, diff the generated twin
   (`.design-sync/.cache/previews/AppShell.tsx`) against it.

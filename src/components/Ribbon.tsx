@@ -69,8 +69,7 @@ export interface RibbonProps {
   /** Opens Settings, where the release notes and the actual update controls are. */
   onOpenUpdate?: () => void;
   /**
-   * The relay socket's state, or `null` where device sync does not exist — the web target,
-   * and every installation that has paired nothing.
+   * The relay socket's state, or `null` for no marker at all.
    */
   deviceSync?: LiveState | null;
   /** Opens Settings at the Sync panel. */
@@ -331,8 +330,7 @@ export function Ribbon({
               `TOUCH_FLOOR`'s own comment measured `Refresh data` and the update button at 38px
               icon-only, under `--target-min`'s 44px. This marker is icon-only *unconditionally*
               — there is no wide-row label to lose — so without the floor it would ship at
-              roughly 28px (`p-1.5` around a `size-4` glyph) on the one layout `AppShell` nulls
-              it for the least: Android, once a phone install pairs. */}
+              roughly 28px (`p-1.5` around a `size-4` glyph) under a finger. */}
           {deviceSync !== null && deviceSync !== "off" && (
             <button
               type="button"

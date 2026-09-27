@@ -51,12 +51,10 @@
 
 use crate::price_history::{market_key, week_bucket, DAILY_DAYS, KEEP_DAYS};
 use crate::sorting::{self, Marketplace};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// Refusal for a split word the command does not answer.
@@ -478,7 +476,6 @@ fn arrange(
 /// The Collection value graph's read. **Read-only** connection, blocking pool, and the
 /// marketplace taken as `price_movers` takes it — an absent or unknown id is TCGplayer, never a
 /// refusal. The split is refused in words when it is not one of the four.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_value_history(
     state: tauri::State<'_, Arc<AppState>>,

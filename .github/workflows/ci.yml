@@ -36,8 +36,6 @@ jobs:
       frontend: ${{ steps.classify.outputs.frontend }}
       rust: ${{ steps.classify.outputs.rust }}
       powershell: ${{ steps.classify.outputs.powershell }}
-      wasm: ${{ steps.classify.outputs.wasm }}
-      android: ${{ steps.classify.outputs.android }}
       storybook: ${{ steps.classify.outputs.storybook }}
     steps:
       # The classification is a diff against the base, so this needs history, not a
@@ -46,9 +44,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The router is a dependency-free Node script, so no `npm ci` — only a pinned Node, for the
-      # reason the `wasm` job pins its clang: whatever the runner image ships is not a contract.
-      # `.nvmrc` is that pin for every job and workflow here, and for a contributor's machine.
+      # The router is a dependency-free Node script, so no `npm ci` — only a pinned Node, because
+      # whatever the runner image ships is not a contract. `.nvmrc` is that pin for every job and
+      # workflow here, and for a contributor's machine.
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
@@ -88,7 +86,7 @@ jobs:
           # missing one reads as `''`, every job gated on it skips, and `ci-ok` counts a skip
           # as a pass — so a router that printed nothing would take the gate green having run
           # nothing. Fail here instead.
-          for job in frontend rust powershell wasm android storybook; do
+          for job in frontend rust powershell storybook; do
             grep -Eqx "$job=(true|false)" <<< "$flags" \
               || { echo "ci-route.mjs printed no '$job=true|false' line:" >&2; echo "$flags" >&2; exit 1; }
           done
@@ -270,157 +268,6 @@ jobs:
           cargo test --locked --features cli --manifest-path crates/card-scanner/Cargo.toml
           cargo test --locked --features builder --bins --manifest-path crates/card-scanner/Cargo.toml
 
-  wasm:
-    name: wasm
-    needs: changes
-    if: needs.changes.outputs.wasm == 'true'
-    # Linux only, and not as a preference: this compiles SQLite's C amalgamation to wasm32
-    # with clang, which is the same compiler on every host. A Windows leg would prove the
-    # same thing more slowly. **Note that no measured figure in this repo has ever come off
-    # a Linux build** — this job is a compile gate, not a source of numbers.
-    #
-    # **24.04 for the clang version, and 22.04 genuinely does not work.** `sqlite-wasm-rs`'s
-    # `shim/wasm-shim.h` declares `[[noreturn]] void rust_sqlite_wasm_abort();` — C23
-    # attribute syntax, which clang accepts in C mode by default only from **18**. Ubuntu
-    # 22.04's `apt-get install clang` gives **14**, which rejects it with four
-    # `expected expression` errors inside a `cargo:warning=` stream, so the real cause is
-    # buried in build-script output and the visible failure is `cc-rs: command did not
-    # execute successfully`. 24.04 ships clang 18.
-    #
-    # The trap worth naming: `apt-get install clang` reads as correct and pins nothing. This
-    # job was written and reviewed on a machine with clang 22, where it passes.
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-
-      - run: npm ci
-
-      # sqlite-wasm-rs compiles SQLite's C with `cc` targeting wasm32. There is no way
-      # around this and no way to cache past it.
-      - name: Install clang
-        run: |
-          sudo apt-get update && sudo apt-get install -y clang
-          # Printed, and checked, because the failure this guards is four errors deep in a
-          # build script's warning stream. 18 is the floor for C23 `[[noreturn]]`.
-          clang --version
-          major=$(clang --version | sed -n 's/.*clang version \([0-9]*\).*/\1/p' | head -1)
-          if [ "$major" -lt 18 ]; then
-            echo "clang $major is too old: sqlite-wasm-rs's shim needs C23 attributes (clang 18+)" >&2
-            exit 1
-          fi
-
-      - uses: ./.github/actions/rust-toolchain
-        with:
-          targets: wasm32-unknown-unknown
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-          # Its own key: this target's artifacts share nothing with the host build's, and a
-          # shared cache would thrash between the two jobs.
-          key: wasm
-
-      # Pinned, and `--locked`. The CLI must match the `wasm-bindgen` crate EXACTLY;
-      # `scripts/build-wasm.mjs` re-checks that pair and refuses if they have drifted.
-      - name: Install wasm-bindgen-cli
-        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
-
-      # No `dist/` stub here, unlike the `rust` job: `build.rs` returns early for a wasm
-      # TARGET, so `tauri_build` — which is what demands `frontendDist` — never runs.
-      #
-      # This step also checks something no compiler can: that every `#[wasm_bindgen]` entry
-      # point the Worker imports is actually exported. Dropping that attribute compiles
-      # clean with no warning at all, because the function stays `pub` in a `pub mod`.
-      - name: Build the wasm core
-        run: npm run build:wasm
-
-      - name: cargo clippy (wasm)
-        working-directory: src-tauri
-        run: cargo clippy --lib --locked --target wasm32-unknown-unknown -- -D warnings
-
-      - name: Build the web bundle
-        run: npm run web:build
-
-  android:
-    name: android
-    needs: changes
-    if: needs.changes.outputs.android == 'true'
-    # **This job exists because `main` can stop cross-compiling for Android and nothing goes
-    # red.** It already did: #270 fixed a break that only surfaced when somebody built an APK
-    # by hand, which is not a thing CI has ever done and not a thing anybody does on a
-    # schedule. It is the same argument the `wasm` job was added on — one crate, more than one
-    # target, and a fully green `npm run verify` proving only the host.
-    #
-    # **It is a compile gate and not an APK build.** Assembling one needs Gradle, a full SDK
-    # and a signing story; `cargo build --lib` for the ARM64 target needs only the NDK, takes
-    # a fraction of the time, and catches the whole class of failure this is for — a `use` that
-    # is desktop-only, a dependency that will not build for the triple, a `cfg` that leaves a
-    # module unreachable. Nothing here proves the app *runs* on a phone; that is still a
-    # hardware pass.
-    #
-    # Linux for the same reason the `wasm` job is: the NDK is the compiler on every host, and
-    # the Ubuntu runner images ship one already. **No measured figure in this repo comes off a
-    # Linux build**, and this job produces none.
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-
-      # `tauri-build` runs for this target — unlike wasm, where `build.rs` returns early — so
-      # `frontendDist: "../dist"` has to exist or the build fails before it compiles anything.
-      # The `rust` job's stub, for the `rust` job's reason: nothing under test reads it.
-      - name: Stub the frontend bundle
-        shell: bash
-        run: |
-          mkdir -p dist
-          echo '<!doctype html><title>ci stub</title>' > dist/index.html
-
-      - uses: ./.github/actions/rust-toolchain
-        with:
-          targets: aarch64-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-          # Its own key, for the `wasm` job's reason: this target shares no artifacts with the
-          # host build, and one cache would thrash between the two.
-          key: android
-
-      # **`cargo` and `cc-rs` have never heard of `NDK_HOME`** — that variable is the Tauri
-      # CLI's, and this job does not go through the CLI. Driving the target directly needs two
-      # things set by hand, and each fails with an error naming something other than the cause:
-      # clang on `PATH` (or `cc-rs` reports `failed to find tool "clang"` while compiling
-      # `libsqlite3-sys` and `ring`), and an explicit linker (or `rustc` reports
-      # ``linker `cc` not found``).
-      #
-      # **API 26 is not a choice made here** — it is `minSdk` in
-      # `src-tauri/gen/android/app/build.gradle.kts`, which a Rust test already pins, so the
-      # linker binary has to be the `26` one.
-      - name: Point cargo at the NDK toolchain
-        run: |
-          set -euo pipefail
-          # The runner image sets this; failing loudly beats compiling against a surprise.
-          : "${ANDROID_NDK_LATEST_HOME:?the runner image did not set ANDROID_NDK_LATEST_HOME}"
-          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          linker="$bin/aarch64-linux-android26-clang"
-          # Named checks, because both of these fail later as something else entirely.
-          [ -d "$bin" ] || { echo "no NDK toolchain bin at $bin" >&2; exit 1; }
-          [ -x "$linker" ] || { echo "no API-26 linker at $linker" >&2; exit 1; }
-          echo "$bin" >> "$GITHUB_PATH"
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$linker" >> "$GITHUB_ENV"
-          "$linker" --version | head -1
-
-      # `--lib` and not `--all-targets`: the test harness does not cross-compile usefully here
-      # (it would need a device or an emulator to run on), and the question this job asks is
-      # whether the library the APK links still builds for the triple.
-      - name: cargo build (aarch64-linux-android)
-        working-directory: src-tauri
-        run: cargo build --lib --locked --target aarch64-linux-android
-
   # Branch protection pins required checks by name string, and a matrix job's name embeds
   # its matrix values — so protecting `rust (windows-latest)` would silently stop applying
   # the day the matrix changes. This fixed name is the protected check; the matrix
@@ -457,7 +304,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, frontend, rust, powershell, wasm, android, storybook]
+    needs: [changes, frontend, rust, powershell, storybook]
     runs-on: ubuntu-22.04
     steps:
       - name: Fail unless every dependency succeeded or was deliberately skipped
@@ -466,11 +313,9 @@ jobs:
           FRONTEND: ${{ needs.frontend.result }}
           RUST: ${{ needs.rust.result }}
           POWERSHELL: ${{ needs.powershell.result }}
-          WASM: ${{ needs.wasm.result }}
-          ANDROID: ${{ needs.android.result }}
           STORYBOOK: ${{ needs.storybook.result }}
         run: |
-          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST powershell=$POWERSHELL wasm=$WASM android=$ANDROID storybook=$STORYBOOK"
+          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST powershell=$POWERSHELL storybook=$STORYBOOK"
 
           # `changes` is the one dependency that may never be skipped or fail. It decides
           # what the other two do, so if it dies they skip — and a rule that reads a skip
@@ -480,7 +325,7 @@ jobs:
           # A skip here is a deliberate answer from `changes`: that part of the repo did
           # not change, so it has nothing to prove. Every job gated on a `changes` output
           # belongs in this loop — one left out is a job whose failure the gate ignores.
-          for result in "$FRONTEND" "$RUST" "$POWERSHELL" "$WASM" "$ANDROID" "$STORYBOOK"; do
+          for result in "$FRONTEND" "$RUST" "$POWERSHELL" "$STORYBOOK"; do
             case "$result" in
               success|skipped) ;;
               *) exit 1 ;;

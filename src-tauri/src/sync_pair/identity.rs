@@ -51,12 +51,7 @@ pub struct Device {
 const MAX_NAME_LEN: usize = 64;
 
 /// What a desktop calls itself when the environment will not say.
-#[cfg(not(any(target_os = "android", target_family = "wasm")))]
 const FALLBACK_DESKTOP: &str = "Desktop";
-
-/// What a phone calls itself when the JVM will not answer.
-#[cfg(target_os = "android")]
-const FALLBACK_ANDROID: &str = "Android device";
 
 /// The one string every install used to share, and the only name [`ensure`] will overwrite.
 ///
@@ -66,10 +61,6 @@ const FALLBACK_ANDROID: &str = "Android device";
 /// 2026-08-29.
 pub(crate) const PLACEHOLDER: &str = "This device";
 
-/// What a browser calls itself when there is no user agent to read.
-#[cfg(target_family = "wasm")]
-const FALLBACK_BROWSER: &str = "Browser";
-
 /// The name a device gives itself the first time it mints an identity.
 ///
 /// **It is the machine's own name, and the comment that stood here argued the exact opposite.**
@@ -78,7 +69,7 @@ const FALLBACK_BROWSER: &str = "Browser";
 /// "This device" was the honest answer. **The reader overruled that on 2026-08-29, knowingly and
 /// on the evidence**: every install minted that same string, so a paired group drew two
 /// identical rows with a Remove button each and nothing on the screen said which press removed
-/// the phone. A roster a reader cannot act on is the worse failure of the two.
+/// which machine. A roster a reader cannot act on is the worse failure of the two.
 ///
 /// **The cost the old comment named is real and is not softened by this being a default.**
 /// `sync_identity.name` is the copy every pairing sends — [`create_group`], [`join_group`] and
@@ -88,13 +79,9 @@ const FALLBACK_BROWSER: &str = "Browser";
 /// writes both rows, and [`ensure`] mints **on absence only**, so a reader who renames is never
 /// renamed back and an existing install keeps the name it already had.
 ///
-/// **Three arms because the three platforms have three different answers, not three spellings
-/// of one.** An Android hostname is `localhost` and a browser has none at all, so asking for one
-/// there would name every phone and every tab the same thing — which is the bug this whole
-/// change is about, moved one platform over. And **every arm is infallible**: failing to read a
-/// name must never stop a device minting an identity, so each falls back to a word rather than
-/// returning an error.
-#[cfg(not(any(target_os = "android", target_family = "wasm")))]
+/// **One question — the machine's hostname — and it is infallible**: failing to read a name must
+/// never stop a device minting an identity, so it falls back to a word rather than returning an
+/// error.
 fn mint_name() -> String {
     // `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere, read straight out of the environment
     // rather than through a `hostname` crate — one string read once per install is not worth a
@@ -118,127 +105,7 @@ fn mint_name() -> String {
     name
 }
 
-/// `android.os.Build.MODEL` — "OnePlus 12" rather than a hostname, which on Android is
-/// `localhost` on every phone ever made.
-///
-/// **The JavaVM comes from tao's own Android glue rather than from `ndk-context`**, and that is
-/// a correction to the obvious route rather than a preference. `ndk_context::android_context()`
-/// is the standard way to reach a VM, but nothing in this tree calls
-/// `initialize_android_context` — the crate is not in `Cargo.lock` at all — so it would answer a
-/// null pointer and this arm would fall back on every phone forever: code that compiles, ships
-/// and can never run. `tauri::tao` is the runtime this app is actually built on and
-/// `main_android_context` is where it keeps the VM the activity handed it.
-///
-/// `jni` was already in `Cargo.lock` through `tao`, `wry` and `tauri`, so its line in
-/// `Cargo.toml` is a **direct edge on a crate already in the tree** rather than a new
-/// dependency — `tauri-plugin-fs`'s case, one block above it in that file.
-#[cfg(target_os = "android")]
-fn mint_name() -> String {
-    android_model()
-        .map(|m| tidy(&m))
-        .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| FALLBACK_ANDROID.to_owned())
-}
-
-/// The static `android.os.Build.MODEL` field, read through JNI. `None` at every step that can
-/// fail, because [`mint_name`] owes its caller a string and never an error.
-#[cfg(target_os = "android")]
-fn android_model() -> Option<String> {
-    use jni::objects::JString;
-    use tauri::tao::platform::android::prelude::main_android_context;
-
-    let ctx = main_android_context()?;
-    // SAFETY: the pointer is the `JavaVM*` tao was handed by `JNI_OnLoad` and keeps for the
-    // life of the process; `from_raw` rejects null on its own.
-    let vm = unsafe { jni::JavaVM::from_raw(ctx.java_vm.cast()) }.ok()?;
-    let mut env = vm.attach_current_thread().ok()?;
-    let field = env
-        .get_static_field("android/os/Build", "MODEL", "Ljava/lang/String;")
-        .ok()?;
-    let model: JString = field.l().ok()?.into();
-    env.get_string(&model).ok().map(String::from)
-}
-
-/// A label off the user agent — "Chrome on Windows".
-///
-/// **A browser has no hostname and nothing to ask for one**, so this arm names the browser and
-/// the platform instead: two facts a reader can match against the machine in front of them, and
-/// neither of them anything the browser was not already telling every site it visits.
-///
-/// `navigator.userAgent` is read by reflection off the global rather than through
-/// `web_sys::Window`, because this build runs inside a Worker as well as in a page and `Window`
-/// is not among the `web-sys` features switched on here. `js_sys::Reflect` answers in both
-/// contexts and throws in neither, so no feature had to be added for one string.
-#[cfg(target_family = "wasm")]
-fn mint_name() -> String {
-    let label = user_agent()
-        .map(|ua| tidy(&browser_label(&ua)))
-        .unwrap_or_default();
-    if label.is_empty() {
-        return FALLBACK_BROWSER.to_owned();
-    }
-    label
-}
-
-/// `navigator.userAgent`, in a page or in a Worker. `None` rather than a panic anywhere it is
-/// absent — a headless context with no navigator is a browser that still has to be able to pair.
-#[cfg(target_family = "wasm")]
-fn user_agent() -> Option<String> {
-    use wasm_bindgen::JsValue;
-    let global = js_sys::global();
-    let nav = js_sys::Reflect::get(&global, &JsValue::from_str("navigator")).ok()?;
-    js_sys::Reflect::get(&nav, &JsValue::from_str("userAgent"))
-        .ok()?
-        .as_string()
-}
-
-/// A user agent string as two words a reader recognises.
-///
-/// **The order of both tables is the whole of this function.** Every Chromium browser says
-/// `Chrome` in its user agent and Edge and Opera add their own token beside it, so the specific
-/// token has to be tested first or every browser on the desk reads as Chrome; Safari is last
-/// for the same reason from the other end, since every one of them also says `Safari`. Android
-/// says `Linux` and is tested before it.
-///
-/// **What is not matched is not guessed at.** An unrecognised browser or platform is left out
-/// of the label rather than named wrongly, and a string that matches nothing at all comes back
-/// empty so that [`mint_name`] can use its fallback instead of showing the reader a blank row.
-///
-/// It is `pub` and compiled on every target although only the wasm arm calls it: it is a pure
-/// string function, and the desktop suite is the only place it can be tested.
-pub fn browser_label(ua: &str) -> String {
-    const BROWSERS: [(&str, &str); 5] = [
-        ("Edg/", "Edge"),
-        ("OPR/", "Opera"),
-        ("Firefox/", "Firefox"),
-        ("Chrome/", "Chrome"),
-        ("Safari/", "Safari"),
-    ];
-    const PLATFORMS: [(&str, &str); 6] = [
-        ("Android", "Android"),
-        ("iPhone", "iOS"),
-        ("iPad", "iOS"),
-        ("Windows", "Windows"),
-        ("Mac OS X", "macOS"),
-        ("Linux", "Linux"),
-    ];
-    let browser = BROWSERS
-        .iter()
-        .find(|(token, _)| ua.contains(token))
-        .map(|(_, name)| *name);
-    let platform = PLATFORMS
-        .iter()
-        .find(|(token, _)| ua.contains(token))
-        .map(|(_, name)| *name);
-    match (browser, platform) {
-        (Some(b), Some(p)) => format!("{b} on {p}"),
-        (Some(b), None) => b.to_owned(),
-        (None, Some(p)) => p.to_owned(),
-        (None, None) => String::new(),
-    }
-}
-
-/// A platform's answer, trimmed and cut to [`MAX_NAME_LEN`] characters.
+/// The environment's answer, trimmed and cut to [`MAX_NAME_LEN`] characters.
 fn tidy(raw: &str) -> String {
     raw.trim().chars().take(MAX_NAME_LEN).collect()
 }
@@ -511,8 +378,8 @@ fn write_group(conn: &Connection, g: &Group) -> rusqlite::Result<()> {
 /// this device learned at the ceremony, and the ceremony is asymmetric: `Invite` carries no
 /// name at all and `pairing::respond` — the one place `peer_name` is set — runs on the
 /// **initiator** alone, so a joiner has never learnt who it joined and files it under
-/// `DEFAULT_PEER_NAME`. Measured on the real pair 2026-08-29: the desktop's roster read
-/// `["main-game", "CPH2581"]` and the phone's read `["Paired device", "CPH2581"]`.
+/// `DEFAULT_PEER_NAME`. Measured on the real pair 2026-08-29: the initiator's roster read
+/// `["main-game", "CPH2581"]` and the joiner's read `["Paired device", "CPH2581"]`.
 /// [`write_synced_name`] is the other end — once a real name reaches `device_names`, the
 /// placeholder is simply outranked.
 ///
@@ -710,7 +577,7 @@ const NOT_A_NEWER_EPOCH: &str = "that key manifest is not ahead of this device";
 /// saying it is still a member, on every device that adopts.
 ///
 /// **What a rotation does not do is withdraw anything the removed device contributed** — spec
-/// §12.3. The collection is one object the whole group has been writing, and a phone's cards,
+/// §12.3. The collection is one object the whole group has been writing, and a laptop's cards,
 /// decks and folders are rows in every device's tables by the time it leaves. Removal ends a
 /// device's ability to keep *writing*; nothing here deletes, re-parents or re-counts a row it
 /// wrote, and `removing_a_device_changes_no_row_it_contributed` is what holds that true. Note the
@@ -864,7 +731,7 @@ pub const ROSTER_DIRTY: &str = "roster_dirty";
 ///
 /// **Set when a join's rotation could not be published and cleared only once `/rotate` accepts
 /// one.** A join plans a rotation naming the whole roster plus the joiner (see [`plan_join`]),
-/// but planning is not publishing — the relay can be unreachable at the exact moment two phones
+/// but planning is not publishing — the relay can be unreachable at the exact moment two devices
 /// are standing next to each other comparing six digits. Without this mark that failure is
 /// silent: the pairing ceremony still succeeds locally, the joiner is on *this* device's roster,
 /// and nothing ever retries telling the others. A sibling task reads this flag to know a publish
@@ -1235,7 +1102,7 @@ pub fn adopt_epoch(
 ///
 /// **The grant keys are the caller's to decide about and are deliberately not touched here.**
 /// This module knows about groups and nothing about Patreon: the removed device may be the very
-/// one holding the refresh secret — the reader selling a laptop removes it from the phone — and
+/// one holding the refresh secret — the reader selling a laptop removes it from their desktop — and
 /// throwing that secret away would cost them the membership rather than the pairing.
 /// `client::check_keys` is where the two facts sit side by side.
 ///
@@ -1390,55 +1257,6 @@ mod tests {
         assert_eq!(ensure(&conn).unwrap().name, "Kitchen table");
         create_group(&conn, &ensure(&conn).unwrap()).unwrap();
         assert_eq!(roster(&conn).unwrap()[0].name, "Kitchen table");
-    }
-
-    /// The browser label, which is the one arm of [`mint_name`] that can be tested off its own
-    /// platform. Every case here is a real user agent's distinguishing substrings.
-    #[test]
-    fn a_browser_is_named_by_its_engine_and_its_platform() {
-        for (ua, want) in [
-            (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like \
-                 Gecko) Chrome/131.0.0.0 Safari/537.36",
-                "Chrome on Windows",
-            ),
-            (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like \
-                 Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
-                "Edge on Windows",
-            ),
-            (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like \
-                 Gecko) Chrome/130.0.0.0 Safari/537.36 OPR/115.0.0.0",
-                "Opera on Windows",
-            ),
-            (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 \
-                 Firefox/133.0",
-                "Firefox on macOS",
-            ),
-            (
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 \
-                 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1",
-                "Safari on iOS",
-            ),
-            (
-                "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like \
-                 Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-                "Chrome on Android",
-            ),
-        ] {
-            assert_eq!(browser_label(ua), want, "{ua}");
-        }
-    }
-
-    /// A user agent this function cannot read names nothing rather than naming it wrongly, and
-    /// an empty label is what lets [`mint_name`] reach its fallback.
-    #[test]
-    fn an_unreadable_user_agent_is_left_unnamed() {
-        assert_eq!(browser_label(""), "");
-        assert_eq!(browser_label("curl/8.9.1"), "");
-        assert_eq!(browser_label("Some Browser (Windows NT 10.0)"), "Windows");
     }
 
     /// A name is trimmed and cut, and the cut counts characters — a byte slice would panic on
@@ -1865,7 +1683,7 @@ mod tests {
 
     /// **Spec §12.3, and the one test in this module whose failure is a reader losing cards.**
     ///
-    /// A device's contributions outlive it. Removing a phone does not withdraw the cards it
+    /// A device's contributions outlive it. Removing one does not withdraw the cards it
     /// added, the decks it built or the folders it made — the collection is one object the
     /// whole group has been writing, and revocation ends a device's ability to keep writing
     /// rather than unwinding what it wrote.

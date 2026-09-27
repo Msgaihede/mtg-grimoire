@@ -6,8 +6,7 @@ value of this page is that it distinguishes them.
 
 **The first half landed on 2026-08-29** in `e5ff435`, `86a9b8e` and `612a01e`, with
 `npm run verify` green (249 test files, 5 932 frontend tests, 1 786 Rust), `cargo fmt --check`
-clean, and both clippy legs clean — host `--all-targets` and `--lib --target wasm32-unknown-unknown`,
-which CI runs and `verify` does not. **Those three figures are that day's tree and have not been
+clean, and clippy `--all-targets` clean. **Those three figures are that day's tree and have not been
 re-derived**; the counts move with every branch, so take them as the record of one green run
 rather than as today's number. **It is deployed**: step 1 is done, step 6 has run, and step 3 is
 done — both `vars` are committed in `wrangler.jsonc`. **Two of step 4's three secrets are
@@ -33,19 +32,6 @@ already did.
 adds a **second** migration file to step 2 (run as its own `--command`, never a `--file` — that
 step says why) and **no new step at all**. It changes no existing route path either, so step 6
 still deploys the same list plus these two new routes.
-
-⚠️ **This paragraph named `/.well-known/assetlinks.json` and a step 9 for its fingerprint until
-2026-08-31, and both are gone — deliberately, and not because the fingerprint is hard to get.**
-Nothing in the app reads a launch intent: there is no `tauri-plugin-deep-link`, no handler for the
-URL an activity is opened with, and nothing that reads a code out of one. So the `autoVerify`
-intent-filter did nothing while the fingerprint was a placeholder, and installing a real one would
-have started it *working* — Android would hand `https://…/pair#<code>` to the app instead of the
-browser, the app would open on its ordinary window with the code nowhere, and the `/pair` page,
-which is the only thing that shows a generic camera app's scan to the reader, would have become
-unreachable from a scan. **The deploy step would have broken the flow it was written to complete.**
-The intent-filter, the `intent://` button on the page and the `assetlinks.json` route are all
-removed; the reader's primary path is the app's own scanner, which needs no link. Deep-linking is a
-follow-up that starts with the intent handling and ends with these, never the other way round.
 
 Designs: [2026-08-29-hosted-relay-and-patreon-design.md](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md),
 [2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md),
@@ -83,8 +69,8 @@ it comes before everything else. Probe, then read; never the other way round.**
 
 ⚠️ **Two things are called "the relay" at one hostname, and every sentence in this file is about
 telling them apart.** The **baseline** relay is the three unauthenticated endpoints; the
-**hosted** relay is everything else. `docs/reference/sync.md` records a 2026-08-29 pass in which a
-desktop and a phone converged "over the deployed relay" — that was the baseline one, pointed at by
+**hosted** relay is everything else. `docs/reference/sync.md` records a 2026-08-29 pass in which
+two devices converged "over the deployed relay" — that was the baseline one, pointed at by
 hand through `sync_state.relay_url`, and it remains the only pass two real devices have driven end
 to end. **The hosted code has since run**, which is what the table's first three rows say, but
 nothing has driven a second device across it. The distinction is exactly the kind that rots, and a
@@ -249,7 +235,7 @@ build has ever sent one there.
    successfully — not on the one that has been failing.
 
    **Measured 2026-08-30**, on the real pair and on the first press of the pass: a paid-up,
-   paired phone at epoch 2, `entitled: true`, `status: "active"` — and `sync_now` answering
+   paired device at epoch 2, `entitled: true`, `status: "active"` — and `sync_now` answering
    *the relay did not recognise this device's group key*. **No suite could have caught it**:
    every relay test starts from a group claimed under the new code, so "claimed before the
    migration" is a state the fixtures cannot express. It took a device with real history.
@@ -299,15 +285,6 @@ build has ever sent one there.
    None of the five reaches a Durable Object, so the metered line is untouched — but "unauthenticated
    at the edge" is what a rate-limit rule is about, and by that test they belong on this list rather
    than on the other one.
-⚠️ **There is no step 9, and the one that stood here has been deleted rather than deferred.** It
-said to put the release keystore's SHA-256 fingerprint into `/.well-known/assetlinks.json` so
-`android:autoVerify` could confirm the app owns `/pair`. **Running it would have broken the QR
-flow**: the app reads no launch intent, so a verified App Link takes `https://…/pair#<code>` away
-from the browser and gives it to an app with nowhere to read the code from — and the `/pair` page
-is the only thing that shows that code to a reader whose camera app is not this one. The route,
-the manifest's intent-filter and the page's `intent://` button are all gone (2026-08-31);
-`relay/src/pair.ts` and `AndroidManifest.xml` each carry the argument at their own site. Nothing
-about this deploy replaces it.
 
 ---
 

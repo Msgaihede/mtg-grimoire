@@ -22,7 +22,7 @@ import { departureFrom, type PaneDeparture } from "@/features/card/cardReturn";
 // card menu's collection add and this hook's quick add have to agree, and two spellings of a
 // default drift the first time either changes.
 import { MENU_CONDITION } from "@/lib/conditions";
-import { OWNED_WRITE_KEYS } from "@/lib/query";
+import { invalidateOwnedWrite, refreshCardSearches } from "@/lib/searchMarks";
 import { autoCategoryFor } from "./autoCategory";
 import { sameDeckSlot } from "./deckWalk";
 
@@ -1247,7 +1247,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     onSuccess: () => {
       invalidate();
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
   });
 
@@ -1288,7 +1288,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     onSuccess: () => {
       invalidate();
       invalidateCollection();
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
   });
 
@@ -1351,7 +1351,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
         wishId,
       ),
     onSuccess: () => {
-      for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
+      invalidateOwnedWrite(queryClient);
     },
   });
 
@@ -1393,7 +1393,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     mutationFn: ({ picks, clearWishes }: { picks: DeckMissingPick[]; clearWishes: boolean }) =>
       ipc.deckMissingToCollection(opened(id), picks, clearWishes),
     onSuccess: () => {
-      for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
+      invalidateOwnedWrite(queryClient);
     },
   });
 
@@ -1425,9 +1425,10 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     /** Every card of the variant this hook was opened on, in category `sortOrder`, then by the
      *  name the row carries, then by row id. */
     cards: query.data?.cards ?? NONE,
-    /** **Every** category of the deck in `sortOrder`, empty and inactive ones included — the
-     *  editor's columns are this list, not the categories that happen to hold a card. The list
-     *  is the same in both variants; only the counts on each row are scoped. */
+    /** **Every** category of the list this hook reads, in `sortOrder`, empty and inactive ones
+     *  included — the editor's columns are this list, not the categories that happen to hold a
+     *  card. Each list has piles of its own since user schema v53 (issue #561), so the Theory
+     *  tab's columns are the plan's and never the Actual list's. */
     categories: query.data?.categories ?? NO_CATEGORIES,
     /** Every label this list is wearing — the palette a row's mark is drawn from. */
     labels: query.data?.labels ?? NO_LABELS,

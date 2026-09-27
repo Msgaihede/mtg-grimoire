@@ -18,7 +18,7 @@ import { cardDetailKey } from "./cardDetailKey";
  * that, and the refusal is not a taste argument: **an image is not text.** It is unreachable by
  * a screen reader, unselectable, un-searchable by the reader's own browser find, and *absent
  * altogether* on a printing whose picture has never cached — which on a first run is most of
- * them, and on the web target is every printing the row did not hand a URL for. A modal whose
+ * them. A modal whose
  * only statement of what a card does is a JPEG has no answer for any of those four readers.
  *
  * So `CardDetailPane`'s `Facts` survives here, minus the prices: those are a fact about *this

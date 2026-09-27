@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, CircleCheck } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useWishDestinationName, WishDestination } from "@/features/wishlist/WishDestination";
 import { count } from "@/lib/counts";
@@ -16,7 +16,7 @@ import {
   type ManaKey,
   type PipCounts,
 } from "@/lib/mana";
-import { PRESS, statusLine } from "@/lib/motion";
+import { popup, PRESS, statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { cardManaValue, CURVE_BUCKETS, curveBucket, isLand, isMdfcLand } from "./deckBuckets";
 import { CardDistribution } from "./stats/CardDistribution";
@@ -1295,12 +1295,54 @@ function Missing({
           refused write filed nothing anywhere, and the one refusal a destination can cause
           (`That folder is not there any more.`) is quoted verbatim and says so better than a
           prefix could. */}
-      <p role="status" className="text-dim">
-        {added === null
-          ? ""
-          : added === 0
-            ? "Nothing to add — a recount covered the shortfall, or what is short has left the card database."
-            : `Added ${count(added)} ${added === 1 ? "wish" : "wishes"}${destination === null ? "" : ` to ${destination}`} — one per card, for every copy you are short.`}
+      <p
+        role="status"
+        // **Accent, with a check, only for a press that wrote something** (issue #553). Pressing
+        // twice doubles every wish — `add_wish` raises the one already there, and the reader
+        // chose to keep that fold — and the answer that was meant to say the first press had
+        // worked was drawn in `text-dim`, the voice this strip uses for the nothing-to-say
+        // lines. So a write that landed says so in the accent, beside `CircleCheck` — the pair
+        // `ErrorLogPanel` already draws for its "Nothing has failed." line, so the app has one
+        // spelling of "that went through". Not `text-ok`, the green `ValidationPanel` gives the
+        // same glyph: that one is the format check's *clean*, a verdict about a deck, and this is
+        // a receipt for a press.
+        //
+        // **The zero arm keeps the dim voice and gets no check**, because nothing was added and
+        // a tick beside "Nothing to add" would be a receipt for a write that did not happen. The
+        // empty arm is dim too, which costs nothing: there is no text for a colour to reach.
+        //
+        // The class is what changes and never the element — the region stays mounted for the
+        // reason the comment above gives, so the arm a press lands in is a change *inside* a
+        // live region a screen reader is already watching.
+        className={added !== null && added > 0 ? "min-w-0 text-accent" : "text-dim"}
+      >
+        {added === null ? (
+          ""
+        ) : added === 0 ? (
+          "Nothing to add — a recount covered the shortfall, or what is short has left the card database."
+        ) : (
+          // One element holding the glyph and the sentence, so the arrival is one thing that
+          // happens rather than two. `popup`'s own fade and 4% grow and nothing else: a status
+          // line that travelled would be the text moving under a reader who is looking at it,
+          // and `MotionConfig reducedMotion="user"` drops the scale for a reader who asked for
+          // less while keeping the fade, which carries no movement (motion.md). Not
+          // `statusLine`, the preset the refusal below uses: that one grows a line into place by
+          // its *height*, which is for a line that arrives and pushes what is under it, and this
+          // sentence is swapped into a region that is already in the row. Mounted with the
+          // sentence, so it plays once per answer — the latch above means once per shortfall.
+          // `origin-left` because the sentence reads from its left edge, and a grow from its
+          // middle would move the check.
+          //
+          // **The glyph is `aria-hidden` and adds no text**, so the region's `textContent` is
+          // exactly the sentence it always was; `DeckStats.test.tsx` compares it whole, which is
+          // what catches a stray space from a JSX line break between the two.
+          <motion.span {...popup} className="flex min-w-0 origin-left items-center gap-1.5">
+            <CircleCheck aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="min-w-0">
+              {`Added ${count(added)} ${added === 1 ? "wish" : "wishes"}${destination === null ? "" : ` to ${destination}`} — one per card, for every copy you are short.`}
+            </span>
+          </motion.span>
+        )}
       </p>
 
       {/* Beside the button that was pressed, not in the editor's banner: that one speaks for

@@ -2,8 +2,8 @@
  * Open somebody else's shared collection from its link.
  *
  * **Paste is the whole of the way in, and that is a decision rather than a first cut.** The app
- * reads no launch intent and registers no URL scheme; `relay/src/pair.ts` carries the argument
- * for why adding one is separate work with an Android trap in it. So a reader who was handed a
+ * reads no launch intent and registers no URL scheme, and adding one is separate work. So a
+ * reader who was handed a
  * link in a chat window pastes it here, and the link is the whole of the capability — no
  * membership, no account, no token (spec §9).
  *

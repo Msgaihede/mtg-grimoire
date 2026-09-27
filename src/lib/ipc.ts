@@ -173,8 +173,6 @@
  */
 import { core } from "@/lib/core";
 import type { CallArgs, CallOptions } from "@/lib/core";
-import { bytesToBase64 } from "@/lib/bytes";
-import { isAndroid } from "@/lib/platform";
 import type { Border } from "./border";
 import type { Condition } from "./conditions";
 import type { Finish } from "./finish";
@@ -195,7 +193,7 @@ export type Unlisten = () => void;
 /**
  * The methods below are written as `invoke("name", { args })` and stay that way. (This read
  * "~136" long after it stopped being true; count them in the file rather than here.)
- * Only where the call goes has changed — {@link core} decides that, per build.
+ * Only where the call goes has changed — {@link core} decides that.
  *
  * **Two parameters wider than that sentence since the scanner**, and both widenings serve the
  * one call that cannot be `{ args }`: a camera frame is bytes with no fields to name, so `args`
@@ -220,7 +218,7 @@ const invoke = <T,>(command: string, args?: CallArgs, options?: CallOptions): Pr
  * still the same JSON: `JSON.parse` on the far side yields the original character.
  *
  * Used for **both** headers, so the two are symmetric even though only one has ever carried a
- * card name. The Android leg needs none of this — it sends a JSON *body*, which is UTF-8.
+ * card name.
  *
  * A surrogate pair escapes to its two code units, which is exactly what JSON asks for.
  */
@@ -606,15 +604,7 @@ export interface CardSummary {
    * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
    * has no usable picture for this printing.
    *
-   * **The web build has no other way to get one, which is the whole reason this is on the
-   * row.** `cardImageUrl` answers `mtgimg://…`, a Tauri custom protocol registered natively
-   * with the webview, and wasm cannot register a URL scheme with a browser; `card_image_uri`
-   * would be the fallback and it lives in `card.rs`, which is gated out of the wasm build.
-   * So on web a tile draws `imageUris?.[WALL_CARD_VARIANT]` and on Tauri it goes on drawing
-   * `mtgimg://` — the platform branch stays in `images.ts`, where the two lines already are.
-   *
-   * **Front face only.** The walls draw the front; flipping lives in the card pane, which is
-   * not routed on web at all.
+   * **Front face only.** The walls draw the front; flipping lives in the card pane.
    *
    * `Partial`, and not decoration: a `transform` printing publishes only the variants its
    * faces carry, and a printing whose only URL is Scryfall's `soon.jpg` error page carries
@@ -825,12 +815,7 @@ export interface CardDetail {
   imageStatus: string | null;
   faces: CardFace[];
   /**
-   * Where this printing's picture is, per variant — **the web target's only way to draw one.**
-   *
-   * `mtgimg://` is registered natively with the webview and wasm cannot register a URL scheme
-   * with a browser, so a card pane in a browser can reach no picture the row did not hand it.
-   * {@link cardArtSrc} is the whole of that branch and ignores this on desktop, where the local
-   * cache already holds the right bytes at the right size.
+   * Where this printing's picture is on `cards.scryfall.io`, per variant.
    *
    * A printing carrying neither picture column answers `null` — the frame's "no art" state,
    * and **never a URL to build one from**.
@@ -874,12 +859,7 @@ export interface Printing {
   borderColor: string | null;
   layout: string;
   /**
-   * Where this printing's picture is, per variant — **the web target's only way to draw one.**
-   *
-   * `mtgimg://` is registered natively with the webview and wasm cannot register a URL scheme
-   * with a browser, so a card pane in a browser can reach no picture the row did not hand it.
-   * {@link cardArtSrc} is the whole of that branch and ignores this on desktop, where the local
-   * cache already holds the right bytes at the right size.
+   * Where this printing's picture is on `cards.scryfall.io`, per variant.
    *
    * A printing carrying neither picture column answers `null` — the frame's "no art" state,
    * and **never a URL to build one from**.
@@ -1487,8 +1467,8 @@ export interface CollectionQuery extends CardFilters {
    *
    * Who sends it: the collection page, and the deck builder's Collection Search tab — that tab
    * asks "what can I build with today", which is exactly the question a set-aside drawer is not
-   * part of. Who does not, and must not: the mirror, the export sweep, the importer's preview
-   * and the web route's passthrough.
+   * part of. Who does not, and must not: the mirror, the export sweep and the importer's
+   * preview.
    */
   excludeLocked?: boolean;
   /**
@@ -1667,12 +1647,10 @@ export interface CollectionRow {
    * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
    * has no usable picture for this printing.
    *
-   * The same field, with the same rules and for the same reason, as
-   * {@link CardSummary.imageUris}: the web build has no `mtgimg://` to ask, so a collection
-   * tile draws `imageUris?.[WALL_CARD_VARIANT]` there or draws the no-art frame. On Tauri it is
-   * ignored and the local cache wins. Front face only, `Partial`, and **a missing entry means
-   * "no art"** — never a reason to build a URL of your own, because the backend has already
-   * refused a URI it cannot version or one from a host that does not serve card art.
+   * The same field, with the same rules, as {@link CardSummary.imageUris}: front face only,
+   * `Partial`, and **a missing entry means "no art"** — never a reason to build a URL of your
+   * own, because the backend has already refused a URI it cannot version or one from a host
+   * that does not serve card art.
    *
    * Mirrors `CollectionRow::image_uris` in `src-tauri/src/collection.rs`; `ipc.test.ts`'s
    * field-name pin is the only fence.
@@ -1949,9 +1927,8 @@ export interface WishRow {
    * has no printing of its own. One join answers all three, so the picture, the id and the
    * price can never disagree about which piece of cardboard is on screen.
    *
-   * The same rules as {@link CardSummary.imageUris}: front face, `Partial`, a missing entry is
-   * "no art", and the whole field is ignored on Tauri. `wishlist_list` is routed on web, where
-   * `mtgimg://` cannot be reached at all.
+   * The same rules as {@link CardSummary.imageUris}: front face, `Partial`, and a missing entry
+   * is "no art".
    *
    * Mirrors `WishRow::image_uris` in `src-tauri/src/wishlist.rs`.
    */
@@ -2160,8 +2137,8 @@ export type CategoryKind = "main" | "side" | "commander" | "companion" | "maybe"
  *
  * That last sentence is the entire reason this is a column and not a name list. "Ramp", "Draw",
  * "Removal" and "Lands" are exactly what a person calls their own piles, and
- * `DECK_CATEGORY_GRAIN` is `(deck_id, name)` — one pile per name per deck — so a rule reading
- * the *name* would quietly take over the pile a reader made deliberately. **The name is the
+ * `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)` — one pile per name per list — so a rule
+ * reading the *name* would quietly take over the pile a reader made deliberately. **The name is the
  * user's; the kind is what the rules read**, and provenance is the same kind of fact as the
  * kind.
  *
@@ -2209,12 +2186,22 @@ export type DeckFinish = Exclude<Finish, "nonfoil"> | null;
  * One category of one deck: a named pile the user owns.
  *
  * Schema v8 replaced the fixed five-word zone with these. The four predefined ones
- * (`schema::PREDEFINED_CATEGORIES`) are seeded with every deck and cannot be renamed or
+ * (`schema::PREDEFINED_CATEGORIES`) are seeded with every list and cannot be renamed or
  * deleted; everything else is the user's, and `kind` is `main`.
  */
 export interface DeckCategory {
   id: number;
   deckId: number;
+  /**
+   * **Which of the deck's two lists this pile belongs to** — user schema v53 (issue #561).
+   *
+   * Until then a pile was the deck's and both lists shared one set, so a column made on Theory
+   * appeared on Actual and switching the Sideboard off on one switched it off on the other. The
+   * two lists are separate versions of the deck, and the theory diff is the only thing that
+   * joins them — so each list has its own piles, its own four predefined zones, its own names,
+   * order and switches, and a `deck_cards` row only ever points at a pile of its own list.
+   */
+  variant: DeckVariant;
   /** As the user wrote it — a column heading, and what every refusal about a card in it says. */
   name: string;
   kind: CategoryKind;
@@ -2256,9 +2243,9 @@ export interface DeckCategory {
    * Copies filed here **in the variant that was asked for** — `sum(quantity)`, not a row count.
    * Two printings at 2 and 3 copies read 5.
    *
-   * The number a *list* row wants: a panel drawing the deck's columns is drawing the list the
-   * reader is editing. It is **not** the number a delete confirmation wants — see
-   * {@link DeckCategory.cardCountAllVariants}, and read both before reaching for either.
+   * A pile holds cards of its own {@link DeckCategory.variant} only (issue #561), so this is
+   * every copy it holds — the number a list row draws **and** the number a delete confirmation
+   * quotes. Until v53 those were two numbers, because a pile was shared between the lists.
    */
   cardCount: number;
   /** Nonfoil unit price × copies over the same variant, at the marketplace the read named;
@@ -2266,17 +2253,6 @@ export interface DeckCategory {
    *  marketplaces' totals over one pile are legitimately not a conversion of each other — each
    *  omits the copies *it* cannot price. */
   totalPrice: number | null;
-  /**
-   * Copies filed here **across both variants**, live and theory together — the number a
-   * destructive confirmation has to quote, and the same answer whichever variant was asked by.
-   *
-   * A category is not per-variant. `deck_cards.category_id` is `ON DELETE CASCADE`, so deleting
-   * one takes its rows out of **both** lists, and `deckCategoryDelete`'s move arm moves both for
-   * the same reason. A dialog quoting {@link DeckCategory.cardCount} therefore understates what
-   * it is about to do on any theory-enabled deck — and understates the **destructive** arm in
-   * particular, which is a control lying in the direction of the reader pressing it.
-   */
-  cardCountAllVariants: number;
 }
 
 /**
@@ -2765,8 +2741,7 @@ export interface DeckQuickAddWish {
   collectorNumber: string | null;
   /** The finish the wish asks for in the **wishlist's** spelling, or `null` for any finish. */
   preferredFinish: "nonfoil" | "foil" | "etched" | null;
-  /** The named printing's picture, front face, exactly as {@link CardSummary.imageUris} — for the
-   *  web build, which cannot draw from the `mtgimg:` cache. */
+  /** The named printing's picture, front face, exactly as {@link CardSummary.imageUris}. */
   imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
@@ -2925,7 +2900,8 @@ export interface DeckMissingOutcome {
  * refuses is the same member spelled with two different types.
  */
 export interface TheorySlot {
-  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
+  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``, where the finish is
+   *  the one the row **plays** (its own, else the printing's sole finish — issue #563).
    *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
   key: string;
   /**
@@ -2996,7 +2972,10 @@ export interface TheoryDiffRow {
   setCode: string;
   collectorNumber: string;
   /**
-   * Which **object** this line is for — `deck_cards.finish`, so `null` is the regular copy.
+   * Which **object** this line is for — the finish the theory row **plays**, so `null` is the
+   * regular copy. That is `deck_cards.finish` where the row stored one and the printing's sole
+   * finish where it did not: an unsaid row of a foil-only printing reads `foil` here, because it
+   * can be no other object (issue #563, `deck_theory::played_finish`).
    *
    * **Half of the row's identity**, with {@link TheoryDiffRow.cardId}: a foil Sol Ring and a
    * regular one are two pieces of cardboard to go and find, two rows in `deck_cards`, and two
@@ -3048,14 +3027,12 @@ export interface TheoryDiffRow {
    */
   heldAsOtherPrinting: number;
   /**
-   * Where this row's printing's picture is, per variant — the web target's only way to draw the
-   * thumbnail beside the name.
+   * Where this row's printing's picture is on `cards.scryfall.io`, per variant.
    *
    * The dialog draws `art` (626×457), which is the crop the deck's own views draw, so that one
    * card is not pictured two ways on one screen. The same rules as
    * {@link CardSummary.imageUris}: front face only, `Partial`, `null` for a printing that has
-   * left `cards` or carries no usable URL, ignored on desktop by `cardArtSrc` — and **never a
-   * URL to build one from**.
+   * left `cards` or carries no usable URL — and **never a URL to build one from**.
    *
    * Mirrors `TheoryDiffRow::image_uris` in `src-tauri/src/deck_theory.rs`. Nothing type-checks
    * this file against the crate — `ipc.test.ts`'s field-name pin reads both and is the only
@@ -3599,8 +3576,8 @@ export interface DeckPatch {
    * it" — {@link ipc.deckSetFolder} exists because `folderId` cannot. This column needs no such
    * command, because its cleared state is a number.
    *
-   * A non-zero id must name a category **of this deck**; Rust refuses anything else by name,
-   * since no foreign key says so.
+   * A non-zero id must name a category **of this deck's live list**; Rust refuses anything else
+   * by name, a theory pile included, since no foreign key says so.
    */
   defaultCategoryId?: number;
   /**
@@ -3735,8 +3712,7 @@ export interface DeckRow {
    */
   coverArtist: string | null;
   /**
-   * Where the **cover printing's** picture is, per variant — the web target's only way to draw
-   * a deck cover.
+   * Where the **cover printing's** picture is on `cards.scryfall.io`, per variant.
    *
    * **About {@link DeckRow.coverCardId} and nothing else**, exactly as {@link coverArtist} is:
    * it comes off the same `LEFT JOIN cards c ON c.id = d.cover_card_id`, so a deck with no
@@ -3747,9 +3723,8 @@ export interface DeckRow {
    * (`DeckTile`'s frame, `FolderCard`'s strip and `DeckCoverPicker`'s preview alike, and the
    * folder strip is why this is on the *row* rather than fetched per tile: a folder card draws
    * three of its members' covers and holds three `DeckRow`s to do it). It is `Partial` for
-   * {@link CardSummary.imageUris}' reason and carries the same fence: on desktop `cardArtSrc`
-   * ignores it and the local cache wins, on web it is the whole of what a browser can reach,
-   * and a missing entry is "no art" rather than a URL to build one from.
+   * {@link CardSummary.imageUris}' reason and carries the same fence: a missing entry is
+   * "no art" rather than a URL to build one from.
    *
    * Mirrors `DeckRow::image_uris` in `src-tauri/src/deck.rs`. Nothing type-checks this file
    * against the crate — `ipc.test.ts`'s field-name pin reads both and is the only fence.
@@ -4049,9 +4024,13 @@ export interface DeckRow {
    * Zero can never collide with a real pile — `deck_categories.id` is an `INTEGER PRIMARY KEY`,
    * so rowids start at 1 — and Rust spells the same sentinel `deck::AUTO_CATEGORY`.
    *
-   * **An id this deck's `categories` does not carry reads as Auto**, and no writer has to
-   * arrange that: deleting a pile puts every deck filing by it back to zero in the same
-   * transaction, and a duplicate is remapped onto its own copy of the pile.
+   * **It names a _live_ pile** — Deck settings offers the live list's — and since user schema
+   * v53 (issue #561) the plan has piles of its own, so on the Theory tab the editor carries it
+   * across **by name** to the plan's pile of that name (`defaultCategory.ts`), else Auto.
+   *
+   * **An id the list's `categories` does not carry, and no name carries across, reads as Auto**,
+   * and no writer has to arrange that: deleting a pile puts every deck filing by it back to zero
+   * in the same transaction, and a duplicate is remapped onto its own copy of the pile.
    */
   defaultCategoryId: number;
   /**
@@ -4536,10 +4515,8 @@ export interface DeckCard {
    * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
    * has no usable picture for this printing.
    *
-   * Read at `DECK_CARD_VARIANT`, which is the same `display` {@link CardSummary.imageUris} is
-   * read at, by both deck surfaces that draw a card: `views/GridView` hands it to `CardArt`'s
-   * `imageUrl`, and `CardStack` — which builds its own `<img>` src — puts it through
-   * `cardArtSrc` itself. Ignored on Tauri; on web it is the only picture there is.
+   * Keyed like {@link CardSummary.imageUris}; the deck's own views read `DECK_CARD_VARIANT`,
+   * which is the same `display`.
    *
    * Mirrors `DeckCardRow::image_uris` in `src-tauri/src/deck.rs`.
    */
@@ -4724,12 +4701,10 @@ export interface DeckTokenRow {
   /**
    * Where the **resolved printing's** picture is, per variant.
    *
-   * The same field, with the same rules and for the same reason, as
-   * {@link CardSummary.imageUris}: the web build and the phone have no `mtgimg://` to ask, so a
-   * token tile draws `imageUris?.[WALL_CARD_VARIANT]` there or draws the no-art frame. On Tauri
-   * it is ignored and the local cache wins. Front face only, `Partial`, and **a missing entry
-   * means "no art"** — never a reason to build a URL of your own, because the backend has
-   * already refused a URI it cannot version or one from a host that does not serve card art.
+   * The same field, with the same rules, as {@link CardSummary.imageUris}: front face only,
+   * `Partial`, and **a missing entry means "no art"** — never a reason to build a URL of your
+   * own, because the backend has already refused a URI it cannot version or one from a host
+   * that does not serve card art.
    *
    * **The printing is this entry's** ({@link cardId}), resolved in Rust, so two entries of one
    * token draw their own two pictures — which is why `deckTokenViews` can fold it to one URL
@@ -5298,11 +5273,10 @@ export interface SyncStatus {
  * How far the native side has got with opening the data folder — the answer to
  * `startup_status` and the payload of `startup:changed`.
  *
- * **Desktop and Android only.** Opening and migrating the two databases runs on a background
- * thread so the window can paint and the taskbar can draw its icon, and until it finishes the
- * shared state every other command reads is not there — so every other command errors. That is
- * why `boot/DesktopBoot` asks this before it mounts anything that queries. The web target opens
- * its database in a Worker and has its own gate (`web/WebBoot`).
+ * Opening and migrating the two databases runs on a background thread so the window can paint
+ * and the taskbar can draw its icon, and until it finishes the shared state every other command
+ * reads is not there — so every other command errors. That is why `boot/DesktopBoot` asks this
+ * before it mounts anything that queries.
  *
  * It only ever moves `loading → ready` or `loading → failed`, never back. `message` is a
  * human-written, multi-line sentence naming the folder that would not open, meant to be shown
@@ -5376,22 +5350,8 @@ export interface ReconciledEvent {
  * new release and is offered the release page, never an in-app install. Nobody has ever run
  * a Linux build of this app, and an MSI major upgrade is unverified; guessing at either is
  * how a user ends up with two copies.
- *
- * `managed` is Android: the Play Store installed this app and the store is what replaces it.
- * It is deliberately **not** `other` — `other` means "we could not tell, here is the release
- * page", and this app's release page offers a Windows exe and an NSIS installer, which is a
- * worse answer on a phone than no answer. `managed` means something else installs this app,
- * which is true, is typed, and makes this union exhaustive so `UpdatePanel` cannot forget the
- * case.
- *
- * `web` is the browser build, and it is `managed`'s sibling rather than a repeat of it: both
- * mean "something else installs this and the app does not replace itself", and the reader is
- * owed the name of the thing that does. A **service worker** is what replaces a PWA, and
- * saying "Google Play" to somebody holding a laptop is the same wrong answer `managed` exists
- * to stop `other` giving a phone. Answered by `web::route`, which is the only place in the
- * crate that knows it is running in a browser.
  */
-export type InstallKind = "portable" | "nsis" | "managed" | "other" | "web";
+export type InstallKind = "portable" | "nsis" | "other";
 
 /** One downloadable file on a GitHub release. Mirrors `update::Asset`. */
 export interface UpdateAsset {
@@ -5930,9 +5890,6 @@ export interface ComboPiece {
    * The front face's image URLs, exactly as {@link CardSummary.imageUris} — `Partial`, front
    * face only, and `null` for a piece with no usable picture (which includes every piece whose
    * {@link ComboPiece.cardId} is `null`, since there is no printing to have one).
-   *
-   * On Tauri a tile draws `mtgimg://` and ignores this; on the web build and the phone it is the
-   * only picture there is. The platform branch stays in `images.ts` — see that field's note.
    */
   imageUris?: Partial<Record<ImageVariant, string>> | null;
   /**
@@ -6411,41 +6368,6 @@ export interface MirrorStatus {
   lastReport: PassReport | null;
   /** The sentence to show when the last pass could not write, or `null` when it went fine. */
   lastError: string | null;
-}
-
-/**
- * One backup archive — `src-tauri/src/mirror/snapshot.rs`.
- *
- * **What web and Android get instead of the folder**, and the trade is written down rather than
- * hidden: the mirror writes ~350 files so that *other* programs can read them, and neither OPFS
- * nor an Android app's private directory is a folder any other program can open. So those two
- * targets render the same files on demand and hand over one zip — a snapshot rather than a live
- * mirror.
- *
- * **`base64` is `null` when Rust has already written the file**, which is the one field that
- * says which door the bytes went out of. `mirrorBackupSave` picks that door on Android, where
- * the destination is a `content://` URI and a megabyte of base64 through the webview and
- * straight back would be two copies of the archive for nothing; `mirrorBackupZip` picks the
- * other, which is the only one a browser has.
- */
-export interface BackupZip {
-  /** A suggestion, not a promise — `mtg-grimoire-backup-2026-08-31.zip`, or the stem alone if
-   *  the database's clock would not answer. Nothing parses it. */
-  fileName: string;
-  /** Entries in the archive, `README.txt` included. */
-  files: number;
-  /**
-   * Lists that could not be read, and so are **missing from the archive**.
-   *
-   * {@link PassReport.failed}'s rule with one difference that matters: a folder the reader can
-   * look at shows them a missing deck, and a zip they have already mailed to themselves does
-   * not. So this number travels to the panel and is said in the tone a refusal gets.
-   */
-  failed: number;
-  /** The archive's size in bytes. */
-  byteLength: number;
-  /** The archive itself, standard base64 — or `null` when Rust wrote it at a picked path. */
-  base64: string | null;
 }
 
 /**
@@ -7066,9 +6988,7 @@ export interface NewPrinting {
    */
   lang: string;
   /**
-   * The printing's picture, front face, exactly as {@link CardSummary.imageUris}. **The web and
-   * Android builds' only way to draw the row's thumb** — `mtgimg://` is a desktop protocol — which
-   * is why a row was an empty frame there until this travelled (issue #514).
+   * The printing's picture, front face, exactly as {@link CardSummary.imageUris}.
    */
   imageUris?: Partial<Record<ImageVariant, string>> | null;
   decks: readonly NewPrintingDeck[];
@@ -7153,8 +7073,8 @@ export interface UpcomingSet {
 /**
  * The upcoming sets, and the day they were counted from — `upcoming_sets.rs`'s `UpcomingSets`.
  *
- * **Read over `cards`, not `sets`**, because the browser build never fills `sets`; where it has
- * rows the crate also drops token, promo, memorabilia and minigame sets. Tokens, emblems, art
+ * **Read over `cards`, not `sets`**, because the crate drops token, promo, memorabilia and
+ * minigame sets from `sets`. Tokens, emblems, art
  * cards and front cards are never counted, and **a set any of whose paper cards has already
  * released is not coming soon at all** — The List and its kind gain future-dated printings, and a
  * card date alone would announce a set from 2020.
@@ -7685,6 +7605,26 @@ export interface ShareRow {
  * refusal.** It arrives `false`, the publish succeeds, and the column the reader ticked is
  * missing from every card in the snapshot — which is why `ipc.test.ts` pins all three by name.
  */
+/**
+ * Which rows of a loaded search to re-read the badges of — mirrors `search::MarksRequest`.
+ *
+ * `collapse` and `availableForDeck` are the loaded search's own, because they decide the grain
+ * and the scope {@link CardSummary.ownedQuantity} was counted at; the ids stand in for every
+ * filter, which decided which rows a page holds and nothing about what a row's badge reads.
+ */
+export interface MarksRequest {
+  ids: string[];
+  collapse?: boolean;
+  availableForDeck?: number;
+}
+
+/** One row's badges, re-read — mirrors `search::CardMarks`. */
+export interface CardMarks {
+  id: string;
+  ownedQuantity: number;
+  wishlisted: boolean;
+}
+
 export interface ShareFields {
   /** The grade each copy is in, `NM` and friends. An **ungraded** copy still carries nothing —
    *  see `@/lib/shareSnapshot`'s header. */
@@ -7697,6 +7637,12 @@ export interface ShareFields {
 
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
+  /**
+   * The two badges of rows a search already holds, re-read after a write — what
+   * `@/lib/searchMarks` patches into the cached pages instead of refetching every one of them
+   * (issue #552). An id the corpus no longer holds is left out of the answer.
+   */
+  searchMarks: (req: MarksRequest) => invoke<CardMarks[]>("search_marks", { req }),
   /**
    * Facet counts for one search — the same request shape as `searchCards`, whose `sort`,
    * `offset` and `limit` are ignored. Its own command so a page turn does not recompute
@@ -7819,6 +7765,18 @@ export const ipc = {
     invoke<EntryChange>("collection_set_quantity", { id, quantity }),
   collectionUpdate: (id: number, patch: EntryPatch) =>
     invoke<EntryChange>("collection_update", { id, patch }),
+  /**
+   * Move one row's copies onto another printing of the same card — the one write that reaches
+   * `collection_entries.card_id` after the row exists (issue #564). `set_code`,
+   * `collector_number` and `lang` follow from `cards`, because they describe the printing.
+   *
+   * **Merges rather than fails on a collision**, {@link ipc.collectionUpdate}'s rule: a row
+   * already holding the new printing at the same finish, condition and folder takes these copies,
+   * and the answer's `id` names *that* row — so a caller following the edit reads the id off the
+   * answer and never keeps the one it sent. A printing of a different card is refused.
+   */
+  collectionSetPrinting: (id: number, cardId: string) =>
+    invoke<EntryChange>("collection_set_printing", { id, cardId }),
   collectionRemove: (id: number) => invoke<EntryChange>("collection_remove", { id }),
   collectionList: (query: CollectionQuery) => invoke<CollectionPage>("collection_list", { query }),
   /** The aggregate header, over the same filters as the list it captions. */
@@ -8275,10 +8233,10 @@ export const ipc = {
    * One deck and everything in it, or `null` when no deck has that id — a gallery that has
    * not refreshed since another view deleted it asks for a deck that is not there.
    *
-   * `variant` scopes the **cards, and the two counts on every category and label row** — it is
-   * threaded into all three reads. What it does *not* scope is which categories and labels come
-   * back: every one of them does either way, so switching between the two lists changes the
-   * numbers in the column headings and never the columns themselves.
+   * `variant` scopes the **cards, the categories, and the two counts on every label row** — it
+   * is threaded into all three reads. Since user schema v53 (issue #561) each list has piles of
+   * its own, so switching between the two lists can change the columns as well as the numbers in
+   * them; which *labels* come back does not depend on it, only how many copies wear each.
    *
    * `marketplace` decides every price in the answer — each card's {@link DeckCard.unitPrice}
    * and each category's {@link DeckCategory.totalPrice} — so it is part of the question rather
@@ -8627,17 +8585,18 @@ export const ipc = {
    * A deck's categories on their own — the same list `deckGet` already carries, for a panel
    * that wants it without the cards.
    *
-   * `variant` scopes each row's `cardCount`/`totalPrice` and **nothing else**: which categories
-   * a deck has does not depend on which list is showing, which is what keeps the columns still
-   * while the reader switches between Live and Theory. `marketplace` decides what
+   * `variant` picks **which list's piles** come back — each list has its own since user schema
+   * v53 (issue #561), so a pile made on Theory is not a column on Actual — and scopes nothing
+   * else, because a pile's counts are already its own list's. `marketplace` decides what
    * {@link DeckCategory.totalPrice} is a total *of*.
    */
   deckCategoryList: (deckId: number, variant: DeckVariant, marketplace: MarketplaceId) =>
     invoke<DeckCategory[]>("deck_category_list", { deckId, variant, marketplace }),
-  /** A new category, always `kind: "main"` and always active, appended after the deck's last
-   *  one. Refuses a name the deck already has — the grain is `(deckId, name)`. */
-  deckCategoryCreate: (deckId: number, name: string) =>
-    invoke<DeckCategory>("deck_category_create", { deckId, name }),
+  /** A new category in **one of the deck's two lists**, always `kind: "main"` and always active,
+   *  appended after that list's last one. Refuses a name the list already has — the grain is
+   *  `(deckId, variant, name)`, so Theory and Actual may each hold a "Ramp" of their own. */
+  deckCategoryCreate: (deckId: number, variant: DeckVariant, name: string) =>
+    invoke<DeckCategory>("deck_category_create", { deckId, variant, name }),
   /**
    * Rename one category — `id`, not `deckId`, because a category names its own deck.
    *
@@ -8664,7 +8623,8 @@ export const ipc = {
    *
    * An id that is not this deck's — stale, or gone — is **silently skipped** rather than
    * failing the reorder over one entry, so a list that raced a delete still lands. Send every
-   * id: this is the order, not a move.
+   * id **of one list**: this is the order of that list's piles, not a move, and a list mixing
+   * Actual's piles with Theory's is refused (issue #561).
    */
   deckCategoryReorder: (deckId: number, ids: number[]) =>
     invoke<DeckCategory[]>("deck_category_reorder", { deckId, ids }),
@@ -8677,9 +8637,9 @@ export const ipc = {
    * confirm dialog has to say out loud. One command for both, because a caller doing the move
    * and the delete as two round trips could lose the cards between them.
    *
-   * The move covers **both variants**: a `live` row and a `theory` row of one printing fold
-   * into their own matching rows in the target and never into each other. Refuses a predefined
-   * category, a target belonging to another deck, and a move into itself.
+   * A pile holds one list's cards (issue #561), so the move stays inside that list: the target
+   * must be a pile of the same deck **and the same variant**. Refuses a predefined category, a
+   * target belonging to another deck or the other list, and a move into itself.
    */
   deckCategoryDelete: (id: number, moveToCategoryId: number | null) =>
     invoke<void>("deck_category_delete", { id, moveToCategoryId }),
@@ -8994,10 +8954,10 @@ export const ipc = {
    * `deckImportCommit`'s: a loop over a forty-card pile is forty transactions, forty history
    * rows and forty invalidations. This is one of each.
    *
-   * **This variant only**, which is the opposite of `deckCategoryDelete` — that takes the live
-   * list and the theory list together, because `deck_cards.category_id` cascades and a category
-   * is not variant-scoped. A clear leaves the pile standing, so what it empties is the list the
-   * reader is looking at, and the confirmation says so.
+   * **This variant only** — which, since a pile belongs to one list (user schema v53, issue
+   * #561), is every copy the pile holds — `variant` is the pile's own. A clear leaves the pile
+   * standing, so what it empties is the list the reader is looking at, and the confirmation says
+   * so.
    *
    * An empty pile answers `0` and writes nothing at all: no history row, no `updated_at`, and
    * not one collection row moved.
@@ -9366,7 +9326,7 @@ export const ipc = {
   /**
    * Whether the data folder has finished opening. Answerable before every other command is —
    * it reads no database — so it is the one thing `boot/DesktopBoot` may ask while the rest
-   * would error. Not routed on the web target.
+   * would error.
    */
   startupStatus: () => invoke<StartupStatus>("startup_status"),
   /**
@@ -9903,8 +9863,7 @@ export const ipc = {
       includeBasics,
       limit,
     }),
-  /** Move the *seen* cursor to `at`, in Unix seconds. **The clock is the caller's** — never
-   *  `SystemTime::now()`, which panics on the wasm target. */
+  /** Move the *seen* cursor to `at`, in Unix seconds. **The clock is the caller's.** */
   markNewPrintingsSeen: (at: number) => invoke<void>("mark_new_printings_seen", { at }),
   /**
    * How much of every deck the reader owns, priced at `marketplace` — see {@link DeckCompletion}.
@@ -9921,7 +9880,7 @@ export const ipc = {
   deckReviewCount: () => invoke<number>("deck_review_count"),
   /**
    * The sets with paper printings released after today and within `days` (clamped `1..=365` in
-   * Rust) — see {@link UpcomingSets}. Routed on both targets.
+   * Rust) — see {@link UpcomingSets}.
    */
   upcomingSets: (days: number) => invoke<UpcomingSets>("upcoming_sets", { days }),
   /**
@@ -10005,9 +9964,8 @@ export const ipc = {
    * taxonomy uninvited (`tags::oracle::refresh_if_due`) and no page ever asked for it again, so
    * the `oracleTagsRefresh` wrapper that stood beside this — and its art twin — was called only
    * from tests and one story, and was removed on 2026-09-27. The
-   * `oracle_tags_refresh` command itself stays: the web target's worker diverts it by name in
-   * `src/workers/protocol.ts`, and a failed fetch still leaves the previous taxonomy in place, the
-   * type-line fallback always available.
+   * `oracle_tags_refresh` command itself stays registered, and a failed fetch still leaves the
+   * previous taxonomy in place, the type-line fallback always available.
    */
   oracleTagsStatus: () => invoke<OracleTagStatus>("oracle_tags_status"),
   /**
@@ -10308,31 +10266,6 @@ export const ipc = {
    */
   mirrorRebuild: () => invoke<PassReport>("mirror_rebuild"),
   /**
-   * Render the whole backup and hand this page the archive.
-   *
-   * **The browser's door, and the only one it has.** The four calls above are the folder —
-   * where it is, whether it runs, when it last ran — and a browser has nowhere to put a folder
-   * other programs can read. This one renders the same files through the same Rust writer the
-   * mirror pass uses and answers the zip's bytes as base64, which the page turns into a
-   * download.
-   *
-   * Routed on web (`web::route`) and registered on the Tauri builds too, because it is the same
-   * archive either way and a command that exists on one target only is a command nothing here
-   * can test.
-   */
-  mirrorBackupZip: () => invoke<BackupZip>("mirror_backup_zip"),
-  /**
-   * Render the whole backup and write it at a path the reader chose in the OS save dialog.
-   *
-   * **Android's door**, and it exists rather than reusing {@link ipc.mirrorBackupZip} for the
-   * same reason {@link ipc.exportWriteFile} exists: what `dialog:allow-save` answers on a phone
-   * is a `content://` URI naming a row `ACTION_CREATE_DOCUMENT` has already created, not a path
-   * the page could ever write to — and handing the webview a megabyte of base64 to hand
-   * straight back would be two copies of the archive through IPC for nothing. Rust builds it
-   * and Rust writes it; {@link BackupZip.base64} comes back `null`.
-   */
-  mirrorBackupSave: (path: string) => invoke<BackupZip>("mirror_backup_save", { path }),
-  /**
    * This device, the group it is in, and the roster — the pairing panel's only read.
    *
    * A **write** path at the far end despite the name: a database that has never paired has no
@@ -10387,9 +10320,6 @@ export const ipc = {
    * That is not an error, it is the state every existing installation is in.
    */
   syncNow: () => invoke<RelayOutcome | null>("sync_now"),
-  /** Tell the socket whether the app is in front. Android only — see Task 11's effect. */
-  syncLiveForeground: (on: boolean): Promise<void> =>
-    invoke("sync_live_foreground", { on }),
   /** The relay socket's state right now. Seeds a listener that mounts after the last transition.
    *
    * The Rust manager **deduplicates** `sync:live` — it emits only on a transition, because
@@ -10445,28 +10375,21 @@ export const ipc = {
   /** `scanner::scanner_status`. Lazy: the first call loads the bundle and the models. */
   scannerStatus: () => invoke<ScannerStatus>("scanner_status"),
   /**
-   * `scanner::scanner_frame`. **Two shapes for one command.** On desktop the JPEG is the body
-   * and the options ride in a header; on Android Tauri carries no raw bytes ("on all platforms
-   * except Android", its own doc on `Request`), so the same command takes `{ jpeg, options }`
-   * as named arguments. `isAndroid()`'s third reader, and the one its note asks to justify: the
-   * core boundary is per *build* and both legs are the Tauri build — the difference is
-   * Tauri's, per OS, and it is met here in the one wrapper that meets it.
+   * `scanner::scanner_frame`. The JPEG is the body and the options ride in a header, because a
+   * frame is bytes with no fields to name.
    */
   scannerFrame: (jpeg: Uint8Array, options: ScannerOptions) =>
-    isAndroid()
-      ? invoke<ScannerVerdict>("scanner_frame", { jpeg: bytesToBase64(jpeg), options })
-      : invoke<ScannerVerdict>("scanner_frame", jpeg, {
-          headers: { "x-scanner-options": asciiJson(options) },
-        }),
+    invoke<ScannerVerdict>("scanner_frame", jpeg, {
+      headers: { "x-scanner-options": asciiJson(options) },
+    }),
   /** `scanner::scanner_reset`. The reader pressed reset, or the next card is coming. */
   scannerReset: () => invoke<void>("scanner_reset"),
-  /** `scanner::scanner_capture`. The same two shapes as {@link ipc.scannerFrame}. */
+  /** `scanner::scanner_capture`. The same shape as {@link ipc.scannerFrame}: the JPEG is the
+   *  body and the sidecar rides in a header. */
   scannerCapture: (jpeg: Uint8Array, sidecar: ScannerSidecar) =>
-    isAndroid()
-      ? invoke<ScannerCaptured>("scanner_capture", { jpeg: bytesToBase64(jpeg), sidecar })
-      : invoke<ScannerCaptured>("scanner_capture", jpeg, {
-          headers: { "x-scanner-capture": asciiJson(sidecar) },
-        }),
+    invoke<ScannerCaptured>("scanner_capture", jpeg, {
+      headers: { "x-scanner-capture": asciiJson(sidecar) },
+    }),
   /**
    * `scanner::scanner_set_filters`. Narrows every later frame to these sets and dates, and resets
    * the tracker. **Rejects in the crate's words** — no card names loaded to filter by, or filters

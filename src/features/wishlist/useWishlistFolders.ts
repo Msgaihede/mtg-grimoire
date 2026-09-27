@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type WishlistFolder } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { refreshCardSearches } from "@/lib/searchMarks";
 
 /** Stable identity for "no folders yet" — a wishlist that files nothing is the ordinary case,
  *  and the tree builder's `useMemo` does not see a new identity every render. */
@@ -198,7 +199,7 @@ export function useWishlistFolders() {
    */
   const settleWishes = () => {
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    void refreshCardSearches(queryClient);
   };
   const wishWrites = { onSuccess: settleWishes, onError: settleWishes };
 

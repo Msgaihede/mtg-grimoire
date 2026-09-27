@@ -119,6 +119,17 @@ export function deckCardTarget(card: DeckCard): CardMenuTarget {
  */
 const ALREADY_HERE = "already here";
 
+/**
+ * What a per-row write may answer: nothing, or the promise of its outcome — which is what lets a
+ * plural row hand a whole batch to {@link DeckCardMenuDeps.batch}.
+ */
+type Press = void | Promise<unknown>;
+
+/** Hand a plural row's presses to the surface as one batch — see {@link DeckCardMenuDeps.batch}. */
+function reportBatch(deps: DeckCardMenuDeps, presses: readonly Press[]) {
+  deps.batch?.(presses.filter((press): press is Promise<unknown> => press instanceof Promise));
+}
+
 /** Everything the deck's own rows need that is not the card. Built once per surface, never
  *  once per row. */
 export interface DeckCardMenuDeps {
@@ -143,9 +154,9 @@ export interface DeckCardMenuDeps {
   spec: FormatSpec | null;
   /** `useDeck.moveCard`, addressed by the row rather than by a slot: the caller knows which
    *  pile the card is leaving. */
-  moveTo: (card: DeckCard, categoryId: number) => void;
+  moveTo: (card: DeckCard, categoryId: number) => Press;
   /** `useDeck.setLabel`. `null` takes the label off. */
-  setLabel: (card: DeckCard, labelId: number | null) => void;
+  setLabel: (card: DeckCard, labelId: number | null) => Press;
   /** `useDeck.setCardFinish`. `null` is the regular copy — see {@link finishItem}. */
   setFinish: (card: DeckCard, to: DeckFinish) => void;
   /** The labels **this list is wearing**, already in hand from `deck_get`, most-used first —
@@ -190,7 +201,18 @@ export interface DeckCardMenuDeps {
    * add to put back and the reader can see which one it was; a pile is a column they would have
    * to rebuild, and the two rows differ by exactly that.
    */
-  remove: (card: DeckCard) => void;
+  remove: (card: DeckCard) => Press;
+  /**
+   * **Every outcome of a plural row's writes, handed back as one batch** (issue #553) — `Move N
+   * cards to`, `Label N cards` and `Remove N cards` each make one write per picked row, and the
+   * surface's banner can only hear a batch's refusals if it is shown all of them: each write is a
+   * call on one shared observer, which remembers the last card alone. Called with the promises
+   * the three writes above answered; a write that answered none is left out.
+   *
+   * Optional, because a surface with no banner to speak through has nothing to do with them — the
+   * workbench's stories build this menu with bare `act` spies.
+   */
+  batch?: (presses: readonly Promise<unknown>[]) => void;
   /**
    * **Quick add to collection** — record the copies this row is short of and file them in the
    * deck's own group, and write nothing to the wishlist (`deck_quick_add_to_collection` with no
@@ -400,9 +422,12 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
       label: many ? `Label ${manyCards(rows.length)}` : "Label card",
       Icon: Tag,
       items: [
-        ...deckCardLabelRows(card, deps.labels, (_card, labelId) => {
-          for (const row of rows) deps.setLabel(row, labelId);
-        }),
+        ...deckCardLabelRows(card, deps.labels, (_card, labelId) =>
+          reportBatch(
+            deps,
+            rows.map((row) => deps.setLabel(row, labelId)),
+          ),
+        ),
         // The line between putting a label on and making one. Above it every row is a press and
         // the card is labelled; below it the menu closes and a dialog opens, which is a
         // different kind of act and is drawn as one.
@@ -448,9 +473,11 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
       // row per write. What keeps it unconfirmed is that the reader picked those four themselves,
       // one Ctrl-click at a time, and every one of them is wearing a gold ring while they read
       // this row — the pile's `Clear stack…` asks because a pile is a column nobody enumerated.
-      onSelect: () => {
-        for (const row of rows) deps.remove(row);
-      },
+      onSelect: () =>
+        reportBatch(
+          deps,
+          rows.map((row) => deps.remove(row)),
+        ),
     },
   ];
 }
@@ -520,12 +547,13 @@ function categoryItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
         kind: "action",
         id: `move-${category.id}`,
         label: category.name,
-        onSelect: () => {
-          for (const row of rows) {
-            if (row.categoryId === category.id) continue;
-            deps.moveTo(row, category.id);
-          }
-        },
+        onSelect: () =>
+          reportBatch(
+            deps,
+            rows
+              .filter((row) => row.categoryId !== category.id)
+              .map((row) => deps.moveTo(row, category.id)),
+          ),
       };
     }),
   };

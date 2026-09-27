@@ -36,16 +36,14 @@ export function wireFinish(f: string): Finish | null {
  * * **It is not a button.** There is no card to open — the snapshot carries a printing's
  *   identity and its picture and nothing a detail pane could draw — and a button that opened
  *   nothing would be a control the page cannot honour.
- * * **`cardId={null}`, always — but that is not what carries the picture.** ⚠️ `cardArtSrc` is
- *   `isWebTarget() ? (suppliedUrl ?? null) : protocolUrl`, so what makes the frame draw
- *   `card.img` is **`__CORE__ === "web"`**, which `vite.share.config.ts` defines and this
- *   bundle's build is the only place it comes from. With `cardId={null}` on a *tauri* build the
- *   same call returns `null` and no `<img>` is drawn at all — which is why the suite mocks
- *   `@/pwa/target`, and why a doc saying "the supplied URL on every build" would be wrong.
- *   The null is kept as defence in depth: it means this bundle can never *ask* for the
- *   `mtgimg://` protocol a browser has never heard of, even if that define were ever wrong.
- *   A card the publisher's corpus had forgotten carries no `img` — which `CardArt` draws as a
- *   named frame rather than a broken image.
+ * * **`cardId={null}`, always — but that is not what carries the picture.** `remoteSrc` is:
+ *   this page has no Tauri behind it and so no `mtgimg://` protocol to ask, and `CardArt`'s
+ *   `remoteSrc` is the one door for a picture from anywhere else — this tile is its only
+ *   caller. ⚠️ **`card.img ?? null`, never bare `card.img`**: an absent `remoteSrc` means *the
+ *   cache*, and a present `null` means *no picture*. A card the publisher's corpus had
+ *   forgotten carries no `img`, which `CardArt` draws as a named frame rather than a broken
+ *   image. The null id is kept as defence in depth: it means this bundle can never *ask* for
+ *   the `mtgimg://` protocol a browser has never heard of.
  * * **`rarity={null}` on the chin.** Rarity is not on the wire (spec §3's absences), so the gem
  *   says *unknown* rather than being derived from a corpus this page does not have.
  */
@@ -85,7 +83,7 @@ export function ShareTile({
   return (
     <li className="group flex flex-col" style={cardScaleVars(DEFAULT_ZOOM)}>
       <div className="relative">
-        <CardArt cardId={null} name={card.n} imageUrl={card.img} finish={marked} />
+        <CardArt cardId={null} name={card.n} remoteSrc={card.img ?? null} finish={marked} />
         {card.q > 1 && (
           // Bottom-left. The art's top-right corner is the finish chip's on every wall in this
           // app, and a bare number laid *on* a card is `CountTag` — no `×`. The tag is

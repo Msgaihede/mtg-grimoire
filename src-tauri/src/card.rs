@@ -28,11 +28,9 @@
 //! [`store_group_by`].
 
 use crate::sorting::Marketplace;
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// Printings returned for one oracle card. A bound on a pane, not a pager.
@@ -189,13 +187,7 @@ pub struct CardDetail {
     pub image_status: Option<String>,
     /// Empty for a single-faced card.
     pub faces: Vec<CardFace>,
-    /// Where this printing's picture is, per variant — **the web target's only way to draw
-    /// one**, and the reason it is on a DTO at all.
-    ///
-    /// `mtgimg://` is registered natively with the webview and wasm cannot register a URL
-    /// scheme with a browser, so a card pane in a browser can reach no picture the row did not
-    /// hand it. `src/lib/images.ts`'s `cardArtSrc` is the whole of that branch: it ignores this
-    /// on desktop, where the local cache is already the right bytes at the right size.
+    /// Where this printing's picture is on `cards.scryfall.io`, per variant.
     ///
     /// Built by [`crate::image_uri::front_face_selects`] and folded by `front_face_map`, which
     /// is where the face-first precedence and the `soon.jpg` fence live. A printing carrying
@@ -235,13 +227,7 @@ pub struct Printing {
     pub frame_effects: Option<String>,
     pub border_color: Option<String>,
     pub layout: String,
-    /// Where this printing's picture is, per variant — **the web target's only way to draw
-    /// one**, and the reason it is on a DTO at all.
-    ///
-    /// `mtgimg://` is registered natively with the webview and wasm cannot register a URL
-    /// scheme with a browser, so a card pane in a browser can reach no picture the row did not
-    /// hand it. `src/lib/images.ts`'s `cardArtSrc` is the whole of that branch: it ignores this
-    /// on desktop, where the local cache is already the right bytes at the right size.
+    /// Where this printing's picture is on `cards.scryfall.io`, per variant.
     ///
     /// Built by [`crate::image_uri::front_face_selects`] and folded by `front_face_map`, which
     /// is where the face-first precedence and the `soon.jpg` fence live. A printing carrying
@@ -451,7 +437,6 @@ pub fn list_printings(
 /// The marketplace is resolved by [`Marketplace::from_opt`], which is the crate's one rule and
 /// never fails: absent, null, a typo, a future id and `cardtrader` all mean TCGplayer, because a
 /// card the reader asked to see must not refuse to open over a setting.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_detail(
     state: tauri::State<'_, Arc<AppState>>,
@@ -473,7 +458,6 @@ pub async fn card_detail(
 /// for it; the printings modal asks for [`MAX_PRINTINGS_HARD`] because it filters client-side,
 /// and a filter over a truncated list draws an empty wall that reads as an answer. Whatever a
 /// caller sends is clamped by [`page_size`], so the number is a request rather than a promise.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_printings(
     state: tauri::State<'_, Arc<AppState>>,
@@ -522,7 +506,6 @@ pub async fn card_printings(
 /// replaced.
 ///
 /// Read-only connection, blocking pool — as [`card_detail`] is, and for the same reason.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_image_uri(
     state: tauri::State<'_, Arc<AppState>>,
@@ -537,9 +520,7 @@ pub async fn card_image_uri(
     .map_err(|e| format!("the image URL could not be read: {e}"))?
 }
 
-/// **`pub(crate)` since 2026-08-30**: `web::route` calls it directly, because the browser
-/// has no `mtgimg://` handler for the wrapper's answer to be fetched through and the page
-/// builds a `cards.scryfall.io` URL from the same two columns instead.
+/// [`card_image_uri`] on a connection the caller holds.
 pub(crate) fn card_image_uri_inner(
     conn: &Connection,
     card_id: &str,
@@ -715,7 +696,6 @@ pub fn meld_parts(conn: &Connection, id: &str) -> Result<Vec<MeldRelation>, Stri
 /// [`card_detail`] is, and for the same reason.
 ///
 /// Takes no `marketplace`: this answers who a card melds with, not what anything costs.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_meld_parts(
     state: tauri::State<'_, Arc<AppState>>,
@@ -855,7 +835,6 @@ pub fn tcgplayer_ids(conn: &Connection, id: &str) -> Result<TcgplayerIds, String
 /// Takes no `marketplace`: this answers what TCGplayer's catalogue calls this printing, not
 /// what anything costs. The ids are the same whichever marketplace the reader has chosen, which
 /// is also why nothing about them belongs in [`FinishPrices`].
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_tcgplayer_ids(
     state: tauri::State<'_, Arc<AppState>>,
@@ -961,7 +940,6 @@ pub fn holdings(conn: &Connection, oracle_id: &str) -> Result<CardHoldings, Stri
 /// — three reads that each answered a page of rows to have their `quantity` column summed in
 /// the webview. Takes no `marketplace`: these are counts, and nothing about them moves when the
 /// setting does.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_holdings(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1054,7 +1032,6 @@ pub fn store_group_by(conn: &Connection, mode: &str) -> Result<(), String> {
 /// the write connection would hold the whole pane behind it. The `Result` is `spawn_blocking`'s
 /// join and nothing else; the read itself has no failure mode left, because every way it could
 /// go wrong is already a reason to answer the default.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn printing_group_by(state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
     let state = state.inner().clone();
@@ -1072,7 +1049,6 @@ pub async fn printing_group_by(state: tauri::State<'_, Arc<AppState>>) -> Result
 /// sync holds the connection answers BUSY, because nothing has looked at the mode yet. Getting
 /// that backwards would mean the same call answered two different sentences depending on
 /// whether an ingest happened to be running.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_printing_group_by(
     state: tauri::State<'_, Arc<AppState>>,
