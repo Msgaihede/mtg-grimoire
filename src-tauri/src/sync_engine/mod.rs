@@ -30,7 +30,6 @@ pub mod capture;
 pub mod client;
 /// The IPC surface, and the one module here that is not every-target: a `#[tauri::command]`
 /// does not exist in a browser. Everything it orchestrates does.
-#[cfg(not(target_family = "wasm"))]
 pub mod commands;
 /// The entitlement grant — the tokens that let this device talk to the relay at all, and the
 /// supporter status the relay last reported. Every-target: a browser needs the same grant.
@@ -39,7 +38,6 @@ pub mod hlc;
 /// The relay socket and the task that acts on it. Not every-target, and for the same shape of
 /// reason [`commands`] is not: `tokio-tungstenite` does not build for `wasm32`, and a browser
 /// could not set the bearer header the upgrade needs anyway.
-#[cfg(not(target_family = "wasm"))]
 pub mod live;
 pub mod merge;
 pub mod schedule;

@@ -23,12 +23,10 @@ use crate::collection::{valid_quantity, EntryChange, ShelfCount};
 use crate::deck_meta::FOLDER_GONE;
 use crate::filters::{escape_like, PredicateField, QueryPredicate, LIKE_ESCAPE};
 use crate::schema::{FINISHES, WISHLIST_GRAIN};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// One wish, as the UI sends it.
@@ -1579,7 +1577,6 @@ pub fn shelf_counts(conn: &Connection, q: &WishlistQuery) -> Result<Vec<ShelfCou
     Ok(counts)
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_add(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1591,7 +1588,6 @@ pub async fn wishlist_add(
         .map_err(|e| format!("the wishlist could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_set_quantity(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1606,7 +1602,6 @@ pub async fn wishlist_set_quantity(
     .map_err(|e| format!("the wishlist could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_remove(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1620,7 +1615,6 @@ pub async fn wishlist_remove(
 
 /// "Use this printing", and "Any printing" — see [`set_wish_printing`] for the merge, which
 /// is why this answers an [`EntryChange`] whose `id` is not always the `id` it was given.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_set_printing(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1637,7 +1631,6 @@ pub async fn wishlist_set_printing(
 
 /// One transaction for a whole imported file — see [`commit_import`] for the `set` arm's route
 /// through [`add_wish`] and why `removed` is counted rather than derived.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1653,7 +1646,6 @@ pub async fn wishlist_import_commit(
 }
 
 /// The wishlist. **Read-only** connection, blocking pool — as every read in this app is.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1669,7 +1661,6 @@ pub async fn wishlist_list(
 
 /// The Shelves wall's per-shelf figures for the wishlist — and, summed, its header's Total cost.
 /// **Read-only** connection, blocking pool.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_shelf_counts(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1918,7 +1909,6 @@ pub fn breakdown(
 
 /// The wishlist's header figures. **Read-only** connection, blocking pool — as every read in
 /// this app is.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_summary(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1933,7 +1923,6 @@ pub async fn wishlist_summary(
 }
 
 /// The same money, one dimension at a time. **Read-only**, like its neighbour.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_breakdown(
     state: tauri::State<'_, Arc<AppState>>,

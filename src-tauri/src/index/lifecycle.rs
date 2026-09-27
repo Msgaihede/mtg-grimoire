@@ -158,7 +158,6 @@ pub fn build_from(state: &AppState, conn: &rusqlite::Connection) -> Result<(), S
 /// ~767 ms of it, once per corpus swap. [`build_from`]'s own test is what proves the two
 /// builds publish the same index.
 pub fn build_now(state: &AppState) -> Result<(), String> {
-    #[cfg(not(target_family = "wasm"))]
     {
         // Spelled here and in `desktop.rs`'s `init_state`, which is the one that creates it.
         let conn =
@@ -181,7 +180,6 @@ pub fn build_now(state: &AppState) -> Result<(), String> {
 ///
 /// The handle is returned so a test can join it; the three production call sites drop it and
 /// let the thread run detached. A failure is logged and nothing else — see the module docs.
-#[cfg(not(target_family = "wasm"))]
 pub fn spawn_build(state: &Arc<AppState>) -> std::thread::JoinHandle<()> {
     clear(state);
     let state = state.clone();
@@ -216,7 +214,6 @@ pub fn invalidate_owned(state: &AppState) {
     };
     // [`build_now`]'s split, for its reason: a connection of its own on desktop, the only one
     // there is in a Worker.
-    #[cfg(not(target_family = "wasm"))]
     let Ok(conn) = crate::db::open_read(&state.data_dir) else {
         return;
     };

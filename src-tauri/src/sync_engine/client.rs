@@ -341,7 +341,7 @@ fn me(conn: &Connection) -> Result<Option<(String, Group)>, String> {
 /// it removes the only thing being shared across runtimes.
 ///
 /// Re-measured after this change: **0 failures in 60 runs** (p ≈ 0.002 against a 10% rate).
-#[cfg(all(not(target_family = "wasm"), not(test)))]
+#[cfg(not(test))]
 fn http() -> reqwest::Client {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -349,14 +349,13 @@ fn http() -> reqwest::Client {
 }
 
 /// See [`http`]: a test build takes a fresh client so nothing is shared across runtimes.
-#[cfg(all(not(target_family = "wasm"), test))]
+#[cfg(test)]
 fn http() -> reqwest::Client {
     build_http()
 }
 
 /// The one place the client's shape is written down, so the two arms above cannot drift on a
 /// timeout the way two copies of a builder would.
-#[cfg(not(target_family = "wasm"))]
 fn build_http() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(crate::scryfall::USER_AGENT)
@@ -1500,5 +1499,5 @@ async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOu
     Ok(Some(outcome))
 }
 
-#[cfg(all(test, not(target_family = "wasm")))]
+#[cfg(test)]
 mod tests;

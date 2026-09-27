@@ -19,10 +19,8 @@
 //!
 //! See `docs/superpowers/specs/2026-08-12-card-marketplace-pricing-design.md`.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// Every marketplace id this build recognises, in the order the picker lists them.
@@ -95,7 +93,6 @@ pub fn store(conn: &Connection, id: &str) -> Result<(), String> {
 /// IPC thread, and this one takes `db_read`'s mutex, which a search may hold for tens of
 /// milliseconds. It is not an `async fn` because Tauri requires a `Result` from one that
 /// borrows `State`, and a `Result` here would be a failure mode this call does not have.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn get_marketplace(state: tauri::State<'_, Arc<AppState>>) -> String {
     stored(&crate::sync::lock_db_read(state.inner()))
@@ -103,7 +100,6 @@ pub fn get_marketplace(state: tauri::State<'_, Arc<AppState>>) -> String {
 
 /// Choose a marketplace. Rejects an unknown id, and answers [`crate::db::BUSY`] if a
 /// sync holds the write connection — the bound every write command in this crate takes.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_marketplace(
     state: tauri::State<'_, Arc<AppState>>,
@@ -134,7 +130,6 @@ pub async fn set_marketplace(
 /// `mirror` field on wasm — there is no mirror there, by §6.3 — so this is gated while
 /// [`store`] and [`stored`] beside it are not: the *setting* is every target's, and telling a
 /// mirror about it is not. `deck_meta`'s readback quotes `stored` on the web the same way.
-#[cfg(not(target_family = "wasm"))]
 pub fn set_marketplace_now(state: &AppState, id: &str) -> Result<(), String> {
     let saved = crate::sync::with_write(state, |conn| store(conn, id));
     if saved.is_ok() {

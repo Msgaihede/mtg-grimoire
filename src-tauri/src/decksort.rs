@@ -43,10 +43,8 @@
 //! not `sync_meta`, where a row the sync did not write makes every later timing claim a fiction
 //! — and this is a key in it.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key.
@@ -104,7 +102,6 @@ pub fn store(conn: &Connection, sort: &str) -> Result<(), String> {
 /// `#[tauri::command(async)]` rather than a bare sync command, also [`crate::listview`]'s: a
 /// sync body runs inline on the IPC thread, and this one takes `db_read`'s mutex, which a search
 /// may hold for tens of milliseconds.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn deck_sort(state: tauri::State<'_, Arc<AppState>>) -> String {
     stored(&crate::sync::lock_db_read(state.inner()))
@@ -117,7 +114,6 @@ pub fn deck_sort(state: tauri::State<'_, Arc<AppState>>) -> String {
 /// its reason: the frontend writes optimistically and keeps the reader's choice for the session
 /// either way, so a BUSY during a first-run sync costs them nothing they can see now and only
 /// the next launch's starting order.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_deck_sort(
     state: tauri::State<'_, Arc<AppState>>,

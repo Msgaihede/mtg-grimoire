@@ -52,12 +52,10 @@
 //!   out lately of what you play*, not *what you are missing*, and the deck popover names the
 //!   copies either way.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key. The table is the application's, deliberately not `sync_meta` — a mark
@@ -508,7 +506,6 @@ pub fn mark_seen(conn: &Connection, at: i64) -> Result<(), String> {
 /// one is narrowed again here: `days` into `1..=MAX_DAYS`, `limit` into
 /// `0..=`[`NEW_PRINTINGS_READ`], an unknown `scope` into `all`, and `langs` to codes of the right
 /// shape, capped at `MAX_LANGS`. A hand-edited row cannot ask for the whole corpus.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn new_printings(
@@ -544,7 +541,6 @@ pub async fn new_printings(
 /// Answers [`crate::db::BUSY`] if a sync holds the write connection, like every write command
 /// here. **The caller ignores a refusal**: a cursor that did not move costs a row of gold dots
 /// the reader has already looked at, and a widget that raised an error over it would be worse.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn mark_new_printings_seen(
     state: tauri::State<'_, Arc<AppState>>,

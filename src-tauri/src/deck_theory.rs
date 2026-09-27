@@ -44,12 +44,10 @@
 //! list. Nothing in this module or in `deck.rs` deletes a `theory` row except the ordinary card
 //! writes the user makes against it.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What is actually sleeved up — `DECK_VARIANTS[0]` by index, [`crate::deck`]'s discipline.
@@ -902,7 +900,6 @@ pub(crate) fn wanted(
 }
 
 /// What a write here says when its worker thread died under it.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck could not be written: {e}")
 }
@@ -991,7 +988,6 @@ pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<TheorySlot>, 
 
 /// [`theory_slots`]'s command. **Read-only** connection, and no marketplace: nothing here is
 /// priced.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_slots(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1006,7 +1002,6 @@ pub async fn deck_theory_slots(
 }
 
 /// What the plan wants and the deck does not have. **Read-only** connection.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_diff(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1029,7 +1024,6 @@ pub async fn deck_theory_diff(
 /// every press had before the dialog could offer one, and the destination a caller that sends
 /// nothing still gets. A folder that is not there is refused by name before a single wish is
 /// written.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_missing_to_wishlist(
     state: tauri::State<'_, Arc<AppState>>,

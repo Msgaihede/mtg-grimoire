@@ -5,7 +5,6 @@ use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, Tr
 use std::time::Duration;
 // `Instant::now()` **panics** on `wasm32-unknown-unknown`. Gating the import rather than
 // only its caller is the fence: on the web target the name is not in scope at all.
-#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 
 /// Ceiling on the write-ahead log *file* after a checkpoint, in bytes.
@@ -352,7 +351,6 @@ pub fn lock_write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
 ///
 /// Gated because the web arm has no waiting to do, and an unused constant fails
 /// `clippy -D warnings` on that target.
-#[cfg(not(target_family = "wasm"))]
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Take `mutex`, giving up after `timeout` rather than queueing behind whatever holds it.
@@ -395,7 +393,6 @@ pub fn lock_for(
         }
     }
 
-    #[cfg(not(target_family = "wasm"))]
     {
         let deadline = Instant::now() + timeout;
         loop {

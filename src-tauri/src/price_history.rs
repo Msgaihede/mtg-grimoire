@@ -91,11 +91,9 @@
 
 use crate::collection_source::{self, Availability};
 use crate::sorting::{self, Marketplace};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
 use serde::Serialize;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// Nothing older than this many days survives a [`prune`] — a year and a month, so `all` can
@@ -577,7 +575,6 @@ fn snapshot_days(conn: &Connection, key: &str) -> rusqlite::Result<i64> {
 /// `marketplace` is taken as the enum, whose own `Deserialize` never fails — an id this build does
 /// not know is TCGplayer, as on every list query — and as an `Option`, so a caller that sends none
 /// gets the same default rather than a refusal.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn price_movers(
     state: tauri::State<'_, Arc<AppState>>,
@@ -689,7 +686,6 @@ pub fn history(
 /// A mover's detail: one printing's kept history at one marketplace, and its live price.
 /// **Read-only** connection, blocking pool, and the marketplace taken as [`price_movers`] takes
 /// it — an absent or unknown id is TCGplayer, never a refusal.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn price_history(
     state: tauri::State<'_, Arc<AppState>>,

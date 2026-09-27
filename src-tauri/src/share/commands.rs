@@ -13,9 +13,7 @@
 
 use serde::Serialize;
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{self, AppState};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// One published share, as the page draws it.
@@ -82,7 +80,6 @@ impl From<ShareFieldsArg> for super::ShareFields {
 /// What a write here says when its worker thread died under it — never a reader's problem; the
 /// write itself answers [`crate::db::BUSY`] when the database is busy.
 /// [`crate::collection_folders`]' helper of the same name, named for this table instead.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the share list could not be written: {e}")
 }
@@ -93,7 +90,6 @@ fn unfinished(e: tauri::Error) -> String {
 /// write connection is behind a `Mutex`, so a guard on it cannot cross an `await` on a
 /// multi-threaded runtime; `spawn_blocking` moves the whole trip to a thread where a `block_on`
 /// is legal and the guard never has to be `Send`.
-#[cfg(not(target_family = "wasm"))]
 async fn on_the_write_connection<T: Send + 'static>(
     state: Arc<AppState>,
     work: impl FnOnce(&rusqlite::Connection, &tokio::runtime::Runtime) -> Result<T, String>
@@ -119,7 +115,6 @@ async fn on_the_write_connection<T: Send + 'static>(
 /// — or no membership at all — answers the cache, which is what the cache is for.
 ///
 /// **The browser build routes the cache read alone**; see [`crate::web::route`].
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn share_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<ShareRow>, String> {
     let state = state.inner().clone();
@@ -130,7 +125,6 @@ pub async fn share_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Sh
 }
 
 /// Publish a folder — or the whole collection, for a `null` `folderUid`.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn share_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -151,7 +145,6 @@ pub async fn share_create(
 }
 
 /// Upload a fresh snapshot for a share that already exists, keeping its link.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn share_refresh(
     state: tauri::State<'_, Arc<AppState>>,
@@ -165,7 +158,6 @@ pub async fn share_refresh(
 }
 
 /// Withdraw a share. Terminal, and the reader's own press.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn share_revoke(
     state: tauri::State<'_, Arc<AppState>>,
@@ -183,7 +175,6 @@ pub async fn share_revoke(
 /// **Needs no membership and sends no token** (spec §9): viewing is open to everyone, and the
 /// link is the whole of the capability. It still takes the write connection, because
 /// [`super::publish::open`] records a failure in `error_log` like every other network path here.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn share_open(
     state: tauri::State<'_, Arc<AppState>>,

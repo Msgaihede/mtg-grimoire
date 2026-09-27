@@ -48,11 +48,9 @@
 //! make a set they own a card of disappear from the list.
 
 use crate::collection_source::{self, Availability};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde::Serialize;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// One set the collection holds at least one card of.
@@ -139,7 +137,6 @@ pub fn set_completion_of(conn: &Connection) -> Result<Vec<SetCompletion>, String
 ///
 /// **No arguments**, and the page sends none: an argument object sent to a command that declares
 /// only the managed state is a deserialisation error (`src/lib/ipc.test.ts` pins it).
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_completion(
     state: tauri::State<'_, Arc<AppState>>,

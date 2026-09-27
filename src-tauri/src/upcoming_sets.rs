@@ -39,11 +39,9 @@
 // edit. It carries `front_card` as well as the four the widget's spec named. And the search's
 // spelling of "the same card", which `previewed` counts with so it is the search's number.
 use crate::search::{COLLAPSE_KEY, NON_CARD_LAYOUTS};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
 use serde::Serialize;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The longest window the read answers, in days — the widget offers 30, 90 and 365, and a
@@ -173,7 +171,6 @@ pub fn upcoming_sets_for(conn: &Connection, days: i64) -> Result<UpcomingSets, S
 
 /// Coming soon's read. **Read-only** connection, blocking pool. `days` is narrowed here as well as
 /// in TypeScript, because it arrives from a `config` a reader can hand-edit.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn upcoming_sets(
     state: tauri::State<'_, Arc<AppState>>,

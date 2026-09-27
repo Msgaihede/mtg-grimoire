@@ -946,7 +946,6 @@ pub async fn set_scanner_tray(
 /// written whole, and a window that has lost the scanner is a window whose tray may be older than
 /// the stored one — its commit would file rows another window has already filed, and store a tray
 /// over theirs.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn scanner_tray_commit(
     state: tauri::State<'_, Arc<AppState>>,

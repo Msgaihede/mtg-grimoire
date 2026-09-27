@@ -222,7 +222,6 @@ pub fn owned_rowids(_conn: &Connection) -> String {
 /// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
 /// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists
 /// before the first web write rather than after it.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn with_write_owned<T>(
     state: &Arc<AppState>,
     f: impl FnOnce(&Connection) -> Result<T, String>,

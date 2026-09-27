@@ -48,10 +48,8 @@
 //! file reads this file back to keep it that way, which is also why that column's name is
 //! spelled in exactly one place below.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What a write says when the note it names is not there any more.
@@ -229,7 +227,6 @@ fn exists(conn: &Connection, id: i64) -> Result<bool, String> {
 
 /// What a write here says when its worker thread died under it — never a reader's problem. The
 /// write itself answers [`crate::db::BUSY`] when a sync holds the connection.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the note could not be written: {e}")
 }
@@ -248,13 +245,11 @@ fn unfinished(e: tauri::Error) -> String {
 /// `sticky_notes::sticky_notes` registers as `sticky_notes` — the module and its read wear one
 /// name on purpose, exactly as `deck_notes::deck_notes` does, because the wire name is the one
 /// `src/lib/ipc.ts` invokes.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn sticky_notes(state: tauri::State<'_, Arc<AppState>>) -> Vec<StickyNoteRow> {
     list_notes(&crate::sync::lock_db_read(state.inner())).unwrap_or_default()
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sticky_note_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -271,7 +266,6 @@ pub async fn sticky_note_create(
 }
 
 /// **Every field is optional and an absent one means *leave it*.** See [`update_note`].
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sticky_note_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -289,7 +283,6 @@ pub async fn sticky_note_update(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sticky_note_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -301,7 +294,6 @@ pub async fn sticky_note_delete(
         .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sticky_note_reorder(
     state: tauri::State<'_, Arc<AppState>>,

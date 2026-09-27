@@ -92,19 +92,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::Path;
-#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::{Arc, OnceLock};
 // `SystemTime::now()` **panics** on `wasm32-unknown-unknown`. Gating the import rather
 // than only its callers is the fence: on the web target the name is not in scope, so a
 // clock cannot be reached for by accident from a module the map says compiles there.
-#[cfg(not(target_family = "wasm"))]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-#[cfg(not(target_family = "wasm"))]
 use tauri::Emitter;
 
 // ---------------------------------------------------------------------------------------
@@ -160,7 +155,6 @@ const MAX_FEED_BYTES: u64 = 128 * 1024 * 1024;
 /// Bytes of download between progress events. reqwest's chunk callback fires thousands of
 /// times over 27.5 MB, which is far more than a progress bar can use —
 /// [`crate::marketplace_feed`]'s number, for its reason.
-#[cfg(not(target_family = "wasm"))]
 const PROGRESS_EMIT_BYTES: u64 = 1_000_000;
 
 /// How long an ingested combo database stays fresh.
@@ -178,13 +172,11 @@ const PROGRESS_EMIT_BYTES: u64 = 1_000_000;
 pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 
 /// The connect timeout. This is an ordinary web host, not a CDN this app has measured.
-#[cfg(not(target_family = "wasm"))]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The longest gap between two chunks of the body before the connection is called dead.
 /// Deliberately *not* an overall timeout: 27.5 MB legitimately runs for a minute on a slow
 /// line, and a `timeout()` would kill it partway every time — [`crate::scryfall`]'s rule.
-#[cfg(not(target_family = "wasm"))]
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Rows per transaction on the way into staging.
@@ -196,10 +188,8 @@ const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const BATCH: usize = 2_000;
 
 /// Let a waiting writer see the connection is free. **Call it with no guard in scope.**
-#[cfg(not(target_family = "wasm"))]
 const YIELD_BETWEEN_BATCHES: Duration = Duration::from_millis(5);
 
-#[cfg(not(target_family = "wasm"))]
 fn stand_aside() {
     std::thread::sleep(YIELD_BETWEEN_BATCHES);
 }
@@ -1032,7 +1022,6 @@ pub fn clear(conn: &Connection) -> Result<ComboStatus, String> {
 /// and an arm in the frontend's total `SOURCE_LABEL` map. The `operation` carries the feed's
 /// name instead — that field is free text precisely so a new call site can report a failure
 /// without a migration first.
-#[cfg(not(target_family = "wasm"))]
 fn note_failure(db: &Mutex<Connection>, err: &ComboError) {
     // Skipped rather than waited for if the connection is busy: this describes a failure that
     // has already happened, on a path that is already returning an error.
@@ -1057,7 +1046,6 @@ fn note_failure(db: &Mutex<Connection>, err: &ComboError) {
 /// **Deliberately not [`crate::scryfall::Client`]** — see the module header. The user agent is
 /// shared because it is accurate here too: it names this app, its version and its repository,
 /// which is what a public bulk endpoint is owed.
-#[cfg(not(target_family = "wasm"))]
 fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -1089,7 +1077,6 @@ pub enum Fetch {
 /// **A refusal leaves nothing at `dest`** — including a size refusal that trips mid-stream,
 /// where the partial is deleted before returning. There is no resume here, and a half-written
 /// body would only fail to decompress next time.
-#[cfg(not(target_family = "wasm"))]
 pub async fn download(
     url: &str,
     dest: &Path,
@@ -1100,7 +1087,6 @@ pub async fn download(
 }
 
 /// [`download`] with the bound handed in, which is the seam the size-guard tests drive.
-#[cfg(not(target_family = "wasm"))]
 async fn download_capped(
     url: &str,
     dest: &Path,
@@ -1168,7 +1154,6 @@ async fn download_capped(
 
 /// Where the file is downloaded to. Beside the bulk file's and the price feeds' `tmp/`, and
 /// deleted either way.
-#[cfg(not(target_family = "wasm"))]
 fn temp_path(state: &AppState) -> PathBuf {
     state
         .data_dir
@@ -1237,7 +1222,6 @@ fn read_meta(conn: &Connection) -> Option<ComboMeta> {
 /// `tags::closure_is_populated`'s rule, for its reason: metadata can outlive the rows it
 /// describes, and replaying an `If-None-Match` for a file whose rows are gone earns a 304 that
 /// no amount of refreshing can get past.
-#[cfg(not(target_family = "wasm"))]
 fn is_populated(conn: &Connection) -> bool {
     conn.query_row("SELECT EXISTS(SELECT 1 FROM combos)", [], |r| {
         r.get::<_, i64>(0)
@@ -1304,7 +1288,6 @@ pub(crate) fn status_of(state: &AppState) -> ComboStatus {
 
 /// Seconds since the Unix epoch. A clock before 1970 reads as 0, which makes the combo
 /// database stale — [`crate::sync`]'s choice, for its reason.
-#[cfg(not(target_family = "wasm"))]
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2079,16 +2062,13 @@ pub fn card_combos(
 /// exists so an art refresh does not refuse because an oracle one is running, and there is no
 /// second dataset here to be refused by. Module-level rather than a field on `AppState` because
 /// it is this module's concern alone.
-#[cfg(not(target_family = "wasm"))]
 static REFRESHING: AtomicBool = AtomicBool::new(false);
 
 /// Clears the claim however the refresh ends — an early return, an error, a dropped future.
 /// `sync::SyncingGuard`'s shape, for its reason: a latched flag locks the reader out until they
 /// restart the app.
-#[cfg(not(target_family = "wasm"))]
 struct RefreshGuard;
 
-#[cfg(not(target_family = "wasm"))]
 impl RefreshGuard {
     /// Claim the refresh, or `None` if one is already running.
     fn claim() -> Option<RefreshGuard> {
@@ -2099,7 +2079,6 @@ impl RefreshGuard {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl Drop for RefreshGuard {
     fn drop(&mut self) {
         REFRESHING.store(false, Ordering::SeqCst);
@@ -2117,7 +2096,6 @@ impl Drop for RefreshGuard {
 /// the two fails the refresh and costs another 27.5 MB at the next launch. Named for its
 /// siblings in [`crate::marketplace_feed`] and [`crate::tags`], which answer the same question
 /// over a list of names; here there is one file, so it is the flag.
-#[cfg(not(target_family = "wasm"))]
 pub(crate) fn any_refresh_running() -> bool {
     REFRESHING.load(Ordering::SeqCst)
 }
@@ -2132,7 +2110,6 @@ pub(crate) fn any_refresh_running() -> bool {
 ///
 /// Its own function rather than an inline `filter` so the rule can be asserted without a
 /// network in the way.
-#[cfg(not(target_family = "wasm"))]
 fn conditional_etag(etag: Option<&str>, populated: bool) -> Option<&str> {
     etag.filter(|_| populated)
 }
@@ -2149,7 +2126,6 @@ fn conditional_etag(etag: Option<&str>, populated: bool) -> Option<&str> {
 ///
 /// The function survives the collapse to a single expression because the rule is worth being
 /// able to assert on its own; that is the split every other helper in this module uses.
-#[cfg(not(target_family = "wasm"))]
 fn due_at_startup(meta: Option<&ComboMeta>, now: i64) -> bool {
     is_stale(meta.and_then(|m| m.checked_at), now)
 }
@@ -2160,7 +2136,6 @@ fn due_at_startup(meta: Option<&ComboMeta>, now: i64) -> bool {
 /// stamp costs is one more conditional request a week from now. **Nothing is written when there
 /// is no row**, which is the never-ingested state: a watermark with no rows behind it is exactly
 /// what would make the next run 304 past an empty database.
-#[cfg(not(target_family = "wasm"))]
 fn mark_checked(state: &Arc<AppState>) {
     let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) else {
         return;
@@ -2182,7 +2157,6 @@ fn mark_checked(state: &Arc<AppState>) {
 ///
 /// Every failure leaves the previous combos exactly where they were and is written to
 /// `error_log`.
-#[cfg(not(target_family = "wasm"))]
 pub async fn refresh(
     state: &Arc<AppState>,
     force: bool,
@@ -2292,7 +2266,6 @@ pub async fn refresh(
 /// or, on a first run that fails, the three signals the estimate had before this feed existed.
 /// A failed first fetch leaves no watermark at all, because [`mark_checked`] updates a row that
 /// is not there, so it is retried at the next launch rather than throttled out for a week.
-#[cfg(not(target_family = "wasm"))]
 pub async fn refresh_if_due(state: &Arc<AppState>, app: &tauri::AppHandle) {
     let due = {
         let conn = crate::sync::lock_db_read(state);
@@ -2328,7 +2301,6 @@ pub struct ComboProgress {
 /// Emit one progress event. Dropped if nobody is listening, which is Tauri's behaviour and is
 /// why [`combos_status`] exists: the event is the fast path, the tables are what a reader can
 /// still consult a minute later.
-#[cfg(not(target_family = "wasm"))]
 fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64) {
     debug_assert!(PHASES.contains(&phase), "unknown combo phase `{phase}`");
     let _ = app.emit(
@@ -2353,7 +2325,6 @@ fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64) {
 ///
 /// `async`, and answered on the blocking pool, because a sync command body runs inline on the
 /// IPC thread and this takes `db_read`'s mutex.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn combos_status(state: tauri::State<'_, Arc<AppState>>) -> Result<ComboStatus, String> {
     let state = state.inner().clone();
@@ -2368,7 +2339,6 @@ pub async fn combos_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Com
 /// `force` skips the weekly throttle, not the ETag check. Long-running by nature (27.5 MB), so
 /// it reports itself through [`PROGRESS_EVENT`]. A failure leaves the previous combos in place,
 /// and the reason is in the error log.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn combos_refresh(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2405,7 +2375,6 @@ pub async fn combos_refresh(
 /// between this and [`mark_checked`]. That one is a best-effort watermark nobody is waiting on;
 /// this is a press somebody is watching, and a clear that quietly did nothing would read as a
 /// database that refuses to empty.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn combos_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<ComboStatus, String> {
     let state = state.inner().clone();
@@ -2426,7 +2395,6 @@ pub async fn combos_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<Comb
 /// [`MAX_CARD_IDS`] of them; see [`match_combos`] for why the list length is a real bound.
 ///
 /// `async`, and answered on the blocking pool, for [`combos_status`]'s reason.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn combos_for_cards(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2465,7 +2433,6 @@ pub async fn combos_for_cards(
 /// body runs inline on the IPC thread and this one takes `db_read`'s mutex. The body is
 /// [`card_combos`], which is also what the web target's router calls — one answer to the
 /// question, reached two ways.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn combos_for_card(
     state: tauri::State<'_, Arc<AppState>>,

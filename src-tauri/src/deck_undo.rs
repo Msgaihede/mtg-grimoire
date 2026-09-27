@@ -71,7 +71,6 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What an apply says when the id it was handed is not the deck's cursor (or, for a redo, not
@@ -2384,7 +2383,6 @@ pub struct DeckUndoState {
     pub redo: Option<crate::deck_audit::DeckAuditEntry>,
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// The `deck` payload an undo or a redo records, and the whole of what makes the pair legible.
 ///
 /// `of` is the history row being reversed, which is what lets `auditText.ts` render the undone
@@ -2393,7 +2391,6 @@ fn reversal_payload(field: &str, of: i64) -> Value {
     json!({ "field": field, "of": of })
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// One history row for the reversal itself.
 ///
 /// **`delta` is negated on an undo and carried straight on a redo**, so the day header's
@@ -2570,7 +2567,6 @@ pub fn undo_state(
     Ok(DeckUndoState { undo, redo })
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_undo_state(
     state: tauri::State<'_, Arc<crate::sync::AppState>>,
@@ -2586,7 +2582,6 @@ pub async fn deck_undo_state(
 }
 
 /// Undo the named change. The id is the cursor's or the call is refused in words.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_undo_apply(
     state: tauri::State<'_, Arc<crate::sync::AppState>>,
@@ -2605,7 +2600,6 @@ pub async fn deck_undo_apply(
 }
 
 /// Put back a change that was undone.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_redo_apply(
     state: tauri::State<'_, Arc<crate::sync::AppState>>,

@@ -51,15 +51,11 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 // `PathBuf` is only in `temp_path`'s return type, and downloading is desktop-only.
-#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 use std::sync::Mutex;
 // `Arc` only appears in signatures the ingest owns, all of which are gated off the web target.
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
-#[cfg(not(target_family = "wasm"))]
 use std::time::{SystemTime, UNIX_EPOCH};
-#[cfg(not(target_family = "wasm"))]
 use tauri::Emitter;
 
 // ---------------------------------------------------------------------------------------
@@ -217,7 +213,6 @@ pub const PHASES: [&str; 5] = ["checking", "downloading", "ingesting", "done", "
 /// wait for the write connection.
 const BATCH: usize = 2_000;
 
-#[cfg(not(target_family = "wasm"))]
 /// Bytes of download between progress events. Against reqwest's chunk callback, which fires
 /// far more often than a progress bar can use.
 const DOWNLOAD_EMIT_BYTES: u64 = 512 * 1024;
@@ -1246,7 +1241,6 @@ fn read_meta(ds: &Dataset, conn: &Connection) -> Option<TagMeta> {
     .flatten()
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Are there closure rows to read? The second half of the ETag decision, and
 /// [`crate::sync`]'s `card_count > 0` for its reason: metadata can outlive the rows it
 /// describes, and replaying an `If-None-Match` for a file whose rows are gone earns a 304
@@ -1323,7 +1317,6 @@ pub(crate) fn now_from(conn: &Connection) -> i64 {
 ///
 /// **Ingest-only, and gated because of it.** See [`now_from`] for the read path's answer and
 /// why the two are not one function.
-#[cfg(not(target_family = "wasm"))]
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1343,13 +1336,11 @@ fn unix_now() -> i64 {
 /// rather than a field on `AppState` because it is this module's concern alone.
 static REFRESHING: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 
-#[cfg(not(target_family = "wasm"))]
 /// Clears the claim however the refresh ends — an early return, an error, a dropped future.
 /// `sync::SyncingGuard`'s shape, for its reason: a latched flag locks the user out until they
 /// restart the app.
 pub(crate) struct RefreshGuard(&'static str);
 
-#[cfg(not(target_family = "wasm"))]
 impl RefreshGuard {
     /// Claim `dataset`, or `None` if a refresh of it is already running.
     fn claim(dataset: &'static str) -> Option<RefreshGuard> {
@@ -1362,7 +1353,6 @@ impl RefreshGuard {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl Drop for RefreshGuard {
     fn drop(&mut self) {
         crate::db::lock_plain(&REFRESHING).retain(|d| *d != self.0);
@@ -1382,7 +1372,6 @@ fn is_refreshing(dataset: &str) -> bool {
 /// datasets are fetched uninvited at every launch that finds them a week old, so a reader
 /// pressing Clear in the first minute is not a contrived case. The claim is the answer because
 /// it is held for exactly the span the file is in use.
-#[cfg(not(target_family = "wasm"))]
 pub(crate) fn any_refresh_running() -> bool {
     !crate::db::lock_plain(&REFRESHING).is_empty()
 }
@@ -1398,13 +1387,11 @@ pub(crate) fn hold_refresh_for_test(name: &'static str) -> RefreshGuard {
     RefreshGuard::claim(name).expect("a test-only name no other test claims")
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Where a tag file is downloaded to. Beside the bulk file's `tmp/`, and deleted either way.
 fn temp_path(ds: &Dataset, state: &AppState) -> PathBuf {
     state.data_dir.join("tmp").join(ds.tmp_file)
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Write a failed refresh to `error_log`, best-effort.
 ///
 /// `Source::ScryfallApi` because that is exactly what this is — unlike
@@ -1426,7 +1413,6 @@ fn note_failure(ds: &Dataset, db: &Mutex<Connection>, kind: crate::errors::Kind,
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Note that Scryfall has been asked, on a run that found nothing to ingest — and, where the
 /// answer carried one, the fresh ETag to replay next time.
 ///
@@ -1457,7 +1443,6 @@ fn mark_checked(ds: &Dataset, state: &Arc<AppState>, etag: Option<Option<&str>>)
     };
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Fetch `ds`'s bulk file if it has changed, and replace that taxonomy with it.
 ///
 /// `force` skips the [`Dataset::refresh_interval_secs`] throttle but **not** the ETag check: a
@@ -1615,7 +1600,6 @@ pub async fn refresh(
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Refresh `ds` at startup if it is due.
 ///
 /// **Silent, best-effort and never blocking.** It runs before there is a window to complain
@@ -1658,7 +1642,6 @@ pub struct TagProgress {
     pub total: u64,
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Emit one progress event. Dropped if nobody is listening, which is Tauri's behaviour and is
 /// why each binding also has a status command: the event is the fast path, the watermark table
 /// is the one a reader can still consult a minute later.

@@ -19,5 +19,4 @@ pub mod invite;
 /// it is the desktop's and Android's IPC surface rather than a piece of the protocol. The
 /// browser has no pairing panel yet; when it gets one it will call the three layers above
 /// through the wasm boundary rather than compiling this.
-#[cfg(not(target_family = "wasm"))]
 pub mod pairing;

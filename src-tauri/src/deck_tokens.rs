@@ -2503,7 +2503,6 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
 /// is `card_printings`, which already answers on a token — its predicate is
 /// `oracle_id = ?1 AND is_paper = 1` and every token row satisfies both — so this feature adds no
 /// second read command.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_tokens(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2525,7 +2524,6 @@ pub async fn deck_tokens(
 /// Plain [`crate::sync::with_write`] and **not** `with_write_owned`, for all five writes: that one
 /// is for the commands that move copies across the collection/deck boundary, and no token write
 /// touches the collection.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_token_set_quantity(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2547,7 +2545,6 @@ pub async fn deck_token_set_quantity(
 
 /// [`swap`]'s command. `from` is `{ cardId, finish }` or `null` for the implicit entry; `to` is
 /// always a printing and a finish, the picker's grain.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_token_swap(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2569,7 +2566,6 @@ pub async fn deck_token_swap(
 
 /// [`add_printing`]'s command — one copy of a printing in a finish, rule 5. A `null` finish is
 /// the printing's default.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_token_add_printing(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2594,7 +2590,6 @@ pub async fn deck_token_add_printing(
 /// `app` here** — Tauri injects a `tauri::State` by its type and never by its name, which is what
 /// frees the name for the argument the page sends. (The retired `deck_token_set` took
 /// `tokenState` instead, and `src/lib/ipc.ts` had to know the rename.)
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_token_state(
     app: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2611,7 +2606,6 @@ pub async fn deck_token_state(
 }
 
 /// [`reset`]'s command.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_token_reset(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,

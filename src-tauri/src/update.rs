@@ -32,11 +32,9 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 // With the download gated away, [`verify_digest`] is the only thing left that hashes, and
 // it goes with it — so this import would be unused on wasm, which CI treats as a red build.
-#[cfg(not(target_family = "wasm"))]
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::Path;
-#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 // **Gated rather than deleted**, because CI runs
 // `cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings` and an unused import
@@ -44,13 +42,9 @@ use std::path::PathBuf;
 // that fills it, or from the download-and-swap half of this file — all of which carry the
 // same gate. **`SystemTime` is the one worth naming twice**: it does not merely go unused on
 // wasm, `SystemTime::now()` *panics* there, and [`unix_now`] is the only thing that calls it.
-#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::{Arc, Mutex};
-#[cfg(not(target_family = "wasm"))]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-#[cfg(not(target_family = "wasm"))]
 use tauri::Emitter;
 
 /// The repository the app updates itself from. Not derived from `CARGO_PKG_REPOSITORY`:
@@ -98,18 +92,15 @@ const PORTABLE_SUFFIX: &str = "-windows-x64-portable.zip";
 const NSIS_SUFFIX: &str = "_x64-setup.exe";
 
 /// The one entry read out of the portable archive.
-#[cfg(not(target_family = "wasm"))]
 const PORTABLE_EXE: &str = "mtg-grimoire.exe";
 
 /// Refuse an asset larger than this before a byte is read. The Windows artifacts are
 /// 4.8–6.5 MB; this is a bound on what a bad answer can make this process spend, not a
 /// statement about the release.
-#[cfg(not(target_family = "wasm"))]
 const MAX_ASSET_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Bytes between `update:progress` events. A chunk-by-chunk callback fires far more often
 /// than a progress bar can use.
-#[cfg(not(target_family = "wasm"))]
 const PROGRESS_EMIT_BYTES: u64 = 256 * 1024;
 
 /// How long a freshly launched successor waits for the process it replaced to exit.
@@ -246,7 +237,6 @@ pub struct UpdateProgress {
     pub total: u64,
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// What a completed download left behind, and what [`apply`] will do with it.
 #[derive(Clone, Debug)]
 struct Staged {
@@ -257,7 +247,6 @@ struct Staged {
     version: String,
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Runtime state for the updater. Managed by Tauri beside `AppState`, rather than inside
 /// it: nothing here needs the database except the two `app_meta` reads, which take a
 /// connection as an argument like every other read in this app.
@@ -278,18 +267,15 @@ pub struct Updater {
     staged: Mutex<Option<Staged>>,
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Clears `busy` however the operation ends.
 struct BusyGuard<'a>(&'a AtomicBool);
 
-#[cfg(not(target_family = "wasm"))]
 impl Drop for BusyGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl Updater {
     pub fn new(api_base: String, exe: PathBuf) -> Updater {
         let kind = install_kind_for(cfg!(mobile), exe.parent());
@@ -369,7 +355,6 @@ fn clear_app_meta(conn: &Connection, key: &str) -> rusqlite::Result<()> {
 /// nothing the page can show. `sync`, `tags` and `combos` were each caught by it before this
 /// one; where a wasm caller needs a clock it reads `SELECT unixepoch()` off the connection.
 /// Nothing here does, because the only caller is [`check_inner`], which is desktop's.
-#[cfg(not(target_family = "wasm"))]
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -490,7 +475,6 @@ pub fn pick_asset(assets: &[Asset], kind: InstallKind) -> Option<&Asset> {
 /// An absent digest is a **failure**, not a pass. This is the only integrity check the
 /// design has — there is no minisign signature behind it — so "the field was missing" must
 /// never be the path of least resistance into running a downloaded executable.
-#[cfg(not(target_family = "wasm"))]
 fn verify_digest(expected: Option<&str>, actual: &[u8]) -> Result<(), String> {
     let Some(expected) = expected else {
         return Err(
@@ -524,7 +508,6 @@ fn verify_digest(expected: Option<&str>, actual: &[u8]) -> Result<(), String> {
 /// Built by appending to the whole file name rather than with `Path::with_extension`, which
 /// would replace `.exe` and give `mtg-grimoire.old` — a name that is not the running image
 /// and would leave the real one behind.
-#[cfg(not(target_family = "wasm"))]
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(suffix);
@@ -711,7 +694,6 @@ pub fn page_from_body(body: &str) -> Result<Vec<ReleaseInfo>, String> {
 /// re-compared against the running version every time, which is what makes it
 /// self-clearing — after an update lands, yesterday's cached release is no longer newer and
 /// the notice goes away with no bookkeeping.
-#[cfg(not(target_family = "wasm"))]
 pub fn status(state: &AppState, updater: &Updater) -> UpdateStatus {
     status_for(
         state,
@@ -806,7 +788,6 @@ pub fn history(state: &AppState) -> Vec<ReleaseNote> {
 /// press whose failure rejects the promise the panel is already watching — `entitlement.rs`'s
 /// standing argument, and PR 11's for the three feeds. The desktop needs the error log
 /// because *its* check also runs unattended at startup with no window listening.
-#[cfg(not(target_family = "wasm"))]
 pub async fn check(
     state: &Arc<AppState>,
     updater: &Arc<Updater>,
@@ -819,7 +800,6 @@ pub async fn check(
     result
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Note a failed dealing with GitHub in the error log.
 ///
 /// **Classified from this module's own message strings**, which is only acceptable because
@@ -854,7 +834,6 @@ fn note_github(state: &Arc<AppState>, operation: &str, message: &str) {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 async fn check_inner(
     state: &Arc<AppState>,
     updater: &Arc<Updater>,
@@ -929,7 +908,6 @@ async fn check_inner(
 ///
 /// Nothing is swapped here and nothing is launched. A download that succeeds leaves the app
 /// running exactly as it was, with one more file on disk.
-#[cfg(not(target_family = "wasm"))]
 pub async fn download(
     state: &Arc<AppState>,
     updater: &Arc<Updater>,
@@ -942,7 +920,6 @@ pub async fn download(
     result
 }
 
-#[cfg(not(target_family = "wasm"))]
 async fn download_inner(
     state: &Arc<AppState>,
     updater: &Arc<Updater>,
@@ -1027,7 +1004,6 @@ async fn download_inner(
 /// The size bound is enforced against the running total rather than against
 /// `Content-Length`: a header is a claim, and a chunked response makes no claim at all —
 /// `scryfall::Client::download`'s rule, for its reason.
-#[cfg(not(target_family = "wasm"))]
 async fn stream_to_file(
     updater: &Arc<Updater>,
     app: &tauri::AppHandle,
@@ -1103,7 +1079,6 @@ async fn stream_to_file(
 /// Matched on the file name rather than on a full path, because the archive's layout is the
 /// release workflow's business and `Compress-Archive` has changed how it stores single
 /// files before.
-#[cfg(not(target_family = "wasm"))]
 fn extract_portable_exe(archive: &Path, dest: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive)
         .map_err(|e| format!("could not open the downloaded archive: {e}"))?;
@@ -1143,7 +1118,6 @@ fn extract_portable_exe(archive: &Path, dest: &Path) -> Result<(), String> {
 ///
 /// The exit is scheduled rather than immediate: a command that tears its own webview down
 /// inline never delivers its answer, and the caller needs to know this did not fail.
-#[cfg(not(target_family = "wasm"))]
 pub fn apply(updater: &Arc<Updater>, app: &tauri::AppHandle) -> Result<(), String> {
     let staged = crate::sync::lock_plain(&updater.staged)
         .clone()
@@ -1194,7 +1168,6 @@ pub fn apply(updater: &Arc<Updater>, app: &tauri::AppHandle) -> Result<(), Strin
 /// If the second rename fails the first is undone, so a failure here leaves a working app
 /// exactly where it was. That is the case worth the code — the window is still up, and an
 /// app that has renamed itself out of existence cannot be relaunched by the user.
-#[cfg(not(target_family = "wasm"))]
 fn swap_and_relaunch(exe: &Path, staged: &Path) -> Result<(), String> {
     let old = sibling(exe, ".old");
     // A leftover from an earlier update whose successor never got to clean up. It is not
@@ -1225,7 +1198,6 @@ fn swap_and_relaunch(exe: &Path, staged: &Path) -> Result<(), String> {
 ///
 /// `OpenProcess` failing means it is already gone — the usual case for a process that never
 /// existed, and the correct answer for one that has just exited.
-#[cfg(not(target_family = "wasm"))]
 #[cfg(windows)]
 fn wait_for_process(pid: u32) {
     use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
@@ -1253,7 +1225,6 @@ fn wait_for_process(pid: u32) {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[cfg(not(windows))]
 fn wait_for_process(_pid: u32) {}
 
@@ -1277,7 +1248,6 @@ fn wait_for_process(_pid: u32) {}
 ///
 /// Called before `tauri::Builder::default()`, because by the time a plugin has initialised
 /// the decision has already been made.
-#[cfg(not(target_family = "wasm"))]
 pub fn await_predecessor(exe: &Path, pid: Option<u32>) {
     if let Some(pid) = pid {
         let started = std::time::Instant::now();
@@ -1297,7 +1267,6 @@ pub fn await_predecessor(exe: &Path, pid: Option<u32>) {
 ///
 /// `None` for a launch with the flag and no id — a hand-run of the successor path — which
 /// waits for nothing and simply cleans up.
-#[cfg(not(target_family = "wasm"))]
 pub fn predecessor_pid<I: IntoIterator<Item = String>>(args: I) -> Option<u32> {
     let mut args = args.into_iter().skip_while(|a| a != AWAIT_FLAG);
     args.next()?;
@@ -1310,7 +1279,6 @@ pub fn predecessor_pid<I: IntoIterator<Item = String>>(args: I) -> Option<u32> {
 /// Runs on every launch, and is a no-op on nearly all of them. The staged file goes too —
 /// staging lives for one session by design, and a `.new` of unknown provenance is not
 /// something a later launch should quietly install.
-#[cfg(not(target_family = "wasm"))]
 pub fn clean_up(exe: &Path) {
     let _ = std::fs::remove_file(sibling(exe, ".old"));
     let _ = std::fs::remove_file(sibling(exe, ".new"));

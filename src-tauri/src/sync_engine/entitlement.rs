@@ -547,7 +547,7 @@ fn now(conn: &Connection) -> Result<i64, String> {
 /// flaking: one static client, `httpmock`'s pooled ports, and a runtime per `#[tokio::test]`.
 /// Fixing one of a matched pair and leaving the other is how the survivor gets diagnosed from
 /// scratch in six months.
-#[cfg(all(not(target_family = "wasm"), not(test)))]
+#[cfg(not(test))]
 fn http() -> reqwest::Client {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -555,14 +555,13 @@ fn http() -> reqwest::Client {
 }
 
 /// See [`http`]: a test build takes a fresh client so nothing is shared across runtimes.
-#[cfg(all(not(target_family = "wasm"), test))]
+#[cfg(test)]
 fn http() -> reqwest::Client {
     build_http()
 }
 
 /// The one place this client's shape is written down. **Its read timeout is 10 seconds, not
 /// the relay client's 30**, which is the whole reason the two exist separately.
-#[cfg(not(target_family = "wasm"))]
 fn build_http() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(crate::scryfall::USER_AGENT)
@@ -973,7 +972,7 @@ pub fn authorize_url(state: &str) -> String {
     )
 }
 
-#[cfg(all(test, not(target_family = "wasm")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::sync_engine::client;

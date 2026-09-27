@@ -35,11 +35,8 @@ pub mod readme;
 pub mod snapshot;
 
 /// The pass that writes the folder. `std::fs` from top to bottom.
-#[cfg(not(target_family = "wasm"))]
 pub mod run;
 /// The two `app_meta` settings and the Backup panel's four commands.
-#[cfg(not(target_family = "wasm"))]
 pub mod settings;
 /// The `update_hook`, the dirty [`watch::Mask`] and the thread that drains it.
-#[cfg(not(target_family = "wasm"))]
 pub mod watch;

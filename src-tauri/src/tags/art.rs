@@ -36,9 +36,7 @@
 //! a supported state, and the app it describes is the app before this module existed.
 
 use super::{Dataset, TagStatus};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The event a refresh reports itself through.
@@ -111,7 +109,6 @@ pub type ArtTagProgress = super::TagProgress;
 /// Download the Art Tags file if it has changed and rebuild the taxonomy from it.
 ///
 /// `force` skips the weekly throttle, not the ETag check.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn art_tags_refresh(
     state: tauri::State<'_, Arc<AppState>>,
@@ -129,7 +126,6 @@ pub async fn art_tags_refresh(
 ///
 /// `async`, and answered on the blocking pool, because a sync command body runs inline on the
 /// IPC thread and this takes `db_read`'s mutex.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn art_tags_status(
     state: tauri::State<'_, Arc<AppState>>,
@@ -140,7 +136,6 @@ pub async fn art_tags_status(
         .map_err(|e| format!("could not read the art tag status: {e}"))
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Refresh the taxonomy at startup if it is due.
 ///
 /// **Silent, best-effort and never blocking** — [`super::refresh_if_due`]'s contract. The

@@ -288,39 +288,28 @@ pub mod zoom;
 /// webview2 target. It is here rather than in the "Every target" block above for `images`'
 /// and `scryfall`'s reason: `desktop::run` is its only caller, and that module does not build
 /// for wasm.
-#[cfg(not(target_family = "wasm"))]
 pub mod camera;
 /// **Which user tables a commit wrote, told to every open window.** Non-wasm because it rides the
 /// write connection's update hook and lives on `AppState` beside `mirror`; its emitter is
 /// `#[cfg(desktop)]` inside, because only the desktop opens a second window. See the module doc.
-#[cfg(not(target_family = "wasm"))]
 pub mod changes;
-#[cfg(not(target_family = "wasm"))]
 pub mod export;
-#[cfg(not(target_family = "wasm"))]
 pub mod images;
 pub mod import;
 pub mod marketplace_feed;
-#[cfg(not(target_family = "wasm"))]
 pub mod paths;
-#[cfg(not(target_family = "wasm"))]
 pub mod picked;
-#[cfg(not(target_family = "wasm"))]
 pub mod reconcile;
 /// **The card scanner, and its stored preferences and review tray.** Non-wasm for the crate's
 /// reason: the web build has no detector, and the page says so. See `scanner`'s own doc for the
 /// two body shapes and the asset load order. Its commands are registered in `desktop.rs`.
-#[cfg(not(target_family = "wasm"))]
 pub mod scanner;
-#[cfg(not(target_family = "wasm"))]
 pub mod scryfall;
 /// **Whether the background startup has landed, as the webview asks it.** Non-wasm because it is
 /// managed Tauri state and one `#[tauri::command]`; the browser's gate is `WebBoot`, which waits on
 /// its Worker instead. See the module doc for why startup left the UI thread.
-#[cfg(not(target_family = "wasm"))]
 pub mod startup;
 pub mod tags;
-#[cfg(not(target_family = "wasm"))]
 // Desktop only. `open_sized_to_monitor` calls `WebviewWindow::center()`, which tauri
 // declares `#[cfg(desktop)]` (tauri/src/window/mod.rs:1924) — so this module is not merely
 // useless on a phone, it does not compile there. Android's window is the activity and the
@@ -332,7 +321,5 @@ pub mod tags;
 #[cfg(desktop)]
 pub mod window;
 
-#[cfg(not(target_family = "wasm"))]
 mod desktop;
-#[cfg(not(target_family = "wasm"))]
 pub use desktop::run;

@@ -63,16 +63,11 @@ use serde::Serialize;
 // what this file lost: they were the two the module could import unconditionally, because
 // `clear_decks` swept the covers directory and `clear_decks` compiles everywhere. With custom
 // deck covers gone, every path this module touches is `clear_cache`'s.
-#[cfg(not(target_family = "wasm"))]
 use std::fs;
-#[cfg(not(target_family = "wasm"))]
 use std::path::Path;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::Ordering;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 
 /// What emptying the collection took with it.
@@ -136,7 +131,6 @@ pub struct CacheCleared {
 /// left — is desktop-only. Custom deck covers went, and a struct nothing constructs is a red
 /// `cargo clippy --target wasm32-unknown-unknown -- -D warnings`, the same build the imports
 /// above are gated for.
-#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, Clone, Copy, Default)]
 struct Swept {
     files: u64,
@@ -163,7 +157,6 @@ struct Swept {
 /// deletes recursively.** There was a third — `clear_decks` handed it the covers directory —
 /// until custom deck covers were removed on 2026-08-31. Nothing should give this function a
 /// fourth root without an argument for it: what it is handed, it empties.
-#[cfg(not(target_family = "wasm"))]
 fn sweep_dir(root: &Path, out: &mut Swept) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
@@ -521,7 +514,6 @@ pub fn clear_decks(conn: &Connection) -> Result<DecksCleared, String> {
 /// Cache Storage rather than a directory, which is a rewrite and not a port, and its own
 /// piece of work. Everything above this line is ordinary SQLite and compiles everywhere,
 /// which is why the other three clears are routed and this one is not.
-#[cfg(not(target_family = "wasm"))]
 pub fn clear_cache(
     forget_rows: impl FnOnce() -> Result<i64, String>,
     images: &Path,
@@ -546,7 +538,6 @@ pub fn clear_cache(
 /// A function of its own rather than a closure at the call site so that the command and the
 /// tests hand [`clear_cache`] the same statement — the command under `with_write`, a test over
 /// its own connection.
-#[cfg(not(target_family = "wasm"))]
 fn forget_image_rows(conn: &Connection) -> Result<i64, String> {
     conn.execute("DELETE FROM image_cache", [])
         .map(|n| n as i64)
@@ -554,7 +545,6 @@ fn forget_image_rows(conn: &Connection) -> Result<i64, String> {
 }
 
 /// Refused when a sync is in flight, in the reader's words.
-#[cfg(not(target_family = "wasm"))]
 const SYNCING: &str = "a card update is running — clear the cache once it has finished";
 
 /// Refused when a feed is downloading into `data/tmp/`, in the reader's words.
@@ -562,7 +552,6 @@ const SYNCING: &str = "a card update is running — clear the cache once it has 
 /// One sentence for all five feeds rather than one per feed: the reader did not necessarily
 /// start any of them — every one of them can run at launch without a press — and what they
 /// need to know is that the press will work in a minute, not which file was in the way.
-#[cfg(not(target_family = "wasm"))]
 const DOWNLOADING: &str =
     "a price, tag or combo download is running — clear the cache once it has finished";
 
@@ -574,7 +563,6 @@ const DOWNLOADING: &str =
 /// from before the download until the temp file is deleted — which is exactly the span a sweep
 /// must not land in. The sync is asked first only because its sentence is the more specific
 /// one when both are true.
-#[cfg(not(target_family = "wasm"))]
 fn cache_clear_refusal(syncing: bool) -> Option<&'static str> {
     if syncing {
         return Some(SYNCING);
@@ -599,7 +587,6 @@ fn cache_clear_refusal(syncing: bool) -> Option<&'static str> {
 // list too, for `paths::covers_dir`; custom covers went on 2026-08-31 and `decks_clear` takes
 // no handle any more.
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_clear(
     state: tauri::State<'_, Arc<AppState>>,
@@ -616,7 +603,6 @@ pub async fn collection_clear(
     .map_err(|e| format!("the collection could not be cleared: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<i64, String> {
     let state = state.inner().clone();
@@ -626,7 +612,6 @@ pub async fn wishlist_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<i6
 }
 
 /// Empty every deck.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn decks_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<DecksCleared, String> {
     let state = state.inner().clone();
@@ -669,7 +654,6 @@ pub async fn decks_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<Decks
 ///
 /// **The write lock is held for the `DELETE` and released before the sweep** — see
 /// [`clear_cache`] for why, and for why it is that function's shape and not a habit here.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn cache_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<CacheCleared, String> {
     let state = state.inner().clone();

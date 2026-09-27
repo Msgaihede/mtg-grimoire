@@ -33,12 +33,10 @@
 //! Connection in, DTO out, no clock and no network, so it answers in a browser as on the desktop.
 
 use crate::sorting::Marketplace;
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// `deck_cards.variant` for the list that is sleeved up.
@@ -208,7 +206,6 @@ fn measure(
 /// Every deck's completion, for the home page. **Read-only** connection, blocking pool, as every
 /// read in this app is — [`crate::deck::deck_values`]' shape exactly, marketplace and fallback
 /// included: anything this build does not recognise quotes TCGplayer rather than failing.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_completion(
     state: tauri::State<'_, Arc<AppState>>,
@@ -238,7 +235,6 @@ pub fn review_count(conn: &Connection) -> Result<i64, String> {
 }
 
 /// To review's deck-card count. **Read-only** connection, blocking pool.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_review_count(state: tauri::State<'_, Arc<AppState>>) -> Result<i64, String> {
     let state = state.inner().clone();

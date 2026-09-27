@@ -21,12 +21,10 @@
 //!   rather than a number that would be a lie.
 
 use crate::filters;
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What the UI asks for.
@@ -1284,7 +1282,6 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
 /// `async` + `spawn_blocking`, not a plain sync command: a sync command body runs inline
 /// on the IPC thread, and SQLite work is blocking. `lock_db_read` is shared with `sync`
 /// so poison recovery has one definition.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn search_cards(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1354,7 +1351,6 @@ pub fn run_list_sets(conn: &Connection) -> Result<Vec<SetSummary>, String> {
 
 /// The set list, for the search filter. Read-only connection, blocking pool — as
 /// [`search_cards`] is, and for the same reason.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn list_sets(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<SetSummary>, String> {
     let state = state.inner().clone();

@@ -51,7 +51,6 @@ pub struct Device {
 const MAX_NAME_LEN: usize = 64;
 
 /// What a desktop calls itself when the environment will not say.
-#[cfg(not(any(target_os = "android", target_family = "wasm")))]
 const FALLBACK_DESKTOP: &str = "Desktop";
 
 /// What a phone calls itself when the JVM will not answer.
@@ -94,7 +93,6 @@ const FALLBACK_BROWSER: &str = "Browser";
 /// change is about, moved one platform over. And **every arm is infallible**: failing to read a
 /// name must never stop a device minting an identity, so each falls back to a word rather than
 /// returning an error.
-#[cfg(not(any(target_os = "android", target_family = "wasm")))]
 fn mint_name() -> String {
     // `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere, read straight out of the environment
     // rather than through a `hostname` crate — one string read once per install is not worth a

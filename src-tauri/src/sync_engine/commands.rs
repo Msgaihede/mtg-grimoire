@@ -322,7 +322,6 @@ fn ensure_group(conn: &Connection) -> Result<(), String> {
 }
 
 /// What Settings draws: the relay, what is waiting, and what wants looking at.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sync_relay_status(
     state: tauri::State<'_, Arc<AppState>>,
@@ -339,7 +338,6 @@ pub async fn sync_relay_status(
 /// of its own.** Both are one press of the Settings page against a handful of `sync_state` rows,
 /// so neither is worth a second connection — and taking the lock means this cannot answer from
 /// beside the claim that has just written, which is the read the panel makes next.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sync_supporter_status(
     state: tauri::State<'_, Arc<AppState>>,
@@ -357,7 +355,6 @@ pub async fn sync_supporter_status(
 /// It answers a URL and opens nothing: the page belongs to the `opener` plugin, which is
 /// TypeScript's, so this command needs no permission of its own and the browser build can reach
 /// the same string when it grows a panel.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sync_patreon_begin(state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
     let state = state.inner().clone();
@@ -374,7 +371,6 @@ pub async fn sync_patreon_begin(state: tauri::State<'_, Arc<AppState>>) -> Resul
 ///
 /// [`ensure_group`] runs first, so this can never answer [`entitlement::NO_GROUP`] — spec §6.3's
 /// group of one is made here, before the request that has to name it.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sync_patreon_claim(
     state: tauri::State<'_, Arc<AppState>>,
@@ -421,7 +417,6 @@ pub async fn sync_patreon_claim(
 /// closure, which is `state`'s shape here and not `app`'s — `AppHandle` has no business on the
 /// thread doing the write, and reaching for it from inside that closure would be the mistake to
 /// watch for in a diff, not the shape this one takes.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sync_now(
     app: tauri::AppHandle,
@@ -452,7 +447,6 @@ pub async fn sync_now(
 /// to drop one when the window is minimised. Android does, because Doze severs a background
 /// socket anyway and a phone that *looks* connected while being hours stale is worse than one
 /// that knows it is offline.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub fn sync_live_foreground(on: bool) {
     if on {
@@ -470,14 +464,12 @@ pub fn sync_live_foreground(on: bool) {
 /// after the last transition would never hear anything. Tauri also drops events emitted before
 /// the webview registered its listener, which makes that the common case at launch rather than a
 /// rare one: a page that only ever subscribed would sit on its default state indefinitely.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub fn sync_live_state() -> LiveState {
     live::current()
 }
 
 /// Every row carrying a sentence, from all six tables that can hold one.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sync_review_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -494,7 +486,6 @@ pub async fn sync_review_list(
 /// it.** Clearing is a write like any other, so it is captured and travels: a row one device
 /// has looked at stops asking on the others too, which is the whole point of the sentence
 /// being on the row rather than in a notification.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sync_review_clear(
     state: tauri::State<'_, Arc<AppState>>,

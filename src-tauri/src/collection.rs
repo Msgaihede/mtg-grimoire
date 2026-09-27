@@ -14,12 +14,10 @@
 use crate::collection_folders::{FOLDER_NOT_YOURS, USER_KIND};
 use crate::deck_meta::FOLDER_GONE;
 use crate::schema::{COLLECTION_GRAIN, FINISHES};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The NA condition scale, in descending order, with the **not-set sentinel in front of it**.
@@ -388,7 +386,6 @@ fn folder_named(conn: &Connection, folder_id: Option<i64>, kinds: &[&str]) -> Re
 /// `removed` folder named here is a stale client or a bug.
 const READER_FOLDERS: &[&str] = &[USER_KIND];
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// …and what a **deck-driven write** may file into, which is the reader's drawers plus the group
 /// of the deck that same press answers for.
 ///
@@ -416,7 +413,6 @@ const READER_FOLDERS: &[&str] = &[USER_KIND];
 /// write naming it would be cardboard that arrives already discarded.
 pub(crate) const DECK_WRITE_FOLDERS: &[&str] = &[USER_KIND, DECK_KIND];
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// `COLLECTION_FOLDER_KINDS[1]` — the one folder that stands for a deck.
 ///
 /// By index rather than by spelling, [`crate::collection_alloc`]'s rule: the word here and the
@@ -728,7 +724,6 @@ pub struct ImportCommitOutcome {
     pub removed: i64,
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// [`add_entry`] with one clause changed: the grain's quantity is **written**, not accumulated.
 /// A `set` import means "this file's number is the truth", not "add these copies to what is
 /// already there" — the collection's own asymmetry [`set_quantity`] already carries, reused here
@@ -1520,7 +1515,6 @@ pub(crate) fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite:
     Ok(())
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_add(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1534,7 +1528,6 @@ pub async fn collection_add(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_set_quantity(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1549,7 +1542,6 @@ pub async fn collection_set_quantity(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1564,7 +1556,6 @@ pub async fn collection_update(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_remove(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1586,7 +1577,6 @@ pub async fn collection_remove(
 /// import dialog sends the group of the deck it just wrote a list into, so the list and the
 /// copies backing it agree the moment the dialog closes — see [`DECK_WRITE_FOLDERS`], which is the
 /// only place in the crate that fence is wider than the reader's own drawers.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2539,7 +2529,6 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
 
 /// The collection list. **Read-only** connection, blocking pool — as every read in this
 /// app is, so a list never queues behind a sync.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2553,7 +2542,6 @@ pub async fn collection_list(
     .map_err(|e| format!("the collection could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_summary(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2728,7 +2716,6 @@ pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfC
 
 /// The Shelves wall's per-shelf figures. **Read-only** connection, blocking pool, like
 /// [`collection_list`] beside it.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_shelf_counts(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2898,7 +2885,6 @@ pub fn breakdown(
 /// [`crate::collection_folders::collection_folder_summary`]'s spelling for the same argument:
 /// an id this build does not know lands on TCGplayer through
 /// [`crate::sorting::Marketplace::from_opt`] rather than failing the whole request.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_breakdown(
     state: tauri::State<'_, Arc<AppState>>,

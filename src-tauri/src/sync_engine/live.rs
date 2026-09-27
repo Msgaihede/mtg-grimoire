@@ -15,7 +15,6 @@
 //! [`client::run_once`], which is the same round trip the Sync Now button has always made. So
 //! there is exactly one code path that can change this database, and the socket only decides
 //! *when* it runs.
-#![cfg(not(target_family = "wasm"))]
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;

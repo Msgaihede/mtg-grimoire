@@ -306,7 +306,6 @@ fn archive_name(date: &str) -> String {
 /// If the connection cannot be opened it falls back to the shared one rather than refusing — a
 /// slow archive is better than a button that does nothing, and the reader asked for this
 /// explicitly.
-#[cfg(not(target_family = "wasm"))]
 pub fn build_now(state: &crate::sync::AppState) -> Result<Archive, String> {
     let own = crate::db::open_read(&state.data_dir).ok();
     let shared = own.is_none().then(|| crate::sync::lock_db_read(state));
@@ -331,7 +330,6 @@ pub fn build_now(state: &crate::sync::AppState) -> Result<Archive, String> {
 /// `#[tauri::command(async)]` through `spawn_blocking`, like `settings::mirror_rebuild`:
 /// this is four listings, ~350 renders and a deflate, and none of that belongs on the async
 /// runtime's thread.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn mirror_backup_zip(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -355,7 +353,6 @@ pub async fn mirror_backup_zip(
 /// `capabilities/mobile.json` since the export dialog shipped, and `tauri_plugin_fs::Fs::open`
 /// is a Rust-side method on managed state that no `invoke` ever crosses. The page's filesystem
 /// access is unchanged: none.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn mirror_backup_save(
     app: tauri::AppHandle,

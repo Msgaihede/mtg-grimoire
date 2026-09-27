@@ -5217,7 +5217,6 @@ fn replace_attached_corpus(conn: &Connection, failed: rusqlite::Error) -> rusqli
         let _ = conn;
         Err(failed)
     }
-    #[cfg(not(target_family = "wasm"))]
     {
         let file: String = conn.query_row(
             &format!("SELECT file FROM pragma_database_list WHERE name = '{CORPUS}'"),
@@ -5281,7 +5280,6 @@ pub const USER_BACKUPS_DIR: &str = "backups";
 /// How many pre-upgrade copies of `user.db` [`back_up_user_file`] keeps. Three upgrades back is
 /// long enough for a bug in a rung to be noticed, and at ~1.35 MB a copy it bounds the folder
 /// on a USB stick where one per update forever would not be.
-#[cfg(not(target_family = "wasm"))]
 const USER_BACKUPS_KEPT: usize = 3;
 
 /// Copy `user.db` to `backups/user.v{from}.db` before [`migrate_user`] climbs from `from`, and
@@ -5300,7 +5298,6 @@ const USER_BACKUPS_KEPT: usize = 3;
 ///
 /// An in-memory `main` (the tests) has no path and is skipped, and so is the web target, whose
 /// OPFS pool is not a filesystem this can make a folder in.
-#[cfg(not(target_family = "wasm"))]
 pub(crate) fn back_up_user_file(
     conn: &Connection,
     from: i64,
@@ -5335,7 +5332,6 @@ pub(crate) fn back_up_user_file(
 
 /// Keep the newest [`USER_BACKUPS_KEPT`] `user.v{N}.db` copies by `N`, and leave every other
 /// file in the folder alone — a reader may keep their own copies there.
-#[cfg(not(target_family = "wasm"))]
 fn prune_user_backups(backups: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(backups) else {
         return;
@@ -5429,7 +5425,6 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // head owes nothing and is not copied on every launch. Logged and never fatal — a full disk
     // that cannot take 1.35 MB of copy should not also cost the reader their launch, and every
     // rung below is still its own transaction with its stamp.
-    #[cfg(not(target_family = "wasm"))]
     if v < USER_SCHEMA_VERSION {
         if let Err(e) = back_up_user_file(conn, v) {
             eprintln!(

@@ -13,7 +13,6 @@ pub mod cache;
 /// commands inside it are not — see its head.
 pub mod commands;
 /// The upload. **Desktop and Android only**, because it is `reqwest`.
-#[cfg(not(target_family = "wasm"))]
 pub mod publish;
 mod snapshot;
 #[cfg(test)]
