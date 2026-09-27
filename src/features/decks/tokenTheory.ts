@@ -85,6 +85,17 @@ export function tokenDeckFinish(view: Pick<DeckTokenView, "finish">): DeckFinish
 }
 
 /**
+ * The printing's finishes as `theorySlot` asks for them — **`null`, always, and on both sides.**
+ *
+ * `theorySlot` reads them to settle a deck card whose finish was never stated (issue #563: an
+ * unsaid row of a foil-only printing is the foil). A token entry has no such row: its finish is
+ * `NOT NULL` in `deck_token_printings` and filed in the printing's default finish when an add names
+ * none, so a `null` from {@link tokenDeckFinish} is a stated regular copy and there is nothing for
+ * the printing to fill in. Passing `null` keeps the key exactly the entry's own finish.
+ */
+const STATED = null;
+
+/**
  * The plan's entries as `TheorySlot`s — each printing **and finish**, keyed exactly as a deck
  * card's slot is (`theorySlot({ cardId, finish })`), with the token's `oracleId` as the name
  * tier's key — the module note says why never its name. `undefined` in, `undefined` out: a plan
@@ -104,7 +115,11 @@ export function tokenTheorySlots(
   return plan
     ?.filter((view) => view.quantity > 0)
     .map((view) => ({
-      key: theorySlot({ cardId: view.printingId, finish: tokenDeckFinish(view) }),
+      key: theorySlot({
+        cardId: view.printingId,
+        finish: tokenDeckFinish(view),
+        finishes: STATED,
+      }),
       nameKey: view.oracleId,
       quantity: view.quantity,
     }));
@@ -128,6 +143,7 @@ export function tokenTheoryPlan(
     live.map((view) => ({
       cardId: view.printingId,
       finish: tokenDeckFinish(view),
+      finishes: STATED,
       name: view.oracleId,
       quantity: view.quantity,
       categoryActive: true,
@@ -146,6 +162,7 @@ export function tokenTheoryMark(
   return theoryMatchMark(plan, {
     cardId: view.printingId,
     finish: tokenDeckFinish(view),
+    finishes: STATED,
     name: view.oracleId,
   });
 }

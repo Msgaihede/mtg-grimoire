@@ -103,10 +103,38 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   a Ramp column appears with its first ramp spell while a pile the reader made stays until they
   delete it; Rust records the fact and draws no conclusion from it. **It is stored rather than
   derived from the name because `category_for_name` finds before it creates**: the grain is
-  `(deck_id, name)`, so a reader's own "Ramp" is found rather than re-made and keeps `'user'`
+  `(deck_id, variant, name)`, so a reader's own "Ramp" is found rather than re-made and keeps `'user'`
   even once ramp spells are filed into it — and "Ramp", "Draw", "Removal" and "Land" are exactly
   what a person names their own piles. The one-time backfill and why it is frozen:
   [data-and-sync.md](data-and-sync.md).
+- **A pile belongs to one list** — `deck_categories.variant`, user schema v53, issue
+  [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561). Until then a deck's Theory and
+  Actual lists shared one pile set, because `deck_cards` carried the variant and
+  `deck_categories` did not: a pile made on one tab drew on the other (empty, since `user` piles
+  always draw), and one Sideboard switch answered for both lists. Now:
+  - **Each list has its own four zones** — `ensure_predefined_categories(conn, deck, variant)`,
+    run for `theory` by `create_deck` on a deck born with a plan and by `update_deck` on every
+    switch-on — and its own names, order and switches; `CATEGORY_NAME_TAKEN` reads *This list
+    already has a category with that name.*
+  - **Every write that files a card checks the pile's list**: `deck::category_of_deck` takes the
+    variant and answers `CATEGORY_WRONG_LIST` (*That category belongs to the other list.*) for the
+    other list's pile, and `add_card`, `set_card_quantity`, `clear_category`, `move_card`,
+    `swap_printing`, `set_card_finish`, the import commit and `collection_to_deck` all go through
+    it or through the variant-scoped `category_for_name`. `reorder_categories` refuses a list that
+    mixes the two (`CATEGORY_MIXED_LISTS`); a delete's move target must be in the same list;
+    `decks.default_category_id` must name a **live** pile.
+  - **One press carries piles across, and it pours one list into the other.** The theory switch
+    moves the live cards into the plan and **clones** each live pile for them —
+    `deck_meta::counterpart_in`, by kind for a zone and by name otherwise — leaving the live piles
+    standing, empty. It records the piles it made in its undo step
+    (`deck_undo::push_made_categories`), so an undo takes them away again.
+  - **`DeckCategoryRow.card_count_all_variants` is gone** — a pile's copies are all in one list, so
+    it always equalled `card_count`, and every confirmation quotes `card_count` now.
+  - **A pile's history rows stay at `DECK_LEVEL`**: the history drawer does not filter by list, and
+    no category sentence names one.
+  - **The comparison is the only link between the lists**, and it matches cards, never piles
+    (`deck_theory::theory_diff`). The rung, the derived clone uids and the net for a group that
+    climbed unevenly: `src-tauri/CLAUDE.md`'s v53 entry.
 - **The grain is `deck_id, variant, category_id, card_id, coalesce(finish, '')`**
   (`schema::DECK_CARD_GRAIN`) — the
   same printing in two categories is two rows, added twice in one is one row with the sum, and
@@ -800,6 +828,22 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
     thrown away with the window and cleared by any other write *that window* makes. A
     database-backed redo would offer to resurrect a fortnight-old branch of edits the reader had
     forgotten making.
+  - **The journal keeps each deck's newest 200 steps and the history keeps everything** (issue
+    #553, 2026-09-27). Until then nothing deleted a `deck_undo` row but deleting the deck or a
+    retired undo, and a step is rows on both sides: a settings Save carries all of `DECK_FIELDS`
+    twice, an import or a theory switch the whole list twice. `record_step` now deletes the deck's
+    rows below the newest `deck_undo::UNDO_STEPS_PER_DECK` by `audit_id`, in the caller's
+    transaction, right after its insert — the one statement that files a step, so the one place
+    the cap lives. `deck_audit` is not touched: it is the drawer's record and it **syncs**, where
+    `deck_undo` does not, so a prune here is a local decision no peer sees. **It cannot take
+    either button's target**: the row just inserted is the deck's highest id and applied, so it is
+    the cursor, and no undone row sits above it for `next_redo` to find — what goes is the oldest
+    applied steps and dead branches. Undoing down past the oldest kept step answers
+    `NOTHING_TO_UNDO`, and a history row whose step is gone reads as a pre-v17 row does: worded,
+    with nothing offering to reverse it (an undo's `{"of":…}` names a `deck_audit` id, so its
+    sentence survives). **A dead branch counts toward the 200 until it ages out**, because deleting
+    it would turn a stale redo's `MOVED_ON` into `NOTHING_TO_UNDO`. A database already over the cap
+    sheds the excess at that deck's next step rather than at a schema rung.
   - **Three commands**: `deck_undo_state(deckId, redoId)` — the two `DeckAuditEntry`s the buttons
     name themselves from, the redo half answered only for the id the caller hands in, and only when
     it is `next_redo` —
@@ -1250,12 +1294,11 @@ variant)`; `deck_missing_to_wishlist(deckId, folderId?)`, which reads `live` and
   refusal halfway leaving the pile half-empty with nothing able to say so. One statement, one
   transaction, one history row. (It was "one allocator run" as well until schema v25; the
   arithmetic that made this a command survives the allocator that first motivated it.)
-  - **Variant-scoped, which is the exact reverse of `deck_category_delete`.** That command
-    cascades through both lists because `deck_cards.category_id` is `ON DELETE CASCADE` and a
-    category is not per-variant; a clear leaves the pile standing, so what it empties is the list
-    the reader is looking at. The two confirmations therefore quote **different numbers** —
-    `cardCountAllVariants` for the delete, `cardCount` for the clear — and swapping them would
-    over- or understate a destructive press.
+  - **Variant-scoped, and since user schema v53 so is `deck_category_delete`.** A delete used to
+    cascade through both lists, because `deck_cards.category_id` is `ON DELETE CASCADE` and a
+    category was not per-variant, so the two confirmations quoted different numbers
+    (`cardCountAllVariants` against `cardCount`). A pile now belongs to one list (issue #561), the
+    field is gone, and both quote `cardCount`.
   - **It answers the copies it removed**, counted before the `DELETE` and in copies rather than
     rows, which is what the confirmation quoted and what `delta` means in the history.
   - **An empty pile writes nothing at all**: no `touch_deck` and no audit row. The

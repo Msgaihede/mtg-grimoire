@@ -157,7 +157,7 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
     sortOrder: 1,
     cardCount: 0,
     totalPrice: null,
-    cardCountAllVariants: over.cardCount ?? 0,
+    variant: "live",
     // A pile the reader made, unless a fixture says otherwise — and the default matters here in
     // a way it does not in most files: `buildGroups` drops an **empty** `origin: "auto"` pile,
     // so a fixture that drifted to `"auto"` would silently take a group out of every column
