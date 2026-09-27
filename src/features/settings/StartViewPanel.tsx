@@ -98,9 +98,7 @@ export function StartViewPanel(): JSX.Element {
   return (
     <SettingsSection id="start-view" title="Opening view">
       <p className="text-sm text-dim">
-        Which view the app opens on when you launch it. Home is built to be landed on — it is
-        where the app opens until you say otherwise — but if you always start in the same place,
-        start there.
+        Choose the default view displayed when launching the app.
       </p>
 
       {/* No visible `<label>`: the section's heading is already the only name this control could
@@ -127,13 +125,8 @@ export function StartViewPanel(): JSX.Element {
         placeholder={NAV.find((entry) => entry.id === view)?.label}
       />
 
-      {/* `TheoryMarksPanel`'s closing sentence and the same fact: this is an `app_meta` row, and
-          `app_meta` is not among the tables sync carries. Two devices really do land in two
-          different places, and here that is closer to a feature than to a shortfall — the desk
-          and the laptop are not opened for the same reason. Said out loud regardless, because a
-          reader who has just paired two machines has every right to expect otherwise. */}
       <p className="text-sm text-dim">
-        This is kept only on this device — each of your devices can open somewhere different.
+        This setting is saved locally on this device.
       </p>
     </SettingsSection>
   );

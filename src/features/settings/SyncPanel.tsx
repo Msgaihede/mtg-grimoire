@@ -51,37 +51,12 @@ const PAIRING_POLL_KEY: QueryKey = ["sync", "pairing", "poll"];
  * wiped, which is the opposite of what happens.
  */
 export const REMOVAL_WARNING =
-  "Removing a device changes the key your devices share, so it can read nothing new from now " +
-  "on. It keeps whatever it already synced — this app cannot reach into it and take that " +
-  "back, and no server has a copy to delete.";
+  "Removing a device changes the key your devices share. It keeps whatever it already synced — " +
+  "this app cannot reach into it, and no server has a copy to delete.";
 
-/**
- * §2.1 and §2.3, and the two facts a reader cannot work out from the word *Leave*.
- *
- * **This wording is load-bearing and not copy**, for {@link REMOVAL_WARNING}'s reason arrived at
- * from the other side of the same act. Two things have to be in it:
- *
- * 1. **This device keeps its own collection.** Leaving is the one press on this panel that
- *    sounds like it throws something away, and what it actually throws away is a *membership in
- *    a group* — every row is still in this device's own SQLite afterwards. A dialog that said
- *    only "Leave group?" would be asking a reader to gamble their cards on a guess.
- * 2. **The others may not hear.** `leave_group_now` publishes best effort and clears locally
- *    whatever the relay answered, which is the whole of *"leaving is always possible"* — so a
- *    reader who leaves offline leaves for real while the remaining devices go on listing this
- *    one. That is the honest cost of the guarantee, and hiding it would let a reader believe the
- *    group had closed behind them when it had not. §5's first row, in the reader's words.
- *
- * The middle clause is the third consequence and the only *visible* one: `entitlement::clear`
- * runs unconditionally too, so a reader who pressed Connect on this device reads *Not connected*
- * a moment later. Nothing ended — `clear`, never `revoke` — which is why the sentence offers the
- * way back rather than apologising.
- */
 export const LEAVE_WARNING =
-  "Your collection stays on this device. Nothing here is deleted — what goes is this device's " +
-  "place in the group, and the membership it was carrying with it. You can pair it again, or " +
-  "connect a membership again, whenever you like. And if the relay cannot be reached right now, " +
-  "your other devices will not hear that you have gone: they go on listing this one until " +
-  "somebody removes it there.";
+  "Your collection stays on this device; nothing here is deleted. If the relay cannot be reached " +
+  "right now, other devices will not hear and go on listing this one until somebody removes it there.";
 
 /**
  * What the panel says when a pairing attempt ran out of time.
@@ -510,16 +485,11 @@ export function outcomeText(outcome: RelayOutcome | null): string {
   }
   if (outcome.baselineOps > 0) {
     parts.push(
-      "This was the first exchange with a device that had not heard from this one, so " +
-        `everything here went across — ${count(outcome.baselineOps)} rows.`,
+      `This was the first exchange with a new device — ${count(outcome.baselineOps)} rows synced.`,
     );
-    // Nested rather than a clause of its own: history rows are *among* the baseline's, so a
-    // count with no baseline behind it is a state the backend cannot produce, and drawing "0 of
-    // those" on a routine trip is the noise every other clause here is guarded against.
     if (outcome.baselineHistory > 0) {
       parts.push(
-        `${count(outcome.baselineHistory)} of those are deck history — a deck's story reads ` +
-          "the same wherever it is opened, so it goes across too.",
+        `${count(outcome.baselineHistory)} of those are deck history.`,
       );
     }
   }
@@ -642,36 +612,15 @@ const LAPSE_REASSURANCE =
  * level out of the `offering` block leaves the rest of the file green.
  */
 const CONNECT_ORDER =
-  "Connecting puts this device in a sync group of its own if it is not in one yet, and a " +
-  "device can only be in one group. If your other devices already sync together, pair this " +
-  "one to them first — then a membership on any of them covers all of them.";
+  "Each device can only belong to one group. If other devices already sync, " +
+  "pair this one to them first — then a membership on any of them covers all of them.";
 
 /**
- * The cost of a *re-claim*, said beside the field that makes one — spec §3, and its own words:
- * **"the panel says so before the press, and that copy is load-bearing."**
- *
- * `/claim` used to refuse a subject that already held a group with a 409, which stranded the one
- * reader it was worst for: the paying device leaves, and there is then no press anywhere that
- * re-binds its membership. So a re-claim **moves** the binding instead — and the price is paid
- * by whoever is still in the old group. Their relay log is dropped and their `group_devices`
- * rows go with it, so they stop syncing with each other and fail their next key check.
- *
- * **The reader this is for has not left anything.** A payer who leaves first has already
- * orphaned that group and this sentence tells them nothing new; a reader who simply pastes a
- * fresh code on a second machine can take down a working group without any press ever saying so.
- * That reader is the whole audience, which is why it is drawn at the claim field rather than at
- * *Connect Patreon* — opening a browser costs nothing, and the claim is the write.
- *
- * **What it must not do is offer a way to keep both**, because there is not one: one
- * subscription serves exactly one group, which is the invariant the 409 was protecting and the
- * rebinding keeps. So the sentence names what the old group loses and what it does not, and
- * stops.
+ * The cost of a *re-claim*, said beside the field that makes one.
  */
 const RECLAIM_WARNING =
-  "One membership covers one group. If this membership was last claimed for a different group " +
-  "of devices, claiming it here moves it — and the devices left in that group stop syncing with " +
-  "each other, because the relay drops what it was holding for them. Their own collections are " +
-  "untouched, but they have no way back until they pair again.";
+  "One membership covers one group. Claiming it here moves it — devices in the previous group " +
+  "stop syncing with each other. Their own collections are untouched.";
 
 /**
  * The one line drawn from `RelayStatus.pullHeld === "newer"`, and the reason it is a paragraph
@@ -835,10 +784,8 @@ function SupporterSection({ live }: { live: LiveState }): JSX.Element {
       <h3 className="font-heading text-sm leading-none">Membership</h3>
 
       <p className="text-sm text-dim">
-        Your devices hand changes to each other through one small server. It never gets the key
-        the group shares, so what it holds is unreadable to it &mdash; which is why none of this
-        needs an account with the server itself. What it does need is somebody to pay for it, so
-        it is open to supporters on Patreon.
+        Your devices sync through an end-to-end encrypted relay server that requires no account.
+        Relay hosting is funded by supporters on Patreon.
       </p>
 
       {/* **No controls at all while the read is unanswered**, which is the pairing half's rule
@@ -1320,12 +1267,8 @@ export function SyncPanel(): JSX.Element {
       <h3 className="font-heading text-sm leading-none">Devices</h3>
 
       <p className="text-sm text-dim">
-        Pairing joins two of your devices into one group so they can share a collection. There is
-        no account and no password: one device shows a code, the other reads it, and both then
-        show the same six digits for you to compare. Comparing them is what stops anything
-        sitting in between joining the group, so it is the one step that is never skipped. The
-        other device needs to be online too, now that pairing goes through the relay rather than
-        being carried between the two screens by hand.
+        Pairing links two online devices using a 6-digit confirmation code.
+        No account or password required.
       </p>
 
       {status === null ? (

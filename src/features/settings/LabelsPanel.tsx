@@ -189,8 +189,8 @@ export function LabelsPanel(): JSX.Element {
           a label belongs to no deck, so the word and the colour a reader sets here are the word
           and the colour it has everywhere. The deck dialog says the same thing in its subtitle. */}
       <p className="text-sm text-dim">
-        Every deck shares one list of labels, and a card carries at most one. Renaming or
-        recolouring a label here changes it in every deck wearing it.
+        Labels are shared across all decks, and each card carries at most one.
+        Renaming or recoloring a label updates it across all decks.
       </p>
 
       {/* Making one comes first, and this panel opens on it — `LabelsDialog`'s own rule, kept for

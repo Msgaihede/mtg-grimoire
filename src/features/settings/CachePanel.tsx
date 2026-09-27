@@ -49,8 +49,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
     <SettingsSection id="cache" title="Local cache">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="min-w-0 text-sm text-dim">
-          Card images and the leftovers of each download. All of it is fetched again when it is
-          next needed — your collection and decks are not touched.
+          Cached card images and temporary download files. Missing files will be re-downloaded when needed.
         </p>
         <button
           type="button"
@@ -70,8 +69,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
           about. */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
         <p className="min-w-0 text-sm text-dim">
-          The stored combos, thrown away and downloaded again straight away. Nothing needs this
-          done — it is here for when a deck&rsquo;s combo readout looks wrong.
+          Clears and re-downloads Commander Spellbook combo definitions.
         </p>
         <button
           type="button"

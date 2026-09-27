@@ -65,11 +65,9 @@ export function TheoryMarksPanel(): JSX.Element {
           calling one of them green would be describing the screen it is sitting on wrongly. What
           it says instead is what the two marks *mean*, which is the thing that does not move. */}
       <p className="text-sm text-dim">
-        A deck that keeps a theory list marks the cards on its live list against it — one colour
-        where the printing is the one the theory names, another where it is the same card in a
-        printing the theory does not name, and a third where the theory does not ask for the card
-        at all. A card the theory asks a different number of wears the number to add or remove
-        instead of the tick.
+        A deck with a theory list marks cards on its active list against the plan:
+        one color for the exact planned printing, another for an alternate printing,
+        and a third for cards not in the plan. Cards with quantity differences display the count to add or remove.
       </p>
 
       {/* `space-y-4` over a hairline the first row does not wear — `HiddenTagsPanel`'s list,
@@ -214,8 +212,7 @@ export function TheoryMarksPanel(): JSX.Element {
           stylesheet's on the phone beside it, and that is the design rather than a fault to be
           reported. */}
       <p className="text-sm text-dim">
-        These colours are kept only on this device. The theory switches on each deck, and your
-        labels, are synced as usual — these are not.
+        These colors are kept only on this device. Deck theory settings and labels sync normally.
       </p>
 
       {/* `problem`, and this is the one hook in the app whose refusal is surfaced at all: the
@@ -303,9 +300,7 @@ const MARKS: readonly MarkRow[] = [
     tier: "exact",
     id: "theory-exact",
     title: "Matching printing",
-    blurb:
-      "The card in front of you is the printing the theory list names — the real thing rather " +
-      "than a stand-in.",
+    blurb: "Matches the exact printing specified in the planned deck list.",
     noun: "matching-printing mark",
     subject: "Matching printing colour",
     fill: "--color-theory-exact",
@@ -315,9 +310,7 @@ const MARKS: readonly MarkRow[] = [
     tier: "name",
     id: "theory-name",
     title: "Different printing",
-    blurb:
-      "The same card, in a printing the theory list does not name — the proxy or the spare copy " +
-      "standing in until the one you meant arrives.",
+    blurb: "The same card, but in a different printing than planned.",
     noun: "different-printing mark",
     subject: "Different printing colour",
     fill: "--color-theory-name",
@@ -326,15 +319,8 @@ const MARKS: readonly MarkRow[] = [
     key: "theoryUnplanned",
     tier: "unplanned",
     id: "theory-unplanned",
-    // The heading is the mark's own sentence — `CardMarks.tsx`'s `THEORY_UNPLANNED_LABEL`, which
-    // is what the mark's tooltip and `deckCardName`'s clause both say. The other two rows are
-    // named for the *distinction* they draw (a matching printing, a different one), which is a
-    // thing only the theory list can say; this one is named for what a reader sees on the card,
-    // because "no printing" and "no card" are not phrases anybody would recognise.
     title: "Not in the theory list",
-    blurb:
-      "A card the theory list does not ask for at all — a stand-in, a spare or an experiment. " +
-      "Only on the actual list; nothing about which printing, which the other two marks say.",
+    blurb: "Card is present in the active deck, but not in the planned list.",
     noun: "unplanned-card mark",
     subject: "Not in the theory list colour",
     fill: "--color-theory-unplanned",

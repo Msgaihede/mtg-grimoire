@@ -271,10 +271,8 @@ export function MarketplacePanel({ marketplace }: { marketplace: MarketplaceStat
   return (
     <SettingsSection id="prices" title="Prices">
       <p className="text-sm text-dim">
-        Every price this app shows — in search, the collection, decks and the wishlist — is quoted
-        from one marketplace, in that marketplace&rsquo;s currency. Switching re-reads the lists you
-        are looking at; nothing re-syncs. A card a marketplace does not list shows an em dash there
-        rather than another marketplace&rsquo;s number.
+        Prices across search, collection, decks, and wishlist are quoted from your selected marketplace
+        in its native currency. Unlisted cards display &ldquo;&mdash;&rdquo;.
       </p>
 
       {/* `aria-busy` on the list rather than `disabled` on the rows: the write is one row
