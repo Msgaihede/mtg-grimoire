@@ -78,6 +78,40 @@ Three repo files carry sync state. All three look incidental and none is:
   **The cover is exactly the modules aliased, and no more** — a future `__CORE__` reader that no
   aliased module pulls in fails again, loudly, as a `[RENDER]` root-empty with that
   `ReferenceError` in `.render-check.json`. Remedy is another `paths` line, not a code change.
+- **[GENERAL] A story that imports a *hook* gets a second copy of it — and of the context the
+  hook reads.** The converter's rule 2 redirects an import to `window.MtgGrimoire` only when it
+  resolves to an exported **component's** module. `Tooltip.stories.tsx` imports `useTooltip` from
+  `./useTooltip`, which is not a component, so `_preview/TooltipProvider.js` compiled its own
+  `useTooltip` with its own `TooltipContext`. The bundle's `TooltipProvider` filled the bundle's
+  context and the story read the other one, which answers `NO_TOOLTIP_API`: measured 2026-09-27,
+  the button focused and matched `:focus-visible` and `#app-tooltip` never mounted. Fixed with a
+  `cfg.storyImports.shim` entry, `/components/tooltip/useTooltip`, which needs the barrel to export
+  the hook. **The tell is `createContext` in a `_preview/*.js`** —
+  `grep -c createContext ds-bundle/_preview/<Name>.js` should be 0 for any module whose context
+  matters. Any future story importing a context-reading hook needs its own shim line.
+- **[GENERAL] `GrimoirePreviewProvider` installs keyboard modality, or no focus ring ever draws.**
+  `src/index.css` redefines `focus-visible:` as `html[data-kbd] *:focus-visible` and blanks
+  `html:not([data-kbd]) :focus-visible`. `data-kbd` is written by `installKeyboardModality`, which
+  `main.tsx` and `.storybook/preview.tsx` both install and the provider did not until 2026-09-27 —
+  so every design built on claude.ai/design showed no keyboard focus anywhere. Found grading
+  Tooltip's `OnFocus`, whose reference shows the ring. Mounted in a ref-counted layout effect, not
+  at module scope, for the same reason as the surface style.
+- **[GENERAL] compare's reference is cropped to `#storybook-root`, so a `fixed` panel outside it
+  is invisible.** Dropdown's root is its 36px trigger: the listbox its plays open sits below and
+  never appears in the reference, so `Open` and `Default` photograph identically. The compare
+  cannot verify an open popup at all. It was verified by hand on 2026-09-27 — real input on both
+  sides, then `[role=option]` text, `aria-selected`/`aria-disabled` and listbox-to-trigger offset
+  compared (identical on all five stories that open it) plus a 2x visual. Tooltip is the opposite
+  case: its `Stage` is `min-h-[220px]`, so the panel lands inside the root and IS compared.
+- **[GENERAL] The `?story=` capture page offsets viewport-positioned `fixed` panels by +24px.** It
+  keeps the body's 24px padding gutter (deliberately — it is the graded framing) while wrapping
+  the story in `.ds-single{transform:translateZ(0)}`, and a transformed ancestor is the containing
+  block for `fixed`. `TooltipPanel` computes viewport coordinates, so in the grading capture its
+  panel lands 24px right and down, over its own button. **The product card does not have this**:
+  single mode without `?story=` zeroes the padding, and the probe measured panel centre = button
+  centre = 450px with an 8px gap. `Dropdown` is immune, because `usePopupPlacement` measures a
+  zero-size `fixed` probe and corrects for exactly this. Graded `close` with that note; do not
+  "fix" it in the preview.
 - **`@/lib/core` is a *directory*, and that is a second trap in the same line.** The converter's
   `tsconfigPathsPlugin` tries the bare stem before `/index.ts`, and `existsSync` says yes to a
   folder — esbuild is handed a directory to read and fails with a Windows `Incorrect function`.
@@ -86,8 +120,9 @@ Three repo files carry sync state. All three look incidental and none is:
 
 ## Config decisions worth knowing
 
-- **Scope is deliberate**: the 14 reusable primitives + shell. Every other storybook title is
-  `titleMap: null` — those are whole feature pages (`Search/Page`, `Decks/Editor`, …), which sync
+- **Scope is deliberate**: the reusable primitives and the shell (no count here; see Re-sync
+  risks for the command that answers it). Every other storybook title is either
+  `titleMap: null` or has no module in the barrel. The nulls are whole feature pages (`Search/Page`, `Decks/Editor`, …), which sync
   fine but are near-useless as design-agent building blocks. `titleMap` keys are the title's
   **leaf segment**, so one `"Page": null` excludes all four `*/Page` titles at once.
 - **`FilterChips` → `ToggleChip`.** `src/components/FilterChips.tsx` is a family module
@@ -98,6 +133,18 @@ Three repo files carry sync state. All three look incidental and none is:
   stories choose their backend through `parameters.fake`, which no preview wrapper can see. It
   derives the world from each story's own parameters rather than naming the four, so a story that
   gains or changes a seed is followed automatically.
+- **`Dropdown`, `TooltipProvider` and `WorkInProgress` joined on 2026-09-27, by Markus's choice.**
+  All three had stories before the 2026-09-08 sync and were dropped as `[TITLE_UNMAPPED]` with no
+  module in the barrel. The tooltip is a provider and a hook with no `Tooltip` component, so
+  `titleMap` sends `Tooltip` to `TooltipProvider` and the barrel exports `useTooltip` beside it.
+  **Six other `src/components` titles are still out, and that was the decision, not an oversight**
+  — offered and declined the same day: `BottomTabBar` (mobile), `CardChin`, `FolderNameField`,
+  `KeyMap`, `ParentFolderCard`, and `Dropdown/PlacementProbe` (see skipped stories). Do not
+  re-raise them unless one becomes a general-purpose primitive.
+- **Four owned previews exist only to re-enact a `play`**: `TooltipProvider`, `CardZoomIndicator`,
+  `ContextMenu`, and the `Flanked` half of `Dialog`. The rule they follow is under "Stories with a
+  `play`" below. `TooltipProvider` is `cardMode: "single"`, `primaryStory: "Interactive"`, because
+  an open panel is `fixed` and validate flags it `[GRID_OVERFLOW] escape` in a grid.
 - **`AppShell` renders at `viewport: "1280x800"`** — the app's narrow rung, near enough. The
   opening size is decided per monitor since 2026-08-20 (`src-tauri/src/window.rs`): 1280×**720**
   on a 1080p desk, 1920×1080 on anything with the room. The width is the one that matters to a
@@ -113,6 +160,78 @@ Three repo files carry sync state. All three look incidental and none is:
   The owned preview deliberately does not export this cell (it would report as an extra).
 - `primitives-manatext--nothing` — renders `null` by design, so storybook has no root content
   either (`sb-error` on both sides).
+- `primitives-dropdown-placementprobe--{in-a-scroller,in-a-transformed-box,at-the-bottom}` — the
+  file's own doc comment calls them "a probe, not a catalogue entry": three containers that
+  `usePopupPlacement` has to survive, driven by hand over CDP. They join the Dropdown card only
+  because the title nests under `Primitives/Dropdown`, and on a card they are filler lines.
+
+## Duplicate contexts that are known and harmless (swept 2026-09-27)
+
+`grep -c createContext ds-bundle/_preview/*.js` is non-zero for four previews, and none of
+them is the `useTooltip` bug:
+
+- **ContextMenu (8)** — its story imports `ContextMenuProvider`, `useContextMenu`, `cardMenu` and
+  the four feature menus from source. The whole menu stack compiles consistently *inside* the
+  preview, so the provider and every reader share the preview's copy and it renders correctly. The
+  cost: this card proves the source menu stack, not the bundle's copy. Shimming it would mean
+  exporting `ContextMenuProvider`, `useContextMenu` and the feature menus from the barrel —
+  not done.
+- **AppShell (8), Ribbon (1), Dialog (1)** — `motion`'s and `lucide-react`'s contexts come from
+  `node_modules`, which rule 2 never redirects by design. `FeedDownloadContext` rides in through
+  `src/lib/query.ts`. The 2026-09-08 grades already covered all three in this state.
+
+Designs never see any of this: they mount the bundle's own provider stack through
+`GrimoirePreviewProvider`. Re-run the grep when a count moves.
+
+## Stories with a `play` — what the reference shows, and when a preview re-enacts it
+
+Settled across the 2026-09-27 fan-out. A preview runs no play (`storybook/test` is stubbed to inert
+callables), and the storybook side is photographed with the play in whatever state it has reached.
+Read the play before grading, because three facts decide what its reference can show:
+
+1. **[GENERAL] compare does not wait for a play to finish.** `captureStory` shoots after
+   `networkidle` and fonts. A short play is usually done by then; a play that shows something and
+   removes it on a timer is caught **mid-flight**. `CardZoomIndicator` `While Zooming` shows its
+   `130%` badge inside `ZOOM_QUIET_MS` (1,200 ms). ContextMenu `No Stored Image` and
+   `Add To Wishlist Folders` still show the menu their plays go on to close.
+2. **[GENERAL] The reference is cropped to `#storybook-root`**, so a `fixed` panel below a thin
+   root never appears: Dropdown's listbox, ToggleChip `With Hint`, CountTag `Neutral` and
+   OwnedBadge `Both` tooltips, ContextMenu's submenus, and the TitleBar shortcuts panel (past the
+   900px edge too). Those were checked by hand with real input or a read-only hover probe on both
+   sides. **The compare itself verifies none of them.**
+3. **[GENERAL] Re-enact only where the leftover state can be shown.** An owned `withPlay` wrapper
+   re-enacts the end state with the DOM events `userEvent` dispatches, and nothing else: no props
+   and no store writes. It's done where the state is **in flow** (a focus ring, a focused row, a
+   badge) or the card is **already `single`**: `TooltipProvider`, `CardZoomIndicator`, Dialog
+   `Flanked` (Tab then focus the Next flank, once the dialog holds focus) and ContextMenu `Card`
+   (ArrowDown on the panel once it holds focus). **Never for a `fixed` panel on a grid or column
+   card**: every `.ds-cell` is `transform:translateZ(0); overflow:hidden`, so the panel lands
+   relative to the cell and is clipped. Measured on CardArt's grid at 728px, it landed at cell-local
+   y=349 in a 330x296 cell. Validate would still flag it `escape` and prescribe `single`, cutting
+   CardArt's card from seven variants to one.
+
+Graded `close` on purpose, each with its reason in its `grade.json`:
+
+- **Dropdown `Multi` and `Picked Icon`**: the reference is the play's end state ("3 formats"; "No
+  label" with the swatch gone), and the preview renders the story's args ("1 format"; "Removal"
+  with its `triggerIcon` swatch). They are kept rather than skipped because they are the only cells
+  that show `MultiDropdown` and `triggerIcon`.
+- **TooltipProvider `Interactive` and `On Focus`**: the +24px capture-page offset described above.
+  Product-card placement was measured correct.
+- **CardArt `Game Changer` and `Game Changer Foil`, Figure `With As Of Title`**: the reference
+  shows the tooltip each play opens (Figure's only as a 5px sliver at the root's bottom edge).
+  Rule 3 forbids re-enacting it on their grid cards. A hover probe confirmed that the bundle opens
+  the right text on every one.
+
+Grading tips from the same pass:
+
+- **Storybook text has LCD colour fringes and the preview's does not.** That is antialiasing, not
+  colour: the `.ds-single` transform puts the capture on a composited layer, which loses subpixel
+  AA. Solid fills agree to the unit, e.g. RarityGem rare is 191,163,90 on both.
+- **A thin reference strip cannot be judged from the sheet** (ManaLine's root is 868x2). Crop the
+  preview raw to its content, upscale both 5–6x nearest-neighbour into one image, and Read that.
+- **Fan-out subagents share one scratchpad**, and two batches writing `compare1.log` interleaved.
+  Tell each batch to log under its own subdirectory.
 
 ## Known render warns (triaged — not new)
 
@@ -150,6 +269,15 @@ Three repo files carry sync state. All three look incidental and none is:
   `bad:false`, `variantsIdentical:false`, 42 KB of PNG. The card was opened and shows seven gold
   grimoire-book variants (`Large`, `TitleBarSize`, `TakesItsColourFromTheParent`, …) rendering
   correctly. Any text-free icon component added later will trip this the same way.
+- **`[RENDER_THIN]` on `TooltipProvider`** ("DOM content present but rendered height is 0px") —
+  triaged 2026-09-27, **false positive from the `withPlay` wrapper.** Validate measures the mount's
+  *direct children* (`package-validate.mjs` ~l.546), and the owned preview wraps the story in a
+  `display: contents` div, which has no box and reads 0×0 however tall the story inside it is.
+  Only this card trips it: it is `single`, so the wrapper is the one mount. ContextMenu's grid has
+  taller sibling cells, and Dialog's wrapper is a sized stage. Its row reads `bad:false`, `blank:false`,
+  12 KB PNG, and the card screenshot shows the tooltip open and centred over "Needs review".
+  If it ever needs silencing, swap the wrapper for a plain block `div` (the story's `Stage` is
+  full-width block anyway) and re-grade.
 - **`[RENDER_THIN]` on `TitleBar`** ("variants render identically") — triaged 2026-09-08, true but
   harmless. Its row is `thin:false`, `bad:false`, and all six variants read `MTG GRIMOIRE`: the
   stories differ by window state and button behaviour, and the window controls sit **past the
@@ -218,5 +346,19 @@ not `$?`.
 - **`AppShell.tsx`'s owned preview copies `compose` verbatim from the generated wrapper.** If the
   converter's story composition changes, diff the generated twin
   (`.design-sync/.cache/previews/AppShell.tsx`) against it.
-- Only `AppShell` uses `parameters.fake` today. If another story starts to, it needs the same
-  owned-preview treatment or it will render the default `starter` world.
+- **`TooltipProvider.tsx`'s owned preview mirrors two plays by hand.** If `Interactive`'s or
+  `OnFocus`'s play changes, `[STORY_CHANGED]` names it and this file has to follow. Its `compose`
+  is the generated one verbatim, same as `AppShell.tsx` and `Dialog.tsx`.
+- **`cfg.storyImports.shim` holds one hook now (`useTooltip`).** A new story that imports a
+  context-reading hook from a module that is not a component (`useCardToDeckRefusal`, a
+  `use…Context`) compiles a dead second copy, and the static render usually looks fine. Grep the
+  compiled preview for `createContext`.
+- **Four owned previews re-enact plays by hand** (see "Stories with a `play`"). If
+  `CardZoomIndicator` `WhileZooming`, Dialog `Flanked` or ContextMenu `Card` changes its play,
+  `[STORY_CHANGED]` names it and the owned file has to follow. `CardZoomIndicator`'s match is
+  timing-dependent **on both sides**: each shot has to land within 1,200 ms of the click.
+- `AppShell` is the only story whose `parameters.fake` changes what renders. ContextMenu
+  `No Stored Image` also sets one (`fault: "imageUrisMissing"`, since 2026-08-14), but the fault
+  only changes what *Copy card image* copies, and no static render presses it. A story whose
+  `parameters.fake` does change a render needs AppShell's owned-preview treatment, or it renders
+  the default `starter` world.
