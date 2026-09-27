@@ -8888,10 +8888,11 @@ pub(crate) mod tests {
     /// fixture that ran `capture::install` before rewinding — each pointing at a table that is not
     /// there until the climb puts it back. SQLite then refuses a `DROP COLUMN` or a `RENAME` on
     /// any table carrying one (`error in trigger sync_gone_decks: no such table: main.sync_gone`,
-    /// measured against 3.53.0), as well as a delete from it. So such a fixture may rewind v53 and
-    /// nothing below it — [`UNDO_V52`]'s `DROP COLUMN token_mode` is refused over the installed
-    /// `sync_upd_decks`, which reads that column, before this could matter — and v53's own climb
-    /// alters none of those tables.
+    /// measured against 3.53.0), as well as a delete from it. So such a fixture may rewind v54 and
+    /// v53 and nothing below them — [`UNDO_V52`]'s `DROP COLUMN token_mode` is refused over the
+    /// installed `sync_upd_decks`, which reads that column, before this could matter — and the
+    /// climb back alters none of those tables until v53 has put `sync_gone` back: v54's
+    /// `ADD COLUMN` on `wishlist_folders` runs after it.
     const UNDO_V53: &str = "DROP TABLE IF EXISTS sync_gone;";
 
     /// v52's token entries and mode — the rewind directly under [`UNDO_V53`] and directly above
@@ -9661,13 +9662,14 @@ pub(crate) mod tests {
     /// A user file at 49 — the shape every machine carries the day before a price snapshot
     /// recorded how many copies it was of, and the only population the v50 rung is *for*.
     ///
-    /// Head rewound past **all four** rungs above it, newest first — [`UNDO_V53`], [`UNDO_V52`],
-    /// [`UNDO_V51`] and then [`UNDO_V50`]. It read "both" until v52 landed and "all three" until
-    /// v53 did, which is the prediction every fixture doc on this ladder makes coming true once
-    /// more. Without [`UNDO_V51`] the file would keep `decks.token_rail_index` and the v51 rung
-    /// would die at `duplicate column name` on the climb this fixture exists for; without
-    /// [`UNDO_V52`], v52's at `table deck_token_printings already exists`; without [`UNDO_V53`],
-    /// v53's at `table sync_gone already exists`.
+    /// Head rewound past **all five** rungs above it, newest first — [`UNDO_V54`], [`UNDO_V53`],
+    /// [`UNDO_V52`], [`UNDO_V51`] and then [`UNDO_V50`]. It read "both" until v52 landed, "all
+    /// three" until v53 did and "all four" until v54 did, which is the prediction every fixture
+    /// doc on this ladder makes coming true once more. Without [`UNDO_V51`] the file would keep
+    /// `decks.token_rail_index` and the v51 rung would die at `duplicate column name` on the climb
+    /// this fixture exists for; without [`UNDO_V52`], v52's at `table deck_token_printings already
+    /// exists`; without [`UNDO_V53`], v53's at `table sync_gone already exists`; without
+    /// [`UNDO_V54`], v54's at `duplicate column name: managed_tokens`.
     fn user_file_at_49() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
@@ -9681,8 +9683,8 @@ pub(crate) mod tests {
     /// A user file at 50 — the shape every machine carries the day before the token pile could
     /// be moved in the rail, and the only population the v51 rung is *for*.
     ///
-    /// Head rewound past v53, v52 and v51, newest first, so it carries v50's holdings table exactly
-    /// as a real v50 file does. (Written as `user_file_at_49`, before the rung was renumbered to
+    /// Head rewound past v54, v53, v52 and v51, newest first, so it carries v50's holdings table
+    /// exactly as a real v50 file does. (Written as `user_file_at_49`, before the rung was renumbered to
     /// v51; renamed with it, which also keeps it clear of the v50 rung's own `user_file_at_49`
     /// above.)
     fn user_file_at_50() -> Connection {
@@ -9698,8 +9700,9 @@ pub(crate) mod tests {
     /// A user file at 51 — the shape every machine carries the day before a token's printings
     /// became entries, and the only population the v52 rung is *for*.
     ///
-    /// Head rewound past v53 and v52 — v52 alone until v53's table landed above it, which a file at
-    /// 51 cannot hold. What makes a test built on it a real upgrade rather than a fresh install is
+    /// Head rewound past v54, v53 and v52 — v52 alone until v53's table landed above it, which a
+    /// file at 51 cannot hold, and v54's column after it. What makes a test built on it a real
+    /// upgrade rather than a fresh install is
     /// what the test seeds afterwards: a `deck_tokens` row carrying a picked `card_id`, which
     /// nothing at head writes any more, and a `decks.token_stack` that head does not have.
     fn user_file_at_51() -> Connection {
