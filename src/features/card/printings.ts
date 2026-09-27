@@ -133,10 +133,14 @@ export const PRINTING_GROUP_BY_OPTIONS: readonly {
 /**
  * What the picker opens on, and what an unreadable stored value falls back to.
  *
- * `artist` because it is what the pane grouped by before there was anything to pick — the
- * reader who never opens the selector sees exactly the list they saw yesterday.
+ * `released`, newest first — the order Rust already hands the page over in, and what a reader
+ * opening *All printings* expects to scan (issue #568). It was `artist` until 2026-09-27, the
+ * pane's pre-selector folding; a reader who picked a mode keeps it, because only an unset or
+ * unreadable row reaches this constant. `DEFAULT_PRINTING_GROUP_BY` in `src-tauri/src/card.rs`
+ * is the other half and must say the same word: that one answers the read when no row exists,
+ * so it is the default a fresh install actually sees.
  */
-export const DEFAULT_PRINTING_GROUP_BY: PrintingGroupBy = "artist";
+export const DEFAULT_PRINTING_GROUP_BY: PrintingGroupBy = "released";
 
 /**
  * Narrows an unvalidated string (an `app_meta` row, a `<select>` value) to a mode.
