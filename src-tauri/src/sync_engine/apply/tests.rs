@@ -2884,6 +2884,295 @@ fn a_copy_filed_into_a_binder_made_under_one_this_device_deleted_lands_at_the_ro
     assert!(skips(&a).is_empty() && skips(&b).is_empty());
 }
 
+/// **...and that tombstone waits for the retry, so a parent the same page brings back keeps the
+/// folder's children.** `b` makes `P` and deletes it; `a`, which saw `P` and has not heard of the
+/// delete, makes `X` under it, files a copy into `X`, and then renames `P` — later than `b`'s
+/// delete, so add-wins brings `P` back on `b` when the page arrives. The page sorts `X` ahead of
+/// the rename. Tombstoned on the first attempt, `X` sent the copy to the root before `P` came
+/// back, and the retry then made `X` under the resurrected `P`: `b` held the copy at the root and
+/// `a` held it in `X`.
+///
+/// **What makes it red**: the moot arm tombstoning a row it did not find on the first attempt —
+/// or any decision resting on `gone` taken there.
+#[test]
+fn a_folder_made_under_a_parent_the_same_page_brings_back_keeps_its_copy() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let p_on_b = binder(&b, "P", None);
+    apply(&a, &since(&b, &mut mb)).unwrap();
+
+    crate::collection_folders::delete_folder(&b, p_on_b).unwrap();
+    // Every write of `a`'s is later than `b`'s delete, which is what add-wins asks of the rename.
+    a.execute("UPDATE sync_clock SET ms = ms + 60000", [])
+        .unwrap();
+    let p_on_a: i64 = a
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'P'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let x = binder(&a, "X", Some(p_on_a));
+    file_copies(&a, Some(x), 1);
+    a.execute(
+        "UPDATE collection_folders SET name = 'P2' WHERE id = ?1",
+        [p_on_a],
+    )
+    .unwrap();
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(unwritten(rb), (0, 0), "{rb:?}");
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 1), "{who} lost the copy");
+        let placed: (Option<String>, Option<String>) = c
+            .query_row(
+                "SELECT f.name, p.name FROM collection_entries e
+                   LEFT JOIN collection_folders f ON f.id = e.folder_id
+                   LEFT JOIN collection_folders p ON p.id = f.parent_id",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            placed,
+            (Some("X".to_owned()), Some("P2".to_owned())),
+            "{who} does not hold the copy in X under the resurrected P"
+        );
+    }
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
+}
+
+/// **A folder this device holds, moved under a parent deleted here, follows that parent back when
+/// the same page resurrects it.** `b` makes `P`, `a` makes `X`, and both devices hold both; `b`
+/// deletes `P`; `a`, not having heard, moves `X` under `P` and then renames `P` — later than `b`'s
+/// delete, so add-wins brings `P` back on `b`. The page sorts `X`'s move ahead of the rename.
+/// Decided on the first attempt, the move was moot and deleted `X` before the rename brought `P`
+/// back; on the retry `X` found `P` but no row of its own, and a sparse move cannot rebuild one, so
+/// it was dropped (`NOT NULL constraint failed: collection_folders.name`) while `a` kept `X` under
+/// `P`. Decided on the retry, the move meets the resurrected `P` and lands.
+///
+/// **What makes it red**: a decision resting on `gone` taken on the first attempt.
+#[test]
+fn a_folder_moved_under_a_parent_the_same_page_brings_back_follows_it() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let p_on_b = binder(&b, "P", None);
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    let x = binder(&a, "X", None);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    crate::collection_folders::delete_folder(&b, p_on_b).unwrap();
+    // Every write of `a`'s is later than `b`'s delete, which is what add-wins asks of the rename.
+    a.execute("UPDATE sync_clock SET ms = ms + 60000", [])
+        .unwrap();
+    let p_on_a: i64 = a
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'P'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    crate::collection_folders::move_folder(&a, x, Some(p_on_a)).unwrap();
+    a.execute(
+        "UPDATE collection_folders SET name = 'P2' WHERE id = ?1",
+        [p_on_a],
+    )
+    .unwrap();
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(unwritten(rb), (0, 0), "{rb:?}: {:?}", skips(&b));
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let under: Option<String> = c
+            .query_row(
+                "SELECT p.name FROM collection_folders f
+                   JOIN collection_folders p ON p.id = f.parent_id
+                  WHERE f.name = 'X'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(
+            under.as_deref(),
+            Some("P2"),
+            "{who} does not hold X under P"
+        );
+    }
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
+}
+
+/// **...and a copy filed into a binder deleted here stays in it when the same page brings the
+/// binder back** — the `SET NULL` arm's form of the test above. `b` makes `B` and deletes it; `a`,
+/// not having heard, files a copy into `B`, renames it — later than `b`'s delete, so add-wins
+/// brings it back — and moves it into `Outer`, a folder it makes after the rename. The move names
+/// a parent `b` has not got yet, so `B`'s own group fails its first attempt and is written on the
+/// retry; decided on the first attempt, the copy had already been written at the root as the
+/// `SET NULL` would leave it, while on `a` it is in `B`. (The move is what makes this reachable:
+/// with no failing parent, `B`'s group sorts ahead of the copy by table rank and lands first on
+/// any code.) Decided on the retry, the copy meets the resurrected `B`.
+///
+/// **What makes it red**: a decision resting on `gone` taken on the first attempt.
+#[test]
+fn a_copy_filed_into_a_binder_the_same_page_brings_back_stays_in_it() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let bin_on_b = binder(&b, "B", None);
+    apply(&a, &since(&b, &mut mb)).unwrap();
+
+    crate::collection_folders::delete_folder(&b, bin_on_b).unwrap();
+    a.execute("UPDATE sync_clock SET ms = ms + 60000", [])
+        .unwrap();
+    let bin_on_a: i64 = a
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'B'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    file_copies(&a, Some(bin_on_a), 1);
+    a.execute(
+        "UPDATE collection_folders SET name = 'B2' WHERE id = ?1",
+        [bin_on_a],
+    )
+    .unwrap();
+    let outer = binder(&a, "Outer", None);
+    crate::collection_folders::move_folder(&a, bin_on_a, Some(outer)).unwrap();
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(unwritten(rb), (0, 0), "{rb:?}: {:?}", skips(&b));
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 1), "{who} lost the copy");
+        let placed: (Option<String>, Option<String>) = c
+            .query_row(
+                "SELECT f.name, p.name FROM collection_entries e
+                   LEFT JOIN collection_folders f ON f.id = e.folder_id
+                   LEFT JOIN collection_folders p ON p.id = f.parent_id",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            placed,
+            (Some("B2".to_owned()), Some("Outer".to_owned())),
+            "{who} does not hold the copy in the resurrected binder"
+        );
+    }
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
+}
+
+/// **A moot folder delete waits for the retry when rows are still filed in it, so the page's own
+/// re-filing of them lands first** — the delete arm's reason, met one level up: every decision
+/// resting on `gone` is made on the retry (`Why::DecidedOnRetry`). Both
+/// devices hold a root copy `u0` and a copy `u1` in `Inner`, one printing; `b` deletes `Outer`;
+/// `a`, not having heard, moves `Inner` under `Outer` and then drags `u1` to the root, which folds
+/// it into `u0` — the page carries `u0`'s `+1` and `u1`'s delete. Deleted on the first attempt,
+/// `Inner` re-homed `u1` onto `u0` itself, ahead of both: where `u0`'s uid sorts lower the `+1`
+/// then counted the fold a second time (3 against `a`'s 2), and where `u1`'s does the survivor
+/// took `u1`'s uid, `u0`'s `+1` found no row, and `u1`'s delete took the survivor (0 copies).
+/// Waiting, the `+1` and the delete land first and the retry finds `Inner` empty.
+///
+/// The two uids are forced so both orders are driven rather than left to a coin toss.
+///
+/// **What makes it red**: the moot arm deleting a folder on the first attempt with rows in it —
+/// its own wait until fix round 2, the parent loop's deferral since.
+fn a_copy_dragged_out_of_a_binder_moved_under_a_deleted_one_lands_once(root_lower: bool) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let outer = binder(&a, "Outer", None);
+    let inner = binder(&a, "Inner", None);
+    file_copies(&a, None, 1);
+    file_copies(&a, Some(inner), 1);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+    let (u0, u1) = if root_lower {
+        (
+            "0000000000000000000000000000000a",
+            "0000000000000000000000000000000b",
+        )
+    } else {
+        (
+            "0000000000000000000000000000000b",
+            "0000000000000000000000000000000a",
+        )
+    };
+    for c in [&a, &b] {
+        capture::suppressed(c, || {
+            c.execute(
+                "UPDATE collection_entries SET sync_uid = ?1 WHERE folder_id IS NULL",
+                [u0],
+            )
+            .unwrap();
+            c.execute(
+                "UPDATE collection_entries SET sync_uid = ?1 WHERE folder_id IS NOT NULL",
+                [u1],
+            )
+            .unwrap();
+        });
+    }
+
+    let b_outer: i64 = b
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'Outer'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    crate::collection_folders::delete_folder(&b, b_outer).unwrap();
+    crate::collection_folders::move_folder(&a, inner, Some(outer)).unwrap();
+    let filed: i64 = a
+        .query_row(
+            "SELECT id FROM collection_entries WHERE sync_uid = ?1",
+            [u1],
+            |r| r.get(0),
+        )
+        .unwrap();
+    crate::collection_folders::set_entry_folder(&a, filed, None).unwrap();
+    let page = since(&a, &mut ma);
+    assert!(
+        page.iter()
+            .any(|op| op.uid == u0 && op.counters.get("quantity") == Some(&1))
+            && page.iter().any(|op| op.uid == u1 && op.kind == Kind::Del),
+        "the premise: the drag folds u1 into u0: {page:?}"
+    );
+
+    let rb = apply(&b, &page).unwrap();
+    assert_eq!(
+        unwritten(rb),
+        (0, 0),
+        "{rb:?}, b holds (rows, copies) {:?}",
+        qty(&b)
+    );
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 2), "{who} does not hold one row of two");
+        assert_eq!(uids_of_copies(c), vec![Some(u0.to_owned())], "{who}");
+        assert_eq!(
+            (folders(c), copies_at_root(c)),
+            (0, 1),
+            "{who} kept a binder or a filed copy"
+        );
+    }
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
+}
+
+#[test]
+fn a_copy_dragged_onto_a_lower_root_twin_out_of_a_binder_moved_under_a_deleted_one_lands_once() {
+    a_copy_dragged_out_of_a_binder_moved_under_a_deleted_one_lands_once(true);
+}
+
+#[test]
+fn a_copy_dragged_onto_a_higher_root_twin_out_of_a_binder_moved_under_a_deleted_one_lands_once() {
+    a_copy_dragged_out_of_a_binder_moved_under_a_deleted_one_lands_once(false);
+}
+
 /// **A newer device's child of a deleted parent is moot, never a permanent newer hold** (review
 /// focus 2). Moot is asked first because it is a fact about *this* device that no upgrade
 /// changes: held as newer, the child would wait for an update that cannot help it, and pin the

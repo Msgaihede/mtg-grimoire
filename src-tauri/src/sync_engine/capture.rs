@@ -850,7 +850,7 @@ fn update_trigger(spec: &Spec) -> String {
     )
 }
 
-/// The delete trigger: a tombstone, and nothing else in it.
+/// The delete trigger: a `del` op, and nothing else in it.
 fn delete_trigger(spec: &Spec) -> String {
     let t = spec.table;
     let body = emit(
@@ -873,8 +873,8 @@ fn delete_trigger(spec: &Spec) -> String {
 
 /// Every table some spec names as a parent — the tables other rows are filed under, and so the
 /// only ones [`crate::sync_engine::apply`]'s `gone` is ever asked about. **Read off [`TABLES`]
-/// rather than listed**, so a synced table that grows a child is tombstoned the day its spec says
-/// so.
+/// rather than listed**, so a deleted row of a synced table that grows a child leaves a
+/// `sync_gone` tombstone the day its spec says so.
 pub(crate) fn parent_tables() -> Vec<&'static str> {
     let mut out: Vec<&'static str> = Vec::new();
     for spec in &TABLES {
