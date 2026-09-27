@@ -199,7 +199,7 @@ describe("useDeckTokens", () => {
 
     const keys = spy.mock.calls.map(([filters]) => filters?.queryKey);
     expect(keys).toContainEqual(["decks"]);
-    // **And the wishlist since user schema v54** (managed tokens spec §3.8): a theory deck's
+    // **And the wishlist since user schema v55** (managed tokens spec §3.8): a theory deck's
     // managed wishlist files the plan's missing tokens in a `Tokens` subfolder, and its dirty
     // triggers watch the two token tables — so a token step re-settles it like a card step does,
     // and `useDeck`'s own reason for firing `["wishlist"]` after every deck write is this one's too.

@@ -175,6 +175,7 @@ import { core } from "@/lib/core";
 import type { CallArgs, CallOptions } from "@/lib/core";
 import { bytesToBase64 } from "@/lib/bytes";
 import { isAndroid } from "@/lib/platform";
+import type { Border } from "./border";
 import type { Condition } from "./conditions";
 import type { Finish } from "./finish";
 import type { MarketplaceId } from "./marketplace";
@@ -192,14 +193,15 @@ import type { SortSpec } from "./sort";
 export type Unlisten = () => void;
 
 /**
- * The ~136 methods below are written as `invoke("name", { args })` and stay that way.
+ * The methods below are written as `invoke("name", { args })` and stay that way. (This read
+ * "~136" long after it stopped being true; count them in the file rather than here.)
  * Only where the call goes has changed — {@link core} decides that, per build.
  *
  * **Two parameters wider than that sentence since the scanner**, and both widenings serve the
  * one call that cannot be `{ args }`: a camera frame is bytes with no fields to name, so `args`
  * takes {@link CallArgs}' other arm, and whatever the bytes cannot say rides in
  * {@link CallOptions}' headers. Every other wrapper passes a record and no options, which is
- * what keeps `core.call`'s one- and two-argument forms — and the twenty
+ * what keeps `core.call`'s one- and two-argument forms — and the
  * `toHaveBeenCalledWith("sync_status")` assertions that depend on them — unchanged.
  */
 const invoke = <T,>(command: string, args?: CallArgs, options?: CallOptions): Promise<T> =>
@@ -341,6 +343,24 @@ export interface SearchRequest {
    * (`Land Creature — Forest Dryad`) answers both `Land` and `Creature`.
    */
   types?: string[];
+  /**
+   * Border chips — `regular`/`borderless`/`fullart` (`@/lib/border`). ORed with each other,
+   * ANDed with every other filter: the type chips' shape one dimension along. `regular` is a
+   * printing that is **neither** borderless nor full art; a borderless full-art printing
+   * answers both of the other two. Rust: `borders: Option<Vec<String>>`.
+   */
+  borders?: Border[];
+  /**
+   * Finish chips over the **printing** — "is this printing published in foil", Scryfall's
+   * `is:foil` — ORed with each other. Answered from `cards.finishes`, so a printing that exists
+   * in nonfoil and foil answers both chips.
+   *
+   * **Not the collection's {@link CollectionQuery.finishes}**, which is the finish one *copy*
+   * is in. The two share the tray's Finish cell and nothing else; the different name is what
+   * keeps them from colliding on the collection's flattened payload. Rust:
+   * `printed_finishes: Option<Vec<String>>`.
+   */
+  printedFinishes?: Finish[];
   /**
    * The price band, at {@link marketplace}. Inclusive at both ends, either half usable alone.
    *
@@ -687,6 +707,18 @@ export interface FacetResponse {
    * {@link rarities} needs.
    */
   types: Record<string, number>;
+  /**
+   * Keyed `regular`/`borderless`/`fullart`. Plain counts, all three on every ready response,
+   * zeros included. **They overlap** — a borderless full-art printing is counted under both —
+   * so, like {@link types}, they do not sum to {@link total}. Rust: `borders`.
+   */
+  borders: Record<string, number>;
+  /**
+   * Keyed `nonfoil`/`foil`/`etched`: how many printings are **published** in each finish. Plain
+   * counts, all three on every ready response. They overlap (51,628 paper printings come in
+   * both nonfoil and foil), so they do not sum to {@link total}. Rust: `finishes`.
+   */
+  finishes: Record<string, number>;
   /**
    * Keyed by set code. Plain counts, and **every code in the corpus arrives, zeros
    * included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
@@ -1102,6 +1134,16 @@ export interface CardFilters {
    * be narrowed to a type without a second filter path. Rust: `types: Option<Vec<String>>`.
    */
   types?: string[];
+  /** Border chips — see {@link SearchRequest.borders}, the same field on the same control.
+   *  Declared here as well because `filters::push_card_filters` emits it for all three lists, so
+   *  a binder and a wishlist narrow by the printing's frame too. Rust:
+   *  `borders: Option<Vec<String>>`. */
+  borders?: Border[];
+  /** The printing's published finishes — see {@link SearchRequest.printedFinishes}. On the
+   *  collection's payload this sits beside {@link CollectionQuery.finishes}, the copy's own
+   *  finish, which is a different question; nothing in the app sends this one there. Rust:
+   *  `printed_finishes: Option<Vec<String>>`. */
+  printedFinishes?: Finish[];
   /** Omitted means true in the search and false in the collection: a search offers cards to
    *  own, a collection lists cards that are owned. */
   paperOnly?: boolean;
@@ -1148,13 +1190,18 @@ export interface CardFilters {
  * What one {@link QueryPredicate} is a statement about — `filters::PredicateField`, whose
  * variants carry `#[serde(rename_all = "camelCase")]`, so these strings are the wire.
  *
- * **`typeLine` and `oracleText` emit no SQL at all.** They travel in the same list as the other
- * ten and are folded into the FTS5 `MATCH` string instead, because `LIKE` over either column
- * measured 80× to 250× slower on the real corpus. Nothing on this side has to know that — it is
- * recorded because the two are the fields whose behaviour differs from their neighbours', and
- * the difference is invisible in the payload.
+ * **`name`, `typeLine` and `oracleText` emit no SQL at all.** They travel in the same list as
+ * the other ten and are folded into the FTS5 `MATCH` string instead, because `LIKE` over either
+ * text column measured 80× to 250× slower on the real corpus. Nothing on this side has to know
+ * that — it is recorded because the three are the fields whose behaviour differs from their
+ * neighbours', and the difference is invisible in the payload. (The wishlist is the exception
+ * for `name`: it answers one from its own denormalised name column, as it does its free text.)
+ *
+ * `name` has no keyword: `queryLanguage.ts` sends it only for a leading `-` on free text —
+ * `-bolt`, `-"lightning bolt"` — so on the wire it is always negated.
  */
 export type PredicateField =
+  | "name"
   | "typeLine"
   | "oracleText"
   | "keyword"
@@ -2144,8 +2191,8 @@ export type CategoryKind = "main" | "side" | "commander" | "companion" | "maybe"
  *
  * That last sentence is the entire reason this is a column and not a name list. "Ramp", "Draw",
  * "Removal" and "Lands" are exactly what a person calls their own piles, and
- * `DECK_CATEGORY_GRAIN` is `(deck_id, name)` — one pile per name per deck — so a rule reading
- * the *name* would quietly take over the pile a reader made deliberately. **The name is the
+ * `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)` — one pile per name per list — so a rule
+ * reading the *name* would quietly take over the pile a reader made deliberately. **The name is the
  * user's; the kind is what the rules read**, and provenance is the same kind of fact as the
  * kind.
  *
@@ -2193,12 +2240,22 @@ export type DeckFinish = Exclude<Finish, "nonfoil"> | null;
  * One category of one deck: a named pile the user owns.
  *
  * Schema v8 replaced the fixed five-word zone with these. The four predefined ones
- * (`schema::PREDEFINED_CATEGORIES`) are seeded with every deck and cannot be renamed or
+ * (`schema::PREDEFINED_CATEGORIES`) are seeded with every list and cannot be renamed or
  * deleted; everything else is the user's, and `kind` is `main`.
  */
 export interface DeckCategory {
   id: number;
   deckId: number;
+  /**
+   * **Which of the deck's two lists this pile belongs to** — user schema v53 (issue #561).
+   *
+   * Until then a pile was the deck's and both lists shared one set, so a column made on Theory
+   * appeared on Actual and switching the Sideboard off on one switched it off on the other. The
+   * two lists are separate versions of the deck, and the theory diff is the only thing that
+   * joins them — so each list has its own piles, its own four predefined zones, its own names,
+   * order and switches, and a `deck_cards` row only ever points at a pile of its own list.
+   */
+  variant: DeckVariant;
   /** As the user wrote it — a column heading, and what every refusal about a card in it says. */
   name: string;
   kind: CategoryKind;
@@ -2240,9 +2297,9 @@ export interface DeckCategory {
    * Copies filed here **in the variant that was asked for** — `sum(quantity)`, not a row count.
    * Two printings at 2 and 3 copies read 5.
    *
-   * The number a *list* row wants: a panel drawing the deck's columns is drawing the list the
-   * reader is editing. It is **not** the number a delete confirmation wants — see
-   * {@link DeckCategory.cardCountAllVariants}, and read both before reaching for either.
+   * A pile holds cards of its own {@link DeckCategory.variant} only (issue #561), so this is
+   * every copy it holds — the number a list row draws **and** the number a delete confirmation
+   * quotes. Until v53 those were two numbers, because a pile was shared between the lists.
    */
   cardCount: number;
   /** Nonfoil unit price × copies over the same variant, at the marketplace the read named;
@@ -2250,17 +2307,6 @@ export interface DeckCategory {
    *  marketplaces' totals over one pile are legitimately not a conversion of each other — each
    *  omits the copies *it* cannot price. */
   totalPrice: number | null;
-  /**
-   * Copies filed here **across both variants**, live and theory together — the number a
-   * destructive confirmation has to quote, and the same answer whichever variant was asked by.
-   *
-   * A category is not per-variant. `deck_cards.category_id` is `ON DELETE CASCADE`, so deleting
-   * one takes its rows out of **both** lists, and `deckCategoryDelete`'s move arm moves both for
-   * the same reason. A dialog quoting {@link DeckCategory.cardCount} therefore understates what
-   * it is about to do on any theory-enabled deck — and understates the **destructive** arm in
-   * particular, which is a control lying in the direction of the reader pressing it.
-   */
-  cardCountAllVariants: number;
 }
 
 /**
@@ -2387,7 +2433,7 @@ export interface WishlistFolder {
    */
   managedDeckId: number | null;
   /**
-   * **The managed wishlist's Tokens subfolder** (user schema v54, managed tokens spec §3.8): the
+   * **The managed wishlist's Tokens subfolder** (user schema v55, managed tokens spec §3.8): the
    * one child a managed folder can have, named `Tokens`, carrying the **same** `managedDeckId` and
    * its parent's id in `parentId`, and holding the token printings that deck's plan is short of.
    * `false` for every other folder — the reader's own and the managed folder itself. What tells
@@ -2918,7 +2964,8 @@ export interface DeckMissingOutcome {
  * refuses is the same member spelled with two different types.
  */
 export interface TheorySlot {
-  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
+  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``, where the finish is
+   *  the one the row **plays** (its own, else the printing's sole finish — issue #563).
    *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
   key: string;
   /**
@@ -2989,7 +3036,10 @@ export interface TheoryDiffRow {
   setCode: string;
   collectorNumber: string;
   /**
-   * Which **object** this line is for — `deck_cards.finish`, so `null` is the regular copy.
+   * Which **object** this line is for — the finish the theory row **plays**, so `null` is the
+   * regular copy. That is `deck_cards.finish` where the row stored one and the printing's sole
+   * finish where it did not: an unsaid row of a foil-only printing reads `foil` here, because it
+   * can be no other object (issue #563, `deck_theory::played_finish`).
    *
    * **Half of the row's identity**, with {@link TheoryDiffRow.cardId}: a foil Sol Ring and a
    * regular one are two pieces of cardboard to go and find, two rows in `deck_cards`, and two
@@ -3180,7 +3230,7 @@ export interface DeckAuditEntry {
    * | `label` | `{ label, previous }` on a card; `{ action, label, previous }` on the label |
    * | `category` | `{ action, name, previousName, cards }` |
    * | `folder` | `{ action, folder }` — `folder` is `null` for the root |
-   * | `deck` | `{ field, from, to }`, or `{ field: "theory", copied }` |
+   * | `deck` | `{ field, from, to }` — and `{ field: "theory", copied }` from a writer since removed |
    *
    * **Read every field as optional, including the ones that table shows.** Several payloads
    * are narrower than they look — a category `reorder` emits `{ action }` alone, because every
@@ -3207,14 +3257,14 @@ export interface DeckAuditEntry {
   payload: string;
   /**
    * Signed **copies**, for the day header's `+7 / −6` roll-up: `+n` on an add, `−n` on a
-   * remove, the difference on a quantity change, and **`+n` on the one `deck` row that records
-   * a theory copy** — `deck_theory::copy_from_live` seeds the plan from the actual list and
-   * carries the copies it wrote. `0` on everything else.
+   * remove, the difference on a quantity change. `0` on everything else.
    *
-   * That fourth case is the one worth naming, because it is the exception to the shape of this
-   * list: every *other* nonzero delta belongs to a card-shaped kind, and a reader who took
-   * "card kinds move the number, deck kinds do not" as the rule would be wrong exactly once —
-   * on a row that can move it by ninety-nine.
+   * **There used to be a fourth case, and it went with its writer.** A `deck` row of
+   * `{ field: "theory", copied }` carried `+copied` here — the theory list's copy-from-live
+   * command, which seeded the plan from the actual list and was the one exception to "card kinds
+   * move the number, deck kinds do not". It was removed on 2026-09-27 without ever having had a
+   * caller in the app, so no shipped database was given such a row; the roll-up sums whatever a
+   * row carries and `auditText.ts` still renders the payload, so one would read rather than break.
    *
    * Zero is the common case and means "this changed no card count", never "nothing
    * happened" — a rename, a reorder, a move, a labelling and a printing swap all record `0`.
@@ -3373,9 +3423,9 @@ export interface DeckInput {
    *
    * Worth knowing one step further out: the patch acts on the **transition** off → on, so a deck
    * born with theory already on has made that transition at birth and no later patch will ever
-   * move anything for it. Filling the plan from a live list built up afterwards is
-   * {@link ipc.deckTheoryCopyFromLive}, which is the reader's button for exactly that and is
-   * unchanged.
+   * move anything for it. Its plan fills through the ordinary card writes aimed at the `theory`
+   * variant, the same as any other list — there is no command that copies a live list built up
+   * afterwards into it. One existed, never had a caller, and was removed on 2026-09-27.
    */
   theoryEnabled?: boolean;
   /**
@@ -3420,7 +3470,7 @@ export interface DeckInput {
  * schema v49), and `managed_wishlist::MODES` in the crate. `other` is the dialog's
  * `Different printing`. The words and their order are `features/decks/managedWishlist.ts`'s.
  *
- * **`tokens` since user schema v54** (managed tokens spec §3.8): All and Tokens fill a `Tokens`
+ * **`tokens` since user schema v55** (managed tokens spec §3.8): All and Tokens fill a `Tokens`
  * subfolder inside the deck's folder with the plan's missing tokens, Tokens puts nothing in the
  * folder itself, and Missing and Different printing leave tokens out.
  */
@@ -3475,8 +3525,9 @@ export interface DeckPatch {
    * The deck's {@link DeckRow.lastVariant} is left at `"theory"` with them, so the editor opens
    * on the list the cards are now in.
    *
-   * It used to *copy*, which is what {@link ipc.deckTheoryCopyFromLive} still does and is now
-   * the only thing that does.
+   * It used to *copy*, and no longer does; nothing in the backend copies one list into the
+   * other now. The explicit copy command that outlived the switch never had a caller and was
+   * removed on 2026-09-27.
    *
    * Switching it off **keeps every row** — it hides a switch, it does not delete a list, and
    * nothing in the backend ever deletes a `theory` row except the ordinary card writes the
@@ -3611,8 +3662,8 @@ export interface DeckPatch {
    * it" — {@link ipc.deckSetFolder} exists because `folderId` cannot. This column needs no such
    * command, because its cleared state is a number.
    *
-   * A non-zero id must name a category **of this deck**; Rust refuses anything else by name,
-   * since no foreign key says so.
+   * A non-zero id must name a category **of this deck's live list**; Rust refuses anything else
+   * by name, a theory pile included, since no foreign key says so.
    */
   defaultCategoryId?: number;
   /**
@@ -4061,9 +4112,13 @@ export interface DeckRow {
    * Zero can never collide with a real pile — `deck_categories.id` is an `INTEGER PRIMARY KEY`,
    * so rowids start at 1 — and Rust spells the same sentinel `deck::AUTO_CATEGORY`.
    *
-   * **An id this deck's `categories` does not carry reads as Auto**, and no writer has to
-   * arrange that: deleting a pile puts every deck filing by it back to zero in the same
-   * transaction, and a duplicate is remapped onto its own copy of the pile.
+   * **It names a _live_ pile** — Deck settings offers the live list's — and since user schema
+   * v53 (issue #561) the plan has piles of its own, so on the Theory tab the editor carries it
+   * across **by name** to the plan's pile of that name (`defaultCategory.ts`), else Auto.
+   *
+   * **An id the list's `categories` does not carry, and no name carries across, reads as Auto**,
+   * and no writer has to arrange that: deleting a pile puts every deck filing by it back to zero
+   * in the same transaction, and a duplicate is remapped onto its own copy of the pile.
    */
   defaultCategoryId: number;
   /**
@@ -4516,10 +4571,10 @@ export interface DeckCard {
    * by, so the old map dropped it; at the printing grain there is nothing to look up — the
    * pool's row and this deck's row name the same `card_id` — so the copy counts.
    *
-   * The only one of this file's four `ownedQuantity` fields that is about **this deck** rather
+   * The only one of this file's `ownedQuantity` fields that is about **this deck** rather
    * than about the reader's shelves as a whole: {@link CardSummary.ownedQuantity} is every
    * copy of one printing, {@link ImportMatch.ownedQuantity} is that same count taken per
-   * decklist line, {@link WishRow.ownedQuantity} is the copies that fill one wish, and this
+   * decklist line (a wish carried a fourth until 2026-09-08 and no longer does), and this
    * one is what is in *this box* (live) or what *this box could be filled from* (theory) —
    * printing-grained (`(card_id, finish)`, not the oracle card — no more "a Bolt is a Bolt"
    * here), finish-**aware**, still condition-blind.
@@ -8298,10 +8353,10 @@ export const ipc = {
    * One deck and everything in it, or `null` when no deck has that id — a gallery that has
    * not refreshed since another view deleted it asks for a deck that is not there.
    *
-   * `variant` scopes the **cards, and the two counts on every category and label row** — it is
-   * threaded into all three reads. What it does *not* scope is which categories and labels come
-   * back: every one of them does either way, so switching between the two lists changes the
-   * numbers in the column headings and never the columns themselves.
+   * `variant` scopes the **cards, the categories, and the two counts on every label row** — it
+   * is threaded into all three reads. Since user schema v53 (issue #561) each list has piles of
+   * its own, so switching between the two lists can change the columns as well as the numbers in
+   * them; which *labels* come back does not depend on it, only how many copies wear each.
    *
    * `marketplace` decides every price in the answer — each card's {@link DeckCard.unitPrice}
    * and each category's {@link DeckCategory.totalPrice} — so it is part of the question rather
@@ -8673,17 +8728,18 @@ export const ipc = {
    * A deck's categories on their own — the same list `deckGet` already carries, for a panel
    * that wants it without the cards.
    *
-   * `variant` scopes each row's `cardCount`/`totalPrice` and **nothing else**: which categories
-   * a deck has does not depend on which list is showing, which is what keeps the columns still
-   * while the reader switches between Live and Theory. `marketplace` decides what
+   * `variant` picks **which list's piles** come back — each list has its own since user schema
+   * v53 (issue #561), so a pile made on Theory is not a column on Actual — and scopes nothing
+   * else, because a pile's counts are already its own list's. `marketplace` decides what
    * {@link DeckCategory.totalPrice} is a total *of*.
    */
   deckCategoryList: (deckId: number, variant: DeckVariant, marketplace: MarketplaceId) =>
     invoke<DeckCategory[]>("deck_category_list", { deckId, variant, marketplace }),
-  /** A new category, always `kind: "main"` and always active, appended after the deck's last
-   *  one. Refuses a name the deck already has — the grain is `(deckId, name)`. */
-  deckCategoryCreate: (deckId: number, name: string) =>
-    invoke<DeckCategory>("deck_category_create", { deckId, name }),
+  /** A new category in **one of the deck's two lists**, always `kind: "main"` and always active,
+   *  appended after that list's last one. Refuses a name the list already has — the grain is
+   *  `(deckId, variant, name)`, so Theory and Actual may each hold a "Ramp" of their own. */
+  deckCategoryCreate: (deckId: number, variant: DeckVariant, name: string) =>
+    invoke<DeckCategory>("deck_category_create", { deckId, variant, name }),
   /**
    * Rename one category — `id`, not `deckId`, because a category names its own deck.
    *
@@ -8710,7 +8766,8 @@ export const ipc = {
    *
    * An id that is not this deck's — stale, or gone — is **silently skipped** rather than
    * failing the reorder over one entry, so a list that raced a delete still lands. Send every
-   * id: this is the order, not a move.
+   * id **of one list**: this is the order of that list's piles, not a move, and a list mixing
+   * Actual's piles with Theory's is refused (issue #561).
    */
   deckCategoryReorder: (deckId: number, ids: number[]) =>
     invoke<DeckCategory[]>("deck_category_reorder", { deckId, ids }),
@@ -8723,9 +8780,9 @@ export const ipc = {
    * confirm dialog has to say out loud. One command for both, because a caller doing the move
    * and the delete as two round trips could lose the cards between them.
    *
-   * The move covers **both variants**: a `live` row and a `theory` row of one printing fold
-   * into their own matching rows in the target and never into each other. Refuses a predefined
-   * category, a target belonging to another deck, and a move into itself.
+   * A pile holds one list's cards (issue #561), so the move stays inside that list: the target
+   * must be a pile of the same deck **and the same variant**. Refuses a predefined category, a
+   * target belonging to another deck or the other list, and a move into itself.
    */
   deckCategoryDelete: (id: number, moveToCategoryId: number | null) =>
     invoke<void>("deck_category_delete", { id, moveToCategoryId }),
@@ -8904,27 +8961,6 @@ export const ipc = {
    */
   deckTheorySlots: (deckId: number) => invoke<TheorySlot[]>("deck_theory_slots", { deckId }),
   /**
-   * Copy the live list into the theory one. Answers how many **rows** were written.
-   *
-   * **This is no longer what enabling the switch does, and it used to be.**
-   * `deckUpdate(id, { theoryEnabled: true })` now *moves* the live list into theory — the deck
-   * becomes the plan and live starts empty — so nothing calls this implicitly any more. It
-   * stays as the explicit gesture it always also was: *copy what is sleeved up into the plan*,
-   * for the reader who wants to start the plan again from the deck as it stands.
-   *
-   * **It skips rather than folding, and the difference is the whole point of the command.**
-   * `deck_theory::seed_from_live` is `ON CONFLICT(deck, variant, category, card) DO NOTHING`:
-   * a theory row the reader already made is *their plan for that card*, and topping it up with
-   * the live count would silently overwrite the very edit the theory list exists to hold. So a
-   * card the plan already holds one of stays at **one** however many are sleeved up — this is
-   * the one place in this file where a repeated card is not summed, and "fold" (which means
-   * *sum the quantities* in {@link SwapResult.folded}, {@link ipc.deckAddCard} and
-   * {@link ipc.deckCategoryDelete}'s move arm) is the wrong word for it. Idempotent, never
-   * destructive, and the number it answers is **rows written** — the ones that were missing.
-   */
-  deckTheoryCopyFromLive: (deckId: number) =>
-    invoke<number>("deck_theory_copy_from_live", { deckId }),
-  /**
    * Everything the **plan** is short of, onto the wishlist. Answers how many wishes were
    * touched, like its live twin.
    *
@@ -9061,10 +9097,10 @@ export const ipc = {
    * `deckImportCommit`'s: a loop over a forty-card pile is forty transactions, forty history
    * rows and forty invalidations. This is one of each.
    *
-   * **This variant only**, which is the opposite of `deckCategoryDelete` — that takes the live
-   * list and the theory list together, because `deck_cards.category_id` cascades and a category
-   * is not variant-scoped. A clear leaves the pile standing, so what it empties is the list the
-   * reader is looking at, and the confirmation says so.
+   * **This variant only** — which, since a pile belongs to one list (user schema v53, issue
+   * #561), is every copy the pile holds — `variant` is the pile's own. A clear leaves the pile
+   * standing, so what it empties is the list the reader is looking at, and the confirmation says
+   * so.
    *
    * An empty pile answers `0` and writes nothing at all: no history row, no `updated_at`, and
    * not one collection row moved.
@@ -10067,18 +10103,16 @@ export const ipc = {
    * The taxonomy's freshness. Reads one small table, makes no network call, and **is safe
    * before the first refresh has ever run** — a database with no meta row answers every field
    * `null` with `stale: true` rather than rejecting, so no caller needs a guard.
+   *
+   * **Nothing in `ipc` starts a refresh, and that absence is not a gap.** The launch fetches the
+   * taxonomy uninvited (`tags::oracle::refresh_if_due`) and no page ever asked for it again, so
+   * the `oracleTagsRefresh` wrapper that stood beside this — and its art twin — was called only
+   * from tests and one story, and was removed on 2026-09-27. The
+   * `oracle_tags_refresh` command itself stays: the web target's worker diverts it by name in
+   * `src/workers/protocol.ts`, and a failed fetch still leaves the previous taxonomy in place, the
+   * type-line fallback always available.
    */
   oracleTagsStatus: () => invoke<OracleTagStatus>("oracle_tags_status"),
-  /**
-   * Fetch the taxonomy if it is due. `force` skips the weekly throttle, **not** the ETag check
-   * — a forced refresh of an unchanged file still costs one request and no ingest.
-   *
-   * ~5.8 MiB compressed and a few seconds of ingest, so it reports through the same `Activity`
-   * mechanism every other long job uses. **A failed fetch leaves the previous taxonomy in
-   * place**: stale categories beat none, and a rejection here is never a reason to stop filing
-   * cards — the type-line fallback is always available.
-   */
-  oracleTagsRefresh: (force: boolean) => invoke<OracleTagStatus>("oracle_tags_refresh", { force }),
   /**
    * The taxonomy being fetched, phase by phase — beside `sync:progress`, `marketplace:progress`
    * and `update:progress`.
@@ -10100,16 +10134,6 @@ export const ipc = {
    * is a Tags page that says it has nothing yet.
    */
   artTagsStatus: () => invoke<ArtTagStatus>("art_tags_status"),
-  /**
-   * Fetch the art taxonomy if it is due. `force` skips the weekly throttle, **not** the ETag
-   * check — a forced refresh of an unchanged file still costs one request and no ingest.
-   *
-   * ~12.5 MiB compressed (measured 2026-08-20), a little over twice the oracle file, flattening
-   * 475 163 taggings into 951 499 closure rows. It reports through the same `Activity` mechanism
-   * every other long job uses, and **a failed fetch leaves the previous taxonomy in place**:
-   * nothing here may break a launch or a card sync.
-   */
-  artTagsRefresh: (force: boolean) => invoke<ArtTagStatus>("art_tags_refresh", { force }),
   /**
    * The art taxonomy being fetched, phase by phase — a channel of its own beside
    * `oracle-tags:progress`, because either taxonomy may be refreshing while the other is.
@@ -10213,8 +10237,8 @@ export const ipc = {
   /**
    * Fetch Commander Spellbook's combo feed if it is due, and answer the table's state
    * afterwards. `force` skips the weekly throttle, **not** the ETag check — a forced refresh of
-   * an unchanged file still costs one request and no ingest, exactly as
-   * {@link ipc.oracleTagsRefresh} does one dataset over.
+   * an unchanged file still costs one request and no ingest, exactly as the Tagger refreshes
+   * (`oracle_tags_refresh`, `art_tags_refresh`) do one dataset over.
    *
    * 27.5 MB compressed and 640 MB of JSON behind it (measured 2026-08-27), streamed rather than
    * held, so it reports through the same `Activity` mechanism every other long job uses.

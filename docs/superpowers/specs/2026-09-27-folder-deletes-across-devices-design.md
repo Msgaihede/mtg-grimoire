@@ -5,7 +5,8 @@ spec approved. Written to land before token stacks PR 3 (Collection tokens), whi
 deleted a deck's token folder on every exit from Collection mode; **PR 3 was dropped the same day**
 (the reader's decision), and this stands on its own: today a deck deleted with a copy its group
 and the root both hold stops a paired device's sync for good. Builds on the delivery holds (#572,
-#574).
+#574). **The rung was written as user schema v53 and renumbered to v54 at the merge with `main`**,
+whose per-list piles (#561) took 53 first; the rung is v54 below.
 
 ## 1. The problem
 
@@ -112,7 +113,7 @@ CREATE TABLE sync_gone (
 - **`gone` reads it** in place of `sync_ops`: the page's delete set first, then
   `SELECT 1 FROM sync_gone WHERE tbl = ?1 AND uid = ?2`. One source, so an own delete and an
   applied one are asked the same way.
-- **The rung (user schema v53) backfills it** from this device's own history:
+- **The rung (user schema v54; written as v53) backfills it** from this device's own history:
   `INSERT OR IGNORE INTO sync_gone SELECT DISTINCT tbl, uid FROM sync_ops WHERE kind = 'del' AND
   tbl IN (<the seven, frozen in the rung>)`, so every delete `gone` could see yesterday it still
   sees. Deletes applied from peers before the upgrade left no row anywhere and are not recovered.
@@ -123,7 +124,7 @@ CREATE TABLE sync_gone (
   child of it on a later page would wait out the bound.
 - **Nothing clears it.** Leaving a group keeps it, as it keeps `sync_ops`; a resurrected parent
   is found by `resolve_parent` before `gone` is ever asked, so a stale tombstone is never read.
-- **A new user table owes its sites** (sync.md's list): `USER_SCHEMA_SQL` and `UNDO_V53`,
+- **A new user table owes its sites** (sync.md's list): `USER_SCHEMA_SQL` and `UNDO_V54`,
   `schema::TABLES` as `Side::User`, `mirror::watch::surface_of` (→ `None`, and its decided-about
   list), `changes::WRITTEN_BY_THE_APP` (it is `WITHOUT ROWID`, so the update hook never sees it,
   and the app writes it where no press does — `sync_peers`' footing), `src/lib/userTables.json`
@@ -140,10 +141,15 @@ whatever either device files into X afterwards is written at the root (a deck, a
 unchanged: the row goes only where the group's placement under the deleted parent is the one that
 stands. The delete itself goes through §3.3.
 
-### 3.3 A delete that would collide waits for the second attempt, then merges
+### 3.3 A delete that would clear rows waits for the second attempt, then re-homes them
+
+*(As approved this section waited only on a collision; the amendment in the bullet "Every delete
+that would clear rows waits" below widened it to any non-empty doomed set. Steps 1–2 stand; step 3
+and the first bullet are the record of the narrower rule.)*
 
 Every `DELETE` `apply` issues — `write_group`'s delete arm and the moot delete — first asks
-**whether it would drop two rows onto one grain**:
+**whether it would clear rows out of a folder** (as approved: *whether it would drop two rows onto
+one grain*):
 
 1. **The doomed folders** of the row being deleted: a `collection_folders` or `wishlist_folders`
    row and its sub-tree (`parent_id`); a `decks` row's `collection_folders` with that `deck_id`,
@@ -181,7 +187,14 @@ Every `DELETE` `apply` issues — `write_group`'s delete arm and the moot delete
   ordinary press, not a corner). So a delete whose doomed set is non-empty waits for the retry, and
   **a grain match onto a row this page deletes adopts the incoming uid rather than `min`**
   (`find_row`): the sender retired the old uid, so the re-made row keeps the new one, and the
-  retried delete finds nothing to take.
+  retried delete finds nothing to take. **And a group whose own ops end in a delete finds its row
+  by uid alone, never by grain** (amended again at the scoped re-review, and narrowed from "whose
+  uid the page deletes" so that a row deleted and put back in one page — add-wins — still meets its
+  twin): the sender made and discarded that row, so its delete can only take a row wearing its own
+  uid — without the rule, a
+  collection cleared twice between two pulls (or a deck toggled Virtual on, off, on, off) had its
+  middle folder grain-match the one re-made after it and delete it, and a copy made and removed on
+  the sender deleted a local twin the peer had made on its own.
 - **The backstop.** Every `DELETE` `apply` issues runs inside the group's savepoint, and a refusal
   rolls it back and becomes `Why::Unbuildable(<the constraint's words>)` — dropped and recorded,
   or held where the sender is newer — never `?`. The moot delete already did this; the ordinary
@@ -190,6 +203,24 @@ Every `DELETE` `apply` issues — `write_group`'s delete arm and the moot delete
 
 All of it runs inside `apply`'s `capture::suppressed`: every device derives the same re-homing
 from the same delete.
+
+- **Every decision that rests on `gone` is made on a retry pass** *(amended 2026-09-27 at Task C's
+  fix rounds)* — the moot arm and the `SET NULL` "written without that parent" arm alike. A
+  same-page add-wins resurrection of the parent lands on the first pass, so the retry resolves the
+  parent normally; decided on the first attempt, a held folder was deleted that a sparse move could
+  not rebuild, and a copy was filed at the root the sender kept in its binder. The first attempt
+  answers `Why::DecidedOnRetry` (the name `Occupied` had at approval), which the clearing-delete wait
+  shares.
+- **The retry is a bounded fixed-point loop** *(amended at the same review)*: groups still failing
+  are retried in page order while the previous pass made progress (a group written or decided moot),
+  capped at the group count, and only each group's last answer is classified. One pass met a folder
+  moved into a new folder created under a deleted parent before the new folder was decided, held it,
+  and dropped it at the bound. **A gone-based decision is taken only on a pass that follows one on
+  which nothing else landed** (amended at the fourth fix round): the group that resurrects a parent
+  can itself land only on a retry pass — a parent renamed and moved into a folder made later in the
+  page — and a decision taken before it deleted a folder the sender keeps. Withheld decisions are
+  taken on the next pass that lands nothing, and the loop continues; the cap is twice the group count
+  plus one.
 
 ### 3.4 Why not "apply deletes last"
 
@@ -204,6 +235,10 @@ waits.
 
 - ~~A folder deleted and re-made at the same grain in one page loses the re-made row~~ — closed by
   §3.3's amendment (the incoming uid wins a grain match onto a row the page deletes).
+- **A row the peer filed concurrently into a folder the sender re-made follows the rename there and
+  lands at the root on the sender** (its folder is a delete on the sender, and the key is
+  `SET NULL`). Counts and identity converge; placement does not. Read off the code at the scoped
+  re-review, unmeasured.
 - **A copy re-homed onto a twin the sender never had can leave one `error_log` row describing no
   fault**: the sender's own later move of it names the uid that lost the fold, finds no row, and is
   skipped. Counts and identity still converge (the sender adopts the twin's uid when the twin's put
@@ -230,7 +265,8 @@ record of the fix), *A parent deleted on a third device* (closed), *What is stil
 folder bullets removed, §3.5's residuals added). `src-tauri/CLAUDE.md`'s `sync_peers` bullet (the
 moot delete's "no capture spec names its table as a parent" clause) and the rung history.
 `data-and-sync.md`'s ladder. `apply.rs`'s module doc and `gone`'s doc. The token-stacks spec's
-§5 gets a one-line note that PR 3 was dropped and v53 went to `sync_gone`.
+§5 gets a one-line note that PR 3 was dropped and its number went elsewhere (`sync_gone` took
+v53, and was renumbered to v54 at the merge when the per-list piles took 53 on `main`).
 
 ## 4. Testing
 
@@ -255,8 +291,8 @@ describes a bug:
   `error_log` row.
 - **Tombstones**: an own delete, an applied delete and a cascaded one each write their row; a
   device with no group writes one too; `gone` answers from `sync_gone` alone.
-- **The backfill**: a v52 database whose `sync_ops` holds `del`s for a deck and a binder climbs to
-  v53 with both tombstoned and nothing else.
+- **The backfill**: a v53 database whose `sync_ops` holds `del`s for a deck and a binder climbs to
+  v54 with both tombstoned and nothing else.
 - **The backstop**: a TEMP trigger refusing a folder delete during apply — the group is dropped and
   recorded, the rest of the page applies, the next pull does not fail.
 - **The cascade fence**: every `ON DELETE CASCADE` key into `collection_folders` and

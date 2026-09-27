@@ -393,8 +393,8 @@ export const WrappedPiles: Story = {
     // what the layout is given: the widths this view writes inline — the same
     // `stackColumnWidth(zoom)` for a pile and for the rail, so this holds at whatever zoom the
     // **deck section** is left on rather than at 1× only — against the desk the decorator
-    // declares. (`cardZoom.deck`: the desk's own number, shared with `GridView` because the two
-    // are one deck drawn two ways, and not the docked search column's.) More
+    // declares. (`cardZoom.deck`: the desk's own number — not `GridView`'s since issue #567, which
+    // reads `deckGrid` — and not the docked search column's.) More
     // piles than fit on a line is a wrap, and pinning the count against that capacity is what
     // stops the story going quiet the way it just did: rail one more pile, or widen the rail
     // until a box no longer fits beside it, and this fails instead of silently drawing a

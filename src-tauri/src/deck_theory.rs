@@ -71,7 +71,9 @@ const THEORY: &str = crate::schema::DECK_VARIANTS[1];
 #[serde(rename_all = "camelCase")]
 pub struct TheorySlot {
     /// [`group_key`]'s own string — `` `{card_id}|{finish}` ``, the regular copy spelling its
-    /// half empty. **This module's function rather than a pair the caller reassembles**, which
+    /// half empty and the finish being the one the row plays ([`played_finish`]), which
+    /// `theoryMatch.ts`' `theorySlot` spells the same way for a live row.
+    /// **This module's function rather than a pair the caller reassembles**, which
     /// is what stops the tick and the shopping list drifting apart: "the same planned card" is
     /// one definition, and both surfaces spell it with this code.
     pub key: String,
@@ -126,9 +128,11 @@ pub struct TheoryDiffRow {
     pub unit_price: Option<f64>,
     pub set_code: String,
     pub collector_number: String,
-    /// Which **object** this line is for — `deck_cards.finish`, so `None` is the regular copy
-    /// and the other two are `foil` and `etched` ([`crate::schema::FINISHES`] less `nonfoil`,
-    /// which [`crate::deck::normalise_finish`] stores as NULL).
+    /// Which **object** this line is for — the finish the theory row **plays** ([`played_finish`]),
+    /// so `None` is the regular copy and the other two are `foil` and `etched`
+    /// ([`crate::schema::FINISHES`] less `nonfoil`, which [`crate::deck::normalise_finish`] stores
+    /// as NULL). A row that stored no finish on a printing sold only in foil reads `foil` here,
+    /// because that is the only object it can be (issue #563).
     ///
     /// **Part of the identity, with [`Self::card_id`]**: the pair is what makes two deck rows
     /// one line here, and either alone is not unique across the list. A foil Sol Ring and a
@@ -244,7 +248,10 @@ const TOKEN_CATEGORY: &str = "Tokens & Emblems";
 /// question, the variant is the two sides of the subtraction, and the category is *placement*
 /// rather than possession. `finish` stays because it is not placement — a foil copy and a
 /// regular one are two objects, cost different money ([`TheoryDiffRow::unit_price`] is already
-/// quoted per finish), and are two rows in `deck_cards` for exactly that reason.
+/// quoted per finish), and are two rows in `deck_cards` for exactly that reason. **It is the
+/// finish the row plays, [`played_finish`], not the column as stored** (issue #563): the one place
+/// this key is wider than the grain, where a foil-only printing's unsaid row and its `foil` row are
+/// two rows of the table and one object.
 ///
 /// [`GROUP_SEPARATOR`] is what keeps the pair a pair. An orphan — a row whose printing has left
 /// `cards` — needs no special case, which is the simplification the change bought: its
@@ -284,6 +291,54 @@ fn group_key(card_id: &str, finish: Option<&str>) -> String {
     format!("{card_id}{GROUP_SEPARATOR}{}", finish.unwrap_or(""))
 }
 
+/// The finish a printing leaves no choice about, or `None` — `src/lib/finish.ts`'s `soleFinish`,
+/// line for line, over the JSON text `cards.finishes` holds.
+///
+/// **It has to answer exactly what that function answers**, because the two are the two halves
+/// of one key: [`theory_slots`] spells the plan's side here and `theoryMatch.ts` spells the live
+/// row's side there, and a printing the two disagreed about would miss every lookup. So an
+/// unknown word is dropped *before* counting (`parseFinishes`' rule), a printing sold in two
+/// finishes answers `None` even when neither is `nonfoil`, and `nonfoil` itself answers `None` —
+/// the regular copy is what an unsaid row already is. `deck_tokens`' `default_finish` is a
+/// different question and is not this: it picks a finish to *file*, so it answers `foil` for a
+/// printing sold in foil and etched, where this says the printing has not decided.
+fn sole_finish(finishes: Option<&str>) -> Option<&'static str> {
+    let listed: Vec<serde_json::Value> = serde_json::from_str(finishes?).ok()?;
+    let known: Vec<&'static str> = listed
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter_map(|word| crate::schema::FINISHES.into_iter().find(|f| *f == word))
+        .collect();
+    match known.as_slice() {
+        [only] if *only != crate::schema::FINISHES[0] => Some(only),
+        _ => None,
+    }
+}
+
+/// The finish a deck row **plays** — its own where it names one, and the printing's
+/// [`sole_finish`] where it does not. `src/lib/finish.ts`'s `playedFinish`, and the finish half of
+/// every [`group_key`] this module builds.
+///
+/// **Why the comparison reads this rather than the raw column**
+/// ([issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563)). `deck_cards.finish` is
+/// NULL where a write named no finish, and most writes name none: the search's Add, the quick
+/// add, every drag and a decklist line without a `*F*`. An add out of the binder names the copy's
+/// own. For a printing sold in both finishes that NULL is the regular copy and the two spellings
+/// are rightly two objects — but for one sold **only** in foil it can be nothing but the foil, and
+/// the deck's own views already draw it with the foil mark. Keyed raw, the plan's `id|` and the
+/// live list's `id|foil` were one Surge Foil Palantír counted as two cards, so the copy the reader
+/// had put in both lists was on the Compare dialog, the wishlist press and the managed wishlist
+/// at once. [`crate::deck::normalise_finish`]'s doc names this shape — two spellings that draw
+/// identically and sum apart — as the worst a bug in that table can have; this is the one it
+/// could not see, because telling them apart needs the printing.
+///
+/// Read rather than written: the rows keep what their writers stored, so a database already
+/// holding both spellings, and a sync peer on an older build writing either, compare correctly
+/// with no rung.
+fn played_finish(stored: Option<String>, finishes: Option<&str>) -> Option<String> {
+    stored.or_else(|| sole_finish(finishes).map(str::to_owned))
+}
+
 /// Every row of one deck, both variants, in the editor's own order — [`theory_diff`]'s input.
 ///
 /// **Inactive categories are excluded from both sides**, which is the rule stated once in
@@ -299,6 +354,8 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
     format!(
         "SELECT dc.variant, dc.card_id, dc.name, dc.set_code,
             dc.collector_number, dc.quantity, cat.name, c.oracle_id, dc.finish,
+            -- Beside the finish it completes: [`played_finish`] reads the two together.
+            c.finishes,
             {price},
             -- Last, and the reads below are positional, so a column added anywhere else
             -- shifts every index after it into a field of the same SQLite type. Built by
@@ -355,11 +412,14 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
 /// not disagree about what a card is: "buy the foil retro-frame one" over a spare count earned
 /// by regular precon copies is a sentence about two different objects.
 ///
-/// **`?2` is `deck_cards.finish`, and the `coalesce` is the translation between two spellings
-/// of the regular copy**: `deck_cards.finish` is NULL for it ([`crate::deck::normalise_finish`],
-/// so the grain's `coalesce(finish, '')` has one thing to compare) while
-/// `collection_entries.finish` is `NOT NULL` and spells it `nonfoil` outright. Binding the
-/// deck's NULL straight through would make every regular line read zero spare.
+/// **`?2` is the finish the line plays ([`played_finish`]), and the `coalesce` is the translation
+/// between two spellings of the regular copy**: the deck spells it NULL
+/// ([`crate::deck::normalise_finish`], so the grain's `coalesce(finish, '')` has one thing to
+/// compare) while `collection_entries.finish` is `NOT NULL` and spells it `nonfoil` outright.
+/// Binding the deck's NULL straight through would make every regular line read zero spare. It is
+/// the *played* finish rather than the stored one for the same reason one level up: an unsaid row
+/// of a foil-only printing bound as `nonfoil` counted none of the foil copies the binder holds,
+/// which are the only copies of it there are.
 ///
 /// No `LEFT JOIN cards` and no orphan arm: `collection_entries.card_id` is the printing, so an
 /// entry whose card has left the corpus is matched by exactly the same equality as every other.
@@ -582,7 +642,7 @@ fn grouped_diff(
 ) -> Result<Vec<Grouped>, String> {
     /// Where `diff_select`'s image columns start — one past the price expression, which is the
     /// last named column.
-    const IMAGE_COL: usize = 10;
+    const IMAGE_COL: usize = 11;
     // Both variants in one read: two reads could not be compared, because a card write between
     // them would put a copy on one side of the subtraction and not the other.
     let sql = diff_select(marketplace);
@@ -598,9 +658,10 @@ fn grouped_diff(
                 r.get::<_, i64>(5)?,            // quantity
                 r.get::<_, String>(6)?,         // category name
                 r.get::<_, Option<String>>(7)?, // oracle_id
-                r.get::<_, Option<String>>(8)?, // finish
-                r.get::<_, Option<f64>>(9)?,    // unit price
-                // **From 10**, last of all, for the reason written into `diff_select` — the
+                r.get::<_, Option<String>>(8)?, // finish, as stored
+                r.get::<_, Option<String>>(9)?, // the printing's finishes
+                r.get::<_, Option<f64>>(10)?,   // unit price
+                // **From 11**, last of all, for the reason written into `diff_select` — the
                 // `image_uri::FRONT_FACE_COLUMNS` expressions it appended, folded back into the
                 // front face's variant → URL map by the module that emitted them.
                 //
@@ -626,9 +687,14 @@ fn grouped_diff(
             category,
             oracle,
             finish,
+            finishes,
             unit_price,
             image_uris,
         ) = row.map_err(|e| e.to_string())?;
+        // The finish the row *plays*, not the one it happened to store — issue #563, and
+        // [`played_finish`]'s whole argument. It is also what the line reports and what its wish
+        // is pinned to, so a foil-only printing is bought as the foil it can only be.
+        let finish = played_finish(finish, finishes.as_deref());
         // The exact card — printing and finish — see [`Grouped`]. `category` is read for the
         // row's caption and is deliberately *not* in the key: where a card sits is placement,
         // not possession, so a plan that moved a Bolt from Burn to Removal is short of no Bolts.
@@ -667,9 +733,9 @@ fn grouped_diff(
 ///
 /// **Both walls are [`crate::deck_tokens::deck_token_rows`]' own, implicit entries included**,
 /// so what is compared is what the band draws: a derived token no entry has touched counts its
-/// implicit entry at `0` since user schema v54 and asks for nothing, and a hand-added one counts
+/// implicit entry at `0` since user schema v55 and asks for nothing, and a hand-added one counts
 /// only in a list that holds an entry of it. **A `hidden` state is not read**: nothing hides a
-/// token since v54, and a dismissal an older peer synced in counts like any other token until
+/// token since v55, and a dismissal an older peer synced in counts like any other token until
 /// the launch pass retires it. Inactive categories are already off both sides — the derivation
 /// reads active piles only, which is [`diff_select`]'s rule from the other table.
 ///
@@ -728,9 +794,9 @@ fn regular_as_none(finish: String) -> Option<String> {
 
 /// The `preferred_finish` a wish for this line files.
 ///
-/// **A card row's is its finish as the deck row stores it**, the regular copy pinning none —
-/// [`missing_to_wishlist`]'s rule, so the wish lands on the same wishlist grain as every other
-/// wish the app makes for that card. **A token row's is spelled out, `nonfoil` included**: an
+/// **A card row's is the finish the deck row plays** ([`played_finish`]: as stored, or the only
+/// finish a printing is sold in), the regular copy pinning none — [`missing_to_wishlist`]'s rule,
+/// so the wish lands on the same wishlist grain as every other wish the app makes for that card. **A token row's is spelled out, `nonfoil` included**: an
 /// entry always names its finish (`deck_token_printings.finish` is `NOT NULL`), so the plan asked
 /// for that finish of that printing, and a wish naming none is one a foil copy fills.
 fn wish_finish(row: &TheoryDiffRow) -> Option<String> {
@@ -745,52 +811,33 @@ fn wish_finish(row: &TheoryDiffRow) -> Option<String> {
     }
 }
 
-/// Copy the live list into the theory one, leaving whatever theory already holds alone.
-///
-/// **Takes the caller's connection and opens no transaction**, exactly as
-/// [`crate::deck_audit::record`] does, because its caller [`copy_from_live`] pairs it with a
-/// `touch_deck` and a history row and the three are one fact: a copy that committed while the
-/// history rolled back is a change with no line against it.
-///
-/// `ON CONFLICT … DO NOTHING` on [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) rather
-/// than a fold: a theory row the user already made is *their plan for that card*, and topping
-/// it up with the live count would silently overwrite the very edit the theory list exists to
-/// hold. So this is a seed that can also top up — idempotent, never destructive, and returning
-/// how many rows it actually wrote.
-///
-/// `label_id` and `needs_review` travel with the copy. A label is the user's word about this card
-/// in this deck and a plan inherits it; the flag says the printing left the card database, which
-/// is as true of the copy as of the original.
-///
-/// **Moves no cardboard**, and must not: it writes `deck_cards` rows and nothing else. Copies
-/// cross the deck boundary only through [`crate::collection_alloc`]'s two writes, which a plan
-/// cannot reach — so a seed that touched the collection would file a second set of copies the
-/// reader does not own into a group that already holds theirs.
-///
-/// Answers the number of **rows** written, which is what `execute` counts. [`copy_from_live`]
-/// wants **copies** for its history and measures them itself with [`theory_copies`] — a row is
-/// a line and a copy is a card, and this app counts decks in cards everywhere else.
-pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, String> {
-    let sql = format!(
-        // `finish` comes across with the row: the plan is what is sleeved up, and a plan that
-        // quietly turned every foil into a regular copy would price differently from the deck
-        // it was copied from.
-        "INSERT INTO deck_cards
-            (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-             label_id, quantity, needs_review, finish, created_at, updated_at)
-         SELECT deck_id, category_id, ?2, card_id, set_code, collector_number, lang, name,
-                label_id, quantity, needs_review, finish, unixepoch(), unixepoch()
-           FROM deck_cards
-          WHERE deck_id = ?1 AND variant = ?3
-         ON CONFLICT({grain}) DO NOTHING",
-        grain = crate::schema::DECK_CARD_GRAIN
-    );
-    tx.execute(&sql, params![deck_id, THEORY, LIVE])
+/// Every live pile of a deck, in the order the Actual tab draws them — what the theory switch
+/// clones, empty piles included.
+fn live_piles(tx: &Connection, deck_id: i64) -> Result<Vec<i64>, String> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND variant = ?2
+              ORDER BY sort_order, id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![deck_id, LIVE], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
 }
 
 /// **Move** the live list into the theory one: the same rows, re-labelled, leaving `live`
 /// empty.
+///
+/// **Every live pile is cloned into the plan and each card is filed into its clone** (user
+/// schema v53, issue #561) — [`crate::deck_meta::counterpart_in`], so a plan pile of the same name
+/// (or, for a predefined zone, the same kind) is used where one exists and made otherwise, as a
+/// copy of the live one. The live piles **stay**, empty: the Actual list keeps the structure the
+/// reader built, and from this press on the two lists' piles are independent — renaming one, or
+/// switching a Sideboard off, touches one tab. Empty live piles are cloned too, because the
+/// columns the reader made are part of the deck they built and the plan is that deck. The piles
+/// this makes are undone by the caller's step (`deck_undo::push_made_categories`).
 ///
 /// What switching the theory list on actually does. The deck the reader has spent their evening
 /// building **is the plan** — they typed it out of a list, not out of a box — and the live list
@@ -818,16 +865,21 @@ pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, Str
 /// the copies are physically in the box with the deck's name on it, the plan moving does not
 /// unsleeve them, and `enabling_theory_leaves_the_copies_in_the_decks_group` pins it.
 ///
-/// Answers the number of **rows** moved, which is what `execute` counts — [`seed_from_live`]'s
-/// unit, and for its reason.
+/// Answers the number of **rows** moved, which is what `execute` counts — lines, not cards. A
+/// row is a line and a copy is a card, and this app counts decks in cards everywhere else, so the
+/// number is not one to put in front of a reader as it stands.
 pub(crate) fn move_live_into_theory(tx: &Connection, deck_id: i64) -> Result<usize, String> {
-    let moved = tx
-        .execute(
-            "UPDATE deck_cards SET variant = ?2, updated_at = unixepoch()
-              WHERE deck_id = ?1 AND variant = ?3",
-            params![deck_id, THEORY, LIVE],
-        )
-        .map_err(|e| e.to_string())?;
+    let mut moved = 0;
+    for pile in live_piles(tx, deck_id)? {
+        let plan_pile = crate::deck_meta::counterpart_in(tx, deck_id, THEORY, pile)?;
+        moved += tx
+            .execute(
+                "UPDATE deck_cards SET variant = ?2, category_id = ?4, updated_at = unixepoch()
+                  WHERE deck_id = ?1 AND variant = ?3 AND category_id = ?5",
+                params![deck_id, THEORY, LIVE, plan_pile, pile],
+            )
+            .map_err(|e| e.to_string())?;
+    }
     tx.execute(
         "UPDATE decks SET last_variant = ?2 WHERE id = ?1",
         params![deck_id, THEORY],
@@ -846,72 +898,6 @@ pub(crate) fn theory_is_empty(conn: &Connection, deck_id: i64) -> Result<bool, S
         |r| r.get(0),
     )
     .map_err(|e| e.to_string())
-}
-
-/// Copies the theory list holds, summed. The unit a deck is counted in everywhere else in this
-/// app — two printings at 2 and 3 is 5 cards, not 2.
-fn theory_copies(conn: &Connection, deck_id: i64) -> Result<i64, String> {
-    conn.query_row(
-        "SELECT coalesce(sum(quantity), 0) FROM deck_cards
-          WHERE deck_id = ?1 AND variant = ?2",
-        params![deck_id, THEORY],
-        |r| r.get(0),
-    )
-    .map_err(|e| e.to_string())
-}
-
-/// [`seed_from_live`] as a command of its own — "copy what I have sleeved up into the plan",
-/// pressed.
-///
-/// **This is the copy, and it stays a copy**, which is what tells it apart from
-/// [`move_live_into_theory`] now that switching the list on is a move. That one runs once, on a
-/// deck whose live list *is* the plan the reader typed out; this one is pressed later, on a deck
-/// that has both lists, and it means "the cards I actually own should be in the plan too". Live
-/// keeps every row, exactly as the button says.
-///
-/// Opens the transaction its callee will not, and moves `updated_at` through
-/// [`crate::deck::touch_deck`] so the gallery surfaces the edit and a stale deck id is answered
-/// with [`crate::deck::GONE`] rather than with a silent no-op.
-///
-/// **Records exactly one history row**, kind `deck`, field `theory`, carrying the copies it
-/// added — and it has to, for a reason worth stating because the opposite was tried first. The
-/// toggle's own row is a fact about a *switch*, written once per deck whether the deck holds
-/// forty cards or none; on a list that already exists, which is the only state where this button
-/// is meaningfully pressed, the toggle's row was written long ago and nothing else would be.
-/// "Log ALL changes" is the whole point of the table, and a press that copies forty cards into a
-/// list is a change.
-///
-/// One row and not one per card: N `add` rows would read as a deck somebody typed out, and the
-/// toggle path — where the move rides along inside `update_deck` — records one row for the
-/// same reason. `copied` is in the payload **and** in `delta`, which is [`crate::deck_audit`]'s
-/// established shape (an `add` carries its quantity in both): `delta` is the day header's
-/// arithmetic, the payload is the sentence's facts.
-pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> {
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    crate::deck::touch_deck(&tx, deck_id)?;
-    // Measured either side of the insert rather than derived from its row count: `execute`
-    // counts rows and a row is a line, while what a reader (and `delta`) wants is cards.
-    let before = theory_copies(&tx, deck_id)?;
-    // The plan as it stood. `copied` is a count and cannot rebuild a list — and this command's
-    // whole job is to pour one list into another, so what an undo has to put back is the
-    // *other* list's rows rather than a number of them.
-    let cards_before = crate::deck_undo::read_variant(&tx, deck_id, THEORY)?;
-    let rows = seed_from_live(&tx, deck_id)?;
-    let copied = theory_copies(&tx, deck_id)? - before;
-    let audit_id = crate::deck_audit::record(
-        &tx,
-        deck_id,
-        THEORY,
-        crate::deck_audit::DECK,
-        None,
-        &serde_json::json!({ "field": "theory", "copied": copied }),
-        copied,
-    )?;
-    // `None` for the pile diff: `seed_from_live` re-labels rows into categories the deck
-    // already has, so this command cannot invent one.
-    crate::deck_undo::record_variant(&tx, audit_id, deck_id, THEORY, cards_before, None, None)?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(rows)
 }
 
 /// Everything the plan is short of, onto the wishlist. Returns how many wishes were touched.
@@ -984,7 +970,8 @@ pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> 
 /// ([`crate::deck::normalise_finish`]) and writing `nonfoil` here would put this wish on a
 /// different row of [`WISHLIST_GRAIN`](crate::schema::WISHLIST_GRAIN) from every other wish the
 /// app makes for that card. `foil` and `etched` pass straight through, because those *are* what
-/// the reader is going out to find.
+/// the reader is going out to find — and so does the finish an unsaid row of a foil-only printing
+/// plays, which is `foil` ([`played_finish`], issue #563) rather than a regular copy nobody sells.
 ///
 /// A pinned wish and an any-printing one are **different rows** on that grain, so a reader who
 /// pressed this before the change keeps their old any-printing line and gains a pinned one.
@@ -1094,7 +1081,7 @@ pub fn missing_to_wishlist(
                 // and the same name the list would show for it — a token's own, for a token line.
                 name: Some(grouped.row.name),
                 quantity: wanted,
-                // A card row's finish as stored, a token row's spelled out — [`wish_finish`].
+                // A card row's finish as played, a token row's spelled out — [`wish_finish`].
                 preferred_finish,
                 // Where the reader pointed, straight through — and the root when they pointed
                 // nowhere, which is what this field's absence meant on every press before
@@ -1128,8 +1115,9 @@ pub(crate) struct Wanted {
     pub oracle_id: String,
     pub card_id: String,
     pub name: String,
-    /// The wish's `preferred_finish` — [`wish_finish`]: a card row's finish as the deck row
-    /// stores it, NULL for the regular copy, and a token row's spelled out.
+    /// The wish's `preferred_finish` — [`wish_finish`], [`missing_to_wishlist`]'s rule: a card
+    /// row's is the finish the deck row plays ([`played_finish`]), NULL for the regular copy, and
+    /// a token row's is spelled out.
     pub finish: Option<String>,
     pub quantity: i64,
     /// Whether this is a token line — which of the managed wishlist's two folders it is filed in:
@@ -1242,8 +1230,9 @@ fn unfinished(e: tauri::Error) -> String {
 /// every row, joins categories and rolls up what the deck's group holds, which is a great deal
 /// of work for a mark.
 /// This command answers neither a comparison nor a priced row: one indexed scan of `deck_cards`,
-/// four columns, a LEFT JOIN to `cards` for the name alone, and no marketplace. The join arrived
-/// with the loose tier on 2026-09-07 and is a primary-key lookup per group; what the founding
+/// five columns, a LEFT JOIN to `cards` for the name and the printing's finishes, and no
+/// marketplace. The join arrived with the loose tier on 2026-09-07 (the finishes rode it on
+/// 2026-09-27, for [`played_finish`]) and is a primary-key lookup per group; what the founding
 /// argument was really against is still absent — this does not price a row, does not roll up what
 /// the group holds, and does not become a second `deck_get`. `DeckEditor.test.tsx` pins the first
 /// reason from the frontend side — nothing may call `deck_get` for the list the reader is not on.
@@ -1267,17 +1256,24 @@ fn unfinished(e: tauri::Error) -> String {
 ///
 /// **The rows therefore fold here rather than in the caller**, which is the one thing that had to
 /// change with it: two `Vec` entries spelling one key were harmless while a set was being built
-/// out of them, and would be a silently halved quantity now. `GROUP BY dc.card_id, dc.finish` is
-/// exactly [`group_key`]'s own grain — SQLite groups two NULL finishes together, which is the
-/// regular copy — so the same card filed as Ramp and as Main deck is still **one** planned card,
-/// now with both piles counted rather than one key printed twice.
+/// out of them, and would be a silently halved quantity now. `GROUP BY dc.card_id, dc.finish` does
+/// most of it — SQLite groups two NULL finishes together, which is the regular copy — so the same
+/// card filed as Ramp and as Main deck is still **one** planned card, with both piles counted
+/// rather than one key printed twice. It is no longer the whole of [`group_key`]'s grain, which is
+/// what the next paragraph is about.
+///
+/// **The SQL groups on the stored finish and Rust finishes the fold on the played one** (issue
+/// #563). A foil-only printing the plan holds once unsaid and once as `foil` is two SQL groups and
+/// one [`group_key`] — [`played_finish`] is what makes them one — so the second is summed into the
+/// first rather than pushed beside it, for the halved-plan reason above. The printing's finishes
+/// ride the group as a bare column, which SQLite allows and which is one value per `card_id`.
 ///
 /// Still a `Vec` rather than a map: a JSON array is what crosses the IPC boundary anyway, and the
 /// caller builds the lookup it wants.
 pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<TheorySlot>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT dc.card_id, dc.finish, SUM(dc.quantity), c.name
+            "SELECT dc.card_id, dc.finish, SUM(dc.quantity), c.name, c.finishes
                FROM deck_cards dc
                JOIN deck_categories cat ON cat.id = dc.category_id
                LEFT JOIN cards c ON c.id = dc.card_id
@@ -1292,14 +1288,25 @@ pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<TheorySlot>, 
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, i64>(2)?,
                 r.get::<_, Option<String>>(3)?,
+                r.get::<_, Option<String>>(4)?,
             ))
         })
         .map_err(|e| e.to_string())?;
-    let mut slots = Vec::new();
+    let mut slots: Vec<TheorySlot> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
     for row in rows {
-        let (card_id, finish, quantity, name) = row.map_err(|e| e.to_string())?;
+        let (card_id, finish, quantity, name, finishes) = row.map_err(|e| e.to_string())?;
+        let key = group_key(
+            &card_id,
+            played_finish(finish, finishes.as_deref()).as_deref(),
+        );
+        if let Some(&i) = at.get(&key) {
+            slots[i].quantity += quantity;
+            continue;
+        }
+        at.insert(key.clone(), slots.len());
         slots.push(TheorySlot {
-            key: group_key(&card_id, finish.as_deref()),
+            key,
             name_key: name,
             quantity,
         });
@@ -1338,19 +1345,6 @@ pub async fn deck_theory_diff(
     })
     .await
     .map_err(|e| format!("the theory list could not be read: {e}"))?
-}
-
-/// Seed the theory list from the live one. Answers how many rows were written.
-#[cfg(not(target_family = "wasm"))]
-#[tauri::command]
-pub async fn deck_theory_copy_from_live(
-    state: tauri::State<'_, Arc<AppState>>,
-    deck_id: i64,
-) -> Result<usize, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| copy_from_live(c, deck_id)))
-        .await
-        .map_err(unfinished)?
 }
 
 /// The one click: everything the plan is short of, onto the wishlist — or, with `only`, the
@@ -1419,8 +1413,25 @@ mod tests {
         .id
     }
 
+    /// The **live** list's pile of this name, found or made. A case hands it to [`add`] for
+    /// either list and [`in_list`] carries it across — the lists keep separate piles since user
+    /// schema v53 (issue #561), and one name per case reads better than two ids.
     fn category(conn: &Connection, deck_id: i64, name: &str) -> i64 {
-        crate::deck_meta::category_for_name(conn, deck_id, name).unwrap()
+        crate::deck_meta::category_for_name(conn, deck_id, LIVE, name).unwrap()
+    }
+
+    /// The **theory** list's pile of this name, found or made — for the cases that write to the
+    /// plan's pile itself rather than filing a card into it, such as switching it off.
+    fn theory_category(conn: &Connection, deck_id: i64, name: &str) -> i64 {
+        crate::deck_meta::category_for_name(conn, deck_id, THEORY, name).unwrap()
+    }
+
+    /// The pile of `variant` standing for `cat` — `cat` itself when it is already that list's,
+    /// else the other list's pile of the same name (or kind), made there if it is missing. Every
+    /// card write refuses a pile of the other list (`deck_meta::CATEGORY_WRONG_LIST`), so a
+    /// theory write goes through this.
+    fn in_list(conn: &Connection, deck_id: i64, variant: &str, cat: i64) -> i64 {
+        crate::deck_meta::counterpart_in(conn, deck_id, variant, cat).unwrap()
     }
 
     fn add(conn: &Connection, deck_id: i64, card: &str, cat: i64, variant: &str, quantity: i64) {
@@ -1428,7 +1439,8 @@ mod tests {
     }
 
     /// The same add, naming the object played — `None` is the regular copy, which
-    /// `deck::normalise_finish` stores as NULL.
+    /// `deck::normalise_finish` stores as NULL. `cat` is carried into the list being written by
+    /// [`in_list`], so a case may name the live pile for a theory add.
     fn add_finish(
         conn: &Connection,
         deck_id: i64,
@@ -1442,7 +1454,7 @@ mod tests {
             conn,
             deck_id,
             card,
-            Some(cat),
+            Some(in_list(conn, deck_id, variant, cat)),
             None,
             variant,
             finish,
@@ -1703,7 +1715,9 @@ mod tests {
 
         // And each side is summed across its piles rather than compared pile by pile: two here
         // and two there is four wanted, which is what the deck has.
-        crate::deck::set_card_quantity(&conn, id, "bolt-lea", removal, THEORY, None, 2).unwrap();
+        let plan_removal = in_list(&conn, id, THEORY, removal);
+        crate::deck::set_card_quantity(&conn, id, "bolt-lea", plan_removal, THEORY, None, 2)
+            .unwrap();
         add(&conn, id, "bolt-lea", burn, THEORY, 2);
         assert!(theory_diff(&conn, id, ANY_MARKET).unwrap().is_empty());
     }
@@ -1900,9 +1914,194 @@ mod tests {
         );
     }
 
+    /// A printing Scryfall sells **only** in foil — issue #563's Palantír of Orthanc, HOC 85, a
+    /// Surge Foil — added to `cards` beside the fixture's three.
+    fn foil_only(conn: &Connection) {
+        conn.execute(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,mana_cost,cmc,type_line,prices,finishes,raw)
+               VALUES ('palantir-hoc','o3','Palantír of Orthanc','hoc','85','en','normal',
+                       'mythic','{3}',3.0,'Legendary Artifact','{"usd_foil":"12.00"}',
+                       '["foil"]','{}')"#,
+            [],
+        )
+        .unwrap();
+    }
+
+    /// **[Issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563): a foil-only printing
+    /// is one card whichever list left its finish unsaid.** `deck_cards.finish` is NULL where a
+    /// write named no finish, and for a printing sold only in foil that NULL can only be the foil
+    /// — the deck's own views draw it with the foil mark (`playedFinish`). Keyed on the raw
+    /// column, the plan's `palantir-hoc|` and the live list's `palantir-hoc|foil` were two
+    /// cards, so the one the reader had in both lists was on the Compare dialog, on the wishlist
+    /// press and in the managed wishlist folder all at once.
+    ///
+    /// Both directions, because either list can be the one that said nothing: an add from the
+    /// search names no finish, and an add out of the binder carries the copy's own `foil`.
+    #[test]
+    fn a_foil_only_printing_is_one_card_whichever_list_left_its_finish_unsaid() {
+        let conn = seeded();
+        foil_only(&conn);
+        for (plan, deck_has) in [(None, Some("foil")), (Some("foil"), None)] {
+            let id = deck(&conn, &format!("Palantír {plan:?}"));
+            let main = category(&conn, id, "Main deck");
+            add_finish(&conn, id, "palantir-hoc", main, THEORY, plan, 1);
+            add_finish(&conn, id, "palantir-hoc", main, LIVE, deck_has, 1);
+
+            let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+            assert!(
+                diff.is_empty(),
+                "plan {plan:?} against {deck_has:?}: {diff:?}"
+            );
+            assert!(
+                wanted(&conn, id, DiffView::All).unwrap().is_empty(),
+                "the managed wishlist follows the diff"
+            );
+            assert_eq!(
+                missing_to_wishlist(&conn, id, None, None).unwrap(),
+                0,
+                "and the press finds nothing to buy"
+            );
+            assert_eq!(
+                theory_slots(&conn, id)
+                    .unwrap()
+                    .into_iter()
+                    .map(|s| (s.key, s.quantity))
+                    .collect::<Vec<_>>(),
+                vec![("palantir-hoc|foil".to_owned(), 1)],
+                "the slot spells the foil, which is what `theoryMatch.ts` looks the live row up by"
+            );
+        }
+        assert!(wishes(&conn).is_empty(), "{:?}", wishes(&conn));
+    }
+
+    /// The same rule inside **one** list: a plan holding the foil-only printing once unsaid and
+    /// once as `foil` is asking for two of one card, so it is one slot and one line — pinned to
+    /// the foil, and counting the foil copies the binder holds as spare. The spare figure read `0`
+    /// for the unsaid half before, because its NULL bound through to `nonfoil`.
+    #[test]
+    fn a_foil_only_printing_unsaid_and_foil_in_one_plan_is_one_line() {
+        let conn = seeded();
+        foil_only(&conn);
+        own_finish(&conn, "palantir-hoc", "foil", 1);
+        let id = deck(&conn, "Palantír");
+        let main = category(&conn, id, "Main deck");
+        let ramp = category(&conn, id, "Ramp");
+        add_finish(&conn, id, "palantir-hoc", main, THEORY, None, 1);
+        add_finish(&conn, id, "palantir-hoc", ramp, THEORY, Some("foil"), 1);
+
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+        assert_eq!(
+            diff.iter()
+                .map(|r| (r.finish.as_deref(), r.quantity, r.owned_spare, r.unit_price))
+                .collect::<Vec<_>>(),
+            vec![(Some("foil"), 2, 1, Some(12.0))],
+            "{diff:?}"
+        );
+        assert_eq!(
+            theory_slots(&conn, id)
+                .unwrap()
+                .into_iter()
+                .map(|s| (s.key, s.quantity))
+                .collect::<Vec<_>>(),
+            vec![("palantir-hoc|foil".to_owned(), 2)]
+        );
+    }
+
+    /// The press the Compare dialog makes, for issue #563's card. Its `only` keys are built off the
+    /// diff rows, whose finish is the played one, so the dialog ticks `palantir-hoc|foil`, and that
+    /// is the spelling the press has to find. The wish is pinned to the foil, the only finish the
+    /// printing exists in. The pre-fix spelling `palantir-hoc|` names nothing now and writes nothing.
+    #[test]
+    fn the_press_finds_a_foil_only_line_by_its_played_key() {
+        let conn = seeded();
+        foil_only(&conn);
+        let id = deck(&conn, "Palantír");
+        let main = category(&conn, id, "Main deck");
+        add_finish(&conn, id, "palantir-hoc", main, THEORY, None, 2);
+        add_finish(&conn, id, "palantir-hoc", main, LIVE, Some("foil"), 1);
+
+        let stale = ["palantir-hoc|".to_owned()];
+        assert_eq!(
+            missing_to_wishlist(&conn, id, Some(&stale), None).unwrap(),
+            0
+        );
+
+        let ticked = ["palantir-hoc|foil".to_owned()];
+        assert_eq!(
+            missing_to_wishlist(&conn, id, Some(&ticked), None).unwrap(),
+            1
+        );
+        assert_eq!(
+            pinned_wishes(&conn),
+            vec![(
+                "o3".to_owned(),
+                "palantir-hoc".to_owned(),
+                Some("foil".to_owned()),
+                1
+            )],
+            "one copy short, wished for as the foil"
+        );
+    }
+
+    /// **Only a printing with no choice is folded.** One sold in both finishes keeps the regular
+    /// copy and the foil apart exactly as `the_diff_tells_a_foil_from_the_regular_copy` says —
+    /// an unsaid row there is the regular copy, and the plan's foil is not answered by it.
+    #[test]
+    fn a_printing_sold_in_both_finishes_still_tells_them_apart() {
+        let conn = seeded();
+        conn.execute(
+            r#"UPDATE cards SET finishes = '["nonfoil","foil"]' WHERE id = 'bolt-lea'"#,
+            [],
+        )
+        .unwrap();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add_finish(&conn, id, "bolt-lea", main, THEORY, Some("foil"), 1);
+        add_finish(&conn, id, "bolt-lea", main, LIVE, None, 1);
+
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+        assert_eq!(
+            diff.iter()
+                .map(|r| (r.finish.as_deref(), r.quantity))
+                .collect::<Vec<_>>(),
+            vec![(Some("foil"), 1)],
+            "{diff:?}"
+        );
+        assert_eq!(
+            theory_slots(&conn, id).unwrap()[0].key,
+            "bolt-lea|foil",
+            "and the regular copy in the live list keeps its own key, `bolt-lea|`"
+        );
+    }
+
+    /// [`sole_finish`] is `finish.ts`'s `soleFinish`, and the two sides of the theory key must
+    /// agree on every one of these — `theoryMatch.test.ts` pins the same literals from the other
+    /// end of the IPC boundary.
+    #[test]
+    fn sole_finish_answers_only_for_a_printing_with_no_choice() {
+        for (finishes, sole) in [
+            (Some(r#"["foil"]"#), Some("foil")),
+            (Some(r#"["etched"]"#), Some("etched")),
+            (Some(r#"["nonfoil"]"#), None),
+            (Some(r#"["nonfoil","foil"]"#), None),
+            (Some(r#"["foil","etched"]"#), None),
+            // A repeated word is counted twice, as `parseFinishes` keeps it twice.
+            (Some(r#"["foil","foil"]"#), None),
+            // An unknown word is dropped before counting, as `parseFinishes` drops it.
+            (Some(r#"["foil","glossy"]"#), Some("foil")),
+            (Some("not json"), None),
+            (Some(r#"{"foil":true}"#), None),
+            (None, None),
+        ] {
+            assert_eq!(sole_finish(finishes), sole, "{finishes:?}");
+        }
+    }
+
     /// An inactive category counts toward nothing — on **both** sides. A card parked in the
     /// theory Maybeboard is not a decision the user made, and one parked in the live
-    /// Maybeboard is not a card the deck has.
+    /// Maybeboard is not a card the deck has. Each list has its own Maybeboard since user schema
+    /// v53, and the plan's is made by [`add`] as a copy of the live one — switched off with it.
     #[test]
     fn the_diff_reads_neither_sides_inactive_categories() {
         let conn = seeded();
@@ -1910,7 +2109,8 @@ mod tests {
         let main = category(&conn, id, "Main deck");
         let maybe: i64 = conn
             .query_row(
-                "SELECT id FROM deck_categories WHERE deck_id = ?1 AND kind = 'maybe'",
+                "SELECT id FROM deck_categories
+                  WHERE deck_id = ?1 AND variant = 'live' AND kind = 'maybe'",
                 params![id],
                 |r| r.get(0),
             )
@@ -2806,103 +3006,12 @@ mod tests {
         );
     }
 
-    /// Rule 1 of the audit table reaches this button too: a press that moves forty cards into
-    /// the plan is a change, and on an already-seeded list the toggle's row was written long
-    /// ago. One row, carrying **copies** rather than rows — a line is not a card.
-    #[test]
-    fn copying_from_live_records_one_row_carrying_the_copies() {
-        let conn = seeded();
-        let id = deck(&conn, "Burn");
-        let main = category(&conn, id, "Main deck");
-        add(&conn, id, "bolt-lea", main, LIVE, 4);
-        add(&conn, id, "serra-lea", main, LIVE, 2);
-        conn.execute("DELETE FROM deck_audit", []).unwrap();
-
-        copy_from_live(&conn, id).unwrap();
-
-        let history = crate::deck_audit::list(&conn, id, 100).unwrap();
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].kind, crate::deck_audit::DECK);
-        assert_eq!(history[0].variant, THEORY);
-        assert_eq!(history[0].delta, 6, "copies, not the two rows");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&history[0].payload).unwrap(),
-            serde_json::json!({ "field": "theory", "copied": 6 })
-        );
-    }
-
-    /// An explicit copy tops the plan up without touching a row the user changed — the
-    /// `DO NOTHING` half of [`seed_from_live`], which a fold would get wrong invisibly.
-    #[test]
-    fn copying_from_live_leaves_a_changed_theory_row_alone() {
-        let conn = seeded();
-        let id = deck(&conn, "Burn");
-        let main = category(&conn, id, "Main deck");
-        add(&conn, id, "bolt-lea", main, LIVE, 4);
-        add(&conn, id, "serra-lea", main, LIVE, 2);
-        add(&conn, id, "bolt-lea", main, THEORY, 1);
-
-        let copied = copy_from_live(&conn, id).unwrap();
-
-        assert_eq!(copied, 1, "only the row theory did not have");
-        assert_eq!(
-            cards_in(&conn, id, THEORY),
-            vec![("bolt-lea".to_owned(), 1), ("serra-lea".to_owned(), 2)],
-            "the user's own count for the Bolt survives"
-        );
-    }
-
-    /// **A plan moves no cardboard**, which is what this rule became at schema v25. It used to
-    /// read "a plan reserves nothing" against a claim ledger; there is no ledger, and the way a
-    /// plan could now go wrong is sharper — [`seed_from_live`] writes a pile of `theory` rows in
-    /// one statement, and any of that copying reaching the collection would file a second set of
-    /// copies the reader does not own into a group that already holds theirs.
-    ///
-    /// **The deck has to really hold the copies, or the test cannot fail.** Eight owned against
-    /// four sleeved up, so a seed that duplicated the group's contents would come out at eight
-    /// in the box — a fixture with everything in the group already at its maximum could not tell
-    /// a doubling from a no-op.
-    #[test]
-    fn seeding_the_plan_moves_no_collection_copy() {
-        let conn = seeded();
-        let id = deck(&conn, "Burn");
-        let main = category(&conn, id, "Main deck");
-        // Four sleeved up and four still in the binder. **The split is what makes a doubling
-        // visible**: a group already holding everything the reader owns reads the same whether
-        // the seed filed a second set or nothing at all. Filed first and topped up after,
-        // because `own` lands on the eleven-term grain — a second add at the root while the
-        // first row is still there is one row of eight, not two rows of four.
-        let sleeved = own(&conn, "bolt-lea", 4);
-        file_into(&conn, sleeved, Some(group_of(&conn, id)));
-        own(&conn, "bolt-lea", 4);
-        add(&conn, id, "bolt-lea", main, LIVE, 4);
-
-        copy_from_live(&conn, id).unwrap();
-
-        assert_eq!(
-            cards_in(&conn, id, THEORY),
-            vec![("bolt-lea".to_owned(), 4)],
-            "the plan holds the same four copies"
-        );
-        assert_eq!(
-            copies_in(&conn, Some(group_of(&conn, id))),
-            vec![("bolt-lea".to_owned(), 4)],
-            "and the box still holds four, not eight"
-        );
-        assert_eq!(
-            copies_in(&conn, None),
-            vec![("bolt-lea".to_owned(), 4)],
-            "the binder is untouched too — a plan is a list, and lists move no cardboard"
-        );
-    }
-
     /// A stale deck id is answered in words by every entry point here, rather than by an empty
     /// list that reads like a deck with nothing in it.
     #[test]
     fn a_deck_that_is_gone_is_refused_by_name() {
         let conn = seeded();
 
-        assert_eq!(copy_from_live(&conn, 404).unwrap_err(), crate::deck::GONE);
         assert_eq!(
             missing_to_wishlist(&conn, 404, None, None).unwrap_err(),
             crate::deck::GONE
@@ -3124,14 +3233,16 @@ mod tests {
 
     /// An inactive pile is excluded from the **quantity** too, not merely from the key list —
     /// the plan is not asking for a card it has parked in the Maybeboard, so those copies may
-    /// not swell the number the tick counts down from.
+    /// not swell the number the tick counts down from. **The plan's own Maybeboard** is the one
+    /// switched off: each list has its own since user schema v53, and the live one's switch
+    /// reaches no theory row.
     #[test]
     fn theory_slots_leave_a_switched_off_pile_out_of_the_count() {
         let conn = seeded();
         let d = deck(&conn, "Burn");
         set_theory(&conn, d, true);
         let main = category(&conn, d, "Main deck");
-        let maybe = category(&conn, d, "Maybeboard");
+        let maybe = theory_category(&conn, d, "Maybeboard");
         add(&conn, d, "bolt-lea", main, THEORY, 2);
         add(&conn, d, "bolt-lea", maybe, THEORY, 3);
         conn.execute(
@@ -3210,14 +3321,15 @@ mod tests {
     }
 
     /// `diff_select`'s rule, read by the same reasoning: a card parked in an inactive pile is
-    /// not something the user has decided to play, so the plan is not asking for it.
+    /// not something the user has decided to play, so the plan is not asking for it. The pile is
+    /// the plan's own, for the reason the case above gives.
     #[test]
     fn theory_slots_skips_a_switched_off_pile() {
         let conn = seeded();
         let d = deck(&conn, "Burn");
         set_theory(&conn, d, true);
         let main = category(&conn, d, "Main deck");
-        let maybe = category(&conn, d, "Maybeboard");
+        let maybe = theory_category(&conn, d, "Maybeboard");
         add(&conn, d, "bolt-lea", main, THEORY, 1);
         add(&conn, d, "serra-lea", maybe, THEORY, 1);
         conn.execute(
@@ -3373,7 +3485,7 @@ mod tests {
 
     /// **A plan that counts no tokens adds no token rows** — and a plan that makes a Treasure
     /// counts none until the reader steps it: its implicit entry is at zero since user schema
-    /// v54. One direction, like the cards: Treasures sleeved and not planned are no line either,
+    /// v55. One direction, like the cards: Treasures sleeved and not planned are no line either,
     /// and neither is a planned token stepped back down to nothing.
     #[test]
     fn a_plan_counting_no_tokens_adds_no_token_rows() {

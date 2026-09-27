@@ -8,7 +8,7 @@
  * of. `off` — the default — is no folder. This module is the words' one home, so the Deck
  * settings group and the history line cannot come to name one choice two ways.
  *
- * **`tokens` since user schema v54** (managed tokens spec §3.8). The token rows' wishes are filed
+ * **`tokens` since user schema v55** (managed tokens spec §3.8). The token rows' wishes are filed
  * in a `Tokens` subfolder inside the deck's folder — by `All`, beside its cards, and by `Tokens`,
  * alone — and `Missing` and `Different printing` leave tokens out, as their Compare views do. So
  * two captions name the subfolder, and the other two say nothing about tokens at all.

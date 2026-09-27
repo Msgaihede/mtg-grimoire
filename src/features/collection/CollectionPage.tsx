@@ -639,8 +639,12 @@ function focusedElement(): HTMLElement | null {
 /**
  * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
  *
- * The four the card search shares, then the three only a collection can ask: what the copy *is*,
- * what state it is in, and whether a sync left a question against it. The absences are each a fact
+ * The card search's printing cells — `border` among them, since a copy has its printing's frame —
+ * then the three only a collection can ask: what the copy *is*, what state it is in, and whether a
+ * sync left a question against it. **`finish` is the first of those three and not the card
+ * search's**, although both trays name it: here it asks which finish this copy is, where the card
+ * search asks which finishes the printing was published in (`FilterBar`'s finish cell carries
+ * both readings). The absences are each a fact
  * about the list rather than an omission — there is no **Owned** pair because every row here is a
  * copy the reader has, no **All printings** because these *are* their printings, and no **Decks**
  * because that cell is the deck editor's Collection tab and asks about one deck.
@@ -651,6 +655,7 @@ const COLLECTION_TRAY: readonly TrayCell[] = [
   "format",
   "rarity",
   "type",
+  "border",
   "price",
   "finish",
   "condition",

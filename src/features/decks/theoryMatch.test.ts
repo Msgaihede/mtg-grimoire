@@ -23,16 +23,23 @@ import {
 const card = (over: {
   cardId: string;
   finish?: DeckFinish;
+  finishes?: string | null;
   name?: string;
   quantity?: number;
   categoryActive?: boolean;
 }) => ({
   cardId: over.cardId,
   finish: over.finish ?? null,
+  // `null` — the column saying nothing — unless a case is about the printing's finishes, so every
+  // unsaid row below stays the regular copy it has always been.
+  finishes: over.finishes ?? null,
   name: over.name ?? over.cardId,
   quantity: over.quantity ?? 1,
   categoryActive: over.categoryActive ?? true,
 });
+
+/** Issue #563's card: Palantír of Orthanc, HOC 85, a Surge Foil Scryfall sells in no other way. */
+const PALANTIR = { cardId: "palantir-hoc", name: "Palantír of Orthanc", finishes: '["foil"]' };
 
 /** A slot as `deck_theory_slots` answers one — see the note on the literals below. */
 const slot = (key: string, nameKey: string | null, quantity = 1): TheorySlot => ({
@@ -75,6 +82,38 @@ describe("theorySlot", () => {
       theorySlot(card({ cardId: "bolt-lea", finish: null })),
     );
   });
+
+  /**
+   * **Issue #563: an unsaid row of a printing with no choice is spelled as the finish it plays.**
+   * `deck_theory.rs`' `played_finish` spells the plan's half the same way — `"palantir-hoc|foil"`
+   * for a plan that stored the foil *and* for one that stored nothing — so the live row has to, or
+   * the Surge Foil the reader has in both lists misses its own slot. These are the literals that
+   * file's `sole_finish_answers_only_for_a_printing_with_no_choice` asserts, from this side.
+   */
+  it("spells an unsaid row of a single-finish printing as that finish", () => {
+    expect(theorySlot(card({ cardId: "palantir-hoc", finishes: '["foil"]' }))).toBe(
+      "palantir-hoc|foil",
+    );
+    expect(theorySlot(card({ cardId: "p-etched", finishes: '["etched"]' }))).toBe(
+      "p-etched|etched",
+    );
+    expect(theorySlot(card({ cardId: "p", finishes: '["foil","glossy"]' }))).toBe("p|foil");
+    // A printing with a choice has not decided, so an unsaid row is the regular copy there.
+    expect(theorySlot(card({ cardId: "bolt-lea", finishes: '["nonfoil"]' }))).toBe("bolt-lea|");
+    expect(theorySlot(card({ cardId: "bolt-m10", finishes: '["nonfoil","foil"]' }))).toBe(
+      "bolt-m10|",
+    );
+    expect(theorySlot(card({ cardId: "p", finishes: '["foil","etched"]' }))).toBe("p|");
+    expect(theorySlot(card({ cardId: "p", finishes: '["foil","foil"]' }))).toBe("p|");
+    expect(theorySlot(card({ cardId: "p", finishes: "not json" }))).toBe("p|");
+    expect(theorySlot(card({ cardId: "p", finishes: '{"foil":true}' }))).toBe("p|");
+  });
+
+  it("lets a stated finish win over the printing's", () => {
+    expect(
+      theorySlot(card({ cardId: "bolt-m10", finish: "foil", finishes: '["nonfoil","foil"]' })),
+    ).toBe("bolt-m10|foil");
+  });
 });
 
 describe("theoryNameKey", () => {
@@ -112,6 +151,28 @@ describe("the three tiers", () => {
     expect(
       theoryMatchMark(plan, card({ cardId: "bolt-m10", finish: null, name: "Lightning Bolt" })),
     ).toEqual({ tier: "name", delta: 0, anyPrinting: false });
+  });
+
+  /**
+   * [Issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563) — the Surge Foil the reader
+   * put in both lists. The plan's slot is what `deck_theory_slots` answers for it whichever way the
+   * plan stored it; the live row is the one a search add leaves, with no finish of its own. It is
+   * the printing the plan named, in the only finish it exists in, so it is the exact tick.
+   */
+  it("draws the exact tier for an unsaid row of a foil-only printing the plan names", () => {
+    const plan = theoryMatchPlan(
+      [slot("palantir-hoc|foil", PALANTIR.name)],
+      [card({ ...PALANTIR, finish: null })],
+      ALL,
+    );
+    expect(theoryMatchMark(plan, card({ ...PALANTIR, finish: null }))).toEqual({
+      tier: "exact",
+      delta: 0,
+    });
+    expect(theoryProgress([slot("palantir-hoc|foil", PALANTIR.name)], [card(PALANTIR)])).toEqual({
+      have: 1,
+      want: 1,
+    });
   });
 
   it("draws the loose tier for the same printing in the wrong finish", () => {

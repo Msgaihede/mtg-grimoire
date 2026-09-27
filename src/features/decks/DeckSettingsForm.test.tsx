@@ -76,7 +76,7 @@ const CATEGORIES: DeckCategory[] = [
   sortOrder: i,
   cardCount: 0,
   totalPrice: null,
-  cardCountAllVariants: 0,
+  variant: "live" as const,
   ...c,
 }));
 
@@ -599,7 +599,7 @@ describe("DeckSettingsForm", () => {
    * The managed wishlist (issue #512) sits under both of the marks' gates — it keeps a view of
    * the difference between the two lists, so a deck with no plan has nothing for it to hold, and
    * the create host has no column to write it to — and is a five-way choice: `Off` and the
-   * Compare dialog's four views, `Tokens` last since user schema v54 (managed tokens spec §3.8).
+   * Compare dialog's four views, `Tokens` last since user schema v55 (managed tokens spec §3.8).
    */
   it("draws the managed wishlist group only for a Theory + Actual deck in the edit host", async () => {
     form({ value: { ...VALUE, theoryEnabled: false } });

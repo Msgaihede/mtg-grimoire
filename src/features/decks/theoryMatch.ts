@@ -64,16 +64,23 @@
  * could learn to trust. **That holds at both grains** — the name tier drops the category for the
  * same reason, and sums every pile on each side before subtracting.
  *
- * So `cardId` and `finish` — the printing and the object. Both are the reader's own statements
- * rather than facts about the corpus: a plan calling for the Alpha Bolt is not satisfied by the
- * M10 one, and a plan calling for the foil is not satisfied by the regular copy. `finish` is read
- * raw and **never** through `playedFinish`, which is the rule this file would otherwise get
- * subtly wrong: `playedFinish` falls back to `soleFinish(finishes)` so a *surface* can draw
- * "this printing only exists in foil", and folding that in here would match a plan's explicit
- * `foil` against a live row the reader never said anything about. The address is what the reader
- * wrote; two rows that both say `null` are two regular copies and match each other. The second
- * tier does not weaken any of that — it says those two rows are the same *card*, which is a
- * different sentence and is drawn in a different colour.
+ * So `cardId` and `finish` — the printing and the object: a plan calling for the Alpha Bolt is not
+ * satisfied by the M10 one, and a plan calling for the foil is not satisfied by the regular copy.
+ *
+ * **The finish is the one the row _plays_ — `playedFinish` — and never the column as stored**
+ * ([issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563), 2026-09-27). This note said
+ * the opposite until then: read raw, on the argument that folding `soleFinish` in would match a
+ * plan's explicit `foil` against a live row the reader never said anything about. For a printing
+ * sold in both finishes that is true and still holds, because `soleFinish` answers `null` there
+ * and an unsaid row stays the regular copy. For a printing sold **only** in foil the argument has
+ * nothing to stand on: an unsaid row can be no other object, every view already draws it with the
+ * foil mark, and most writes leave the finish unsaid — the search's Add, the quick add, every drag,
+ * a decklist line with no `*F*` — while an add out of the binder carries the copy's own `foil`. Read
+ * raw, the Surge Foil Palantír the reader had put in both lists was `palantir-hoc|` in one and
+ * `palantir-hoc|foil` in the other: the blue tier here, and a line on the Compare dialog and the
+ * wishlist besides. `deck_theory.rs`' `played_finish` spells the plan's half by the same rule, so
+ * the two stay one key. The second tier does not weaken any of this — it says two rows are the
+ * same *card*, which is a different sentence and is drawn in a different colour.
  *
  * **The plan's half of the key is not built here at all.** `deck_theory_slots` answers
  * `deck_theory.rs`'s own `group_key` strings, so the only thing this file spells is the *live*
@@ -104,6 +111,7 @@
  * still what the reader buys from; this is still what tells the real card from the proxy standing
  * in for it. {@link theoryMatchPlan} carries the arithmetic, at both grains.
  */
+import { playedFinish } from "@/lib/finish";
 import type { DeckCard, TheorySlot } from "@/lib/ipc";
 
 /** Which of the three statements a mark is making about its row — see the module note's table. */
@@ -217,9 +225,20 @@ export interface TheoryPlan {
  * `theorySlot` answered nothing, and a test hand-spelling a key could not type the character it
  * needed. A key nobody can write down by hand is a key nobody can check.)
  */
-export function theorySlot(card: Pick<DeckCard, "cardId" | "finish">): string {
-  return `${card.cardId}|${card.finish ?? ""}`;
+export function theorySlot(card: TheoryAddress): string {
+  return `${card.cardId}|${playedFinish(card.finish, card.finishes) ?? ""}`;
 }
+
+/**
+ * What {@link theorySlot} reads off a row: the printing, the finish it stored, and the finishes the
+ * printing is sold in — the last because an unsaid finish on a printing sold only in foil *is* the
+ * foil (issue #563, and the module note's *played, not stored*).
+ *
+ * `finishes` is required rather than optional on purpose: a caller that could leave it out would
+ * compile, key every unsaid foil-only row as the regular copy, and put issue #563 back with nothing
+ * going red. A caller whose finish is always stated — a token entry — passes `null` and says so.
+ */
+export type TheoryAddress = Pick<DeckCard, "cardId" | "finish" | "finishes">;
 
 /**
  * A card's identity across printings, folded — the name tier's key.
@@ -328,7 +347,7 @@ function floored(have: number, wanted: number): number {
  */
 export function theoryMatchPlan(
   slots: readonly TheorySlot[] | undefined,
-  live: readonly Pick<DeckCard, "cardId" | "finish" | "name" | "quantity" | "categoryActive">[],
+  live: readonly (TheoryAddress & Pick<DeckCard, "name" | "quantity" | "categoryActive">)[],
   marks: TheoryMarkSwitches,
 ): TheoryPlan | undefined {
   if (slots === undefined) return undefined;
@@ -418,7 +437,7 @@ export function theoryMatchPlan(
  */
 export function theoryMatchMark(
   plan: TheoryPlan | undefined,
-  card: Pick<DeckCard, "cardId" | "finish" | "name">,
+  card: TheoryAddress & Pick<DeckCard, "name">,
 ): TheoryMark | null {
   if (plan === undefined) return null;
   const exact = plan.exact.get(theorySlot(card));
@@ -453,7 +472,7 @@ export function theoryMatchMark(
  */
 export function theoryTier(
   plan: TheoryPlan,
-  card: Pick<DeckCard, "cardId" | "finish" | "name">,
+  card: TheoryAddress & Pick<DeckCard, "name">,
 ): TheoryTier {
   if (plan.exact.has(theorySlot(card))) return "exact";
   if (plan.byName.has(theoryNameKey(card.name))) return "name";
@@ -491,7 +510,7 @@ export function theoryTier(
  */
 export function theoryProgress(
   slots: readonly TheorySlot[] | undefined,
-  live: readonly Pick<DeckCard, "cardId" | "finish" | "quantity" | "categoryActive">[],
+  live: readonly (TheoryAddress & Pick<DeckCard, "quantity" | "categoryActive">)[],
 ): { have: number; want: number } | null {
   if (slots === undefined) return null;
   const sleeved = new Map<string, number>();

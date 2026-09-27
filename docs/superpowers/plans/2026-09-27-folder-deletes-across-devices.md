@@ -23,7 +23,9 @@ map line for the new table's registration.
 - **No wire change, no relay change.** `Op` and `wire.rs` are not touched.
 - **The rung is user schema v53** (`schema::USER_SCHEMA_VERSION` 52 → 53). At merge time the
   controller re-checks `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs` on `origin/main` and
-  renumbers if a rung landed first.
+  renumbers if a rung landed first. **It did: renumbered to v54 at the merge with `main`**, whose
+  per-list piles (#561) took v53 first — the steps below keep the v53 they were written with, and
+  every `v53`, `UNDO_V53` and `53` in them that names this rung reads as 54.
 - **The table is exactly** `sync_gone (tbl TEXT NOT NULL, uid TEXT NOT NULL, PRIMARY KEY (tbl, uid)) WITHOUT ROWID`,
   user side, **not** in `SYNCED_TABLES`, no capture spec, no `sync_uid`.
 - **The trigger is named `sync_gone_{table}`**, `AFTER DELETE`, gated on `OLD.sync_uid IS NOT NULL`

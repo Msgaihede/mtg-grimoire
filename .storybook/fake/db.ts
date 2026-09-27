@@ -294,7 +294,8 @@ import type {
 // The app's own `{X}` test, borrowed rather than re-spelled: the fake answers what Rust
 // answers, and a second reading of "does this cost name X" would let the workbench and the
 // window disagree about which cards are X while both looked right.
-import { parseFinishes, type Finish } from "@/lib/finish";
+import { FINISHES as FINISH_WORDS, parseFinishes, playedFinish, type Finish } from "@/lib/finish";
+import { BORDERS, type Border } from "@/lib/border";
 import { hasVariableCost } from "@/lib/mana";
 // The token view's own rules, borrowed rather than re-spelled: `DEFAULT_TOKEN_QUANTITY` is the
 // `0` in the resolver's `deck_tokens.quantity ?? 0` (managed tokens spec §3.1), `isTokenPrinting` is
@@ -457,7 +458,7 @@ export interface FakeWishlistFolder {
    *  absent or `null` for a folder the reader made. See {@link WishlistFolder.managedDeckId}. */
   managedDeckId?: number | null;
   /**
-   * User schema v54's `managed_tokens` — **this folder is the deck's `Tokens` subfolder** rather
+   * User schema v55's `managed_tokens` — **this folder is the deck's `Tokens` subfolder** rather
    * than the deck's own managed folder (managed tokens spec §3.8). The subfolder's identity is this
    * column and never its name, and it carries the deck's {@link managedDeckId} too, so every guard
    * on a managed folder covers it; absent or `false` is every other folder. **On the DTO** as
@@ -1032,6 +1033,16 @@ export interface FakeDeckState {
 export interface FakeDeckCategory {
   id: number;
   deckId: number;
+  /**
+   * `deck_categories.variant` (user schema v53) — **which of the deck's two lists this pile
+   * belongs to**. Theory and Actual are separate versions of one deck, so each keeps its own
+   * piles: its own four predefined zones, its own `isActive`, names and order. A card row's
+   * `categoryId` must name a pile of the same deck *and* the same variant, which
+   * {@link categoryOfDeck} refuses in the crate's words when it does not. Until v53 the column
+   * was absent and one pile served both lists, so a pile made in Theory drew in Actual and a
+   * Sideboard switched off in one was off in the other (issue #561).
+   */
+  variant: DeckVariant;
   /** As the user wrote it. Every refusal about a card in this pile names it. */
   name: string;
   kind: CategoryKind;
@@ -1075,8 +1086,8 @@ export interface FakeDeckLabel {
 export interface FakeDeckCard {
   id: number;
   deckId: number;
-  /** A {@link FakeDeckCategory} of the **same** deck — nothing in the DDL enforces that half,
-   *  which is why every card write runs {@link categoryOfDeck} first. */
+  /** A {@link FakeDeckCategory} of the **same** deck and the **same** variant — nothing in the
+   *  DDL enforces either half, which is why every card write runs {@link categoryOfDeck} first. */
   categoryId: number;
   variant: DeckVariant;
   cardId: string;
@@ -1711,7 +1722,7 @@ export interface FakeDb {
    * A **stored string** and `null` for the row not being there, for {@link FakeDb.marketplace}'s
    * reason and it is the same reason twice: a fresh install has never written it, and a value
    * written by a different build may name a grouping this one has never heard of. Both read as
-   * `artist`, and only a *write* refuses — so storing it narrowed would put the two states this
+   * `released`, and only a *write* refuses — so storing it narrowed would put the two states this
    * setting actually has out of a story's reach.
    */
   printingGroupBy: string | null;
@@ -3224,7 +3235,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // The row a fresh install has never written. `get_marketplace` answers the default for it,
     // which is what every story that says nothing about prices is standing in.
     marketplace: null,
-    // The same, one row over: `printing_group_by` answers `artist` for a card pane nobody has
+    // The same, one row over: `printing_group_by` answers `released` for a card pane nobody has
     // told, which is the grouping every story that says nothing about it is standing in.
     printingGroupBy: null,
     // The third row, and the only one of the three no command sets on purpose: `deck_create`
@@ -6339,6 +6350,26 @@ function cardHasType(typeLine: string | null, type: string): boolean {
       (face.split(/[—-]/)[0] ?? "").split(/\s+/).some((word) => word === type),
     );
 }
+
+/** `filters::picked_from` — trim, lower-case, keep what the vocabulary names. */
+function pickedFrom<T extends string>(values: readonly string[], vocabulary: readonly T[]): T[] {
+  return values
+    .map((v) => v.trim().toLowerCase())
+    .filter((v): v is T => (vocabulary as readonly string[]).includes(v));
+}
+
+/**
+ * One Border chip asked of one printing — `filters::push_card_filters`' border arm. `regular` is
+ * the negation of the other two together, so a `null` border colour on a framed card is regular,
+ * and an orphan is nothing at all (`NULL` answers no arm of the SQL).
+ */
+function cardHasBorder(card: FakeCard | null, border: Border): boolean {
+  if (card === null) return false;
+  const borderless = card.borderColor === "borderless";
+  if (border === "borderless") return borderless;
+  if (border === "fullart") return card.fullArt;
+  return !borderless && !card.fullArt;
+}
 /** `filters::MAX_SET_FILTER`. */
 const MAX_SET_FILTER = 64;
 /** `filters::MANA_VALUE_OPEN_ENDED` — the last chip means "8 or more". */
@@ -6475,6 +6506,29 @@ function matchesCardFilters(
     const picked = f.types.filter((t) => (CARD_TYPES as readonly string[]).includes(t));
     if (picked.length > 0 && !picked.some((t) => cardHasType(card?.typeLine ?? null, t))) {
       return false;
+    }
+  }
+
+  // The Border chips (issue #573) — OR within, AND without. `filters::picked_borders` trims and
+  // lower-cases like the rarities *and* validates like the types, so `["shiny"]` is no filter.
+  // **Two columns, three words**: `borderless` is a `border_color` value, `fullart` the separate
+  // `full_art` boolean, and `regular` is *neither* — so a borderless full-art printing answers
+  // both of the first two and not the third, and the chips are not a partition. An orphan
+  // answers none of them: a frame is a claim only a card row can make.
+  if (f.borders) {
+    const picked = pickedFrom(f.borders, BORDERS);
+    if (picked.length > 0 && !picked.some((b) => cardHasBorder(card, b))) return false;
+  }
+
+  // The Finish chips over the **printing** — "is it published in foil", Scryfall's `is:foil` —
+  // read off `cards.finishes`. Not `CollectionQuery.finishes`, which is one *copy's* finish and
+  // is `collectionScope`'s `inList` below; the two never meet here because they have different
+  // names on the wire. OR within, validated, and an orphan (no `finishes` at all) fails.
+  if (f.printedFinishes) {
+    const picked = pickedFrom(f.printedFinishes, FINISH_WORDS);
+    if (picked.length > 0) {
+      const sold = parseFinishes(card?.finishes ?? null);
+      if (!picked.some((x) => sold.includes(x))) return false;
     }
   }
 
@@ -6626,7 +6680,16 @@ const RARITY_KEYS = ["common", "uncommon", "rare", "mythic"];
  * have to ignore both or opening it on a request that already names a set would offer nothing
  * but that set.
  */
-type FacetSkip = "colors" | "mana" | "sets" | "formats" | "rarities" | "types" | "owned";
+type FacetSkip =
+  | "colors"
+  | "mana"
+  | "sets"
+  | "formats"
+  | "rarities"
+  | "types"
+  | "borders"
+  | "finishes"
+  | "owned";
 
 /**
  * The picked-colour string after one chip is pressed — `facets::toggle_colors`, which is
@@ -7361,6 +7424,8 @@ function toCollectionFolder(f: FakeCollectionFolder): CollectionFolder {
  */
 const VARIANTS: DeckVariant[] = ["live", "theory"];
 const LIVE = VARIANTS[0];
+/** The other list — `VARIANTS[1]`, for the category writes that name it (user schema v53). */
+const THEORY = VARIANTS[1];
 
 /**
  * `DeckRow.cardCount`'s definition, and the engine's `SIZE_KINDS` verbatim — a **fourth** copy of
@@ -7664,11 +7729,10 @@ function toDeckAudit(a: FakeDeckAudit): DeckAuditEntry {
  * SQL's `sum()` of no non-NULL terms is NULL — and "nothing here has a price" is a different
  * statement from "this is free".
  *
- * `cardCountAllVariants` is the **third** number and the one that is not scoped: a category is
- * not per-variant, and `deck_cards.category_id` is `ON DELETE CASCADE`, so a delete reaches
- * both lists. It is *derived here* rather than stored on `FakeDeckCategory`, like every other
- * DTO field in this file — a stored copy is a number that can disagree with the rows it claims
- * to count, which is the whole reason this fake keeps table rows and derives DTOs.
+ * There was a **third** number until user schema v53, `cardCountAllVariants`, counting both
+ * lists because one pile served both. A pile is one list's now (`c.variant`), so it always
+ * equalled `cardCount` and went. The `variant` filter below stays anyway: it is the crate's
+ * `AND dc.variant = ?`, and a fake that dropped it would agree with a backend that had.
  */
 function toDeckCategory(
   db: FakeDb,
@@ -7676,8 +7740,7 @@ function toDeckCategory(
   variant: DeckVariant,
   mp: MarketplaceId,
 ): DeckCategory {
-  const filed = db.deckCards.filter((dc) => dc.categoryId === c.id);
-  const rows = filed.filter((dc) => dc.variant === variant);
+  const rows = db.deckCards.filter((dc) => dc.categoryId === c.id && dc.variant === variant);
   // One sum, at one marketplace, **skipping what that marketplace does not quote** — so two
   // marketplaces' totals over one pile are two honest partial sums rather than a conversion.
   const totalPrice = ((): number | null => {
@@ -7692,6 +7755,7 @@ function toDeckCategory(
   return {
     id: c.id,
     deckId: c.deckId,
+    variant: c.variant,
     name: c.name,
     kind: c.kind,
     isActive: c.isActive,
@@ -7702,7 +7766,6 @@ function toDeckCategory(
     origin: c.origin,
     cardCount: rows.reduce((n, dc) => n + dc.quantity, 0),
     totalPrice,
-    cardCountAllVariants: filed.reduce((n, dc) => n + dc.quantity, 0),
   };
 }
 
@@ -9249,6 +9312,8 @@ export function readHandlers(db: FakeDb) {
           formats: {},
           rarities: {},
           types: {},
+          borders: {},
+          finishes: {},
           sets: {},
           owned: { owned: 0, missing: 0 },
           total: 0,
@@ -9296,6 +9361,8 @@ export function readHandlers(db: FakeDb) {
         if (skip === "formats") f.format = undefined;
         if (skip === "rarities") f.rarities = undefined;
         if (skip === "types") f.types = undefined;
+        if (skip === "borders") f.borders = undefined;
+        if (skip === "finishes") f.printedFinishes = undefined;
         return db.cards.filter((c) => {
           // Text is in every base **including its own**: it is not a facet, and a facet
           // describes the search the reader is looking at.
@@ -9367,6 +9434,20 @@ export function readHandlers(db: FakeDb) {
       const types: Record<string, number> = {};
       for (const key of CARD_TYPES) types[key] = countWith(typeBase, { types: [key] });
 
+      // Issue #573's two dimensions, all keys on every ready response and each counted over a
+      // base without its own filter — the types' shape. **Both overlap**: a borderless full-art
+      // printing is under two border keys, and a printing sold in nonfoil and foil under two
+      // finish keys, so neither map sums to `total`. `finishes` counts what a printing is
+      // **published** in, never a copy the reader holds.
+      const borderBase = base("borders");
+      const borders: Record<string, number> = {};
+      for (const key of BORDERS) borders[key] = countWith(borderBase, { borders: [key] });
+      const finishBase = base("finishes");
+      const finishes: Record<string, number> = {};
+      for (const key of FINISH_WORDS) {
+        finishes[key] = countWith(finishBase, { printedFinishes: [key] });
+      }
+
       const colorBase = base("colors");
       const colors: Record<string, number> = {};
       const picked = nonblank(req.colors)?.toUpperCase() ?? "";
@@ -9398,6 +9479,8 @@ export function readHandlers(db: FakeDb) {
         formats,
         rarities,
         types,
+        borders,
+        finishes,
         sets,
         owned: { owned, missing: ownedBase.length - owned },
         // **Printings, always**: `collapse` is a view mode and not a filter, so this counts
@@ -10447,8 +10530,9 @@ export function readHandlers(db: FakeDb) {
           const category = categoryById(db, dc.categoryId);
           return category ? [toDeckCard(db, dc, category, owned.get(dc.id) ?? 0, mp)] : [];
         });
+      // Only the list being read's own piles (v53): a Theory pile never draws on Actual.
       const categories: DeckCategory[] = db.deckCategories
-        .filter((c) => c.deckId === deck.id)
+        .filter((c) => c.deckId === deck.id && c.variant === variant)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
         .map((c) => toDeckCategory(db, c, variant, mp));
       const labels: DeckLabel[] = labelsWorn(db, deck.id, variant);
@@ -10620,9 +10704,11 @@ export function readHandlers(db: FakeDb) {
      * `deck_meta::list_categories` — a deck's categories on their own, for a panel that wants
      * them without the cards.
      *
-     * `variant` scopes each row's two numbers and **nothing else**: which categories a deck has
-     * does not depend on which list is showing, which is what keeps the columns still while the
-     * reader switches between Live and Theory.
+     * `variant` picks **which list's piles** answer, as well as scoping each row's two numbers.
+     * Until user schema v53 it scoped the numbers only, because one set of piles served both
+     * lists — and that was issue #561: a pile made in Theory drew in Actual, and a Sideboard
+     * switched off in one was off in the other. The two lists are separate versions of the deck
+     * now, and the theory diff is the only thing that links them.
      */
     deck_category_list: (args: {
       deckId: number;
@@ -10633,7 +10719,7 @@ export function readHandlers(db: FakeDb) {
       const mp = marketplaceOf(args.marketplace);
       refuseIfMetaUnreadable(db, CATEGORIES_UNREADABLE);
       return db.deckCategories
-        .filter((c) => c.deckId === args.deckId)
+        .filter((c) => c.deckId === args.deckId && c.variant === variant)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
         .map((c) => toDeckCategory(db, c, variant, mp));
     },
@@ -10800,7 +10886,7 @@ export function readHandlers(db: FakeDb) {
         ) {
           continue;
         }
-        const key = `${dc.cardId}|${dc.finish ?? ""}`;
+        const key = theoryKey(db, dc);
         const held = wanted.get(key);
         if (held) held.quantity += dc.quantity;
         else wanted.set(key, { nameKey: cardById(db, dc.cardId)?.name ?? null, quantity: dc.quantity });
@@ -12643,9 +12729,19 @@ const NO_CATEGORY = "A card needs a category to go in.";
  *  fence rather than a formality. */
 const CATEGORY_GONE = "That category is not there any more.";
 const CATEGORY_WRONG_DECK = "That category belongs to a different deck.";
-/** `deck_meta::CATEGORY_NAME_TAKEN` — `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, and this is
- *  the sentence a caller that skipped the check would get as a raw UNIQUE failure instead. */
-const CATEGORY_NAME_TAKEN = "This deck already has a category with that name.";
+/** `deck_meta::CATEGORY_WRONG_LIST` (user schema v53, issue #561): the pile is this deck's, but
+ *  of the *other* list. Theory and Actual keep their own piles, so a card of one filed under a
+ *  pile of the other would draw in a list that does not show that pile — a third sentence, since
+ *  "not yours" would send a reader looking for another deck that is not there. */
+const CATEGORY_WRONG_LIST = "That category belongs to the other list.";
+/** `deck_meta::CATEGORY_MIXED_LISTS` — a reorder naming both lists' piles (v53). Each list keeps
+ *  its own `sortOrder`, so a mixed list is an order neither of them has. */
+const CATEGORY_MIXED_LISTS = "Those categories belong to two different lists.";
+/** `deck_meta::CATEGORY_NAME_TAKEN` — `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)` since
+ *  user schema v53, and this is the sentence a caller that skipped the check would get as a raw
+ *  UNIQUE failure instead. **"This list"**, because that is the grain's scope: the two lists may
+ *  each hold a pile of one name. */
+const CATEGORY_NAME_TAKEN = "This list already has a category with that name.";
 /** `deck_meta::CATEGORY_SELF_MOVE`. Refused in words rather than left to be a quiet no-op that
  *  happens to end with an empty category: the fold would select the very rows it is about to
  *  re-insert, and the delete that follows would then take them away again. */
@@ -13469,7 +13565,7 @@ function writeTokenState(
 /**
  * `deck_tokens::settle_hidden` (Task 1's fix round) — **a write to a dismissed token settles its
  * state**: `auto` where the written list makes the token, `manual` where it does not, which is
- * {@link addTokenPrinting}'s own rule. Nothing reads `hidden` since managed tokens, and a v54
+ * {@link addTokenPrinting}'s own rule. Nothing reads `hidden` since managed tokens, and a v55
  * launch retires every one it holds, but an older peer can still sync one in; the first write
  * after that puts it right. Called inside the write's {@link journalTokens} closure, so the change
  * rides that write's history row and undo step. Any other state is left alone.
@@ -13667,7 +13763,7 @@ function journalTokens(
     },
     0,
   );
-  // **A token write re-settles the deck's managed wishlist** since user schema v54 — the crate's
+  // **A token write re-settles the deck's managed wishlist** since user schema v55 — the crate's
   // dirty triggers watch `deck_token_printings` and `deck_tokens`, because the plan's token rows
   // fill the folder's `Tokens` subfolder (managed tokens spec §3.8). Only where something changed,
   // as the triggers only fire on a row that moved.
@@ -14060,10 +14156,17 @@ function normaliseFinish(raw: string | null | undefined): DeckFinish {
  * category of a *different* deck (the foreign key only requires the row to exist), so this is
  * where "a card of deck A cannot be filed under a category of deck B" actually lives.
  */
-function categoryOfDeck(db: FakeDb, deckId: number, categoryId: number): FakeDeckCategory {
+function categoryOfDeck(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  categoryId: number,
+): FakeDeckCategory {
   const category = categoryById(db, categoryId);
   if (!category) throw refuse(CATEGORY_GONE);
   if (category.deckId !== deckId) throw refuse(CATEGORY_WRONG_DECK);
+  // The list half (v53): a pile is one list's, so the row being written must be of the same one.
+  if (category.variant !== variant) throw refuse(CATEGORY_WRONG_LIST);
   return category;
 }
 
@@ -14073,38 +14176,48 @@ function categoryOfDeck(db: FakeDb, deckId: number, categoryId: number): FakeDec
  * The add path's "file it where this card belongs", and unlike a create it is *meant* to be
  * handed the same name over and over and answer the same id every time. The word itself is
  * computed in TypeScript (`autoCategoryFor`), because which pile a Sol Ring belongs in is
- * domain logic and this is plumbing. Matched on the name alone, `DECK_CATEGORY_GRAIN`'s shape:
- * a deck's own "Sideboard" category and the predefined one are the same row by that grain.
+ * domain logic and this is plumbing. Matched on the name **within the list being written**,
+ * `DECK_CATEGORY_GRAIN`'s shape since v53: a deck's own "Sideboard" category and the predefined
+ * one are the same row by that grain, and a Theory "Ramp" is never the Actual one.
  *
  * **This is the one path that writes `origin: "auto"`**, and the `found` return above it is
  * half of what that means: the app asked for this pile while filing a card, so a pile it had to
  * *make* is one the reader never asked for — while a pile that was already there stays whatever
  * it was, which for anything the reader typed is `"user"`.
  */
-function categoryForName(db: FakeDb, deckId: number, name: string): FakeDeckCategory {
+function categoryForName(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  name: string,
+): FakeDeckCategory {
   const trimmed = name.trim();
   if (trimmed === "") throw refuse("A category needs a name.");
-  const found = db.deckCategories.find((c) => c.deckId === deckId && c.name === trimmed);
+  const found = db.deckCategories.find(
+    (c) => c.deckId === deckId && c.variant === variant && c.name === trimmed,
+  );
   if (found) return found;
   const row: FakeDeckCategory = {
     id: nextId(db.deckCategories),
     deckId,
+    variant,
     name: trimmed,
     // Always `main`: every category a user makes is one, which is why `PREDEFINED_CATEGORIES`
     // has no `main` row to collide with.
     kind: "main",
     isActive: true,
-    sortOrder: nextSortOrder(db, deckId),
+    sortOrder: nextSortOrder(db, deckId, variant),
     origin: "auto",
   };
   db.deckCategories.push(row);
   return row;
 }
 
-/** `coalesce(max(sort_order), -1) + 1` over one deck's categories — where the next one goes. */
-function nextSortOrder(db: FakeDb, deckId: number): number {
+/** `coalesce(max(sort_order), -1) + 1` over one list's categories — where the next one goes.
+ *  Per list since v53, because each list keeps its own order. */
+function nextSortOrder(db: FakeDb, deckId: number, variant: DeckVariant): number {
   return db.deckCategories
-    .filter((c) => c.deckId === deckId)
+    .filter((c) => c.deckId === deckId && c.variant === variant)
     .reduce((n, c) => Math.max(n, c.sortOrder + 1), 0);
 }
 
@@ -14113,19 +14226,28 @@ function nextSortOrder(db: FakeDb, deckId: number): number {
  * it has.
  *
  * Idempotent by construction: each kind is checked before it is inserted, so a second call
- * writes nothing. `deck_create` is the one caller here, as it is the one caller there; a deck
- * that exists but can be filed into nothing is a state nothing downstream expects.
+ * writes nothing. **Per list since v53** — each of a deck's two lists has its own four zones.
+ * `deck_create` seeds `live` always and `theory` too when the deck is born with the plan on;
+ * `deck_update` switching the plan on seeds `theory`. A list that exists but can be filed into
+ * nothing is a state nothing downstream expects.
  */
-function ensurePredefinedCategories(db: FakeDb, deckId: number): void {
+function ensurePredefinedCategories(db: FakeDb, deckId: number, variant: DeckVariant): void {
   for (const [kind, name, isActive] of PREDEFINED_CATEGORIES) {
-    if (db.deckCategories.some((c) => c.deckId === deckId && c.kind === kind)) continue;
+    if (
+      db.deckCategories.some(
+        (c) => c.deckId === deckId && c.variant === variant && c.kind === kind,
+      )
+    ) {
+      continue;
+    }
     db.deckCategories.push({
       id: nextId(db.deckCategories),
       deckId,
+      variant,
       name,
       kind,
       isActive,
-      sortOrder: nextSortOrder(db, deckId),
+      sortOrder: nextSortOrder(db, deckId, variant),
       // `user`, like the panel's create and unlike the add path's find-or-create. These four are
       // the deck's fixed zones rather than piles the app filed something into, and three of them
       // draw empty for reasons of their own — so marking them `auto` would make the Sideboard of
@@ -14178,15 +14300,18 @@ function refuseIfPredefined(category: FakeDeckCategory): void {
   if (category.kind !== "main") throw refuse(predefinedRefusal(category.name));
 }
 
-/** `EXISTS(… WHERE deck_id = ?1 AND name = ?2 AND id <> ?3)` — the grain check both the
- *  category create and the rename run, and the label pair's twin one table over. */
+/** `EXISTS(… WHERE deck_id = ?1 AND variant = ?2 AND name = ?3 AND id <> ?4)` — the grain
+ *  check both the category create and the rename run, within the one list the pile is in. */
 function nameIsTaken(
-  rows: { deckId: number; name: string; id: number }[],
+  rows: FakeDeckCategory[],
   deckId: number,
+  variant: DeckVariant,
   name: string,
   except: number | null,
 ): boolean {
-  return rows.some((r) => r.deckId === deckId && r.name === name && r.id !== except);
+  return rows.some(
+    (r) => r.deckId === deckId && r.variant === variant && r.name === name && r.id !== except,
+  );
 }
 
 function labelById(db: FakeDb, id: number): FakeDeckLabel | undefined {
@@ -14223,7 +14348,7 @@ function wishFolderById(db: FakeDb, id: number): FakeWishlistFolder | undefined 
  * **The other half — Rust rewriting the folder — is {@link settleManagedWishlist}, run on part of
  * what the crate's dirty triggers watch**: a change to the deck row's own four columns (its name,
  * its theory switch, its kind, its mode — `deck_update`), the deck's delete, an undo or a redo,
- * and since user schema v54 every token write (managed tokens spec §3.8). **A card write does not
+ * and since user schema v55 every token write (managed tokens spec §3.8). **A card write does not
  * settle here**, which is this fake's standing gap rather than the crate's: the seeded rows stand
  * in for the folder's answer at rest, and a story that edits a card of deck 4 will not see its
  * folder follow until one of those presses does.
@@ -14232,7 +14357,7 @@ const MANAGED_WISHLIST = "A managed wishlist follows its deck, so it can't be ed
 
 /**
  * `managed_wishlist::MODES` — `off`, the Compare dialog's three views, and **`tokens`** since user
- * schema v54 (managed tokens spec §3.8): the words `decks.managed_wishlist_mode` may hold.
+ * schema v55 (managed tokens spec §3.8): the words `decks.managed_wishlist_mode` may hold.
  */
 const MANAGED_WISHLIST_MODES: readonly ManagedWishlistMode[] = [
   "off",
@@ -14242,7 +14367,7 @@ const MANAGED_WISHLIST_MODES: readonly ManagedWishlistMode[] = [
   "tokens",
 ];
 
-/** `managed_wishlist::BAD_MODE`, with v54's fifth word — what a patch naming any other is told. */
+/** `managed_wishlist::BAD_MODE`, with v55's fifth word — what a patch naming any other is told. */
 const MANAGED_BAD_MODE =
   "A managed wishlist follows All, Missing, Different printing, Tokens or nothing.";
 
@@ -14270,7 +14395,7 @@ interface ManagedWant {
 }
 
 /**
- * `deck_theory::wanted`, split in two for v54 — **what the deck's folder holds, and what its
+ * `deck_theory::wanted`, split in two for v55 — **what the deck's folder holds, and what its
  * `Tokens` subfolder holds**, under one mode (managed tokens spec §3.8).
  *
  * The card rows are the Compare view's own, **at that view's own quantity** (issue #512's
@@ -14360,7 +14485,7 @@ function syncManagedWishes(db: FakeDb, folderId: number, wants: readonly Managed
 
 /**
  * `managed_wishlist::settle_deck` — **bring one deck's managed wishlist to what the deck says**,
- * `Tokens` subfolder included (user schema v54, managed tokens spec §3.8).
+ * `Tokens` subfolder included (user schema v55, managed tokens spec §3.8).
  *
  * A deck that is gone, is not a `Theory + Actual` deck, or is `off` keeps no folder: the
  * subfolder's wishes, then the subfolder, then the folder's wishes, then the folder. An eligible
@@ -15103,38 +15228,27 @@ function createDeckGroup(db: FakeDb, deckId: number, name: string): FakeCollecti
 }
 
 /**
- * `deck_theory::seed_from_live` — copy the live list into the theory one, leaving whatever
- * theory already holds alone.
+/**
+ * `deck_theory`'s find-or-create of **the theory pile a live pile corresponds to** (user schema
+ * v53) — the rule {@link moveLiveToTheory} files a card by.
  *
- * `ON CONFLICT … DO NOTHING` on the grain rather than a fold, and the distinction is the whole
- * point: a theory row the user already made is *their plan for that card*, and topping it up
- * with the live count would silently overwrite the very edit the theory list exists to hold.
- * So this is a seed that can also top up — idempotent, never destructive.
- *
- * `labelId` and `needsReview` travel with the copy. A label is the user's word about this card in
- * this deck and a plan inherits it; the flag says the printing left the card database, which is
- * as true of the copy as of the original.
- *
- * **Moves no copies**, and must not: what a deck holds is where its rows physically sit, and a
- * plan that took a card out of a binder would be reserving something nobody has sleeved up.
- *
- * Answers the number of **rows** written, which is what `execute` counts — never copies.
+ * A predefined zone (`kind <> 'main'`) is matched by its **kind**, because the reader may have
+ * renamed either list's Sideboard and it is still the Sideboard; a pile of their own is matched
+ * by **name** within the theory list. A pile that has to be made copies the live one's kind,
+ * `isActive`, `sortOrder` and `origin`, so the plan opens looking like the deck it came from —
+ * and from there the two lists are independent.
  */
-function seedFromLive(db: FakeDb, deckId: number): number {
-  let rows = 0;
-  for (const live of db.deckCards.filter((dc) => dc.deckId === deckId && dc.variant === LIVE)) {
-    const held = db.deckCards.some(
-      (dc) =>
-        dc.deckId === deckId &&
-        dc.variant === "theory" &&
-        dc.categoryId === live.categoryId &&
-        dc.cardId === live.cardId,
-    );
-    if (held) continue;
-    db.deckCards.push({ ...live, id: nextId(db.deckCards), variant: "theory" });
-    rows += 1;
-  }
-  return rows;
+function theoryPileFor(db: FakeDb, live: FakeDeckCategory): FakeDeckCategory {
+  const theory = db.deckCategories.filter(
+    (c) => c.deckId === live.deckId && c.variant === THEORY,
+  );
+  const found =
+    (live.kind !== "main" ? theory.find((c) => c.kind === live.kind) : undefined) ??
+    theory.find((c) => c.name === live.name);
+  if (found) return found;
+  const made: FakeDeckCategory = { ...live, id: nextId(db.deckCategories), variant: THEORY };
+  db.deckCategories.push(made);
+  return made;
 }
 
 /**
@@ -15142,9 +15256,9 @@ function seedFromLive(db: FakeDb, deckId: number): number {
  * rather than a copy.
  *
  * The deck the reader built *becomes* the plan: every `live` row changes variant, and the live
- * list is left **empty**. That is the whole difference from {@link seedFromLive}, which copies
- * and leaves both lists holding the same cards — and it is a difference about what the two
- * lists mean rather than about rows. Enabling the switch is the moment a reader says "this is
+ * list is left **empty**. That is the whole difference from a copy, which would leave both lists
+ * holding the same cards — and it is a difference about what the two lists mean rather than
+ * about rows. Enabling the switch is the moment a reader says "this is
  * what I am working toward, not what is sleeved up"; a copy would leave a live list nobody had
  * decided was real, and every count on the gallery tile would go on claiming copies for it.
  *
@@ -15158,10 +15272,27 @@ function seedFromLive(db: FakeDb, deckId: number): number {
  *
  * Row ids, tags and `needsReview` travel with the row because it *is* the same row. Answers the
  * number of rows moved.
+ *
+ * **The piles are cloned, not moved** (user schema v53, issue #561). Every live pile gets its
+ * theory counterpart ({@link theoryPileFor}) — all of them, used or not, so the plan opens with
+ * the structure the deck had — and each moved row is filed into its pile's clone. The live piles
+ * stay where they are, now empty, so the Actual list keeps its shape; from here the two lists
+ * are separate versions of the deck and no pile is shared. The step's snapshot holds the deck's
+ * whole category list, so an undo takes the clones back out with the rows.
  */
 function moveLiveToTheory(db: FakeDb, deckId: number): number {
+  const piles = db.deckCategories
+    .filter((c) => c.deckId === deckId && c.variant === LIVE)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+  const clones = new Map<number, number>();
+  for (const pile of piles) clones.set(pile.id, theoryPileFor(db, pile).id);
   const live = db.deckCards.filter((dc) => dc.deckId === deckId && dc.variant === LIVE);
-  for (const row of live) row.variant = "theory";
+  for (const row of live) {
+    row.variant = THEORY;
+    // A row under a pile that has gone is not a row the inner join answers, and nothing here
+    // can produce one — left where it is rather than filed under a guess.
+    row.categoryId = clones.get(row.categoryId) ?? row.categoryId;
+  }
   return live.length;
 }
 
@@ -15188,7 +15319,13 @@ function moveLiveTokensToTheory(db: FakeDb, deckId: number): void {
   }
 }
 
-/** `deck_theory::theory_copies` — copies, not rows. Two printings at 2 and 3 is 5 cards. */
+/**
+ * Copies the theory list holds, summed — copies, not rows. Two printings at 2 and 3 is 5 cards.
+ *
+ * Its one reader is the theory switch's emptiness guard, where `=== 0` stands in for
+ * `deck_theory::theory_is_empty`. The crate's own copy-counting twin went on 2026-09-27 with the
+ * copy-from-live command that was its only caller.
+ */
 function theoryCopies(db: FakeDb, deckId: number): number {
   return db.deckCards
     .filter((dc) => dc.deckId === deckId && dc.variant === "theory")
@@ -15305,6 +15442,25 @@ interface GroupedDiff {
 }
 
 /**
+ * `deck_theory::played_finish` — the finish a deck row plays: its own, or the printing's sole
+ * finish where it stored none (issue #563). The app's own `playedFinish`, borrowed for the reason
+ * the `{X}` test above is: a foil-only Surge Foil stored unsaid in one list and `foil` in the other
+ * is one card to Rust, and a fake that spelled it two ways would draw it on the Compare dialog in
+ * a story while the window did not.
+ */
+function theoryFinish(db: FakeDb, dc: FakeDeckCard): FakeDeckCard["finish"] {
+  const played = playedFinish(dc.finish, cardById(db, dc.cardId)?.finishes ?? null);
+  // Unreachable — `soleFinish` answers `null` rather than `nonfoil` — and spelled anyway, because
+  // a deck's regular copy is `null` and the type says so.
+  return played === "nonfoil" ? null : played;
+}
+
+/** `deck_theory::group_key` over {@link theoryFinish} — the key both theory handlers spell. */
+function theoryKey(db: FakeDb, dc: FakeDeckCard): string {
+  return `${dc.cardId}|${theoryFinish(db, dc) ?? ""}`;
+}
+
+/**
  * `deck_theory::grouped_diff` — cards the **theory** list holds that **live** does not.
  *
  * **One direction only**, which is the design rather than an omission: what live has and theory
@@ -15349,7 +15505,7 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
     const card = cardById(db, dc.cardId);
     // `deck_theory::group_key` — the exact card, in the exact object played. Not the category:
     // where a card sits is placement, not possession.
-    const key = `${dc.cardId}|${dc.finish ?? ""}`;
+    const key = theoryKey(db, dc);
     if (dc.variant !== "theory") {
       held.set(key, (held.get(key) ?? 0) + dc.quantity);
       // An orphan contributes nothing: there is no oracle card to file it under, so a printing
@@ -15374,7 +15530,9 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
           unitPrice: deckPriceAt(db, card, mp),
           setCode: dc.setCode,
           collectorNumber: dc.collectorNumber,
-          finish: dc.finish,
+          // The finish played rather than stored — the half of the key the line reports, and
+          // what `ownedSpare` and a wish are asked about.
+          finish: theoryFinish(db, dc),
           ownedSpare: 0,
           // Filled by the second pass below, once every exact match is known. Zero is already
           // the right answer for an orphan and for a card the deck plays no other copy of.
@@ -16524,8 +16682,8 @@ export function writeHandlers(db: FakeDb) {
       const piles = db.deckCategories.length;
       const category =
         byId !== null
-          ? categoryOfDeck(db, args.deckId, byId)
-          : categoryForName(db, args.deckId, byName!);
+          ? categoryOfDeck(db, args.deckId, LIVE, byId)
+          : categoryForName(db, args.deckId, LIVE, byName!);
       const invented = db.deckCategories.length > piles ? category : null;
       const rollback = () => {
         if (invented === null) return;
@@ -17714,9 +17872,11 @@ export function writeHandlers(db: FakeDb) {
      *   command could not give — a picture off disk was `deck_set_cover_image`, which took a
      *   path *and* a deck id and so could only run afterwards, making the create dialog a
      *   two-step write. `coverCardId` travels here, so it is one again.
-     * - **`theoryEnabled` sets the column and seeds nothing.** The patch seeds the theory list
+     * - **`theoryEnabled` sets the column and seeds no cards.** The patch seeds the theory list
      *   from live on the off → on transition; a deck being born has no live cards to copy, and
-     *   a deck born with the switch already on has made that transition at birth.
+     *   a deck born with the switch already on has made that transition at birth. What it does
+     *   seed is the theory list's four **piles** (user schema v53), because each list keeps its
+     *   own and a plan with no Sideboard to file into is a state nothing downstream expects.
      * - **A deck's birth is exactly one audit row**, however many fields it was born with:
      *   `deck_update` records one per changed field because each of those is an event, and
      *   being born is one event. It is also the only `deck` row whose `from` is null — there
@@ -17803,7 +17963,10 @@ export function writeHandlers(db: FakeDb) {
       // create refused above (a blank name, or a format {@link validFormat} does not know)
       // never reaches this line, which is what leaves the previous answer standing.
       db.lastDeckFormat = row.formatKey;
-      ensurePredefinedCategories(db, row.id);
+      ensurePredefinedCategories(db, row.id, LIVE);
+      // A deck born with its plan on gets the plan's own four as well (v53): each list keeps its
+      // own piles, and a Theory tab with no Sideboard to file into is a state nothing expects.
+      if (row.theoryEnabled) ensurePredefinedCategories(db, row.id, THEORY);
       // **And the group that holds its copies — unless there are no copies to sit in it.** In
       // the same breath as the four categories and for the same reason: a deck that exists
       // without the row saying where its cards sit is a state nothing downstream expects —
@@ -17851,8 +18014,9 @@ export function writeHandlers(db: FakeDb) {
      * **Two guards on that move, and both are about not destroying an edit.** It happens only on
      * the false→true *transition*, and only when the theory list is **empty** — a plan the reader
      * has already started is not something a re-press of the switch may pour the live deck over.
-     * A reader who wants the deck copied into a plan they have already begun asks for it by name:
-     * {@link deck_theory_copy_from_live} still copies, and still skips rather than folding.
+     * Nothing else copies one list into the other either: the explicit copy-from-live command
+     * that used to sit beside this switch never had a caller and was removed on 2026-09-27, so a
+     * plan already begun grows only through the ordinary card writes.
      *
      * **And the third kind, schema v40.** `virtualOnly` and `theoryEnabled` are one three-way
      * choice wearing two columns, so setting either **clears the other in the same write** —
@@ -17873,9 +18037,18 @@ export function writeHandlers(db: FakeDb) {
       const bracket = patch.bracket === undefined ? undefined : validBracket(patch.bracket);
       const tokenMode =
         patch.tokenMode === undefined ? undefined : validTokenMode(patch.tokenMode);
-      // `managed_wishlist::valid_mode`, strict — v54's `tokens` among its five words.
+      // `managed_wishlist::valid_mode`, strict — v55's `tokens` among its five words.
       const managedWishlist =
         patch.managedWishlist === undefined ? undefined : validManagedMode(patch.managedWishlist);
+      // **The deck's default pile is one deck setting and names a live pile** (user schema v53).
+      // Deck settings offers the live list's piles, and the Theory tab resolves the setting by
+      // that pile's *name* among its own — so a theory id stored here would be a setting the
+      // Actual list could never honour. Checked before anything is written.
+      if (patch.defaultCategoryId !== undefined && patch.defaultCategoryId !== 0) {
+        if (categoryById(db, patch.defaultCategoryId)?.variant === THEORY) {
+          throw refuse(CATEGORY_WRONG_LIST);
+        }
+      }
       // The deck's **kind**, resolved once and read by everything below that touches either
       // flag: the two history arms, the live-list move and the group transition. Neither
       // `patch.theoryEnabled` nor `patch.virtualOnly` is read again after this line, which is
@@ -18113,6 +18286,10 @@ export function writeHandlers(db: FakeDb) {
           // not two commands: a reader who pressed one switch made one decision.
           deck.lastVariant = "theory";
         }
+        // The plan's own four zones whenever the switch turns on, moved or not (v53): a plan the
+        // reader had already begun keeps its rows, but a Theory tab with nothing to file into is
+        // still a state nothing expects. Idempotent, so the moved arm's clones stand.
+        if (turnedOn) ensurePredefinedCategories(db, deck.id, THEORY);
       }
       // **Becoming Virtual puts the deck's cardboard back on the reader's desk** (schema v40),
       // and **moves not one `deck_cards` row** — which is the exact opposite of the theory
@@ -18219,7 +18396,7 @@ export function writeHandlers(db: FakeDb) {
       // **The deck's managed wishlist follows the four columns it is made of** — the crate's
       // `mw_deck_upd` trigger watches `name`, `theory_enabled`, `virtual_only` and
       // `managed_wishlist_mode`, and a change to any of them re-settles the folder (and, since
-      // user schema v54, its `Tokens` subfolder). Only on a change, as the trigger only fires on
+      // user schema v55, its `Tokens` subfolder). Only on a change, as the trigger only fires on
       // one, so an untouched patch rewrites nothing.
       if (
         deck.name !== before.name ||
@@ -18374,10 +18551,12 @@ export function writeHandlers(db: FakeDb) {
      * This is the part a "copy the cards" implementation gets wrong invisibly: a card row
      * stores a `category_id`, so copying it verbatim would file the copy's cards under the
      * *original's* categories — and then deleting the original would take the copy's cards
-     * with it through `ON DELETE CASCADE`. Two id maps are what keep a copy a copy.
+     * with it through `ON DELETE CASCADE`. Two id maps are what keep a copy a copy. Each pile
+     * keeps its **variant** through the spread (v53), so the copy's plan has the plan's piles
+     * and its live list the live ones — one map serves both, because an id names one pile.
      *
-     * It is not handed {@link ensurePredefinedCategories}: it inherits the source's four,
-     * because every deck has them.
+     * It is not handed {@link ensurePredefinedCategories}: it inherits the source's four per
+     * list, because every list has them.
      *
      * **The three view-state columns are reset rather than inherited**, and that is Rust's
      * answer rather than a taste: `duplicate_deck` names the columns it copies, and those three
@@ -18503,9 +18682,9 @@ export function writeHandlers(db: FakeDb) {
       const deck = requireDeck(db, args.deckId);
       let category: FakeDeckCategory;
       if (args.categoryId !== null) {
-        category = categoryOfDeck(db, args.deckId, args.categoryId);
+        category = categoryOfDeck(db, args.deckId, variant, args.categoryId);
       } else if (args.categoryName !== null) {
-        category = categoryForName(db, args.deckId, args.categoryName);
+        category = categoryForName(db, args.deckId, variant, args.categoryName);
       } else {
         // Unreachable past the guard above, and written as a second refusal rather than an
         // assertion so that an edit which ever drops that guard answers the sentence instead
@@ -18561,7 +18740,7 @@ export function writeHandlers(db: FakeDb) {
       const variant = validVariant(args.variant);
       validQuantity(args.quantity, "deck quantity");
       const deck = requireDeck(db, args.deckId);
-      const category = categoryOfDeck(db, args.deckId, args.categoryId);
+      const category = categoryOfDeck(db, args.deckId, variant, args.categoryId);
       const row = deckCardAt(
         db,
         args.deckId,
@@ -18587,10 +18766,10 @@ export function writeHandlers(db: FakeDb) {
      * `deck::clear_category` — a pile's right-click **Clear stack**, answering the **copies**
      * it removed.
      *
-     * **One variant**, which is the opposite of `deck_category_delete` below: that one cascades
-     * through both lists because a category is not variant-scoped, and this one leaves the pile
-     * standing so it empties only the list the reader is looking at. The `variant` in the filter
-     * is what a story about a theory-enabled deck exercises.
+     * **One variant**, and since user schema v53 that is the pile's own: a pile belongs to one
+     * list, so a `variant` naming the other is refused ({@link categoryOfDeck}) rather than
+     * clearing nothing. It leaves the pile standing, where `deck_category_delete` below takes it
+     * away.
      *
      * **An empty pile writes nothing at all** — no `updatedAt` — where `deck_set_card_quantity`'s
      * zero arm above deliberately still moves it: that path commits a transaction whatever it
@@ -18609,7 +18788,7 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       const variant = validVariant(args.variant);
       const deck = requireDeck(db, args.deckId);
-      const category = categoryOfDeck(db, args.deckId, args.categoryId);
+      const category = categoryOfDeck(db, args.deckId, variant, args.categoryId);
       const doomed = db.deckCards.filter(
         (dc) =>
           dc.deckId === args.deckId && dc.categoryId === category.id && dc.variant === variant,
@@ -18718,11 +18897,11 @@ export function writeHandlers(db: FakeDb) {
       const finish = normaliseFinish(args.finish);
       if (args.toCategoryId === null && args.toCategoryName === null) throw refuse(NO_CATEGORY);
       const deck = requireDeck(db, args.deckId);
-      const from = categoryOfDeck(db, args.deckId, args.fromCategoryId);
+      const from = categoryOfDeck(db, args.deckId, variant, args.fromCategoryId);
       const to =
         args.toCategoryId !== null
-          ? categoryOfDeck(db, args.deckId, args.toCategoryId)
-          : categoryForName(db, args.deckId, args.toCategoryName!);
+          ? categoryOfDeck(db, args.deckId, variant, args.toCategoryId)
+          : categoryForName(db, args.deckId, variant, args.toCategoryName!);
       // After the resolution, and it writes nothing at all — not even `updatedAt`, which the
       // Rust rolls back with its transaction for the same reason.
       if (from.id === to.id) return to.id;
@@ -18788,7 +18967,7 @@ export function writeHandlers(db: FakeDb) {
       // Before anything else, so a no-op does not move `updatedAt` and resort the gallery.
       if (args.fromCardId === args.toCardId) throw refuse(SAME_PRINTING);
       const deck = requireDeck(db, args.deckId);
-      const category = categoryOfDeck(db, args.deckId, args.categoryId);
+      const category = categoryOfDeck(db, args.deckId, variant, args.categoryId);
       const row = deckCardAt(db, args.deckId, args.fromCardId, category.id, variant, finish);
       if (!row) throw refuse(cardGone(category.name));
       const to = cardById(db, args.toCardId);
@@ -18872,7 +19051,7 @@ export function writeHandlers(db: FakeDb) {
       // Before anything else, so a no-op does not move `updatedAt` and resort the gallery.
       if (from === to) throw refuse(SAME_FINISH);
       const deck = requireDeck(db, args.deckId);
-      const category = categoryOfDeck(db, args.deckId, args.categoryId);
+      const category = categoryOfDeck(db, args.deckId, variant, args.categoryId);
       if (to !== null) {
         const sold = parseFinishes(cardById(db, args.cardId)?.finishes ?? null);
         if (!sold.includes(to)) throw refuse(FINISH_NOT_SOLD);
@@ -19088,8 +19267,12 @@ export function writeHandlers(db: FakeDb) {
           // Asked *before* the find-or-create, because afterwards there is no way to tell a
           // category that was made from one that was already there — and "3 new categories" is
           // a sentence the preview promises.
-          const existed = db.deckCategories.some((c) => c.deckId === deck.id && c.name === name);
-          category = categoryForName(db, deck.id, name);
+          // Within the list being imported into (v53): a name the other list holds is not one
+          // this list has, so it is made here and counts as new.
+          const existed = db.deckCategories.some(
+            (c) => c.deckId === deck.id && c.variant === variant && c.name === name,
+          );
+          category = categoryForName(db, deck.id, variant, name);
           if (!existed) {
             categoriesCreated += 1;
             // Archidekt's `{noDeck}`: the file says this pile counts toward nothing, which is
@@ -19191,8 +19374,10 @@ export function writeHandlers(db: FakeDb) {
     /* ----------------------------------------------- categories, labels and folders ---- */
 
     /**
-     * `deck_meta::create_category` — a new pile, always `kind: "main"`, always active, always
-     * `origin: "user"`, appended after the deck's last one.
+     * `deck_meta::create_category` — a new pile **in one of the deck's two lists**, always
+     * `kind: "main"`, always active, always `origin: "user"`, appended after that list's last one.
+     * `variant` is the only category write that names a list, because it is the only one with
+     * no pile of its own yet to take the list from (user schema v53).
      *
      * **The reader pressed a button to get here**, which is the whole of what `origin` records
      * and the opposite of {@link categoryForName}'s answer. A pile made this way draws for as
@@ -19202,29 +19387,35 @@ export function writeHandlers(db: FakeDb) {
      * The duplicate check runs **before** the deck is touched: a refused create should not move
      * `updated_at` and resort the gallery over a write that never happened.
      */
-    deck_category_create: (args: { deckId: number; name: string }): DeckCategory => {
+    deck_category_create: (args: {
+      deckId: number;
+      variant: DeckVariant;
+      name: string;
+    }): DeckCategory => {
       refuseIfBusy(db);
+      const variant = validVariant(args.variant);
       const name = validMetaName(args.name, "A category");
-      if (nameIsTaken(db.deckCategories, args.deckId, name, null)) {
+      if (nameIsTaken(db.deckCategories, args.deckId, variant, name, null)) {
         throw refuse(CATEGORY_NAME_TAKEN);
       }
       const deck = requireDeck(db, args.deckId);
       const category: FakeDeckCategory = {
         id: nextId(db.deckCategories),
         deckId: deck.id,
+        variant,
         name,
         kind: "main",
         isActive: true,
-        sortOrder: nextSortOrder(db, deck.id),
+        sortOrder: nextSortOrder(db, deck.id, variant),
         origin: "user",
       };
       db.deckCategories.push(category);
       recordCategory(db, deck.id, { action: "create", name });
       deck.updatedAt = stamp(db);
-      // `LIVE` and the default marketplace, both for one reason: a category **write** carries
-      // neither, so the row it answers with is a courtesy rather than the read the panel then
-      // does. Every caller invalidates and re-reads through its own variant and marketplace.
-      return toDeckCategory(db, category, LIVE, DEFAULT_MARKETPLACE);
+      // The pile's own list and the default marketplace: a category **write** carries no
+      // marketplace, so the row it answers with is a courtesy rather than the read the panel then
+      // does. Every caller invalidates and re-reads through its own marketplace.
+      return toDeckCategory(db, category, category.variant, DEFAULT_MARKETPLACE);
     },
 
     /**
@@ -19239,7 +19430,8 @@ export function writeHandlers(db: FakeDb) {
       const name = validMetaName(args.name, "A category");
       const category = requireCategory(db, args.id);
       refuseIfPredefined(category);
-      if (nameIsTaken(db.deckCategories, category.deckId, name, category.id)) {
+      // Unique within the pile's own list (v53) — the other list may hold the same word.
+      if (nameIsTaken(db.deckCategories, category.deckId, category.variant, name, category.id)) {
         throw refuse(CATEGORY_NAME_TAKEN);
       }
       const deck = requireDeck(db, category.deckId);
@@ -19247,10 +19439,8 @@ export function writeHandlers(db: FakeDb) {
       category.name = name;
       recordCategory(db, deck.id, { action: "rename", name, previousName });
       deck.updatedAt = stamp(db);
-      // `LIVE` and the default marketplace, both for one reason: a category **write** carries
-      // neither, so the row it answers with is a courtesy rather than the read the panel then
-      // does. Every caller invalidates and re-reads through its own variant and marketplace.
-      return toDeckCategory(db, category, LIVE, DEFAULT_MARKETPLACE);
+      // The pile's own list and the default marketplace — {@link deck_category_create}'s reason.
+      return toDeckCategory(db, category, category.variant, DEFAULT_MARKETPLACE);
     },
 
     /**
@@ -19276,10 +19466,8 @@ export function writeHandlers(db: FakeDb) {
         name: category.name,
       });
       deck.updatedAt = stamp(db);
-      // `LIVE` and the default marketplace, both for one reason: a category **write** carries
-      // neither, so the row it answers with is a courtesy rather than the read the panel then
-      // does. Every caller invalidates and re-reads through its own variant and marketplace.
-      return toDeckCategory(db, category, LIVE, DEFAULT_MARKETPLACE);
+      // The pile's own list and the default marketplace — {@link deck_category_create}'s reason.
+      return toDeckCategory(db, category, category.variant, DEFAULT_MARKETPLACE);
     },
 
     /**
@@ -19293,20 +19481,30 @@ export function writeHandlers(db: FakeDb) {
      * The history names no category, because every one of them moved: there is no "from" and no
      * "to" that is about one pile, and listing the whole order would be storing the state rather
      * than the change.
+     *
+     * **One list at a time** (user schema v53): the ids that match must all be piles of one
+     * variant, and a list mixing Actual's with Theory's is refused before anything is written —
+     * each list keeps its own order, so a mixed one describes no order either list has. The list
+     * answered is that variant's; a reorder whose every id was stale answers the live list.
      */
     deck_category_reorder: (args: { deckId: number; ids: number[] }): DeckCategory[] => {
       refuseIfBusy(db);
       const deck = requireDeck(db, args.deckId);
-      args.ids.forEach((id, at) => {
-        const category = db.deckCategories.find((c) => c.id === id && c.deckId === deck.id);
+      const piles = args.ids.map((id) =>
+        db.deckCategories.find((c) => c.id === id && c.deckId === deck.id),
+      );
+      const variants = new Set(piles.flatMap((c) => (c ? [c.variant] : [])));
+      if (variants.size > 1) throw refuse(CATEGORY_MIXED_LISTS);
+      const variant = [...variants][0] ?? LIVE;
+      piles.forEach((category, at) => {
         if (category) category.sortOrder = at;
       });
       recordCategory(db, deck.id, { action: "reorder" });
       deck.updatedAt = stamp(db);
       return db.deckCategories
-        .filter((c) => c.deckId === deck.id)
+        .filter((c) => c.deckId === deck.id && c.variant === variant)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
-        .map((c) => toDeckCategory(db, c, LIVE, DEFAULT_MARKETPLACE));
+        .map((c) => toDeckCategory(db, c, variant, DEFAULT_MARKETPLACE));
     },
 
     /**
@@ -19318,10 +19516,11 @@ export function writeHandlers(db: FakeDb) {
      * loud. One command for both, because a caller doing the move and the delete as two round
      * trips could lose the cards between them.
      *
-     * The move covers **both variants**, folding on the grain, so a `live` row and a `theory`
-     * row of one printing land in their own matching rows in the target and never in each
-     * other. A row the target already holds keeps its own `labelId` and `needsReview` — the
-     * existing row wins a fold.
+     * The move stays **within the pile's own list** (user schema v53): the target must be a pile
+     * of the same deck *and* the same variant ({@link CATEGORY_WRONG_LIST}), because a pile holds
+     * one list's cards and a move into the other list's would file them where no tab draws them.
+     * It folds on the grain, and a row the target already holds keeps its own `labelId` and
+     * `needsReview` — the existing row wins a fold.
      *
      * The card count in the history is taken **before** anything moves, in copies rather than
      * rows: two printings at 2 and 3 is 5 cards, which is what the dialog warned about and the
@@ -19340,6 +19539,7 @@ export function writeHandlers(db: FakeDb) {
         const target = categoryById(db, args.moveToCategoryId);
         if (!target) throw refuse(CATEGORY_GONE);
         if (target.deckId !== category.deckId) throw refuse(CATEGORY_WRONG_DECK);
+        if (target.variant !== category.variant) throw refuse(CATEGORY_WRONG_LIST);
       }
       const deck = requireDeck(db, category.deckId);
       const held = db.deckCards.filter((dc) => dc.categoryId === category.id);
@@ -20075,37 +20275,6 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_theory::copy_from_live` — seed the theory list from the live one, answering how many
-     * **rows** were written.
-     *
-     * **The one command that still copies**, and the reason it is worth having beside
-     * {@link moveLiveToTheory}: switching the plan on *moves* the deck into it, while this
-     * duplicates a live list that stays exactly where it is. It is what a reader reaches for to
-     * start a plan again from what is sleeved up, and it is the only way to fill a plan that
-     * already has something in it — the switch refuses to touch one of those on purpose.
-     *
-     * It folds nothing and overwrites nothing: a theory row the reader already made is their
-     * plan for that card.
-     *
-     * **Records exactly one history row**, kind `deck`, field `theory`, carrying the *copies* it
-     * added in both the payload and `delta` — which makes it the one `deck`-kind row that can
-     * move the day header's arithmetic, by up to ninety-nine. One row and not one per card: N
-     * `add` rows would read as a deck somebody typed out.
-     */
-    deck_theory_copy_from_live: (args: { deckId: number }): number => {
-      refuseIfBusy(db);
-      const deck = requireDeck(db, args.deckId);
-      // Measured either side of the insert rather than derived from its row count: a row is a
-      // line and a copy is a card, and this app counts decks in cards everywhere else.
-      const before = theoryCopies(db, deck.id);
-      const rows = seedFromLive(db, deck.id);
-      const copied = theoryCopies(db, deck.id) - before;
-      record(db, deck.id, "theory", "deck", null, { field: "theory", copied }, copied);
-      deck.updatedAt = stamp(db);
-      return rows;
-    },
-
-    /**
      * `deck_theory::missing_to_wishlist` — everything the **plan** is short of, onto the
      * wishlist, answering how many wishes were touched.
      *
@@ -20404,7 +20573,7 @@ export function writeHandlers(db: FakeDb) {
      * **The refusal is the half a fake is easiest to get wrong by leaving out**, and the one
      * this file's job description is about: the read side falls back on a mode it does not
      * know, so a fake that accepted any string would let a story save `"rarity"`, read back
-     * `"artist"`, and look like it worked — the exact bug the backend's validation exists to
+     * `"released"`, and look like it worked — the exact bug the backend's validation exists to
      * make impossible. `card::store_group_by`'s sentence, verbatim.
      *
      * It honours `busy` like every other ordinary write here — the command takes the write
@@ -23508,7 +23677,7 @@ function undoHandlers(db: FakeDb) {
       // moved the deck's cards reconciles its tokens, and those deletions sit in no step.
       backstopping(db, () => restoreDeck(db, args.deckId, cursor.before));
       // And the managed wishlist settles after it, as `with_write`'s settle does after any write
-      // its triggers saw — a step putting a token entry back is one (user schema v54).
+      // its triggers saw — a step putting a token entry back is one (user schema v55).
       settleManagedWishlist(db, args.deckId);
       // Strictly increasing within the deck, `deck_undo::apply_reversal`'s rule: `nextRedo` reads
       // it as an ordinal, and two undos inside one tick of `stamp` would otherwise tie.

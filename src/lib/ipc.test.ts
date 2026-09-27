@@ -1269,10 +1269,9 @@ describe("ipc argument names match the Rust command signatures", () => {
   it("sends every category command under the name its command declares", async () => {
     invoke.mockResolvedValue([]);
     await ipc.deckCategoryList(4, "theory", "manapool");
-    // The variant scopes the two **counts** on each row and nothing else — the list of
-    // categories is the same either way, which is what keeps the editor's columns still while
-    // the reader switches lists. The marketplace scopes one of those two numbers: `totalPrice`
-    // is a sum *at* a marketplace, and two of them are not conversions of each other.
+    // The variant picks which list's piles come back — each list has its own since user schema
+    // v53 (issue #561). The marketplace scopes one of the two numbers on each: `totalPrice` is a
+    // sum *at* a marketplace, and two of them are not conversions of each other.
     expect(invoke).toHaveBeenCalledWith("deck_category_list", {
       deckId: 4,
       variant: "theory",
@@ -1280,8 +1279,13 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
 
     invoke.mockResolvedValue({ id: 7 });
-    await ipc.deckCategoryCreate(4, "Ramp");
-    expect(invoke).toHaveBeenCalledWith("deck_category_create", { deckId: 4, name: "Ramp" });
+    await ipc.deckCategoryCreate(4, "theory", "Ramp");
+    // A pile is made in one list — the variant is part of its grain, not a filter on its counts.
+    expect(invoke).toHaveBeenCalledWith("deck_category_create", {
+      deckId: 4,
+      variant: "theory",
+      name: "Ramp",
+    });
 
     await ipc.deckCategoryRename(7, "Acceleration");
     // `id`, not `deckId`: a category names its own deck, so a rename does not.
@@ -1781,11 +1785,6 @@ describe("ipc argument names match the Rust command signatures", () => {
     // The crate is read for the shape rather than trusted — `deck_theory_diff`'s rule above.
     expect(deckTheoryRs.length).toBeGreaterThan(1_000);
     expect(deckTheoryRs).toContain("pub name_key: Option<String>,");
-
-    invoke.mockResolvedValue(12);
-    const copied = await ipc.deckTheoryCopyFromLive(4);
-    expect(invoke).toHaveBeenCalledWith("deck_theory_copy_from_live", { deckId: 4 });
-    expect(copied).toBe(12);
 
     invoke.mockResolvedValue(3);
     const wishes = await ipc.deckTheoryMissingToWishlist(4);
@@ -2367,16 +2366,20 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The status read and the refresh, and the two traps between them.
+   * The status read, and the two traps in it.
    *
    * `oracle_tags_status` takes **no arguments** — `prewarm_collection`'s trap, where an argument
-   * object is a deserialization error rather than a type error the compiler could have caught —
-   * while `oracle_tags_refresh` spells its one argument `force`, exactly as `sync_run` does one
-   * dataset over. And the fields are the second half: `ingestedAt` and `checkedAt` are separate
-   * columns because a 304 moves only the latter, so a mirror that folded them into one would
-   * make an up-to-date taxonomy read as due on every launch and cost an API call per start.
+   * object is a deserialization error rather than a type error the compiler could have caught.
+   * And the fields are the second half: `ingestedAt` and `checkedAt` are separate columns
+   * because a 304 moves only the latter, so a mirror that folded them into one would make an
+   * up-to-date taxonomy read as due on every launch and cost an API call per start.
+   *
+   * The refresh that used to share this case went with its wrapper on 2026-09-27 — nothing but
+   * this file and one story ever called `ipc.oracleTagsRefresh`. The command's `force` spelling is
+   * still pinned where the command is still sent: `src/workers/db.test.ts` and
+   * `src/lib/core/browser.test.ts`.
    */
-  it("asks for the tag status with no arguments and sends the throttle override under `force`", async () => {
+  it("asks for the tag status with no arguments", async () => {
     const status = {
       updatedAt: "2026-08-11T09:04:16.113+00:00",
       ingestedAt: 1_800_000_000,
@@ -2398,27 +2401,18 @@ describe("ipc argument names match the Rust command signatures", () => {
     // The two stamps are apart by design — the ordinary state of a taxonomy whose last check
     // was a 304 — and nothing here may collapse them.
     expect(read.checkedAt).not.toBe(read.ingestedAt);
-
-    invoke.mockResolvedValue({ ...status, stale: false });
-    await ipc.oracleTagsRefresh(true);
-    expect(invoke).toHaveBeenCalledWith("oracle_tags_refresh", { force: true });
-
-    // `false` must travel as a key: Tauri fills parameters by name and an absent one is a
-    // refusal, not a default.
-    await ipc.oracleTagsRefresh(false);
-    expect(invoke).toHaveBeenCalledWith("oracle_tags_refresh", { force: false });
   });
 
   /**
-   * The **art** taxonomy's pair, which is the oracle pair's shape under different command names
-   * and one different event channel — and that last one is the trap.
+   * The **art** taxonomy's status and progress, which are the oracle pair's shape under a
+   * different command name and one different event channel — and that last one is the trap.
    *
    * `oracle-tags:progress` and `art-tags:progress` are two channels because either taxonomy may
    * be refreshing while the other is, so a listener wired to the wrong one is a progress bar that
    * never moves and never errors. Both payloads are the same `tags::TagProgress`, which is
    * exactly what makes the mistake invisible to the compiler.
    */
-  it("reads the art tag status, forces its refresh, and listens on its own channel", async () => {
+  it("reads the art tag status and listens on its own channel", async () => {
     const status = {
       updatedAt: "2026-08-20T09:12:44.207+00:00",
       ingestedAt: 1_800_000_000,
@@ -2432,9 +2426,6 @@ describe("ipc argument names match the Rust command signatures", () => {
 
     expect(await ipc.artTagsStatus()).toEqual(status);
     expect(invoke).toHaveBeenCalledWith("art_tags_status");
-
-    await ipc.artTagsRefresh(true);
-    expect(invoke).toHaveBeenCalledWith("art_tags_refresh", { force: true });
 
     let emit: ((evt: { payload: ArtTagProgressEvent }) => void) | undefined;
     listen.mockImplementation(
@@ -4682,9 +4673,11 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     expect([...tsPredicate].sort()).toEqual([...rustPredicate].sort());
 
     const fields = rustVariants(cardFiltersRs, "PredicateField").map(variantName);
-    expect(fields).toHaveLength(12);
+    expect(fields).toHaveLength(13);
     expect(fields).toContain("typeLine");
     expect(fields).toContain("cmc");
+    // The one field no keyword names — a leading `-` on free text (issue #571).
+    expect(fields).toContain("name");
     expect([...tsUnion(ipcSource, "PredicateField")].sort()).toEqual([...fields].sort());
 
     const ops = rustVariants(cardFiltersRs, "PredicateOp").map(variantName);
@@ -5373,7 +5366,7 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   });
 
   /**
-   * **`managedTokens` on both sides of the wishlist folder** (user schema v54) — named for
+   * **`managedTokens` on both sides of the wishlist folder** (user schema v55) — named for
    * `isToken`'s reason one test up. A folder with no `managedTokens` reads `undefined`, which is
    * falsy, so every deck's Tokens child would be listed among the managed folders by name — one
    * indistinguishable `Tokens` row per deck — and nothing would say why.

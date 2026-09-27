@@ -86,7 +86,7 @@ const WISHES = [BUY_SOON, STAPLES, LATER];
 
 /**
  * A deck's **managed** wishlist folder at the root and its `Tokens` child inside it (managed tokens
- * spec §3.8, user schema v54) — the child is `Tokens` on every deck, which is the whole reason the
+ * spec §3.8, user schema v55) — the child is `Tokens` on every deck, which is the whole reason the
  * cases that use these exist. The child's id is the parent's plus one.
  */
 function deckWishFolders(id: number, name: string, deckId: number): WishlistFolder[] {

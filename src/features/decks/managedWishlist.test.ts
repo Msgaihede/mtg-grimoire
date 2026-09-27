@@ -12,7 +12,7 @@ import {
  */
 describe("the managed wishlist's modes", () => {
   /**
-   * **`tokens` since user schema v54** (managed tokens spec §3.8): the choices follow Compare's
+   * **`tokens` since user schema v55** (managed tokens spec §3.8): the choices follow Compare's
    * views, and Compare gained `Tokens` last — so the group paints it last, after the three views
    * it already offered, in the dialog's own order.
    */

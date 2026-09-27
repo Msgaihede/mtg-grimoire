@@ -19,7 +19,7 @@ const folder = (over: Partial<WishlistFolder> & Pick<WishlistFolder, "id" | "nam
 });
 
 /**
- * **A managed wishlist's Tokens child** (user schema v54) — the deck's like its parent, so no
+ * **A managed wishlist's Tokens child** (user schema v55) — the deck's like its parent, so no
  * destination offers it and every wish in it is the deck's; but **not** a managed folder of its own
  * in a list of them by name, where every deck's would read `Tokens` and nothing would tell them
  * apart. Its parent is what names it.

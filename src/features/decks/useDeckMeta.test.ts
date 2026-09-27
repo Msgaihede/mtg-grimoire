@@ -52,9 +52,7 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
     sortOrder: 0,
     cardCount: 0,
     totalPrice: null,
-    // Both lists, defaulting to the one-list count — the shape the backend can produce. Only
-    // the delete confirmation reads it.
-    cardCountAllVariants: over.cardCount ?? 0,
+    variant: "live",
     ...over,
   };
 }
@@ -270,15 +268,18 @@ describe("useDeckMeta", () => {
   });
 
   /**
-   * **The variant scopes the counts and nothing else**, and it is in the key so the two
+   * **The variant picks which list's piles these are**, and it is in the key so the two
    * answers are cached side by side rather than one replacing the other.
    *
-   * Which categories a deck has, what they are called and what order they are in are facts
-   * about the *deck*; only `cardCount` and `totalPrice` are about one of its two lists. So a
-   * Live/Theory switch changes the numbers in the headings, never the headings.
+   * Each list has piles of its own since user schema v53 (issue #561) — Theory and Actual are
+   * separate versions of the deck — so a Live/Theory switch can change the headings as well as
+   * the numbers in them. Here the plan has no Removal column at all.
    */
-  it("caches each variant's counts under its own key", async () => {
-    const theory = [{ ...MAIN, cardCount: 1 }, REMOVAL, MAYBE];
+  it("caches each list's piles under its own key", async () => {
+    const theory = [
+      category({ id: 11, name: "Main deck", cardCount: 1, variant: "theory" }),
+      category({ id: 13, name: "Maybeboard", kind: "maybe", isActive: false, variant: "theory" }),
+    ];
     deckCategoryList.mockImplementation((_id: number, variant: string) =>
       Promise.resolve(variant === "theory" ? theory : [MAIN, REMOVAL, MAYBE]),
     );
@@ -306,7 +307,7 @@ describe("useDeckMeta", () => {
     await waitFor(() => expect(result.current.categories).toHaveLength(3));
 
     await result.current.createCategory.mutateAsync("Creature");
-    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Creature");
+    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "live", "Creature");
 
     // `id`, not `deckId`: a category names its own deck, so the three writes about **one**
     // category do not repeat it.
@@ -328,6 +329,22 @@ describe("useDeckMeta", () => {
     // cards go with the category by cascade.
     await result.current.deleteCategory.mutateAsync({ id: 2, moveToCategoryId: null });
     expect(deckCategoryDelete).toHaveBeenCalledWith(2, null);
+  });
+
+  /**
+   * **A pile is made in the list the reader is standing in** (issue #561). Before v53 the create
+   * carried no variant and the pile was the deck's, so a column made on the Theory tab turned up
+   * as an empty `user` heading on Actual — drawn, because `drawsWhenEmpty` keeps a pile the
+   * reader asked for.
+   */
+  it("makes a new pile in the hook's own list", async () => {
+    const { result } = renderHook(() => useDeckMeta(4, "theory"), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(3));
+
+    await result.current.createCategory.mutateAsync("Ramp");
+
+    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "theory", "Ramp");
+    expect(deckCategoryCreate).not.toHaveBeenCalledWith(4, "live", "Ramp");
   });
 
   it("sends every label write to the command that owns it", async () => {
@@ -412,7 +429,7 @@ describe("useDeckMeta.autoCategorise", () => {
     // The deck already has a Removal column, so the tagged card joins it rather than making a
     // second one; the untagged one gets the type pile it has always got.
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p5", MAIN.id, REMOVAL.id, null, "live", null);
-    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Creature");
+    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "live", "Creature");
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 40, null, "live", null);
   });
 
@@ -432,8 +449,8 @@ describe("useDeckMeta.autoCategorise", () => {
     ]);
 
     expect(moved).toBe(1);
-    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Land");
-    expect(deckCategoryCreate).not.toHaveBeenCalledWith(4, "Tutor");
+    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "live", "Land");
+    expect(deckCategoryCreate).not.toHaveBeenCalledWith(4, "live", "Tutor");
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p6", MAIN.id, 43, null, "live", null);
   });
 
@@ -527,8 +544,8 @@ describe("useDeckMeta.autoCategorise", () => {
     const moved = await result.current.autoCategorise.mutateAsync([CREATURE, LAND]);
 
     expect(moved).toBe(2);
-    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Creature");
-    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Land");
+    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "live", "Creature");
+    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "live", "Land");
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 40, null, "live", null);
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, 41, null, "live", null);
   });
@@ -699,6 +716,25 @@ describe("useDeckMeta.autoCategorise", () => {
 
     expect(moved).toBe(0);
     expect(deckMoveCard).not.toHaveBeenCalled();
+  });
+
+  /** On the Theory tab the press reads the plan's piles and makes any it lacks **in the plan** —
+   *  the Actual list's piles are another version of the deck and are neither read nor grown. */
+  it("reads and makes the piles of the list it was opened on", async () => {
+    const PLAN_MAIN = category({ id: 21, name: "Main deck", variant: "theory" });
+    deckCategoryList.mockResolvedValue([PLAN_MAIN]);
+    deckCategoryCreate.mockResolvedValue(category({ id: 44, name: "Creature", variant: "theory" }));
+    const { result } = renderHook(() => useDeckMeta(4, "theory"), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(1));
+
+    const moved = await result.current.autoCategorise.mutateAsync([
+      card({ ...CREATURE, variant: "theory", categoryId: PLAN_MAIN.id }),
+    ]);
+
+    expect(moved).toBe(1);
+    expect(deckCategoryList).toHaveBeenLastCalledWith(4, "theory", "tcgplayer");
+    expect(deckCategoryCreate).toHaveBeenCalledWith(4, "theory", "Creature");
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", PLAN_MAIN.id, 44, null, "theory", null);
   });
 
   /**

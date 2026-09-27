@@ -233,7 +233,19 @@ pub const TABLES: [Spec; 17] = [
     Spec {
         table: "deck_categories",
         keys: &["id"],
-        fields: &["name", "kind", "is_active", "sort_order", "origin"],
+        // **`variant` since user schema v53**, first as it is on `deck_cards`: a pile belongs to
+        // one list of its deck, and a theory `Ramp` and a live one are two rows that must stay
+        // two on the far device. `apply`'s grains name it for that reason. An older sender's op
+        // carries none, and its insert lands in the column's `'live'` default — which is what
+        // every pile was before the rung.
+        fields: &[
+            "variant",
+            "name",
+            "kind",
+            "is_active",
+            "sort_order",
+            "origin",
+        ],
         counters: &[],
         parents: &[Parent {
             key: "deck",
@@ -850,7 +862,7 @@ fn update_trigger(spec: &Spec) -> String {
     )
 }
 
-/// The delete trigger: a tombstone, and nothing else in it.
+/// The delete trigger: a `del` op, and nothing else in it.
 fn delete_trigger(spec: &Spec) -> String {
     let t = spec.table;
     let body = emit(
@@ -873,8 +885,8 @@ fn delete_trigger(spec: &Spec) -> String {
 
 /// Every table some spec names as a parent — the tables other rows are filed under, and so the
 /// only ones [`crate::sync_engine::apply`]'s `gone` is ever asked about. **Read off [`TABLES`]
-/// rather than listed**, so a synced table that grows a child is tombstoned the day its spec says
-/// so.
+/// rather than listed**, so a deleted row of a synced table that grows a child leaves a
+/// `sync_gone` tombstone the day its spec says so.
 pub(crate) fn parent_tables() -> Vec<&'static str> {
     let mut out: Vec<&'static str> = Vec::new();
     for spec in &TABLES {
@@ -887,7 +899,8 @@ pub(crate) fn parent_tables() -> Vec<&'static str> {
     out
 }
 
-/// The tombstone trigger: every delete of a parent row, whatever made it.
+/// The trigger that writes a `sync_gone` tombstone (not a `del` op): every delete of a parent row,
+/// whatever made it.
 ///
 /// **Not gated on [`GUARD`], and that is the point of it.** A delete an apply makes runs behind
 /// the guard, and so does every cascade it sets off — which is why, before this, a delete a peer
@@ -924,9 +937,10 @@ const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
 /// that changed the generator and shipped `IF NOT EXISTS` would leave every existing database
 /// running last year's rules forever, silently, and a bug fixed here would reach nobody who
 /// already had the app. Dropping and creating every one at open — an insert trigger per
-/// [`TABLES`] entry, an update and a delete for every one but `deck_audit`, a tombstone trigger
-/// per [`parent_tables`] entry, and the clock — is a fraction of a millisecond. (This carried a
-/// count, and said thirty-seven while the array made forty-seven; the array is the count.)
+/// [`TABLES`] entry, an update and a delete for every one but `deck_audit`, a trigger per
+/// [`parent_tables`] entry writing a `sync_gone` tombstone (not a `del` op), and the clock — is a
+/// fraction of a millisecond. (This carried a count, and said thirty-seven while the array made
+/// forty-seven; the array is the count.)
 ///
 /// **The tombstone triggers are the one kind here that is not capture**: they write
 /// `sync_gone` rather than `sync_ops`, on every device and behind the apply guard as well, so a
@@ -952,7 +966,7 @@ pub fn install(conn: &Connection) -> rusqlite::Result<()> {
 /// Read one `sync_ops` row as an [`Op`](super::merge::Op).
 ///
 /// **One reader, two callers**, and they must not drift: [`super::apply`] loads this device's
-/// own history for a row so that add-wins can compare a remote tombstone against a local edit,
+/// own history for a row so that add-wins can compare a remote `del` op against a local edit,
 /// and [`super::client`] drains the unpushed tail. The column order below is the order both
 /// their `SELECT`s use, and `OPS_SELECT` is what keeps that true.
 pub const OPS_SELECT: &str =
@@ -1976,9 +1990,9 @@ mod tests {
         );
     }
 
-    /// A delete writes a tombstone.
+    /// A delete writes one `del` op.
     #[test]
-    fn a_delete_writes_one_tombstone() {
+    fn a_delete_writes_one_del_op() {
         let conn = db();
         conn.execute(
             "INSERT INTO decks (name, format_key, created_at, updated_at)
@@ -1995,10 +2009,10 @@ mod tests {
         let o = ops(&conn);
         assert_eq!(o.len(), 1);
         assert_eq!(o[0].1, "del");
-        let tombstone: String = conn
+        let deleted: String = conn
             .query_row("SELECT uid FROM sync_ops", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(tombstone, uid);
+        assert_eq!(deleted, uid);
     }
 
     fn gone_rows(conn: &Connection) -> Vec<(String, String)> {

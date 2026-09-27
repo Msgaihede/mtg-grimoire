@@ -183,8 +183,9 @@ because it has no address yet.**
 ## Testing
 
 There is **no test runner for workerd in this tree, deliberately** —
-`@cloudflare/vitest-pool-workers` drags wrangler and workerd into a suite pinned to vitest 4.1.10,
-and `vite.config.ts` says so. So the handlers are plain functions over an injected `Env`, driven
+`@cloudflare/vitest-pool-workers` drags wrangler and workerd into the tree, and its peer range
+(`vitest ^4.1.0` at 0.22.0, checked 2026-09-27) does not cover the vitest 5 this suite runs;
+`vite.config.ts` says so. So the handlers are plain functions over an injected `Env`, driven
 as `worker.fetch(request, env)` against `relay/src/fakeD1.ts`'s SQL evaluator, exactly as
 `relay/src/rotate.test.ts` drives `/rotate` and `/keys`.
 

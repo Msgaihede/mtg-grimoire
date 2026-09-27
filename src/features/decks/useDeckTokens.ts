@@ -110,7 +110,7 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
    * cached answer for the marketplace the reader is not on would draw the old printing the moment
    * they switched back).
    *
-   * **And `["wishlist"]`, since user schema v54**, which `useDeck` fires after every deck write for
+   * **And `["wishlist"]`, since user schema v55**, which `useDeck` fires after every deck write for
    * the same reason: a theory deck's managed wishlist files the plan's missing tokens in a
    * `Tokens` subfolder (managed tokens spec §3.8), and its dirty triggers watch
    * `deck_token_printings` and `deck_tokens` — so Rust re-settles it after a token step exactly as

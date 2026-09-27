@@ -29,7 +29,7 @@
 //! (`live` or `theory`), with a quantity — [`crate::schema::DECK_TOKEN_PRINTING_GRAIN`]. A token
 //! the list derives and holds no entries of draws one **implicit** entry: the resolver's default
 //! printing in its default finish, at `deck_tokens.quantity ?? 0` — **zero since user schema
-//! v54**, because a token is something the reader starts to use (the token-improvements spec
+//! v55**, because a token is something the reader starts to use (the token-improvements spec
 //! §3.1). A token the reader added by hand draws only the entries it has in that list, and none
 //! in a list with none. `deck_tokens` keeps what is shared by both
 //! lists — the token's **state**, `auto`, `hidden` or `manual` — and its `card_id` and `quantity`
@@ -49,7 +49,7 @@
 //!
 //! Rust supplies *facts* and TypeScript draws *conclusions*, the crate root's rule. Which rows the
 //! stacks draw and what order the wall is in are `src/features/decks/deckTokens.ts`'s; a `hidden`
-//! row is answered here like any other — and since user schema v54 nothing hides one:
+//! row is answered here like any other — and since user schema v55 nothing hides one:
 //! [`retire_hidden`] turns every dismissal back into an ordinary token at launch. **What an implicit entry *is* is answered
 //! here and not there**, since v52, because a write has to be able to materialise it (rule 2) and
 //! the two halves must not be able to disagree about which printing that is.
@@ -76,7 +76,7 @@
 //!
 //! **One `deck_audit` row of kind `deck` with `field: "token"`, and one `deck_undo` step**, for
 //! each of the four writes — which reverses what this module said until v52, that token writes
-//! record nothing. (Five until v54, which retired the state write and the reset and added
+//! record nothing. (Five until v55, which retired the state write and the reset and added
 //! [`remove_entry`].) Never a new audit kind: `deck_audit` syncs, a word a paired device's `CHECK`
 //! does not know would be refused there, and its applier would defer the op — which a v51 client
 //! drops, taking the rest of that device's page with it, and a v52 or later client holds, pinning
@@ -134,7 +134,7 @@ const TOKEN_LINE_WORDS: [&str; 2] = ["Token", "Emblem"];
 /// The three words `deck_tokens.state` may hold, in the order the DDL's `CHECK` spells them.
 ///
 /// * `auto` — the row exists only to carry a legacy quantity for a token the deck derives anyway.
-/// * `hidden` — the reader dismissed it, on a build before user schema v54. **Nothing here writes
+/// * `hidden` — the reader dismissed it, on a build before user schema v55. **Nothing here writes
 ///   it any more**: the dismiss went with the token-improvements spec §3.3, and [`retire_hidden`]
 ///   turns every one back into an ordinary token at launch. It stays in the `CHECK` because a
 ///   peer on an older build can still write it and an old undo step can still restore it, and
@@ -147,7 +147,7 @@ const TOKEN_LINE_WORDS: [&str; 2] = ["Token", "Emblem"];
 /// rather than respelled. `every_state_word_is_one_the_table_accepts` walks every word in this
 /// constant through the real table, which is what holds the two spellings together. (It also
 /// turned an unknown word into a sentence while `deck_token_state` let a command parameter reach
-/// this column; v54 retired that command, and no parameter reaches it now.)
+/// this column; v55 retired that command, and no parameter reaches it now.)
 const TOKEN_STATES: [&str; 3] = ["auto", "hidden", "manual"];
 
 /// The column's own DEFAULT, by index rather than by spelling — [`crate::deck`]'s `LIVE`
@@ -245,7 +245,7 @@ pub struct DeckTokenRow {
     /// by every entry of the token. `auto` where `deck_tokens` holds no row, which is the
     /// ordinary case: that table stores only deviations. **Whether the deck makes the token is
     /// [`Self::derived`] and never this**: a derived token can be `manual`. `hidden` is a
-    /// pre-v54 dismissal the launch has not retired yet, and nothing draws it any differently.
+    /// pre-v55 dismissal the launch has not retired yet, and nothing draws it any differently.
     pub state: String,
     /// **This entry's printing.** An implicit entry's is [`Self::default_card_id`].
     pub card_id: String,
@@ -629,7 +629,7 @@ fn derive(conn: &Connection, deck_id: i64, variant: &str) -> Result<Derivation, 
 /// walk, and its doc carries the five things about it.
 ///
 /// **Which tokens are on the wall**: every token the list derives, and every token it does not
-/// whose state is `manual` — or a pre-v54 `hidden` the launch has not retired yet — **and that
+/// whose state is `manual` — or a pre-v55 `hidden` the launch has not retired yet — **and that
 /// holds an entry in this list**. A hand-added token draws its entries and never an implicit one
 /// (the token-improvements spec §3.4), so a Soldier added to the live list is not on the plan's
 /// wall. An `auto` token with entries that the list does not derive — its maker was cut through a
@@ -770,11 +770,11 @@ fn push_rows(
 
 /// An implicit entry's quantity: the legacy `deck_tokens.quantity`, or **none**.
 ///
-/// **Zero since user schema v54, and one until then** (the token-improvements spec §3.1). A token
+/// **Zero since user schema v55, and one until then** (the token-improvements spec §3.1). A token
 /// is something the reader starts to use — a Treasure the deck *can* make is not a Treasure on
 /// the table — so an untouched one counts nothing, stays out of the stacks, and the first `+`
 /// materialises it at one. Nothing stored changes with it: an untouched token was never written,
-/// so it simply reads zero from this build on, and a peer still on v53 goes on drawing it at one —
+/// so it simply reads zero from this build on, and a peer still on v54 goes on drawing it at one —
 /// a difference in what two builds draw, never in what they store.
 ///
 /// `??` and never "truthy": a legacy count a reader set before v52 is still theirs, a `0`
@@ -1303,7 +1303,7 @@ fn drop_entry(tx: &Connection, deck_id: i64, row: &TokenEntryRow) -> Result<(), 
 /// [`deck_token_rows`] computes it so that a write materialises the entry the reader was looking
 /// at: the derived printing, in its [`default_finish`], at [`implicit_quantity`].
 ///
-/// `None` for a token the list derives nothing for — `manual` included since user schema v54,
+/// `None` for a token the list derives nothing for — `manual` included since user schema v55,
 /// because a hand-added token is drawn only where it holds an entry and so has no implicit one to
 /// materialise (the token-improvements spec §3.4). A `hidden` token that the list derives *has*
 /// one, and is materialised like any other.
@@ -1393,7 +1393,7 @@ fn named_entry(
 
 /// **A stale `hidden`, settled by the write that touches the token** — `auto` where this list
 /// makes it, `manual` where it does not, the answer [`add_printing_in`] has always given. The word
-/// is a pre-v54 dismissal nothing draws any more ([`retire_hidden`] settles the rest at launch),
+/// is a pre-v55 dismissal nothing draws any more ([`retire_hidden`] settles the rest at launch),
 /// and a step, a swap or a remove on the token is the reader using it; leaving the word behind
 /// would hand a later reconcile a hand-added token it thinks it may take.
 ///
@@ -1417,7 +1417,7 @@ fn settle_hidden(
 /// What one token write did — the variable half of its history row.
 struct Change {
     /// `quantity`, `swap`, `add` or `remove` — `auditText.ts`' arms. (`state` and `reset` were
-    /// the other two until v54 retired their commands; rows already on disk still carry them.)
+    /// the other two until v55 retired their commands; rows already on disk still carry them.)
     action: &'static str,
     card_id: Option<String>,
     finish: Option<String>,
@@ -1473,7 +1473,7 @@ impl Change {
 ///   up cards. Its payload is `{ field, action, name, subtitle, card_id, finish, list, from, to }`
 ///   plus [`Change::extra`]; `name` and `subtitle` are the token's own, written down now because
 ///   a history is read after the corpus has moved. (`list` was `null` on a state write, which
-///   was shared by both lists; every write since v54 is in one list.)
+///   was shared by both lists; every write since v55 is in one list.)
 /// * **The step is [`Op::Tokens`] over the whole token in that list**, both sides: the undo side
 ///   deletes what the write left and restores what it found, the redo side the other way round.
 ///   `states` rides only when the state moved — a quantity step that recorded the state it did
@@ -1779,7 +1779,7 @@ pub fn add_printing(
 ///
 /// 1. **An implicit entry is materialised first** (rule 2), so adding art B to a token drawn at
 ///    art A keeps A — the whole point of the rule. Only a derived token has one, and **only one
-///    at a count is materialised**: since v54 an untouched implicit entry is at zero, which step 2
+///    at a count is materialised**: since v55 an untouched implicit entry is at zero, which step 2
 ///    would clear again in the same write, so writing it would be a captured insert and delete of
 ///    a row nobody saw, sent to every device in the group. B is filed alone; what keeps A is a
 ///    legacy count.
@@ -1789,7 +1789,7 @@ pub fn add_printing(
 ///    new entry it is not, and a `0` tile no stepper can zero again is stuck on the band. The
 ///    deletes are the write's own, so one Undo restores them.
 /// 3. **A token the list derives nothing for becomes `manual`** — the reader's own, which no cut
-///    can reconcile away. A derived token still `hidden` from a pre-v54 dismissal comes back to
+///    can reconcile away. A derived token still `hidden` from a pre-v55 dismissal comes back to
 ///    `auto`, as [`retire_hidden`] would have sent it at the next launch.
 ///
 /// **The three callers** are this module's [`add_printing`] (one copy, from the band's picker),
@@ -2559,7 +2559,7 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
     })
 }
 
-/// **The launch pass that retires a dismissal** (user schema v54, the token-improvements spec
+/// **The launch pass that retires a dismissal** (user schema v55, the token-improvements spec
 /// §3.3): every token still `hidden` comes back as an ordinary token **at zero, its printings
 /// kept** — the reader's own rule, and the whole of what this does. Per token:
 ///
@@ -2584,7 +2584,7 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
 /// **Behind `capture::suppressed`**, `src-tauri/CLAUDE.md`'s rule for a write every device
 /// derives for itself: each device retires the same synced rows over the same corpus to the same
 /// answer, so there is nothing to announce — and an announced zero would reach a peer still on
-/// v53 as a count nobody set there. The entries are rewritten **in place**, for
+/// v54 as a count nobody set there. The entries are rewritten **in place**, for
 /// [`repair_entry_finishes`]' reason: each keeps its row and its `sync_uid`, so the next captured
 /// step on it names the row every peer holds.
 ///
@@ -2928,7 +2928,7 @@ pub async fn deck_token_add_printing(
 /// implicit entry is not in the table, so there is nothing to remove, and the page draws the
 /// button on a stored entry only.
 ///
-/// It replaced two commands at v54: `deck_token_state`, whose dismiss went with the eye button
+/// It replaced two commands at v55: `deck_token_state`, whose dismiss went with the eye button
 /// (and whose restore had nothing left to restore once [`retire_hidden`] runs), and
 /// `deck_token_reset`, which one Remove per printing covers.
 #[cfg(not(target_family = "wasm"))]
@@ -4330,7 +4330,7 @@ mod tests {
     }
 
     /// A dismissed token is still answered — every one of its rows carrying `hidden` — and drawn
-    /// like any other, since v54, until the next launch retires it. The state is shared by both
+    /// like any other, since v55, until the next launch retires it. The state is shared by both
     /// lists.
     #[test]
     fn a_dismissed_tokens_rows_carry_its_state() {
@@ -4831,7 +4831,7 @@ mod tests {
         assert_eq!(rows(&conn, deck).len(), 1, "and it is on the wall");
     }
 
-    /// An add of a token still dismissed from before v54 — one the launch has not retired yet —
+    /// An add of a token still dismissed from before v55 — one the launch has not retired yet —
     /// sends it back to `auto`, where the retirement would have sent it.
     #[test]
     fn adding_a_printing_of_a_dismissed_token_restores_it() {
@@ -5159,7 +5159,7 @@ mod tests {
     }
 
     /// **Every token write settles a stale `hidden`**, as an add always has: the dismissal is a
-    /// pre-v54 word nothing draws, and a write to the token is the reader using it. A step on a
+    /// pre-v55 word nothing draws, and a write to the token is the reader using it. A step on a
     /// Treasure the deck makes sends it to `auto` (no row), a remove on a Soldier nothing makes that
     /// still holds another entry sends it to `manual`, and each rides its write's own undo step.
     #[test]
@@ -5209,7 +5209,7 @@ mod tests {
 
     /// **Every word the constant carries is one the DDL's `CHECK` takes**, and a word outside it
     /// is refused by the table — the constant is held to the table rather than to itself. No
-    /// command hands this column a word any more (v54 retired `deck_token_state`), so the fence
+    /// command hands this column a word any more (v55 retired `deck_token_state`), so the fence
     /// is the table's, and the constant is how this module names what it writes.
     #[test]
     fn every_state_word_is_one_the_table_accepts() {

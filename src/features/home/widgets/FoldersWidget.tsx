@@ -296,7 +296,7 @@ function collectionKind(folder: CollectionFolder): {
 /**
  * A wishlist folder's name as this card says it — its own, except for **a managed `Tokens` child,
  * which is named by the deck folder it sits in**: `Burn › Tokens` (managed tokens spec §3.8, user
- * schema v54).
+ * schema v55).
  *
  * Every theory deck whose managed wishlist follows `All` or `Tokens` has one, and every one of
  * them is called `Tokens`, so naming it by itself drew a column of identical rows — pinned on the

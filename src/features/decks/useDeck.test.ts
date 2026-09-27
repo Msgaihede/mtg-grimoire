@@ -137,7 +137,7 @@ const MAIN: DeckCategory = {
   sortOrder: 0,
   cardCount: 4,
   totalPrice: 18,
-  cardCountAllVariants: 4,
+  variant: "live",
 };
 const SIDE: DeckCategory = {
   id: 2,
@@ -149,7 +149,7 @@ const SIDE: DeckCategory = {
   sortOrder: 1,
   cardCount: 0,
   totalPrice: null,
-  cardCountAllVariants: 0,
+  variant: "live",
 };
 const MAYBE: DeckCategory = {
   id: 5,
@@ -161,7 +161,7 @@ const MAYBE: DeckCategory = {
   sortOrder: 2,
   cardCount: 0,
   totalPrice: null,
-  cardCountAllVariants: 0,
+  variant: "live",
 };
 
 const BOLT: DeckCard = {
@@ -376,9 +376,9 @@ describe("useDeck", () => {
     await result.current.moveCard.mutateAsync({ cardId: "p2", from: SIDE.id, to: MAIN.id, finish: null });
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", SIDE.id, MAIN.id, null, "theory", null);
 
-    // The clear is variant-scoped like the rest, and that is the whole difference between it
-    // and `deckCategoryDelete`, which takes both lists because the CASCADE does. Emptying the
-    // deck while the reader is looking at the plan is the failure this pins.
+    // The clear is variant-scoped like the rest: it names the list the hook is reading, which
+    // is the list the pile belongs to. Emptying the actual list while the reader is looking at
+    // the plan is the failure this pins.
     await result.current.clearCategory.mutateAsync(MAIN.id);
     expect(deckCategoryClear).toHaveBeenCalledWith(4, MAIN.id, "theory");
   });

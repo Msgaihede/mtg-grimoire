@@ -39,7 +39,7 @@ export function userWishFolders<T extends Pick<WishlistFolder, "managedDeckId">>
  * `ORDER BY sort_order, id` is the order the decks happened to be made in, which is not an order a
  * reader can predict or scan, and these rows have no `sort_order` anybody arranged.
  *
- * **Less every deck's Tokens child** (user schema v54): each is named `Tokens`, so a list by name
+ * **Less every deck's Tokens child** (user schema v55): each is named `Tokens`, so a list by name
  * would draw one indistinguishable row per deck — it is its parent that says whose it is. It is
  * still the deck's everywhere else ({@link userWishFolders}, {@link managedIds}).
  */
@@ -69,7 +69,7 @@ export function managedIds(folders: readonly WishlistFolder[]): ReadonlySet<numb
  * **Words, never a target**: the folder is app-owned and takes no drop, so this is said in a box
  * and not in the dashed drawer a reader's empty folder draws.
  *
- * **`tokens` since user schema v54** (managed tokens spec §3.8) is the one view whose folder is
+ * **`tokens` since user schema v55** (managed tokens spec §3.8) is the one view whose folder is
  * *always* empty of its own: it files the plan's missing tokens in a `Tokens` folder inside it and
  * no card in itself, so its sentence says where the wishes go rather than that there are none —
  * *a* Tokens folder, since there is none while the deck is short of nothing.
@@ -92,7 +92,7 @@ export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> 
 export const MANAGED_EMPTY_UNKNOWN = "Nothing here — this folder follows its deck and fills itself.";
 
 /**
- * What an empty **Tokens child** says (user schema v54) — one sentence whichever view fills it,
+ * What an empty **Tokens child** says (user schema v55) — one sentence whichever view fills it,
  * `all` or `tokens`, because in both it holds the same thing: the token printings the plan asks
  * for and the deck does not count. Its parent's sentence would be wrong here — under `tokens` it
  * points at this very folder.

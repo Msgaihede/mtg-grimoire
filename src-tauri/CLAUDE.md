@@ -5,7 +5,9 @@ protocol). **TS owns domain logic** (deck validation, import/export parsing). Ru
 _facts_; TypeScript draws _conclusions_. Keep that boundary.
 
 `cargo test` and `cargo clippy -D warnings` run from here; `npm run verify` at the root runs
-both plus the frontend.
+both, `cargo fmt --check` and the frontend. (It ran neither `clippy` nor `fmt` until 2026-09-27,
+while this line said it ran the first.) The toolchain is `rust-toolchain.toml`'s pin — rustup
+picks it up from any directory under the root.
 
 ## Hard rules — database
 
@@ -74,9 +76,13 @@ both plus the frontend.
   (`PredicateField`, `PredicateOp`, a value and `negated`), and one match arm per field in
   `push_card_filters` is what reaches **all three** card searches — `search_cards`,
   `collection_list` and `wishlist_list` already call that one function with the same `"c"` alias,
-  so a predicate costs one edit rather than three. **Two of the twelve fields emit no SQL at
-  all**: `TypeLine` and `OracleText` ride the FTS `MATCH` string instead, because `LIKE` measured
-  82× and 277× slower on the two warm probes. Their arms are **explicit skips with a comment** —
+  so a predicate costs one edit rather than three. **Three of the thirteen fields emit no SQL at
+  all**: `Name`, `TypeLine` and `OracleText` ride the FTS `MATCH` string instead, because `LIKE`
+  measured 82× and 277× slower on the two warm probes. **`Name` has no keyword** — it is what a
+  `-` on free text becomes (`-bolt`, `-"lightning bolt"`, issue #571), an ordered phrase on the
+  `name` column alone, while the positive free text beside it still reads every column; and the
+  wishlist answers it with a `LIKE` over its own name, for its free text's orphan reason, rather
+  than through `cards_fts`. Their arms are **explicit skips with a comment** —
   a bare `_ => {}` would hide the next field somebody forgets, and a field handled by neither
   side is a filter that silently does nothing. **FTS5's `NOT` is binary**, so a purely negative
   text term cannot ride the `MATCH` at all and becomes `rowid NOT IN (SELECT … MATCH ?)`. An
@@ -86,8 +92,8 @@ both plus the frontend.
   (schema 27). `data/user.db` is the reader's — the tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again
   (`grep -c '^\s*("[a-z_]*", Side::User),' src-tauri/src/schema.rs` is the count; this line
-  carried the number too, and said thirty through v51 and thirty-one through v52 until user schema
-  v53's `sync_gone` moved it again) — and it is what
+  carried the number too, and said thirty through v51 and thirty-one through v53 until user schema
+  v54's `sync_gone` moved it again) — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
   a corpus that will not open has to be a delete and a re-`ATTACH`, not a process-wide reopen
@@ -148,6 +154,15 @@ both plus the frontend.
   mean `main`, which after the split is a 1.3 MB file — measured, `page_count` 323 against
   `corpus.page_count` 192 149 — so `needs_conversion` and `freelist_pages` take a schema
   argument and `vacuum_into_incremental` runs `VACUUM corpus`.
+- **Both ladders commit each rung with its version stamp in one transaction** — the corpus one
+  since [issue #550](https://github.com/Msgaihede/mtg-grimoire/issues/550), which found a kill
+  between its bare `CREATE`s and the stamp stopping every later launch on `table cards already
+  exists`. **A `migrate_corpus` failure no longer stops a launch**: `prepare_database` detaches the
+  corpus, deletes it and builds it again at head (a resync, nothing the reader wrote) — unless the
+  error says nothing about the file (busy, locked, read-only, full, I/O), which stops the launch
+  as before. **`migrate_user` copies `user.db` to `backups/user.v{N}.db` with `VACUUM INTO` before
+  its first owed rung**, never overwriting a copy and keeping the newest three; a failed copy is
+  logged and the climb goes on.
 - Only `schema::migrate_user` / `migrate_corpus` may stop a launch. `prepare_database`'s other
   steps (an FTS rebuild an interrupted compaction owed; the staging table an interrupted ingest
   left; `managed_wishlist::settle_all`; and v52's pair, `deck_tokens::convert_legacy_picks_at_launch`
@@ -157,7 +172,8 @@ both plus the frontend.
   meanwhile, because a conversion before the device has heard its group reverted a peer's later
   edits; the repair after it and suppressed) are logged and left owing — their likeliest cause is a full
   or read-only disk,
-  and `init_state` turns any error into "move it aside", which that disk cannot do. **A corpus
+  and `init_state` turns any error into a refusal to start, which does that disk no good (it no
+  longer says "move it aside": `user.db` is the one file nothing can rebuild). **A corpus
   that will not open is not one of those failures**: it is deleted and rebuilt, and the
   collection is untouched — `split::tests::a_destroyed_corpus_costs_a_resync_and_nothing_else`.
 - **`card_migrations` is on the user side and that is a correctness requirement.** Its rows are
@@ -196,17 +212,44 @@ both plus the frontend.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v53**
-  (2026-09-27, the folder-deletes spec §3.1) is `sync_gone`, a **tombstone table** — `(tbl, uid)`,
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v54**
+  (2026-09-27, the folder-deletes spec §3.1) is `sync_gone`, a **tombstone table** — a row saying a
+  parent went, not the `del` op in `sync_ops` also called a tombstone — `(tbl, uid)`,
   `WITHOUT ROWID` and **not synced**, one row per deleted row of a table other rows are filed
-  under, written by `capture::install`'s `sync_gone_{table}` trigger and by nothing else (ungated by
-  the apply guard, so a peer's delete and every cascade leave one too) and **backfilled from this
+  under, written by `capture::install`'s `sync_gone_{table}` trigger (ungated by the apply guard,
+  so a peer's delete and every cascade leave one too) and by `apply` for a row it never held, and
+  **backfilled from this
   device's own `del` ops** for the seven parent tables of the day, spelled in the rung while live
   code reads `capture::parent_tables()`, so a delete applied from a peer before the upgrade is not
-  recovered — on the number token stacks PR 3 had planned, and PR 3 was dropped the same day. That
-  is one above **v52** (2026-09-26, the token-stacks spec §4), which makes a token's printings
-  **entries** — `deck_token_printings`, the thirty-first user table and the **seventeenth synced**
-  one, one printing in one finish in one list with a quantity, grained on `DECK_TOKEN_PRINTING_GRAIN`
+  recovered. It was written as v53 — the number token stacks PR 3 had planned, and PR 3 was
+  dropped the same day — and renumbered to v54 at the merge with `main`, because the per-list
+  piles below it landed there first. That is one above **v53**
+  (2026-09-27, [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561)), which gives
+  `deck_categories` a **`variant`**, so a deck's Theory and Actual lists stop sharing one pile set
+  — `NOT NULL DEFAULT 'live'` and no `CHECK` (`origin`'s precedent; `deck_meta::valid_variant` is
+  the fence), both unique indexes widened to `(deck_id, variant, …)`, and `variant` on the capture
+  spec and in both apply grains. The rung drops the six capture triggers on `deck_categories` and
+  `deck_cards` first, then `schema::split_theory_piles` clones **every** pile of every deck with a
+  plan (`theory_enabled`, or any theory row) into the theory list with the original's fields and
+  **stamps**, repoints the deck's theory cards, and deletes those decks' `deck_undo` rows (every
+  step names a theory card by the pile it has just left). `split::convert` runs the same function,
+  because a converted legacy file stamps head and never climbs. **The clone's uid is derived** —
+  `schema::theory_pile_uid`, SHA-256 of `deck_categories/theory/<original uid>` cut to 32 hex — so
+  every device that climbs names the same clone the same way, and `deck_meta::counterpart_in`
+  names a plan pile it makes at runtime the same way when the name is free. ⚠️ **What the rung
+  cannot reach is a v52 peer's writes after this device climbed**, v52's lesson one table over:
+  such a peer files its plan's cards into the one pile set it knows, so they arrive here in a
+  *live* pile, where neither tab draws them. `deck_meta::refile_stray_theory_cards` is the net —
+  captured, after `capture::install`, gated like `convert_legacy_picks` (a paired device waits for
+  `THEORY_PILES_READY`, set behind the first advancing pull; `client::pull` runs it behind every
+  such pull), moving each stray into the plan's pile of that name and **folding** it into a row
+  already there. A v52 peer still misreads what this device sends — it ignores `variant`, so a
+  theory pile's insert lands on its `(deck_id, name)` grain and merges into the live pile of that
+  name — **so every device in a group is updated before it syncs across v53**, the rule v52 set.
+  That is one above **v52**
+  (2026-09-26, the token-stacks spec §4), which makes a token's printings **entries** —
+  `deck_token_printings`, the thirty-first user table and the **seventeenth synced** one, one
+  printing in one finish in one list with a quantity, grained on `DECK_TOKEN_PRINTING_GRAIN`
   (`deck_id, variant, card_id, finish`, `finish` NOT NULL so the unique index cannot hold one
   regular printing twice) — and replaces `decks.token_stack` with `decks.token_mode`
   (`managed|collection|hidden`, `DEFAULT 'managed'`, a `CHECK` carrying PR 3's word already so
@@ -561,7 +604,7 @@ shared_cell` walks both into two databases and compares them column by column.
   REFERENCES without a NULL default, and GENERATED STORED). It has none because no command
   parameter reaches it — and, unlike `last_variant`, **no Rust fence either**: no command
   parameter reaches this column, so there is no untrusted value to refuse. **The reason it is a
-  stored fact and not a name test**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)` and
+  stored fact and not a name test**: `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)` and
   `category_for_name` finds before it creates, so a reader's own "Ramp" keeps `'user'` forever
   even once the app files cards into it — and "Ramp"/"Draw"/"Removal"/"Land" are exactly what a
   person names their own piles. The v15 backfill is a **frozen one-time guess** (`kind = 'main'`
@@ -1314,8 +1357,9 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   **`WITHOUT ROWID` tables never fire it at all** — `muted_tags`, `sync_devices`, `sync_state` and
   `device_names` are marked by the commands a reader's press reaches
   (`changes::MARKED_BY_COMMAND`), `price_snapshots`, `sync_peers` and `sync_gone` deliberately are
-  not (`WRITTEN_BY_THE_APP`: the app writes them and no press does — a press reaches `sync_gone`
-  only through the tombstone trigger, and no window draws it), and a test enumerates
+  not (`WRITTEN_BY_THE_APP`: the app writes them and no press does — a press reaches `sync_gone`,
+  whose rows are tombstones saying a parent went and not `del` ops, only through its trigger, and
+  no window draws it), and a test enumerates
   `main.sqlite_master` against the two lists so a new one goes red until somebody decides. It is
   also `db::CrossFileFence`'s blind spot, one bullet up, and the mirror's.
   **A bare `DELETE FROM t` with no `WHERE` is the second** — SQLite's truncate optimisation visits
@@ -1584,7 +1628,7 @@ record, with every measurement, is
   [sync.md](../docs/reference/sync.md) lists — **twelve sites since v52 counted them**, the ten it
   named plus `src/lib/userTables.json` and `crossWindow.ts`' `TABLE_KEYS`, which any new *user*
   table owes, synced or not, and a thirteenth for a `WITHOUT ROWID` one,
-  `changes::MARKED_BY_COMMAND` or `changes::WRITTEN_BY_THE_APP`, which v53's unsynced `sync_gone`
+  `changes::MARKED_BY_COMMAND` or `changes::WRITTEN_BY_THE_APP`, which v54's unsynced `sync_gone`
   found missing from the list; dropping a synced *column* costs nothing on the
   wire at all, because `apply::updates()` walks the **local** spec's field list and looks each
   name up in the incoming op, so a field a v42 peer goes on sending is skipped rather than
@@ -1605,10 +1649,11 @@ record, with every measurement, is
   a build that changed the generator would leave every existing database running the old rules.
   **`capture::clear_stale_guard` runs just before them**: `suppressed` writes `applying` ahead of
   its work and no `Drop` runs through a kill, so a row left by one switches capture off until
-  something clears it — and before this, with no deck, nothing at launch did. **The tombstone
-  triggers ride the same install and are the one kind never gated on that guard** (user schema v53,
-  `sync_gone_{table}` on every `capture::parent_tables()` entry): a delete `apply` makes, and every
-  cascade it sets off, runs behind the guard, and recording exactly those is what they are for.
+  something clears it — and before this, with no deck, nothing at launch did. **The triggers that
+  write `sync_gone` tombstones — rows saying a parent went, not `del` ops — ride the same install
+  and are the one kind never gated on that guard** (user schema v54, `sync_gone_{table}` on every
+  `capture::parent_tables()` entry): a delete `apply` makes, and every cascade it sets off, runs
+  behind the guard, and recording exactly those is what they are for.
 - **`PRAGMA recursive_triggers` being OFF does not mean a trigger's statements fire no triggers**
   — it stops a trigger firing *itself*. The uid mint is an `UPDATE`, so an update trigger without
   both its guards (`AFTER UPDATE OF <captured columns>` **and** a `WHEN` that compares values)
@@ -1668,25 +1713,54 @@ record, with every measurement, is
   the bound over, so a wait that has run its course cannot release a new one with it — the final
   review's I1 — and `identity::leave_group` deletes the key with the group.
   Everything else is **consumed** and blocks nothing: a child of a parent deleted in the page, or
-  anywhere a delete has ever reached this device — `gone` reads `sync_gone` since user schema v53,
-  which the tombstone trigger writes for this device's own deletes, a peer's applied here and every
-  row a cascade took with either — is **moot** where the key cascades, and a row this device holds
-  under its uid is deleted, as the sender's cascade takes it, where the fold says the group's
-  placement stands, **a folder included** (excluded until v53, because a delete made here
-  uncaptured was invisible to `gone`, and the release dropped the peer's later children of the
-  folder) — and written without it where the key is `SET NULL`;
-  an unknown table or an unbuildable row from a same or older schema is **dropped**, one
-  `error_log` row (`Source::Relay`, `apply`) folded per table. **A delete `apply` issues that would
-  drop two rows onto one grain** — a folder's or a deck's, whose `SET NULL` would land a copy or a
-  wish on a grain the root, or another doomed row, already holds — **waits for the page's retry**
-  (`Why::Occupied`, never classified), by which the sender's own re-filing has landed, **then
-  re-homes** each doomed row at the root through `collection_folders::refile_entry` /
-  `wishlist_folders::refile_wish`, the survivor of a fold keeping the lower `sync_uid`, and deletes;
-  a refusal is rolled back and is **never `?`** — `Why::Unbuildable` on the delete arm, the row left
-  standing on the moot one — where the delete arm's `?` used to fail the whole apply on every pull
-  (`apply/rehome.rs`). **Do not hold the cursor on anything that cannot resolve**: the relay
-  compacts nothing above a device's ack, so that hold
-  pins the group's log for good and re-downloads it on every pull — metered storage. **Do not
+  anywhere a delete has ever reached this device — `gone` reads `sync_gone` since user schema v54,
+  whose rows are tombstones saying a parent went (not `del` ops), written by its trigger for this
+  device's own deletes, a peer's applied here and every row a cascade took with either, and by
+  `apply::tombstone` for a row `apply` deletes without ever having held it (a parent a third device
+  made and deleted between two pulls, a folder a peer made under one deleted here) — is **moot**
+  where the key cascades, and a row this device holds under its uid is deleted, as the sender's
+  cascade takes it, where the fold says the group's placement stands, **a folder included**
+  (excluded until v54, because a delete made here uncaptured was invisible to `gone`, and the
+  release dropped the peer's later children of the folder) — and written without it where the key
+  is `SET NULL`; an unknown table or an unbuildable row from a same or older schema is **dropped**,
+  one `error_log` row (`Source::Relay`, `apply`) folded per table. **Every decision resting on
+  `gone`, moot or `SET NULL`, is taken only on a retry pass that follows one on which nothing else
+  landed** (an `Attempt::Decide` pass); the first attempt and every `Retry` pass answer
+  `Why::DecidedOnRetry` and withhold it. The group that brings a parent back through add-wins can
+  sort after the child or land only on a retry pass itself — a parent renamed and moved into a
+  folder made later in the page — and a decision taken before it deleted a folder the sender keeps
+  (its sparse move cannot rebuild it) or filed at the root a copy the sender keeps in its binder.
+  The cost is at least two retry passes for every **put, or put and delete, naming a gone parent**;
+  a bare `del` carries no parents and never reaches the arm, so a deck's cards deleted with it do
+  not pay it. **The moot arm's `sync_gone` row for a row it never held waits for the deciding pass
+  too**: on the first attempt it misfiled a child at the root when the parent came back later in
+  the page. **The retry passes are a bounded fixed point** (`apply::run_groups`): after a pass that
+  landed something comes a `Retry`, after one that landed nothing but withheld a decision a
+  `Decide`, and a pass that did neither ends the loop; the cap is twice the page's group count
+  plus one, and only each group's last answer is classified. A single retry held a folder moved
+  into a new folder made under a deleted parent, met before that folder was decided, and the
+  release dropped it.
+  **Every delete `apply` issues that would clear rows out of a folder waits for the page's retry**
+  too — a folder's or a deck's whose doomed set (the copies and wishes filed in the folders it
+  would take) is non-empty, collision or not, answers `Why::DecidedOnRetry` on the first attempt,
+  never classified — **then re-homes** what is still filed there at the root through
+  `collection_folders::refile_entry` / `wishlist_folders::refile_wish`, the survivor of a fold
+  keeping the lower `sync_uid`, and deletes.
+  Waiting only on a collision double-counted: a new root copy and the delete of a binder whose copy
+  folds into it, in one page, collide with nothing until the new copy lands, so the re-homed copy
+  took the free grain and the new copy's insert added its count on top. Two `find_row` rules go
+  with it: **a grain hit on a row whose uid this page deletes adopts the incoming uid, not `min`**
+  — the sender retired the old one, and under `min` `reset::clear_collection` made the peer lose
+  its `Recently removed` and deck groups about half the time — and **a group whose own ops end in a
+  delete finds its row by uid alone**, because the sender made and discarded that row (a collection
+  cleared twice between pulls, a deck toggled Virtual on and off twice, a copy made and removed
+  that deleted a local twin), keyed on the group's own fold so a row deleted and put back in one
+  page, add-wins, still meets its twin. A refusal is rolled back and is **never `?`** —
+  `Why::Unbuildable` on the delete arm, the row left standing on the moot one — where the delete
+  arm's `?` used to fail the whole apply on every pull (`apply/rehome.rs`, `apply::find_row`).
+  **Do not hold the cursor on anything that cannot resolve**: the relay compacts nothing above a
+  device's ack, so that hold pins the group's log for good and re-downloads it on every pull —
+  metered storage. **Do not
   advance past a held op either**: until 2026-09-27 `pull` set the cursor to the page head
   whatever `apply` deferred, so a deferred op and its sender's later ops in the page were lost,
   upgrade or not — which a v51 client still does, so every device is updated before it syncs
@@ -1921,11 +1995,20 @@ Full detail, with the measurements and the traps behind each rule, is in
   columns, one indexed scan, inactive categories excluded on `diff_select`'s rule; deliberately
   **not** a `deck_get` of the other variant, which prices every row and rolls up allocations for
   a mark that needs neither. **The quantity joined the key on 2026-08-26 (issue #212) and the
-  rows fold in the SQL with it** — `GROUP BY dc.card_id, dc.finish`, which is `group_key`'s own
-  grain: two `Vec` entries spelling one key were harmless while the caller built a set out of
-  them and would be a silently halved plan now.
-  `deck_theory_copy_from_live` still means "copy what is sleeved up into the plan" and is no
-  longer what the switch does.
+  rows fold with it**: two `Vec` entries spelling one key were harmless while the caller built a
+  set out of them and would be a silently halved plan now.
+  ⚠️ **The fold is in two halves since 2026-09-27, and the Rust half is not redundant**
+  ([issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563)). The SQL still says
+  `GROUP BY dc.card_id, dc.finish`, but `group_key` is keyed on the finish a row **plays** —
+  `deck_theory::played_finish`, the stored finish or else the printing's sole finish — so for a
+  printing sold only in foil an unsaid row and a `foil` row are two SQL groups and **one key**,
+  and `theory_slots` sums the second into the first in Rust. Deleting that loop as a duplicate of
+  the `GROUP BY` puts #563 back as a halved plan. The diff (`grouped_diff`) keys the same way,
+  and `theoryMatch.ts`' `theorySlot` spells the live row by the same rule: the search's Add, the
+  quick add, drags and an unmarked decklist line store no finish, while a binder filing stores
+  the copy's `foil`, so keyed raw the Surge Foil the reader had in both lists was two cards.
+  The explicit copy-from-live command that used to sit beside the switch was removed on
+  2026-09-27: it never had a caller, so nothing in the crate copies one list into the other now.
 - **There are three deck kinds, they are two booleans, and nothing may add a third column or an
   enum** (schema v40, [issue #401](https://github.com/Msgaihede/mtg-grimoire/issues/401)).
   `theory_enabled`/`virtual_only` reads `0/0` regular, `1/0` theory-and-actual and `0/1`
@@ -2139,6 +2222,13 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   keep out of the ordinary case, not a counter-example to it.) **The reversal's own row records no
   step**, so the stack stays linear.
   `undone_at` persists (undo survives a restart); the redo queue is the webview's and does not.
+  **The journal is capped and the history is not** (issue #553, 2026-09-27): `record_step` deletes
+  the deck's steps below the newest `UNDO_STEPS_PER_DECK` (200) by `audit_id`, in the same
+  transaction as its insert, because a step carries whole rows twice and nothing else ever pruned
+  one. `deck_audit` stays whole — it is the drawer's record and it syncs; `deck_undo` does not.
+  The just-inserted row is the cursor and nothing undone sits above it, so the prune can take
+  neither button's target; past the oldest kept step an undo answers `NOTHING_TO_UNDO`. **A new
+  statement that inserts a step must go through `record_step`** or it files outside the cap.
   **A reversal is checked, never trusted — twice.** The id must be the cursor (`next_undo`, or for
   a redo `next_redo`: the undone step above the cursor with the newest `undone_at` — an ordinal
   now, `max(now, newest + 1)`, never the wall clock). Then the deck must still hold the side the

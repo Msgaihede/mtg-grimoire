@@ -82,7 +82,7 @@ pub struct WishlistFolder {
     /// refused with [`crate::managed_wishlist::MANAGED`].
     pub managed_deck_id: Option<i64>,
     /// Whether this is a deck's **Tokens** subfolder rather than its own folder —
-    /// `wishlist_folders.managed_tokens`, user schema v54 (the token-improvements spec §3.8).
+    /// `wishlist_folders.managed_tokens`, user schema v55 (the token-improvements spec §3.8).
     ///
     /// **On the wire because it is the child's identity**: the child carries the deck's
     /// [`Self::managed_deck_id`] too, so that id alone cannot tell the two apart, and the column is
@@ -212,25 +212,32 @@ pub fn create_folder(
     if let Some(parent) = parent_id {
         require_folder(conn, parent)?;
     }
-    // `IS`, not `=`: `parent_id` is nullable (root), and `=` never matches a bound NULL.
-    let next_order: i64 = conn
-        .query_row(
-            "SELECT coalesce(max(sort_order), -1) + 1 FROM wishlist_folders WHERE parent_id IS ?1",
-            params![parent_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    let id: i64 = conn
-        .query_row(
-            "INSERT INTO wishlist_folders (parent_id, name, sort_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, unixepoch(), unixepoch())
-             RETURNING id",
-            params![parent_id, name, next_order],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    record_folder(conn, "create", name, None)?;
-    read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+    // The insert and its feed row in one savepoint (issue #550): the command opens no
+    // transaction, so a feed insert that failed after an autocommitted insert answered an error
+    // over a folder that was there, and a second press made it twice. It nests, so a caller's
+    // own transaction still owns the write.
+    crate::db::in_savepoint(conn, "wish_folder_create", || {
+        // `IS`, not `=`: `parent_id` is nullable (root), and `=` never matches a bound NULL.
+        let next_order: i64 = conn
+            .query_row(
+                "SELECT coalesce(max(sort_order), -1) + 1 FROM wishlist_folders
+                  WHERE parent_id IS ?1",
+                params![parent_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let id: i64 = conn
+            .query_row(
+                "INSERT INTO wishlist_folders (parent_id, name, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, unixepoch(), unixepoch())
+                 RETURNING id",
+                params![parent_id, name, next_order],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        record_folder(conn, "create", name, None)?;
+        read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+    })
 }
 
 /// One `folder` line in the feed, for the three acts that change what drawers exist.
@@ -259,20 +266,23 @@ fn record_folder(
 
 pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<WishlistFolder, String> {
     let name = valid_name(name)?;
-    // The previous name, read before the write — it is the half of the sentence that says what
-    // the drawer used to be called, and one statement later there is nothing to read it off.
-    let before = read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())?;
-    let changed = conn
-        .execute(
-            "UPDATE wishlist_folders SET name = ?2, updated_at = unixepoch() WHERE id = ?1",
-            params![id, name],
-        )
-        .map_err(|e| e.to_string())?;
-    if changed == 0 {
-        return Err(FOLDER_GONE.to_owned());
-    }
-    record_folder(conn, "rename", name, Some(&before.name))?;
-    read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+    // The update and its feed row in one savepoint (issue #550), `create_folder`'s reason.
+    crate::db::in_savepoint(conn, "wish_folder_rename", || {
+        // The previous name, read before the write — it is the half of the sentence that says what
+        // the drawer used to be called, and one statement later there is nothing to read it off.
+        let before = read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())?;
+        let changed = conn
+            .execute(
+                "UPDATE wishlist_folders SET name = ?2, updated_at = unixepoch() WHERE id = ?1",
+                params![id, name],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err(FOLDER_GONE.to_owned());
+        }
+        record_folder(conn, "rename", name, Some(&before.name))?;
+        read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+    })
 }
 
 /// The destination fence, in one place because every write that is handed a folder id owes it:
@@ -1181,7 +1191,7 @@ mod tests {
     }
 
     /// **`managedTokens` is read off the column and reaches the wire by that name** — the Tokens
-    /// subfolder's identity (user schema v54), which the frontend needs because the child carries
+    /// subfolder's identity (user schema v55), which the frontend needs because the child carries
     /// its deck's `managedDeckId` as well. Three rows that differ in exactly the fields that could
     /// be mistaken for it: a reader's folder named `Tokens`, a deck's own folder, and its child.
     /// Written straight into the table, with no guard armed on this connection, because the
@@ -2251,5 +2261,62 @@ mod tests {
         reorder_folders(&conn, Some(a.id), &[b.id]).unwrap();
 
         assert_eq!(feed(&conn).len(), before);
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * Issue #550: a folder write and its feed line are one savepoint.
+     * ---------------------------------------------------------------------------------- */
+
+    /// Make every `activity` insert fail, as a full disk or a locked table would — a temp
+    /// trigger, so it lives on this connection only and [`allow_activity`] takes it away.
+    fn refuse_activity(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER refuse_activity BEFORE INSERT ON main.activity
+             BEGIN SELECT RAISE(ABORT, 'the feed is full'); END;",
+        )
+        .unwrap();
+    }
+
+    fn allow_activity(conn: &Connection) {
+        conn.execute_batch("DROP TRIGGER temp.refuse_activity")
+            .unwrap();
+    }
+
+    fn user_folder_names(conn: &Connection) -> Vec<String> {
+        conn.prepare("SELECT name FROM wishlist_folders ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_new_folder_back_with_it() {
+        let conn = conn();
+        refuse_activity(&conn);
+        assert!(create_folder(&conn, None, "Binder A").is_err());
+        assert!(
+            user_folder_names(&conn).is_empty(),
+            "no folder without its line"
+        );
+
+        allow_activity(&conn);
+        create_folder(&conn, None, "Binder A").unwrap();
+        assert_eq!(
+            user_folder_names(&conn),
+            ["Binder A"],
+            "and the retry makes one, not two"
+        );
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_rename_back_with_it() {
+        let conn = conn();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        refuse_activity(&conn);
+        assert!(rename_folder(&conn, shelf.id, "Trade box").is_err());
+        assert_eq!(user_folder_names(&conn), ["Shelf"]);
+        assert_eq!(feed(&conn).len(), 1, "the create's line, and no rename's");
     }
 }

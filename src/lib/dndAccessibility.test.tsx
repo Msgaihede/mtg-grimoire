@@ -243,7 +243,7 @@ const RAMP: DeckCategory = {
   sortOrder: 1,
   cardCount: 1,
   totalPrice: null,
-  cardCountAllVariants: 1,
+  variant: "live",
 };
 const DRAW: DeckCategory = { ...RAMP, id: 6, name: "Draw", sortOrder: 2 };
 

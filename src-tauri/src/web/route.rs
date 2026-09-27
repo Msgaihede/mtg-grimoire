@@ -76,7 +76,7 @@ pub const COMMANDS: &[&str] = &[
     // `card_meld_parts`' trick and compiles on every target for the same reason.
     "deck_tokens",
     // Every paper token and emblem printing in the corpus — Add printing's All tokens (user
-    // schema v54). Not a deck read at all, but the token picker's, filed beside the deck's own
+    // schema v55). Not a deck read at all, but the token picker's, filed beside the deck's own
     // token read: one statement over `cards`, which a browser has.
     "token_printings",
     // The Notes band's read, and the one note read that is not deck-scoped at all: every note in
@@ -119,12 +119,11 @@ pub const COMMANDS: &[&str] = &[
     "deck_folder_move",
     "deck_folder_reorder",
     "deck_folder_delete",
-    "deck_theory_copy_from_live",
     "deck_theory_missing_to_wishlist",
     "deck_undo_apply",
     "deck_redo_apply",
     // The four token writes (user schema v52, which retired `deck_token_set`, `deck_token_clear`
-    // and `deck_token_add`; v54 retired `deck_token_state` and `deck_token_reset` for
+    // and `deck_token_add`; v55 retired `deck_token_state` and `deck_token_reset` for
     // `deck_token_remove`). Plain `sync::with_write` on the other side — nothing here moves a
     // copy across the collection boundary, so none of them is one of the four that owe
     // `with_write_owned`.
@@ -925,11 +924,15 @@ pub fn call(
         // ── Categories, labels and folders ──────────────────────────────────────────
         "deck_category_create" => {
             let deck_id: i64 = field(command, args, "deckId")?;
+            // The list the pile is made in (user schema v53) — required, as the desktop
+            // command's parameter is: a pile belongs to one list, and there is no default that
+            // would not be a guess about which tab the reader pressed "New category" on.
+            let variant: String = field(command, args, "variant")?;
             let name: String = field(command, args, "name")?;
             encode(
                 command,
                 crate::sync::with_write(state, |c| {
-                    crate::deck_meta::create_category(c, deck_id, &name)
+                    crate::deck_meta::create_category(c, deck_id, &variant, &name)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -1120,15 +1123,6 @@ pub fn call(
         }
 
         // ── Theory list and undo ────────────────────────────────────────────────────
-        "deck_theory_copy_from_live" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
-            encode(
-                command,
-                crate::sync::with_write(state, |c| crate::deck_theory::copy_from_live(c, deck_id))
-                    .map_err(RouteError::Failed)?,
-            )
-        }
-
         // `only` narrows which rows are sent and `folderId` says where they land; both are
         // optional and neither reads the other. Absent `folderId` is the wishlist's root, which
         // is where the Compare dialog filed everything until 2026-09-09.
@@ -3069,7 +3063,7 @@ mod tests {
             let conn = crate::db::lock_blocking(&s.db);
             conn.execute("UPDATE cards SET mana_cost = '{R}' WHERE id = '1'", [])
                 .unwrap();
-            let cat = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            let cat = crate::deck_meta::category_for_name(&conn, id, "live", "Main deck").unwrap();
             crate::deck::add_card(&conn, id, "1", Some(cat), None, "live", None, 3).unwrap();
             // A second card with no printed cost, which must not reach the page at all.
             crate::deck::add_card(&conn, id, "2", Some(cat), None, "live", None, 1).unwrap();
@@ -3095,7 +3089,7 @@ mod tests {
         let id = make_deck(&s, "Bracketed");
         {
             let conn = crate::db::lock_blocking(&s.db);
-            let cat = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            let cat = crate::deck_meta::category_for_name(&conn, id, "live", "Main deck").unwrap();
             crate::deck::add_card(&conn, id, "1", Some(cat), None, "live", None, 1).unwrap();
         }
 
@@ -4094,7 +4088,7 @@ mod tests {
         let id = make_deck(&s, "Web Deck");
         {
             let conn = crate::db::lock_blocking(&s.db);
-            let main = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            let main = crate::deck_meta::category_for_name(&conn, id, "live", "Main deck").unwrap();
             crate::deck::add_card(&conn, id, "1", Some(main), None, "live", None, 2).unwrap();
         }
         let out = call(&s, "deck_completion", &json!({ "marketplace": "manapool" })).unwrap();
@@ -4120,7 +4114,7 @@ mod tests {
         let id = make_deck(&s, "Web Deck");
         {
             let conn = crate::db::lock_blocking(&s.db);
-            let main = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            let main = crate::deck_meta::category_for_name(&conn, id, "live", "Main deck").unwrap();
             crate::deck::add_card(&conn, id, "1", Some(main), None, "live", None, 1).unwrap();
             crate::deck::add_card(&conn, id, "3", Some(main), None, "live", None, 1).unwrap();
             conn.execute(
@@ -4392,7 +4386,7 @@ mod tests {
     }
 
     /// **The four token writes and the two reads, routed and advertised, and the five commands
-    /// they retired gone from both** (user schema v52, and v54's state and reset) — the
+    /// they retired gone from both** (user schema v52, and v55's state and reset) — the
     /// notebook's pin below, for the token cluster: membership in `COMMANDS` beside the wire names
     /// each arm reads, driven through a write and a read back so an arm that parsed its arguments
     /// and wrote nothing would still go red.
@@ -4720,12 +4714,16 @@ mod tests {
         // **189 when token stacks met the shelves branch** — `awk` over the merged array, not
         // 187 plus or minus either side's change.
         //
-        // **Still 189 at user schema v54**, and counted rather than reasoned to: managed tokens,
-        // improved, routed `deck_token_remove` and `token_printings` and retired
+        // **Still 189 at the token improvements' user schema v55**, and counted rather than
+        // reasoned to: they routed `deck_token_remove` and `token_printings` and retired
         // `deck_token_state` and `deck_token_reset`.
+        //
+        // **188 on 2026-09-27, when the theory list's copy-from-live command was removed** — it
+        // never had a caller on either target. `awk` over the array as it stands here, after
+        // the token improvements met that removal.
         assert_eq!(
             COMMANDS.len(),
-            189,
+            188,
             "update this number when a command is added"
         );
     }

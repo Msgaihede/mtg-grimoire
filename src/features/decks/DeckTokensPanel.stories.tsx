@@ -432,7 +432,14 @@ export const AddToADeckThatMakesNothing: Story = {
  *
  * A tile is `stackCardWidth(cardZoom.deck)` — the stacked card's own width, read at the number
  * the reader set on the deck beside it — so the tokens a deck makes are drawn the size of the
- * cards that make them. **Everything on the tile moves with it**, through `cardScaleVars`.
+ * cards that make them. `cardZoom.deck` is the Stacks desk's key (Grid has had `deckGrid` of
+ * its own since issue #567), and this band is a third thing on the same desk; what it is emphatically
+ * not is `deckSearch`, the docked column, which is why that record holds a number per section.
+ *
+ * **Everything on the tile moves with it**, through `cardScaleVars`. A 315px picture over an 11px
+ * caption is the tile disagreeing with itself, and it is the failure this story is here to make
+ * visible — neither the type sizes nor the picture's width can be asserted from jsdom, so the play
+ * below pins the one number that is an inline style and the picture is the reader's own check.
  *
  * The store is set rather than mocked because `useCardZoomPersistence` is `AppShell`'s alone —
  * nothing in a story writes this row back.

@@ -268,6 +268,12 @@ function anyPrintingWish(
  * tell you.** Decks 1–3 are all `user`: four predefined seeds plus the pile v8's migration
  * built, which the v15 backfill deliberately leaves alone. Deck 4 has one of each class, so a
  * story can see all three answers at once — see the tuples below.
+ *
+ * **Decks 3 and 4 carry a second set, for their plans** (user schema v53, issue #561). A pile
+ * belongs to one list, and those two decks have `theoryEnabled` — so each has a clone of every
+ * live pile in the `theory` variant, same name, kind, switch, order and origin, which is exactly
+ * what the v53 rung writes for a deck with a plan. They come **after** every live pile, so the
+ * live ids above keep the numbers every test and story already names.
  */
 function starterCategories(): FakeDeckCategory[] {
   const next = ids();
@@ -275,6 +281,7 @@ function starterCategories(): FakeDeckCategory[] {
     DECK_CATEGORIES.map((c) => ({
       id: next(),
       deckId,
+      variant: "live" as const,
       name: c.name,
       kind: c.kind,
       isActive: c.isActive,
@@ -299,8 +306,9 @@ function starterCategories(): FakeDeckCategory[] {
     ["side", "Sideboard", true, "user"],
     ["companion", "Companion", true, "user"],
     ["maybe", "Maybeboard", false, "user"],
-    // Made by the add path, and holding cards in both lists — so it is drawn in both, and what
-    // its `auto` says is only that emptying it would take the heading with it.
+    // Made by the add path, and holding cards in both lists — each list's own `Ramp`, since v53
+    // — so it is drawn in both, and what its `auto` says is only that emptying it would take the
+    // heading with it.
     ["main", "Ramp", true, "auto"],
     ["main", "Card advantage", true, "user"],
     // **The point of the whole fixture.** A pile the *reader* made and switched off, which
@@ -314,11 +322,12 @@ function starterCategories(): FakeDeckCategory[] {
     // pile in that state would not be drawn at all.
     ["main", "Cut list", false, "user"],
   ];
-  return [
+  const live: FakeDeckCategory[] = [
     ...migrated,
     ...testbed.map(([kind, name, isActive, origin], sortOrder) => ({
       id: next(),
       deckId: 4,
+      variant: "live" as const,
       name,
       kind,
       isActive,
@@ -326,30 +335,46 @@ function starterCategories(): FakeDeckCategory[] {
       origin,
     })),
   ];
+  // The two plans' own piles — every live pile of decks 3 and 4, cloned into `theory`, which is
+  // the v53 rung's move for a deck with a plan. Everything but the id and the variant is the
+  // original's.
+  const plans = live
+    .filter((c) => c.deckId === 3 || c.deckId === 4)
+    .map((c) => ({ ...c, id: next(), variant: "theory" as const }));
+  return [...live, ...plans];
 }
 
-/** One deck's category of a given kind. Decks 1–3 have exactly one of each of the five, which
- *  is why this throws rather than taking the first match of many — deck 4 owns three `main`
- *  categories and is addressed with {@link categoryNamed} instead. */
+/** One list's category of a given kind. Decks 1–3 have exactly one of each of the five per
+ *  list, which is why this throws rather than taking the first match of many — deck 4 owns
+ *  three `main` categories and is addressed with {@link categoryNamed} instead. `variant` is
+ *  which list's pile (v53); a card is filed into its own list's. */
 function categoryOf(
   categories: FakeDeckCategory[],
   deckId: number,
   kind: CategoryKind,
+  variant: DeckVariant = "live",
 ): FakeDeckCategory {
-  const found = categories.filter((c) => c.deckId === deckId && c.kind === kind);
-  if (found.length !== 1) throw new Error(`Deck ${deckId} has ${found.length} ${kind} categories`);
+  const found = categories.filter(
+    (c) => c.deckId === deckId && c.variant === variant && c.kind === kind,
+  );
+  if (found.length !== 1) {
+    throw new Error(`Deck ${deckId} has ${found.length} ${variant} ${kind} categories`);
+  }
   return found[0];
 }
 
-/** One deck's category by name — `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so this is exact
- *  wherever {@link categoryOf} is ambiguous. */
+/** One list's category by name — `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)`, so this
+ *  is exact wherever {@link categoryOf} is ambiguous. */
 function categoryNamed(
   categories: FakeDeckCategory[],
   deckId: number,
   name: string,
+  variant: DeckVariant = "live",
 ): FakeDeckCategory {
-  const found = categories.find((c) => c.deckId === deckId && c.name === name);
-  if (!found) throw new Error(`Deck ${deckId} has no category called ${name}`);
+  const found = categories.find(
+    (c) => c.deckId === deckId && c.variant === variant && c.name === name,
+  );
+  if (!found) throw new Error(`Deck ${deckId} has no ${variant} category called ${name}`);
   return found;
 }
 
@@ -917,13 +942,14 @@ function starterDecks(): FakeDeck[] {
       coverCardId: printing("lea", "232").id,
       archived: true,
       // **A plan that is an exact copy of the deck**, which is not a degenerate fixture: it is
-      // the state `deck_theory_copy_from_live` *produces*, and the only command that produces
-      // it — switching the list on **moves** the deck into the plan and leaves live empty, so a
-      // full list beside a full list is now reachable by that command alone. This is the deck
-      // whose two lists genuinely agree: the answer `deck_theory_diff` gives when there is
-      // nothing to buy, which is a sentence rather than a blank panel. An archived deck is the
-      // cheapest place to keep it — nothing else opens it. Both lists are seeded outright
-      // rather than left to a toggle, which is what keeps that true whatever the switch does.
+      // the state a reader reaches by building both lists card for card, and no single press
+      // produces it — switching the list on **moves** the deck into the plan and leaves live
+      // empty, and the explicit copy command that once made it in one step never had a caller
+      // and was removed on 2026-09-27. This is the deck whose two lists genuinely agree: the
+      // answer `deck_theory_diff` gives when there is nothing to buy, which is a sentence rather
+      // than a blank panel. An archived deck is the cheapest place to keep it — nothing else
+      // opens it. Both lists are seeded outright rather than left to a toggle, which is what
+      // keeps that true whatever the switch does.
       theoryEnabled: true,
       updatedAt: CLOCK_BASE - 30 * DAY,
     }),
@@ -1026,9 +1052,10 @@ function starterFolders(): FakeDeckFolder[] {
  * by **exactly one card and that card is the commander** — measured: the deck's whole issue
  * list is one error reading "Lurrus of the Dream-Den needs every permanent card in your deck to
  * have mana value 2 or less; Kenrith, the Returned King does not." `companions.ts`'
- * `STARTING_DECK` is `["main", "commander"]`, so Kenrith at mana value 5 is inside the pile
- * Lurrus judges. That is not a mistake in the fixture — it is unavoidable here and worth
- * staging deliberately. Lurrus is `WB`, so its commander's identity must cover `W` and `B`, and
+ * `STARTING_DECK` is `SIZE_KINDS` (`main`, `commander`, a switched-on `maybe`), so Kenrith at
+ * mana value 5 is inside the pile Lurrus judges. That is not a mistake in the fixture — it is
+ * unavoidable here and worth staging deliberately. Lurrus is `WB`, so its commander's identity
+ * must cover `W` and `B`, and
  * the corpus's only legends that wide are Kenrith (mana value 5) and Tymna (3); every
  * legal-companion arrangement is out of reach, and the app's own note says as much ("most of
  * why Lurrus is not an EDH companion"). The 84 basics are what singleton leaves: 99 − 15
@@ -1131,17 +1158,23 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
     main(3, printing("lea", "47"), 1),
     main(3, printing("lea", "161"), 4),
     main(3, printing("lea", "288"), 16),
-    // Its plan, copy for copy — what `seed_from_live` leaves behind, and the only pair of lists
-    // in any seed that `deck_theory_diff` answers **nothing** about.
+    // Its plan, copy for copy — the only pair of lists in any seed that `deck_theory_diff`
+    // answers **nothing** about.
     ...[
       [printing("lea", "232"), 1],
       [printing("lea", "47"), 1],
       [printing("lea", "161"), 4],
       [printing("lea", "288"), 16],
     ].map(([card, quantity]) =>
-      deckCard(next(), 3, card as FakeCard, categoryOf(categories, 3, "main"), quantity as number, {
-        variant: "theory",
-      }),
+      deckCard(
+        next(),
+        3,
+        card as FakeCard,
+        // The plan's own Main deck (v53) — a theory row is filed into a theory pile.
+        categoryOf(categories, 3, "main", "theory"),
+        quantity as number,
+        { variant: "theory" },
+      ),
     ),
   ];
 }
@@ -1187,7 +1220,11 @@ function testbedDeckCards(
     quantity: number,
     variant: DeckVariant,
     over: Partial<FakeDeckCard> = {},
-  ) => deckCard(id++, 4, card, categoryNamed(categories, 4, name), quantity, { variant, ...over });
+  ) =>
+    deckCard(id++, 4, card, categoryNamed(categories, 4, name, variant), quantity, {
+      variant,
+      ...over,
+    });
 
   return [
     // --- live: what is sleeved up -------------------------------------------------------
@@ -1219,11 +1256,6 @@ function testbedDeckCards(
     // a piece of cardboard that does not exist, and {@link deckCard}'s note above states the
     // convention this row is the second instance of. It is also unpriced in every currency — the
     // foil rate is null too — which the Black Lotus below no longer has to itself.
-    //
-    // The consequence worth knowing before writing a story against it: `seed_from_live` matches
-    // on `(categoryId, cardId)`, so "copy the deck into the plan" no longer finds a Sol Ring row
-    // here and adds the `c21 263` pair beside this one — three Sol Rings in the plan, and a plan
-    // reporting the copy limit it exists to fix. That is the press behaving, not a broken seed.
     filed(printing("sld", "913"), "Ramp", 1, "theory", { finish: "foil" }),
     // **Wanted in an active pile while the live copy sits in the switched-off one**, which is
     // the case that proves the exclusion runs on *both* sides: the Cut list's Black Lotus is
@@ -1548,9 +1580,12 @@ function starterAudit(): FakeDeckAudit[] {
     row(4, "folder", daysAgo(6, 18, 0), '{"action":"move","folder":"Constructed › Commander"}'),
     row(4, "deck", daysAgo(6, 18, 1), '{"field":"format","from":"casual","to":"commander"}'),
     card(4, "add", daysAgo(6, 18, 2), "eld", "303", '{"category":"Commander","quantity":1}', 1),
-    // The one `deck`-kind row that can move the day header's arithmetic, and by five — every
-    // *other* nonzero delta in this table belongs to a card-shaped kind. `copy_from_live` seeds
-    // the plan and carries the copies it wrote, in the payload and in `delta` both.
+    // The one `deck`-kind row that moves the day header's arithmetic, and by five — every
+    // *other* nonzero delta in this table belongs to a card-shaped kind. **No build writes this
+    // shape any more**: its writer was the theory list's copy-from-live command, removed on
+    // 2026-09-27 without ever having had a caller. It stays because `auditText.ts` still renders
+    // a `copied` payload and the drawer still sums whatever `delta` a row carries, so the row is
+    // the fixture that keeps that reading path drawn rather than a state a reader can reach.
     row(4, "deck", daysAgo(6, 18, 3), '{"field":"theory","copied":5}', {
       variant: "theory",
       delta: 5,
@@ -2522,6 +2557,8 @@ function bracketMismatchSeed(): FakeDb {
     db.deckCategories.push({
       id: (nextCategory += 1),
       deckId: BRACKET_DECK,
+      // Live only: the deck is born without a plan, so its theory list has no piles to seed.
+      variant: "live",
       name: c.name,
       kind: c.kind,
       isActive: c.isActive,
@@ -2880,6 +2917,8 @@ function virtualDeckSeed(): FakeDb {
     db.deckCategories.push({
       id: (nextCategory += 1),
       deckId: VIRTUAL_DECK,
+      // Live only, for the same reason — a virtual deck has no plan.
+      variant: "live",
       name: c.name,
       kind: c.kind,
       isActive: c.isActive,
@@ -3071,7 +3110,7 @@ function waitingSeed(): FakeDb {
  *   lists; this one sits beside cards that make tokens, which is the case a reader meets.
  *
  * **Deck 4's managed wishlist follows `All`**, so it files the plan's missing tokens in a `Tokens`
- * subfolder inside its folder (user schema v54, spec §3.8) — and the folders are **settled rather
+ * subfolder inside its folder (user schema v55, spec §3.8) — and the folders are **settled rather
  * than written**: {@link settleManagedWishlist} is asked for them over the finished world, which is
  * the answer the crate would have left at rest, where a hand-written list would be a guess at it.
  *

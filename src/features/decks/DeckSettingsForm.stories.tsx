@@ -472,7 +472,7 @@ export const KindTheoryAndActual: Story = {
 };
 
 /**
- * **The managed wishlist's `Tokens` mode** (managed tokens spec §3.8, user schema v54) — the
+ * **The managed wishlist's `Tokens` mode** (managed tokens spec §3.8, user schema v55) — the
  * Compare dialog's fourth view, last in the group as it is last in the dialog.
  *
  * Its caption is the one that names the `Tokens` subfolder its wishes are filed in, inside the

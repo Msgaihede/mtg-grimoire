@@ -805,7 +805,7 @@ function TheoryMarkSwitches({
  * box, the selected choice's caption underneath — because it is the same kind of question: one
  * choice out of a closed set, where a switch could only say *whether*. The four view words are
  * the Compare dialog's own tabs, so a reader who picks `Missing` here meets the same list there.
- * `Tokens` joined them with user schema v54 (managed tokens spec §3.8), and its caption is the one
+ * `Tokens` joined them with user schema v55 (managed tokens spec §3.8), and its caption is the one
  * that names the `Tokens` subfolder its wishes are filed in — `managedWishlist.ts` has the words.
  */
 function ManagedWishlistGroup({

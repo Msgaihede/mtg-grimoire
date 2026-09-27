@@ -10,7 +10,7 @@
 //!
 //! ## The Tokens subfolder
 //!
-//! **Since user schema v54 a deck can own a second folder, inside the first** (the
+//! **Since user schema v55 a deck can own a second folder, inside the first** (the
 //! token-improvements spec §3.8): a child named **Tokens** holding the view's token rows. **All**
 //! and **Tokens** are the views with any — the first puts its cards in the deck's folder and its
 //! tokens in the child, the second puts nothing in the deck's folder at all — and **Missing** and
@@ -86,7 +86,7 @@ pub const BAD_MODE: &str =
 
 /// The name of the deck's **Tokens** subfolder. **Its identity is `managed_tokens = 1`, never
 /// this name**: a reader's own folder called `Tokens`, or a deck called `Tokens`, must never be
-/// taken for it (user schema v54).
+/// taken for it (user schema v55).
 const TOKENS_FOLDER: &str = "Tokens";
 
 /// A stored mode, read **leniently**: a word this build does not know came from a newer peer
@@ -368,7 +368,7 @@ type Held = (i64, Option<String>, Option<String>, Option<String>, i64);
 
 /// One of a deck's two managed folders, by `managed_tokens`: `(id, name)`.
 ///
-/// **Every lookup of a deck's managed folder names the column**, since user schema v54 gave a deck
+/// **Every lookup of a deck's managed folder names the column**, since user schema v55 gave a deck
 /// a second managed row: `managed_deck_id = ?` alone answers either folder, and `query_row` would
 /// hand back whichever SQLite found first. `0` is the deck's own folder and `1` its **Tokens**
 /// child.
@@ -405,7 +405,7 @@ fn drop_folder(tx: &Connection, folder_id: i64) -> Result<(), String> {
 
 /// Bring one deck's folders to what the deck says, in one transaction.
 ///
-/// **Two folders since user schema v54** (the token-improvements spec §3.8): the deck's own, named
+/// **Two folders since user schema v55** (the token-improvements spec §3.8): the deck's own, named
 /// after it, holding the card rows of its Compare view, and inside it a child named **Tokens**
 /// holding the token rows — for **All** and **Tokens**, the two views that have any. The child is
 /// made when there is a token to want and deleted when there is none, so a deck that wants no
@@ -645,11 +645,11 @@ mod tests {
 
     /// Add `qty` more copies to one list, through `deck::add_card`.
     fn put(conn: &Connection, deck_id: i64, variant: &str, card: &str, qty: i64) {
-        let cat = crate::deck_meta::category_for_name(conn, deck_id, "Main deck").unwrap();
+        let cat = crate::deck_meta::category_for_name(conn, deck_id, variant, "Main deck").unwrap();
         crate::deck::add_card(conn, deck_id, card, Some(cat), None, variant, None, qty).unwrap();
     }
 
-    /// The deck's own folder — `managed_tokens = 0`, since v54 gave a deck a second managed row.
+    /// The deck's own folder — `managed_tokens = 0`, since v55 gave a deck a second managed row.
     fn folder(conn: &Connection, deck_id: i64) -> Option<(i64, String)> {
         conn.query_row(
             "SELECT id, name FROM wishlist_folders
