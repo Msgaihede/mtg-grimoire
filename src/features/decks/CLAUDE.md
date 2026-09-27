@@ -1229,9 +1229,20 @@ layer.
   the name tier drops the category for the same reason and sums every pile on each side before
   subtracting: a card planned as Ramp and
   sleeved into Main deck is still the card that was planned, and a mark that went dark because a
-  pile was renamed is a mark nobody can learn to trust. `finish` is read **raw**, never through
-  `playedFinish` — that helper falls back to `soleFinish`, which would match a plan's explicit
-  `foil` against a live row the reader never said anything about.
+  pile was renamed is a mark nobody can learn to trust. **`finish` is the one the row _plays_ —
+  `playedFinish`, the stored finish or else the printing's `soleFinish` — on both sides and in
+  every theory surface** ([issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563),
+  2026-09-27). This line said *read raw, never through `playedFinish`* until then, and that rule
+  was the bug: the search's Add, the quick add, every drag and a decklist line with no `*F*` all
+  store no finish, while an add out of the binder stores the copy's own `foil` — so a foil-only
+  Surge Foil the reader had in both lists was `id|` in one and `id|foil` in the other, drawn blue
+  here and listed on the Compare dialog, the wishlist press and the managed wishlist at once. For a
+  printing sold in both finishes nothing moved: `soleFinish` answers `null` there, an unsaid row
+  is still the regular copy, and a plan's foil is still not answered by it. Rust's
+  `deck_theory::played_finish` is the plan's half and `theoryMatch.ts`' `theorySlot` the live
+  row's; **`TheoryAddress` makes `finishes` required** so a caller cannot leave it out and
+  silently key every unsaid foil-only row as the regular copy — a token entry, whose finish is
+  always stated, passes `null` and says so.
   **The grain agrees with `deck_theory_diff`, which reached it independently the same day** —
   that command groups on the exact card now, finish included, and `TheoryDiffDialog`'s `rowKey` is
   the same pair with a `|` where this uses a space. Keep the two in step if either moves.
