@@ -2552,18 +2552,22 @@ fn a_moot_delete_this_database_refuses_leaves_the_row_and_applies_the_rest() {
     assert_eq!(qty(&b), (1, 1), "a's later copy did not apply");
 }
 
-/// **A folder moved under one this device deleted is left standing here, so what a peer files into
-/// it lands** (the scoped re-review of the moot delete). `b` deletes `Shelf`; `a`, not having
-/// heard, moves `Box` under it and then makes a deck in `Box` with a card in it. Deleted here as
-/// moot — uncaptured, and no delete in the page — `Box` would leave `gone` nothing to find: the
-/// deck would wait on it for the bound, and the release would drop the deck and every card in it.
-/// On `a` the delete cascades `Box` and `SET NULL` puts the deck at the root, so the device that
-/// deleted `Box` would be the one that lost a deck. **A table another table's spec names as a
-/// parent is never deleted as moot**, and the deck lands on both. (`Box` itself is where it was on
-/// `b` and gone on `a` — the moot arm's consume-only divergence for a folder, as before the delete
-/// existed.)
+/// **A folder moved under one this device deleted goes on both devices, and what either filed into
+/// it lands at the root on both** (the scoped re-review of the moot delete, and spec 2026-09-27
+/// §3.2). `b` deletes `Shelf` and, not having heard of the move, files deck `E` into `Box`; `a`, not
+/// having heard of the delete, moves `Box` under `Shelf` and makes deck `D` in it with a card. On
+/// `a` the delete cascades `Box` and `SET NULL` puts `D` at the root, and the tombstone that
+/// cascade leaves is what lands `E` at the root when `b`'s filing arrives. On `b` the move is moot
+/// and `Box` goes as it went on `a` — `E` to the root with it — and the tombstone the moot delete
+/// leaves lands `D` at the root in the same pass.
 ///
-/// **What makes it red**: the moot delete reaching a folder table.
+/// Until the tombstones, `Box` was left standing on `b`: deleted there as moot, uncaptured and no
+/// delete in the page, it would have left `gone` nothing to find, and the release would have
+/// dropped `D` and every card in it. So `b` kept both decks filed in a folder `a` no longer had,
+/// and `E` waited on `a` for a folder its own cascade had taken.
+///
+/// **What makes it red**: the moot delete stopping at a folder table — `b` keeps `Box` with both
+/// decks in it — or `gone` reading this device's own `sync_ops`, which holds `E` on `a`.
 #[test]
 fn a_deck_filed_into_a_folder_moved_under_one_this_device_deleted_survives_on_both() {
     let (a, b) = (paired("dev-a"), paired("dev-b"));
@@ -2602,6 +2606,13 @@ fn a_deck_filed_into_a_folder_moved_under_one_this_device_deleted_survives_on_bo
     )
     .unwrap();
     file_a_card(&a);
+    b.execute(
+        "INSERT INTO decks (name, format_key, folder_id, created_at, updated_at)
+         VALUES ('E', 'commander', (SELECT id FROM deck_folders WHERE name = 'Box'),
+                 unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
 
     let rb = apply(&b, &since(&a, &mut ma)).unwrap();
     assert_eq!(
@@ -2623,16 +2634,37 @@ fn a_deck_filed_into_a_folder_moved_under_one_this_device_deleted_survives_on_bo
             "{who} lost the deck filed into the moved folder"
         );
     }
-    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let (folders, filed): (i64, i64) = c
+            .query_row(
+                "SELECT (SELECT count(*) FROM deck_folders),
+                        (SELECT count(*) FROM decks WHERE folder_id IS NOT NULL)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (folders, filed),
+            (0, 0),
+            "{who} kept a folder or a filed deck"
+        );
+        let decks: i64 = c
+            .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(decks, 2, "{who} lost a deck");
+    }
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
 }
 
-/// **...and a binder moved under one this device deleted keeps the copy a peer files into it.**
-/// The same shape in the collection's cabinet: `b` deletes `Outer`; `a` moves `Inner` under it
-/// and files a second copy in `Inner`. Deleted here as moot, `Inner` would leave the second copy
-/// waiting on a folder `gone` cannot find, and the release would drop it; on `a` the cascade takes
-/// `Inner` and `SET NULL` puts both copies at the root.
+/// **...and a binder moved under one this device deleted goes on both, every copy filed into it
+/// landing at the root.** The same shape in the collection's cabinet: `b` deletes `Outer` and, not
+/// having heard of the move, files a copy into `Inner`; `a` moves `Inner` under `Outer` and files
+/// a copy of its own there. On `a` the delete waits for the retry, re-homes all three copies at the
+/// root and cascades `Inner`; on `b` the move is moot, so `Inner`'s delete waits the same way —
+/// `a`'s copy lands in it first — and the retry re-homes the three and deletes it.
 ///
-/// **What makes it red**: the moot delete reaching `collection_folders`.
+/// **What makes it red**: the moot delete stopping at `collection_folders` — `b` keeps `Inner`
+/// with every copy filed in it.
 #[test]
 fn a_copy_filed_into_a_binder_moved_under_one_this_device_deleted_survives_on_both() {
     let (a, b) = (paired("dev-a"), paired("dev-b"));
@@ -2671,6 +2703,7 @@ fn a_copy_filed_into_a_binder_moved_under_one_this_device_deleted_survives_on_bo
     )
     .unwrap();
     file_into_inner(&a, "c2");
+    file_into_inner(&b, "c3");
 
     let rb = apply(&b, &since(&a, &mut ma)).unwrap();
     assert_eq!(
@@ -2681,8 +2714,174 @@ fn a_copy_filed_into_a_binder_moved_under_one_this_device_deleted_survives_on_bo
     let ra = apply(&a, &since(&b, &mut mb)).unwrap();
     assert_eq!((ra.deferred, ra.dropped), (0, 0), "{ra:?}");
     for (who, c) in [("a", &a), ("b", &b)] {
-        assert_eq!(qty(c), (2, 2), "{who} lost a copy");
+        assert_eq!(qty(c), (3, 3), "{who} lost a copy");
+        assert_eq!(
+            (folders(c), copies_at_root(c)),
+            (0, 3),
+            "{who} kept a binder or a filed copy"
+        );
     }
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
+}
+
+/// The copies on `conn` filed at the root.
+fn copies_at_root(conn: &Connection) -> i64 {
+    conn.query_row(
+        "SELECT count(*) FROM collection_entries WHERE folder_id IS NULL",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// **A third device's delete, applied on an earlier pull, is seen by a later child.** `c` deletes
+/// a binder and `b` applies that on one pull; `a`'s copy filed into the binder reaches `b` on the
+/// next. It lands at the root at once — no hold, no `error_log` row — where it used to wait out the
+/// bound and be dropped while `a` kept it at the root once `c`'s delete reached it (spec 2026-09-27
+/// §1.2): the delete was applied behind the apply guard and left nothing in `b`'s own `sync_ops`.
+///
+/// **What makes it red**: `gone` reading this device's own `sync_ops` only.
+#[test]
+fn a_copy_filed_into_a_binder_a_third_device_deleted_lands_at_the_root() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let mut mc = 0;
+    let bin = binder(&c, "Binder", None);
+    let page = since(&c, &mut mc);
+    apply(&a, &page).unwrap();
+    apply(&b, &page).unwrap();
+
+    crate::collection_folders::delete_folder(&c, bin).unwrap();
+    apply(&b, &since(&c, &mut mc)).unwrap();
+
+    let mut ma = 0;
+    let _ = since(&a, &mut ma);
+    let a_bin: i64 = a
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'Binder'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    file_copies(&a, Some(a_bin), 1);
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!((rb.held_waiting, rb.dropped), (0, 0), "{rb:?}");
+    assert_eq!(qty(&b), (1, 1));
+    assert_eq!(copies_at_root(&b), 1);
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+}
+
+/// **`gone` answers from the tombstones alone**: a parent with a `sync_gone` row and no `del` in
+/// this device's own history — nor any row, nor any delete in the page — is gone.
+#[test]
+fn gone_answers_from_the_tombstone_table() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    let bin = binder(&a, "Binder", None);
+    let uid: String = a
+        .query_row(
+            "SELECT sync_uid FROM collection_folders WHERE id = ?1",
+            [bin],
+            |r| r.get(0),
+        )
+        .unwrap();
+    file_copies(&a, Some(bin), 1);
+    // `b` never heard of the binder; only a tombstone says it went.
+    b.execute(
+        "INSERT INTO sync_gone (tbl, uid) VALUES ('collection_folders', ?1)",
+        [&uid],
+    )
+    .unwrap();
+    let page: Vec<Op> = since(&a, &mut ma)
+        .into_iter()
+        .filter(|op| op.table != "collection_folders")
+        .collect();
+    let rb = apply(&b, &page).unwrap();
+
+    assert_eq!((rb.held_waiting, rb.dropped), (0, 0), "{rb:?}");
+    assert_eq!(qty(&b), (1, 1));
+    assert_eq!(copies_at_root(&b), 1);
+}
+
+/// **A parent a third device made and deleted between two pulls is tombstoned here, though this
+/// device never held it** (spec 2026-09-27 §3.1, as amended). `c` makes a binder and deletes it
+/// before `b` pulls, so `b` applies the put and the delete in one page: the group folds to deleted,
+/// there is no row to `DELETE`, and no trigger fires. `a`, which saw the binder, files a copy into
+/// it, and that reaches `b` on a later pull. It lands at the root at once, as it does on `a` once
+/// `c`'s delete gets there.
+///
+/// **What makes it red**: the delete arm recording nothing for a row it did not find — the copy
+/// waits out the bound on `b`, and the release drops it.
+#[test]
+fn a_child_of_a_parent_a_third_device_made_and_deleted_between_two_pulls_lands_at_once() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let mut mc = 0;
+    let bin = binder(&c, "Binder", None);
+    let made = since(&c, &mut mc);
+    apply(&a, &made).unwrap();
+    crate::collection_folders::delete_folder(&c, bin).unwrap();
+    let mut page = made;
+    page.extend(since(&c, &mut mc));
+    let first = apply(&b, &page).unwrap();
+    assert_eq!(unwritten(first), (0, 0), "{first:?}");
+    assert_eq!(folders(&b), 0, "the premise: b never holds the binder");
+
+    let mut ma = 0;
+    let a_bin: i64 = a
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'Binder'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    file_copies(&a, Some(a_bin), 1);
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!((rb.held_waiting, rb.dropped), (0, 0), "{rb:?}");
+    assert_eq!(qty(&b), (1, 1));
+    assert_eq!(copies_at_root(&b), 1);
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+
+    // And `a` agrees once `c`'s delete reaches it.
+    let ra = apply(&a, &page).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+    assert_eq!((qty(&a), copies_at_root(&a), folders(&a)), ((1, 1), 1, 0));
+}
+
+/// **A folder a peer made under one this device deleted is tombstoned here too, though this device
+/// never held it.** `b` deletes `Outer`; `a`, not having heard, makes `Inner` under it and files a
+/// copy into `Inner`. On `b` the page's `Inner` is moot — its parent is gone and the key cascades —
+/// and there is no row to delete, so no trigger fires: the copy behind it named a folder nothing
+/// said was gone, waited out the bound and was dropped, while on `a` the delete cascades `Inner`
+/// and `SET NULL` puts the copy at the root.
+///
+/// **What makes it red**: the moot arm recording nothing for a row it did not find.
+#[test]
+fn a_copy_filed_into_a_binder_made_under_one_this_device_deleted_lands_at_the_root_on_both() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let outer = binder(&a, "Outer", None);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    b.execute("DELETE FROM collection_folders WHERE name = 'Outer'", [])
+        .unwrap();
+    let inner = binder(&a, "Inner", Some(outer));
+    file_copies(&a, Some(inner), 1);
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!((rb.moot, rb.held_waiting, rb.dropped), (1, 0, 0), "{rb:?}");
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 1), "{who} lost the copy");
+        assert_eq!(
+            (folders(c), copies_at_root(c)),
+            (0, 1),
+            "{who} kept a binder or a filed copy"
+        );
+    }
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
 }
 
 /// **A newer device's child of a deleted parent is moot, never a permanent newer hold** (review
@@ -3288,7 +3487,7 @@ fn a_collection_cleared_on_one_device_keeps_the_re_made_folders_on_the_other() {
 /// by `min` and then deleted — the peer lost its holding area and the deck's group again, in
 /// either order of the two new uids.
 ///
-/// **What makes it red**: `find_row` grain-matching a group whose own uid this page deletes.
+/// **What makes it red**: `find_row` grain-matching a group whose own ops end in a delete.
 #[test]
 fn a_collection_cleared_twice_on_one_device_keeps_the_last_re_made_folders_on_the_other() {
     a_collection_cleared_crosses_keeping_the_last_re_made_folders(2);
@@ -3398,7 +3597,7 @@ fn a_new_root_copy_and_a_binder_that_folds_into_it_land_at_the_senders_count() {
 /// The sender made and discarded that row, so its delete can only ever mean a row wearing its
 /// own uid.
 ///
-/// **What makes it red**: `find_row` grain-matching a group whose own uid this page deletes.
+/// **What makes it red**: `find_row` grain-matching a group whose own ops end in a delete.
 #[test]
 fn a_row_made_and_deleted_on_the_sender_never_deletes_a_local_twin() {
     let (a, b) = (paired("dev-a"), paired("dev-b"));

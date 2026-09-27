@@ -887,7 +887,8 @@ pub(crate) fn parent_tables() -> Vec<&'static str> {
     out
 }
 
-/// The tombstone trigger: every delete of a parent row, whatever made it.
+/// The trigger that writes a `sync_gone` tombstone (not a `del` op): every delete of a parent row,
+/// whatever made it.
 ///
 /// **Not gated on [`GUARD`], and that is the point of it.** A delete an apply makes runs behind
 /// the guard, and so does every cascade it sets off — which is why, before this, a delete a peer
@@ -924,9 +925,10 @@ const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
 /// that changed the generator and shipped `IF NOT EXISTS` would leave every existing database
 /// running last year's rules forever, silently, and a bug fixed here would reach nobody who
 /// already had the app. Dropping and creating every one at open — an insert trigger per
-/// [`TABLES`] entry, an update and a delete for every one but `deck_audit`, a tombstone trigger
-/// per [`parent_tables`] entry, and the clock — is a fraction of a millisecond. (This carried a
-/// count, and said thirty-seven while the array made forty-seven; the array is the count.)
+/// [`TABLES`] entry, an update and a delete for every one but `deck_audit`, a trigger per
+/// [`parent_tables`] entry writing a `sync_gone` tombstone (not a `del` op), and the clock — is a
+/// fraction of a millisecond. (This carried a count, and said thirty-seven while the array made
+/// forty-seven; the array is the count.)
 ///
 /// **The tombstone triggers are the one kind here that is not capture**: they write
 /// `sync_gone` rather than `sync_ops`, on every device and behind the apply guard as well, so a
