@@ -1,5 +1,5 @@
 import { defineConfig, mergeConfig } from "vite";
-import base from "./vite.config";
+import base from "./vite.config.ts";
 
 /**
  * The **public web viewer**'s build — the third Vite config in this repo, after the app's and the
@@ -50,7 +50,7 @@ export default mergeConfig(
     build: {
       outDir: "dist-share",
       emptyOutDir: true,
-      rollupOptions: {
+      rolldownOptions: {
         input: "share/index.html",
         output: {
           // ⚠️ **`assets/share.js` is pinned, not hashed, and this is the single easiest way to
