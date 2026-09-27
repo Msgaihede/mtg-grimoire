@@ -91,18 +91,19 @@
 //! ([`Why::DecidedOnRetry`], `run_groups`), so a parent that any group of the same page brings
 //! back through add-wins, however late in the page, is found instead, and the group is written as
 //! any other. **A deciding pass takes its decisions in page order**, so a decision there can come
-//! before a group of the same rank that an earlier decision of the same pass unblocks. Ordinary
-//! commands reach that with a binder and a deck's group, both `collection_folders`: a deck written
-//! without the deck folder deleted here lands its group on that pass, and a binder's delete met
-//! after the group re-homed a copy the sender had moved into it before the move came round. **So a
+//! before a group that an earlier decision of the same pass unblocks. Ordinary commands reach that
+//! with a binder and a deck's group: a deck written without the deck folder deleted here lands its
+//! group on that pass, and the binder's delete — which ranks before the copies it holds — re-homed
+//! a copy the sender had moved out of it into that group before the move came round. **So a
 //! delete that would clear rows out of a folder — this arm's included — waits one pass further**,
 //! for an [`Attempt::Clear`] pass, which runs only after a deciding pass that landed nothing. A
-//! moot or `SET NULL` decision keeps the exposure only where its gone parent is of its own table
-//! and is brought back by a group that lands on that pass alone — a folder under a deck group,
-//! which no command builds. Whoever adds a `SET NULL` key into a tree table, or a command that
-//! files a folder under a deck group, makes that reachable, and owes the deciding pass a
-//! parents-first order within the table. A moot or dropped group is *consumed*: it holds nothing,
-//! the ops after it apply, and the watermark passes it.
+//! moot or `SET NULL` decision keeps the exposure only where the group that would bring its gone
+//! parent back lands on that pass alone and shares the deciding row's rank, so page order can put
+//! the decision first — a folder filed under a deck group, which no command builds. Whoever adds a
+//! `SET NULL` key into a tree table, or a command that files a folder under a deck group, makes
+//! that reachable, and owes the deciding pass a parents-first order within the table. A moot or
+//! dropped group is *consumed*: it holds nothing, the ops after it apply, and the watermark passes
+//! it.
 //! `client::pull` holds `PULL_CURSOR` while either held count is non-zero, so the relay hands the
 //! page back, and ends a waiting hold at its bound by applying the page once more with
 //! [`Waiting::Release`]. [sync.md](../../../docs/reference/sync.md) is the record.

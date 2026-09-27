@@ -1987,7 +1987,7 @@ would clear (`sync_engine/apply/rehome.rs`'s `doomed`):
   `+n` for the twin would then count it a second time. Measured by mutation on 2026-09-27, against
   the design before the wait was widened: merging on the first attempt turned five of the branch's
   new tests red, the binder's above among them.
-- **Why a deciding pass and not the first retry.** A copy the sender dragged out of the binder
+- **Why not the first retry pass.** A copy the sender dragged out of the binder
   into a folder the page itself makes is moved only once that folder lands, and the folder can
   land only on a retry pass: `a` makes `N`, then `Outer`, moves `N` into `Outer`, drags `c` from
   `B` into `N` and deletes `B`, so the peer meets `N`, `Outer`, `B` and `c`'s move in that order,
