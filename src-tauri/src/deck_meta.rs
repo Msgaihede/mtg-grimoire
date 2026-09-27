@@ -590,8 +590,8 @@ pub fn category_for_name(
 }
 
 /// The pile in list `variant` that stands for pile `source` of the other list — found, or made
-/// there as a copy of it. The one rule the theory switch and "copy Actual into the plan" share
-/// for carrying a card across the lists (user schema v53, issue #561), where until then both
+/// there as a copy of it. The rule the theory switch carries a card across the lists by, and
+/// [`refile_stray_theory_cards`]' too (user schema v53, issue #561), where until then the switch
 /// simply kept the card's `category_id`, because the two lists shared one pile set.
 ///
 /// **Matched by kind for a predefined zone and by name for everything else**, and the
@@ -4041,71 +4041,6 @@ mod tests {
         for kind in ["commander", "side", "companion", "maybe"] {
             pile_of_kind(&conn, d, "theory", kind);
         }
-    }
-
-    /// "Copy Actual into the plan" files each card into the plan's pile **of the same name** —
-    /// found where the plan has one, made where it does not, and never for a live pile with
-    /// nothing in it — and its undo takes away the piles it made along with the cards.
-    #[test]
-    fn copy_from_live_files_into_the_plans_pile_of_the_same_name_and_undo_removes_what_it_made() {
-        let conn = conn();
-        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
-        crate::schema::tests::seed_card(&conn, "bolt-m10", "m10", "146");
-        let d = new_deck(&conn, "Burn", true);
-        let live_ramp = create_category(&conn, d, "live", "Ramp").unwrap().id;
-        let live_main = create_category(&conn, d, "live", "Main deck").unwrap().id;
-        create_category(&conn, d, "live", "Nothing yet").unwrap();
-        let live_side = pile_of_kind(&conn, d, "live", "side");
-        let plan_main = create_category(&conn, d, "theory", "Main deck").unwrap().id;
-        let plan_side = pile_of_kind(&conn, d, "theory", "side");
-        for (pile, card, n) in [
-            (live_ramp, "bolt-lea", 2),
-            (live_main, "bolt-m10", 1),
-            (live_side, "bolt-lea", 1),
-        ] {
-            crate::deck::add_card(&conn, d, card, Some(pile), None, "live", None, n).unwrap();
-        }
-        let plan_piles = pile_ids(&conn, d, "theory");
-
-        crate::deck_theory::copy_from_live(&conn, d).unwrap();
-
-        let plan_ramp =
-            find_pile(&conn, d, "theory", "Ramp").expect("the plan had no Ramp, so one is made");
-        assert!(!plan_piles.contains(&plan_ramp));
-        assert_eq!(
-            find_pile(&conn, d, "theory", "Main deck"),
-            Some(plan_main),
-            "the plan's own Main deck is found, not made twice"
-        );
-        assert_eq!(
-            find_pile(&conn, d, "theory", "Nothing yet"),
-            None,
-            "an empty live pile makes nothing in the plan"
-        );
-        let mut want = vec![
-            (plan_ramp, "bolt-lea".to_owned(), 2),
-            (plan_main, "bolt-m10".to_owned(), 1),
-            (plan_side, "bolt-lea".to_owned(), 1),
-        ];
-        want.sort();
-        assert_eq!(list_rows(&conn, d, "theory"), want);
-        assert_eq!(
-            list_rows(&conn, d, "live").len(),
-            3,
-            "a copy leaves live standing"
-        );
-
-        let audit = undo_newest(&conn, d);
-        assert_eq!(
-            pile_ids(&conn, d, "theory"),
-            plan_piles,
-            "the made Ramp is gone again"
-        );
-        assert!(list_rows(&conn, d, "theory").is_empty());
-
-        redo(&conn, d, audit);
-        assert_eq!(list_rows(&conn, d, "theory").len(), 3);
-        assert!(find_pile(&conn, d, "theory", "Ramp").is_some());
     }
 
     /// A duplicate copies **both lists' piles**, each in its own list, and remaps both lists'

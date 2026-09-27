@@ -1786,11 +1786,6 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(deckTheoryRs.length).toBeGreaterThan(1_000);
     expect(deckTheoryRs).toContain("pub name_key: Option<String>,");
 
-    invoke.mockResolvedValue(12);
-    const copied = await ipc.deckTheoryCopyFromLive(4);
-    expect(invoke).toHaveBeenCalledWith("deck_theory_copy_from_live", { deckId: 4 });
-    expect(copied).toBe(12);
-
     invoke.mockResolvedValue(3);
     const wishes = await ipc.deckTheoryMissingToWishlist(4);
     // A **second** command rather than a variant argument on `deck_missing_to_wishlist`: that
@@ -2364,16 +2359,20 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The status read and the refresh, and the two traps between them.
+   * The status read, and the two traps in it.
    *
    * `oracle_tags_status` takes **no arguments** — `prewarm_collection`'s trap, where an argument
-   * object is a deserialization error rather than a type error the compiler could have caught —
-   * while `oracle_tags_refresh` spells its one argument `force`, exactly as `sync_run` does one
-   * dataset over. And the fields are the second half: `ingestedAt` and `checkedAt` are separate
-   * columns because a 304 moves only the latter, so a mirror that folded them into one would
-   * make an up-to-date taxonomy read as due on every launch and cost an API call per start.
+   * object is a deserialization error rather than a type error the compiler could have caught.
+   * And the fields are the second half: `ingestedAt` and `checkedAt` are separate columns
+   * because a 304 moves only the latter, so a mirror that folded them into one would make an
+   * up-to-date taxonomy read as due on every launch and cost an API call per start.
+   *
+   * The refresh that used to share this case went with its wrapper on 2026-09-27 — nothing but
+   * this file and one story ever called `ipc.oracleTagsRefresh`. The command's `force` spelling is
+   * still pinned where the command is still sent: `src/workers/db.test.ts` and
+   * `src/lib/core/browser.test.ts`.
    */
-  it("asks for the tag status with no arguments and sends the throttle override under `force`", async () => {
+  it("asks for the tag status with no arguments", async () => {
     const status = {
       updatedAt: "2026-08-11T09:04:16.113+00:00",
       ingestedAt: 1_800_000_000,
@@ -2395,27 +2394,18 @@ describe("ipc argument names match the Rust command signatures", () => {
     // The two stamps are apart by design — the ordinary state of a taxonomy whose last check
     // was a 304 — and nothing here may collapse them.
     expect(read.checkedAt).not.toBe(read.ingestedAt);
-
-    invoke.mockResolvedValue({ ...status, stale: false });
-    await ipc.oracleTagsRefresh(true);
-    expect(invoke).toHaveBeenCalledWith("oracle_tags_refresh", { force: true });
-
-    // `false` must travel as a key: Tauri fills parameters by name and an absent one is a
-    // refusal, not a default.
-    await ipc.oracleTagsRefresh(false);
-    expect(invoke).toHaveBeenCalledWith("oracle_tags_refresh", { force: false });
   });
 
   /**
-   * The **art** taxonomy's pair, which is the oracle pair's shape under different command names
-   * and one different event channel — and that last one is the trap.
+   * The **art** taxonomy's status and progress, which are the oracle pair's shape under a
+   * different command name and one different event channel — and that last one is the trap.
    *
    * `oracle-tags:progress` and `art-tags:progress` are two channels because either taxonomy may
    * be refreshing while the other is, so a listener wired to the wrong one is a progress bar that
    * never moves and never errors. Both payloads are the same `tags::TagProgress`, which is
    * exactly what makes the mistake invisible to the compiler.
    */
-  it("reads the art tag status, forces its refresh, and listens on its own channel", async () => {
+  it("reads the art tag status and listens on its own channel", async () => {
     const status = {
       updatedAt: "2026-08-20T09:12:44.207+00:00",
       ingestedAt: 1_800_000_000,
@@ -2429,9 +2419,6 @@ describe("ipc argument names match the Rust command signatures", () => {
 
     expect(await ipc.artTagsStatus()).toEqual(status);
     expect(invoke).toHaveBeenCalledWith("art_tags_status");
-
-    await ipc.artTagsRefresh(true);
-    expect(invoke).toHaveBeenCalledWith("art_tags_refresh", { force: true });
 
     let emit: ((evt: { payload: ArtTagProgressEvent }) => void) | undefined;
     listen.mockImplementation(

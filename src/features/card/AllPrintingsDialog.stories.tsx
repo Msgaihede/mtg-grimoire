@@ -447,8 +447,8 @@ type Story = StoryObj<typeof meta>;
  * reads as a fact about the card in front of you. The row also keeps a fixed shape that way, so
  * it does not reflow as the reader narrows.
  *
- * The sort control opens on `artist`, which is the *card pane's* stored preference and not this
- * modal's: a reader who sorts by price here finds the pane sorted by price too, because it is one
+ * The sort control opens on `released` — the default since issue #568, newest first — which is
+ * the *card pane's* stored preference and not this modal's: a reader who sorts by price here finds the pane sorted by price too, because it is one
  * question asked on two surfaces and answered in one `app_meta` row.
  */
 export const Default: Story = {
@@ -461,7 +461,7 @@ export const Default: Story = {
     // explain, which is the case a reader must be able to trust at a glance.
     await expect(await modal.findByText("8 printings")).toBeInTheDocument();
     await expect(modal.getByRole("button", { name: "Sort printings by" })).toHaveTextContent(
-      "Artist",
+      "Release date",
     );
 
     // The set picker at rest: a disclosure button whose *content* is its value, which is why its

@@ -674,8 +674,7 @@ pub fn record_step(
 /// back, redo deletes it and puts `after` back.
 /// `made` is the deck's category ids **before** the write, for the commands that can invent a
 /// pile — [`crate::deck::add_card`]'s and [`crate::deck::move_card`]'s name arms and the
-/// importer, all through `category_for_name`, and `deck_theory::copy_from_live`, which files each
-/// copied card into the plan's pile of the same name and makes the ones the plan lacks.
+/// importer, all through `category_for_name`.
 /// `None` where the command cannot create one, which skips the diff.
 /// Without it, undoing a quick add that invented `Ramp` puts the card back and leaves the
 /// column standing: harmless on screen, because TypeScript hides an empty `auto` pile, and a
@@ -3332,16 +3331,6 @@ mod tests {
                 },
                 |c, id| {
                     crate::deck::set_folder(c, id, None).unwrap();
-                },
-            ),
-            (
-                // Files each copied card into the plan's pile of the same name — [`fresh`]'s plan
-                // has a `Ramp` and no `Draw` — so since user schema v53 this is also a write that
-                // makes a pile, and its undo takes the plan's `Draw` away with the cards.
-                "deck_theory_copy_from_live",
-                nothing,
-                |c, id| {
-                    crate::deck_theory::copy_from_live(c, id).unwrap();
                 },
             ),
             ("deck_import_commit (merge)", nothing, |c, id| {

@@ -929,13 +929,14 @@ function starterDecks(): FakeDeck[] {
       coverCardId: printing("lea", "232").id,
       archived: true,
       // **A plan that is an exact copy of the deck**, which is not a degenerate fixture: it is
-      // the state `deck_theory_copy_from_live` *produces*, and the only command that produces
-      // it — switching the list on **moves** the deck into the plan and leaves live empty, so a
-      // full list beside a full list is now reachable by that command alone. This is the deck
-      // whose two lists genuinely agree: the answer `deck_theory_diff` gives when there is
-      // nothing to buy, which is a sentence rather than a blank panel. An archived deck is the
-      // cheapest place to keep it — nothing else opens it. Both lists are seeded outright
-      // rather than left to a toggle, which is what keeps that true whatever the switch does.
+      // the state a reader reaches by building both lists card for card, and no single press
+      // produces it — switching the list on **moves** the deck into the plan and leaves live
+      // empty, and the explicit copy command that once made it in one step never had a caller
+      // and was removed on 2026-09-27. This is the deck whose two lists genuinely agree: the
+      // answer `deck_theory_diff` gives when there is nothing to buy, which is a sentence rather
+      // than a blank panel. An archived deck is the cheapest place to keep it — nothing else
+      // opens it. Both lists are seeded outright rather than left to a toggle, which is what
+      // keeps that true whatever the switch does.
       theoryEnabled: true,
       updatedAt: CLOCK_BASE - 30 * DAY,
     }),
@@ -1143,8 +1144,8 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
     main(3, printing("lea", "47"), 1),
     main(3, printing("lea", "161"), 4),
     main(3, printing("lea", "288"), 16),
-    // Its plan, copy for copy — what `seed_from_live` leaves behind, and the only pair of lists
-    // in any seed that `deck_theory_diff` answers **nothing** about.
+    // Its plan, copy for copy — the only pair of lists in any seed that `deck_theory_diff`
+    // answers **nothing** about.
     ...[
       [printing("lea", "232"), 1],
       [printing("lea", "47"), 1],
@@ -1241,12 +1242,6 @@ function testbedDeckCards(
     // a piece of cardboard that does not exist, and {@link deckCard}'s note above states the
     // convention this row is the second instance of. It is also unpriced in every currency — the
     // foil rate is null too — which the Black Lotus below no longer has to itself.
-    //
-    // The consequence worth knowing before writing a story against it: `seed_from_live` matches
-    // on the plan's pile of the same name and `(cardId, finish)`, so "copy the deck into the
-    // plan" no longer finds a Sol Ring row here and adds the `c21 263` pair beside this one —
-    // three Sol Rings in the plan, and a plan reporting the copy limit it exists to fix. That is
-    // the press behaving, not a broken seed.
     filed(printing("sld", "913"), "Ramp", 1, "theory", { finish: "foil" }),
     // **Wanted in an active pile while the live copy sits in the switched-off one**, which is
     // the case that proves the exclusion runs on *both* sides: the Cut list's Black Lotus is
@@ -1569,9 +1564,12 @@ function starterAudit(): FakeDeckAudit[] {
     row(4, "folder", daysAgo(6, 18, 0), '{"action":"move","folder":"Constructed › Commander"}'),
     row(4, "deck", daysAgo(6, 18, 1), '{"field":"format","from":"casual","to":"commander"}'),
     card(4, "add", daysAgo(6, 18, 2), "eld", "303", '{"category":"Commander","quantity":1}', 1),
-    // The one `deck`-kind row that can move the day header's arithmetic, and by five — every
-    // *other* nonzero delta in this table belongs to a card-shaped kind. `copy_from_live` seeds
-    // the plan and carries the copies it wrote, in the payload and in `delta` both.
+    // The one `deck`-kind row that moves the day header's arithmetic, and by five — every
+    // *other* nonzero delta in this table belongs to a card-shaped kind. **No build writes this
+    // shape any more**: its writer was the theory list's copy-from-live command, removed on
+    // 2026-09-27 without ever having had a caller. It stays because `auditText.ts` still renders
+    // a `copied` payload and the drawer still sums whatever `delta` a row carries, so the row is
+    // the fixture that keeps that reading path drawn rather than a state a reader can reach.
     row(4, "deck", daysAgo(6, 18, 3), '{"field":"theory","copied":5}', {
       variant: "theory",
       delta: 5,

@@ -12,21 +12,19 @@
 > an optimistic bound for Android, not a representative one. Chrome is within one patch of the
 > desktop's, which does make the two columns genuinely comparable to each other.
 
-Throwaway code lives on the `spike-wasm-core` branch under `spike/`. Nothing there is meant to
-ship; it exists to answer three assumptions before anything is designed against them.
+Throwaway code lived on the `spike-wasm-core` branch under `spike/`. Nothing there was meant to
+ship; it existed to answer three assumptions before anything was designed against them.
 
-**PR 4 landed and `spike/` is deliberately still here.** Three of its four probes are shipped
-code now — probe 1 as the manifest's wasm table, probe 2 as `db::install_opfs_pool` and
-`db::open_pooled_pair`, probe 4 as `feed::frame::Elements` (PR 1) and `combos::StreamRead` — and
-the plan for that PR said to delete the directory once they were. **Probe 3 is the exception and
-it is why the directory stays**: its `bytes_stream` → decoder → batch loop shipped as
-`web::glue::ingest_cards`, and that path does not yet reliably finish, dying in wasm's allocator
-about two runs in three ([web-target.md](../../reference/web-target.md)). A minimal harness that
-performs the same streaming ingest with none of the app around it is the obvious way to bisect
-that, and deleting it the week it became useful would be the wrong order. It goes when the first
-run is reliable.
+**`spike/` was deleted on 2026-09-27**, having met the condition it was kept for. All four probes
+are shipped code — probe 1 as the manifest's wasm table, probe 2 as `db::install_opfs_pool` and
+`db::open_pooled_pair`, probe 3 as `web::glue::ingest_cards`, probe 4 as `feed::frame::Elements`
+(PR 1) and `combos::StreamRead`. Probe 3 was the one that kept the directory alive past PR 4: its
+streaming ingest died in wasm's allocator about two runs in three, and a minimal harness was the
+obvious way to bisect that. It went once the first run was reliable, which
+[web-target.md](../../reference/web-target.md) records as **6 of 6** clean runs. The directory is
+still in git history for anyone who wants to re-measure a figure below.
 
-A fifth probe was written during PR 4 and is not in this directory: `probe6`, which asked whether
+A fifth probe was written during PR 4 and was never in that directory: `probe6`, which asked whether
 `opfs-sahpool` can hold **two** database files and `ATTACH` across them — a question this spike
 never had to ask, because the user/corpus split landed after it. It can: `PRAGMA database_list`
 answered `main=user.db corpus=corpus.db`, one transaction wrote to both, a join across them

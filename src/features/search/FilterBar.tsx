@@ -21,6 +21,7 @@ import {
 } from "@/components/FilterChips";
 import { PriceRange } from "@/components/PriceRange";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { BORDERS, BORDER_LABEL, type Border } from "@/lib/border";
 import {
   CONDITIONS,
   CONDITION_LABEL,
@@ -119,16 +120,29 @@ export type TrayCell =
   | "decks"
   | "rarity"
   | "type"
+  /** The printing's frame — `Regular`, `Borderless`, `Full art` (issue #573). A fact about the
+   *  printing on every surface, so it reads one question wherever it is drawn. */
+  | "border"
   | "price"
   | "printings"
+  /** One cell, two questions — see the cell itself. Published finish on the card search, the
+   *  copy's own finish on a list of copies. */
   | "finish"
   | "condition"
   // `"fulfilled"` sat here until 2026-09-08. It was the wishlist's alone — the Fulfilled / Still
   // missing pair — and it went with every other comparison that list made against the collection.
   | "needsReview";
 
-/** What the card search offers, which is every cell there is. The default, so the two surfaces
- *  that draw the whole tray say nothing. */
+/**
+ * What the card search offers: every cell that asks about a card or a printing, and none of the
+ * ones that ask about a copy (`condition`, `needsReview`) or a deck (`decks`). The default, so the
+ * surfaces that take it — the search page, the Tags page and every docked `CardSearchBody` — say
+ * nothing.
+ *
+ * `border` and `finish` sit after `type` because the three describe the cardboard in front of the
+ * reader, and `finish` has been here only since issue #573: on this surface it asks whether the
+ * printing was **published** in a finish, which is a real narrowing — see the cell.
+ */
 export const SEARCH_TRAY: readonly TrayCell[] = [
   "exact",
   "set",
@@ -136,6 +150,8 @@ export const SEARCH_TRAY: readonly TrayCell[] = [
   "owned",
   "rarity",
   "type",
+  "border",
+  "finish",
   "price",
   "printings",
 ];
@@ -297,13 +313,30 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
   types?: readonly string[];
   toggleType?: (type: string) => void;
   /**
-   * Which finishes a copy may be in. Absent on every surface whose rows are *printings* rather
-   * than copies — a printing exists in every finish it was published in, so the question has no
-   * answer there.
+   * The border chips — `regular`/`borderless`/`fullart` (`@/lib/border`). ORed with each other,
+   * ANDed with every other filter: the type chips' shape one dimension along.
+   *
+   * **A fact about the printing, so every surface asks the same question**, copies included —
+   * a copy is of one printing and has that printing's frame. They are not a partition: a
+   * borderless full-art printing answers both of those chips, and `regular` is the printing that
+   * is neither.
+   */
+  borders?: readonly Border[];
+  toggleBorder?: (border: Border) => void;
+  /**
+   * The finish chips, and **the one pair here whose meaning is the surface's** — the price band's
+   * shape. Over *printings* (the card search) it is whether the printing was **published** in
+   * that finish, Scryfall's `is:foil`: a printing can be nonfoil only, foil only, both, or etched,
+   * so a printing published in two finishes answers both chips. Over *copies* (the collection,
+   * the deck editor's Collection tab) it is which finish that piece of cardboard **is**, and a
+   * copy is exactly one. The hook decides which it sends; the tray draws one cell for both.
+   *
+   * Absent where neither question is offered — the wishlist, whose wish carries a *preferred*
+   * finish, which is a third question again.
    */
   finishes?: readonly Finish[];
   toggleFinish?: (finish: Finish) => void;
-  /** The grades a copy may be in. Absent for {@link FilterSurface.finishes}' reason: a printing
+  /** The grades a copy may be in. Absent on every surface whose rows are *printings*: a printing
    *  has no condition, only a piece of cardboard does. */
   conditions?: readonly Condition[];
   toggleCondition?: (condition: Condition) => void;
@@ -516,6 +549,21 @@ function activeChips<SortKey extends string>(
     });
   }
 
+  // The type chip's rule one kind along: gated on the setter, one chip for the whole OR group,
+  // and drawn in `BORDERS`' own order — the ordinary card first — rather than the order pressed.
+  // `BORDER_LABEL` rather than the ids, so `Full art` reads as the tray's chip reads and never as
+  // the `fullart` the wire carries.
+  const { toggleBorder } = search;
+  if (toggleBorder && search.borders && search.borders.length > 0) {
+    const { borders } = search;
+    chips.push({
+      label: `Border: ${BORDERS.filter((b) => borders.includes(b))
+        .map((b) => BORDER_LABEL[b])
+        .join(", ")}`,
+      remove: () => borders.forEach((b) => toggleBorder(b)),
+    });
+  }
+
   // The setter and not the value, because `owned`'s own third state *is* `undefined`: a surface
   // that cannot ask this question is told apart from one that is not currently asking it by which
   // of the two fields is here at all.
@@ -529,6 +577,8 @@ function activeChips<SortKey extends string>(
     });
   }
 
+  // One sentence for both of the cell's questions: `Finish: Foil` is true of a printing published
+  // in foil and of a copy that is foil, and the surface the chip is drawn on says which.
   if (search.toggleFinish && search.finishes && search.finishes.length > 0) {
     const { finishes, toggleFinish } = search;
     chips.push({
@@ -639,7 +689,7 @@ export function FilterBar<SortKey extends string>({
   sortRows?: readonly { value: SortKey; label: string; disabled?: boolean }[];
   /**
    * Which captioned cells the tray draws — see {@link TrayCell}. Defaults to
-   * {@link SEARCH_TRAY}, so the two surfaces that offer every filter say nothing.
+   * {@link SEARCH_TRAY}, so the surfaces that offer the card search's filters say nothing.
    */
   tray?: readonly TrayCell[];
   /**
@@ -1915,6 +1965,45 @@ function FilterTray<SortKey extends string>({
       </TrayField>
     ) : null,
 
+    /* Three chips, OR within — the type cell's shape and its greying rule. **Not a partition**: a
+       borderless full-art printing answers both of the last two, and `Regular` is the printing
+       that is neither (`@/lib/border` carries the corpus measurement). So the counts in the titles
+       overlap like the types' do, and are not meant to sum to anything.
+
+       **`BORDERS`' order and not the alphabet, which is `sortOptions`' order-is-the-information
+       exemption**: the ordinary framed card first, then the two treatments that take the frame
+       away. Sorted, `Borderless` would lead a row whose first question is nearly always "the
+       normal one".
+
+       A printing fact on every surface, so unlike Finish beside it this cell asks one question
+       wherever it is drawn — a copy has its printing's frame. On the surfaces with no facet
+       command `facets` is `undefined` and every chip stays live, `facets.ts`' fail-open arm.
+
+       `flex-wrap` for the type cell's reason: at the docked panel's 206px floor three `flex-1`
+       chips are wider than the ~161px cell, and a row that cannot break hangs out of the panel. */
+    border: search.toggleBorder ? (
+      <TrayField key="border" label="Border">
+        <div role="group" aria-label="Border" className="flex flex-wrap gap-1.5">
+          {BORDERS.map((b) => {
+            const pressed = search.borders?.includes(b) ?? false;
+            return (
+              <ToggleChip
+                key={b}
+                label={BORDER_LABEL[b]}
+                pressed={pressed}
+                // The selected arm, like the types above: a border the reader picked stays
+                // pressable however its own count reads, so the way out is never what greys.
+                disabled={optionDisabled(facets?.borders, b, pressed)}
+                title={facetTitle(BORDER_LABEL[b], facets?.borders?.[b])}
+                onClick={() => search.toggleBorder?.(b)}
+                className="flex-1"
+              />
+            );
+          })}
+        </div>
+      </TrayField>
+    ) : null,
+
     /* The marketplace's own money in the caption, never a bare `$`. The number a reader types
             here is compared against the same expression the Price column shows, so a band in
             euros over Cardmarket prices and a band in dollars over TCGplayer's are two different
@@ -1935,31 +2024,39 @@ function FilterTray<SortKey extends string>({
       </TrayField>
     ) : null,
 
-    /* A view mode rather than a filter — it says which *rows* the wall draws, one per card or
-            one per printing — so it is untouched by Reset all and absent from the badge. In the
-            tray rather than on the bar because it is the rarest press on this whole surface: the
-            search answers "which cards exist", and this is the way through to "which printings",
-            which is otherwise the card pane's question. */
-    /* The finishes as a copy can be in — **not as a printing was published in**, which is the
-       whole reason this cell is absent from the card search. A printing exists in every finish it
-       was printed in at once, so `Foil` over a wall of printings would be a filter with no
-       question behind it; a *copy* is one piece of cardboard and is exactly one of them.
+    /* **One cell, two questions, and the surface decides which** — the price cell's shape. Over
+       *printings* (the card search) it asks whether the printing was **published** in this
+       finish, Scryfall's `is:foil`: a printing can be nonfoil only, foil only, both, or etched,
+       so `Foil` narrows a wall of printings and one published in two finishes answers both chips.
+       Over *copies* (the collection, the deck editor's Collection tab) it asks which finish this
+       piece of cardboard **is**, and a copy is exactly one. The hook owns the difference —
+       `printedFinishes` on the wire against the collection's `finishes` — so the markup is one.
 
-       No facet props, here or on the three cells below: no surface that draws them has a facet
-       command behind it, so every chip keeps its plain label and nothing greys — `facets.ts`'
-       "we don't know" arm, which fails open. */
+       It was absent from the card search until issue #573, on the argument that "a printing
+       exists in every finish it was published in". That read the copy's question and found the
+       printing had no answer to it; the printing's own question has one.
+
+       Greyed and titled from `facets.finishes` exactly as the type cell is. Only the card search
+       has a facet command, and its counts are *published* finishes; every copy surface hands
+       `facets` over as `undefined`, so there every chip stays live — `facets.ts`' "we don't know"
+       arm, which fails open rather than greying a copy's question by a printing's count. */
     finish: search.toggleFinish ? (
       <TrayField key="finish" label="Finish">
         <div role="group" aria-label="Finish" className="flex flex-wrap gap-1.5">
-          {FINISHES.map((f) => (
-            <ToggleChip
-              key={f}
-              label={FINISH_LABEL[f]}
-              pressed={search.finishes?.includes(f) ?? false}
-              onClick={() => search.toggleFinish?.(f)}
-              className="flex-1"
-            />
-          ))}
+          {FINISHES.map((f) => {
+            const pressed = search.finishes?.includes(f) ?? false;
+            return (
+              <ToggleChip
+                key={f}
+                label={FINISH_LABEL[f]}
+                pressed={pressed}
+                disabled={optionDisabled(facets?.finishes, f, pressed)}
+                title={facetTitle(FINISH_LABEL[f], facets?.finishes?.[f])}
+                onClick={() => search.toggleFinish?.(f)}
+                className="flex-1"
+              />
+            );
+          })}
         </div>
       </TrayField>
     ) : null,
@@ -2028,6 +2125,11 @@ function FilterTray<SortKey extends string>({
       </TrayField>
     ) : null,
 
+    /* A view mode rather than a filter — it says which *rows* the wall draws, one per card or
+            one per printing — so it is untouched by Reset all and absent from the badge. In the
+            tray rather than on the bar because it is the rarest press on this whole surface: the
+            search answers "which cards exist", and this is the way through to "which printings",
+            which is otherwise the card pane's question. */
     printings: search.toggleAllPrintings ? (
       <TrayField key="printings" label="Printings">
         {/* **One label, never flipped to `One per card` when it is off.** This is a plain

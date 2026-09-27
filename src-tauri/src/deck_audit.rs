@@ -116,15 +116,17 @@ pub struct DeckAuditEntry {
     /// sentence. The shape per kind is documented on [`record`].
     pub payload: String,
     /// Signed copies, for the day header's `+7 / −6` roll-up: `+n` on an add, `−n` on a
-    /// remove, the difference on a quantity change, and **`+n` on the one [`DECK`] row that
-    /// records a theory copy** ([`crate::deck_theory::copy_from_live`] carries the copies it
-    /// seeded). **0** on everything else: a move, a swap, a label and every other deck- or
-    /// category-level edit change no count, and a roll-up that pretended otherwise would
-    /// double a card that only ever changed pile.
+    /// remove, the difference on a quantity change. **0** on everything else: a move, a swap, a
+    /// label and every other deck- or category-level edit change no count, and a roll-up that
+    /// pretended otherwise would double a card that only ever changed pile.
     ///
-    /// The theory copy is the exception to the shape of that list — every other nonzero delta
-    /// belongs to a card-shaped kind — and it is named here because this comment previously
-    /// said "0 on everything else" without it, and `ipc.ts` mirrored the mistake cleanly.
+    /// **There used to be one exception, and it went with its writer.** A [`DECK`] row of
+    /// `{ field: "theory", copied }` carried `+copied` here, written by the theory list's
+    /// copy-from-live command — removed on 2026-09-27 because nothing in the app had ever called
+    /// it, so no shipped database was ever given such a row. Nothing here reads
+    /// the shape to be rid of it: the roll-up sums whatever `delta` a row carries and
+    /// `auditText.ts` still renders a `copied` payload, so a row of that kind would read rather
+    /// than break.
     pub delta: i64,
 }
 
@@ -630,16 +632,6 @@ mod tests {
                         },
                     )
                     .unwrap();
-                }),
-            ),
-            (
-                "deck_theory_copy_from_live",
-                1,
-                Box::new(|| {
-                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 4)
-                        .unwrap();
-                    clear(&conn);
-                    crate::deck_theory::copy_from_live(&conn, id).unwrap();
                 }),
             ),
             (

@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { nextOffset } from "@/features/collection/useCollection";
 import {
+  bordersParam,
   colorParam,
   cycleTriState,
   DEBOUNCE_MS,
@@ -20,6 +21,7 @@ import {
   type ColorKey,
 } from "@/features/search/useCardSearch";
 import { useShelfFolds } from "@/features/shelves/useShelfFolds";
+import type { Border } from "@/lib/border";
 import {
   ipc,
   type ShelfCount,
@@ -124,6 +126,11 @@ export interface WishlistFilterState {
   /** The card-type chips — `CARD_TYPES`, ORed with each other. One kind however many are
    *  pressed, for `rarities`' reason. */
   types: readonly string[];
+  /** The border chips — `regular`/`borderless`/`fullart`, over the wish's printing. One kind
+   *  however many are pressed, for `types`' reason. **No finish beside it**: a wish's
+   *  `preferred_finish` is what the reader means to buy, not a fact about the card, and the tray
+   *  draws no Finish cell here. */
+  borders: readonly Border[];
   /** `true` is the wishes a sync flagged, `false` everything it did not touch. Three-way
    *  because the complement is a real question, and compared against `undefined` rather than
    *  tested for truthiness because `false` is a filter too. */
@@ -133,7 +140,7 @@ export interface WishlistFilterState {
 /**
  * How many *kinds* of filter are on — the number on the Reset all badge.
  *
- * Eight, where it was three until 2026-08-26 and the argument for three was about the *screen*
+ * Nine, where it was three until 2026-08-26 and the argument for three was about the *screen*
  * rather than the plumbing: a shopping list is read by name, so a row of colour chips over forty
  * rows was chrome that would never be pressed. What overturned it is that the chips are no longer
  * a row — the three card views draw one `FilterBar` now, where everything but the box, the
@@ -147,8 +154,9 @@ export interface WishlistFilterState {
  * **The number has been eight before, and for a different eighth kind.** `fulfilled` — the wishes
  * the collection already covered — was counted here until 2026-09-08, when it went with every
  * other comparison this list made against the binder; the card-type chips took the eighth place
- * back on 2026-09-22. A count is a fact about the list below it and nothing else, so read that
- * list rather than this sentence if the two ever disagree.
+ * back on 2026-09-22, and the border chips made it nine on 2026-09-27 — the one kind here the
+ * backend learned alongside the control rather than before it. A count is a fact about the list
+ * below it and nothing else, so read that list rather than this sentence if the two ever disagree.
  */
 export function activeFilterCount(f: WishlistFilterState): number {
   return [
@@ -163,6 +171,8 @@ export function activeFilterCount(f: WishlistFilterState): number {
     // One kind however many chips are pressed, the way the colours and the rarities beside it
     // are counted: `Creature` and `Land` together are one narrowing of one question.
     f.types.length > 0,
+    // One kind for the same reason: `Borderless` and `Full art` are one narrowing of *which frame*.
+    f.borders.length > 0,
     f.needsReview !== undefined,
   ].filter(Boolean).length;
 }
@@ -204,6 +214,9 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
   // The eight card-type chips, ORed with each other and ANDed with everything else — the rarity
   // chips' shape exactly, and on the wire for free: `WishlistQuery extends CardFilters`.
   const [types, setTypes] = useState<readonly string[]>([]);
+  // The border chips (issue #573) — the type chips' shape, on the wire for the same reason:
+  // `CardFilters.borders`, which `push_card_filters` emits for all three lists.
+  const [borders, setBorders] = useState<readonly Border[]>([]);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   // Additive rather than exclusive, exactly as both siblings are: `cmc` counts `{X}` as zero, so
@@ -250,6 +263,7 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
   // canonicalise this same list, and four copies of one normal form is four places for it to
   // drift.
   const typesParamValue = typesParam(types);
+  const bordersParamValue = bordersParam(borders);
 
   /**
    * The box, read as Scryfall's query syntax — the free text and the typed predicates.
@@ -288,6 +302,7 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
       manaX,
       rarities,
       types,
+      borders,
       needsReview,
     }) > 0;
   const shelves = useMemo(
@@ -320,6 +335,7 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
     colorsStrict: strictParam || undefined,
     sets: setsParam,
     types: typesParamValue,
+    borders: bordersParamValue,
     manaValues: manaParam,
     // Absent rather than `false`, which is what the backend defaults to. `true` widens — it adds
     // the `{X}` rows to whatever the numerals matched.
@@ -354,6 +370,7 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
     strictParam ? "strict" : "",
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
+    bordersParamValue?.join(",") ?? "",
     manaParam?.join(",") ?? "",
     // X is a second axis over the same chips, so "3, and also X" must not be served from plain "3".
     manaX ? "x" : "",
@@ -519,6 +536,10 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
      *  answers `Land` and `Artifact` both. */
     types,
     toggleType: (type: string) => setTypes((picked) => toggleIn(picked, type)),
+    /** The border chips, ORed with each other and ANDed with everything else — over the wish's
+     *  printing, so a borderless full-art wish answers two chips. */
+    borders,
+    toggleBorder: (border: Border) => setBorders((picked) => toggleIn(picked, border)),
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
     /** Also match the wishes whose printed cost contains `{X}` — **additive, never exclusive**,
@@ -614,6 +635,7 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
       manaX,
       rarities,
       types,
+      borders,
       needsReview,
     }),
     /** Clear every filter at once. The sort is not a filter and stays: it is how the reader
@@ -630,6 +652,7 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
       setColorFilter(NO_COLORS);
       setSets([]);
       setTypes([]);
+      setBorders([]);
       setManaValues([]);
       setManaX(false);
       setRarities([]);

@@ -426,7 +426,7 @@ export function languagePhrase(langs: readonly string[]): string {
  * and a `defaultWindow(fit.w, fit.h)` beside it can never run. Reading the raw config instead
  * fixes that half and exposes the other: the title chip is `chipLabel(widget)`, which takes no
  * `fit`, so a fresh 6 × 4 card would **read a year while its own chip said 90 days**. Threading
- * the fit through `chipLabel` is a change to chrome all ten kinds draw, for one kind's nicety.
+ * the fit through `chipLabel` is a change to chrome every kind draws, for one kind's nicety.
  *
  * So every card opens on ninety days and the chip never lies; a reader who wants the year is one
  * press away in the settings. Recorded in §12 of `docs/reference/home-page.md`.

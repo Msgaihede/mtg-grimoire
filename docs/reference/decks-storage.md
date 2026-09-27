@@ -123,11 +123,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     it or through the variant-scoped `category_for_name`. `reorder_categories` refuses a list that
     mixes the two (`CATEGORY_MIXED_LISTS`); a delete's move target must be in the same list;
     `decks.default_category_id` must name a **live** pile.
-  - **Two writes carry piles across, and both pour one list into the other.** The theory switch
+  - **One press carries piles across, and it pours one list into the other.** The theory switch
     moves the live cards into the plan and **clones** each live pile for them —
     `deck_meta::counterpart_in`, by kind for a zone and by name otherwise — leaving the live piles
-    standing, empty; `copy_from_live` files each copied card into the plan's pile of the same name,
-    making it if absent. Both record the piles they made in their undo step
+    standing, empty. It records the piles it made in its undo step
     (`deck_undo::push_made_categories`), so an undo takes them away again.
   - **`DeckCategoryRow.card_count_all_variants` is gone** — a pile's copies are all in one list, so
     it always equalled `card_count`, and every confirmation quotes `card_count` now.
@@ -239,8 +238,8 @@ preferred_finish`'s nullability one table over.
   right danger and the wrong half: nothing is ever deleted here, both lists being the same table,
   and what the copy actually produced was two identical lists with no way to tell which one was
   being edited. A reader who switches the theory list on is saying _what I have is the plan_.
-  **`deck_theory_copy_from_live` is unchanged** and still means "copy what is sleeved up into the
-  plan" — it is simply no longer what the switch does.
+  **The explicit copy-from-live command that outlived that rule was removed on 2026-09-27** — it
+  never had a caller in the app, so nothing copies one list into the other now.
 - **The empty-theory guard is now load-bearing twice, and the second reason is the one to know.**
   `variant` is _in_ `DECK_CARD_GRAIN`, and the move is a bare `UPDATE … SET variant` with no
   `ON CONFLICT` clause — so re-labelling a live row over a theory row of the same deck, category
@@ -933,8 +932,9 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `deck_theory::move_live_into_theory`, making the deck the reader already has into the plan and
   leaving live empty, and it does so only on the off → on _transition_. So a deck **born** with
   theory on has made that transition at birth, no later patch will ever move anything for it, and
-  the reader's route is `deck_theory_copy_from_live`, which is unchanged. The two routes differ in
-  what they _do_ and agree exactly on what a new deck ends up with. **(4)** `virtualOnly` at create
+  its plan fills through the ordinary card writes aimed at `theory` — the copy-from-live command
+  once named as this route never had a caller and was removed on 2026-09-27. The two routes
+  differ in what they _do_ and agree exactly on what a new deck ends up with. **(4)** `virtualOnly` at create
   is **not cross-checked against `theoryEnabled`**, where the patch route's `deck_kind` clears
   whichever half a press did not name: there is nothing to clear on a row that does not exist
   yet, and a create that silently rewrote one of the two fields it was handed would be answering

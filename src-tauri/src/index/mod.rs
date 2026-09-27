@@ -107,6 +107,26 @@ pub struct CardIndex {
     /// implementation of the type rule — one that can disagree with the first, which is the
     /// greyed-option-over-results-that-exist failure this module exists to prevent.
     pub types: [BitSet; crate::cardtypes::TYPE_KEYS.len()],
+    /// One bitset per [`crate::filters::BORDER_KEYS`] entry, same order —
+    /// `regular`, `borderless`, `fullart`.
+    ///
+    /// **Not a partition, for [`Self::types`]' overlapping reason and not its missing one.** A
+    /// borderless full-art printing is in `borderless` *and* `fullart` (835 of the 2 264 full-art
+    /// paper printings, measured 2026-09-27), so the counts over-read; but `regular` is defined
+    /// as "neither of the other two", so every printing lands in at least one and the three do
+    /// cover the corpus.
+    ///
+    /// **Filled from `border_color` and `full_art`, mirroring
+    /// [`crate::filters::push_card_filters`]' border arm term for term** — a NULL border colour
+    /// is a border, exactly as that arm's `coalesce(…, '')` reads it.
+    pub borders: [BitSet; crate::filters::BORDER_KEYS.len()],
+    /// One bitset per [`crate::filters::FINISH_KEYS`] entry, same order — `nonfoil`, `foil`,
+    /// `etched`: the finishes the printing is **published** in.
+    ///
+    /// **Overlapping, and not a cover.** `["nonfoil","foil"]` puts a printing in two of these —
+    /// 51 628 of the 109 254 paper printings, measured 2026-09-27 — and a NULL `finishes` puts it
+    /// in none, the answer `instr(NULL, ?)` gives in SQL.
+    pub finishes: [BitSet; crate::filters::FINISH_KEYS.len()],
     /// Set ordinal per doc, indexing [`CardIndex::set_codes`]. `u16` because 986 codes is
     /// three orders of magnitude inside its range and this array is one per printing.
     pub set_ord: Vec<u16>,
@@ -150,12 +170,13 @@ impl CardIndex {
     /// and a backfill that rewrote all 116 695 rows: the page layout scanned here is that
     /// rewrite's, which may be more or less fragmented than a synced database's. The spec
     /// left this figure *estimated* at "467 ms for five
-    /// columns, and the real read wants about fifteen"; the read as built wants **nine**
+    /// columns, and the real read wants about fifteen"; the read as built wants **twelve**
     /// (`rowid`, `set_code`, `cmc`, `color_identity`, `legal_mask`, `is_paper`, `mana_cost`,
-    /// `rarity`, `type_mask`), which is where the estimate's headroom went. **The 767 ms was
-    /// measured at six** — the X overlay added `mana_cost` afterwards, the rarity chips
-    /// `rarity`, the type chips `type_mask`, and nobody has re-timed it, so read that figure
-    /// as a floor rather than as this read's cost. Comfortably inside the ~1.5 s at which the
+    /// `rarity`, `type_mask`, `border_color`, `full_art`, `finishes`), which is where the
+    /// estimate's headroom went. **The 767 ms was measured at six** — the X overlay added
+    /// `mana_cost` afterwards, the rarity chips `rarity`, the type chips `type_mask`, the border
+    /// and finish chips the last three, and nobody has re-timed it, so read that figure as a
+    /// floor rather than as this read's cost. Comfortably inside the ~1.5 s at which the
     /// spec would have spent its fallback — a covering index for this read — so that stays
     /// unspent. It is a full table scan today and no existing index changes that:
     /// `idx_cards_collapse` carries neither `set_code` nor `mana_cost`, and one missing column
@@ -211,15 +232,24 @@ impl CardIndex {
             playable: BitSet::new(capacity),
             rarity: std::array::from_fn(|_| BitSet::new(capacity)),
             types: std::array::from_fn(|_| BitSet::new(capacity)),
+            borders: std::array::from_fn(|_| BitSet::new(capacity)),
+            finishes: std::array::from_fn(|_| BitSet::new(capacity)),
             set_ord: vec![0; capacity],
             set_codes: Vec::new(),
             owned: BitSet::new(capacity),
         };
 
+        // The finish needles, quoted once rather than per row — the same `"foil"` the SQL binds,
+        // so `"foil"` cannot be found inside `"nonfoil"` here either.
+        let finish_needles: Vec<String> = crate::filters::FINISH_KEYS
+            .iter()
+            .map(|f| format!("\"{f}\""))
+            .collect();
+
         let mut seen: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
         let mut stmt = conn.prepare(
             "SELECT rowid, set_code, cmc, color_identity, legal_mask, is_paper, mana_cost,
-                    rarity, type_mask
+                    rarity, type_mask, border_color, full_art, finishes
                FROM cards",
         )?;
         let mut rows = stmt.query([])?;
@@ -243,6 +273,12 @@ impl CardIndex {
             // none of the eight bitsets, which is the same answer `type_mask & ? != 0` gives
             // it in SQL.
             let type_mask: i64 = row.get(8)?;
+            // Nullable, and read as the SQL reads it — see the border block below.
+            let border_color: Option<String> = row.get(9)?;
+            // `NOT NULL DEFAULT 0`, so a bare `bool` is the right read, as `type_mask` is.
+            let full_art: bool = row.get(10)?;
+            // Nullable JSON text; a NULL is in no finish bitset.
+            let finishes: Option<String> = row.get(11)?;
 
             ix.all.set(doc);
             if paper {
@@ -327,6 +363,35 @@ impl CardIndex {
             for (k, set) in ix.types.iter_mut().enumerate() {
                 if type_mask & (1i64 << k) != 0 {
                     set.set(doc);
+                }
+            }
+
+            // [`crate::filters::push_card_filters`]' border arm, term for term: `borderless` is
+            // the stored word, `fullart` the flag, and `regular` is neither — with a NULL border
+            // read as a border, which is that arm's `coalesce(border_color, '') <> 'borderless'`.
+            // Looked up by name in `BORDER_KEYS` rather than by a hard-coded slot, so a
+            // reordering of that list moves the bits with it.
+            let borderless = border_color.as_deref() == Some("borderless");
+            for (k, set) in ix.borders.iter_mut().enumerate() {
+                let hit = match crate::filters::BORDER_KEYS[k] {
+                    "regular" => !borderless && !full_art,
+                    "borderless" => borderless,
+                    "fullart" => full_art,
+                    _ => false,
+                };
+                if hit {
+                    set.set(doc);
+                }
+            }
+
+            // A substring test with the quotes on, which is the SQL's `instr(finishes, '"foil"')`
+            // character for character — parsing the JSON here instead would be a second reading
+            // of the column that could disagree with the first.
+            if let Some(finishes) = finishes.as_deref() {
+                for (set, needle) in ix.finishes.iter_mut().zip(&finish_needles) {
+                    if finishes.contains(needle.as_str()) {
+                        set.set(doc);
+                    }
                 }
             }
 
@@ -536,6 +601,31 @@ pub(crate) mod fixtures {
         .unwrap();
     }
 
+    /// One printing with a **frame and a finish list**, for the border and finish dimensions.
+    ///
+    /// The columns are spelled as the ingest writes them — Scryfall's border word (or NULL,
+    /// which the schema allows), `full_art` as `0`/`1`, and `finishes` as the JSON array's own
+    /// text — because the bitsets read exactly those, and a fixture in any other spelling
+    /// would test a row the app could not produce.
+    ///
+    /// Paper, in `lea`, with no `cmc`, no legality bit and no rarity: a row seeded here is a row
+    /// about frames and finishes, and every other dimension reads whatever `cards` defaults to.
+    pub(crate) fn framed(
+        conn: &Connection,
+        id: &str,
+        border_color: Option<&str>,
+        full_art: bool,
+        finishes: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                border_color,full_art,finishes,raw)
+             VALUES (?1,?1,'lea',?1,'en','normal',1,?2,?3,?4,'{}')",
+            rusqlite::params![id, border_color, full_art, finishes],
+        )
+        .unwrap();
+    }
+
     /// A collection entry for one printing. `set_code`/`collector_number` are denormalized
     /// migration insurance rather than part of [`crate::schema::COLLECTION_GRAIN`], so they
     /// are filler here — the `card_id` is what makes two entries distinct.
@@ -560,7 +650,7 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use super::fixtures::{doc, own, seeded, typed};
+    use super::fixtures::{doc, framed, own, seeded, typed};
     use super::*;
 
     /// The slot in [`CardIndex::types`] one type key occupies — the bit position
@@ -863,6 +953,77 @@ mod tests {
         assert!(
             !ix.types[type_slot("Creature")].contains(doc(&conn, "5")),
             "the line says Creature and the mask says nothing; the mask is what the SQL tests"
+        );
+    }
+
+    /// The slot one key occupies in a vocabulary, read back by name so a reordering of the list
+    /// breaks the assertion rather than silently relabelling it — [`type_slot`]'s reason.
+    fn slot(keys: &[&str], name: &str) -> usize {
+        keys.iter().position(|k| *k == name).unwrap()
+    }
+
+    /// The border bitsets mirror `push_card_filters`' border arm term for term: `regular` is
+    /// **neither** of the other two — a white border and a NULL one included — and a borderless
+    /// full-art printing is in both of those at once.
+    ///
+    /// The four fixture rows carry no border word and `full_art = 0`, so they are `regular`
+    /// too; that is the NULL-is-a-border reading, asserted here over rows nobody framed.
+    #[test]
+    fn the_border_bitsets_read_neither_as_regular_and_overlap_on_borderless_full_art() {
+        let conn = seeded();
+        framed(&conn, "5", Some("white"), false, r#"["nonfoil"]"#);
+        framed(&conn, "6", Some("borderless"), false, r#"["foil"]"#);
+        framed(&conn, "7", Some("black"), true, r#"["nonfoil","foil"]"#);
+        framed(&conn, "8", Some("borderless"), true, r#"["foil","etched"]"#);
+        let ix = CardIndex::build(&conn).unwrap();
+        let keys = &crate::filters::BORDER_KEYS;
+        let regular = &ix.borders[slot(keys, "regular")];
+        let borderless = &ix.borders[slot(keys, "borderless")];
+        let fullart = &ix.borders[slot(keys, "fullart")];
+
+        assert!(
+            regular.contains(doc(&conn, "5")),
+            "a white border is a border"
+        );
+        assert!(
+            regular.contains(doc(&conn, "1")),
+            "and so is a NULL one, which is what `coalesce(border_color, '')` reads"
+        );
+        assert_eq!(
+            regular.count(),
+            5,
+            "the four fixture rows and the white one"
+        );
+
+        let both = doc(&conn, "8");
+        assert!(borderless.contains(both) && fullart.contains(both));
+        assert!(!regular.contains(both), "neither means neither");
+        assert_eq!(borderless.count(), 2);
+        assert_eq!(fullart.count(), 2);
+    }
+
+    /// The finish bitsets are the SQL's quoted `instr`, so `"foil"` is never found inside
+    /// `"nonfoil"` — and a NULL finish list, which every fixture row has, is in none of them.
+    #[test]
+    fn the_finish_bitsets_match_the_quoted_word_and_a_null_list_is_in_none() {
+        let conn = seeded();
+        framed(&conn, "5", Some("black"), false, r#"["nonfoil"]"#);
+        framed(&conn, "6", Some("black"), false, r#"["nonfoil","foil"]"#);
+        framed(&conn, "7", Some("black"), false, r#"["etched"]"#);
+        let ix = CardIndex::build(&conn).unwrap();
+        let keys = &crate::filters::FINISH_KEYS;
+        let foil = &ix.finishes[slot(keys, "foil")];
+
+        assert!(
+            !foil.contains(doc(&conn, "5")),
+            "`nonfoil` holds `foil` as a substring and not as a word"
+        );
+        assert!(foil.contains(doc(&conn, "6")));
+        assert_eq!(ix.finishes[slot(keys, "nonfoil")].count(), 2);
+        assert_eq!(ix.finishes[slot(keys, "etched")].count(), 1);
+        assert!(
+            ix.finishes.iter().all(|f| !f.contains(doc(&conn, "1"))),
+            "a NULL `finishes` is in no bitset, as `instr(NULL, ?)` is NULL"
         );
     }
 

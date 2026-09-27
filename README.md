@@ -33,23 +33,52 @@ The installers are unsigned, so Windows SmartScreen warns on first run.
 ## Development
 
 See `CLAUDE.md` for architecture and the map of the rest. Rules for an area live in that area's
-own `CLAUDE.md` (`src/`, `src-tauri/`, `src/features/decks/`, `.storybook/`, `.github/`);
-`docs/reference/` holds the long-form record behind them, and `docs/superpowers/` the specs and
-plans.
+own `CLAUDE.md` (`src/`, `src-tauri/`, `src/features/decks/`, `src/features/transfer/`,
+`.storybook/`, `.github/`); `docs/reference/` holds the long-form record behind them, and
+`docs/superpowers/` the specs and plans.
+
+### Prerequisites
+
+- **Node** — the version in [`.nvmrc`](.nvmrc) (24), which is what CI runs; `package.json`'s
+  `engines` floor is 22.18. `npm ci` installs everything else on the TypeScript side.
+- **Rust via [rustup](https://rustup.rs)** — the toolchain is pinned in
+  [`rust-toolchain.toml`](rust-toolchain.toml), and rustup installs it, with `rustfmt` and
+  `clippy`, the first time `cargo` runs in the repo. Do not install a different one by hand.
+- **[Tauri's platform prerequisites](https://tauri.app/start/prerequisites/)** — on Windows,
+  the Microsoft C++ Build Tools ("Desktop development with C++") and WebView2, which Windows 11
+  ships; on Linux, the WebKitGTK stack CI installs: `libwebkit2gtk-4.1-dev`, `build-essential`,
+  `libxdo-dev`, `libssl-dev`, `libayatana-appindicator3-dev` and `librsvg2-dev`.
+
+Only for the other targets:
+
+- **Web build** (`npm run build:wasm`) — `rustup target add wasm32-unknown-unknown`, clang 18 or
+  later (LLVM on Windows; MSVC cannot emit wasm), and `wasm-bindgen-cli` at the exact version
+  `src-tauri/Cargo.toml` pins (`=0.2.127` today) — the script refuses a mismatch. See
+  [web-target.md](docs/reference/web-target.md).
+- **Android** — the Android SDK and NDK plus the four Android Rust targets; see
+  [android-target.md](docs/reference/android-target.md).
+
+Rust targets and components are per toolchain, so after `rust-toolchain.toml` moves, the extra
+targets above (and `llvm-tools-preview` for Rust coverage) need adding again.
+
+### Commands
 
 - `npm run tauri dev` — run the app
-- `npm run verify` — build + lint + Vitest + cargo test; run before every commit
+- `npm run verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test; run
+  before every commit
+- `npm run storybook` — the component workbench, on a fake backend
 
-Pull requests are gated on `ci-ok`, which aggregates the frontend checks and a Rust matrix
-across Windows and Linux. Versions are derived from conventional commits by release-please —
-never edit a version by hand.
+Pull requests are gated on `ci-ok`, which aggregates the frontend build, lint and sharded
+Vitest legs, the Storybook build, a Rust matrix across Windows and Linux, and the web and
+Android compile gates — each run only when the change can have broken it. Versions are derived
+from conventional commits by release-please — never edit a version by hand.
 
 ### Test coverage
 
-| Side                    | Lines covered          | Tests            |
-| ----------------------- | ---------------------- | ---------------- |
-| Frontend — Vitest + v8  | **97.34%** (3777/3880) | 1769 in 91 files |
-| Rust — `cargo llvm-cov` | **77.45%** (5811/7503) | 549              |
+| Side                    | Lines covered (2026-08-12) | Tests (2026-09-27)                       |
+| ----------------------- | -------------------------- | ---------------------------------------- |
+| Frontend — Vitest + v8  | **97.34%** (3777/3880)     | 11,492 in 434 files                      |
+| Rust — `cargo llvm-cov` | **77.45%** (5811/7503)     | 3,005, plus 204 in `crates/card-scanner` |
 
 - `npm run test:coverage` — frontend; writes `coverage/`
 - `npm run test:coverage:rust` — Rust; needs `cargo install cargo-llvm-cov` and
@@ -60,10 +89,13 @@ Neither runs in CI — the instrumented Rust rebuild takes minutes against `carg
 The Rust figure counts **shipped code only**, and is ~14 points below what `cargo llvm-cov`
 prints on its own: the crate's tests are inline `#[cfg(test)]` modules, so llvm-cov instruments
 them too and scores every line of them covered by definition. `scripts/coverage-rust.mjs` splits
-each file at its test module and reports both halves. Measured 2026-08-12 on debug builds,
-Windows — [docs/reference/test-coverage.md](docs/reference/test-coverage.md) has the per-file
-tables, the thin spots, and the traps. **The numbers above are hand-maintained and nothing
-recomputes them.**
+each file at its test module and reports both halves. Coverage was measured 2026-08-12 on debug
+builds, Windows — [docs/reference/test-coverage.md](docs/reference/test-coverage.md) has the
+per-file tables, the thin spots, and the traps — and the suite has grown roughly sixfold since,
+so both percentages are that day's rather than today's. The test counts
+are from `npm run verify`'s own suites on this branch's tree, run on Linux (debug) on
+2026-09-27; the Rust count differs slightly by platform because some tests are `cfg`-gated.
+**The numbers above are hand-maintained and nothing recomputes them.**
 
 ## License
 

@@ -6,6 +6,7 @@ import {
   type InfiniteData,
 } from "@tanstack/react-query";
 import {
+  bordersParam,
   colorParam,
   cycleTriState,
   DEBOUNCE_MS,
@@ -19,6 +20,7 @@ import {
   type ColorKey,
 } from "@/features/search/useCardSearch";
 import { useShelfFolds } from "@/features/shelves/useShelfFolds";
+import type { Border } from "@/lib/border";
 import { CONDITIONS, type Condition } from "@/lib/conditions";
 import { FINISHES, type Finish } from "@/lib/finish";
 import { lockedFolderIds } from "@/lib/folderTree";
@@ -113,6 +115,9 @@ export interface CollectionFilterState {
   /** The card-type chips — `CARD_TYPES`, ORed with each other. One kind however many are
    *  pressed, for `rarities`' reason. */
   types: readonly string[];
+  /** The border chips — `regular`/`borderless`/`fullart`, over the copy's printing. One kind
+   *  however many are pressed, for `types`' reason. */
+  borders: readonly Border[];
   /** The band the Price cell sets, at the marketplace the list is quoting. Either end alone is a
    *  filter; both `undefined` is none. */
   priceMin: number | undefined;
@@ -146,6 +151,8 @@ export function activeFilterCount(f: CollectionFilterState): number {
     // One kind however many chips are pressed, the way the colours and the rarities beside it
     // are counted: `Creature` and `Land` together are one narrowing of one question.
     f.types.length > 0,
+    // One kind however many are pressed, for the type row's reason.
+    f.borders.length > 0,
     // One kind for both ends, as the search counts it: `$5 – $20` is one band and one thing to
     // clear, so a reader who set both ends and saw `Reset all 2` would have been told the wrong
     // number about one control.
@@ -256,6 +263,10 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
   // The eight card-type chips, ORed with each other and ANDed with everything else — the rarity
   // chips' shape exactly. On the wire for free: `CollectionQuery extends CardFilters`.
   const [types, setTypes] = useState<readonly string[]>([]);
+  // The border chips (issue #573), a fact about the copy's *printing* rather than the copy — so
+  // unlike `finishes` below they ask what the search's chips ask. On the wire for the type chips'
+  // reason: `CardFilters.borders`, which `push_card_filters` emits for all three lists.
+  const [borders, setBorders] = useState<readonly Border[]>([]);
   const [sets, setSets] = useState<readonly string[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   // Additive rather than exclusive, exactly as the search's is: `cmc` counts `{X}` as zero, so
@@ -323,6 +334,7 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
   // canonicalise this same list, and four copies of one normal form is four places for it to
   // drift.
   const typesParamValue = typesParam(types);
+  const bordersParamValue = bordersParam(borders);
   const finishParam =
     finishes.length > 0 ? FINISHES.filter((f) => finishes.includes(f)) : undefined;
   const conditionParam =
@@ -373,6 +385,7 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
       manaX,
       rarities,
       types,
+      borders,
       priceMin,
       priceMax,
       finishes,
@@ -407,6 +420,7 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
     colorsStrict: strictParam || undefined,
     sets: setsParam,
     types: typesParamValue,
+    borders: bordersParamValue,
     manaValues: manaParam,
     // Absent rather than `false`, which is what the backend defaults to: an off chip is not a
     // filter, and a payload that said so would be lying about intent the way a blank `text`
@@ -470,6 +484,7 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
     strictParam ? "strict" : "",
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
+    bordersParamValue?.join(",") ?? "",
     manaParam?.join(",") ?? "",
     // Its own segment, and load-bearing: X is a second axis over the same chips, so a key
     // built from the numerals alone would serve "3, and also X" out of the pages cached for
@@ -681,6 +696,10 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
      *  answers `Land` and `Artifact` both. */
     types,
     toggleType: (type: string) => setTypes((picked) => toggleIn(picked, type)),
+    /** The border chips, ORed with each other and ANDed with everything else — a copy answers
+     *  the chip its printing's frame answers, so a borderless full-art copy answers two. */
+    borders,
+    toggleBorder: (border: Border) => setBorders((picked) => toggleIn(picked, border)),
     rarities,
     toggleRarity: (rarity: string) => setRarities((picked) => toggleIn(picked, rarity)),
     priceMin,
@@ -877,6 +896,7 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
       manaX,
       rarities,
       types,
+      borders,
       priceMin,
       priceMax,
       finishes,
@@ -897,6 +917,7 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
       setColorFilter(NO_COLORS);
       setSets([]);
       setTypes([]);
+      setBorders([]);
       setManaValues([]);
       setManaX(false);
       setRarities([]);

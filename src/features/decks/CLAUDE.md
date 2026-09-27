@@ -103,10 +103,10 @@ Full record, with every measurement and the provenance of each rung:
   two** (`TheoryDiffDialog`, `deck_theory::theory_diff`), and it matches cards, never piles. The
   bug this replaced: one pile set per deck, so a `user` pile made on the Theory tab drew — empty —
   on the Actual one, because `drawsWhenEmpty` draws every `user` pile. Three things follow:
-  - **Only two writes carry piles across, and both pour one list into the other.** Switching the
+  - **Only one press carries piles across, and it pours one list into the other.** Switching the
     plan on moves the live cards into theory and **clones** each live pile for them (the live
-    piles stay, empty); `deck_theory_copy_from_live` files each copied card into the plan's pile
-    of the same name, making it if absent. Both undo the piles they made.
+    piles stay, empty), and its undo takes the clones away again. (The other writer this sentence
+    named, `deck_theory_copy_from_live`, was removed on 2026-09-27 for having no caller.)
   - **`decks.default_category_id` is still one deck setting, and it names a _live_ pile** — Deck
     settings mounts the live list. On the Theory tab `defaultPileFor` resolves it by id, then by
     that pile's **name** among the plan's piles, else Auto: the setting is a place, and "my
@@ -1117,8 +1117,8 @@ layer.
   an empty theory list beside a full live one reads as data loss. Right danger, wrong half:
   nothing is deleted either way — the two lists are the same table — and what the copy actually
   handed the reader was two identical lists with no way to tell which one they were editing.
-  `deck_theory_copy_from_live` is unchanged and still means "copy what is sleeved up into the
-  plan".
+  The explicit copy-from-live command that outlived that rule was removed on 2026-09-27: it never
+  had a caller, so nothing in the app copies one list into the other now.
 - **The Live list marks which of its cards are the plan, and that mark is `theoryMatch.ts`.** A
   live list is what the reader has actually sleeved up; the one thing it cannot say about itself is
   which rows are the deck they designed and which are the proxies and stand-ins waiting to be
