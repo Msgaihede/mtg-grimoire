@@ -1974,25 +1974,16 @@ describe("CardStack marks", () => {
 /**
  * **The stack card builds its own `<img>`** — its face is a bare image at the stack's own height
  * rather than a 5:7 `CardArt` frame — so it is the one deck surface that asks for the picture
- * itself, and it must ask the local cache even for a row that carries a Scryfall URL.
+ * itself, and it must ask the local cache.
  */
 describe("a stack card's art", () => {
-  const SCRYFALL = { display: "https://cards.scryfall.io/display/front/s/o/sol.webp?1706230661" };
-
   const draw = () =>
-    render(
-      <CardStack
-        cards={[card({ name: "Sol Ring", imageUris: SCRYFALL })]}
-        label="Ramp"
-        currency="usd"
-      />,
-    );
+    render(<CardStack cards={[card({ name: "Sol Ring" })]} label="Ramp" currency="usd" />);
 
-  it("draws the cached protocol picture for a row that carries a URL", () => {
+  it("draws the cached protocol picture", () => {
     const { container } = draw();
 
     const src = container.querySelector("img")?.getAttribute("src");
     expect(src).toContain("mtgimg");
-    expect(src).not.toContain("scryfall.io");
   });
 });

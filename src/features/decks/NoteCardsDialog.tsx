@@ -158,7 +158,7 @@ function Picker({
    * The named cards the deck no longer holds, drawn at the head so an unticking press is always
    * reachable. `attachable` cannot contain them by construction — it is built from the deck.
    *
-   * **Four of {@link NoteCardChoice}'s eight fields are synthesised** rather than read, because a
+   * **Four of {@link NoteCardChoice}'s seven fields are synthesised** rather than read, because a
    * `DeckNoteCard` carries no printing: `setCode` and `collectorNumber` are empty, `copies` is
    * `0`, and `typeBucket` is {@link OTHER}. None of the four is a fact about the card, so nothing
    * may draw them — see {@link Row}, which is handed `stray` and decides on that rather than on
@@ -176,7 +176,6 @@ function Picker({
           oracleId: c.oracleId,
           name: c.name,
           cardId: c.cardId ?? "",
-          imageUris: c.imageUris,
           setCode: "",
           collectorNumber: "",
           typeBucket: OTHER,
@@ -383,9 +382,9 @@ function Picker({
  * **The frame beside it is usually a real picture, and that is worth stating because the opposite
  * is the natural guess.** `attachments_by_note` (`src-tauri/src/deck_notes.rs`) resolves a printing
  * over the *whole corpus* — `ORDER BY (dc.card_id IS NULL), c.id`, so a printing the deck holds
- * first and any printing otherwise — so a card cut from the deck keeps its `cardId` **and** its
- * `imageUris`. A deck row leaving does not take the art with it. `cardId` is absent, and the frame
- * therefore empty, only for the orphan whose oracle id the corpus knows no printing of at all.
+ * first and any printing otherwise — so a card cut from the deck keeps its `cardId`, and the frame
+ * draws from that. A deck row leaving does not take the art with it. `cardId` is absent, and the
+ * frame therefore empty, only for the orphan whose oracle id the corpus knows no printing of at all.
  *
  * The guard is `stray` and never `row.setCode !== ""`: the sentinels are the symptom and being cut
  * from the deck is the reason, and a row that guarded on the symptom would silently start drawing

@@ -129,7 +129,7 @@ import { DEFAULT_SCANNER_PREFS, STATUS, VERDICTS } from "@/features/scanner/fixt
 // and a second hand-typed list here would let the workbench and the window disagree about which
 // four exist. Under Storybook this specifier is aliased to `.storybook/fake/images.ts`, which
 // re-exports it from the real module unchanged — so both programs read the same tuple.
-import { IMAGE_VARIANTS, type ImageVariant } from "@/lib/images";
+import { IMAGE_VARIANTS } from "@/lib/images";
 import type {
   ActivityEntry,
   BracketCardRow,
@@ -5324,7 +5324,6 @@ function comboPieces(
         quantity: row.quantity,
         mustBeCommander: row.mustBeCommander,
         cardId,
-        imageUris: frontFaceImageUris(db, cardId),
         owned,
       };
     });
@@ -5820,38 +5819,6 @@ function implicitTokenQuantity(db: FakeDb, deckId: number, oracleId: string): nu
   return storedToken(db, deckId, oracleId)?.quantity ?? DEFAULT_TOKEN_QUANTITY;
 }
 
-/**
- * `image_uri::front_face_map` over a fixture row — the field only three DTOs here carry: a
- * token row, a combo piece and a note card's representative printing
- * ({@link noteCardsOf}, through {@link noteCardPrinting}).
- *
- * **Every other DTO omits `imageUris` and that is still the rule**: a picture under Storybook
- * comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever fetches. **No
- * view reads this field any more either** — every card frame draws the `mtgimg` protocol through
- * `cardImageUrl` — so these three carry it only to keep the payloads the shape Rust sends.
- * `grep -n "frontFaceImageUris(" .storybook/fake/db.ts` is the census.
- *
- * Nothing minted: the two URLs are the fixture's own real Scryfall ones, the same pair
- * {@link readHandlers.card_image_uri} answers with, and the same two variants
- * `image_uri::LIST_VARIANTS` names — `display` from `normalUrl` and `art` from `artCropUrl`. The
- * corpus can answer no others, which is why `thumb` and `grid` are absent here as they are there.
- *
- * `null` rather than `{}` for a row with neither, which is `front_face_map`'s own answer, and
- * the {@link FakeDb.fault} `imageUrisMissing` is every row in that state.
- *
- * **A `null` `cardId` is a `null` picture and not a lookup**, which is the combo piece's case
- * and never a token's: there is no printing to have one.
- */
-function frontFaceImageUris(db: FakeDb, cardId: string | null): DeckTokenRow["imageUris"] {
-  if (db.fault === "imageUrisMissing") return null;
-  const card = cardById(db, cardId);
-  if (card === null) return null;
-  const uris: Partial<Record<ImageVariant, string>> = {};
-  if (card.normalUrl !== null) uris.display = card.normalUrl;
-  if (card.artCropUrl !== null) uris.art = card.artCropUrl;
-  return Object.keys(uris).length === 0 ? null : uris;
-}
-
 /** One entry of a token, as {@link toDeckTokenRow} draws it — stored or implicit. */
 interface TokenEntryDraw {
   cardId: string;
@@ -5934,11 +5901,8 @@ function toDeckTokenRow(
     finish: draw.finish,
     quantity: draw.quantity,
     implicit: draw.implicit,
-    // **The entry's picture**, and deliberately not the resolver's: the two differ for exactly the
-    // entries somebody picked, and taking the resolver's would draw the deck's default Treasure
-    // on the tile the reader chose the other Treasure for.
-    imageUris: frontFaceImageUris(db, draw.cardId),
-    // The chin of that same printing, so the set code under the art is the art's — the Treasure
+    // The chin of the entry's own printing — `cardId`, whose picture the tile draws — and
+    // deliberately not the resolver's, so the set code under the art is the art's: the Treasure
     // in `starter` is the case, an entry at `tafr` against the resolver's `thob`.
     setCode: drawn?.setCode ?? null,
     collectorNumber: drawn?.collectorNumber ?? null,
@@ -7566,7 +7530,6 @@ function noteCardsOf(db: FakeDb, deckId: number, noteId: number): DeckNoteCard[]
         oracleId: c.oracleId,
         name: cardNameOfOracle(db, c.oracleId),
         cardId: printing?.id ?? null,
-        imageUris: frontFaceImageUris(db, printing?.id ?? null),
       };
     })
     .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
@@ -7574,7 +7537,7 @@ function noteCardsOf(db: FakeDb, deckId: number, noteId: number): DeckNoteCard[]
 
 /**
  * `deck_notes::attachments_by_note`'s correlated subquery — the **representative printing** one
- * attachment draws, and the third DTO in this file to fold {@link frontFaceImageUris}.
+ * attachment draws, which is the whole of what `DeckNoteCard.cardId` is.
  *
  * **The deck's own printing first, any printing the corpus holds second**, which is that
  * statement's `ORDER BY (dc.card_id IS NULL), c.id` spelled as two passes: SQLite sorts `0`
@@ -10853,14 +10816,6 @@ export function readHandlers(db: FakeDb) {
      * the gallery may simply have deleted, and `plan` turns the same `None` into
      * {@link DECK_GONE} because an empty plan already means something else here — "nothing in
      * this deck can be filled" — and a dialog cannot tell those two apart from a bare `[]`.
-     *
-     * `imageUris` is omitted, as it is from every DTO this fake builds but the ones that **fold**
-     * it: under Storybook a card picture comes from the `@/lib/images` alias rather than from a
-     * URL on the row, so a hand-minted one here would be a URL nobody ever fetches. The
-     * exceptions go through {@link frontFaceImageUris}, and its own comment enumerates them and
-     * says what earns one — a view that folds the field rather than passing it through. **No
-     * count here on purpose**: this sentence read "bar one" while two DTOs carried it and then
-     * three, because a number in prose goes red nowhere.
      */
     deck_pull_plan: (args: { deckId: number }): DeckPullRow[] => {
       // **First, ahead of the read, and {@link isVirtual}'s own contract is what makes that
@@ -10970,12 +10925,6 @@ export function readHandlers(db: FakeDb) {
      * A deck that is not there is {@link DECK_GONE} rather than `[]`, {@link deck_pull_plan}'s
      * reason: an empty plan already means something else here — *everything this deck is short of
      * has left the card database* — and a dialog cannot tell those two apart from a bare list.
-     *
-     * `imageUris` is omitted, as it is from every DTO this fake builds but the ones that **fold**
-     * it: under Storybook a card picture comes from the `@/lib/images` alias rather than from a
-     * URL on the row, so a hand-minted one here would be a URL nobody ever fetches.
-     * {@link frontFaceImageUris} enumerates the exceptions; no count is written here, for the
-     * reason its own comment gives.
      */
     deck_missing_plan: (args: { deckId: number }): DeckMissingRow[] => {
       // {@link deck_pull_plan}'s fence, ahead of the shortfall walk and for its reason: a
@@ -12174,9 +12123,6 @@ export function readHandlers(db: FakeDb) {
         promoTypes: p.promoTypes,
         finishes: p.finishes,
         lang: p.lang,
-        // `front_face_map`'s answer, through the one fold every other picture-carrying row here
-        // uses — so `imageUrisMissing` empties this feed's thumbs exactly as it empties a wall's.
-        imageUris: frontFaceImageUris(db, p.id),
         decks: [...(holders.get(p.oracleId)?.values() ?? [])].sort(
           (a, b) => cmp(a.name, b.name) || a.deckId - b.deckId,
         ),
@@ -15596,8 +15542,7 @@ function wishIsForCard(db: FakeDb, wish: FakeWish, cardId: string): boolean {
  * the pre-pick is what the narrow read would have chosen; then both reads share the root-first,
  * then folders in their own `sort_order`, then oldest-row ranking — {@link pullOrder}'s argument.
  *
- * **An empty answer is the ordinary case and never a refusal.** `imageUris` is omitted for the
- * reason {@link deck_missing_plan} gives: a Storybook picture comes from the `@/lib/images` alias.
+ * **An empty answer is the ordinary case and never a refusal.**
  */
 function quickAddWishes(
   db: FakeDb,

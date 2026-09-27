@@ -19,7 +19,6 @@
  */
 
 import type { DeckCard, DeckNote } from "@/lib/ipc";
-import type { ImageVariant } from "@/lib/images";
 import { OTHER, TYPE_BUCKETS, typeBucket } from "./deckBuckets";
 import { noteToPlainText } from "./noteMarkdown";
 
@@ -111,7 +110,6 @@ export interface NoteCardChoice {
   /** The printing this row draws — the **lowest `cardId`** among the deck's rows for this oracle
    *  id, which is the printing `attachments_by_note` will name for the note the press creates. */
   cardId: string;
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
   setCode: string;
   collectorNumber: string;
   /** `deckBuckets.ts`' bucket for the **front** face — what the chips filter on. */
@@ -147,7 +145,7 @@ export interface NoteCardChoice {
  * collator is locale-aware about punctuation and is free to order two ids the other way round,
  * which would put this back to disagreeing with Rust on exactly the decks it is here to fix.
  *
- * **Only the four printing fields move with the winner.** `name` and `typeBucket` are facts about
+ * **Only the three printing fields move with the winner.** `name` and `typeBucket` are facts about
  * the *card* — two printings of one card denormalise the same name and share a type line — so
  * taking them from the first row seen keeps the sort and the chips stable whichever printing wins.
  */
@@ -161,7 +159,6 @@ export function attachableCards(cards: readonly DeckCard[]): NoteCardChoice[] {
       // The fold is over every row; the *printing* is a race the lowest id wins.
       if (card.cardId < seen.cardId) {
         seen.cardId = card.cardId;
-        seen.imageUris = card.imageUris;
         seen.setCode = card.setCode;
         seen.collectorNumber = card.collectorNumber;
       }
@@ -171,7 +168,6 @@ export function attachableCards(cards: readonly DeckCard[]): NoteCardChoice[] {
       oracleId: card.oracleId,
       name: card.name,
       cardId: card.cardId,
-      imageUris: card.imageUris,
       setCode: card.setCode,
       collectorNumber: card.collectorNumber,
       typeBucket: typeBucket(card.typeLine),

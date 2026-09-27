@@ -113,7 +113,6 @@ function piece(over: Partial<ComboPiece> = {}): ComboPiece {
     quantity: 1,
     mustBeCommander: false,
     cardId: "c1",
-    imageUris: null,
     owned: 1,
     ...over,
   };

@@ -64,7 +64,6 @@ const BOLT: DeckPullRow = {
   finish: null,
   short: 3,
   categories: ["Removal"],
-  imageUris: null,
   candidates: [candidate({ entryId: 11, quantity: 3 })],
 };
 
@@ -83,7 +82,6 @@ const BOROS_CHARM: DeckPullRow = {
   finish: null,
   short: 2,
   categories: ["Burn", "Sideboard"],
-  imageUris: null,
   candidates: [
     candidate({ entryId: 21, quantity: 1 }),
     candidate({
@@ -108,7 +106,6 @@ const SWORDS: DeckPullRow = {
   finish: "foil",
   short: 2,
   categories: ["Removal"],
-  imageUris: null,
   candidates: [
     candidate({
       entryId: 31,

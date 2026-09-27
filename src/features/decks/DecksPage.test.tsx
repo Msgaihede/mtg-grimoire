@@ -663,24 +663,6 @@ describe("DecksPage", () => {
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
   });
 
-  /**
-   * The local cache already holds the crop at the right size, so a row that carries a URL of its
-   * own is still drawn from the protocol. A frame that preferred the row's URL would refetch
-   * every cover over the network on a wall the reader has already paid for.
-   */
-  it("keeps drawing the cached protocol picture when a row carries a URL of its own", async () => {
-    deckList.mockResolvedValue([
-      { ...BURN, imageUris: { art: "https://cards.scryfall.io/art/front/0/0/x.webp?1" } },
-    ]);
-
-    wrap(<DecksPage />);
-
-    const tile = (await tileFor("Burn")).closest("li")!;
-    const img = tile.querySelector("img");
-    expect(img).toHaveAttribute("src", cardImageUrl(BURN.coverCardId!, 0, "art"));
-    expect(img!.getAttribute("src")).not.toContain("scryfall.io");
-  });
-
   /** A filed deck is kept, not shown: it is behind its own disclosure, shut. */
   it("keeps archived decks in a section of their own, collapsed", async () => {
     wrap(<DecksPage />);

@@ -898,8 +898,6 @@ describe("the tile the wishlist's wall is given at the phone width", () => {
  * reading `cardId` would draw nothing on exactly the rows a wishlist is mostly made of.
  */
 describe("a wish's art", () => {
-  const SCRYFALL = { display: "https://cards.scryfall.io/display/front/c/1/c1.webp?1706230661" };
-
   it("draws an any-printing wish as the printing the backend chose for it", () => {
     wall([ANY]);
 
@@ -907,15 +905,6 @@ describe("a wish's art", () => {
       "src",
       expect.stringContaining("/c-recall/0"),
     );
-  });
-
-  /** The local cache still wins for a row that carries a Scryfall URL of its own. */
-  it("keeps drawing the cached protocol picture for a row that carries a URL", () => {
-    wall([{ ...BOLT, imageUris: SCRYFALL }]);
-
-    const src = screen.getByAltText("Lightning Bolt").getAttribute("src");
-    expect(src).toContain("mtgimg");
-    expect(src).not.toContain("scryfall.io");
   });
 });
 

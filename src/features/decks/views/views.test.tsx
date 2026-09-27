@@ -4652,36 +4652,27 @@ describe("StackView arrow keys", () => {
 
 /**
  * **The deck editor's Grid view draws the deck's own `DeckCardFace`**, as `CardStack` does, so the
- * picture it asks for is the face's — the local cache, even for a row that carries a Scryfall URL.
- * `GridView` is a second caller of that face at a different width, and nothing in the type system
+ * picture it asks for is the face's — the local cache. `GridView` is a second caller of that face at a different width, and nothing in the type system
  * says a tile has to hold one, so this is the case that would go red for a tile that went back to
  * drawing a picture of its own. Addressed the way `CardStack.test.tsx` addresses the same picture
  * (`container.querySelector("img")`), since the face's `<img>` is decoration and has no `alt` to
  * be found by.
  */
 describe("the deck grid's art", () => {
-  const SCRYFALL = { display: "https://cards.scryfall.io/display/front/s/o/sol.webp?1706230661" };
-
   const draw = () =>
     render(
       <GridView
         tracksCollection
-        groups={buildGroups(
-          [{ ...card({ name: "Sol Ring" }), imageUris: SCRYFALL }],
-          [RAMP],
-          "category",
-          "alphabetical",
-        )}
+        groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
         marketplace={TCG}
       />,
     );
 
-  it("draws the cached protocol picture for a row that carries a URL", () => {
+  it("draws the cached protocol picture", () => {
     const { container } = draw();
 
     const src = container.querySelector("img")?.getAttribute("src");
     expect(src).toContain("mtgimg");
-    expect(src).not.toContain("scryfall.io");
   });
 });
 
@@ -4707,8 +4698,6 @@ function tokenView(over: Partial<DeckTokenView> = {}): DeckTokenView {
     state: "auto",
     overridden: false,
     subtitle: "Colorless · {T}, Sacrifice this token: Add one mana of any color.",
-    imageUrl: null,
-    imageUris: null,
     setCode: "tclb",
     collectorNumber: "5",
     setName: "Commander Legends",
