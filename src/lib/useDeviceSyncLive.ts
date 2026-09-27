@@ -12,9 +12,9 @@ import { ipc, type LiveState } from "@/lib/ipc";
  * transition, which at launch is the common case rather than a rare race: a device already
  * connected when this mounts would read `"off"` for as long as the socket stays `"live"`.
  *
- * **The seed tolerates the command rejecting.** The web target has no relay commands at all —
- * `web/route.rs`'s `COMMANDS` list carries none of them — so `syncLiveState()` rejects there,
- * and this hook simply stays at `"off"` rather than throwing or leaving an unhandled rejection.
+ * **The seed tolerates the command rejecting.** Under a plain `vite dev` there is no Tauri window
+ * to answer it, so `syncLiveState()` rejects there, and this hook simply stays at `"off"` rather
+ * than throwing or leaving an unhandled rejection.
  *
  * **A `seeded` ref lets a real event always win over the seed, and the guard is load-bearing
  * rather than ceremony — the same dedup above is exactly what makes the race unrecoverable if
@@ -58,9 +58,8 @@ export function useDeviceSyncLive(): LiveState {
       .then((value) => {
         if (!seeded.current) setState(value);
       })
-      // No relay commands on the web target, and no Tauri window under a plain `vite dev` —
-      // either way, staying at `"off"` is the honest answer and not worth taking the app down
-      // for.
+      // No Tauri window under a plain `vite dev` — staying at `"off"` is the honest answer and
+      // not worth taking the app down for.
       .catch(() => {});
 
     return unlisten;

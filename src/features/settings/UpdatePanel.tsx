@@ -1,7 +1,6 @@
 import { CircleArrowUp, CircleCheck, Download, ExternalLink, RefreshCw } from "lucide-react";
 import { useId } from "react";
 import { GrimoireMark } from "@/components/GrimoireMark";
-import type { InstallKind } from "@/lib/ipc";
 import type { ReleaseHistory } from "@/lib/useReleaseHistory";
 import { formatBytes, formatChecked, type Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
@@ -9,23 +8,6 @@ import { BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import { ReleaseNotes } from "./ReleaseNotes";
 import { VersionHistory } from "./VersionHistory";
-
-/**
- * The one sentence for a build that something else replaces, per install kind.
- *
- * **A lookup rather than a ternary**, so the union in `@/lib/ipc` is what decides whether a
- * kind belongs here: adding a sixth `InstallKind` makes this object's type ask the question,
- * where an `=== "managed" || === "web"` chain would quietly answer "self-updating" for it and
- * draw a Download button. The three that are absent — `portable`, `nsis`, `other` — are the
- * three where this app is the thing that installs itself, or where nothing knows what does.
- */
-const ELSEWHERE: Partial<Record<InstallKind, string>> = {
-  managed: "Updates arrive through Google Play.",
-  // Not "reload the page", which is the mechanism rather than the promise, and not accurate
-  // either: the service worker fetches the new build in the background and it is live at the
-  // *next* start. `src/pwa` owns that flow and already tells the reader when one is waiting.
-  web: "Updates arrive through your browser.",
-};
 
 /**
  * The download bar.
@@ -98,47 +80,9 @@ export function UpdatePanel({
   const { status, progress, busy, action, error } = update;
   const release = status?.available ?? null;
   /**
-   * Who replaces this build — the answer that decides whether this panel offers controls at
-   * all, and the one that has to come from the backend.
-   *
-   * **Read off `installKind` rather than off `isAndroid()` or `isWebTarget()`**, and the
-   * difference is the point: the backend already answered this question, and asking the user
-   * agent here would be a second, independent answer to one question, free to disagree.
-   *
-   * **The trap this walked into once is worth keeping written down.** Until 2026-08-31 the
-   * web build did not answer `update_status` at all, so `installKind` was `undefined`, so
-   * this test said "not managed" and the panel drew a Download button over a page that can
-   * download nothing — **a feature gated on a backend answer is ungated wherever the backend
-   * cannot answer.** PR #315 fixed the symptom by hiding the whole panel on web; the fix now
-   * is that the browser answers `"web"`, which is a real answer this test can read.
-   *
-   * `ELSEWHERE` is the two kinds where something else does the replacing, and each names
-   * *what*: a reader told "updates arrive elsewhere" with no elsewhere has been told nothing.
-   * Neither is `other` — that one means "we could not tell, here is the release page", and
-   * this app's release page offers a Windows exe and an NSIS installer, which is a worse
-   * answer to a phone or a browser than no answer at all.
-   */
-  const elsewhere = status ? ELSEWHERE[status.installKind] : undefined;
-  /**
-   * Can this build replace itself? Governs the Download / Restart / release-page controls
-   * and nothing else since 2026-08-31.
-   *
    * Nothing on this panel presses until the backend has said which kind of install this is.
-   */
-  const selfUpdating = status !== null && elsewhere === undefined;
-  /**
-   * Can this build *ask* — which is a different question, and separating the two is the
-   * whole of "check and notes, no download".
-   *
-   * **Every target, once the backend has answered at all.** `update_check` is desktop's and
-   * Android's as an ordinary command and the browser's as `glue::update_check`, so a reader
-   * on a phone or in a tab can read what the release they are about to be handed actually
-   * changed — which is the only thing `update_history` had to say and could not, because
-   * until the check ran on those targets that row was never written.
-   *
-   * It is not `!== elsewhere`: a managed or web install can check and cannot install, and
-   * reading one flag for both questions is what drew a Download button over a page that can
-   * download nothing.
+   * The release block's buttons need no gate of their own: `release` is read off `status`, so
+   * there is no release to act on before this is true.
    */
   const canCheck = status !== null;
 
@@ -182,12 +126,6 @@ export function UpdatePanel({
             <p className="text-xs text-dim">{formatChecked(status?.lastCheckAt ?? null)}</p>
           </div>
         </div>
-        {/* **On every install kind, which reverses what this button used to be.** It was
-            drawn only where the app could replace itself, on the reasoning that a check with
-            no download behind it answers nothing — true only while `update_check` was
-            desktop's, because the release *notes* and the version history are written by the
-            very same request and by nothing else. A phone and a browser can ask now, so they
-            are asked to press. See `canCheck`. */}
         {canCheck && (
           <button
             type="button"
@@ -202,18 +140,8 @@ export function UpdatePanel({
         )}
       </div>
 
-      {elsewhere && (
-        <p className="border-t border-border pt-4 text-sm text-dim">
-          <span className="text-text">{elsewhere}</span> This build cannot replace itself, so a
-          check here reads what changed rather than offering a download.
-        </p>
-      )}
-
-      {/* **The release block is drawn on every target; only its buttons are the desktop's.**
-          The border moves onto whichever of the two is first, so a panel that draws the
-          sentence above does not draw a second rule directly under it. */}
       {release ? (
-        <div className={cn("space-y-3", !elsewhere && "border-t border-border pt-4")}>
+        <div className="space-y-3 border-t border-border pt-4">
           <div>
             <p className="text-sm text-text">
               <span className="font-mono tabular-nums text-accent">{release.version}</span> is
@@ -235,72 +163,48 @@ export function UpdatePanel({
 
           {progress && <Bar done={progress.done} total={progress.total} />}
 
-          {/* **`selfUpdating`, not `canCheck`** — this is the half that stays the desktop's.
-              `PrimaryAction` reads `action`, which is `"unavailable"` for a managed or web
-              install (`pick_asset` refuses both kinds), and its `"unavailable"` branch offers
-              a release page carrying a Windows exe and an NSIS setup — the wrong answer to
-              somebody holding a phone, which is the same mistake `ELSEWHERE` exists to stop
-              `other` making. `update_open_release_page` is not routed on web either, so the
-              GitHub button beside it would answer `unknown command`. */}
-          {selfUpdating && (
-            <>
-              <div className="flex flex-wrap items-center gap-3">
-                <PrimaryAction update={update} windows={windows} />
-                {action !== "unavailable" && (
-                  <button
-                    type="button"
-                    onClick={update.openReleasePage}
-                    className={cn(BUTTON, "border-border text-dim hover:bg-bg hover:text-text")}
-                  >
-                    <ExternalLink className="size-4" aria-hidden="true" />
-                    View on GitHub
-                  </button>
-                )}
-              </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <PrimaryAction update={update} windows={windows} />
+            {action !== "unavailable" && (
+              <button
+                type="button"
+                onClick={update.openReleasePage}
+                className={cn(BUTTON, "border-border text-dim hover:bg-bg hover:text-text")}
+              >
+                <ExternalLink className="size-4" aria-hidden="true" />
+                View on GitHub
+              </button>
+            )}
+          </div>
 
-              {action === "install" && (
-                <p className="text-xs text-dim">
-                  The app will close and reopen. Nothing in your collection is touched.
-                </p>
-              )}
-              {action === "unavailable" && (
-                <p className="text-xs text-dim">
-                  This copy was installed in a way the app can&rsquo;t update on its own.
-                  Download {release.version} from the release page and install it over this one
-                  — your collection stays where it is.
-                </p>
-              )}
-            </>
+          {action === "install" && (
+            <p className="text-xs text-dim">
+              The app will close and reopen. Nothing in your collection is touched.
+            </p>
+          )}
+          {action === "unavailable" && (
+            <p className="text-xs text-dim">
+              This copy was installed in a way the app can&rsquo;t update on its own.
+              Download {release.version} from the release page and install it over this one
+              — your collection stays where it is.
+            </p>
           )}
         </div>
       ) : status?.lastCheckAt ? (
-        <p
-          className={cn(
-            "flex items-center gap-2 text-sm text-dim",
-            !elsewhere && "border-t border-border pt-4",
-          )}
-        >
+        <p className="flex items-center gap-2 border-t border-border pt-4 text-sm text-dim">
           <CircleCheck className="size-4 shrink-0" aria-hidden="true" />
           You&rsquo;re on the latest version.
         </p>
-      ) : elsewhere ? null : (
-        // **Only where something really is checking.** `desktop.rs` spawns a check at
-        // startup under `#[cfg(desktop)]`, so a portable, NSIS or unrecognised install is
-        // doing exactly this while the panel renders — and so is the first frame on every
-        // target, where `status` is still `null` and `elsewhere` cannot be set. A browser
-        // and a phone run no startup check, and the `elsewhere` sentence above already
-        // points at the button; a third line promising a check nobody started would be the
-        // panel describing something that is not happening.
+      ) : (
+        // `desktop.rs` spawns a check at startup, so every install is doing exactly this while
+        // the panel renders — and so is the first frame, where `status` is still `null`.
         <p className="flex items-center gap-2 border-t border-border pt-4 text-sm text-dim">
           Checking for updates…
         </p>
       )}
 
-      {/* **Drawn wherever a check can fill it**, which since 2026-08-31 is everywhere. It was
-          hidden with the buttons while `update_check` was desktop's, because the list is
-          written by that one request and by nothing else — `update_history` answered `[]` in
-          a browser and on a phone, and an empty accordion promising a changelog is worse than
-          no accordion. `VersionHistory` still says so itself before the first check. */}
+      {/* The list is written by `update_check` and by nothing else, so before the first check
+          `VersionHistory` says that itself rather than drawing an empty accordion. */}
       {canCheck && (
         <VersionHistory history={history} currentVersion={status?.currentVersion} />
       )}

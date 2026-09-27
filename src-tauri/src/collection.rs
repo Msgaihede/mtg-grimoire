@@ -14,12 +14,10 @@
 use crate::collection_folders::{FOLDER_NOT_YOURS, USER_KIND};
 use crate::deck_meta::FOLDER_GONE;
 use crate::schema::{COLLECTION_GRAIN, FINISHES};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The NA condition scale, in descending order, with the **not-set sentinel in front of it**.
@@ -388,7 +386,6 @@ fn folder_named(conn: &Connection, folder_id: Option<i64>, kinds: &[&str]) -> Re
 /// `removed` folder named here is a stale client or a bug.
 const READER_FOLDERS: &[&str] = &[USER_KIND];
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// …and what a **deck-driven write** may file into, which is the reader's drawers plus the group
 /// of the deck that same press answers for.
 ///
@@ -416,7 +413,6 @@ const READER_FOLDERS: &[&str] = &[USER_KIND];
 /// write naming it would be cardboard that arrives already discarded.
 pub(crate) const DECK_WRITE_FOLDERS: &[&str] = &[USER_KIND, DECK_KIND];
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// `COLLECTION_FOLDER_KINDS[1]` — the one folder that stands for a deck.
 ///
 /// By index rather than by spelling, [`crate::collection_alloc`]'s rule: the word here and the
@@ -516,8 +512,8 @@ fn card_name_of(conn: &Connection, card_id: &str) -> Result<Option<String>, Stri
 /// [`add_entry_filed`] deliberately is not.** The two callers that reach past this door are a
 /// bulk import — which records one row carrying its count — and `deck_quick_add::quick_add`,
 /// which writes a `deck_audit` row and by the feed's first rule must not write a second line
-/// about the same press. Both production callers of *this* function (`collection_add` and the
-/// web target's route) are the reader's own gesture, which is what makes this the right rung.
+/// about the same press. The production caller of *this* function, `collection_add`, is the
+/// reader's own gesture, which is what makes this the right rung.
 ///
 /// **The upsert and its feed row are one savepoint** ([`crate::db::in_savepoint`], issue #550).
 /// Neither command wrapper opens a transaction, so until then the upsert autocommitted on its
@@ -728,7 +724,6 @@ pub struct ImportCommitOutcome {
     pub removed: i64,
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// [`add_entry`] with one clause changed: the grain's quantity is **written**, not accumulated.
 /// A `set` import means "this file's number is the truth", not "add these copies to what is
 /// already there" — the collection's own asymmetry [`set_quantity`] already carries, reused here
@@ -848,9 +843,6 @@ fn set_entry(
 /// is "nothing was updated", which is exactly what happened. Clamped rather than restructured:
 /// `added` and `removed` each name statements that ran, and making `updated` the subtraction of
 /// two counts that can overlap is what costs the invariant, not the counters themselves.
-/// **`pub(crate)` since 2026-08-29**, with the one-PR `allow(dead_code)` gone: `web::route`
-/// is the second caller. The *file read* stayed behind — this takes already-parsed items, so
-/// it is an ordinary port where `import_read_file` is not.
 pub(crate) fn commit_import(
     conn: &Connection,
     items: &[CollectionImportItem],
@@ -1751,7 +1743,6 @@ pub(crate) fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite:
     Ok(())
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_add(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1765,7 +1756,6 @@ pub async fn collection_add(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_set_quantity(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1780,7 +1770,6 @@ pub async fn collection_set_quantity(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1802,7 +1791,6 @@ pub async fn collection_update(
 /// `wishlist_set_printing`: the facet index's `owned` dimension is keyed by printing, so moving
 /// copies from one printing to another changes what it counts, where a wish changes nothing the
 /// index knows about. It is `collection_update`'s wrapper for `collection_update`'s reason.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_set_printing(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1817,7 +1805,6 @@ pub async fn collection_set_printing(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_remove(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1839,7 +1826,6 @@ pub async fn collection_remove(
 /// import dialog sends the group of the deck it just wrote a list into, so the list and the
 /// copies backing it agree the moment the dialog closes — see [`DECK_WRITE_FOLDERS`], which is the
 /// only place in the crate that fence is wider than the reader's own drawers.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1994,9 +1980,9 @@ pub struct CollectionQuery {
     ///
     /// **Who asks: the deck builder's Collection Search tab, and nothing else** — the surface
     /// whose question is "what can I build with today", which is the one thing a set-aside
-    /// drawer is not part of. Who does not: the mirror, the export sweep, the web route's
-    /// passthrough, and `a_query_that_never_asks_still_sees_a_locked_folders_copies` is the
-    /// fence around that silence.
+    /// drawer is not part of. Who does not: the mirror and the export sweep, and
+    /// `a_query_that_never_asks_still_sees_a_locked_folders_copies` is the fence around that
+    /// silence.
     ///
     /// **The collection page was on that first list until 2026-09-09 and is on the second now**
     /// ([#436](https://github.com/Msgaihede/mtg-grimoire/issues/436)). Its list and its header
@@ -2149,21 +2135,13 @@ pub struct CollectionRow {
     /// whose name I could not find" — `collection_entries.folder_id` is a real foreign key, so
     /// the id and the name arrive together or not at all.
     pub folder_name: Option<String>,
-    /// The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser
-    /// can reach**, and `None` when this printing has none worth fetching.
+    /// The front face's picture on `cards.scryfall.io`, by variant, and `None` when this
+    /// printing has none worth fetching.
     ///
     /// [`crate::search::CardSummary::image_uris`] carries the argument in full and it is not
     /// repeated here. One variant ([`crate::image_uri::LIST_VARIANT`]), face 0 only, the
     /// face-first precedence, and the `soon.jpg` fence — every one of them applied by
     /// [`crate::image_uri::front_face_map`] and none of them respelled on this row.
-    ///
-    /// **It is here because `collection_list` is routed on web** (`web/route.rs`'s `COMMANDS`)
-    /// and `mtgimg://` is a Tauri custom protocol wasm cannot register with a browser. Without
-    /// it the collection wall draws named, artless frames in a browser while the search wall
-    /// beside it draws pictures — which is exactly what shipped, and what the device pass of
-    /// 2026-08-30 could not see because the collection was empty. On the desktop it is
-    /// *ignored*: `cardArtSrc` takes the local cache, whose bytes are already re-encoded to
-    /// the variant's exact size.
     ///
     /// `None` for an orphan, whose printing has left `cards` — the same answer, in the same
     /// shape, as every other card-derived field on this row.
@@ -2792,7 +2770,6 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
 
 /// The collection list. **Read-only** connection, blocking pool — as every read in this
 /// app is, so a list never queues behind a sync.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2806,7 +2783,6 @@ pub async fn collection_list(
     .map_err(|e| format!("the collection could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_summary(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2981,7 +2957,6 @@ pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfC
 
 /// The Shelves wall's per-shelf figures. **Read-only** connection, blocking pool, like
 /// [`collection_list`] beside it.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_shelf_counts(
     state: tauri::State<'_, Arc<AppState>>,
@@ -3151,7 +3126,6 @@ pub fn breakdown(
 /// [`crate::collection_folders::collection_folder_summary`]'s spelling for the same argument:
 /// an id this build does not know lands on TCGplayer through
 /// [`crate::sorting::Marketplace::from_opt`] rather than failing the whole request.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_breakdown(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4093,9 +4067,8 @@ mod tests {
             "the backup's own header counts them too"
         );
 
-        // The wire's spelling and its default, which is where this is really decided: the web
-        // route's passthrough hands `scope` whatever JSON arrived, so an omitted field has to
-        // parse to `false` rather than to a narrowing or an error.
+        // The wire's spelling and its default, which is where this is really decided: an
+        // omitted field has to parse to `false` rather than to a narrowing or an error.
         let bare: CollectionQuery = serde_json::from_str("{}").unwrap();
         assert!(
             !bare.exclude_locked,
@@ -6972,11 +6945,9 @@ mod tests {
     }
 
     /// **A collection row carries the front face's image URL, at the index the appended pair
-    /// put it at** — the field the web build's wall has no other way to get a picture from.
+    /// put it at.**
     ///
-    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register one with a browser, so
-    /// in a browser a tile draws this or draws the no-art frame. Four printings, because the
-    /// four ways this can be wrong fail apart: a missing
+    /// Four printings, because the four ways this can be wrong fail apart: a missing
     /// [`crate::image_uri::is_fetchable`] lands Scryfall's error page under `display`; a
     /// printing with neither image column must answer `None` and not an empty map; a reversed
     /// precedence draws a `meld` card's melded picture where its front belongs; and the pair

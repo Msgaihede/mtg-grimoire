@@ -1,9 +1,7 @@
 //! Framing a byte stream, with no I/O and no database in sight.
 //!
 //! Everything here is push-shaped: the caller hands over chunks as they arrive and the
-//! framer calls back with whatever became complete. That is not a stylistic choice — a
-//! browser stream is push and async with no thread to block, so a pull parser
-//! (`Read`, `Deserializer::from_reader`) cannot be driven from one at all.
+//! framer calls back with whatever became complete.
 
 /// A framer that has stopped draining, refused before it becomes the whole document.
 ///
@@ -11,7 +9,7 @@
 /// framer found 63 elements in a 610.2 MB document and grew its buffer to 609.82 MB *without
 /// erroring* — a row count cannot see that, and neither can a caller that only checks the
 /// `Result`. [`Elements::peak_buffer`] is how a test sees it; this is what stops a real run
-/// paying for it, on a target where the whole database is in one Worker's linear memory.
+/// paying for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Overlong {
     /// What the framer was holding when it gave up.
@@ -46,7 +44,7 @@ impl From<Overlong> for std::io::Error {
 /// How much [`Elements`] may hold without completing one element.
 ///
 /// **8 MiB against a measured 2.01 MB peak** on Commander Spellbook's real 610.2 MB document
-/// (2026-08-27, a desktop and a OnePlus 12 alike) — four times the largest reading this repo
+/// (2026-08-27) — four times the largest reading this repo
 /// has ever taken, so a legitimate element cannot reach it while a desynchronised framer
 /// passes it within a document's first few chunks.
 pub const MAX_ELEMENT_BYTES: usize = 8 * 1024 * 1024;
@@ -59,9 +57,8 @@ pub const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Decompresses a byte stream if it is gzipped, and passes it through if it is not.
 ///
-/// **The decision comes from the first two bytes, never from a header.** The same feed
-/// arrives gzipped on desktop and already-decompressed in a browser, because `fetch`
-/// transparently decodes `Content-Encoding: gzip` and offers no way to opt out.
+/// **The decision comes from the first two bytes, never from a header**, so a caller hands
+/// over whatever it has and never has to say which it is.
 pub struct Decoder {
     gz: Option<flate2::write::GzDecoder<Vec<u8>>>,
     /// Held back until two bytes have been seen and the question can be answered.
@@ -354,8 +351,8 @@ impl Default for Elements {
 
 /// How much of a document's head is kept so a top-level stamp can be scraped out of it.
 ///
-/// Both feeds that need one put it within the first few dozen bytes — Commander Spellbook's
-/// `timestamp` and Card Kingdom's `meta.created_at`. This is slack, not a measurement.
+/// The feed that needs one puts it within the first few dozen bytes — Commander Spellbook's
+/// `timestamp`. This is slack, not a measurement.
 pub const HEAD_SCRAPE_BYTES: usize = 512;
 
 /// Keep the first [`HEAD_SCRAPE_BYTES`] of the decoded stream, for [`scrape_string`].
@@ -371,8 +368,7 @@ pub fn take_head(head: &mut Vec<u8>, decoded: &[u8]) {
 /// **A scrape and not a parse, because [`Elements`] never models the enclosing object**: it
 /// starts at the first `[`, so anything written beside the array — the file's own build stamp
 /// — is not something the framer can hand back. `None` for a document that omits the key,
-/// which is a real state rather than an error: Mana Pool publishes no stamp at all, and Card
-/// Kingdom's would be missing here if it ever moved its `meta` after its `data`.
+/// which is a real state rather than an error.
 pub fn scrape_string(head: &[u8], key: &str) -> Option<String> {
     let text = String::from_utf8_lossy(head);
     let rest = text.split_once(&format!("\"{key}\"")).map(|(_, r)| r)?;
@@ -393,7 +389,7 @@ mod tests {
         e.finish().unwrap()
     }
 
-    /// The desktop shape: a real .gz file's bytes.
+    /// A real .gz file's bytes.
     #[test]
     fn decodes_a_gzip_stream() {
         let src = b"hello world, this is a line\n";
@@ -405,8 +401,7 @@ mod tests {
         assert_eq!(d.is_gzip(), Some(true));
     }
 
-    /// The browser shape: fetch already decompressed a Content-Encoding: gzip body,
-    /// so the same feed arrives as plain bytes and must pass straight through.
+    /// Bytes that are not gzipped must pass straight through.
     #[test]
     fn passes_plain_bytes_through_untouched() {
         let src = b"{\"id\":\"a\"}\n{\"id\":\"b\"}\n";
@@ -699,7 +694,7 @@ mod tests {
     }
 
     /// …and the same when the closing bracket lands in a different chunk from the last
-    /// element, which is the only way a browser stream ever delivers it.
+    /// element.
     #[test]
     fn the_arrays_end_is_recognised_across_a_chunk_boundary() {
         let doc = br#"{"data":[{"id":1},{"id":2}],"trailing":{"after":"data"}}"#;

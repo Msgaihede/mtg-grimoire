@@ -161,11 +161,6 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 
 /// Now, in unix milliseconds.
-///
-/// `SystemTime::now()` is safe here — unlike `entitlement` and `sync_engine`, which read
-/// `unixepoch()` off the connection instead because they compile for `wasm32-unknown-unknown`,
-/// this whole module does not: `sync_pair::mod` gates it `#[cfg(not(target_family = "wasm"))]`,
-/// so there is no wasm target for this clock to panic on.
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1894,8 +1889,8 @@ mod tests {
         let mut pa = None;
         let before = status(&a).unwrap();
         assert_eq!(before.device_id.len(), 32);
-        // The panel's heading is whatever this machine minted — a hostname on a desktop, a
-        // model on a phone. The shape is what a test on any machine can assert: a real name,
+        // The panel's heading is whatever this machine minted — its hostname, or the fallback
+        // word. The shape is what a test on any machine can assert: a real name,
         // and not the placeholder every install used to share.
         assert_eq!(
             before.device_name,

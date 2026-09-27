@@ -211,14 +211,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
   **To a reader, the pictures are free.** A collapsed browse is ~147 ms carrying them and ~150 ms
   without; the wall's own request is ~137 ms either way. Those differences sit under the IPC hop
-  and the paint that follow them, and the 123 B a row the payload grew buys the browser build a
-  wall that can draw art at all — `mtgimg://` is a Tauri protocol and wasm cannot register a URL
-  scheme, so on web the URL travels with the row or there is no picture.
+  and the paint that follow them. The 123 B a row bought the browser build a wall that could draw
+  art at all, since `mtgimg://` is a Tauri protocol; that build was removed on 2026-09-27, and
+  the field now travels with the row unread until a follow-up takes it out.
 
 - **2026-08-31 doubled those two `json_extract`s to four, and the query cost was *not*
   re-measured.** `image_uri::LIST_VARIANTS` gained `art` beside `display`, because a deck cover,
   a folder card's member strip, both halves of the cover picker and the theory diff all draw the
-  frameless crop and every one of them was a blank frame in a browser — five surfaces, five
+  frameless crop and every one of them was a blank frame in the browser build — five surfaces, five
   readers, which is what that constant's doc asks for before a name goes on it. **The payload
   was re-measured** the same way the figure above was taken (debug, `run_search`, a byte copy of
   the dev pair, one collapsed 50-row page, `serde_json`): 23 196 B with no field → 29 346 B with
@@ -661,8 +661,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `CREATE TRIGGER`s, and `ALTER TABLE` rewrites a trigger the way it rewrites a reference — so
   `sync_ins_deck_tags` would survive as a second, older trigger firing on `deck_labels` beside the
   `sync_ins_deck_labels` that `capture::install` then creates, and every insert would emit two
-  ops. Dropping them costs nothing: `prepare_database` calls `install` immediately afterwards, on
-  every target, so the gap is shut before anything can write.
+  ops. Dropping them costs nothing: `prepare_database` calls `install` immediately afterwards,
+  so the gap is shut before anything can write.
   Third, **`deck_audit` is a full rebuild**, v29's `error_log` argument exactly — `kind` sits
   inside a CHECK and SQLite has no `ALTER … CHECK`. The rows are rewritten on the way across, and
   the payload key moves through **`json_insert` then `json_remove` rather than a text

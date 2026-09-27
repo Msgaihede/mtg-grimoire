@@ -9,11 +9,6 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { isWebTarget } from "@/pwa/target";
-
-// The build flag `cardArtSrc` branches on. `false` is what `__CORE__` already answers under
-// vitest, so this changes nothing here until a case below asks for a browser.
-vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 // The shelf layout, **unchanged** — wrapped only so a case can count how often the wall is laid out
 // (`CardGrid` and this page both call it). Every other case reads it through the real function.
 vi.mock("@/lib/shelfLayout", async (importOriginal) => {
@@ -6888,42 +6883,17 @@ describe("the tile the collection's wall is given at the phone width", () => {
   });
 });
 
-/**
- * **The collection wall in a browser**, which drew named, artless frames until 2026-08-31.
- *
- * `collection_list` is routed on web (`web/route.rs`'s `COMMANDS`), but its rows carried no
- * picture and `mtgimg://` is a Tauri custom protocol wasm cannot register with a browser — so
- * every tile fell through to `CardArt`'s no-art frame while the search wall beside it drew
- * pictures. The device pass of 2026-08-30 could not see it, because the collection was empty.
- *
- * The branch itself is `cardArtSrc`'s, in `@/lib/images`, and neither this page nor `CardGrid`
- * knows which build it is in. What these two cases say is that this wall is *wired* to it.
- */
 describe("the collection wall's art", () => {
   /** One key, because `WALL_CARD_VARIANT` is the one size any wall draws. */
   const SCRYFALL = { display: "https://cards.scryfall.io/display/front/c/1/c1.webp?1706230661" };
 
-  // Restored inside this block, so nothing else in the suite has to know the flag exists.
-  afterEach(() => {
-    vi.mocked(isWebTarget).mockReturnValue(false);
-  });
-
-  it("draws the row's own picture in a browser", async () => {
-    vi.mocked(isWebTarget).mockReturnValue(true);
-    useAppStore.setState({ collectionView: "grid" });
-    collectionList.mockResolvedValue(page([{ ...BOLT, imageUris: SCRYFALL }]));
-    wrap(<CollectionPage />);
-
-    expect(await screen.findByAltText("Lightning Bolt")).toHaveAttribute("src", SCRYFALL.display);
-  });
-
   /**
-   * The row carries the URL on **both** builds — one DTO, one shape — so the desktop claim is
-   * that the local cache still wins, not that nothing was passed. A wall that preferred the
-   * supplied URL would refetch a screenful of art the cache already holds, over the network and
-   * at Scryfall's expense, and it would still draw cards — so there would be nothing to see.
+   * The row carries a Scryfall URL, so the claim is that the local cache still wins, not that
+   * nothing was passed. A wall that preferred the row's URL would refetch a screenful of art the
+   * cache already holds, over the network and at Scryfall's expense, and it would still draw
+   * cards — so there would be nothing to see.
    */
-  it("keeps drawing the cached protocol picture on desktop", async () => {
+  it("keeps drawing the cached protocol picture for a row that carries a URL", async () => {
     useAppStore.setState({ collectionView: "grid" });
     collectionList.mockResolvedValue(page([{ ...BOLT, imageUris: SCRYFALL }]));
     wrap(<CollectionPage />);

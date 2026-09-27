@@ -115,11 +115,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
       checkedAt: null,
       stale: true,
     }),
-    // Task 10's and Task 11's four — `AppShell` mounts `useDeviceSyncInvalidation` and
-    // `useDeviceSyncLive` beside the listeners above, and its Android foreground effect calls
-    // `syncLiveForeground`. Same reason as every entry in this block: a bare call inside a
-    // mount effect, so a missing mock is a synchronous `TypeError` rather than a rejection
-    // anything can catch. `"off"` is the resting state every installation that has paired
+    // Task 10's and Task 11's three — `AppShell` mounts `useDeviceSyncInvalidation` and
+    // `useDeviceSyncLive` beside the listeners above. Same reason as every entry in this block:
+    // a bare call inside a mount effect, so a missing mock is a synchronous `TypeError` rather
+    // than a rejection anything can catch. `"off"` is the resting state every installation that has paired
     // nothing is in, which both of this file's shell-mounting tests stand in.
     onSyncApplied: vi.fn().mockReturnValue(() => {}),
     // Multi-window's one listener, `useCrossWindowRefresh` — mounted beside the two above and
@@ -127,7 +126,6 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onDbChanged: vi.fn().mockReturnValue(() => {}),
     onSyncLive: vi.fn().mockReturnValue(() => {}),
     syncLiveState: vi.fn().mockResolvedValue("off"),
-    syncLiveForeground: vi.fn().mockResolvedValue(undefined),
     marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
     // The wall's `+` opens `AddToCollectionButton`, and since that popup grew a purchase-price
     // field it reads the card for the per-finish figure it offers as a **placeholder**. Absent

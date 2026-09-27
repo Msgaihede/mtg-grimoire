@@ -7,10 +7,8 @@
  * shell's own out, add the dark class, arm the focus indicator, and own the React root.
  *
  * **It has no core**, and that is the design rather than an omission (spec §7): no `ipc`, no
- * `lib/core`, no worker, no OPFS, no wasm and no service worker. A stranger following a link from
- * Discord meets one JSON document and a wall of pictures. The web target's own boot would meet
- * them with a 2.6 MB wasm module, a 75 MB corpus ingest and an OPFS pool that refuses a second
- * tab.
+ * `lib/core`, no worker and no service worker. A stranger following a link from Discord meets one
+ * JSON document and a wall of pictures.
  */
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";

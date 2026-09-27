@@ -534,7 +534,7 @@ pub(crate) mod fixtures {
         // builds the file through the frozen `migrate_single_file` ladder and then stamps
         // `CORPUS_SCHEMA_VERSION` on it, so what comes out of it wears head while carrying
         // whatever shape that ladder last built — and `db::open_write` migrates nothing, by
-        // design: `schema::prepare_database` is the one door all three targets go through.
+        // design: `schema::prepare_database` is the one door every launch goes through.
         // Without this line the fixture is a database no launch can produce, and every test
         // built on it is asking its question of the wrong file.
         //

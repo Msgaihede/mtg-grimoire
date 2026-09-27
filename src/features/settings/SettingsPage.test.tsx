@@ -36,25 +36,12 @@ vi.mock("@/features/settings/MarketplacePanel", () => ({
 /**
  * **The one stub that reads a prop**, because the one prop this page computes for a panel is
  * the window count and nothing else on the page draws it. `data-windows` rather than text, so
- * `getByText("panel:update")` goes on finding it exactly as the other seven are found.
+ * `getByText("panel:update")` goes on finding it exactly as the other six are found.
  */
 vi.mock("@/features/settings/UpdatePanel", () => ({
   UpdatePanel: ({ windows }: { windows?: number }) => (
     <div data-windows={windows}>panel:update</div>
   ),
-}));
-// `isWebTarget` reads `__CORE__`, a build-time constant vitest fixes at "tauri" — so the web
-// answer is only reachable by mocking the module, which its own doc says.
-vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
-// **Stubbed for the same reason the other seven are, and it had never needed to be**: it is
-// the one panel `SettingsPage` draws *only* when `isWebTarget()` is true, so before this file
-// could say that, it never rendered here. Unstubbed it reaches `caches.open` on mount, which
-// jsdom has no Cache Storage for — a failure about the environment rather than about the gate.
-// The hook goes with it: `SettingsPage` calls `useWebStorage()` unconditionally, and the real
-// one reaches `caches.open` as soon as `isWebTarget()` answers true.
-vi.mock("@/features/settings/WebStoragePanel", () => ({
-  WebStoragePanel: stub("panel:webstorage"),
-  useWebStorage: () => null,
 }));
 
 /**
@@ -132,30 +119,9 @@ function wrap(node: ReactNode) {
   return <QueryClientProvider client={client}>{node}</QueryClientProvider>;
 }
 
-/**
- * Redefine the agent `isAndroid()` reads by default, and put it back afterwards. A prop would
- * test a parameter nothing passes; the default is what both call sites use.
- */
-function pretendAndroid() {
-  Object.defineProperty(navigator, "userAgent", {
-    value:
-      "Mozilla/5.0 (Linux; Android 16; CPH2581 Build/BP2A.250605.015; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/150.0.7871.183 Mobile Safari/537.36",
-    configurable: true,
-  });
-}
-
-afterEach(async () => {
-  delete (navigator as unknown as Record<string, unknown>).userAgent;
+afterEach(() => {
   backend.syncStatus = null;
   backend.windowCount = 1;
-  /**
-   * **Put back, because two tests below set it and neither used to.** While the `false` case
-   * happened to run last that cost nothing; it made the file order-dependent, and a new test
-   * written between the two would have inherited `true` from its neighbour with no sign of it
-   * anywhere. `false` is the module factory's own default and the shape jsdom stands for.
-   */
-  const { isWebTarget } = await import("@/pwa/target");
-  vi.mocked(isWebTarget).mockReturnValue(false);
 });
 
 /**
@@ -205,85 +171,16 @@ function searchBox(): HTMLElement {
   return screen.queryByRole("searchbox") ?? screen.getByRole("textbox");
 }
 
-describe("the Backup panel is on every platform", () => {
-  it("is on the page under jsdom, which is the desktop shape", async () => {
+describe("the Backup panel", () => {
+  it("is on the page under Storage and data", async () => {
     render(wrap(<SettingsPage update={NO_UPDATE} />));
     await pickGroup("Storage and data");
 
     expect(screen.getByText("panel:backup")).toBeInTheDocument();
-  });
-
-  /**
-   * **This assertion was the opposite until 2026-08-31, and the reversal is the point.** The
-   * panel used to be hidden outright on Android, because the mirror writes a folder a reader
-   * opens in a text editor, syncs with Dropbox or greps — none of which an Android app's own
-   * directory affords — and `tauri-plugin-dialog`'s manifest records the platform as having no
-   * folder picker, so the root could not be chosen either. All of that is still true; hiding the
-   * panel took the *backup* away along with the folder, which is more than the reason supported.
-   *
-   * `BackupPanel` now dispatches on the platform itself and draws the archive here, so the page
-   * mounts it unconditionally. **`BackupArchivePanel.test.tsx` is where the two shapes are told
-   * apart** — this file mocks the panel to a stub, so all it can see is whether it is on the
-   * page at all.
-   *
-   * The "the rest of the page still rendered" witness is now taken in **two** places rather than
-   * one, because the two panels it named no longer share a group: the Updates panel is read
-   * before the press and the cache after it. That is the same assertion — this is about the
-   * Backup panel and not about a mount that failed — asked of a page that draws one group at a
-   * time.
-   */
-  it("stays on Android, where it draws the archive instead of the folder", async () => {
-    pretendAndroid();
-
-    render(wrap(<SettingsPage update={NO_UPDATE} />));
-    expect(screen.getByText("panel:update")).toBeInTheDocument();
-
-    await pickGroup("Storage and data");
-
-    expect(screen.getByText("panel:backup")).toBeInTheDocument();
-    expect(screen.getByText("panel:cache")).toBeInTheDocument();
   });
 });
 
-describe("the Updates panel is drawn on every target", () => {
-  /**
-   * **This reverses PR #315, and the history is why the reversal is not a regression.**
-   *
-   * Driving the phone on 2026-08-30 found `update_history` printing `unknown command` on this
-   * page — the last one left in the app after PR 10 routed 114 commands — so #315 hid the
-   * whole panel behind `!isWebTarget()`. That was right while none of the five updater
-   * commands answered. Two of them answer now: `update_status` and `update_history` are
-   * routed by `web::route`, and a browser gets `installKind: "web"`.
-   *
-   * **So the decision moved out of this file**, and that is the point rather than a
-   * refactor. #315's own write-up named the general lesson — *a feature gated on a backend
-   * answer is ungated wherever the backend cannot answer* — and a build-time constant
-   * standing in for an answer the backend could not give is the other half of the same
-   * mistake. What each install kind draws is now `UpdatePanel`'s, tested against a real
-   * `installKind` in `UpdatePanel.test.tsx`; all this page decides is that the panel exists.
-   *
-   * The panel is stubbed here, so these two assert reachability and nothing about content —
-   * which is the whole of what this file can honestly say about it.
-   *
-   * `Updates` is also the group the page opens on, so neither of these two needs a press to
-   * reach the panel — the second one does, for its witness, and that press is the same
-   * two-places move the Android test above explains.
-   */
-  it("is on the page on the web build, as it is everywhere else", async () => {
-    const { isWebTarget } = await import("@/pwa/target");
-    vi.mocked(isWebTarget).mockReturnValue(true);
-
-    render(wrap(<SettingsPage update={NO_UPDATE} />));
-
-    expect(screen.getByText("panel:update")).toBeInTheDocument();
-    // The page itself still rendered, so this is the panel and not a failed mount — and on this
-    // build the browser panel is in the group too, which is the only place `panelsOn`'s web
-    // answer is visible from here.
-    await pickGroup("Storage and data");
-    expect(screen.getByText("panel:cache")).toBeInTheDocument();
-    expect(screen.getByText("panel:webstorage")).toBeInTheDocument();
-  });
-
+describe("the Updates panel", () => {
   /**
    * **This page is the panel's only caller, so the prop has no other test that can see it.**
    * `UpdatePanel.test.tsx` hands `windows` in itself and stays green whatever this page passes,
@@ -298,24 +195,6 @@ describe("the Updates panel is drawn on every target", () => {
     await waitFor(() =>
       expect(screen.getByText("panel:update")).toHaveAttribute("data-windows", "2"),
     );
-  });
-
-  it("is on the page when the build is not the web one", async () => {
-    const { isWebTarget } = await import("@/pwa/target");
-    vi.mocked(isWebTarget).mockReturnValue(false);
-
-    render(wrap(<SettingsPage update={NO_UPDATE} />));
-
-    expect(screen.getByText("panel:update")).toBeInTheDocument();
-  });
-
-  /** The other half of the gate, and the one that costs a desktop reader nothing. */
-  it("does not draw the browser panel where there is no browser to describe", async () => {
-    render(wrap(<SettingsPage update={NO_UPDATE} />));
-    await pickGroup("Storage and data");
-
-    expect(screen.getByText("panel:cache")).toBeInTheDocument();
-    expect(screen.queryByText("panel:webstorage")).not.toBeInTheDocument();
   });
 });
 

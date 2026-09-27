@@ -401,7 +401,6 @@ function DeckLine({
           cardId={cover?.coverArtist != null ? cover.coverCardId : null}
           name=""
           variant="thumb"
-          imageUrl={cover?.imageUris?.display}
           loading="lazy"
         />
       </span>

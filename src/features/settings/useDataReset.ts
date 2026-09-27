@@ -4,7 +4,6 @@ import { useState } from "react";
 import { ipc } from "@/lib/ipc";
 import { COMBOS_KEY } from "@/lib/query";
 import { writeFailure, type Write } from "@/lib/writes";
-import { useFeedDownload } from "@/pwa/FeedDownloadProvider";
 import {
   cacheOutcome,
   collectionOutcome,
@@ -184,13 +183,6 @@ export function useDangerZone(): {
  * on disk. The next request for a key that is gone is a miss, and a miss re-fetches. So the only
  * thing that half does after a success is say what it freed.
  *
- * **On the web target it is a different cache entirely, and that changes nothing here.**
- * `ipc.cacheClear()` is diverted in `src/lib/core/browser.ts` onto the service worker's
- * `IMAGE_CACHE` — there is no `data/images/` and no protocol handler in a browser, and the
- * pictures come straight from `cards.scryfall.io` into an `<img>`. Both are outside TanStack
- * Query for the same reason, both answer the same `CacheCleared`, and neither this hook nor
- * `CachePanel` takes a branch. The web half is `src/pwa/imageCacheClear.ts`.
- *
  * ## The combo clear is two calls in one mutation, and that is the whole design
  *
  * **`combos_clear` downloads nothing**, so a press that stopped there would leave a reader who
@@ -205,11 +197,6 @@ export function useDangerZone(): {
  * the tables, so every cached combo answer is describing rows that are gone. Invalidating only on
  * success would leave the open deck's bracket advisory quoting a combo list that no longer exists
  * for `lib/query.ts`'s 30 s, which is exactly long enough to look deliberate.
- *
- * **`askFirst` wraps the press rather than the mutation.** On desktop it is a synchronous
- * pass-through and this is the press it always was; on the web target it raises the
- * metered-connection prompt *before* 27.5 MB is spent, and a reader who answers Not now must
- * leave `isPending` false — which it does, because nothing has been started yet.
  */
 export function useLocalCache(): {
   clear: ClearAction;
@@ -219,7 +206,6 @@ export function useLocalCache(): {
   const client = useQueryClient();
   const [outcome, setOutcome] = useState<string | null>(null);
   const started = () => setOutcome(null);
-  const askFirst = useFeedDownload();
 
   const cache = useMutation({
     mutationFn: () => ipc.cacheClear(),
@@ -241,7 +227,7 @@ export function useLocalCache(): {
 
   return {
     clear: { run: () => cache.mutate(), pending: cache.isPending },
-    combos: { run: () => askFirst("combos", () => combos.mutate()), pending: combos.isPending },
+    combos: { run: () => combos.mutate(), pending: combos.isPending },
     status: statusOf([cache, combos], outcome),
   };
 }

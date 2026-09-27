@@ -23,9 +23,9 @@
 //! time [`crate::sync::with_write`] hands it out. They mark a deck dirty on any write to its
 //! `deck_cards`, to the `decks` columns that decide eligibility or the folder's name, and to a
 //! category's switch (an inactive pile counts toward nothing, so it changes the diff). Every
-//! user-facing write goes through `with_write` — sync's `run_once` and the web target's routes
-//! included — so [`settle`] runs after each one and rewrites only the decks it touched. A sweep
-//! of every theory deck after every write would put a diff per deck behind a zoom press.
+//! user-facing write goes through `with_write` — sync's `run_once` included — so [`settle`] runs
+//! after each one and rewrites only the decks it touched. A sweep of every theory deck after
+//! every write would put a diff per deck behind a zoom press.
 //!
 //! Triggers rather than a call at each deck command because there are dozens of those, in
 //! several modules, and a new one would have to remember; a trigger cannot forget.

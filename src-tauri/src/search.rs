@@ -21,12 +21,10 @@
 //!   rather than a number that would be a lie.
 
 use crate::filters;
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What the UI asks for.
@@ -151,9 +149,9 @@ pub struct SearchRequest {
     /// copies count as theirs, for [`Self::owned`] and [`CardSummary::owned_quantity`] alike.
     ///
     /// Absent is [`crate::collection_source::Availability::Everything`], which is what every
-    /// caller written before it asked for without saying so — the search page, the Tags page
-    /// and the web route all still count every copy wherever it is filed, because none of them
-    /// has a deck to be relative to.
+    /// caller written before it asked for without saying so — the search page and the Tags page
+    /// both still count every copy wherever it is filed, because neither has a deck to be
+    /// relative to.
     ///
     /// **Why the deck builder is different** ([#349](https://github.com/Msgaihede/mtg-grimoire/issues/349)):
     /// a badge reading `×4` over a card whose four copies are all sleeved into other decks is
@@ -353,14 +351,7 @@ pub struct CardSummary {
     /// [`crate::image_uri`]'s and none of them is respelled here.
     ///
     /// **Two keys, [`crate::image_uri::LIST_VARIANT`] (`display`) and
-    /// [`crate::image_uri::ART_VARIANT`] (`art`), and the pair is a decision rather than a
-    /// first instalment.** `display` is the size `WALL_CARD_VARIANT` draws and `CardArt`
-    /// defaults to, so it is what every wall reads. `art` was carried by nothing until
-    /// 2026-08-31 and is now read by five surfaces in the deck feature — a deck tile's cover, a
-    /// folder card's member strip, both halves of `DeckCoverPicker` and `TheoryDiffDialog`'s
-    /// row — every one of which drew a blank frame in a browser until it arrived. `thumb` and
-    /// `grid` still have no caller on any wall, and this repo adds a field together with the
-    /// thing that reads it.
+    /// [`crate::image_uri::ART_VARIANT`] (`art`).** `thumb` and `grid` are not carried.
     ///
     /// **Widening cost no type change on either side**, which was the point of the map: the
     /// shape is a map, TypeScript's mirror is already a
@@ -368,22 +359,11 @@ pub struct CardSummary {
     /// [`crate::image_uri::LIST_VARIANTS`] was the whole of it.
     ///
     /// **Face 0 only, and that is the scope rather than an omission.** The walls draw the
-    /// front; the flip control lives in the card pane, which is not routed on web.
+    /// front; the flip control lives in the card pane.
     ///
-    /// **It was on this DTO and on no other until 2026-08-31, and the argument for that was
-    /// simply wrong about `web/route.rs`'s `COMMANDS` list.** `search_cards` is not the one
-    /// card-bearing command a browser can call: `collection_list`, `wishlist_list` and
-    /// `deck_get` are all routed too, so the collection, the wishlist and the deck editor each
-    /// drew named, artless frames on web while the search wall beside them drew pictures. The
-    /// device pass of 2026-08-30 could not see it because both lists were empty (`Cards 0`,
-    /// `Wishes 0`). The three now carry the same field, built from the same helpers:
+    /// Three other rows carry the same field, built from the same helpers:
     /// [`crate::collection::CollectionRow::image_uris`],
     /// [`crate::wishlist::WishRow::image_uris`] and [`crate::deck::DeckCardRow::image_uris`].
-    ///
-    /// What the old note had right is the rest of it: `mtgimg://` is a Tauri custom protocol
-    /// and wasm cannot register a URL scheme with a browser, so the URL travels with the row or
-    /// the browser has no picture at all — and on the desktop every one of these is ignored,
-    /// because `cardArtSrc` takes the local cache.
     ///
     /// `None` when the printing has no fetchable image — the same answer
     /// `images::Placeholder::NoImage` stands for, in a shape a DTO can carry. 162 of the live
@@ -393,9 +373,9 @@ pub struct CardSummary {
     /// copy of the 117 606-row dev corpus, one collapsed 50-row page): **23 199 B → 29 349 B,
     /// +6 150 B — +26.5%, 123 B a row**, one URL of ~108 B plus its key.
     /// All four variants would have been +21 600 B, +93.1%, 432 B a row — affordable, since
-    /// this crosses a Worker `postMessage` or a Tauri IPC hop and never a network, which is
-    /// why the count is *not* what settled the shape. `front_face_selects` carries the third
-    /// option that was weighed and declined: the URL is derivable from the row's id, at ~10 B.
+    /// this crosses a Tauri IPC hop and never a network, which is why the count is *not* what
+    /// settled the shape. `front_face_selects` carries the third option that was weighed and
+    /// declined: the URL is derivable from the row's id, at ~10 B.
     ///
     /// **The second variant was re-measured the same way on 2026-08-31 and cost +5 050 B on
     /// top of that — +17.2%, 101 B a row.** The whole ladder and the arithmetic that made the
@@ -1369,7 +1349,6 @@ pub fn run_search_marks(conn: &Connection, req: &MarksRequest) -> Result<Vec<Car
 }
 
 /// [`run_search_marks`] over the read connection, for [`search_cards`]' reasons.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn search_marks(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1395,7 +1374,6 @@ pub async fn search_marks(
 /// `async` + `spawn_blocking`, not a plain sync command: a sync command body runs inline
 /// on the IPC thread, and SQLite work is blocking. `lock_db_read` is shared with `sync`
 /// so poison recovery has one definition.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn search_cards(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1465,7 +1443,6 @@ pub fn run_list_sets(conn: &Connection) -> Result<Vec<SetSummary>, String> {
 
 /// The set list, for the search filter. Read-only connection, blocking pool — as
 /// [`search_cards`] is, and for the same reason.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn list_sets(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<SetSummary>, String> {
     let state = state.inner().clone();
@@ -4494,10 +4471,7 @@ mod tests {
         }
     }
 
-    /// The front face's picture, on the row, because the web build has no other way to get
-    /// one: `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme
-    /// with a browser, and `card_image_uri` lives in `card.rs`, which is gated out of that
-    /// build entirely.
+    /// The front face's picture, on the row.
     ///
     /// Three rows, because the rule has three parts and each one fails silently on its own:
     /// a plain printing carries its top-level blob, a **meld** printing carries its *face's*

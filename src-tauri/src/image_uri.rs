@@ -1,18 +1,9 @@
 //! Where a printing's picture is, and whether what is there is a picture at all.
 //!
-//! **The one part of the image story that is not desktop-only, and it is here because of
-//! that.** `images` is the permanent byte cache, the placeholders and the
-//! `mtgimg://` protocol handler — a filesystem and a Tauri webview, neither of which a
-//! browser has — so it is `#[cfg(not(target_family = "wasm"))]` in `lib.rs`. The
-//! *resolution rule* underneath it is neither: it is two columns of `cards`, a precedence
-//! between them, and a predicate over a string. `search.rs` compiles for wasm and needs
-//! exactly that much to put a URL on a result row, so the rule lives in a module both
-//! targets build.
-//!
-//! **No `#[cfg]` on this module, deliberately.** `web/route.rs`'s header states the sibling
-//! case: *"a module gated to `wasm32-unknown-unknown` is invisible to `cargo test`."* A rule
-//! this small and this silent when it is wrong — the failure is the *wrong* picture, not a
-//! missing one — has to be the one both builds run and the one `cargo test` covers.
+//! `images` is the permanent byte cache, the placeholders and the `mtgimg://` protocol
+//! handler. The *resolution rule* underneath it is none of those: it is two columns of `cards`,
+//! a precedence between them, and a predicate over a string. `search.rs` needs exactly that
+//! much to put a URL on a result row, so the rule lives in a module of its own.
 //!
 //! Three things live here and nothing else does:
 //!
@@ -185,20 +176,16 @@ pub const ART_VARIANT: &str = "art";
 /// answers.)
 ///
 /// **Why one until 2026-08-31, decided by Markus on 2026-08-29, and the byte count was not the
-/// argument.** All four variants cost +21 600 B on a 50-row page — a Worker `postMessage` on
-/// web and a Tauri IPC hop on the desktop, a local structured clone and never a network round
-/// trip, so +93% was affordable in absolute terms. What decided it is that **three of the four
+/// argument.** All four variants cost +21 600 B on a 50-row page — a Tauri IPC hop, a local
+/// structured clone and never a network round trip, so +93% was affordable in absolute terms. What decided it is that **three of the four
 /// had no caller**: this repo adds a field and its reader together rather than shipping three
 /// URLs against a surface that might want them. Widening was left as the same five lines in
 /// reverse, on the day something asks.
 ///
-/// **`art` is that day, and its caller is five surfaces that are blank on web and on the phone
-/// right now.** PR #327 made a card-art crop the *only* deck-cover mechanism, so every deck
-/// cover in a browser draws `http://mtgimg.localhost/art/<id>/0`, which is a Tauri custom
-/// protocol no browser has registered and never will — wasm cannot register a URL scheme. The
-/// other four are the same failure on smaller surfaces. `thumb` and `grid` still have no
-/// caller and are still off the list, which is the 2026-08-29 rule surviving the change rather
-/// than being overturned by it.
+/// **`art` is the second name**, for the five surfaces that draw a card-art crop — PR #327 made
+/// the crop the *only* deck-cover mechanism. `thumb` and `grid` still have no caller and are
+/// still off the list, which is the 2026-08-29 rule surviving the change rather than being
+/// overturned by it.
 ///
 /// **The price of the second name, re-measured 2026-08-31** (debug build, a byte copy of the
 /// dev corpus, one collapsed 50-row page through `run_search`, the whole `SearchResponse`
@@ -485,9 +472,8 @@ mod tests {
     /// one catches a name the schema has no column for, and this one catches a name the schema
     /// *does* have a column for being added or dropped without anybody deciding to. A widening
     /// to `thumb` or `grid` is a real change with a real byte cost
-    /// ([`LIST_VARIANTS`] carries both measurements) and must come through this line; a
-    /// narrowing back to one blanks every deck cover on web and on the phone, which is the
-    /// state 2026-08-31 was spent fixing.
+    /// ([`LIST_VARIANTS`] carries both measurements) and must come through this line, and so
+    /// must a narrowing back to one.
     ///
     /// The order is pinned as well as the membership, because [`front_face_selects`] emits the
     /// columns in it and [`front_face_map`] pairs them back up by position: reversing it puts

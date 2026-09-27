@@ -1113,9 +1113,7 @@ fn blocks_of(deferrals: &[Deferral], known: &Blocks) -> Blocks {
 /// clock that had never heard of the first — so an edit made *after* seeing another device's
 /// could sort *before* it, and the older value would win on every machine.
 ///
-/// It is [`super::hlc::Hlc::observe`] spelled in SQL, in the one place where the alternative is
-/// worse: reading a wall clock in Rust means `SystemTime::now()`, which **panics on
-/// `wasm32-unknown-unknown`**, and this module compiles for the web target.
+/// It is [`super::hlc::Hlc::observe`] spelled in SQL.
 fn observe(conn: &Connection, top: Option<&Hlc>) -> Result<(), String> {
     let Some(top) = top else {
         return Ok(());

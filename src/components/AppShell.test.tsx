@@ -38,12 +38,9 @@ const onOracleTagProgress = vi.hoisted(() => vi.fn());
  *  the same way — an event this window is usually too late to hear, backed by a status read. */
 const onCombosProgress = vi.hoisted(() => vi.fn());
 /**
- * Task 10's and Task 11's four, for the shell's two "exactly one of these in the app" reasons:
+ * Task 10's and Task 11's three, for the shell's two "exactly one of these in the app" reasons:
  * `useDeviceSyncInvalidation` refreshes the screen when a device sync lands from anywhere, and
  * `useDeviceSyncLive` seeds and then follows the relay socket's state for the ribbon's marker.
- * The fourth is the Android foreground effect's own write — unreachable in most of this file's
- * cases, since it is gated on `isAndroid()`, but reached by the one test that redefines the
- * user agent below.
  */
 const onSyncApplied = vi.hoisted(() => vi.fn());
 /**
@@ -56,7 +53,6 @@ const onDbChanged = vi.hoisted(() => vi.fn());
 const windowNew = vi.hoisted(() => vi.fn());
 const onSyncLive = vi.hoisted(() => vi.fn());
 const syncLiveState = vi.hoisted(() => vi.fn());
-const syncLiveForeground = vi.hoisted(() => vi.fn());
 /** The two writes a card dropped on the sidebar means, and the read that names the open
  *  deck — the sidebar borrows `useDeck`, so the shell asks for a deck like the editor does. */
 const deckAddCard = vi.hoisted(() => vi.fn());
@@ -100,7 +96,6 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     windowNew,
     onSyncLive,
     syncLiveState,
-    syncLiveForeground,
     // A database that has never ingested the taxonomy: every field null, stale, and nothing
     // running. The honest resting state, and the one that puts no fourth job in the ribbon.
     oracleTagsStatus: vi.fn().mockResolvedValue({
@@ -348,7 +343,6 @@ beforeEach(() => {
   // "off" — the resting state every installation that has paired nothing is in, and the state
   // that draws no marker at all.
   syncLiveState.mockReset().mockResolvedValue("off");
-  syncLiveForeground.mockReset().mockResolvedValue(undefined);
   deckAddCard.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   deckGet.mockReset().mockResolvedValue(null);
@@ -482,100 +476,6 @@ it("draws the window's own caption, because Windows no longer does", () => {
   expect(screen.getByRole("button", { name: "Minimize" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Maximize" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
-});
-
-/**
- * And the other direction, which is the half a suite running under jsdom cannot see by
- * accident: on Android the caption must not be drawn at all.
- *
- * Three of its four buttons are commands tauri declares `#[cfg(desktop)]` and does not ship
- * there — `minimize`, `toggle_maximize` and `start_dragging` — and `capabilities/mobile.json`
- * grants none of the four. The fourth would close the app from a control no phone user is
- * looking for, on a platform where the OS already owns the frame.
- *
- * The user agent is redefined rather than a prop passed, because `isAndroid()` reads
- * `navigator.userAgent` by default and the default is the thing worth testing. `configurable`
- * so the restore below actually takes.
- */
-it("draws no window caption on Android", () => {
-  const real = Object.getOwnPropertyDescriptor(
-    Object.getPrototypeOf(navigator),
-    "userAgent",
-  );
-  Object.defineProperty(navigator, "userAgent", {
-    value:
-      "Mozilla/5.0 (Linux; Android 16; CPH2581 Build/BP2A.250605.015; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/150.0.7871.183 Mobile Safari/537.36",
-    configurable: true,
-  });
-  try {
-    render(
-      <AppShell update={noUpdate}>
-        <div>content</div>
-      </AppShell>,
-    );
-
-    expect(screen.queryByRole("button", { name: /minimi[sz]e/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /maximi[sz]e/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^close$/i })).not.toBeInTheDocument();
-    // The shell itself still mounted, so this is the caption being absent rather than the
-    // render having thrown.
-    expect(screen.getByText("content")).toBeInTheDocument();
-  } finally {
-    delete (navigator as unknown as Record<string, unknown>).userAgent;
-    if (real) Object.defineProperty(Object.getPrototypeOf(navigator), "userAgent", real);
-  }
-});
-
-/**
- * **The browser owns the window's edge exactly as the OS does on Android, and this gate did not
- * say so until 2026-08-29.**
- *
- * The test was `isAndroid()` alone, which is false in a desktop browser — so the web build drew
- * a caption for a window it does not own, and `TitleBar` reached for Tauri's window API on a
- * target that has none. `src/lib/window.ts` imports `getCurrentWindow` at module scope, so
- * **mounting the row at all was enough**: every web load logged `TypeError: Cannot read
- * properties of undefined (reading 'metadata')` from `getCurrentWindow` and `transformCallback`.
- * It rendered anyway, which is why it read as console noise rather than as a bug.
- *
- * `isWebTarget()` is a build-time flag (`__CORE__`), so it cannot be reached by redefining a
- * user agent the way the Android case above is — mocking the module is the only door, and
- * `src/pwa/target.ts`'s own comment says why that is deliberate.
- */
-vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
-
-it("draws no window caption on the web build, where the browser owns the frame", async () => {
-  const { isWebTarget } = await import("@/pwa/target");
-  vi.mocked(isWebTarget).mockReturnValue(true);
-  try {
-    render(
-      <AppShell update={noUpdate}>
-        <div>content</div>
-      </AppShell>,
-    );
-
-    expect(screen.queryByRole("button", { name: /minimi[sz]e/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /maximi[sz]e/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^close$/i })).not.toBeInTheDocument();
-    // The shell still mounted, so this is the caption being absent rather than a throw.
-    expect(screen.getByText("content")).toBeInTheDocument();
-  } finally {
-    vi.mocked(isWebTarget).mockReturnValue(false);
-  }
-});
-
-/**
- * The desktop build is the one that *does* own its frame, and it is worth pinning from this side
- * too: a gate that answered "no caption" everywhere would pass the case above and take the
- * window's controls away from the platform that needs them.
- */
-it("still draws the caption on the desktop build", () => {
-  render(
-    <AppShell update={noUpdate}>
-      <div>content</div>
-    </AppShell>,
-  );
-
-  expect(screen.getByRole("button", { name: /^close$/i })).toBeInTheDocument();
 });
 
 /**
@@ -2065,29 +1965,6 @@ describe("the shell's keyboard bindings", () => {
   });
 
   /**
-   * The web build does not route `window_new` and a browser tab is its own app, so the chord is
-   * left to the browser there — the key map leaves the row off for the same reason.
-   */
-  it("binds no new-window chord on the web build", async () => {
-    const { isWebTarget } = await import("@/pwa/target");
-    vi.mocked(isWebTarget).mockReturnValue(true);
-    try {
-      const user = userEvent.setup();
-      render(
-        <AppShell update={noUpdate}>
-          <div>content</div>
-        </AppShell>,
-      );
-
-      await user.keyboard("{Control>}{Shift>}n{/Shift}{/Control}");
-
-      expect(windowNew).not.toHaveBeenCalled();
-    } finally {
-      vi.mocked(isWebTarget).mockReturnValue(false);
-    }
-  });
-
-  /**
    * The listener goes on once and stays on — which none of the cases above can see.
    *
    * **The obvious wrong implementation passes every one of them.** Closing over `keyMapOpen` and
@@ -2114,10 +1991,9 @@ describe("the shell's keyboard bindings", () => {
      * The handlers a spy saw registered or torn down for `keydown`, in call order.
      *
      * `String(...)` rather than a bare comparison, and it is the type-checker rather than the
-     * runtime that asks for it: `addEventListener` is overloaded, `vi.spyOn` resolves the
-     * overload keyed on `DedicatedWorkerGlobalScopeEventMap`, and TS then reads `"keydown"` as
-     * having no overlap with a worker's event names. The value arriving here is the string the
-     * shell passed.
+     * runtime that asks for it: `addEventListener` is overloaded, and the spy's call tuple is
+     * typed from whichever overload `vi.spyOn` resolves. The value arriving here is the string
+     * the shell passed.
      */
     const handlers = (spy: typeof add): unknown[] =>
       spy.mock.calls.filter((call) => String(call[0]) === "keydown").map((call) => call[1]);
