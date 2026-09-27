@@ -902,6 +902,111 @@ describe("facet counts", () => {
   });
 });
 
+/**
+ * Issue #573's two printing dimensions — the Border chips and the Finish chips asked of the
+ * printing. Expectations are read off `CARDS`' own columns rather than the handler's, and the
+ * load-bearing row is the full-art basic Forest, which is **borderless too**: it answers both of
+ * the first two border chips and not `regular`, so the three are not a partition.
+ */
+describe("the border and printed-finish chips", () => {
+  const paper = CARDS.filter((c) => c.isPaper);
+  const ids = (db: FakeDb, req: Partial<SearchRequest>) =>
+    (
+      readHandlers(db).search_cards({
+        req: { limit: 500, offset: 0, collapse: false, ...req },
+      }) as { items: CardSummary[] }
+    ).items.map((i) => i.id);
+  const facets = (req: Omit<SearchRequest, "limit" | "offset">) =>
+    readHandlers(makeDb()).facet_cards({ req: { ...req, limit: 0, offset: 0 } });
+  const isBorderless = (c: FakeCard) => c.borderColor === "borderless";
+  const sold = (c: FakeCard) => JSON.parse(c.finishes ?? "[]") as string[];
+
+  it("reads borderless and full art as two columns, and regular as neither", () => {
+    const db = makeDb();
+    const overlap = paper.filter((c) => isBorderless(c) && c.fullArt);
+    // Without a row in both, the next assertion could not tell an OR from a partition.
+    expect(overlap.length).toBeGreaterThan(0);
+
+    expect(new Set(ids(db, { borders: ["borderless"] }))).toEqual(
+      new Set(paper.filter(isBorderless).map((c) => c.id)),
+    );
+    expect(new Set(ids(db, { borders: ["fullart"] }))).toEqual(
+      new Set(paper.filter((c) => c.fullArt).map((c) => c.id)),
+    );
+    const regular = ids(db, { borders: ["regular"] });
+    expect(regular).not.toContain(overlap[0].id);
+    expect(regular).toHaveLength(paper.filter((c) => !isBorderless(c) && !c.fullArt).length);
+    // OR within: both treatments together are their union, the overlap counted once.
+    expect(ids(db, { borders: ["borderless", "fullart"] })).toHaveLength(
+      paper.filter((c) => isBorderless(c) || c.fullArt).length,
+    );
+    // Validated, like the types: a word outside the three is no filter at all.
+    expect(ids(db, { borders: ["shiny" as never] })).toHaveLength(paper.length);
+  });
+
+  it("asks the printing's published finishes, OR within", () => {
+    const db = makeDb();
+    const foilOnly = paper.find((c) => sold(c).join() === "foil");
+    expect(foilOnly).toBeDefined();
+    expect(ids(db, { printedFinishes: ["nonfoil"] })).not.toContain(foilOnly!.id);
+    expect(ids(db, { printedFinishes: ["foil"] })).toContain(foilOnly!.id);
+    expect(ids(db, { printedFinishes: ["etched"] })).toHaveLength(
+      paper.filter((c) => sold(c).includes("etched")).length,
+    );
+    expect(ids(db, { printedFinishes: ["nonfoil", "etched"] })).toHaveLength(
+      paper.filter((c) => sold(c).includes("nonfoil") || sold(c).includes("etched")).length,
+    );
+  });
+
+  it("narrows the binder by the printing, beside the copy's own finish", () => {
+    // A foil copy of a printing sold only in foil, and a nonfoil copy of a nonfoil-only one:
+    // `finishes` asks the copy and `printedFinishes` the printing, and the two differ here.
+    const foilOnly = paper.find((c) => sold(c).join() === "foil")!;
+    const nonfoilOnly = paper.find((c) => sold(c).join() === "nonfoil" && !c.fullArt)!;
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: foilOnly.id, finish: "foil" }),
+        entry({ id: 2, cardId: nonfoilOnly.id, finish: "nonfoil" }),
+      ],
+    });
+    const list = (query: Partial<CollectionQuery>) =>
+      (
+        readHandlers(db).collection_list({
+          query: { limit: 10, offset: 0, ...query },
+        }) as CollectionPage
+      ).items.map((i) => i.cardId);
+    expect(list({ printedFinishes: ["foil"] })).toEqual([foilOnly.id]);
+    expect(list({ printedFinishes: ["foil"], finishes: ["nonfoil"] })).toEqual([]);
+    expect(list({ borders: ["regular"] })).toContain(nonfoilOnly.id);
+  });
+
+  it("counts each dimension without its own filter, every key present, overlapping", () => {
+    const all = facets({});
+    expect(Object.keys(all.borders).sort()).toEqual(["borderless", "fullart", "regular"]);
+    expect(Object.keys(all.finishes).sort()).toEqual(["etched", "foil", "nonfoil"]);
+    expect(all.borders.fullart).toBe(paper.filter((c) => c.fullArt).length);
+    // They overlap, so the finishes sum past the total.
+    const summed = all.finishes.nonfoil + all.finishes.foil + all.finishes.etched;
+    expect(summed).toBeGreaterThan(all.total);
+
+    // A picked border leaves its own counts alone and narrows the finishes, and vice versa.
+    const picked = facets({ borders: ["borderless"] });
+    expect(picked.borders).toEqual(all.borders);
+    expect(picked.finishes.nonfoil).toBeLessThan(all.finishes.nonfoil);
+    const foil = facets({ printedFinishes: ["etched"] });
+    expect(foil.finishes).toEqual(all.finishes);
+    expect(foil.borders.regular).toBeLessThan(all.borders.regular);
+  });
+
+  it("answers both maps empty on a cold index", () => {
+    const cold = readHandlers(makeDb({ fault: "indexCold" })).facet_cards({
+      req: { limit: 0, offset: 0 },
+    });
+    expect(cold.borders).toEqual({});
+    expect(cold.finishes).toEqual({});
+  });
+});
+
 describe("a row whose card is gone", () => {
   it("is listed with null card fields and its own set code and lang", () => {
     const db = makeDb({
