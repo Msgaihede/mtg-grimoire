@@ -168,6 +168,7 @@ describe("the three tiers", () => {
     expect(theoryMatchMark(plan, card({ ...PALANTIR, finish: null }))).toEqual({
       tier: "exact",
       delta: 0,
+      anyPrinting: false,
     });
     expect(theoryProgress([slot("palantir-hoc|foil", PALANTIR.name)], [card(PALANTIR)])).toEqual({
       have: 1,
