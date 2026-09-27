@@ -293,7 +293,13 @@ import type {
 // The app's own `{X}` test, borrowed rather than re-spelled: the fake answers what Rust
 // answers, and a second reading of "does this cost name X" would let the workbench and the
 // window disagree about which cards are X while both looked right.
-import { FINISHES as FINISH_WORDS, parseFinishes, playedFinish, type Finish } from "@/lib/finish";
+import {
+  FINISHES as FINISH_WORDS,
+  parseFinishes,
+  playedFinish,
+  soleFinish,
+  type Finish,
+} from "@/lib/finish";
 import { BORDERS, type Border } from "@/lib/border";
 import { hasVariableCost } from "@/lib/mana";
 // The token view's own rules, borrowed rather than re-spelled: `DEFAULT_TOKEN_QUANTITY` is the
@@ -1084,6 +1090,10 @@ export interface FakeDeckCard {
    * and `"nonfoil"` is never stored: the crate normalises it away at the command boundary and a
    * CHECK makes any other path an error, because two spellings would be two rows on the grain
    * that draw identically.
+   *
+   * **`null` is "unsaid" rather than "regular" for a printing sold in one finish only**: there it
+   * can only be that finish, which the views draw ({@link theoryFinish}) and every owned/missing
+   * read counts it as ({@link entryFinish}). The stored value is left alone: it is the grain.
    *
    * **It is part of the grain**, so {@link sameDeckSlot} matches on it and a pile can hold this
    * printing twice.
@@ -6985,16 +6995,44 @@ function toCollectionRow(
 }
 
 /**
- * The translation between the two spellings of the regular copy.
+ * `deck::entry_finish` — the finish a row of **either** table names, in the collection's
+ * spelling: the one both sides of every owned/missing comparison are keyed in.
  *
- * `deck_cards.finish` is `null` for it — the crate normalises `"nonfoil"` away at the command
- * boundary and a CHECK makes any other path an error — while `collection_entries.finish` says
- * `nonfoil`. **Every read that crosses between the two goes through this** — binding the
- * `null` straight through would make every regular line read zero, which is the one failure
- * that looks like an empty collection rather than like a bug.
+ * `deck_cards.finish` is `null` for a row that said nothing — the crate normalises `"nonfoil"`
+ * away at the command boundary and a CHECK makes any other path an error — while
+ * `collection_entries.finish` is NOT NULL and says `nonfoil` for the regular copy. **Neither can
+ * mean the regular copy of a printing that has none.** For one sold only in foil or only in etched,
+ * an unsaid deck row is that finish — the deck views already draw it so ({@link theoryFinish},
+ * issue #563) — and a collection row stored `nonfoil` is a legacy of the old quick add,
+ * add-missing and the imports, which wrote the regular word for a card nobody sells regular. Both
+ * read as the printing's sole finish here, so an unsaid row counts the foil copies its group
+ * holds and a legacy copy goes on counting rather than being swept away as unclaimed.
+ *
+ * A printing sold in both is untouched — `null` is `nonfoil` and `foil` is `foil`, exactly as
+ * before — and an orphan has no `finishes` to read, so it keeps the spelling it stored. A stated
+ * `foil` or `etched` never needs the printing, which is why the lookup waits behind that test.
+ *
+ * **Every read that crosses between the two tables goes through this.** Binding the deck's `null`
+ * straight through would make every regular line read zero, which is the one failure that looks
+ * like an empty collection rather than like a bug; binding the stored word straight through makes
+ * every unsaid foil-only line read zero, which looks like a card the reader never bought.
  */
-function collectionFinish(finish: DeckFinish): FakeEntry["finish"] {
-  return finish ?? "nonfoil";
+function entryFinish(
+  db: FakeDb,
+  cardId: string,
+  stored: DeckFinish | FakeEntry["finish"],
+): FakeEntry["finish"] {
+  if (stored !== null && stored !== "nonfoil") return stored;
+  return soleFinish(cardById(db, cardId)?.finishes ?? null) ?? "nonfoil";
+}
+
+/**
+ * `(card_id, entry finish)` as one `Map` key — {@link ownedByPrinting}'s separator, for its
+ * reason. The pools, {@link attributeOwned} and {@link releaseUnclaimedCopies} key both tables
+ * with it, so a deck row and a copy of one piece of cardboard cannot land on two keys.
+ */
+function entryKey(db: FakeDb, cardId: string, stored: DeckFinish | FakeEntry["finish"]): string {
+  return `${cardId}|${entryFinish(db, cardId, stored)}`;
 }
 
 /**
@@ -7808,6 +7846,10 @@ function labelsWorn(db: FakeDb, deckId: number, variant: DeckVariant): DeckLabel
  * **live** list's, and since 2026-09-09 it is no longer the only one: a plan is attributed from
  * {@link theoryPool} instead, and {@link readHandlers.deck_get} is where the variant picks
  * between the two.
+ *
+ * **The finish half is the copy's {@link entryFinish}, not its stored word** — so a legacy
+ * `nonfoil` copy of a foil-only printing lands in the `foil` bucket, where the unsaid row that
+ * can only be the foil looks for it.
  */
 function ownedByPrinting(db: FakeDb, deckId: number): Map<string, number> {
   const group = deckGroup(db, deckId);
@@ -7815,7 +7857,7 @@ function ownedByPrinting(db: FakeDb, deckId: number): Map<string, number> {
   const owned = new Map<string, number>();
   for (const e of db.collectionEntries) {
     if (e.folderId !== group.id) continue;
-    const key = `${e.cardId}|${e.finish}`;
+    const key = entryKey(db, e.cardId, e.finish);
     owned.set(key, (owned.get(key) ?? 0) + e.quantity);
   }
   return owned;
@@ -7857,7 +7899,7 @@ function theoryPool(db: FakeDb, deckId: number): Map<string, number> {
   const owned = new Map<string, number>();
   for (const e of db.collectionEntries) {
     if (!availableToDeck(db, e, deckId)) continue;
-    const key = `${e.cardId}|${e.finish}`;
+    const key = entryKey(db, e.cardId, e.finish);
     owned.set(key, (owned.get(key) ?? 0) + e.quantity);
   }
   return owned;
@@ -8004,8 +8046,10 @@ function deckReadOrder(db: FakeDb): Compare<FakeDeckCard> {
  *
  * **The key build is a plain one since 2026-09-07, where it used to be a guard.** A deck row
  * always has a `cardId`, so there is no `oracleId` that can be missing and nothing left to
- * filter on beside `isActive`. {@link collectionFinish} supplies the `row.finish` half of the
- * key, `normaliseFinish`'s translation read the other way.
+ * filter on beside `isActive`. {@link entryFinish} supplies the `row.finish` half of the key —
+ * `normaliseFinish`'s translation read the other way, and the printing's sole finish where the
+ * row said nothing — so an unsaid row and a `foil` row of one foil-only printing draw on one pool
+ * rather than one of them reading a regular bucket nothing is ever filed in.
  *
  * The `min(remaining, row.quantity)` clamp is the crate's: a deck listing four copies of a card
  * the pool holds one of owns one of them.
@@ -8024,7 +8068,7 @@ function attributeOwned(
       owned.set(row.id, 0);
       continue;
     }
-    const key = `${row.cardId}|${collectionFinish(row.finish)}`;
+    const key = entryKey(db, row.cardId, row.finish);
     const remaining = left.get(key) ?? 0;
     const take = Math.max(0, Math.min(remaining, row.quantity));
     left.set(key, remaining - take);
@@ -8080,15 +8124,20 @@ function pullOrder(db: FakeDb, e: FakeEntry): [number, number] {
  * `quantity > 0` is the one extra term, and it is not the fence's business: a row stepped to
  * zero is paperwork rather than a copy, exactly as it is to
  * {@link collection_folder_summary}'s `sum(quantity)`.
+ *
+ * **"The finish matches" means the two {@link entryFinish}es match**, which is the owned count's
+ * own grain: for a foil-only printing the plan's row is the foil, and both a `foil` copy and a
+ * legacy `nonfoil` one fill it.
  */
 function pullCandidates(db: FakeDb, cardId: string, finish: DeckFinish): DeckPullCandidate[] {
+  const want = entryFinish(db, cardId, finish);
   return db.collectionEntries
     .filter(
       (e) =>
         e.cardId === cardId &&
-        // {@link normaliseFinish} is the one place `"nonfoil"` becomes the `null` a deck row
-        // stores, so the two spellings are compared through it rather than beside it.
-        normaliseFinish(e.finish) === finish &&
+        // Both sides through {@link entryFinish}, so the deck's `null` and the collection's
+        // `nonfoil` are compared in one spelling rather than beside each other.
+        entryFinish(db, e.cardId, e.finish) === want &&
         e.quantity > 0 &&
         !inADeckFolder(db, e.folderId),
     )
@@ -10891,7 +10940,11 @@ export function readHandlers(db: FakeDb) {
         if (!row.categoryActive) continue;
         const short = row.quantity - row.ownedQuantity;
         if (short <= 0) continue;
-        const key = `${row.cardId}|${row.finish ?? ""}`;
+        // The finish the row **plays** ({@link playedDeckFinish}), which is both halves of what
+        // `deck::live_shortfall` does with it: the fold key, so an unsaid row and a `foil` row
+        // of one foil-only printing are one hole, and the finish the plan row reports.
+        const finish = playedDeckFinish(row.finish, row.finishes);
+        const key = `${row.cardId}|${finish ?? ""}`;
         const found = folded.get(key);
         if (found) {
           found.short += short;
@@ -10909,10 +10962,10 @@ export function readHandlers(db: FakeDb) {
           name: row.name,
           setCode: row.setCode,
           collectorNumber: row.collectorNumber,
-          finish: row.finish,
+          finish,
           short,
           categories: [row.categoryName],
-          candidates: pullCandidates(db, row.cardId, row.finish),
+          candidates: pullCandidates(db, row.cardId, finish),
         });
       }
       return [...folded.values()].filter((row) => row.candidates.length > 0);
@@ -10940,8 +10993,9 @@ export function readHandlers(db: FakeDb) {
      * once there (`deck::live_shortfall`, three callers), so it is spelled once here too — the
      * **live** list only, because a plan holds no cards, which is {@link deck_pull_plan}'s
      * paragraph on why that is a rule stated here rather than one the attribution draws;
-     * a switched-off pile short of nothing; `(cardId, finish)` as the grain, so
-     * a foil and a nonfoil of one printing are two rows the reader ticks separately; and the
+     * a switched-off pile short of nothing; `(cardId, played finish)` as the grain, so
+     * a foil and a nonfoil of one printing are two rows the reader ticks separately while an
+     * unsaid and a `foil` row of a foil-only one are the same row; and the
      * deck's own read order kept by a `Map` rather than a sorted key. `categories` names the
      * piles for the reader and is never a term in the arithmetic.
      *
@@ -10995,7 +11049,9 @@ export function readHandlers(db: FakeDb) {
         // The one filter, and it is the same lookup {@link requireCard} makes inside the write —
         // asked here so the dialog never draws a row the press would have to refuse.
         if (!cardById(db, row.cardId)) continue;
-        const key = `${row.cardId}|${row.finish ?? ""}`;
+        // The played finish, {@link deck_pull_plan}'s fold key and reported finish alike.
+        const finish = playedDeckFinish(row.finish, row.finishes);
+        const key = `${row.cardId}|${finish ?? ""}`;
         const found = folded.get(key);
         if (found) {
           found.short += short;
@@ -11012,14 +11068,15 @@ export function readHandlers(db: FakeDb) {
           name: row.name,
           setCode: row.setCode,
           collectorNumber: row.collectorNumber,
-          finish: row.finish,
+          finish,
           short,
           categories: [row.categoryName],
           // The deck's spelling of the finish goes across, which is what that handler takes: it
-          // runs {@link normaliseFinish} on the way in and compares the collection's word.
-          // The **narrow** read — `deck_quick_add::wishes` — because the batch clears a lone
-          // match without asking, where the per-card command's wide read backs a picker.
-          wishes: quickAddWishes(db, row.cardId, row.finish, "printing"),
+          // runs {@link normaliseFinish} and {@link entryFinish} on the way in and compares the
+          // collection's word. The **narrow** read — `deck_quick_add::wishes` — because the batch
+          // clears a lone match without asking, where the per-card command's wide read backs a
+          // picker.
+          wishes: quickAddWishes(db, row.cardId, finish, "printing"),
         });
       }
       return [...folded.values()];
@@ -11556,7 +11613,9 @@ export function readHandlers(db: FakeDb) {
      * **The measured list is the deck's kind's**: `theory` for a deck that keeps a plan, attributed
      * from {@link theoryPool}, and `live` otherwise, attributed from {@link ownedByPrinting} — the
      * same two pools `deck_get` picks between, handed to the same {@link attributeOwned} in the
-     * same {@link deckReadOrder}, so one `(card_id, finish)` in two piles shares one pool. **Every
+     * same {@link deckReadOrder}, so one `(card_id, finish)` in two piles shares one pool — and
+     * the finish is {@link entryFinish}'s, so an unsaid row and a `foil` row of one foil-only
+     * printing are that one key rather than a regular want nothing can fill. **Every
      * active pile counts**, sideboard and companion included — `deckStats`' `counted`, and
      * deliberately wider than {@link readHandlers.deck_values}' size pile.
      *
@@ -14656,12 +14715,17 @@ function sourceDeck(db: FakeDb, folderId: number | null): FakeDeck | undefined {
  * row is not available: the walk can span two piles of one deck, so there is no single category
  * to name and no total that describes one slot. Each row instead gets exactly what the stepper
  * writes for the same edit, so `auditText.ts` needs no new arm.
+ *
+ * **`finish` is the moving copy's {@link entryFinish}, and a row is taken when its own entry
+ * finish equals it** — the grain the losing deck's owned count was read at. So a `foil` copy
+ * leaving a deck that lists the foil-only printing unsaid takes that unsaid row down, where a
+ * match on the stored word would have left the deck listing a card it no longer holds.
  */
 function takeFromDeckList(
   db: FakeDb,
   deckId: number,
   cardId: string,
-  finish: DeckFinish,
+  finish: FakeEntry["finish"],
   quantity: number,
 ): void {
   let left = quantity;
@@ -14671,7 +14735,7 @@ function takeFromDeckList(
         dc.deckId === deckId &&
         dc.variant === LIVE &&
         dc.cardId === cardId &&
-        dc.finish === finish,
+        entryFinish(db, dc.cardId, dc.finish) === finish,
     )
     .sort((a, b) => a.id - b.id);
   for (const row of rows) {
@@ -14721,7 +14785,9 @@ function takeFromDeckList(
  * stranding the fallback existed for is {@link releaseUnclaimedCopies}, called after
  * `deck_swap_printing` and `deck_set_card_finish` rewrite a row's identity — so by the time this
  * function is asked to cut a line, the group has nothing filed under an identity no live row
- * still names.
+ * still names. **"The finish" is the {@link entryFinish} of each side**, the owned count's own
+ * grain: a cut gives back exactly the copies the row was counted as owning, which for an unsaid
+ * row of a foil-only printing are its `foil` copies and any legacy `nonfoil` one beside them.
  *
  * **A deck with no group holds nothing rather than refusing**, and `Recently removed` is resolved
  * only when there is something to file — so a store missing either folder still lets a pile be
@@ -14751,11 +14817,17 @@ function releaseGroupCopies(
   if (quantity <= 0) return nothing;
   const group = deckGroup(db, deckId);
   if (!group) return nothing;
-  // The deck row's `null` is the collection row's `'nonfoil'` — {@link collectionFinish}'s
-  // translation, read the other way.
-  const want = collectionFinish(finish);
+  // Both sides through {@link entryFinish}: the deck row's `null` is the collection row's
+  // `'nonfoil'`, and for a foil-only printing both are the `foil` — so an unsaid row gives back
+  // the foil copies it was counted as owning, a legacy regular one included.
+  const want = entryFinish(db, cardId, finish);
   const backing = db.collectionEntries
-    .filter((e) => e.folderId === group.id && e.cardId === cardId && e.finish === want)
+    .filter(
+      (e) =>
+        e.folderId === group.id &&
+        e.cardId === cardId &&
+        entryFinish(db, e.cardId, e.finish) === want,
+    )
     .sort((a, b) => a.id - b.id);
   if (backing.length === 0) return nothing;
   const removed = removedFolder(db);
@@ -14772,7 +14844,7 @@ function releaseGroupCopies(
 
 /**
  * `deck::release_unclaimed_copies` — sweep this deck's group and move every copy no **live**
- * `deck_cards` row claims at `(card_id, finish)` into `Recently removed`.
+ * `deck_cards` row claims at `(card_id, entry finish)` ({@link entryKey}) into `Recently removed`.
  *
  * **What replaced `release_group_copies`'s oracle fallback.** That fallback existed to cure a
  * stranding: `deck_swap_printing` and `deck_set_card_finish` rewrite a row's identity and touch
@@ -14814,10 +14886,13 @@ function releaseUnclaimedCopies(db: FakeDb, deckId: number, variant: DeckVariant
   if (variant !== LIVE) return;
   const group = deckGroup(db, deckId);
   if (group === undefined) return;
+  // Both tables keyed by {@link entryKey}, so the identity a row claims and the identity a copy
+  // is held under are one spelling — an unsaid row of a foil-only printing claims the `foil`
+  // copies, legacy regular ones included, and never leaves them looking unclaimed.
   const claimed = new Map<string, number>();
   for (const dc of db.deckCards) {
     if (dc.deckId !== deckId || dc.variant !== LIVE) continue;
-    const key = `${dc.cardId}|${collectionFinish(dc.finish)}`;
+    const key = entryKey(db, dc.cardId, dc.finish);
     claimed.set(key, (claimed.get(key) ?? 0) + dc.quantity);
   }
   // Grouped by identity here; sorted oldest-first per group below — a store's insertion order
@@ -14825,7 +14900,7 @@ function releaseUnclaimedCopies(db: FakeDb, deckId: number, variant: DeckVariant
   const held = new Map<string, FakeEntry[]>();
   for (const e of db.collectionEntries) {
     if (e.folderId !== group.id) continue;
-    const key = `${e.cardId}|${e.finish}`;
+    const key = entryKey(db, e.cardId, e.finish);
     const rows = held.get(key);
     if (rows) rows.push(e);
     else held.set(key, [e]);
@@ -15033,16 +15108,19 @@ function deckKind(patch: DeckPatch): [boolean | undefined, boolean | undefined] 
  * floored.
  *
  * **On the whole of {@link theoryDiff}'s key** (2026-08-20), and the two halves of one row may
- * not disagree about what a card is. {@link collectionFinish} is the translation between the two
- * spellings of the regular copy: `deckCards.finish` is `null` for it and
- * `collectionEntries.finish` says `nonfoil`. It needs no orphan arm — a collection entry's
- * `cardId` is the printing whether or not `cards` still carries it.
+ * not disagree about what a card is. {@link entryFinish} is the translation between the two
+ * tables, on both sides: `deckCards.finish` is `null` for the regular copy and
+ * `collectionEntries.finish` says `nonfoil` — and for a printing sold only in foil, both are the
+ * foil. The row hands this the finish it **plays** ({@link theoryFinish}, issue #563), so a
+ * binder's `foil` copies count; reading each copy through the same translation is what counts a
+ * legacy `nonfoil` copy of that printing beside them. It needs no orphan arm — a collection
+ * entry's `cardId` is the printing whether or not `cards` still carries it.
  */
 function ownedSpare(db: FakeDb, cardId: string, finish: DeckFinish): number {
-  const want = collectionFinish(finish);
+  const want = entryFinish(db, cardId, finish);
   return db.collectionEntries
     .filter((e) => {
-      if (e.cardId !== cardId || e.finish !== want) return false;
+      if (e.cardId !== cardId || entryFinish(db, e.cardId, e.finish) !== want) return false;
       if (e.folderId === null) return true;
       if (collectionFolderById(db, e.folderId)?.kind === COLLECTION_DECK_KIND) return false;
       return !collectionFolderLocked(db, e.folderId);
@@ -15068,14 +15146,24 @@ interface GroupedDiff {
 }
 
 /**
- * `deck_theory::played_finish` — the finish a deck row plays: its own, or the printing's sole
+ * `deck::played_finish` — the finish a deck row plays: its own, or the printing's sole
  * finish where it stored none (issue #563). The app's own `playedFinish`, borrowed for the reason
  * the `{X}` test above is: a foil-only Surge Foil stored unsaid in one list and `foil` in the other
  * is one card to Rust, and a fake that spelled it two ways would draw it on the Compare dialog in
  * a story while the window did not.
  */
 function theoryFinish(db: FakeDb, dc: FakeDeckCard): FakeDeckCard["finish"] {
-  const played = playedFinish(dc.finish, cardById(db, dc.cardId)?.finishes ?? null);
+  return playedDeckFinish(dc.finish, cardById(db, dc.cardId)?.finishes ?? null);
+}
+
+/**
+ * {@link theoryFinish} over a stored finish and the printing's `finishes` rather than a row — the
+ * shape the shortfall walk has in hand, since it reads `deck_get`'s DTOs and each already carries
+ * the printing's `finishes`. `deck::live_shortfall` folds and reports on this, so an unsaid row
+ * and a `foil` row of one foil-only printing are one plan row, reported as the foil.
+ */
+function playedDeckFinish(stored: DeckFinish, finishes: string | null): DeckFinish {
+  const played = playedFinish(stored, finishes);
   // Unreachable — `soleFinish` answers `null` rather than `nonfoil` — and spelled anyway, because
   // a deck's regular copy is `null` and the type says so.
   return played === "nonfoil" ? null : played;
@@ -15528,6 +15616,10 @@ function wishIsForCard(db: FakeDb, wish: FakeWish, cardId: string): boolean {
  *
  * **An empty answer is the ordinary case and never a refusal.** `imageUris` is omitted for the
  * reason {@link deck_missing_plan} gives: a Storybook picture comes from the `@/lib/images` alias.
+ *
+ * **The finish a wish is ranked and matched against is the {@link entryFinish}** — the copies'
+ * own finish, which is what a quick add records — so a foil-only card asked about with `null`
+ * matches a wish for the foil. A wish's `preferredFinish` is compared as the reader stored it.
  */
 function quickAddWishes(
   db: FakeDb,
@@ -15535,7 +15627,7 @@ function quickAddWishes(
   finish: DeckFinish | string | null,
   scope: "printing" | "card",
 ): DeckQuickAddWish[] {
-  const wanted = normaliseFinish(finish) ?? "nonfoil";
+  const wanted = entryFinish(db, cardId, normaliseFinish(finish));
   const finishFits = (w: FakeWish) => w.preferredFinish === null || w.preferredFinish === wanted;
   const folderRank = (w: FakeWish): [number, number] =>
     w.folderId === null
@@ -15599,9 +15691,10 @@ function quickAddWishes(
  *
  * The matcher is {@link readHandlers.deck_quick_add_wishes}, called rather than re-spelled: it is
  * the same predicate the plan drew the row's `wishes` with, so what the dialog counted and what
- * the write acts on cannot come apart. The finish crossing this call is the **deck's** spelling
- * for that reason — it is the word the plan's row already carries, and that handler normalises on
- * the way in.
+ * the write acts on cannot come apart. The finish crossing this call is the **copies'** — the
+ * {@link entryFinish} the batch has just recorded — and either spelling of it lands on the same
+ * wish, because that handler resolves whatever it is handed through {@link normaliseFinish} and
+ * {@link entryFinish} on the way in, exactly as it resolved the plan row's.
  *
  * `take` is `min(recorded, wish.quantity)`, and a wish taken to nothing is **deleted**:
  * `wishlist_entries.quantity` carries a `CHECK (quantity > 0)`, so there is no zero row to leave
@@ -15610,7 +15703,7 @@ function quickAddWishes(
 function takeLoneWish(
   db: FakeDb,
   cardId: string,
-  finish: DeckFinish,
+  finish: FakeEntry["finish"],
   quantity: number,
 ): number {
   const matches = quickAddWishes(db, cardId, finish, "printing");
@@ -16239,10 +16332,13 @@ export function writeHandlers(db: FakeDb) {
         const finish = normaliseFinish(source.finish);
         const from = sourceDeck(db, source.folderId);
         const cardId = source.cardId;
+        // …and the copy's {@link entryFinish}, read now because {@link moveCopies} may fold the
+        // source row away: it is what the losing deck's rows are matched at.
+        const moving = entryFinish(db, cardId, source.finish);
 
         const landed = moveCopies(db, args.entryId, args.quantity, group.id);
         if (from) {
-          takeFromDeckList(db, from.id, cardId, finish, args.quantity);
+          takeFromDeckList(db, from.id, cardId, moving, args.quantity);
           from.updatedAt = stamp(db);
         }
         // The row this press wrote, kept so the caller has something to point at — the landed
@@ -16584,7 +16680,12 @@ export function writeHandlers(db: FakeDb) {
       // vocabulary, and a second translation would be a second thing to drift. Its position is
       // load-bearing rather than tidy — an unknown finish is refused ahead of the deck fence, so
       // a caller sending junk hears about the junk and not about the deck.
-      const finish = normaliseFinish(args.finish) ?? "nonfoil";
+      //
+      // **{@link entryFinish} rather than `?? "nonfoil"`**, so a foil-only card pressed with
+      // `null` — an unsaid row's own finish — records the foil copy it can only be. Recording
+      // `nonfoil` wrote a regular copy of a card nobody sells regular, and a row the owned count
+      // then had to learn to read as the foil anyway.
+      const finish = entryFinish(db, args.cardId, normaliseFinish(args.finish));
       const deck = requireDeck(db, args.deckId);
       // A virtual deck keeps no cardboard, so there is nothing for this press to record and no
       // group of the deck's to record it into. **Ahead of {@link deckPlays}, which cannot stand
@@ -16713,14 +16814,20 @@ export function writeHandlers(db: FakeDb) {
       const picks = args.picks ?? [];
       if (picks.length === 0) throw refuse(MISSING_NOTHING_PICKED);
 
-      const wanted = new Map<string, { cardId: string; finish: DeckFinish; quantity: number }>();
+      const wanted = new Map<
+        string,
+        { cardId: string; finish: FakeEntry["finish"]; quantity: number }
+      >();
       for (const pick of picks) {
         if (pick.quantity <= 0) throw refuse(ZERO_ADD);
         // The deck's spelling, normalised **ahead of the deck fence** for
         // {@link deck_quick_add_to_collection}'s reason: a caller sending junk hears about the
-        // junk and not about the deck.
-        const finish = normaliseFinish(pick.finish);
-        const key = `${pick.cardId}|${finish ?? ""}`;
+        // junk and not about the deck. Then into the collection's through {@link entryFinish} —
+        // the one translation in this write, read by the sum, the plan check, the copies and the
+        // wish alike — so a foil-only pick sent as the unsaid `null` and one sent as `foil` are
+        // one key, summed against one shortfall and recorded as one `foil` row.
+        const finish = entryFinish(db, pick.cardId, normaliseFinish(pick.finish));
+        const key = `${pick.cardId}|${finish}`;
         const held = wanted.get(key);
         if (held) held.quantity += pick.quantity;
         else wanted.set(key, { cardId: pick.cardId, finish, quantity: pick.quantity });
@@ -16742,7 +16849,9 @@ export function writeHandlers(db: FakeDb) {
 
       const rows = readHandlers(db).deck_missing_plan({ deckId: args.deckId });
       const shortAt = new Map<string, number>();
-      for (const row of rows) shortAt.set(`${row.cardId}|${row.finish ?? ""}`, row.short);
+      // Keyed the way the picks are — the plan row's played finish through {@link entryFinish} —
+      // so the row the dialog drew and the pick it sent back meet on one key.
+      for (const row of rows) shortAt.set(entryKey(db, row.cardId, row.finish), row.short);
       // Every pick checked before the first copy is written, so a refusal on the last one has not
       // already recorded the first.
       for (const [key, pick] of wanted) {
@@ -16766,9 +16875,9 @@ export function writeHandlers(db: FakeDb) {
           db,
           {
             cardId: pick.cardId,
-            // The **collection's** spelling, where `deck_cards` stores the deck's — the one
-            // translation in this write, made once and read by both halves below.
-            finish: pick.finish ?? "nonfoil",
+            // Already the **collection's** spelling, where `deck_cards` stores the deck's — the
+            // one translation in this write, made in the loop above and read by both halves here.
+            finish: pick.finish,
             quantity: pick.quantity,
             folderId: group.id,
           },
