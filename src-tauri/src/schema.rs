@@ -5062,7 +5062,8 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
         if says_nothing_about_the_file(&e) {
             return Err(in_file(e, "the card database (corpus.db)"));
         }
-        replace_attached_corpus(conn, e).map_err(|e| in_file(e, "the card database (corpus.db)"))?;
+        replace_attached_corpus(conn, e)
+            .map_err(|e| in_file(e, "the card database (corpus.db)"))?;
     }
     // **Fatal, like the two migrations above and unlike the two repairs below.** A device whose
     // capture triggers are missing goes on working perfectly and records nothing, so its edits
@@ -5311,7 +5312,10 @@ pub(crate) fn back_up_user_file(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    let Some(dir) = std::path::Path::new(&file).parent().filter(|_| !file.is_empty()) else {
+    let Some(dir) = std::path::Path::new(&file)
+        .parent()
+        .filter(|_| !file.is_empty())
+    else {
         return Ok(None);
     };
     let backups = dir.join(USER_BACKUPS_DIR);
@@ -5340,7 +5344,11 @@ fn prune_user_backups(backups: &std::path::Path) {
         .flatten()
         .filter_map(|entry| {
             let name = entry.file_name().into_string().ok()?;
-            let n = name.strip_prefix("user.v")?.strip_suffix(".db")?.parse().ok()?;
+            let n = name
+                .strip_prefix("user.v")?
+                .strip_suffix(".db")?
+                .parse()
+                .ok()?;
             Some((n, entry.path()))
         })
         .collect();
@@ -8449,11 +8457,16 @@ pub(crate) mod tests {
         let cards: i64 = conn
             .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(cards, 0, "the corpus was rebuilt empty, for the next sync to fill");
+        assert_eq!(
+            cards, 0,
+            "the corpus was rebuilt empty, for the next sync to fill"
+        );
         let kept: String = conn
-            .query_row("SELECT value FROM app_meta WHERE key = 'reader_wrote'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT value FROM app_meta WHERE key = 'reader_wrote'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(kept, "this", "and the reader's own file was not touched");
     }
@@ -8479,7 +8492,11 @@ pub(crate) mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(names, ["id", "name"], "no rung's column survived the failure");
+        assert_eq!(
+            names,
+            ["id", "name"],
+            "no rung's column survived the failure"
+        );
         assert_eq!(corpus_version(&conn), 4, "and the stamp did not move");
         let combos: i64 = conn
             .query_row(
@@ -8488,16 +8505,17 @@ pub(crate) mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(combos, 0, "the combo rebuild earlier in the same launch rolled back too");
+        assert_eq!(
+            combos, 0,
+            "the combo rebuild earlier in the same launch rolled back too"
+        );
         assert!(conn.is_autocommit(), "and no transaction was left open");
     }
 
     /// Only a failure that is a fact about the file may cost the reader a resync.
     #[test]
     fn a_full_or_locked_disk_is_never_a_reason_to_replace_the_corpus() {
-        let failure = |code| {
-            rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)
-        };
+        let failure = |code| rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None);
         for code in [
             rusqlite::ffi::SQLITE_FULL,
             rusqlite::ffi::SQLITE_BUSY,
@@ -8509,9 +8527,17 @@ pub(crate) mod tests {
         for code in [rusqlite::ffi::SQLITE_ERROR, rusqlite::ffi::SQLITE_CORRUPT] {
             assert!(!says_nothing_about_the_file(&failure(code)), "{code}");
         }
-        let labelled = in_file(failure(rusqlite::ffi::SQLITE_FULL), "the card database (corpus.db)");
-        assert!(labelled.to_string().starts_with("the card database (corpus.db): "));
-        assert!(says_nothing_about_the_file(&labelled), "the label keeps the code");
+        let labelled = in_file(
+            failure(rusqlite::ffi::SQLITE_FULL),
+            "the card database (corpus.db)",
+        );
+        assert!(labelled
+            .to_string()
+            .starts_with("the card database (corpus.db): "));
+        assert!(
+            says_nothing_about_the_file(&labelled),
+            "the label keeps the code"
+        );
     }
 
     /// Issue #550: a copy of the reader's file before a rung moves anything, never overwritten,
@@ -8522,13 +8548,17 @@ pub(crate) mod tests {
         let conn = crate::db::open_write(dir.path()).unwrap();
         let backups = dir.path().join(USER_BACKUPS_DIR);
 
-        let copy = back_up_user_file(&conn, 40).unwrap().expect("a copy is written");
+        let copy = back_up_user_file(&conn, 40)
+            .unwrap()
+            .expect("a copy is written");
         assert_eq!(copy, backups.join("user.v40.db"));
         let read = Connection::open(&copy).unwrap();
         let kept: String = read
-            .query_row("SELECT value FROM app_meta WHERE key = 'reader_wrote'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT value FROM app_meta WHERE key = 'reader_wrote'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(kept, "this");
         let has_cards: i64 = read
@@ -8538,7 +8568,10 @@ pub(crate) mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(has_cards, 0, "the copy is the user file alone, not the corpus");
+        assert_eq!(
+            has_cards, 0,
+            "the copy is the user file alone, not the corpus"
+        );
         drop(read);
 
         assert_eq!(
@@ -8556,7 +8589,10 @@ pub(crate) mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         left.sort();
-        assert_eq!(left, ["mine.db", "user.v41.db", "user.v42.db", "user.v43.db"]);
+        assert_eq!(
+            left,
+            ["mine.db", "user.v41.db", "user.v42.db", "user.v43.db"]
+        );
     }
 
     /// Issue #550: a corpus that could not be deleted keeps its mark, so the next launch tries

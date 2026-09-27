@@ -1021,7 +1021,10 @@ mod tests {
             Err("the second statement failed".into())
         });
         assert!(failed.is_err());
-        assert!(saved(&conn).is_empty(), "the first write rolled back with the second");
+        assert!(
+            saved(&conn).is_empty(),
+            "the first write rolled back with the second"
+        );
         assert!(conn.is_autocommit(), "no transaction was left open");
 
         in_savepoint(&conn, "sp", || {
@@ -1030,16 +1033,23 @@ mod tests {
         })
         .unwrap();
         assert_eq!(saved(&conn), vec![2]);
-        assert!(conn.is_autocommit(), "an outermost savepoint commits on release");
+        assert!(
+            conn.is_autocommit(),
+            "an outermost savepoint commits on release"
+        );
 
         // Inside a caller's transaction the savepoint is a step: its failure undoes only itself,
         // and the caller still decides the rest.
-        conn.execute_batch("BEGIN; INSERT INTO t VALUES (3);").unwrap();
+        conn.execute_batch("BEGIN; INSERT INTO t VALUES (3);")
+            .unwrap();
         let _ = in_savepoint(&conn, "sp", || -> Result<(), String> {
             conn.execute("INSERT INTO t VALUES (4)", []).unwrap();
             Err("no".into())
         });
-        assert!(!conn.is_autocommit(), "the caller's transaction is still the caller's");
+        assert!(
+            !conn.is_autocommit(),
+            "the caller's transaction is still the caller's"
+        );
         conn.execute_batch("ROLLBACK").unwrap();
         assert_eq!(saved(&conn), vec![2]);
     }
