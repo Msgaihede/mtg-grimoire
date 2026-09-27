@@ -106,6 +106,11 @@ departure accepted, now paid in the other direction.
 - `keyword<op>value`, where `<op>` is one of `:` `=` `!=` `>=` `<=` `>` `<`, **longest match
   first** so `>=` is never read as `>` followed by a value beginning `=`.
 - `"…"` or `'…'` around a value with a space in it. An unterminated quote runs to the end.
+  **A quote opens only where a value can begin** — at the start of a chunk, after a lone `-`,
+  or straight after `keyword<op>` — and a `'` closes only at the end of a word (issue #552).
+  Until 2026-09-27 any `'` opened one, so the apostrophe in `sensei's -t:artifact` swallowed the
+  type exclusion into free text and `o:can't t:creature` swallowed the type filter into the
+  rules-text value. `Urza's`, `can't` and `o:'can't block'` are now what they look like.
 - A leading `-` excludes: `-t:goblin`, `-atag:dragon`.
 - Everything unrecognised is free text for FTS. `bolt t:creature` searches the index for `bolt`
   alone and filters by the type line beside it.
@@ -191,6 +196,17 @@ things make it the right column anyway: `cards.oracle_text` is **NULL for every 
 card**, so the narrower column is wrong in a worse direction, and the extra matches are face
 text a reader searching rules text would mostly want. A clean `oracle_all` FTS column is a
 possible later rung and is deliberately not this change.
+
+**It also holds every name the printing was _printed_ under** since
+[issue #580](https://github.com/Msgaihede/mtg-grimoire/issues/580): Scryfall's `flavor_name`
+and `printed_name`, top level and per face (`card_row::print_names`). So *Earth Rumble Triumph*
+finds *Return of the Wildspeaker* — and, because `search_text` is per printing, finds it **by
+TLE 44 alone**, which is what makes a collapsed search (the wall, the deck editor's quick add)
+offer that printing rather than the card's usual representative. Scryfall's own free-text search
+answers the same query the same way (1 card, checked 2026-09-27). Two costs, both accepted: `o:`
+now matches a word in a printed name, on that printing only; and a corpus ingested before the
+change has no printed names in its index until the next daily bulk sync re-ingests it, because
+the fields live in the gzip `raw` and no rung can read them back out.
 
 **Negation needs care, because FTS5's `NOT` is binary.** A query that is *only* `-t:goblin` has
 no left operand and is a syntax error as a MATCH string, so a purely negative text term compiles
@@ -378,8 +394,10 @@ Two costs, both FTS's and both in the forgiving direction:
   `escape_like`, beside the positive free text's `LIKE` on the same column. Through `cards_fts`,
   `NULL NOT IN (…)` over the LEFT JOIN would drop every orphaned wish for not being called Bolt,
   which is exactly the row that column exists for. It is a substring there, as the free text is.
-- **Facets** discard it with every other negated text term, so the counts read high under
-  `-bolt` — the documented direction, below.
+- **Facets** subtract it with every other negated text term: the same `MATCH`, resolved to
+  rowids and taken away with `and_not`. They discarded it until 2026-09-27 (issue #552), on the
+  stated ground that the index's `BitSet` had no complement — it had one all along, in
+  `index/facets.rs` — so the counts read high under `-bolt`, `-t:` and `-o:` for nothing.
 
 ### The chip, and the one press it does not survive
 
@@ -484,7 +502,9 @@ did, every `t:` keystroke would blank the wall waiting for a resolve that never 
 **Facets fail open, and that is a decision.** `index/facets.rs` is a second, in-memory
 implementation of what `push_card_filters` answers, and the index carries no text, power,
 toughness, artist or card-colour dimension. `t:` and `o:` narrow the counts for free because
-they ride the FTS-derived bitset `run_facets` already folds. **Every other predicate leaves the
+they ride the FTS-derived bitset `run_facets` already folds — negated as well as positive since
+2026-09-27 (issue #552), when a `-t:`, `-o:` or `-bolt` began to be subtracted from that bitset
+rather than dropped. **Every other predicate leaves the
 facet counts wider than the result set** — a chip may advertise more cards than pressing it
 returns. That is the documented direction in
 [search-faceting.md](search-faceting.md) and the right one: a count that is too high is a

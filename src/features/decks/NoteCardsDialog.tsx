@@ -36,7 +36,7 @@ import { Dialog } from "@/components/Dialog";
 import { FILTER_FIELD } from "@/components/FilterChips";
 import { plural } from "@/lib/counts";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
-import { cardArtSrc, cardImageUrl } from "@/lib/images";
+import { cardImageUrl } from "@/lib/images";
 import type { DeckNoteCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { OTHER } from "./deckBuckets";
@@ -409,8 +409,7 @@ function Row({
   // is a `string`, so {@link Picker}'s `strays` spells a missing printing `?? ""`. The branch is
   // reached only by the orphan the corpus knows no printing of — see this component's doc for why
   // a card merely *cut from the deck* still has one.
-  const art =
-    row.cardId === "" ? null : cardArtSrc(cardImageUrl(row.cardId, 0, "art"), row.imageUris?.art);
+  const art = row.cardId === "" ? null : cardImageUrl(row.cardId, 0, "art");
 
   return (
     <li

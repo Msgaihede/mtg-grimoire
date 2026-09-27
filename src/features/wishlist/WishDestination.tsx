@@ -124,8 +124,8 @@ function pathRows(
 /**
  * The destination's name for a sentence — `null` at the root, the folder's own name otherwise.
  *
- * **The folder's NAME, never its path.** A call site writes `Sent. 4 wishes updated in
- * ${name}.`, and a sentence names the drawer: `Sent. 4 wishes updated in Ordered / Draft night.`
+ * **The folder's NAME, never its path.** A call site writes `… 4 wishes updated in ${name}.`,
+ * and a sentence names the drawer: `… 4 wishes updated in Ordered / Draft night.`
  * is a file path read aloud. The dropdown above is what disambiguates two drawers sharing a name,
  * and it has already done that by the time this sentence is written.
  *

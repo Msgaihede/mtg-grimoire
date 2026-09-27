@@ -28,6 +28,7 @@
  */
 import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
+import { deckCardSlot } from "@/features/decks/dnd";
 import { buildGroups, type GroupBy } from "@/features/decks/grouping";
 import type { SortBy } from "@/features/decks/sorting";
 import { theoryMatchPlan, type TheoryPlan } from "@/features/decks/theoryMatch";
@@ -125,7 +126,7 @@ export const DECK_CATEGORIES: readonly {
  * across every deck in the store; these are the ids of a deck that is the only deck there is.
  *
  * `cardCount` and `totalPrice` default to an empty column. They are read off the world in a
- * story that has one — `deck_get` computes all three over the variant *and the marketplace* it
+ * story that has one — `deck_get` computes both over the variant *and the marketplace* it
  * was asked for — so a story building a `DeckDetail` by hand is the caller that has to say.
  * **One total, not the pair this used to carry**: the marketplace is a query parameter now, so a
  * category row has exactly one sum on it and whose it is was decided before the row was built.
@@ -133,9 +134,12 @@ export const DECK_CATEGORIES: readonly {
 export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {}): DeckCategory {
   const category = DECK_CATEGORIES.find((c) => c.kind === kind);
   if (!category) throw new Error(`No fixture category of kind ${kind}`);
-  const row = {
+  return {
     id: category.sortOrder + 1,
     deckId: 1,
+    // The live list's, which is the list a story draws unless it says otherwise — a fixture for
+    // the plan's pile says `variant: "theory"` in its overrides (user schema v53).
+    variant: "live",
     name: category.name,
     kind: category.kind,
     isActive: category.isActive,
@@ -150,11 +154,6 @@ export function deckCategory(kind: CategoryKind, over: Partial<DeckCategory> = {
     totalPrice: null,
     ...over,
   };
-  // Both lists, defaulting to the one-list count — so a fixture that says nothing is a deck
-  // with nothing in its theory list, and the two numbers differ only where a test means them
-  // to. They must never be defaulted independently: a total *below* the variant-scoped count
-  // is a shape the backend cannot produce, and the delete confirmation reads the total.
-  return { ...row, cardCountAllVariants: over.cardCountAllVariants ?? row.cardCount };
 }
 
 /**
@@ -504,7 +503,7 @@ export function deckGroups(
   // rows still claiming to count.
   const ramp: DeckCategory = {
     ...deckCategory("main"),
-    id: 10,
+    id: RAMP_PILE_ID,
     name: "Ramp",
     sortOrder: 1,
     isActive: switchedOff !== "Ramp",
@@ -566,9 +565,17 @@ export function deckGroups(
   return buildGroups(cards, [commander, ramp, removal, side, maybe], groupBy, sortBy, separateX);
 }
 
+/** The Ramp pile's id in {@link deckGroups}, named because {@link deckViolations} addresses a row
+ *  in it by slot. */
+const RAMP_PILE_ID = 10;
+
 /**
  * One finding about one of the cards above, so a view story can draw the `RULE BREAK` mark
  * beside the game-changer badge it must never be confusable with.
+ *
+ * Keyed by the row's **slot**, as `violationsBySlot` answers — never by the printing (issue #554)
+ * — and the slot rather than the row id because {@link deckGroups} mints fresh row ids on every
+ * call, and a story that regroups the deck still has to find its mark.
  */
 export function deckViolations(): Map<string, ValidationIssue[]> {
   // The sentence names the fixture's own card rather than a pasted one: `CARDS` is generated
@@ -577,7 +584,7 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
   const card = printing("lea", "288");
   return new Map([
     [
-      card.id,
+      deckCardSlot(RAMP_PILE_ID, card.id, null),
       [
         {
           severity: "error" as const,

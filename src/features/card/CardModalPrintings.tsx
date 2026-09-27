@@ -412,6 +412,7 @@ export function CardModalPrintings({
                 printing={printing}
                 dwell={dwell.rowProps(printing.id)}
                 deck={scope.deck}
+                editsCopy={scope.copy !== null}
                 current={printing.id === card.id}
                 busy={busy}
                 marketplace={marketplace}
@@ -422,16 +423,7 @@ export function CardModalPrintings({
         </div>
       ))}
 
-      {/* **The URL comes from here because this is the only place that has it.** `dwell` carries
-          a printing *id*, and on the web build there is no local cache to ask for the bytes —
-          `cardArtSrc` needs the row's own `image_uris`, which the hook never sees. The `find`
-          runs only while a preview is open, over a list already capped by the page the host
-          asked for. */}
-      <PrintingPreview
-        printingId={dwell.printingId}
-        imageUrl={items.find((p) => p.id === dwell.printingId)?.imageUris?.display}
-        anchor={dwell.anchor}
-      />
+      <PrintingPreview printingId={dwell.printingId} anchor={dwell.anchor} />
       </div>
     </section>
     </>
@@ -455,6 +447,7 @@ function PrintingRow({
   printing,
   dwell,
   deck,
+  editsCopy,
   current,
   busy,
   marketplace,
@@ -465,6 +458,8 @@ function PrintingRow({
   dwell: DwellRowProps;
   /** The deck row behind the modal, or `null` — read for the row's name, never for its write. */
   deck: CardModalScope["deck"];
+  /** A collection copy is being edited, so a press moves it — read for the name, as `deck` is. */
+  editsCopy: boolean;
   /** This is the printing the panel is drawing. */
   current: boolean;
   /** A write is in flight somewhere in the list. */
@@ -489,8 +484,14 @@ function PrintingRow({
    * without re-anchoring it.
    */
   const swapInto = deck !== null && printing.id !== deck.cardId ? deck.categoryName : null;
-  /** Out of reach while a write runs — every row that would swap, not only the pressed one. */
-  const inert = swapInto !== null && busy;
+  /**
+   * A press here moves the collection copy being edited onto this printing (issue #564). Only
+   * ever true on a row that draws a button — the current printing draws none — and never beside
+   * `swapInto`, because a scope names a deck row or a copy and not both.
+   */
+  const movesCopy = swapInto === null && editsCopy;
+  /** Out of reach while a write runs — every row that would write, not only the pressed one. */
+  const inert = (swapInto !== null || movesCopy) && busy;
 
   const label = `${printing.setCode.toUpperCase()} · ${printing.collectorNumber}${
     printing.releasedAt ? ` · ${printing.releasedAt.slice(0, 4)}` : ""
@@ -551,7 +552,11 @@ function PrintingRow({
             aria-label={
               swapInto !== null
                 ? `Use this printing (${printing.setCode.toUpperCase()} ${printing.collectorNumber}) in ${swapInto}`
-                : `Show ${label}`
+                : movesCopy
+                  ? `Change this copy to ${printing.setCode.toUpperCase()} ${
+                      printing.collectorNumber
+                    }`
+                  : `Show ${label}`
             }
             // Greyed and refused, never removed from the tab order — see {@link inert}.
             aria-disabled={inert}

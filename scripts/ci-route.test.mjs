@@ -100,7 +100,6 @@ describe("the census", () => {
     expect(rustPaths).toContain("src/features/transfer/__golden__");
     expect(rustPaths).toContain("src/features/transfer/__golden__/corpus.json");
     expect(rustPaths).toContain("share-worker/wrangler.jsonc");
-    expect(rustPaths).toContain("src-tauri/gen/android/app/build.gradle.kts");
   });
 
   it("routes every file a frontend test reads to `frontend`", () => {
@@ -132,58 +131,51 @@ describe("the census", () => {
 describe("the arms", () => {
   const T = true;
   const F = false;
-  // [path, frontend, rust, powershell, wasm, android, storybook]
+  // [path, frontend, rust, powershell, storybook]
   it.each([
-    [".github/workflows/ci.yml", T, T, T, T, T, T],
-    ["scripts/ci-route.mjs", T, T, T, T, T, T],
-    ["rust-toolchain.toml", T, T, F, T, T, F],
-    [".github/actions/rust-toolchain/action.yml", T, T, F, T, T, F],
-    [".github/workflows/release.yml", T, F, F, F, F, F],
-    [".github/workflows/scanner-bundle.yml", T, F, F, F, F, F],
-    [".nvmrc", T, F, F, T, F, T],
-    ["scripts/build-wasm.mjs", T, F, F, T, F, F],
-    ["vite.web.config.ts", T, F, F, T, F, F],
-    ["src/workers/search.worker.ts", T, F, F, T, F, T],
-    ["src/web/boot.ts", T, F, F, T, F, T],
-    ["src/lib/core/index.ts", T, F, F, T, F, T],
-    ["docs/reference/ci-and-releases.md", F, F, F, F, F, F],
-    ["README.md", F, F, F, F, F, F],
-    ["src/features/decks/CLAUDE.md", F, F, F, F, F, F],
-    [".storybook/CLAUDE.md", F, F, F, F, F, F],
-    [".vscode/settings.json", F, F, F, F, F, F],
-    [".gitignore", F, F, F, F, F, F],
-    [".release-please-manifest.json", F, F, F, F, F, F],
-    ["scripts/android-devtools.ps1", F, F, T, F, F, F],
-    [".claude/skills/running-the-app/lock.ps1", F, F, T, F, F, F],
-    ["src-tauri/x.psm1", F, F, T, F, F, F],
-    ["tools/x.psd1", F, F, T, F, F, F],
-    ["src-tauri/gen/android/app/build.gradle.kts", F, T, F, F, F, F],
-    ["src-tauri/gen/android/app/src/main/AndroidManifest.xml", F, T, F, F, F, F],
-    ["src-tauri/gen/android/app/src/main/res/values/colors.xml", F, F, F, F, F, F],
-    ["src-tauri/src/deck.rs", T, T, F, T, T, F],
-    ["src-tauri/src/desktop.rs", T, T, F, T, T, F],
-    ["src-tauri/src/schema.rs", T, T, F, T, T, F],
-    ["src-tauri/Cargo.lock", T, T, F, T, T, F],
-    ["src-tauri/src/share/__golden__/snapshot.json", T, T, F, T, T, F],
-    ["src/features/transfer/__golden__/deck.arena.all.txt", T, T, F, F, F, T],
-    ["src/features/transfer/__golden__/corpus.json", T, T, F, F, F, T],
-    ["src/lib/userTables.json", T, T, F, F, F, T],
-    ["src/features/decks/DeckEditor.tsx", T, F, F, F, F, T],
-    ["public/favicon.svg", T, F, F, F, F, T],
-    ["index.html", T, F, F, F, F, T],
-    [".storybook/fake/db.ts", T, F, F, F, F, T],
-    [".storybook/DesignSystem.mdx", T, F, F, F, F, T],
-    ["package.json", T, F, F, T, F, T],
-    ["package-lock.json", T, F, F, T, F, T],
-    ["vite.config.ts", T, F, F, T, F, T],
-    ["eslint.config.js", T, F, F, T, F, T],
-    ["scripts/golden.mjs", T, F, F, F, F, F],
-    ["crates/card-scanner/src/session.rs", T, T, F, T, T, F],
-    ["share-worker/wrangler.jsonc", T, T, F, T, T, T],
-    ["relay/src/index.ts", T, T, F, T, T, T],
-    ["some/new/thing.txt", T, T, F, T, T, T],
-  ])("%s", (path, frontend, rust, powershell, wasm, android, storybook) => {
-    expect(route([path])).toEqual({ frontend, rust, powershell, wasm, android, storybook });
+    [".github/workflows/ci.yml", T, T, T, T],
+    ["scripts/ci-route.mjs", T, T, T, T],
+    ["rust-toolchain.toml", T, T, F, F],
+    [".github/actions/rust-toolchain/action.yml", T, T, F, F],
+    [".github/workflows/release.yml", T, F, F, F],
+    [".github/workflows/scanner-bundle.yml", T, F, F, F],
+    [".nvmrc", T, F, F, T],
+    ["src/lib/core/index.ts", T, F, F, T],
+    ["docs/reference/ci-and-releases.md", F, F, F, F],
+    ["README.md", F, F, F, F],
+    ["src/features/decks/CLAUDE.md", F, F, F, F],
+    [".storybook/CLAUDE.md", F, F, F, F],
+    [".vscode/settings.json", F, F, F, F],
+    [".gitignore", F, F, F, F],
+    [".release-please-manifest.json", F, F, F, F],
+    ["scripts/x.ps1", F, F, T, F],
+    [".claude/skills/running-the-app/lock.ps1", F, F, T, F],
+    ["src-tauri/x.psm1", F, F, T, F],
+    ["tools/x.psd1", F, F, T, F],
+    ["src-tauri/src/deck.rs", T, T, F, F],
+    ["src-tauri/src/desktop.rs", T, T, F, F],
+    ["src-tauri/src/schema.rs", T, T, F, F],
+    ["src-tauri/Cargo.lock", T, T, F, F],
+    ["src-tauri/src/share/__golden__/snapshot.json", T, T, F, F],
+    ["src/features/transfer/__golden__/deck.arena.all.txt", T, T, F, T],
+    ["src/features/transfer/__golden__/corpus.json", T, T, F, T],
+    ["src/lib/userTables.json", T, T, F, T],
+    ["src/features/decks/DeckEditor.tsx", T, F, F, T],
+    ["public/favicon.svg", T, F, F, T],
+    ["index.html", T, F, F, T],
+    [".storybook/fake/db.ts", T, F, F, T],
+    [".storybook/DesignSystem.mdx", T, F, F, T],
+    ["package.json", T, F, F, T],
+    ["package-lock.json", T, F, F, T],
+    ["vite.config.ts", T, F, F, T],
+    ["eslint.config.js", T, F, F, T],
+    ["scripts/golden.mjs", T, F, F, F],
+    ["crates/card-scanner/src/session.rs", T, T, F, F],
+    ["share-worker/wrangler.jsonc", T, T, F, T],
+    ["relay/src/index.ts", T, T, F, T],
+    ["some/new/thing.txt", T, T, F, T],
+  ])("%s", (path, frontend, rust, powershell, storybook) => {
+    expect(route([path])).toEqual({ frontend, rust, powershell, storybook });
   });
 
   it("routes an empty diff nowhere, skipping blank lines as the `case` loop did", () => {
@@ -196,8 +188,6 @@ describe("the arms", () => {
       frontend: true,
       rust: true,
       powershell: true,
-      wasm: false,
-      android: false,
       storybook: true,
     });
   });
@@ -206,7 +196,7 @@ describe("the arms", () => {
     const last = ARMS.at(-1);
     expect(last.match).toEqual(["*"]);
     expect(armFor("anything/at/all")).toBe(armFor("zzz"));
-    expect([...last.jobs].sort()).toEqual(["android", "frontend", "rust", "storybook", "wasm"]);
+    expect([...last.jobs].sort()).toEqual(["frontend", "rust", "storybook"]);
   });
 });
 

@@ -232,8 +232,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `<deckId>.webp` files as inert bytes; they are safe to delete by hand and no code path opens
   the folder. That is deliberate rather than unfinished — removing a directory of unknown
   contents means a recursive delete, and taking the recursive delete out of the deck path — see
-  `reset.rs`'s module doc and [web-target.md](web-target.md), which records the run of it that
-  ate a working tree — is one of the things this change is *for*.
+  `reset.rs`'s `clear_decks` doc; a mutation-test run once made `covers` resolve to `src-tauri/`,
+  a cargo test binary's working directory, and deleted 93 source files — is one of the things
+  this change is *for*.
 - **The CSP did not change when the route arrived and did not change when it left, and that is
   the point.** `img-src 'self' data: mtgimg: http://mtgimg.localhost` covered a fifth _path_ for
   free; a route is not a source. `images::tests::the_shipped_csp_is_untouched` still pins the

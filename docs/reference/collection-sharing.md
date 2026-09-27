@@ -236,8 +236,8 @@ can make a whole column untested without failing anything.**
 
 ## The publisher, and the two `collection.rs` traps
 
-`src-tauri/src/share/` compiles for wasm as well as desktop — it reads SQLite and formats JSON;
-only the upload is gated.
+`src-tauri/src/share/` reads SQLite and formats JSON; `publish.rs` is the one file of it that
+reaches the network.
 
 **A share does not ride on `collection::list_entries`, and that is the whole of its safety.** The
 two reasons are both defaults that are right for the app and wrong here:
@@ -349,8 +349,7 @@ Three of the five are worth a sentence each:
   Spec §4.3 has a second device inherit the owner's name from the relay's list, and every other
   command needs an id or a name that device does not yet have — so this is the only press that
   could ever learn the group's shares. No membership means no request at all; a failure answers
-  the cache. `web/route.rs` routes the **pure** cache read alone, so the browser build gets no
-  network command.
+  the cache.
 * **`share_open` answers `serde_json::Value`**, not a typed struct. `ShareSnapshot` cannot
   implement `Deserialize` — `fields: Vec<&'static str>` has no owned form — and spec §10 wants a
   newer `v` **told about** rather than refused, which a strict Rust struct turns into a parse error
@@ -660,23 +659,20 @@ is a business decision rather than an engineering one.
 
 ### The public one — `share/`, built by `vite.share.config.ts`
 
-A third Vite build importing from `src/` — the card tile, the image helpers, the design tokens —
-and importing **nothing** from `src/lib/core`, `src/lib/ipc`, `src/workers`, `src/features` or
-`@tauri-apps/`. It never opens OPFS, never loads wasm, and never registers a service worker.
-**It has no core at all**: it fetches one JSON document and renders it. `SharePage.test.tsx`
-walks the real import graph — resolving `./foo` against the **importing file's** own directory, so
-relative-only modules are reachable — and counts a side-effect and a dynamic import as imports.
+A second Vite build importing from `src/` — the card tile, the image helpers, the design tokens —
+and importing **nothing** from `src/lib/core`, `src/lib/ipc`, `src/features` or `@tauri-apps/`.
+**It has no core at all**: it fetches one
+JSON document and renders it. `SharePage.test.tsx` walks the real import graph — resolving `./foo`
+against the **importing file's** own directory, so relative-only modules are reachable — and
+counts a side-effect and a dynamic import as imports.
 
-That is not stylistic. A stranger following a Discord link into the *web target* would meet a
-75 MB corpus ingest, a 2.64 MB wasm module, and an OPFS pool that is exclusive per origin and
-refuses a second tab. All three at once.
-
-⚠️ **Spec §7 also says `src/pwa`, and the shipped fence deliberately does not.** `@/lib/images`
-imports `@/pwa/target`'s `isWebTarget`, so the graph reaches one pure function in that directory;
-`vite.share.config.ts` defines `__CORE__` as `"web"`, and the reviewer confirmed neither
-`__CORE__` nor `"web"` survives into the built JS, so the branch is folded away. Nothing about a
-service worker or a core reaches the bundle. Do not "fix" the sweep to match the spec sentence
-without re-reading this paragraph.
+⚠️ **The picture comes through `CardArt`'s `remoteSrc`, and `ShareTile` is its only caller.**
+`CardArt` draws `remoteSrc` when the prop is present and otherwise asks the `mtgimg://` protocol
+for `cardId` — a protocol this page has no Tauri behind it to answer. So the tile passes
+`cardId={null}` and `remoteSrc={card.img ?? null}`, **never bare `card.img`**: an absent
+`remoteSrc` means *the cache* and a present `null` means *no picture*, which `CardArt` draws as a
+named frame. No other `CardArt` in `src/` passes it. `vite.share.config.ts` merges the app's
+config and adds no `define` of its own.
 
 **Measured 2026-09-08** by `vite build --config vite.share.config.ts` on this branch:
 `dist-share/assets/share.js` is **486.74 kB, 141.49 kB gzipped**, one chunk, with the fonts as
@@ -729,13 +725,12 @@ A new top-level view; `ViewId` gains `"shared"`, and the rail row appears only o
 opened at least one share (decision 6), so nobody who never uses the feature pays a rail slot for
 it.
 
-**It is opened by pasting a link.** The app reads no launch intent and declares no URL scheme;
-`relay/src/pair.ts` carries the whole argument for why adding one is a separate piece of work with
-an Android trap in it.
+**It is opened by pasting a link.** The app registers no URL scheme and reads no launch argument,
+and adding one is a separate piece of work.
 
 **The read-only guarantee is structural, and it has to be.** There is no read-only mode anywhere on
-this app's data path — `lock_db_read` returns the *write* connection on wasm, and `src/lib/writes.ts`
-is only about which mutation owns the error banner — so a flag would be a claim rather than a fence.
+this app's data path — `src/lib/writes.ts` is only about which mutation owns the error banner — so
+a flag would be a claim rather than a fence.
 What this view has instead is that it renders a **fetched document**, and every command it names
 is enumerated in one file.
 
@@ -984,7 +979,7 @@ figure keeps its date and the open question is named beside it.
   the bundle**, so `dist-share/` existing at all is a manual step, and `wrangler deploy` fails
   naming that directory until it has been taken.
 * **`share/` and `share-worker/` match no arm of CI's `changes` router**, so they fall to the `*)`
-  fail-safe and run **every** job — frontend, rust, wasm and android. That is the cheap direction
+  fail-safe and run **every** build job — frontend, rust and storybook. That is the cheap direction
   to be wrong in and it is deliberate design of that router; it does mean a Worker-only edit runs
   the whole clippy-and-test matrix on two platforms.
 * ⚠️ **A directory `vite.config.ts`'s test globs do not name is collected by nothing**, and
@@ -1114,9 +1109,9 @@ branch acquires an unrelated red.
 | Path | Holds |
 | --- | --- |
 | `src-tauri/src/share/snapshot.rs` | `ShareSnapshot`, the subtree read, the gzip, the three refusals |
-| `src-tauri/src/share/cache.rs` | `collection_shares` reads, writes and `reconcile`. Every target |
-| `src-tauri/src/share/publish.rs` | The two-step upload and the sentences. Desktop and Android only |
-| `src-tauri/src/share/commands.rs` | The five commands and `ShareRow`. The module is every-target; the commands are not |
+| `src-tauri/src/share/cache.rs` | `collection_shares` reads, writes and `reconcile` |
+| `src-tauri/src/share/publish.rs` | The two-step upload and the sentences |
+| `src-tauri/src/share/commands.rs` | The five commands and `ShareRow` |
 | `src-tauri/src/share/__golden__/` | The committed snapshot both TypeScript suites read |
 | `share-worker/` | The Worker — `index.ts` (router and gate), `shares.ts`, `blob.ts`, `page.ts`, `lapse.ts`, `env.ts`, `schema.sql`, `README.md` |
 | `share/` | The public viewer bundle; `vite.share.config.ts` builds it into `dist-share/` |
@@ -1133,4 +1128,3 @@ branch acquires an unrelated red.
 | [sync.md](sync.md) | The relay, the group, the bearer token this Worker verifies, and the entitlement that gates a publish |
 | [hosted-relay-deploy.md](hosted-relay-deploy.md) | The other Worker's runbook, and the *ask the host, never a document* rule this page inherits |
 | [data-and-sync.md](data-and-sync.md) | The schema ladder v41 sits on |
-| [web-target.md](web-target.md) | The browser build the public viewer deliberately is not |

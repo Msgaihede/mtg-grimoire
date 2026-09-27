@@ -11,6 +11,7 @@ import {
 import { BORDERS, type Border } from "@/lib/border";
 import { FINISHES, type Finish } from "@/lib/finish";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
+import { searchMarksMeta } from "@/lib/searchMarks";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
 import {
@@ -1198,6 +1199,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // Filter changes keep the old rows on screen until the new ones land, so a search
     // that has to wait out an ingest's database lock does not blank the list first.
     placeholderData: keepPreviousData,
+    // What a collection or wishlist write needs to patch this search's badges in place rather
+    // than refetch every page it holds — `@/lib/searchMarks` (issue #552). The two request
+    // fields a badge is counted at, and whether an `owned` filter makes the rows themselves
+    // depend on the write, in which case it is refetched as before.
+    meta: searchMarksMeta({
+      collapse: !allPrintings,
+      availableForDeck,
+      ownedFilter: owned !== undefined,
+    }),
   });
 
   /**

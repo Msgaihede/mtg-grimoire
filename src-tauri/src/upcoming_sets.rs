@@ -1,9 +1,8 @@
 //! The home page's **Coming soon** read — sets with printings announced for the next N days.
 //!
-//! **Over `cards`, not `sets`**, because the browser build never fills `sets`
-//! (`sync::insert_sets` is gated off the wasm target) while every card row carries its own
-//! `set_code`, `set_name` and `released_at`. `sets` is `LEFT JOIN`ed for the one thing only it
-//! knows — a `set_type` — and where it has no row the layout filter is the whole rule.
+//! **Over `cards`, not `sets`**: every card row carries its own `set_code`, `set_name` and
+//! `released_at`. `sets` is `LEFT JOIN`ed for the one thing only it knows — a `set_type` — and
+//! where it has no row the layout filter is the whole rule.
 //!
 //! * **Which cards**: paper, released after today and on or before today + N, N clamped into
 //!   `1..=365`; `search.rs`' `NON_CARD_LAYOUTS` (tokens, double-faced tokens, emblems, art
@@ -13,9 +12,8 @@
 //! * **Which sets**: only one **none of whose paper cards has released yet**, asked of every card
 //!   the set has rather than of the window's — The List, Foundations Commander and Special Guests
 //!   each gained future-dated printings on the dev corpus, and a card date alone would have
-//!   announced a set from 2020 as coming soon. Asked of `cards` too, so it holds in a browser.
-//!   Where `sets` has a row, `set_type` `token`, `promo`, `memorabilia` and `minigame` drop out
-//!   as well; a row with no type is kept.
+//!   announced a set from 2020 as coming soon. Where `sets` has a row, `set_type` `token`,
+//!   `promo`, `memorabilia` and `minigame` drop out as well; a row with no type is kept.
 //! * **`previewed`** is the number the search draws for the set: its chip on `Any card`, every
 //!   paper printing in the set's code, one per card (`search.rs`' `COLLAPSE_KEY`). A press on the
 //!   row opens exactly that search, and the live pass read `461 seen` for one set beside a search
@@ -30,20 +28,15 @@
 //! on** — ~1.4 s against ~60 ms on the dev corpus's 118,610 printings, measured 2026-09-26
 //! through `node:sqlite` 3.53.0 (a release build of SQLite, not the app's debug one), answers
 //! identical.
-//!
-//! Connection in, DTO out, and no clock but SQLite's — so it answers in a browser as on the
-//! desktop.
 
 // Layouts that are not a card anyone plays — `search.rs`' ranking list, shared rather than
 // copied, so a layout Scryfall adds is left out of the search's ranking and this window by one
 // edit. It carries `front_card` as well as the four the widget's spec named. And the search's
 // spelling of "the same card", which `previewed` counts with so it is the search's number.
 use crate::search::{COLLAPSE_KEY, NON_CARD_LAYOUTS};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
 use serde::Serialize;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The longest window the read answers, in days — the widget offers 30, 90 and 365, and a
@@ -173,7 +166,6 @@ pub fn upcoming_sets_for(conn: &Connection, days: i64) -> Result<UpcomingSets, S
 
 /// Coming soon's read. **Read-only** connection, blocking pool. `days` is narrowed here as well as
 /// in TypeScript, because it arrives from a `config` a reader can hand-edit.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn upcoming_sets(
     state: tauri::State<'_, Arc<AppState>>,
@@ -327,9 +319,8 @@ mod tests {
         );
     }
 
-    /// **`set_type` decides only where `sets` has a row.** The browser build never fills `sets`,
-    /// so there the layout filter is the whole rule; on the desktop the four non-release types
-    /// drop out, and a row with no type is kept.
+    /// **`set_type` decides only where `sets` has a row.** With no row the layout filter is the
+    /// whole rule; with one the four non-release types drop out, and a row with no type is kept.
     #[test]
     fn a_sets_row_drops_the_four_non_release_types_and_no_row_drops_nothing() {
         let c = conn();

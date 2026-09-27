@@ -6,9 +6,8 @@
  * `DeckNote` and three callbacks — so a stray query added to it fails this suite rather than the
  * review. `DeckSettingsForm.test.tsx` makes the same promise the same way.
  *
- * The art crops resolve through `cardArtSrc`, which branches on `__CORE__` — pinned to `"tauri"`
- * by `vite.config.ts`, so a frame with a printing really does draw an `<img>` here and the orphan
- * case is a measurable absence rather than a vacuous one.
+ * A frame with a printing really does draw an `<img>` here, so the orphan case is a measurable
+ * absence rather than a vacuous one.
  */
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

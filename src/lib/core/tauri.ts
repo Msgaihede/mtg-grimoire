@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { CallArgs, CallOptions, Core } from "./types";
 
-/** The desktop and Android implementation: Tauri's own IPC. */
+/** The desktop implementation: Tauri's own IPC. */
 export const tauriCore: Core = {
   // `args === undefined` forwards as a ONE-argument call rather than as an explicit
   // `undefined` second argument. Tauri cannot tell the difference, but twenty assertions

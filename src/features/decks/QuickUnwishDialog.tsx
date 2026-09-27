@@ -60,7 +60,7 @@ import { Dialog } from "@/components/Dialog";
 import { plural } from "@/lib/counts";
 import { FINISH_LABEL } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { cardArtSrc, cardImageUrl } from "@/lib/images";
+import { cardImageUrl } from "@/lib/images";
 import type { DeckQuickAddWish } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -347,12 +347,8 @@ function WishRow({
   checked: boolean;
   onPick: () => void;
 }) {
-  // `AddMissingToCollectionDialog`'s arrangement: the protocol URL on desktop, the row's own
-  // Scryfall URL in a browser, and `null` for an any-printing wish, which has no one picture.
-  const art =
-    wish.cardId === null
-      ? null
-      : cardArtSrc(cardImageUrl(wish.cardId, 0, "art"), wish.imageUris?.art);
+  // `null` for an any-printing wish, which has no one picture.
+  const art = wish.cardId === null ? null : cardImageUrl(wish.cardId, 0, "art");
   return (
     <label
       className={cn(

@@ -20,10 +20,8 @@
  * closed dialog — `open={false}` — mounts nothing: no format state, no memoized preview text.
  *
  * **Where the text ends up is `../files`'s question and no longer this file's.** `saveExport`
- * either opens the OS save dialog and hands the path to `export_write_file`, or — on the web
- * target, where there is no path to hand anybody — turns the text into a `Blob` behind an
- * `<a download>`. This file passes one file name and catches one refusal, and the branch folds
- * away at build time.
+ * opens the OS save dialog and hands the path to `export_write_file`. This file passes one file
+ * name and catches one refusal.
  *
  * **The _native_ picker's own half is unverifiable**, for the reason the cover picker's was
  * before it was removed (`src/features/transfer/CLAUDE.md`'s Import section says the same of the
@@ -31,9 +29,7 @@
  * `dialog:allow-save` opens a native window CDP cannot reach, and nothing in a test or a browser
  * can drive it either. So this file's tests cover **path → write**, not **click → path** — `save`
  * from `@tauri-apps/plugin-dialog` is mocked to answer a path directly, the same way
- * `DeckCoverPicker`'s and `ImportDialog`'s tests stub `open`. **The browser's save is the
- * exception**, because it has no native window in it: the web test below goes press →
- * `<a download>` with nothing stubbed but the target flag and the anchor's own `click`.
+ * `DeckCoverPicker`'s and `ImportDialog`'s tests stub `open`.
  *
  * **The preview is a disclosure and opens shut** (2026-08-18). A decklist is the tallest thing
  * this dialog draws and the least of what a reader came for — the two presses that do the work
@@ -393,12 +389,9 @@ function Body({
     setError(null);
     setSaving(true);
     try {
-      // **Which mechanism this is depends on the build, and this file does not know which.**
-      // `../files` is the seam: on desktop and Android `dialog:allow-save` answers a *path*
-      // and `export_write_file` writes at it in Rust — including the `null` a cancelled save
-      // dialog answers, which is the bug that guard exists to prevent — while on the web
-      // target there is no path and the text goes out as a `Blob` behind an `<a download>`.
-      // The file name is the same either way, which is what keeps the two honest.
+      // `../files` is the seam: `dialog:allow-save` answers a *path* and `export_write_file`
+      // writes at it in Rust — and it is where the `null` a cancelled save dialog answers is
+      // caught before anything is written.
       await saveExport(`${suggestedFileName}.${EXPORT_FORMAT_EXTENSION[format]}`, text);
     } catch (e) {
       // Reported, not fatal to the dialog: the reader's text is still on screen and still

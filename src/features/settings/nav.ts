@@ -38,7 +38,6 @@ export type PanelId =
   | "data-folder"
   | "backup"
   | "cache"
-  | "web-storage"
   | "errors"
   | "danger";
 
@@ -68,8 +67,6 @@ type PanelMeta = {
    * group's label, so none of those three needs repeating here.
    */
   readonly keywords: string;
-  /** Drawn only on the web build, where `WebStoragePanel` has something to say. */
-  readonly webOnly?: true;
 };
 
 /**
@@ -181,7 +178,7 @@ export const PANELS: Record<PanelId, PanelMeta> = {
   backup: {
     title: "Backup",
     group: "storage",
-    keywords: "mirror text files export archive zip rebuild dropbox onedrive copy",
+    keywords: "mirror text files export rebuild dropbox onedrive copy",
   },
   /**
    * **The combo words are here because this is the only combo surface left, and only the words
@@ -205,12 +202,6 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     title: "Local cache",
     group: "storage",
     keywords: "clear images downloads space disk temporary combos spellbook commander",
-  },
-  "web-storage": {
-    title: "This browser",
-    group: "storage",
-    keywords: "opfs quota persistent storage site data eviction",
-    webOnly: true,
   },
   errors: {
     title: "Errors",
@@ -280,19 +271,7 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
 export const GROUP_ORDER = Object.keys(GROUPS) as GroupId[];
 
 /** Every panel, in drawing order. */
-const PANEL_ORDER = Object.keys(PANELS) as PanelId[];
-
-/**
- * The panels this build can draw.
- *
- * `isWeb` is passed in rather than read here so that this module stays a pure function of its
- * arguments and both answers are testable in one process. `SettingsPage` hands it
- * `isWebTarget()`, which is a build-time constant, so on desktop the browser panel is not
- * merely filtered out of the rail — nothing under it is ever constructed.
- */
-export function panelsOn(isWeb: boolean): PanelId[] {
-  return PANEL_ORDER.filter((id) => isWeb || PANELS[id].webOnly !== true);
-}
+export const PANEL_ORDER = Object.keys(PANELS) as PanelId[];
 
 /**
  * Everything a query is matched against for one panel: its group's label, its own title, and
@@ -334,7 +313,7 @@ export function searching(query: string): boolean {
 }
 
 /**
- * The panels to draw: everything this build has, narrowed either by the query or by the group.
+ * The panels to draw: every panel, narrowed either by the query or by the group.
  *
  * **A query outranks the group**, and that is the one rule worth stating out loud. A reader who
  * types "dropbox" while standing on `Updates` is asking the page a question, not asking the
@@ -342,8 +321,7 @@ export function searching(query: string): boolean {
  * entry as current for as long as the box has words in it. Picking a group is what clears the
  * query — see `SettingsNav` — so the two states never both apply.
  */
-export function visiblePanels(group: GroupId, query: string, isWeb: boolean): PanelId[] {
-  const available = panelsOn(isWeb);
-  if (searching(query)) return available.filter((id) => matches(id, query));
-  return available.filter((id) => PANELS[id].group === group);
+export function visiblePanels(group: GroupId, query: string): PanelId[] {
+  if (searching(query)) return PANEL_ORDER.filter((id) => matches(id, query));
+  return PANEL_ORDER.filter((id) => PANELS[id].group === group);
 }

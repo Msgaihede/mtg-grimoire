@@ -4,20 +4,19 @@
 //!
 //! **There is no poll and there never was.** This doc used to plan one — pull on open, pull
 //! every 60 s while the window has focus, push 2 s after the write mask goes quiet — and named
-//! two reasons the alternative, a WebSocket, was not built: `tokio-tungstenite` does not compile
-//! to `wasm32-unknown-unknown`, and a socket opened **from the page** would need the CSP widened.
-//! Both were true and neither was the obstacle they looked like, because the socket that shipped
-//! is opened from **this process**, not from the page: [`super::live`]'s connection manager holds
-//! a `tokio-tungstenite` client behind `cfg(not(target_family = "wasm"))` — so the wasm build
-//! never names it — alongside the `reqwest` connection to the relay this file already made.
+//! a reason the alternative, a WebSocket, was not built: a socket opened **from the page** would
+//! need the CSP widened. That was true and was not the obstacle it looked like, because the
+//! socket that shipped is opened from **this process**, not from the page: [`super::live`]'s
+//! connection manager holds a `tokio-tungstenite` client alongside the `reqwest` connection to
+//! the relay this file already made.
 //! ⚠️ **Neither of those is "under" the CSP, and the phrasing this doc carried for a day said
 //! they were.** A Content-Security-Policy governs what the *webview* may fetch; a native HTTP or
 //! WebSocket client in the Rust process is outside its reach entirely — exempt, not permitted.
 //! The claim that matters is unchanged and is the stronger one: `tauri.conf.json` was not edited,
-//! and nothing was granted to the page. Neither blocker survived contact with where the socket
-//! actually lives; see the
-//! design spec §3 for the fuller argument, including the fourth reason the record never had: a
-//! browser's own `WebSocket` cannot set an `Authorization` header, and this one does.
+//! and nothing was granted to the page. The blocker did not survive contact with where the socket
+//! actually lives; see the design spec §3 for the fuller argument, including a reason the record
+//! never had: the webview's own `WebSocket` cannot set an `Authorization` header, and this one
+//! does.
 //!
 //! **What runs**: a hibernatable WebSocket at `GET /g/{group}/ws`, held open for as long as the
 //! app is entitled-or-paired and in a group. It carries no card data — on every push the Durable
@@ -41,9 +40,9 @@
 //! Spec §6.3 states it as two halves and both are load-bearing: without the second, [`run_once`]
 //! stamping [`LAST_SYNC_AT`] at the end of every trip would arm the debounce that runs the next
 //! trip, for ever, and the Scryfall ingest's commit per 2 000 rows would ring the relay's
-//! doorbell as loudly as a deck edit. Every wake — a frame, a local write, launch, reconnect, Android
-//! resume, exit — feeds one single-flight queue, so at most one round trip is ever in flight and
-//! the rest coalesce into it rather than queuing a second.
+//! doorbell as loudly as a deck edit. Every wake — a frame, a local write, launch, reconnect,
+//! exit — feeds one single-flight queue, so at most one round trip is ever in flight and the rest
+//! coalesce into it rather than queuing a second.
 //!
 //! What is lost against instant delivery is nothing measurable in practice: "within a few
 //! seconds, always" is the design's own bar (spec §2), and the two debounces above are what holds
@@ -150,8 +149,7 @@ pub(crate) fn read_hold(conn: &Connection) -> Option<Hold> {
     get_state(conn, PULL_HOLD).and_then(|s| serde_json::from_str(&s).ok())
 }
 
-/// Now, in unix seconds, **from SQLite** — `SystemTime::now()` panics on `wasm32-unknown-unknown`,
-/// and this module compiles for it.
+/// Now, in unix seconds, **from SQLite**.
 fn now_secs(conn: &Connection) -> Result<i64, String> {
     conn.query_row("SELECT unixepoch()", [], |r| r.get(0))
         .map_err(|e| e.to_string())
@@ -341,7 +339,7 @@ fn me(conn: &Connection) -> Result<Option<(String, Group)>, String> {
 /// it removes the only thing being shared across runtimes.
 ///
 /// Re-measured after this change: **0 failures in 60 runs** (p ≈ 0.002 against a 10% rate).
-#[cfg(all(not(target_family = "wasm"), not(test)))]
+#[cfg(not(test))]
 fn http() -> reqwest::Client {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -349,14 +347,13 @@ fn http() -> reqwest::Client {
 }
 
 /// See [`http`]: a test build takes a fresh client so nothing is shared across runtimes.
-#[cfg(all(not(target_family = "wasm"), test))]
+#[cfg(test)]
 fn http() -> reqwest::Client {
     build_http()
 }
 
 /// The one place the client's shape is written down, so the two arms above cannot drift on a
 /// timeout the way two copies of a builder would.
-#[cfg(not(target_family = "wasm"))]
 fn build_http() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(crate::scryfall::USER_AGENT)
@@ -364,15 +361,6 @@ fn build_http() -> reqwest::Client {
         .read_timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_default()
-}
-
-/// **No `OnceLock` and no timeouts, and neither is an oversight.** reqwest's wasm client wraps
-/// JS values and is not `Sync`, so it cannot be a `static`; and its builder has neither timeout
-/// method there, because `fetch` owns the deadline. `Client::new()` on wasm allocates nothing
-/// but a handle.
-#[cfg(target_family = "wasm")]
-fn http() -> reqwest::Client {
-    reqwest::Client::new()
 }
 
 /// Classify a transport failure, so the four call sites agree about what it was.
@@ -513,7 +501,7 @@ async fn fetch_key_page(conn: &Connection, device: &str, group: &Group) -> Resul
             // sees and must never see — so the repair has to be a press on a device.
             // Reconnecting Patreon re-claims the same group (`row.group_id == group`
             // passes) and seeds the manifest. Measured on the real pair 2026-08-30: a
-            // paid-up, paired phone at epoch 2 failed here on its first press, and no test
+            // paid-up, paired device at epoch 2 failed here on its first press, and no test
             // could have found it — every relay suite starts from a group claimed under the
             // new code, so a group claimed *before* it is a state the fixtures cannot spell.
             "the relay did not recognise this device's group key. If your devices synced \
@@ -1276,6 +1264,16 @@ pub async fn pull(
                  {e}\nThey are tried again behind the next pull."
             );
         }
+        // **User schema v53's net, behind the same pulls and for the same reasons**: a v52
+        // peer's theory card arrives filed in a live pile, and this refiles it into the plan's
+        // pile of that name, captured, on the pull that brings it
+        // (`deck_meta::refile_stray_theory_cards`).
+        if let Err(e) = crate::deck_meta::refile_stray_theory_cards_after_pull(conn) {
+            eprintln!(
+                "the plans' cards filed in the actual list's categories could not be refiled \
+                 after a pull: {e}\nThey are tried again behind the next pull."
+            );
+        }
     }
     Ok((unreadable, report))
 }
@@ -1500,5 +1498,5 @@ async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOu
     Ok(Some(outcome))
 }
 
-#[cfg(all(test, not(target_family = "wasm")))]
+#[cfg(test)]
 mod tests;

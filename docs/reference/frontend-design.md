@@ -4938,11 +4938,11 @@ tree rather than in an array literal.
 
 > ⚠️ **"Zero `[aria-live]`" is a fact about the document that was measured, not about the app, and
 > the difference matters — corrected 2026-08-29.** It was a `querySelectorAll` on one page of a
-> running window, so it counted what was **mounted**. The source has **four** `aria-live="polite"`
+> running window, so it counted what was **mounted**. The source had **four** `aria-live="polite"`
 > elements — `DeckHistoryDialog.tsx:284`, `TheoryDiffDialog.tsx:620`,
-> `transfer/import/shared/CommitBar.tsx:88`, `web/BuildCorpus.tsx:62` — each inside a dialog or a
-> page that was not open, and **93** `role="status"`/`role="alert"` sites against the five that
-> were on screen.
+> `transfer/import/shared/CommitBar.tsx:88`, and `web/BuildCorpus.tsx:62`, which went with the
+> browser build on 2026-09-27 — each inside a dialog or a page that was not open, and **93**
+> `role="status"`/`role="alert"` sites against the five that were on screen.
 >
 > **None of the four is about a drag, so the finding this section rests on is unchanged.** What
 > changes is the cost of doing something about it: the app already has a live-region vocabulary to
@@ -5203,11 +5203,12 @@ there rather than merely permissive.
 **`1024` is `src-tauri/tauri.conf.json`'s `minWidth`, so it is a promise the *desktop window*
 makes and nothing else in this repo makes** (2026-08-29, read out of the config in the
 `mobile-layout` worktree at `56e94c2`). Tauri hands it to the OS window manager, which refuses to
-drag the frame narrower; a browser tab honours nothing of the sort and neither does an Android
-webview, where the window is whatever the device is. Every measurement in this document that ends
-"which the 1024px floor forbids" is still true — a horizontal page scrollbar at 1024 is still the
-failure those passes were checking for — but it is true *about desktop*, and the phrasing that
-makes it sound universal is the thing being corrected here.
+drag the frame narrower. Every measurement in this document that ends "which the 1024px floor
+forbids" is still true — a horizontal page scrollbar at 1024 is still the failure those passes were
+checking for. **The browser and Android builds, which honoured no such floor and were what the two
+narrower widths below were chosen for, were removed on 2026-09-27.** The phone layout they
+motivated is still in the code, and the desktop window's floor sits well above the width that
+draws it.
 
 **The three widths are now stated in one place, `src/lib/viewports.ts`**, and the reason it is a
 module rather than four numbers typed into four story files is that two options compared at two
@@ -5255,9 +5256,9 @@ reader finds by searching the same phrase is the cheaper fence. **A note for who
 grep:** it undercounts. `DeckSearchPanel.test.tsx:1413` wraps "the app's 1024px / floor" across a
 line break and the pattern misses it, so the real figure is a floor and not a count.
 
-**What web and Android have instead is nothing** — no enforced minimum at either target, which is
-precisely why the phone frame above had to be chosen rather than read off a config. `PHONE_PX` is
-a width the design round agrees to look through; it is not a width anything refuses to go below.
+**The phone frame above was chosen rather than read off a config**, because the targets it was
+chosen for enforced no minimum. `PHONE_PX` is a width the design round agrees to look through; it
+is not a width anything refuses to go below.
 
 ---
 
@@ -5266,8 +5267,7 @@ a width the design round agrees to look through; it is not a width anything refu
 Shipped 2026-08-29 (mobile-layout 9a, Task 2), measured against a production `npm run build` —
 `tsc && tsc -p .storybook && tsc -p tsconfig.sw.json && tsc -p tsconfig.relay.json && vite build`
 — in the `mobile-layout` worktree. Nothing here changes a layout. It changes what the shell's
-height *means* on a target this app does not yet ship to, and it makes four properties available
-for the one that will.
+height *means* in a mobile browser, and it makes four properties available there.
 
 **`h-screen` is `100vh`, and `100vh` on a mobile browser is the *large* viewport** — the height
 the page would have if the URL bar were hidden. An `h-screen` shell therefore reaches past the
@@ -5334,9 +5334,10 @@ All four insets are in the sheet — `--safe-t`, `--safe-r`, `--safe-b`, `--safe
 `dist/index.html` carries
 `content="width=device-width, initial-scale=1.0, viewport-fit=cover"`.
 
-`.h-screen{height:100vh}` is **still emitted**, and that is correct rather than leftover: three
-`src/web/` boot screens use `min-h-screen` and `PlacementProbe.stories.tsx` uses `h-screen`
-deliberately. What is no longer true is the *shell* being one.
+`.h-screen{height:100vh}` was **still emitted**, and that was correct rather than leftover: three
+`src/web/` boot screens — gone with the browser build on 2026-09-27 — used `min-h-screen`, and
+`PlacementProbe.stories.tsx` uses `h-screen` deliberately. What is no longer true is the *shell*
+being one.
 
 ### The assertion that was green over its own regression
 
@@ -5377,10 +5378,9 @@ Both name the shell as `h-screen` and neither is in this task's file set:
 
 A prose-only edit routes to neither CI job, so nothing goes red for either.
 
-### The dialog against a real URL bar — deferred, with the recipe
+### The dialog against a real URL bar — deferred, then answered
 
-**This measurement was not taken, and the reading it needs cannot be emulated.** It is recorded
-here in full so the next person pays for it once.
+**This measurement was not taken in 9a, and the reading it needs cannot be emulated.**
 
 The question. `Dialog`'s scrim is `fixed inset-0 grid grid-rows-[minmax(0,1fr)]`
 (`src/components/Dialog.tsx:333`) and the panel's clamp is `max-h-full`
@@ -5394,52 +5394,10 @@ This is genuinely two-way and must not be guessed. It needs a real device, becau
 `scripts/cdp.mjs size` hardcodes `mobile: false` and emulates a narrow *desktop* — no URL bar, no
 `visualViewport` behaviour, no coarse pointer.
 
-**The recipe.**
-
-1. Take the Storybook lock (`.claude/skills/running-the-app/lock.ps1`), `npm run storybook`, then
-   `adb reverse tcp:6006 tcp:6006`. Storybook runs entirely on the fake, so this needs nothing
-   from the web or Android targets.
-2. On the phone, open the story **without the manager chrome**, which otherwise supplies its own
-   scroller and makes the reading about the wrong box:
-   `http://localhost:6006/iframe.html?id=decks-dialog-shell--long-body&viewMode=story`
-   (`Decks/Dialog shell → Long body`, whose 24-paragraph body is already the "more content than
-   fits" case). Repeat on
-   `http://localhost:6006/iframe.html?id=decks-categoriesdialog--default&viewMode=story` for a
-   panel that carries real footer controls — the `Dialog` shell itself renders header + body and
-   its hosts supply the footer, so the shell's own story has no footer to read.
-3. Evaluate, in one expression:
-
-```js
-(() => {
-  const panel = document.querySelector('[role="dialog"]');
-  const scrim = panel.parentElement;
-  const last = panel.lastElementChild;
-  return {
-    scrimHeight: scrim.getBoundingClientRect().height,
-    panelBottom: panel.getBoundingClientRect().bottom,
-    lastChildBottom: last.getBoundingClientRect().bottom,
-    visual: visualViewport.height,
-    inner: innerHeight,
-    client: document.documentElement.clientHeight,
-  };
-})();
-```
-
-`scrim` is `panel.parentElement` because that is exactly how `Dialog.test.tsx:226` reaches it;
-using the same expression keeps the live reading and the pinned assertion talking about one
-element.
-
-4. **If `panelBottom > visualViewport.height`** (equivalently, if `scrimHeight` exceeds it): add
-   `h-dvh` to the scrim's class string beside `inset-0` — a specified height wins over `bottom` on
-   a fixed box — and pin it in `Dialog.test.tsx` next to the existing
-   `expect(scrim).toHaveClass("grid-rows-[minmax(0,1fr)]")` at line 230, with a comment naming the
-   device, the browser and the three numbers, because jsdom can never see the failure.
-5. **If it does not:** change nothing, and **record the three numbers, the device and the browser
-   here.** "We looked and it was already right" is a result. Without it the next person pays for
-   the same measurement, and there is no cheaper way to take it.
-
-Until one branch or the other is written down, `Dialog.tsx` is unchanged and this question is
-open.
+**It was taken on a phone later the same day, and `Dialog` needed no change** — *The dialog
+against a real URL bar — owed since PR #274* below has the numbers. The recipe this section
+carried drove Storybook on that phone over `adb`, and was dropped on 2026-09-27 with the browser
+and Android builds.
 
 ---
 
@@ -5791,12 +5749,6 @@ from the one "a 6 % shrink on the type" suggests.
 At 390×844 in WebView2: `TitleBar` **34**, ribbon + `ManaLine` **58** (56 + the 2px line, exactly
 as the plan states), `main` **752** of which **712** is content after `p-5`'s 20 top and bottom.
 
-**On web and Android the 34 comes back and roughly 144 goes away** — parity §5 says the browser and
-the OS own the frame, so `TitleBar` is absent, while a mobile browser's chrome takes the visible
-viewport to roughly 700. That leaves about **602px** of `main` content before the filter bar
-spends anything, and the bar's two or three lines at 36–40 take it to roughly **500** — one 170px
-tile plus its chin, and a sliver of the next row. The plan's vertical budget holds as written.
-
 ### What this pass could not measure, and why
 
 **The wall was empty.** A worktree is a fresh install and its `corpus.db` has never synced, so
@@ -5810,11 +5762,10 @@ read real tiles here, copy the main checkout's whole `data` folder into the work
 
 ## The phone layout on an actual phone — and the vertical does not work
 
-**Driven 2026-08-29 on the OnePlus (`adb` device `21755151`), Android, Chrome 152.0.7977.64, dpr 3,
-portrait**, against the production web build of 9b (`npm run build:wasm && npm run web:build`,
-served by `vite preview` on 4173, reached from the device through `adb reverse tcp:4173 tcp:4173`
-and driven over `adb forward tcp:9333 localabstract:chrome_devtools_remote`). Corpus built on the
-device: **117 606 cards**.
+**Driven 2026-08-29 on a OnePlus phone, Android, Chrome 152.0.7977.64, dpr 3, portrait**, against
+the production web build of 9b, with **117 606 cards** in a corpus built on the device. That build
+and the Android one were removed on 2026-09-27; the phone layout it drew is still in the code, and
+these are its measurements.
 
 **This is the measurement 9a could not take and 9b's plan is answerable to**, and it falsifies the
 budget the plan was written against. Two independent things went wrong, and neither is visible
@@ -5923,10 +5874,9 @@ would put the bar's targets under it without this.
 
 ## 9c on the phone: the wall shows cards
 
-**Driven 2026-08-29 on the OnePlus, Chrome 152, portrait, `innerWidth` 360**, against the
-production web build of `main` at the merge of PR #300, with the 117 606-card corpus already in
-OPFS. Same instrument as 9b's pass — the recipe is in *"The phone layout on an actual phone"*
-above.
+**Driven 2026-08-29 on the same OnePlus, Chrome 152, portrait, `innerWidth` 360**, against the
+production web build of `main` at the merge of PR #300 — the build removed on 2026-09-27, as
+above — with the same 117 606-card corpus.
 
 **The prediction was 436px of wall and it came back at exactly 436.** The one figure that was off
 was the row height, and it was off in the app's favour.
@@ -5980,18 +5930,6 @@ while invisible. The blocker is no longer a 99px wall: it is that the question n
 categories on the device and a synthesised pointer drag, which is its own pass rather than a step
 in this one. **It is now answerable for the first time** — record that, because the reason it was
 deferred has changed.
-
-### One operational note for the next pass
-
-**The one-tab guard is a real obstacle to repeat measurement.** A tab left open from an earlier
-pass makes the next one render *"MTG Grimoire is already open"* and nothing else — correct
-behaviour, and indistinguishable from a broken build if you are not expecting it. Close the stale
-tab through `http://localhost:9333/json/close/<id>` before reloading, and take the ids from
-`/json/list` so the reader's own tabs are left alone.
-
-**And `vite preview` needs `--host`.** Without it the PC gets 200 and the phone gets `000` through
-`adb reverse` — the server binds too narrowly for the tunnel to reach, and the failure looks like
-a broken tunnel rather than a bound socket.
 
 ### The tab bar reached `--target-min` on 2026-09-08, and four of nine labels truncate
 
@@ -6067,7 +6005,7 @@ are decidable with no DOM in front of them.
 | Sync — badge: the `Needs review` queue | `sync`, `review` |
 | Tags | `hidden-tags` |
 | Appearance | `theory-marks`, `labels` |
-| Storage and data | `data-folder`, `backup`, `cache`, `web-storage` (web build only), `danger` |
+| Storage and data | `data-folder`, `backup`, `cache`, `danger` |
 | Errors — badge: the error count | `errors` |
 
 **Where two panels answer one question they share an entry**, and where a panel is the only answer
@@ -6099,8 +6037,7 @@ prose quotes markup freely, so a doc comment containing `<SettingsSection id="�
 read as a panel that nothing draws (proved by mutation — with the stripper
 disarmed, a tag quoted in one of `nav.ts`'s own comments turns the sweep red); and it **reports a tag carrying
 no literal `id` by name** rather than skipping it, so a dynamic id makes the sweep fail loudly
-instead of quietly under-reporting. `BackupPanel` draws `id="backup"` at two sites — the folder
-variant and the archive variant — and those are one panel, which is why the sweep collects a set.
+instead of quietly under-reporting.
 
 ### The row, and why 999 against 1
 
@@ -6231,7 +6168,7 @@ left out.
 **Also driven, and correct — but this pass is 2026-09-03's, and the rail had six entries that
 day.** **Appearance and its two panels landed on 2026-09-07 and have not been driven in the window
 at all**, so nothing below was measured about them. What the pass confirmed: the six entries and
-their panel sets, `web-storage` absent on desktop, `aria-current` on exactly one entry at rest and on **none** while the box has words in it,
+their panel sets, `aria-current` on exactly one entry at rest and on **none** while the box has words in it,
 the query cleared and `main.scrollTop` back to 0 on a group press, `Escape` clearing the field, a
 cross-group search (`dropbox` typed while standing on Updates draws `backup-heading` and nothing
 else — a word that appears nowhere in that panel's own text, so it is the keyword registry
@@ -6240,7 +6177,7 @@ badges with the written accessible name (`Sync (1)`, `Errors (2)`, forced throug
 cache since this database has neither).
 
 **Still not driven:** the sticky rail's behaviour under a long pane's scroll was not stepped
-frame by frame, and nothing here was read on Android or in the browser build.
+frame by frame.
 
 ## The folder wall names its own folders (2026-09-03) — measured over the built CSS, not in the window
 

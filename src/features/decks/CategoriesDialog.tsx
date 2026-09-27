@@ -86,8 +86,9 @@ import { GroupHeader } from "./views/GroupHeader";
 
 export interface CategoriesDialogProps {
   deckId: number;
-  /** Scopes every count and every price on screen, and nothing else: which categories a deck
-   *  has is a fact about the deck rather than about one of its two lists. */
+  /** **Which list's piles this dialog edits** — the tab the editor is open on. Each list has its
+   *  own piles since user schema v53 (issue #561), so a pile added, renamed, reordered or
+   *  switched off here stays in this list and never appears on the other tab. */
   variant: DeckVariant;
   open: boolean;
   /** Escape, and the ✕: hand focus back to whatever opened the dialog, then close. */
@@ -526,8 +527,8 @@ function CategoryRow({
  *
  * **Above `DeleteCategory`'s own doc rather than between it and the component.** TSDoc attaches a
  * block to the nearest declaration *after* it, so slipping a `const` in between orphaned the
- * component's 27 lines — hovering `DeleteCategory` showed nothing at all — and the sentence that
- * went dark was the `cardCountAllVariants` rule this file's one prohibition exists to protect.
+ * component's 27 lines — hovering `DeleteCategory` showed nothing at all — and what went dark
+ * was the rule about which number a destructive confirmation quotes.
  */
 const CONFIRM_MOVING = cn(
   "rounded-md border px-2 py-1 text-xs",
@@ -555,14 +556,13 @@ const CONFIRM_MOVING = cn(
  * row it was written in, because it draws a self-contained `role="group"` and takes every
  * mutation it needs through `meta`.
  *
- * **Every number in here is `cardCountAllVariants`, never `cardCount`.** A category is not
- * per-variant: `deck_cards.category_id` is `ON DELETE CASCADE`, so the delete reaches the live
- * list and the theory list alike, and the move arm moves both. The row above this dialog shows
- * the variant-scoped count and is right to — that is the list the reader is editing — but a
- * confirmation quoting it would promise less than it takes, and it would understate the
- * **destructive** arm in particular. Found on the fake's seeded deck 4, where "Ramp" offered to
- * move 2 cards and moved 7. When copies exist in the list that is *not* on screen, the sentence
- * says so in words: the reader can see one list and cannot be asked to infer the other.
+ * **Every number in here is `cardCount`, and that is every copy the delete reaches.** A pile
+ * belongs to one list since user schema v53 (issue #561), so `ON DELETE CASCADE` on
+ * `deck_cards.category_id` takes that list's cards and no other, and the move arm's target is a
+ * pile of the same list. Until then a pile was shared, the delete reached both lists, and this
+ * dialog had to quote a second, all-lists count — found on the fake's seeded deck 4, where "Ramp"
+ * offered to move 2 cards and moved 7 — plus a sentence naming the list that was not on screen.
+ * Neither is needed now: the row above this dialog and the confirmation count the same cards.
  */
 export function DeleteCategory({
   category,
@@ -608,15 +608,15 @@ export function DeleteCategory({
   // yet, and a stray Enter must not decide for them. That reason is this site's own — the hook
   // carries the mechanism, each site carries why it needs it.
   const confirm = useConfirmFocus(`Delete ${category.name}`);
-  // Both lists, because both go. See this component's doc.
-  const cards = category.cardCountAllVariants;
+  // The pile's own list is the whole of what goes. See this component's doc.
+  const cards = category.cardCount;
   const count = `${cards} ${cards === 1 ? "card" : "cards"}`;
-  /** Copies in the list the reader is **not** looking at. `> 0` is exactly the condition for
-   *  mentioning the other list at all: a deck with no theory rows in this pile has one list to
-   *  talk about, and a sentence about two would be chrome. */
-  const elsewhere = cards - category.cardCount;
-  const bothLists =
-    elsewhere > 0 ? " — that is both the theory and actual lists, not just the one on screen" : "";
+  /** Where the copies go on the destructive arm. A theory pile is a plan and holds none, so there
+   *  is no folder to promise — `ClearCategory`'s middle arm, for the reason it gives there. */
+  const copiesGo =
+    category.variant === "theory"
+      ? "A theory list holds no copies, so nothing else moves."
+      : "Any copies you own go back to Recently removed.";
   /** The question is only asked when there is something to lose *and* somewhere to put it. */
   const choosing = cards > 0 && others.length > 0;
   const target = choosing ? (others.find((c) => String(c.id) === choice) ?? null) : null;
@@ -667,8 +667,8 @@ export function DeleteCategory({
         {cards === 0
           ? "It is empty, so nothing goes with it."
           : losing
-            ? `The ${count} in it go with it${bothLists}. Any copies you own go back to Recently removed.`
-            : `The ${count} in it move to “${target?.name}”${bothLists}. Nothing is lost.`}
+            ? `The ${count} in it go with it. ${copiesGo}`
+            : `The ${count} in it move to “${target?.name}”. Nothing is lost.`}
       </p>
 
       <div className="mt-2 flex gap-2">

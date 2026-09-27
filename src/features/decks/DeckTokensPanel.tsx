@@ -574,11 +574,6 @@ function TokenTile({
         >
           <CardArt
             cardId={view.printingId}
-            // **The web target's and the phone's only picture**, and `null` there is the no-art
-            // frame rather than a broken `<img>`: neither has the `mtgimg://` protocol to ask, so
-            // a tile with no URL on its row draws nothing at all. `deckTokens.ts` has already
-            // picked the variant off the row, so this is a pass-through and never a lookup.
-            imageUrl={view.imageUrl}
             // The `alt` and the no-picture fallback's own line. The button's `aria-label` above
             // wins the accessible name, so this is what is left for the frame that never loads —
             // and a named frame is what keeps a rate-limited screen a list of tokens.

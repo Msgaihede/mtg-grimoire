@@ -38,9 +38,9 @@
 //! number (and `BETWEEN 1 AND size` drops a literal `0` anyway).
 //!
 //! **With no size, every distinct collector number counts**, verbatim. That is the corpus that has
-//! not fetched `/sets` since the column arrived, a set Scryfall publishes no printed run for, and
-//! the whole browser build (which never fills `sets`). There is no run to be inside, and a count
-//! of what is held is still true; the widget draws no bar for a `null` size.
+//! not fetched `/sets` since the column arrived, and a set Scryfall publishes no printed run for.
+//! There is no run to be inside, and a count of what is held is still true; the widget draws no
+//! bar for a `null` size.
 //!
 //! **A set whose every owned printing is outside the run is still answered, with `owned: 0`.**
 //! The reader does hold a card of that set, and the contract is "every set the collection holds a
@@ -48,11 +48,9 @@
 //! make a set they own a card of disappear from the list.
 
 use crate::collection_source::{self, Availability};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde::Serialize;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// One set the collection holds at least one card of.
@@ -62,8 +60,8 @@ pub struct SetCompletion {
     /// Scryfall's set code, lower case — `cards.set_code`.
     pub set_code: String,
     /// `sets.name`, falling back to the printing's own `cards.set_name` and then to the code, so a
-    /// set `sets` does not list (the browser build, or a corpus that has not fetched `/sets`) still
-    /// has something to be called.
+    /// set `sets` does not list (a corpus that has not fetched `/sets`) still has something to be
+    /// called.
     pub name: String,
     /// `YYYY-MM-DD` — the set's own date where `sets` has one, else the earliest printing's.
     pub released_at: Option<String>,
@@ -139,7 +137,6 @@ pub fn set_completion_of(conn: &Connection) -> Result<Vec<SetCompletion>, String
 ///
 /// **No arguments**, and the page sends none: an argument object sent to a command that declares
 /// only the managed state is a deserialisation error (`src/lib/ipc.test.ts` pins it).
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_completion(
     state: tauri::State<'_, Arc<AppState>>,
@@ -273,8 +270,8 @@ mod tests {
         assert_eq!(sld.owned, 2);
     }
 
-    /// A set `sets` does not list — the browser build, or a corpus that has never fetched `/sets`
-    /// — is named from the printing and has an unknown size, rather than dropping out.
+    /// A set `sets` does not list — a corpus that has never fetched `/sets` — is named from the
+    /// printing and has an unknown size, rather than dropping out.
     #[test]
     fn a_set_the_sets_table_does_not_list_falls_back_to_the_printing() {
         let conn = conn();

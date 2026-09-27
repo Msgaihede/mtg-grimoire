@@ -13,7 +13,7 @@ import { plural } from "@/lib/counts";
 import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
 import { buildFolderTree } from "@/lib/folderTree";
 import { FOCUS } from "@/lib/focus";
-import { CARD_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
+import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import type { ScannerTrayChoice, ScannerTrayRow } from "@/lib/ipc";
 import { DURATION, PRESS, TRANSITION, seconds } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -233,9 +233,8 @@ function TrayRow({
   // **The whole card, never the `art` crop.** A crop has no printed frame and so no artist credit,
   // a tray row carries no artist to name beside one, and the Scanner shows no other full card a
   // reader could read the credit off — `src/CLAUDE.md`'s art-credit rule, met by its second arm.
-  // `thumb` is the smallest variant that is a whole card. The protocol URL on desktop and `null` on
-  // the web build — a tray row carries no Scryfall URL, so a browser draws the empty slot below.
-  const card = cardArtSrc(cardImageUrl(row.cardId, 0, "thumb"));
+  // `thumb` is the smallest variant that is a whole card.
+  const card = cardImageUrl(row.cardId, 0, "thumb");
 
   return (
     <li className="relative rounded-md px-2 py-2">
@@ -270,16 +269,14 @@ function TrayRow({
           className="w-9 shrink-0 overflow-hidden rounded-[3px] bg-bg"
           style={{ aspectRatio: CARD_ASPECT }}
         >
-          {card !== null && (
-            <CardImage
-              src={card}
-              alt=""
-              draggable={false}
-              // A plain scroller, so a long tray really is every row mounted.
-              loading="lazy"
-              className="size-full object-contain"
-            />
-          )}
+          <CardImage
+            src={card}
+            alt=""
+            draggable={false}
+            // A plain scroller, so a long tray really is every row mounted.
+            loading="lazy"
+            className="size-full object-contain"
+          />
         </span>
 
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -371,7 +368,7 @@ function Choices({ row, onPick }: { row: ScannerTrayRow; onPick: (cardId: string
 
 function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: () => void }) {
   const printing = printingOf(choice);
-  const src = cardArtSrc(cardImageUrl(choice.cardId, 0, "thumb"));
+  const src = cardImageUrl(choice.cardId, 0, "thumb");
   return (
     <button
       type="button"
@@ -388,9 +385,13 @@ function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: (
         className="block w-full overflow-hidden rounded-[3px] bg-bg"
         style={{ aspectRatio: CARD_ASPECT }}
       >
-        {src !== null && (
-          <CardImage src={src} alt="" draggable={false} loading="lazy" className="size-full object-contain" />
-        )}
+        <CardImage
+          src={src}
+          alt=""
+          draggable={false}
+          loading="lazy"
+          className="size-full object-contain"
+        />
       </span>
       <span aria-hidden="true" className="truncate text-center font-mono text-[0.625rem] text-dim">
         {printing}

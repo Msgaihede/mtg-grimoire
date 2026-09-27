@@ -19,8 +19,8 @@
 // lockout and this cache's are separate deadlines over separate hosts, but they are one
 // rule, and a second copy of a clamp is a second place for it to drift.
 use crate::scryfall::{self, rate_limit_penalty, ScryfallError};
-// The host allowlist and the resolution rule live in [`crate::image_uri`], which compiles
-// for wasm; this module is the cache that reads them. IMAGE_HOST is imported rather than
+// The host allowlist and the resolution rule live in [`crate::image_uri`]; this module is the
+// cache that reads them. IMAGE_HOST is imported rather than
 // re-spelled because the stderr line below names it.
 use crate::image_uri::IMAGE_HOST;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -198,8 +198,8 @@ pub enum Resolution {
 ///
 /// **The rule itself is [`crate::image_uri`]'s and this is the cache's reading of it.** Which
 /// two columns, the face-first precedence and [`crate::image_uri::is_fetchable`] all live in a
-/// module that compiles for wasm as well, because `search.rs` needs the same three answers to
-/// put a URL on a result row and a second copy of a precedence is exactly the drift this
+/// module of their own, because `search.rs` needs the same three answers to put a URL on a
+/// result row and a second copy of a precedence is exactly the drift this
 /// repo's golden fence exists to prevent. What is left here is what the *cache* adds: a
 /// placeholder for each way an image can be absent, and one line on stderr when the allowlist
 /// and Scryfall's data stop agreeing.

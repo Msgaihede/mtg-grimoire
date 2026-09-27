@@ -51,22 +51,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => {
     },
   };
 });
-/** The build's own answer, which only a module mock can reach — `ScannerPage.test.tsx:9`. */
-vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
-import { isWebTarget } from "@/pwa/target";
 import { makeFit, spanPx, type WidgetFit } from "../fit";
-import {
-  EMPTY,
-  reviewRows,
-  ToReviewWidget,
-  trayCounts,
-  WEB_DECK_HINT,
-  type ReviewCounts,
-} from "./ToReviewWidget";
+import { EMPTY, reviewRows, ToReviewWidget, trayCounts, type ReviewCounts } from "./ToReviewWidget";
 
 const REMOVED_FOLDER = 9;
 
@@ -189,7 +179,7 @@ function wrapper({ children }: { children: ReactNode }) {
 
 function draw(
   config: unknown = null,
-  { fit = ROOMY, still = false, web }: { fit?: WidgetFit; still?: boolean; web?: boolean } = {},
+  { fit = ROOMY, still = false }: { fit?: WidgetFit; still?: boolean } = {},
 ): ReturnType<typeof render> {
   return render(
     <ToReviewWidget
@@ -198,7 +188,6 @@ function draw(
       editing={false}
       still={still}
       onConfig={vi.fn()}
-      web={web}
     />,
     { wrapper },
   );
@@ -251,7 +240,6 @@ beforeEach(() => {
     stub.mockReset();
   }
   world();
-  vi.mocked(isWebTarget).mockReturnValue(false);
   qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   qc.setQueryData(MARKETPLACE_KEY, DEFAULT_MARKETPLACE);
   qc.setQueryData(MARKETPLACE_FEEDS_KEY, []);
@@ -287,7 +275,7 @@ describe("reviewRows", () => {
   };
 
   it("draws every row with a count, always in the same order", () => {
-    expect(reviewRows(ALL, { web: false, removed: true }).map((r) => r.kind)).toEqual([
+    expect(reviewRows(ALL, { removed: true }).map((r) => r.kind)).toEqual([
       "scanned",
       "binder",
       "wishes",
@@ -298,7 +286,7 @@ describe("reviewRows", () => {
 
   it("leaves out a row whose count is zero", () => {
     expect(
-      reviewRows({ ...ALL, binder: 0, wishes: 0 }, { web: false, removed: true }).map((r) => r.kind),
+      reviewRows({ ...ALL, binder: 0, wishes: 0 }, { removed: true }).map((r) => r.kind),
     ).toEqual(["scanned", "deckCards", "removed"]);
   });
 
@@ -309,7 +297,7 @@ describe("reviewRows", () => {
    * no heading to lean on, names the copies.
    */
   it("says what the scanned cards need in the Scanner's words, in the singular and the plural", () => {
-    const one = reviewRows(ALL, { web: false, removed: true })[0];
+    const one = reviewRows(ALL, { removed: true })[0];
     expect(one).toEqual(
       expect.objectContaining({
         name: "Scanned cards",
@@ -318,19 +306,19 @@ describe("reviewRows", () => {
         value: "4",
       }),
     );
-    expect(reviewRows({ ...ALL, unresolved: 3 }, { web: false, removed: true })[0].caption).toBe(
+    expect(reviewRows({ ...ALL, unresolved: 3 }, { removed: true })[0].caption).toBe(
       "3 cards to pick",
     );
-    const ready = reviewRows({ ...ALL, unresolved: 0 }, { web: false, removed: true })[0];
+    const ready = reviewRows({ ...ALL, unresolved: 0 }, { removed: true })[0];
     expect([ready.caption, ready.tileCaption]).toEqual(["Ready to add", "4 copies ready"]);
-    const single = reviewRows({ ...ALL, scanned: 1, unresolved: 0 }, { web: false, removed: true });
+    const single = reviewRows({ ...ALL, scanned: 1, unresolved: 0 }, { removed: true });
     expect(single[0].tileCaption).toBe("1 copy ready");
   });
 
   /** Rows where the table counts rows, copies where the reader thinks in copies — and the
    *  removed row's caption is what says so, which is why it carries no second figure. */
   it("counts the removed folder in copies, in its caption", () => {
-    const removed = reviewRows(ALL, { web: false, removed: true })[4];
+    const removed = reviewRows(ALL, { removed: true })[4];
     expect(removed).toEqual(
       expect.objectContaining({
         name: "Recently removed",
@@ -340,26 +328,15 @@ describe("reviewRows", () => {
       }),
     );
     expect(
-      reviewRows({ ...ALL, removed: 1 }, { web: false, removed: true })[4].caption,
+      reviewRows({ ...ALL, removed: 1 }, { removed: true })[4].caption,
     ).toBe("1 copy");
   });
 
   it("leaves the removed row out when the reader switched it off, or there is no holding area", () => {
-    expect(reviewRows(ALL, { web: false, removed: false }).map((r) => r.kind)).not.toContain(
-      "removed",
-    );
+    expect(reviewRows(ALL, { removed: false }).map((r) => r.kind)).not.toContain("removed");
     expect(
-      reviewRows({ ...ALL, removedFolderId: null }, { web: false, removed: true }).map((r) => r.kind),
+      reviewRows({ ...ALL, removedFolderId: null }, { removed: true }).map((r) => r.kind),
     ).not.toContain("removed");
-  });
-
-  it("hides the scanner and disarms the deck cards on the browser build", () => {
-    const rows = reviewRows(ALL, { web: true, removed: true });
-    expect(rows.map((r) => r.kind)).toEqual(["binder", "wishes", "deckCards", "removed"]);
-    const deckCards = rows.find((r) => r.kind === "deckCards");
-    expect(deckCards?.pressable).toBe(false);
-    expect(deckCards?.hint).toBe(WEB_DECK_HINT);
-    expect(rows.filter((r) => r.kind !== "deckCards").every((r) => r.pressable)).toBe(true);
   });
 });
 
@@ -574,46 +551,6 @@ describe("ToReviewWidget", () => {
 
       expect(await screen.findByText("Binder entries")).toBeInTheDocument();
       expect(screen.queryByRole("button")).toBeNull();
-    });
-  });
-
-  describe("the browser build", () => {
-    it("reads no tray and draws no scanner row", async () => {
-      world(EVERYTHING);
-
-      draw(null, { web: true });
-
-      expect(await screen.findByText("Binder entries")).toBeInTheDocument();
-      expect(screen.queryByText("Scanned cards")).toBeNull();
-      expect(scannerTray).not.toHaveBeenCalled();
-    });
-
-    it("draws the deck cards without a press", async () => {
-      world({ deckCards: 3 });
-
-      draw(null, { web: true });
-
-      expect(await screen.findByText("Deck cards")).toBeInTheDocument();
-      expect(screen.queryByRole("button")).toBeNull();
-    });
-
-    it("says nothing is waiting when only the tray has rows", async () => {
-      world({ scanned: 4 });
-
-      draw(null, { web: true });
-
-      expect(await screen.findByText(EMPTY)).toBeInTheDocument();
-    });
-
-    /** The page never passes `web`, so the build's own answer is what decides there. */
-    it("asks the build which target it is when nobody says", async () => {
-      vi.mocked(isWebTarget).mockReturnValue(true);
-      world(EVERYTHING);
-
-      draw();
-
-      expect(await screen.findByText("Binder entries")).toBeInTheDocument();
-      expect(screen.queryByText("Scanned cards")).toBeNull();
     });
   });
 });

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type CollectionFolder } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { refreshCardSearches } from "@/lib/searchMarks";
 
 /** Stable identity for "no folders yet" — a collection nobody has filed is the ordinary case, and
  *  the tree builder's `useMemo` does not see a new identity every render. */
@@ -141,7 +142,7 @@ export function useCollectionFolders() {
    */
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    void refreshCardSearches(queryClient);
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
   };
   const writes = { onSuccess: invalidate, onError: invalidate };
@@ -407,7 +408,7 @@ export function useSetCollectionFolder({ onMutate, onError }: SetCollectionFolde
       // write, whose whole job is to change that, moves an `×N` even though it moves no quantity.
       // A copy dragged into a locked drawer is the plainest case: nothing was gained or lost and
       // every deck's badge for that card is one lower.
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
   });
 }

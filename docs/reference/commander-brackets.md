@@ -318,8 +318,9 @@ and neither is `serde_json::Value`. `MAX_FEED_BYTES` (128 MiB) is checked agains
 
 **The framing is push-shaped, and that is a change from what first shipped.** The module drove
 `serde_json::Deserializer::from_reader` with a `DeserializeSeed` over the array, which is a
-*pull* parser: it calls `read()` when it wants more and blocks until it gets it. A browser stream
-is push and async with no thread to block, so the web target could not drive it at all.
+*pull* parser: it calls `read()` when it wants more and blocks until it gets it. The push shape
+was built for the browser build, removed on 2026-09-27; the desktop drives it too, with `ingest_gz`
+handing `read_stream` the temp file in 64 KB chunks.
 `read_file` and the seed are still there — they are the file-shaped entry point the tests use —
 but `ingest_gz` goes through `read_stream`.
 

@@ -747,8 +747,7 @@ describe("the unseen cursor", () => {
     expect(rowNames()[0]).toContain("not seen yet");
   });
 
-  /** The clock is the caller's — never `SystemTime::now()`, which panics on the wasm target — and
-   *  it is whole seconds, which is what `app_meta` stores. */
+  /** The clock is the caller's, and it is whole seconds, which is what `app_meta` stores. */
   it("writes the cursor once per mount, in whole seconds", async () => {
     newPrintings.mockResolvedValue(oneUnseenDay());
 

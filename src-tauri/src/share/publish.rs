@@ -1,10 +1,6 @@
 //! The upload: the two-step that makes a failed publish harmless, and the four requests behind
 //! the five commands.
 //!
-//! **`cfg(not(target_family = "wasm"))` on the whole module**, unlike [`super::snapshot`] and
-//! [`super::cache`], because this is the half that reaches the network. Publishing from the
-//! browser build is out of scope for v1 — see [`crate::web::route`]'s `share_list` entry.
-//!
 //! # The order, and why it is the whole of the transactional safety
 //!
 //! ```text

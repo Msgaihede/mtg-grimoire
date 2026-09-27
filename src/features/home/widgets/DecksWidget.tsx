@@ -303,7 +303,6 @@ export function DecksWidget({ widget, fit, still }: WidgetBodyProps): ReactEleme
                     // arm), which is the only honest answer in a 34px frame with no room for a
                     // tooltip target anybody could find.
                     variant="thumb"
-                    imageUrl={deck.imageUris?.thumb}
                     // This body is not virtualised, so the browser's own gate is what bounds what
                     // a tall card asks for — `CardArt`'s `loading` doc.
                     loading="lazy"

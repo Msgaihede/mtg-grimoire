@@ -71,10 +71,6 @@
 //! asking [`membership_ended`] before it records anything — this module's reason, carried to the
 //! caller that now needs it: a reader whose pledge lapsed while nobody was watching must still
 //! read "connect again", never "sync is broken".
-//!
-//! Everything here compiles for `wasm32-unknown-unknown`, which is why "now" is
-//! `SELECT unixepoch()` off the connection rather than `SystemTime::now()`: that one panics
-//! there.
 
 use crate::sync_engine::client;
 use crate::sync_pair::{crypto, identity};
@@ -523,9 +519,6 @@ pub fn revoke(conn: &Connection) -> Result<(), String> {
 }
 
 /// Now, in unix seconds, asked of SQLite.
-///
-/// `SystemTime::now()` panics on `wasm32-unknown-unknown` and this module is every-target —
-/// `apply`'s clock advance reaches the same conclusion and spells it in SQL for the same reason.
 fn now(conn: &Connection) -> Result<i64, String> {
     conn.query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
         .map_err(|e| e.to_string())
@@ -547,7 +540,7 @@ fn now(conn: &Connection) -> Result<i64, String> {
 /// flaking: one static client, `httpmock`'s pooled ports, and a runtime per `#[tokio::test]`.
 /// Fixing one of a matched pair and leaving the other is how the survivor gets diagnosed from
 /// scratch in six months.
-#[cfg(all(not(target_family = "wasm"), not(test)))]
+#[cfg(not(test))]
 fn http() -> reqwest::Client {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -555,14 +548,13 @@ fn http() -> reqwest::Client {
 }
 
 /// See [`http`]: a test build takes a fresh client so nothing is shared across runtimes.
-#[cfg(all(not(target_family = "wasm"), test))]
+#[cfg(test)]
 fn http() -> reqwest::Client {
     build_http()
 }
 
 /// The one place this client's shape is written down. **Its read timeout is 10 seconds, not
 /// the relay client's 30**, which is the whole reason the two exist separately.
-#[cfg(not(target_family = "wasm"))]
 fn build_http() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(crate::scryfall::USER_AGENT)
@@ -570,14 +562,6 @@ fn build_http() -> reqwest::Client {
         .read_timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap_or_default()
-}
-
-/// **No `OnceLock` and no timeouts, and neither is an oversight** — `client::http`'s reasoning
-/// exactly: reqwest's wasm client wraps JS values and is not `Sync`, so it cannot be a `static`,
-/// and its builder has neither timeout method there because `fetch` owns the deadline.
-#[cfg(target_family = "wasm")]
-fn http() -> reqwest::Client {
-    reqwest::Client::new()
 }
 
 /// This device's id, the `device` field every request here now carries (spec §4.2).
@@ -748,7 +732,7 @@ pub async fn access_token(conn: &Connection) -> Result<Option<String>, String> {
 ///
 /// **A 401 says the secret is dead, and that is no longer the same as the membership being
 /// dead.** The relay deletes the secret when a membership ends — but it also replaces it on every
-/// `/claim`, so a reader who pressed Connect on the phone after the desktop has left the desktop
+/// `/claim`, so a reader who pressed Connect on the laptop after the desktop has left the desktop
 /// holding a secret nobody will ever accept again; and it retires one when a rotation's manifest
 /// omits the device that held it. So a refusal here is handed to [`refused_secret`], which asks
 /// the group door before anything is concluded.
@@ -973,7 +957,7 @@ pub fn authorize_url(state: &str) -> String {
     )
 }
 
-#[cfg(all(test, not(target_family = "wasm")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::sync_engine::client;
@@ -1561,7 +1545,7 @@ mod tests {
     #[tokio::test]
     async fn a_superseded_secret_mints_through_the_group_door_and_is_not_a_lapse() {
         // **Reachable in an ordinary flow since `/claim` mints a fresh secret per press**: the
-        // reader connected Patreon on the desktop, then pressed Connect again on the phone, and
+        // reader connected Patreon on the desktop, then pressed Connect again on the laptop, and
         // the desktop's secret is now one the relay has never heard of. Its refresh door answers
         // 401 - but the membership is fine, and the desktop is still in the group, so its group
         // auth mints a token. `revoke` here was a *Membership ended* over a live pledge.

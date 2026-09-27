@@ -23,8 +23,6 @@ import {
   type SidebarDrop,
 } from "@/components/useSidebarDrops";
 import { ipc } from "@/lib/ipc";
-import { isAndroid, isDesktop } from "@/lib/platform";
-import { isWebTarget } from "@/pwa/target";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
 import {
@@ -60,7 +58,6 @@ import { useStartViewHydration } from "@/lib/useStartView";
 import { statusLine, useSync } from "@/lib/useSync";
 import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
 import { useSyncProgress } from "@/lib/useSyncProgress";
-import { useWebStorageLifecycle } from "@/pwa/useWebStorageLifecycle";
 import type { Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
 
@@ -156,9 +153,6 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const setKeyMapOpen = useAppStore((s) => s.setKeyMapOpen);
   const { status, error, refresh, refreshing, upToDate } = useSync();
   const progress = useSyncProgress();
-  // Web only in effect: on desktop this answers "present" for every count and its effect
-  // returns immediately, so the gate below behaves exactly as it always has.
-  const corpus = useWebStorageLifecycle(status?.cardCount ?? null);
   // The sidebar is the one part of the window that is always on screen, which is what makes
   // it the place a card can be dropped from any view — the Search wall and the deck editor
   // never coexist, so without this a card found in Search has nowhere to go.
@@ -254,12 +248,12 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // The relay socket's state, seeded and then kept live by one `sync:live` listener — the
   // ribbon's whole reason for existing (see `Ribbon`'s own comment on `deviceSync`). Read here
   // rather than in the ribbon itself so there is exactly one subscription for the life of the
-  // app, and passed down `isWebTarget()`-gated at the call site below.
+  // app.
   const deviceSync = useDeviceSyncLive();
   /**
    * The app's three window-wide chords: `Ctrl+1`…`Ctrl+9` to jump between the first **nine** of
-   * the ten destinations {@link CHORD_NAV} names, `F1` to open the map that says so, and — on the
-   * desktop alone — `Ctrl+Shift+N` to open another window onto the same app.
+   * the ten destinations {@link CHORD_NAV} names, `F1` to open the map that says so, and
+   * `Ctrl+Shift+N` to open another window onto the same app.
    *
    * **Nine of ten and not "the nine {@link CHORD_NAV} names"**, which is what this line said until
    * Home joined the rail. That list is `NAV` minus `shared` — ten entries — and the run of digits
@@ -310,10 +304,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
         return;
       }
       // Ahead of the modal guard with `F1`, and for a reason of its own: opening another window
-      // disturbs nothing in this one, so a dialog has nothing to be stranded over. `isDesktop()`
-      // is the key map's own filter, so the chord is bound exactly where it is listed — the web
-      // build does not route `window_new`, and a phone runs one window per app.
-      if (isDesktop() && matchesShortcut(NEW_WINDOW, e)) {
+      // disturbs nothing in this one, so a dialog has nothing to be stranded over.
+      if (matchesShortcut(NEW_WINDOW, e)) {
         e.preventDefault();
         // Held keys repeat at the OS rate, and every repeat would be another window.
         if (!e.repeat) void ipc.windowNew().catch(() => undefined);
@@ -340,21 +332,6 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [setActiveView, setKeyMapOpen]);
-  // Android drops its socket in the background because Doze would sever it anyway, and a
-  // phone that looks connected while being hours stale is worse than one that knows it is
-  // offline. Desktop never calls this: an idle hibernated socket costs nothing.
-  //
-  // `isAndroid()`, and deliberately not `isWebTarget()` — the question here is the handset's own
-  // Doze behaviour, which is a fact about the platform the app is running on rather than about
-  // which core it was built against. `TitleBar`'s gate two screens up is the other question, and
-  // getting the two confused is exactly what the comment there warns about.
-  useEffect(() => {
-    if (!isAndroid()) return;
-    const tell = () => void ipc.syncLiveForeground(!document.hidden).catch(() => undefined);
-    tell();
-    document.addEventListener("visibilitychange", tell);
-    return () => document.removeEventListener("visibilitychange", tell);
-  }, []);
   // The one `marketplace:progress` subscription in the app, for `useSyncProgress`' reason.
   // It renders nothing: the event goes into the query cache, and every `useMarketplace()`
   // observer — including the one two lines below — reads it back from there.
@@ -526,32 +503,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           now by `LAYER.caption` in `TitleBar` itself, where the rung carries the argument; the
           claim lives here because this is where the row is placed, and `layers.test.ts` is
           what holds the two together. */}
-      {/* **Not on Android, and it is three of its four buttons that decide it.** In tauri
-          2.11.5 `minimize`, `toggle_maximize` and `start_dragging` are all `#[cfg(desktop)]`
-          (`tauri/src/window/plugin.rs`) — they are not commands there at all — and
-          `capabilities/mobile.json` grants none of the four. The fourth, `close`, exists and
-          would kill the app from a button no phone user is looking for. The OS owns the frame
-          there, and `lib.rs` does not even compile `window.rs` for it.
-
-          The argument above about `LAYER.caption` still governs, on the platforms that draw
-          the row.
-
-          **And not on the web either, which this gate got wrong until 2026-08-29.** Parity §5
-          gives the window's edge to the browser exactly as it gives it to the OS on Android, so
-          the reasoning above transfers whole — but the test was `isAndroid()`, which is false in
-          a desktop browser, so the web build drew a caption for a window it does not own and
-          `TitleBar` reached for Tauri's window API on a target that has none. `window.ts`
-          imports `getCurrentWindow` at module scope, so **mounting the row at all was enough**:
-          the page logged `TypeError: Cannot read properties of undefined (reading 'metadata')`
-          from `getCurrentWindow` and `transformCallback` on every load. It rendered anyway,
-          which is why it read as noise rather than as a bug.
-
-          `isWebTarget()` and not a second `isAndroid()`-style user-agent probe: the target is a
-          build-time fact here (`__CORE__`), so the branch folds away and the desktop bundle
-          carries no web check at all. The two questions are different — *which platform is this
-          agent* versus *which core was this built against* — and `src/lib/images.ts`'s header
-          makes the same distinction for the same reason. */}
-      {!isAndroid() && !isWebTarget() && <TitleBar />}
+      <TitleBar />
 
       <div className="flex min-h-0 flex-1">
         {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got
@@ -706,12 +658,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             updateVersion={update.status?.available?.version ?? null}
             updateInstallable={update.action !== "unavailable"}
             onOpenUpdate={() => setActiveView("settings")}
-            // **`isWebTarget()`, never `isAndroid()`.** Android runs the relay over Tauri events
-            // exactly like desktop; it is the web target that has no relay commands at all
-            // (`web/route.rs`'s `COMMANDS` list carries none of them), so `useDeviceSyncLive`
-            // would sit on its `"off"` seed forever there and drawing a marker over that would be
-            // this shell's `TitleBar` gate wrong a second time in one file.
-            deviceSync={isWebTarget() ? null : deviceSync}
+            deviceSync={deviceSync}
             onOpenSync={() => setActiveView("settings")}
           />
 
@@ -723,7 +670,6 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             error={error}
             busy={busy}
             onRetry={refresh}
-            reason={corpus}
           />
 
           {/* The banner grows into place rather than shoving the whole view down by its height

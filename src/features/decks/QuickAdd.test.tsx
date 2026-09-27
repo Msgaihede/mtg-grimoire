@@ -338,6 +338,55 @@ describe("QuickAdd", () => {
   });
 
   /**
+   * **Two Enters inside the lookup's round trip are one add** (issue #553). The field is cleared
+   * by the answer, not the press, so the name is still there for the second Enter to look up
+   * again — and before the guard it did, and the card went into the deck twice.
+   */
+  it("adds a typed name once however often Enter is pressed while the lookup is out", async () => {
+    let answer: (page: SearchResponse) => void = () => {};
+    searchCards.mockImplementation(({ limit }: { limit: number }) =>
+      limit === 1
+        ? new Promise<SearchResponse>((resolve) => {
+            answer = resolve;
+          })
+        : new Promise(() => {}),
+    );
+    const { field, onAdd } = mount();
+
+    await userEvent.type(field, "goblin guide{Enter}{Enter}");
+    answer(page("Goblin Guide"));
+
+    await waitFor(() => expect(onAdd).toHaveBeenCalledTimes(1));
+    expect(searchCards.mock.calls.filter(([arg]) => arg.limit === 1)).toHaveLength(1);
+  });
+
+  /**
+   * **What was typed during the lookup survives its answer** (issue #553). The add still lands —
+   * the press was for the card the lookup found — but the field now holds the *next* name, and
+   * clearing it would throw the reader's typing away.
+   */
+  it("keeps text typed while the lookup was out, and still adds what it found", async () => {
+    let answer: (page: SearchResponse) => void = () => {};
+    searchCards.mockImplementation(({ limit }: { limit: number }) =>
+      limit === 1
+        ? new Promise<SearchResponse>((resolve) => {
+            answer = resolve;
+          })
+        : new Promise(() => {}),
+    );
+    const { field, onAdd } = mount();
+
+    await userEvent.type(field, "goblin guide{Enter}");
+    await userEvent.type(field, " lightning");
+    answer(page("Goblin Guide"));
+
+    await waitFor(() =>
+      expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ id: "s-Goblin Guide" })),
+    );
+    expect(field).toHaveValue("goblin guide lightning");
+  });
+
+  /**
    * **Three presses, three answers, and the third is the one that leaves.**
    *
    * The list, then the text, then nothing — one rung per press, all the way out of the field. The

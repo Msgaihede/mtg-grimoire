@@ -31,12 +31,10 @@
 //! [`crate::schema::SYNCED_TABLES`], so these colours are **this device's** — every other stored
 //! preference in the app is too, and the two per-deck switches beside this feature are not.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key. The table is the *application's*, deliberately not `sync_meta`.
@@ -127,7 +125,6 @@ pub fn store(conn: &Connection, mark: &str, color: Option<&str>) -> Result<(), S
 /// reason: a sync body runs inline on the IPC thread, and this one takes `db_read`'s mutex, which
 /// a search may hold for tens of milliseconds — and this is called while the window is drawing
 /// its first frame.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn mark_colors(state: tauri::State<'_, Arc<AppState>>) -> BTreeMap<String, String> {
     stored(&crate::sync::lock_db_read(state.inner()))
@@ -138,7 +135,6 @@ pub fn mark_colors(state: tauri::State<'_, Arc<AppState>>) -> BTreeMap<String, S
 /// layout, **this refusal is worth surfacing**: the reader is standing in front of a colour picker
 /// watching a swatch, so the panel says the write did not land rather than leaving them to find
 /// out at the next launch.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_mark_color(
     state: tauri::State<'_, Arc<AppState>>,

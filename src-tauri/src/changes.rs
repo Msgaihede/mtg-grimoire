@@ -188,7 +188,7 @@ pub struct DbChanged {
     pub tables: Vec<&'static str>,
 }
 
-/// Start the task that turns rings into events. Desktop only: a phone has one window.
+/// Start the task that turns rings into events.
 ///
 /// **The write lock is taken before the read and held across it, and that is a barrier, not a
 /// use.** It buys two things, and the second is why the take is inside the lock rather than after
@@ -212,7 +212,6 @@ pub struct DbChanged {
 ///
 /// On timeout it emits what is pending and clears nothing — see [`take_settled`]. A refetch of
 /// data that did not change costs one read, and silence would cost a stale window.
-#[cfg(desktop)]
 pub fn spawn_emitter(app: tauri::AppHandle, state: std::sync::Arc<crate::sync::AppState>) {
     use tauri::{Emitter, Manager};
     tauri::async_runtime::spawn(async move {
@@ -251,7 +250,6 @@ pub fn spawn_emitter(app: tauri::AppHandle, state: std::sync::Arc<crate::sync::A
 ///
 /// Its own function so a test can hold the lock and watch it: the emitter itself needs an
 /// `AppHandle`, and this crate has no mock-app harness.
-#[cfg(any(desktop, test))]
 fn take_settled(
     db: &std::sync::Mutex<rusqlite::Connection>,
     changes: &Changes,

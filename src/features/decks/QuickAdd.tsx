@@ -175,15 +175,39 @@ export function QuickAdd({
   /** What `aria-expanded` says, and the only state in which this layer owns the Escape key. */
   const listOpen = open && options.length > 0;
 
-  /** One place an add happens, whichever of the three routes reached it. */
-  const commit = (card: CardSummary) => {
+  /**
+   * The field as it stands **now**, for the one reader that is not a render: the lookup's
+   * `onSuccess`, which runs a round trip after the press and closes over the text of the render
+   * that pressed. Kept in step from an effect rather than written during render, which is what
+   * `react-hooks/refs` forbids.
+   */
+  const textRef = useRef(text);
+  useEffect(() => {
+    textRef.current = text;
+  }, [text]);
+
+  /**
+   * One place an add happens, whichever of the three routes reached it.
+   *
+   * `asked` is the text the add answered, for the one route that answers late — see
+   * {@link lookup}. Absent for a picked row, which answers the field as it is on the press.
+   */
+  const commit = (card: CardSummary, asked?: string) => {
     setMiss(null);
     // Cleared on a hit and kept on a miss, because the two are different next actions: type
     // the next card, or correct this one. The caret stays here either way — a row's
     // `onMouseDown` refuses the focus a click would otherwise take — so the next name can be
     // typed without going back for the field.
-    setText("");
-    setOpen(false);
+    //
+    // **Only when the field still says what was asked** (issue #553). The lookup answers a round
+    // trip after Enter, and a reader who knows the next name has often started typing it by then
+    // — clearing the field on the answer threw away the letters they had typed in the meantime.
+    // The add still happens: the press was for the card the lookup found, whatever the field
+    // says now.
+    if (asked === undefined || textRef.current.trim() === asked) {
+      setText("");
+      setOpen(false);
+    }
     onAdd(card);
   };
 
@@ -207,7 +231,7 @@ export function QuickAdd({
         setMiss(t);
         return;
       }
-      commit(card);
+      commit(card, t);
     },
   });
   const failure = lookup.isError ? ipcError(lookup.error) : null;
@@ -226,6 +250,11 @@ export function QuickAdd({
     // `AUTO_CATEGORY`, which is a perfectly good destination, and "the deck has not loaded yet"
     // is covered by this field only existing inside an open deck.
     if (!t) return;
+    // **A second Enter while the lookup is out is not a second add** (issue #553). The field is
+    // cleared by the answer rather than by the press, so for the length of that round trip the
+    // text is still there and a second press would look the same name up again — and add it
+    // twice. The press is dropped rather than queued: it asked for exactly what is on its way.
+    if (lookup.isPending) return;
     setMiss(null);
     const picked = fresh ? options[activeIndex] : undefined;
     if (picked) {

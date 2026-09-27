@@ -1,9 +1,8 @@
 /**
  * Paste is the only way in.
  *
- * The app reads no launch intent and declares no URL scheme — `relay/src/pair.ts` carries the
- * argument for why adding one is a separate piece of work with an Android trap in it — so a
- * reader who was sent a link in a chat window arrives here with it on the clipboard.
+ * The app reads no launch intent and declares no URL scheme, so a reader who was sent a link in a
+ * chat window arrives here with it on the clipboard.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

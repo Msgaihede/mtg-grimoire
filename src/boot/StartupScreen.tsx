@@ -3,10 +3,8 @@ import { ManaLine } from "@/components/ManaLine";
 import { TitleBar } from "@/components/TitleBar";
 import { ACTIVITY_DELAY_MS } from "@/lib/activity";
 import type { StartupStatus } from "@/lib/ipc";
-import { isAndroid } from "@/lib/platform";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { cn } from "@/lib/utils";
-import { isWebTarget } from "@/pwa/target";
 
 /**
  * The two states that are not the app. `ready` is never drawn here — `DesktopBoot` mounts `App`
@@ -28,8 +26,7 @@ export const STARTUP_LOADING_LABEL = "Opening your collection…";
  * **The caption is drawn here too, and for the reason `AppShell` draws it.** The window is
  * `decorations: false`, so without {@link TitleBar} a reader cannot move, minimise or close a
  * window that is migrating a database — which on a cold start is the whole of what they are
- * looking at. The gate is `AppShell`'s own, copied rather than reinvented: not on Android, where
- * the OS owns the frame, and not on the web, which never renders this component anyway.
+ * looking at.
  *
  * **Loading says nothing for its first {@link ACTIVITY_DELAY_MS}**, and the number is the
  * ribbon's on purpose. That constant is this app's answer to "how long must a wait run before it
@@ -66,7 +63,7 @@ export function StartupScreen({ status }: StartupScreenProps) {
         paddingRight: "var(--safe-r)",
       }}
     >
-      {!isAndroid() && !isWebTarget() && <TitleBar />}
+      <TitleBar />
 
       {/* `m-auto` on the column rather than `justify-center` on the scroller: a centred flex
           column that outgrows its box overflows off *both* ends, and the top end cannot be
@@ -96,8 +93,7 @@ export function StartupScreen({ status }: StartupScreenProps) {
           {failed && (
             <div className="w-full max-w-lg space-y-3">
               {/* Not "MTG Grimoire could not start": every message Rust writes here already opens
-                  with "MTG Grimoire could not …", so the heading names the thing instead —
-                  `WebBoot`'s "The card database would not open", one folder wider. */}
+                  with "MTG Grimoire could not …", so the heading names the thing instead. */}
               <h1 className="font-heading text-2xl text-text">The data folder would not open</h1>
               {/* Verbatim. The native side wrote this for a reader — it names the folder and what
                 to do about it — and it is multi-line, so `whitespace-pre-line` keeps its breaks.
