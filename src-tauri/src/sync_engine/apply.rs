@@ -9,9 +9,9 @@
 //!    with no alias table — except onto a row this page deletes, whose uid the sender retired, so
 //!    the incoming uid wins outright; and a group whose own ops end in a delete is found by its
 //!    uid alone, never by grain. A folder's or a deck's delete that would clear rows out of
-//!    it waits while anything else in the page still lands, then — on a deciding pass, like a
-//!    gone decision — re-homes whatever is still filed there itself, merging each onto the
-//!    root's twin under the lower uid ([`rehome`]).
+//!    it waits until a pass of its own, which runs only once a pass taking every other decision
+//!    has landed nothing, then re-homes whatever is still filed there itself, merging each onto
+//!    the root's twin under the lower uid ([`rehome`]).
 //! 3. **Foreign uids become local ids.** A parent the device has never seen is a *deferral*, not
 //!    an error.
 //! 4. **Cycles are broken and `needs_review` is written.**
@@ -90,12 +90,19 @@
 //! are given only on a retry pass that follows one on which nothing landed**
 //! ([`Why::DecidedOnRetry`], `run_groups`), so a parent that any group of the same page brings
 //! back through add-wins, however late in the page, is found instead, and the group is written as
-//! any other. **One gap is left, and nothing reaches it today**: a deciding pass takes its
-//! decisions in page order, so a `SET NULL` decision there could be taken before a parent of the
-//! same rank lands later in that same pass — it needs a folder under a deck group, which no
-//! command builds. Whoever adds the next `SET NULL` key into a tree table makes it reachable, and
-//! owes that pass a parents-first order within the table. A moot or dropped group is *consumed*:
-//! it holds nothing, the ops after it apply, and the watermark passes it.
+//! any other. **A deciding pass takes its decisions in page order**, so a decision there can come
+//! before a group of the same rank that an earlier decision of the same pass unblocks. Ordinary
+//! commands reach that with a binder and a deck's group, both `collection_folders`: a deck written
+//! without the deck folder deleted here lands its group on that pass, and a binder's delete met
+//! after the group re-homed a copy the sender had moved into it before the move came round. **So a
+//! delete that would clear rows out of a folder — this arm's included — waits one pass further**,
+//! for an [`Attempt::Clear`] pass, which runs only after a deciding pass that landed nothing. A
+//! moot or `SET NULL` decision keeps the exposure only where its gone parent is of its own table
+//! and is brought back by a group that lands on that pass alone — a folder under a deck group,
+//! which no command builds. Whoever adds a `SET NULL` key into a tree table, or a command that
+//! files a folder under a deck group, makes that reachable, and owes the deciding pass a
+//! parents-first order within the table. A moot or dropped group is *consumed*: it holds nothing,
+//! the ops after it apply, and the watermark passes it.
 //! `client::pull` holds `PULL_CURSOR` while either held count is non-zero, so the relay hands the
 //! page back, and ends a waiting hold at its bound by applying the page once more with
 //! [`Waiting::Release`]. [sync.md](../../../docs/reference/sync.md) is the record.
@@ -644,18 +651,20 @@ enum Why {
     /// Not decided yet, because what the page does to the group is only known once other groups
     /// have landed. Two things answer it (spec 2026-09-27 §3.3):
     ///
-    /// - **A delete that would clear rows out of a folder**, on the first attempt and on every
-    ///   [`Attempt::Retry`] pass while rows are still filed there, so the page's own re-filing of
-    ///   them lands first, however late the folder they go to lands. A pass that finds the folder
-    ///   empty deletes it; otherwise it is taken, like a gone decision, only on an
-    ///   [`Attempt::Decide`] pass, which re-homes what is left at the root and deletes.
     /// - **A group naming a parent [`gone`] says was deleted**, whether its key cascades (moot) or
     ///   is `SET NULL` (written without it), on the first attempt and on every
-    ///   [`Attempt::Retry`] pass — decided only on an [`Attempt::Decide`] pass, which follows a
-    ///   pass on which nothing landed, so any group of the page that brings the parent back
-    ///   through add-wins has landed first, however late, and the parent is resolved again and
-    ///   found. It is also what makes the moot arm's own delete of a folder wait for the page's
-    ///   re-filing, one level up.
+    ///   [`Attempt::Retry`] pass — decided only on an [`Attempt::Decide`] or [`Attempt::Clear`]
+    ///   pass, each of which follows a pass on which nothing landed, so any group of the page that
+    ///   brings the parent back through add-wins has landed first, however late, and the parent
+    ///   is resolved again and found.
+    /// - **A delete that would clear rows out of a folder** — the delete arm's, or the moot arm's
+    ///   delete of a folder it holds — on every pass but an [`Attempt::Clear`] one while rows are
+    ///   still filed there, so the page's own re-filing of them lands first. A pass that finds the
+    ///   folder empty deletes it; otherwise it is taken only on a `Clear` pass, which follows a
+    ///   `Decide` pass on which nothing landed, and re-homes what is left at the root before the
+    ///   delete. **A `Decide` pass is not late enough for it**: that pass's own decisions land
+    ///   groups — a deck written without its gone folder, then the deck's group — and a copy the
+    ///   sender moved into such a group is re-filed only after them, later in that same pass.
     ///
     /// **Never classified**, short of the loop's cap: a withheld group is on every pass until it
     /// is decided, `run_groups` stops only on a pass that withheld nothing, and it keeps only
@@ -690,13 +699,30 @@ enum Attempt {
     First,
     /// A retry pass on which every decision [`Why::DecidedOnRetry`] names stays withheld. The
     /// first follows the first attempt, whatever it landed; every later one follows a pass on
-    /// which something landed or was decided — a [`Attempt::Decide`] pass's decisions count —
+    /// which something landed or was decided — a `Decide` or `Clear` pass's decisions count —
     /// because the page may yet bring a parent back, or re-file a row out of a folder it deletes.
     Retry,
-    /// A retry pass after one on which nothing landed: whatever the page could write without a
-    /// withheld decision it has written, so this one takes those decisions — moot, `SET NULL`,
-    /// or a clearing delete's re-homing.
+    /// A retry pass after a `Retry` pass on which nothing landed: whatever the page could write
+    /// without a withheld decision it has written, so this one takes the decisions resting on
+    /// [`gone`] — moot or `SET NULL` — and still withholds every clearing delete, because what
+    /// those decisions land can re-file rows later in this same pass.
     Decide,
+    /// A retry pass after a `Decide` pass on which nothing landed: nothing else in the page can
+    /// land any more, so this one takes every withheld decision, clearing deletes included — it
+    /// re-homes what is still filed in a folder at the root and deletes the folder.
+    Clear,
+}
+
+impl Attempt {
+    /// Whether a decision resting on [`gone`] is taken on this pass.
+    fn decides_gone(self) -> bool {
+        matches!(self, Attempt::Decide | Attempt::Clear)
+    }
+
+    /// Whether a delete that would clear rows out of a folder is taken on this pass.
+    fn clears(self) -> bool {
+        self == Attempt::Clear
+    }
 }
 
 /// What a group a pass did not write becomes — the module doc's table.
@@ -945,19 +971,26 @@ thread_local! {
 /// # Every group once, then retry passes to a fixed point
 ///
 /// The first attempt takes every group in page order. The groups that did not land are then
-/// retried, in page order, on **retry passes**, of two kinds:
+/// retried, in page order, on **retry passes**, of three kinds:
 ///
 /// - **[`Attempt::Retry`]** writes what it can and **withholds every decision resting on
 ///   [`gone`]** — the moot arm and the `SET NULL` arm both answer [`Why::DecidedOnRetry`] and go
 ///   round again — **and every delete that would clear rows out of a folder** still holding any.
-/// - **[`Attempt::Decide`]** runs only after a pass on which **nothing landed**, and takes those
-///   decisions. A decision is progress in its own right — a moot delete and its tombstone, or a
-///   row written without its parent — so the loop goes on with `Retry` passes after it.
+/// - **[`Attempt::Decide`]** runs only after a `Retry` pass on which **nothing landed**, and takes
+///   the decisions resting on `gone`. A decision is progress in its own right — a moot delete and
+///   its tombstone, or a row written without its parent — so the loop goes on with `Retry` passes
+///   after it. **It still withholds every clearing delete**, the moot arm's delete of a folder
+///   included.
+/// - **[`Attempt::Clear`]** runs only after a `Decide` pass on which nothing landed, and takes
+///   every decision still withheld: a clearing delete re-homes what is still filed in the folder
+///   at the root and deletes it.
 ///
-/// A pass that wrote something is followed by a `Retry`; one that wrote nothing but withheld a
-/// decision is followed by a `Decide`; one that did neither ends the loop. A group whose parent is
-/// unknown and not gone goes round again; every other answer is final. **Only the last answer a
-/// group gave is classified**, so a hold is decided by the page as it finally stood.
+/// A pass that landed or decided something is followed by a `Retry`. One that did neither but
+/// withheld a decision is followed by a `Decide` if it was a `Retry`, and by a `Clear` if it was a
+/// `Decide`; a `Clear` withholds nothing. A pass that neither progressed nor withheld ends the
+/// loop. A group whose parent is unknown and not gone goes round again; every other answer is
+/// final. **Only the last answer a group gave is classified**, so a hold is decided by the page as
+/// it finally stood.
 ///
 /// **Why a decision waits for a pass on which nothing landed.** The group that brings a deleted
 /// parent back through add-wins can land later than the child that names the parent — later in
@@ -968,8 +1001,18 @@ thread_local! {
 /// and lost for good (`a_folder_moved_under_a_parent_resurrected_on_a_retry_pass_follows_it`, and
 /// `a_copy_filed_into_a_binder_resurrected_on_a_later_retry_pass_stays_in_it` for the `SET NULL`
 /// arm two passes in). A pass on which nothing landed is one after which no group of this page can
-/// land without a withheld decision, so no resurrection — and no re-filing out of a folder the
-/// page deletes — is still to come.
+/// land without a withheld decision, so no resurrection is still to come.
+///
+/// **Why a clearing delete waits one pass further, for a `Clear` pass.** The deciding pass's own
+/// decisions land groups, and those can unblock a re-filing later in that same pass. `b` holds a
+/// deck folder `F` and deletes it; `a` makes a deck `Q` in `F`, moves a
+/// copy `c` out of binder `B` into `Q`'s group and deletes `B`. The page meets `Q`, the group, `B`
+/// and `c`'s move, and nothing lands until the deciding pass writes `Q` without `F`; the group
+/// lands after it, and `B`, decided on that pass, re-homed `c` onto a root twin before `c`'s move
+/// came round — which then carried both copies into the group, or found no row and was dropped
+/// (`a_copy_moved_into_a_decks_group_the_page_makes_late_lands_there`, the moot arm's folder delete
+/// alongside). A `Clear` pass comes after a `Decide` pass that landed nothing, when nothing that
+/// could still re-file a row is left to land.
 ///
 /// **Why more than one pass at all.** A child can be met before the parent it waits on has been
 /// decided. `a` renames `X`, makes `Z` under a `P` this device deleted, and moves `X` into `Z`:
@@ -982,14 +1025,16 @@ thread_local! {
 /// (`a_copy_filed_into_a_binder_the_same_page_brings_back_stays_in_it`); going round again is
 /// right in both, because a group waiting on an unknown parent writes nothing.
 ///
-/// **The cap is twice the page's group count plus one, and it is never reached.** Every pass that
-/// lands or decides something takes at least one group out of the waiting set for good, and the
-/// passes between two of those are at most one: a `Retry` that landed nothing is followed by a
-/// `Decide` that either decides something or ends the loop. So there are at most two passes per
-/// failed group, and one to find that nothing moves. The cap is there so a mistake in that
-/// reasoning is a pass too many rather than a hang. **The cost** is two passes for each link of
-/// the longest chain of waiting groups, over only the groups still waiting; a page with nothing
-/// withheld and nothing waiting pays the one retry it always paid.
+/// **The cap is three times the page's group count plus one, and it is never reached.** Every pass
+/// that lands or decides something takes at least one group out of the waiting set for good, and
+/// the passes between two of those are at most two: a `Retry` that landed nothing is followed by
+/// a `Decide`, and a `Decide` that landed nothing by a `Clear`, which withholds nothing and so
+/// either decides something or ends the loop. A run that ends the loop is at most those same three
+/// passes, and it only comes with at least one group still waiting. So a page whose first attempt
+/// leaves `n` groups unwritten takes at most `3n` retry passes. The cap is there so a mistake in
+/// that reasoning is a pass too many rather than a hang. **The cost** is up to three passes for
+/// each link of the longest chain of waiting groups, over only the groups still waiting; a page
+/// with nothing withheld and nothing waiting pays the one retry it always paid.
 fn run_groups<'a>(
     conn: &Connection,
     groups: &'a [Group<'a>],
@@ -1019,9 +1064,10 @@ fn run_groups<'a>(
     // Retry passes, because a batch can carry a child before its parent even when one device's
     // own stream cannot: the relay hands over several devices' streams interleaved. They are also
     // what every decision resting on `gone` waits for ([`Why::DecidedOnRetry`]) — and not merely
-    // the first of them, but the first on which nothing else is still landing. The doc above says
-    // why, how many there can be, and when they stop.
-    let cap = 2 * groups.len() + 1;
+    // the first of them, but the first on which nothing else is still landing; a clearing delete
+    // waits one pass further still. The doc above says why, how many there can be, and when they
+    // stop.
+    let cap = 3 * groups.len() + 1;
     let mut last: Vec<Option<Why>> = failed.iter().map(|_| None).collect();
     let mut pending: Vec<usize> = (0..failed.len()).collect();
     let mut passes = 0;
@@ -1039,8 +1085,8 @@ fn run_groups<'a>(
                 }
                 Outcome::Deferred(why) => {
                     match &why {
-                        // A decision withheld on a `Retry` pass — a gone-based one, or a delete
-                        // that would clear rows out of a folder: it waits for a `Decide` one.
+                        // A decision withheld — a gone-based one until a `Decide` pass, a delete
+                        // that would clear rows out of a folder until a `Clear` one.
                         Why::DecidedOnRetry => {
                             withheld = true;
                             again.push(i);
@@ -1064,16 +1110,18 @@ fn run_groups<'a>(
         if passes >= cap {
             break;
         }
-        attempt = match (progressed, withheld) {
-            // Something landed, so a parent the page brings back, or a row it re-files out of a
-            // folder it deletes, may land next: keep withholding.
-            (true, _) => Attempt::Retry,
-            // Nothing landed and withheld decisions are waiting: the page has done all it can
-            // without them, so take them.
-            (false, true) => Attempt::Decide,
-            // Nothing landed and nothing is withheld — whatever still waits, waits on a parent the
-            // page does not carry.
-            (false, false) => break,
+        attempt = match (progressed, withheld, attempt) {
+            // Something landed or was decided, so a parent the page brings back, or a row it
+            // re-files out of a folder it deletes, may land next: keep withholding.
+            (true, _, _) => Attempt::Retry,
+            // Nothing landed and decisions are withheld: the page has done all it can without
+            // them, so take the ones resting on `gone` — and if that lands nothing either, the
+            // clearing deletes, which only then have nothing left to wait for.
+            (false, true, Attempt::First | Attempt::Retry) => Attempt::Decide,
+            (false, true, Attempt::Decide) => Attempt::Clear,
+            // A `Clear` pass withholds nothing, and a pass that neither landed nor withheld leaves
+            // only groups waiting on a parent the page does not carry.
+            (false, _, _) => break,
         };
         pending = again;
     }
@@ -1185,10 +1233,11 @@ fn gone(
 
 /// A group made moot by a cascading parent that is gone, about a row **this device already
 /// holds**: delete that row, as the delete's cascade does on the device that sent the group — but
-/// only when the group's placement under that parent is the one that stands. **Called only on an
-/// [`Attempt::Decide`] pass**, like every decision resting on [`gone`] ([`Why::DecidedOnRetry`]):
-/// that pass follows one on which nothing landed, so the page's own re-filing of the rows filed in
-/// a folder has landed, and so has any group of the page that brings the parent back — which
+/// only when the group's placement under that parent is the one that stands. Answers whether it
+/// decided: `false` is a folder it would clear rows out of, on a pass that is not a `Clear` one,
+/// and writes nothing. **Called only on an [`Attempt::Decide`] or [`Attempt::Clear`] pass**, like
+/// every decision resting on [`gone`] ([`Why::DecidedOnRetry`]): each follows a pass on which
+/// nothing landed, so any group of the page that brings the parent back has landed — which
 /// `resolve_parent` then finds, and this is never reached.
 ///
 /// A peer moves a card into a pile deleted here. On the peer the card is in that pile when the
@@ -1205,9 +1254,15 @@ fn gone(
 /// **A folder goes too, and the rows filed in it are re-homed first**, by the delete arm's own
 /// merge ([`rehome`]) and for its reasons: whatever is still filed there once the page's re-filing
 /// has landed is merged at the root one row at a time before the `DELETE`, whose `SET NULL` then
-/// has nothing to act on. The delete arm waits for its retry on its own account; this one needs no
-/// wait of its own, because it only ever runs on a `Decide` pass — it had one until the whole moot
-/// decision moved to the retry, and two dragged-copy tests pin that the wait still happens
+/// has nothing to act on. **It is a clearing delete like the delete arm's, and waits as that one
+/// does**: while rows are still filed in the folder it decides only on a `Clear` pass, which
+/// follows a `Decide` pass on which nothing landed. A `Decide` pass alone was not late enough — its
+/// own decisions land groups, a deck written without its gone folder and then the deck's group,
+/// and a copy the sender moved out of this folder into such a group was re-homed here before its
+/// move came round later in that pass
+/// (`a_copy_moved_into_a_late_decks_group_out_of_a_moot_binder_over_a_…_root_twin_lands_there`).
+/// The copies the page's own ordinary re-filing moves out land before any deciding pass, which two
+/// dragged-copy tests pin
 /// (`a_copy_dragged_onto_a_…_root_twin_out_of_a_binder_moved_under_a_deleted_one_lands_once`).
 /// **Until user schema v54 a table any capture spec names as a parent was
 /// excluded here**, and the reason was `gone`: this delete is uncaptured and is no delete in the
@@ -1238,7 +1293,8 @@ fn cascade_onto_the_row_here(
     meta: &Meta,
     g: &Group,
     p: &Parent,
-) -> Result<(), String> {
+    attempt: Attempt,
+) -> Result<bool, String> {
     let uid = &g.ops[0].uid;
     let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
     all.extend(local_history(conn, meta.table, std::slice::from_ref(uid))?);
@@ -1246,11 +1302,17 @@ fn cascade_onto_the_row_here(
     let placed = g.resolved.parents.get(p.key).map(|(_, at)| at);
     let stands = combined.parents.get(p.key).map(|(_, at)| at);
     if placed.is_none() || placed != stands {
-        return Ok(());
+        return Ok(true);
     }
     conn.execute_batch("SAVEPOINT sync_moot_row")
         .map_err(|e| e.to_string())?;
-    let done = rehome::doomed(conn, meta.table, uid)
+    let doomed = rehome::doomed(conn, meta.table, uid);
+    if !attempt.clears() && doomed.as_ref().is_ok_and(|d| !d.is_empty()) {
+        conn.execute_batch("RELEASE sync_moot_row")
+            .map_err(|e| e.to_string())?;
+        return Ok(false);
+    }
+    let done = doomed
         .and_then(|d| rehome::rehome(conn, &d))
         .and_then(|()| {
             conn.execute(
@@ -1267,7 +1329,8 @@ fn cascade_onto_the_row_here(
         Ok(()) => "RELEASE sync_moot_row",
         Err(_) => "ROLLBACK TO sync_moot_row; RELEASE sync_moot_row",
     };
-    conn.execute_batch(end).map_err(|e| e.to_string())
+    conn.execute_batch(end).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 /// Record a delete of a row this device does not hold, where `table` is one other rows are filed
@@ -1279,7 +1342,8 @@ fn cascade_onto_the_row_here(
 /// still say a parent is gone, and a child of it on a later page would otherwise wait out the
 /// bound: the delete arm's, of a parent a third device made and deleted between two of this
 /// device's pulls (spec 2026-09-27 §3.1, as amended), and the moot arm's, which runs only on a
-/// `Decide` pass, of a folder a peer made under one deleted here. `OR IGNORE`, so a second delete
+/// `Decide` or `Clear` pass, of a folder a peer made under one deleted here. `OR IGNORE`, so a
+/// second delete
 /// of one uid — a re-delivery included — writes nothing.
 fn tombstone(conn: &Connection, table: &str, uid: &str) -> Result<(), String> {
     if !capture::parent_tables().contains(&table) {
@@ -1703,9 +1767,9 @@ fn write_group<'a>(
             // absent, like a parent the op never named. A moot row this device holds goes with
             // it, as the cascade takes it on the sender ([`cascade_onto_the_row_here`]).
             //
-            // **Every decision resting on `gone` is made on a `Decide` pass, and only there** —
-            // both arms, the moot one and the absent one; the first attempt and every `Retry`
-            // pass withhold it ([`Why::DecidedOnRetry`]). `gone` answers for the page as it
+            // **Every decision resting on `gone` is made on a `Decide` or `Clear` pass, and only
+            // there** — both arms, the moot one and the absent one; the first attempt and every
+            // `Retry` pass withhold it ([`Why::DecidedOnRetry`]). `gone` answers for the page as it
             // stands, and a group of the same page can still bring the parent back: an edit made
             // on the sender after this device's delete resurrects it through add-wins, and that
             // group can sort after the child, or land only on a retry pass because it waits on a
@@ -1715,19 +1779,22 @@ fn write_group<'a>(
             // the binder. A `Decide` pass comes only after a pass on which nothing landed, so
             // every group that could bring the parent back has; `resolve_parent`, asked again at
             // the top of this loop, finds it, and the group is written like any other — only a
-            // parent still unknown and still gone reaches the arms below. It is also the moot
-            // delete's wait for the page's own re-filing, one level up. **The cost: every group
+            // parent still unknown and still gone reaches the arms below. A moot delete of a
+            // folder that still holds rows waits one pass further, for a `Clear` pass, like the
+            // delete arm's own ([`cascade_onto_the_row_here`]). **The cost: every group
             // naming a gone parent takes at least two retry passes** — one that withholds, one
             // that decides. That is a put, or a put and its delete in one page, naming the
             // parent: a bare `del` carries no parents, resolves `Resolution::None` and never
             // reaches this arm. Each pass is one more `write_group` over a parent already not
             // found, cheap beside the pull.
             Resolution::Unknown(uid) if gone(conn, p.table, &uid, deleted)? => {
-                if attempt != Attempt::Decide {
+                if !attempt.decides_gone() {
                     return Ok(Outcome::Deferred(Why::DecidedOnRetry));
                 }
                 if cascades(conn, meta.table, p)? {
-                    cascade_onto_the_row_here(conn, meta, g, p)?;
+                    if !cascade_onto_the_row_here(conn, meta, g, p, attempt)? {
+                        return Ok(Outcome::Deferred(Why::DecidedOnRetry));
+                    }
                     return Ok(Outcome::Deferred(Why::UnknownParent {
                         table: p.table,
                         uid,
@@ -1782,28 +1849,30 @@ fn write_group<'a>(
 
     if combined.deleted {
         if let Some(uid) = &existing.uid {
-            // **A delete that would clear rows out of a folder waits while anything else in the
-            // page still lands — whether or not it would collide yet — and is taken, like a gone
-            // decision, only on a deciding pass.** A folder's or a deck's `DELETE` clears the
-            // folder off every row filed beneath it (`SET NULL`), and the page takes parents
-            // first, so it runs ahead of the sender's own writes to those rows — rank 7 or 9,
-            // which a retry pass finds landed. Merging now would fold a copy the sender has itself
-            // just merged onto the root, and its `+n` for the twin would count it a second time;
-            // and a delete that collides with nothing *yet* is no safer, because the root copy it
-            // will meet may be in the same page, and re-homing onto the free grain first let that
-            // copy's insert land on the re-homed row. **Waiting one pass was not enough**: a copy
-            // the sender dragged into a folder that lands only on the first retry pass is moved
-            // there only on that pass, after this delete, and re-homing first folded it onto a
-            // root twin — its move then carried both copies into the folder, or found no row and
-            // was dropped (spec 2026-09-27 §3.3, as amended). A pass that finds nothing filed
-            // here deletes at once.
+            // **A delete that would clear rows out of a folder waits — whether or not it would
+            // collide yet — and is taken only on a `Clear` pass, the one that follows a `Decide`
+            // pass on which nothing landed.** A folder's or a deck's `DELETE` clears the folder
+            // off every row filed beneath it (`SET NULL`), and the page takes parents first, so it
+            // runs ahead of the sender's own writes to those rows — rank 7 or 9, which a retry
+            // pass finds landed. Merging now would fold a copy the sender has itself just merged
+            // onto the root, and its `+n` for the twin would count it a second time; and a delete
+            // that collides with nothing *yet* is no safer, because the root copy it will meet may
+            // be in the same page, and re-homing onto the free grain first let that copy's insert
+            // land on the re-homed row. **Waiting one pass was not enough, and neither was waiting
+            // for a `Decide` pass**: a copy the sender moved into a folder that lands only on a
+            // retry pass is moved there only on that pass, after this delete — a folder made late
+            // in the page lands on the first retry pass, and a deck's group made in a deck folder
+            // deleted here lands only on the `Decide` pass that writes its deck — and re-homing
+            // first folded it onto a root twin: its move then carried both copies into the folder,
+            // or found no row and was dropped (spec 2026-09-27 §3.3, as amended). A pass that
+            // finds nothing filed here deletes at once.
             //
             // **Never `?` from here.** A refusal — the read of the doomed rows included — rolls
             // the group back and is a row this database cannot build: dropped and recorded, or
             // held where the sender is newer. A delete that failed through `?` failed the whole
             // apply, and the same page failed it again on every pull after (spec §1.1).
             let doomed = rehome::doomed(conn, meta.table, uid);
-            if attempt != Attempt::Decide && doomed.as_ref().is_ok_and(|d| !d.is_empty()) {
+            if !attempt.clears() && doomed.as_ref().is_ok_and(|d| !d.is_empty()) {
                 rollback()?;
                 return Ok(Outcome::Deferred(Why::DecidedOnRetry));
             }

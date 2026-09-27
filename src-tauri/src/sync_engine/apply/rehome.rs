@@ -8,14 +8,17 @@
 //! `collection_folders::delete_folder` re-files one row at a time through the merge first. This
 //! is that merge on the receiving side, for the rows the page does not re-file itself.
 //!
-//! **Every delete that would clear a row waits for the page's retry, and not only one that would
-//! collide** (§3.3 as amended at Task B's review). Whether a delete collides depends on what has
-//! landed yet, and a page taken parents first has not landed the sender's own rows: a sender that
-//! made a root copy and then deleted a binder whose copy folded into it sends a delete that
-//! collides with nothing on the peer, and re-homing then put the binder's copy on the root's grain
-//! where the new copy's insert met it and added its count on top. So what [`doomed`] finds is the
-//! whole question — anything, and the delete waits — and by the retry the page's re-filing has
-//! taken what it moves and left only the rows it never mentioned for [`rehome`].
+//! **Every delete that would clear a row waits, and not only one that would collide** (§3.3 as
+//! amended at Task B's review). Whether a delete collides depends on what has landed yet, and a
+//! page taken parents first has not landed the sender's own rows: a sender that made a root copy
+//! and then deleted a binder whose copy folded into it sends a delete that collides with nothing on
+//! the peer, and re-homing then put the binder's copy on the root's grain where the new copy's
+//! insert met it and added its count on top. So what [`doomed`] finds is the whole question —
+//! anything, and the delete waits — and **the decision is taken on a `Clear` pass**, the delete
+//! arm's and the moot arm's alike: the retry pass that follows a deciding pass on which nothing
+//! landed, by which time the page's re-filing has taken what it moves — into a folder the page
+//! makes late, or a deck's group the deciding pass itself lands — and left only the rows it never
+//! mentioned for [`rehome`] (§3.3, as amended at the final review).
 //!
 //! **Every-target, like the rest of `sync_engine`**: the two merges it borrows,
 //! `collection_folders::refile_entry` and `wishlist_folders::refile_wish`, sit on the every-target
@@ -47,8 +50,8 @@ pub(super) struct Doomed {
 }
 
 impl Doomed {
-    /// Whether the delete would clear no row at all — the one kind that need not wait for the
-    /// retry, because its `SET NULL` has nothing to act on.
+    /// Whether the delete would clear no row at all — the one kind that need not wait for a
+    /// `Clear` pass, because its `SET NULL` has nothing to act on.
     pub(super) fn is_empty(&self) -> bool {
         self.collection.is_empty() && self.wishlist.is_empty()
     }
@@ -108,8 +111,8 @@ pub(super) fn doomed(conn: &Connection, table: &str, uid: &str) -> Result<Doomed
 }
 
 /// File every doomed row at the root, one at a time, through the crate's own merge — and where
-/// one folded onto a twin, give the survivor the lower of the two uids. Called on the retry, so
-/// what is left doomed by then is what the page did not re-file.
+/// one folded onto a twin, give the survivor the lower of the two uids. Called on a `Clear` pass
+/// where anything is doomed, so what is left doomed by then is what the page did not re-file.
 ///
 /// **Why the lower uid**: a row re-homed here is one the page did not mention, so its own put
 /// reaches the sender with its folder gone, the sender writes it without the folder, and

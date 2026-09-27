@@ -1682,8 +1682,9 @@ receiver ignores the key, because nothing on the wire is `deny_unknown_fields`
 
 **`apply` classifies every group it could not write**, from why — `UnknownTable`,
 `UnknownParent { table, uid }`, or `Unbuildable` carrying the constraint's own words, which were
-once discarded; a fourth, `DecidedOnRetry`, is what the first attempt and every `Retry` pass answer
-for a decision withheld until a deciding pass, and never reaches here (the table's notes) — and from
+once discarded; a fourth, `DecidedOnRetry`, is what a pass answers for a decision it withholds — a
+gone-based one until a `Decide` pass, a clearing delete until a `Clear` one — and never reaches
+here (the table's notes) — and from
 who sealed it (`apply.rs`'s `classify`, asked in this order, of the
 last answer each group gave):
 
@@ -1774,11 +1775,13 @@ last answer each group gave):
   before a later group of that page brought the parent back through add-wins, and the retry then
   built the folder under the resurrected parent — the child at the root here and in the folder on
   the peer (`a_folder_made_under_a_parent_the_same_page_brings_back_keeps_its_copy`).
-  **A folder's or a deck's moot delete needs no wait of its own**: it only ever runs on a deciding
-  pass, which follows a pass on which nothing landed, so the page's own re-filing of the rows filed
-  in it has landed, and the re-homing after these notes takes whatever is left. It had a wait of
-  its own until the whole decision moved to the retry, and two dragged-copy tests pin that the
-  wait still happens
+  **A folder's or a deck's moot delete is a clearing delete, and waits as the delete arm's does**:
+  while rows are still filed in the folder it is decided only on a `Clear` pass, and the
+  re-homing after these notes takes whatever is left then. It had a wait of its own until the whole
+  decision moved to the retry, then none — a deciding pass was taken to be late enough — and has one
+  again since the final review's second wave, because a deciding pass's own decisions can land a
+  deck's group that a copy in the folder is moving into (*Why a `Clear` pass and not the deciding
+  one*, below). Two dragged-copy tests pin the older half of the wait
   (`a_copy_dragged_onto_a_lower_root_twin_out_of_a_binder_moved_under_a_deleted_one_lands_once`
   and its `…higher_root_twin…` sibling: deleted on the first attempt, the folder re-homed a copy
   the page was itself folding, which counted it twice or deleted the survivor, by uid order).
@@ -1828,16 +1831,22 @@ last answer each group gave):
   same page, each a bare `del`, do not pay it. Each pass is one more `write_group` over a parent
   already not found — cheap beside the pull.
 - **The retry passes run to a fixed point, bounded** (`apply::run_groups`). The groups the first
-  attempt did not write are retried in page order on **two kinds of pass**: a `Retry` pass writes
-  what it can and withholds every gone-based decision, and a `Decide` pass, which runs only after a
-  pass on which nothing landed, takes them. A pass that wrote something is followed by a `Retry`;
-  one that wrote nothing but withheld a decision is followed by a `Decide`; one that did neither
-  ends the loop — and a decision is progress in its own right, so the loop goes on with `Retry`
-  passes after it. A group waiting on a parent that is unknown and not gone goes round again, every
-  other answer is final, and **only each group's last answer is classified**, so a hold is decided
-  by the page as it finally stood. **The cap is twice the page's group count plus one** and is
-  never reached: every pass that lands or decides something takes a group out of the waiting set
-  for good, and at most one pass falls between two of those. Why the loop at all: a child can be
+  attempt did not write are retried in page order on **three kinds of pass**: a `Retry` pass
+  writes what it can and withholds every gone-based decision and every clearing delete; a `Decide`
+  pass, which runs only after a `Retry` pass on which nothing landed, takes the gone-based
+  decisions and still withholds the clearing deletes; and a `Clear` pass, which runs only after a
+  `Decide` pass on which nothing landed, takes those too (the clearing-delete notes below). A pass
+  that landed or decided something is followed by a `Retry`; one that did neither but withheld a
+  decision by a `Decide` after a `Retry` and by a `Clear` after a `Decide`; a `Clear` withholds
+  nothing, and a pass that neither progressed nor withheld ends the loop — and a decision is
+  progress in its own right, so the loop goes on with `Retry` passes after it. A group waiting on a
+  parent that is unknown and not gone goes round again, every other answer is final, and **only
+  each group's last answer is classified**, so a hold is decided by the page as it finally stood.
+  **The cap is three times the page's group count plus one** and is never reached: every pass
+  that lands or decides something takes a group out of the waiting set for good, and at most two
+  passes fall between two of those — a `Retry` and a `Decide` that landed nothing, before a `Clear`
+  that either decides something or ends the loop. It was twice the count plus one until the
+  `Clear` pass came in, at the final review. Why the loop at all: a child can be
   met before the parent it waits on has been decided. `a` renames `X`, makes `Z` under a `P` this
   device deleted and moves `X` into `Z`, and `X`'s group sorts ahead of `Z`'s (its earliest op, the
   rename, is older than `Z`'s creation), so on a single retry `X` asked after `Z` before `Z` had
@@ -1847,9 +1856,9 @@ last answer each group gave):
   moot on a `Decide` pass and a later pass finds `X` under a parent that is gone, deleting it as
   `a`'s cascade did. A child whose parent is genuinely missing ends the loop on the first pass after
   the last thing moved, never at the cap (`the_retry_passes_stop_when_nothing_can_progress`, which
-  reads the pass count a test-only counter keeps). The cost is two passes for each link of the longest chain of waiting
-  groups, over only the groups still waiting; a page with nothing withheld and nothing waiting pays
-  the one retry it always paid. All the passes run inside one round of the apply, so a round that
+  reads the pass count a test-only counter keeps). The cost is up to three passes for each link of
+  the longest chain of waiting groups, over only the groups still waiting; a page with nothing
+  withheld and nothing waiting pays the one retry it always paid. All the passes run inside one round of the apply, so a round that
   is rolled back takes every pass with it.
 - **Held · newer is a hold on a possibility.** A newer sender's group this build cannot write may be
   one an upgrade can — a table it has not heard of, a `CHECK` word a rung will add — and nothing
@@ -1885,8 +1894,8 @@ test harness reproduced it (debug build). Read off the code, a wishlist folder i
 and so is a deck: its group folder goes with it (`collection_folders.deck_id` cascades) while
 `deck::delete_deck`'s re-filing into `Recently removed` is rank 7 behind the deck's rank 1 — and a
 copy filed into the folder here, concurrently, has no re-filing in the page at all. So every
-`DELETE` `apply` issues — the delete arm's, and the moot delete above, which only ever runs on a
-deciding pass — now finds first what it would clear (`sync_engine/apply/rehome.rs`'s `doomed`):
+`DELETE` `apply` issues — the delete arm's, and the moot delete above — now finds first what it
+would clear (`sync_engine/apply/rehome.rs`'s `doomed`):
 
 1. **The doomed folders.** A `collection_folders` or `wishlist_folders` row and its sub-tree, or a
    `decks` row's group folders and theirs: the three `ON DELETE CASCADE` keys into the two folder
@@ -1900,13 +1909,14 @@ deciding pass — now finds first what it would clear (`sync_engine/apply/rehome
 
 - **A first attempt with anything doomed writes nothing** and answers `Why::DecidedOnRetry` — the
   reason every decision resting on `gone` shares (the table's notes, above) — **and so does every
-  `Retry` pass on which anything is still doomed.** The group joins `run_groups`' failed list and
-  is tried again on the retry passes, after every other group in the page has had its first
-  attempt, by which time the sender's own writes to those rows — later in rank, sealed before its
-  delete — have landed, or land on a later pass. **A clearing delete, like a gone-based decision,
-  is taken only on a deciding pass**: a pass that finds nothing doomed any more deletes at once,
-  and otherwise the delete answers `DecidedOnRetry` on every pass until one follows a pass on which
-  nothing landed. The reason is **never classified**, short of the loop's cap: a withheld group is
+  `Retry` and every `Decide` pass on which anything is still doomed**, the moot arm's delete of a
+  folder included. The group joins `run_groups`' failed list and is tried again on the retry
+  passes, after every other group in the page has had its first attempt, by which time the
+  sender's own writes to those rows — later in rank, sealed before its delete — have landed, or
+  land on a later pass. **A clearing delete is taken only on a `Clear` pass**, the one that follows
+  a `Decide` pass on which nothing landed: a pass that finds nothing doomed any more deletes at
+  once, and otherwise the delete answers `DecidedOnRetry` on every pass until then. The reason is
+  **never classified**, short of the loop's cap: a withheld group is
   on every pass until it is decided, the loop ends only on a pass that withheld nothing, and only
   each group's last answer is kept. A delete that dooms nothing — any other table, or an empty
   folder — goes on the first attempt, in stamp order.
@@ -1989,6 +1999,23 @@ deciding pass — now finds first what it would clear (`sync_engine/apply/rehome
   (`a_copy_dragged_into_a_folder_the_page_makes_late_out_of_a_deleted_binder_lands_there`, both uid
   orders forced, red first against the first-attempt-only wait). Waiting through every `Retry`
   pass, the move lands on the first retry pass and `B` is deleted empty on the next.
+- **Why a `Clear` pass and not the deciding one.** The deciding pass's own decisions land groups,
+  and a group they unblock can re-file a row later in that same pass. `b` deletes a deck folder
+  `F`; `a` makes a deck `Q` in `F` — its group `G` with it — adds the card to `Q`'s list, moves `c`
+  out of binder `B` into `G` with `collection_to_deck` and deletes `B`, and a root twin `t` of
+  `c`'s printing is on both devices. On the peer nothing lands before the deciding pass: `Q` waits
+  for its `SET NULL` decision, `G` on `Q`, `B` on `c` and `c`'s move on `G`. The deciding pass
+  writes `Q` without `F`, then `G` lands — and `B`, decided on that pass as it was until the final
+  review's second wave, re-homed `c` onto `t` before `c`'s move came round: where `c`'s uid sorted
+  lower the move carried both copies into `G`, so the peer's deck owned 2 against the sender's 1,
+  and where `t`'s did the move found no row and was dropped with an `error_log` row. **The moot
+  arm's delete of a folder is the same delete and had the same flaw**: `b` deleted a binder `P` as
+  well, and `a` moved `B` under `P` in place of deleting it. Both forms, each in both uid orders,
+  are `a_copy_moved_into_a_decks_group_the_page_makes_late_lands_there`, red first against the
+  previous wave's guard; a mutation that drops either arm's wait turns exactly that arm's two red.
+  Withheld until a `Clear` pass, `B` is met again only after the move has landed on the deciding
+  pass, finds nothing doomed and goes empty, so no `Clear` pass is needed at all: three retry
+  passes for the delete arm and four for the moot one, read off the test-only counter.
 - **Not "apply deletes last"**, which would have fixed the ordering in one line and is wrong: a row
   deleted and re-added at the same grain between two pulls — a card stepped to 0 and added again, a
   pile deleted and re-made under its old name — would have its put land first, grain-match the row

@@ -154,9 +154,9 @@ stands. The delete itself goes through §3.3.
 
 *(As approved this section waited only on a collision, and only for the second attempt; the
 amendment in the bullet "Every delete that would clear rows waits" below widened it to any
-non-empty doomed set, and the final review's, the last bullet of the section, moved the decision
-from the second attempt to a deciding pass. Steps 1–2 stand; step 3 and the first two bullets are
-the record of the narrower rule.)*
+non-empty doomed set, and the final review's two, the last two bullets of the section, moved the
+decision from the second attempt to a deciding pass and then to a `Clear` pass after it. Steps
+1–2 stand; step 3 and the first two bullets are the record of the narrower rule.)*
 
 Every `DELETE` `apply` issues — `write_group`'s delete arm and the moot delete — first asks
 **whether it would clear rows out of a folder** (as approved: *whether it would drop two rows onto
@@ -230,12 +230,13 @@ from the same delete.
   which nothing else landed** (amended at the fourth fix round): the group that resurrects a parent
   can itself land only on a retry pass — a parent renamed and moved into a folder made later in the
   page — and a decision taken before it deleted a folder the sender keeps. Withheld decisions are
-  taken on the next pass that lands nothing, and the loop continues; the cap is twice the group count
-  plus one.
-- **A clearing delete, like a gone decision, is taken only on a deciding pass** *(amended at the
-  final review)*. The delete arm answers `DecidedOnRetry` on the first attempt **and on every
-  `Retry` pass** while its doomed set is non-empty; a pass that finds the set empty deletes at once,
-  and a deciding pass re-homes what is left and deletes. Waiting for the second attempt alone lost
+  taken on the next pass that lands nothing, and the loop continues; the cap was twice the group
+  count plus one, and is three times it plus one since the `Clear` pass below.
+- **A clearing delete waits through every `Retry` pass** *(amended at the final review; the next
+  bullet supersedes the pass it was then taken on)*. The delete arm answers `DecidedOnRetry` on the
+  first attempt **and on every `Retry` pass** while its doomed set is non-empty; a pass that finds
+  the set empty deletes at once, and the delete was then taken, like a gone decision, on a deciding
+  pass that re-homed what was left. Waiting for the second attempt alone lost
   a copy the sender dragged out of the binder into a folder the page itself makes: `a` makes `N`,
   then `Outer`, moves `N` into `Outer`, drags `c` from `B` into `N` and deletes `B`, so the peer
   meets `N`, `Outer`, `B` and `c`'s move, and `N` lands — and with it the move — only on the first
@@ -244,6 +245,25 @@ from the same delete.
   row and was dropped with an `error_log` row
   (`a_copy_dragged_into_a_folder_the_page_makes_late_out_of_a_deleted_binder_lands_there`, both uid
   orders, red first). Every clearing-delete test kept its outcome.
+- **A clearing delete is taken only on a `Clear` pass, a pass kind of its own** *(amended at the
+  final review's second wave)*. A deciding pass was not late enough, because its own decisions land
+  groups and one it unblocks can re-file a row later in that same pass: `b` deletes a deck folder
+  `F`, and `a` makes a deck `Q` in `F`, moves a copy `c` out of binder `B` into `Q`'s group and
+  deletes `B`. Nothing lands on the peer until the deciding pass writes `Q` without `F`; the group
+  lands after it, and `B`, decided on that pass, re-homed `c` onto its root twin before `c`'s move
+  came round — the two red shapes above again. **The moot arm's delete of a folder is the same
+  delete** (`b` deletes a binder `P` too, and `a` moves `B` under `P` in place of deleting it), and
+  waits the same way. So the loop is: `Retry` passes until one makes no progress; then a `Decide`
+  pass, which takes the moot and `SET NULL` decisions and still withholds every clearing delete;
+  back to `Retry` if it made progress, and otherwise a `Clear` pass, which takes every decision
+  left, clearing deletes included — re-homing, then deleting; back to `Retry` after a `Clear` pass
+  that made progress, and the end of the loop after one that made none. **The bound**: every pass
+  that lands or decides something takes a group out of the waiting set for good, and at most two
+  passes that do neither fall between two of those, so a page whose first attempt leaves `n` groups
+  unwritten takes at most `3n` retry passes; the cap is three times the group count plus one
+  (`a_copy_moved_into_a_decks_group_the_page_makes_late_lands_there`, both arms in both uid orders,
+  red first against the previous guard; a mutation dropping either arm's wait turns exactly that
+  arm's two red). Every existing test kept its outcome, the pass counts included.
 
 ### 3.4 Why not "apply deletes last"
 

@@ -1725,7 +1725,8 @@ record, with every measurement, is
   is `SET NULL`; an unknown table or an unbuildable row from a same or older schema is **dropped**,
   one `error_log` row (`Source::Relay`, `apply`) folded per table. **Every decision resting on
   `gone`, moot or `SET NULL`, is taken only on a retry pass that follows one on which nothing else
-  landed** (an `Attempt::Decide` pass); the first attempt and every `Retry` pass answer
+  landed** (an `Attempt::Decide` pass, or the `Attempt::Clear` pass after it); the first attempt
+  and every `Retry` pass answer
   `Why::DecidedOnRetry` and withhold it. The group that brings a parent back through add-wins can
   sort after the child or land only on a retry pass itself — a parent renamed and moved into a
   folder made later in the page — and a decision taken before it deleted a folder the sender keeps
@@ -1735,20 +1736,23 @@ record, with every measurement, is
   not pay it. **The moot arm's `sync_gone` row for a row it never held waits for the deciding pass
   too**: on the first attempt it misfiled a child at the root when the parent came back later in
   the page. **The retry passes are a bounded fixed point** (`apply::run_groups`): after a pass that
-  landed something comes a `Retry`, after one that landed nothing but withheld a decision a
-  `Decide`, and a pass that did neither ends the loop; the cap is twice the page's group count
-  plus one, and only each group's last answer is classified. A single retry held a folder moved
-  into a new folder made under a deleted parent, met before that folder was decided, and the
-  release dropped it.
-  **Every delete `apply` issues that would clear rows out of a folder waits too, and like a gone
-  decision is taken only on a `Decide` pass** — a folder's or a deck's whose doomed set (the
-  copies and wishes filed in the folders it would take) is non-empty, collision or not, answers
-  `Why::DecidedOnRetry` on the first attempt and on every `Retry` pass, never classified, and a
-  pass that finds the set empty deletes at once — **then re-homes** what is still filed there at
-  the root through `collection_folders::refile_entry` / `wishlist_folders::refile_wish`, the
-  survivor of a fold keeping the lower `sync_uid`, and deletes. Deciding on the first retry pass
-  lost a copy the sender dragged out of the binder into a folder the page makes late: that folder,
-  and the move, land only on a retry pass, and the delete re-homed the copy onto a root twin first.
+  landed or decided something comes a `Retry`; after one that did neither but withheld a decision,
+  a `Decide` if it was a `Retry` and a `Clear` if it was a `Decide`; a `Clear` withholds nothing,
+  and a pass that neither progressed nor withheld ends the loop. The cap is three times the page's
+  group count plus one (twice, until the `Clear` pass), and only each group's last answer is
+  classified. A single retry held a folder moved into a new folder made under a deleted parent,
+  met before that folder was decided, and the release dropped it.
+  **Every delete `apply` issues that would clear rows out of a folder waits longer still, and is
+  taken only on a `Clear` pass** — the delete arm's and the moot arm's alike: a folder's or a
+  deck's whose doomed set (the copies and wishes filed in the folders it would take) is non-empty,
+  collision or not, answers `Why::DecidedOnRetry` on the first attempt and on every `Retry` and
+  `Decide` pass, never classified, and a pass that finds the set empty deletes at once — **then
+  re-homes** what is still filed there at the root through `collection_folders::refile_entry` /
+  `wishlist_folders::refile_wish`, the survivor of a fold keeping the lower `sync_uid`, and
+  deletes. Deciding on the first retry pass lost a copy the sender dragged out of the binder into
+  a folder the page makes late, and deciding on the `Decide` pass lost one moved into a deck's
+  group: a deck made in a deck folder deleted here is written without it on that pass, its group
+  lands after it, and the delete re-homed the copy onto a root twin before its move came round.
   Waiting only on a collision double-counted: a new root copy and the delete of a binder whose copy
   folds into it, in one page, collide with nothing until the new copy lands, so the re-homed copy
   took the free grain and the new copy's insert added its count on top. Two `find_row` rules go
