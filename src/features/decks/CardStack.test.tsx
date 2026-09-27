@@ -11,6 +11,9 @@ import {
   TOOLTIP_PANEL_ID,
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import type { MenuItem } from "@/components/menu/types";
+import { useContextMenu } from "@/components/menu/useContextMenu";
 import { DEFAULT_ZOOM, MAX_ZOOM, MIN_ZOOM, scaled, ZOOM_STEPS } from "@/lib/cardZoom";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -37,7 +40,7 @@ import {
   stackImageHeight,
   stackLiftRoom,
 } from "./CardStack";
-import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
+import { LANDED_ATTR, SELECTED_ATTR, type DeckCardActions } from "./cardControl";
 import { deckCardSlot } from "./dnd";
 import type { TheoryPlan } from "./theoryMatch";
 import { card } from "./validation/fixtures";
@@ -615,6 +618,96 @@ describe("CardStack flip-through", () => {
  * are reading about drops back into the pile. The card pane is open on it, the deck says
  * nothing.
  */
+/**
+ * Issue #569: the card a context menu is open on stays up while the reader is in that menu.
+ *
+ * The menu is drawn at the app root, so the reader's move onto it is a `pointerleave` from the
+ * list — before the fix that scheduled the collapse, and the card the menu was about dropped back
+ * into the pile under the menu 180ms later.
+ */
+describe("CardStack and its context menu", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const tick = async (ms: number) => {
+    await act(async () => {
+      vi.advanceTimersByTime(ms);
+    });
+  };
+
+  const ITEMS: MenuItem[] = [{ kind: "action", id: "noop", label: "Do nothing", onSelect: () => {} }];
+
+  function WithMenu({ label = "Ramp" }: { label?: string }) {
+    const { menu, menuKey } = useContextMenu();
+    const actions: DeckCardActions = {
+      menu: () => ({ onContextMenu: menu(() => ITEMS), onKeyDown: menuKey(() => ITEMS) }),
+    };
+    return <CardStack cards={CARDS} label={label} currency="usd" actions={actions} />;
+  }
+
+  const mount = () =>
+    render(
+      <ContextMenuProvider>
+        <WithMenu />
+      </ContextMenuProvider>,
+    );
+
+  it("keeps the right-clicked card open while the pointer is in its menu", async () => {
+    mount();
+    arriveOn(items()[1]);
+    await tick(STACK_OPEN_DWELL_MS);
+    expect(openCard()).toBe(items()[1]);
+
+    fireEvent.contextMenu(items()[1]);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    // Out of the stack and onto the menu, which is at the app root rather than in the list.
+    leaveStack(items()[1]);
+    await tick(STACK_CLOSE_DELAY_MS * 4);
+    expect(openCards()).toHaveLength(1);
+    expect(openCard()).toBe(items()[1]);
+  });
+
+  it("holds the right-clicked card against a neighbour the pointer crosses on the way", async () => {
+    mount();
+    arriveOn(items()[1]);
+    await tick(STACK_OPEN_DWELL_MS);
+    fireEvent.contextMenu(items()[1]);
+
+    // A menu opening low on the card sends the pointer across the next card's strip.
+    crossTo(items()[1], items()[2]);
+    await tick(STACK_OPEN_DWELL_MS * 2);
+    expect(openCard()).toBe(items()[1]);
+  });
+
+  it("holds a card whose menu was opened from the keyboard", async () => {
+    mount();
+    fireEvent.keyDown(items()[0], { key: "F10", shiftKey: true });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await tick(STACK_CLOSE_DELAY_MS * 4);
+    expect(openCard()).toBe(items()[0]);
+  });
+
+  it("lets the stack collapse once the menu is gone", async () => {
+    mount();
+    arriveOn(items()[1]);
+    await tick(STACK_OPEN_DWELL_MS);
+    fireEvent.contextMenu(items()[1]);
+    leaveStack(items()[1]);
+    await tick(STACK_CLOSE_DELAY_MS * 4);
+    expect(openCard()).toBe(items()[1]);
+
+    // An outside press closes the menu and hands the caret to nobody.
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(openCard()).toBeNull();
+  });
+});
+
 describe("CardStack selection", () => {
   /** The pick is addressed the way every deck write is — by the slot, not by the printing. */
   const slotOf = (card: DeckCard) => deckCardSlot(card.categoryId, card.cardId, card.finish);

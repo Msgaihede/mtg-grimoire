@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
 import { CardChin } from "@/components/CardChin";
+import { useMenuOpener } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import {
   cardScaleVars,
@@ -384,6 +385,19 @@ export function stackLiftRoom(zoom: number = DEFAULT_ZOOM): number {
  * went, not just that it is missing.
  */
 
+/**
+ * Which card a context menu was last opened from, and the element it was opened on.
+ *
+ * The element is what makes the hold honest: the menu is the app's one menu, so "a menu is open"
+ * is not the question — "the menu that is open is this card's" is, and the provider answers it by
+ * handing out the opener it was given (`useMenuOpener`). The card is named by its `deck_cards.id`
+ * rather than its index, so a pile that re-sorts under an open menu holds the right card.
+ */
+interface MenuFrom {
+  cardId: number;
+  el: HTMLElement;
+}
+
 /** A `setTimeout` handle, as this project's DOM-only lib types one. */
 type Timer = ReturnType<typeof setTimeout>;
 
@@ -720,6 +734,13 @@ export function CardStack({
 }: CardStackProps) {
   const { openIndex, arm, openNow, release } = useFlipThrough();
   const reduced = useReducedMotion();
+  // Recorded on the way *into* a menu, in the capture phase, and never cleared: a stale entry is
+  // harmless, because it only counts while the open menu's opener is that same element.
+  const [menuFrom, setMenuFrom] = useState<MenuFrom | null>(null);
+  const menuOpener = useMenuOpener();
+  const onMenuFrom = useCallback((cardId: number, el: HTMLElement) => {
+    setMenuFrom((prev) => (prev?.cardId === cardId && prev.el === el ? prev : { cardId, el }));
+  }, []);
   if (cards.length === 0) return null;
 
   // `-1` for a pile that does not hold the picked card, which is every pile but one — folded to
@@ -731,7 +752,17 @@ export function CardStack({
     selectedSlot === null
       ? -1
       : cards.findIndex((c) => deckCardSlot(c.categoryId, c.cardId, c.finish) === selectedSlot);
-  const open = openIndex ?? (picked === -1 ? null : picked);
+  // **The card a context menu is open on outranks the pointer** (issue #569). The menu is drawn at
+  // the app root, so moving onto it is a `pointerleave` from this list and the close is scheduled
+  // like any other exit — and a pointer crossing the stack on its way to the menu arms whatever it
+  // passes. Holding the card here, rather than cancelling those timers, is what makes the menu's
+  // closing the end of the hold: the flip-through carries on underneath and simply takes over again,
+  // so a menu dismissed away from the stack collapses it and one dismissed over a card opens that.
+  const held =
+    menuFrom !== null && menuOpener === menuFrom.el
+      ? cards.findIndex((c) => c.id === menuFrom.cardId)
+      : -1;
+  const open = held !== -1 ? held : (openIndex ?? (picked === -1 ? null : picked));
 
   return (
     // `overflow-visible` and the fixed height are the two halves of one idea, and neither
@@ -768,6 +799,7 @@ export function CardStack({
           onArm={arm}
           onOpenNow={openNow}
           onRelease={release}
+          onMenuFrom={onMenuFrom}
           transition={reduced ? STILL : stackCard}
           ruleBreakText={ruleBreak(violations?.get(card.cardId))}
           theoryMark={theoryMatchMark(theoryPlan, card)}
@@ -823,6 +855,7 @@ function StackedCard({
   onArm,
   onOpenNow,
   onRelease,
+  onMenuFrom,
   transition,
   ruleBreakText,
   theoryMark,
@@ -851,6 +884,8 @@ function StackedCard({
   onArm: (index: number) => void;
   onOpenNow: (index: number) => void;
   onRelease: () => void;
+  /** A context menu is being opened on this card — see {@link MenuFrom}. */
+  onMenuFrom: (cardId: number, el: HTMLElement) => void;
   /** The reflow's tween, decided once by the stack so every card animates on the same clock. */
   transition: Transition;
   /** The sentence the `RULE BREAK` mark carries, or `null` when there is nothing wrong. */
@@ -914,6 +949,14 @@ function StackedCard({
       // controls drawn over the card are siblings of that button — Shift+F10 with the caret on
       // the stepper is still a question about this card.
       {...deckCardMenuProps(card, actions)}
+      // Capture, so the stack hears which card the menu is for before the menu's own handler runs
+      // and stops the event. The same two presses `useContextMenu`'s `menuKey` answers.
+      onContextMenuCapture={(e) => onMenuFrom(card.id, e.currentTarget)}
+      onKeyDownCapture={(e) => {
+        if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
+          onMenuFrom(card.id, e.currentTarget);
+        }
+      }}
       {...(open ? { [STACK_OPEN_ATTR]: "" } : {})}
       // The card's whole body, so a click on its data line — which is outside the button on
       // purpose — is a click on the card and not on the desk. See `CARD_BODY_ATTR`.

@@ -194,6 +194,9 @@ describe("CardModalPrintings", () => {
     // without one — so the whole of this component's contract is that the right id arrives.
     const onPick = vi.fn();
     renderList({ onPick });
+    // The list draws in the default grouping until the stored one answers, and the regroup
+    // remounts the rows — so wait for `artist`'s caption, or the click lands on a detached row.
+    await waitFor(() => expect(screen.getByText(/2 artists/)).toBeInTheDocument());
 
     await userEvent.click(await screen.findByRole("button", { name: "Show LEB · 161 · 1993" }));
 

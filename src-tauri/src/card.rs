@@ -989,11 +989,12 @@ pub const PRINTING_GROUP_BY_MODES: [&str; 4] = ["artist", "released", "price", "
 
 /// What the pane groups by when nobody has chosen.
 ///
-/// `artist` because it is the closest thing to what the list already did: the pane folded a
-/// card's printings by art identity long before there was a picker
-/// (`printings.ts`'s `groupByIllustration`), so a reader who never opens the selector gets the
-/// list they had rather than a new one on the first launch after an update.
-pub const DEFAULT_PRINTING_GROUP_BY: &str = "artist";
+/// `released`, newest first (issue #568, 2026-09-27) — the order `card_printings` already
+/// returns, and what a reader opening *All printings* expects to scan. It was `artist` until
+/// then, the pane's pre-selector folding. Only an absent or unreadable row falls back here, so a
+/// reader who picked a mode keeps it. `DEFAULT_PRINTING_GROUP_BY` in
+/// `src/features/card/printings.ts` must name the same mode.
+pub const DEFAULT_PRINTING_GROUP_BY: &str = "released";
 
 /// The `app_meta` key.
 ///
@@ -1872,8 +1873,7 @@ mod tests {
         }
     }
 
-    /// A database nobody has told groups by artist — which is what the pane's list was folded
-    /// by before the selector existed.
+    /// A database nobody has told sorts by release date (issue #568).
     #[test]
     fn a_missing_grouping_row_reads_as_the_default() {
         let conn = meta_db();
@@ -1881,7 +1881,7 @@ mod tests {
             crate::app_meta::get_app_meta(&conn, K_PRINTING_GROUP_BY),
             None
         );
-        assert_eq!(stored_group_by(&conn), "artist");
+        assert_eq!(stored_group_by(&conn), "released");
     }
 
     /// A newer build's mode must not brick an older one pointed at the same `mtg.db`, and
@@ -1895,7 +1895,7 @@ mod tests {
             crate::app_meta::set_app_meta(&conn, K_PRINTING_GROUP_BY, junk).unwrap();
             assert_eq!(
                 stored_group_by(&conn),
-                "artist",
+                DEFAULT_PRINTING_GROUP_BY,
                 "an unrecognised `{junk}` must read as the default, not fail the pane"
             );
         }
