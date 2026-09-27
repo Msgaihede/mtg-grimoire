@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
+  CircleCheck,
   Columns3Cog,
   History,
   Redo2,
@@ -55,7 +56,7 @@ import { useCardSelection } from "@/lib/useCardSelection";
 import { useDockHeight } from "@/lib/useDockHeight";
 import { useScrollPerView } from "@/lib/useScrollPerView";
 import { cn } from "@/lib/utils";
-import { newestWrite, writeFailure } from "@/lib/writes";
+import { batchWrite, handled, NO_BATCH, newestWrite, writeFailure, type Write } from "@/lib/writes";
 import {
   DECK_CARD_VARIANT,
   focusDeckGroup,
@@ -132,7 +133,7 @@ import { QuickUnwishDialog } from "./QuickUnwishDialog";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { LabelsDialog } from "./LabelsDialog";
-import { TheoryDiffDialog } from "./TheoryDiffDialog";
+import { TheoryDiffDialog, wishesSentNote, type WishesSent } from "./TheoryDiffDialog";
 import { theoryMatchPlan, theoryProgress } from "./theoryMatch";
 import {
   pullPlanQuery,
@@ -1561,7 +1562,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // family leaves the docked panel's add out too.
   const bannerWrites =
     row?.tokensOpen === true ? writes : ([...writes, ...deckTokens.writes] as const);
-  const bannerFailure = writeFailure(bannerWrites) ?? undo.error ?? pressReadFailure;
+  /**
+   * **The last batch of card writes, as one write** — a multi-card drop or Delete over a picked
+   * set (issue #553). Each card in a batch is its own call on the same observer, so the observer
+   * only ever remembers the last card, and a refusal in the middle of a batch that ended well
+   * was said nowhere. {@link reportBatch} gathers every outcome into this record; `batchWrite`'s
+   * doc has the rest. **Last in both lists**, so a tie with its own final member goes to it.
+   */
+  const [lastBatch, setLastBatch] = useState<Write>(NO_BATCH);
+  const bannerFailure =
+    writeFailure([...bannerWrites, lastBatch]) ?? undo.error ?? pressReadFailure;
 
   /**
    * What to say when a re-file moved nothing — and **nothing at all when it moved something**,
@@ -1609,6 +1619,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [refileAnswer, refileNote, resetRefile]);
 
   /**
+   * What the Compare dialog's bulk send wrote — **said here, because the dialog closes on it**
+   * (issue #553). Pressing it twice wishes for the same copies twice, which is `add_wish`'s fold
+   * and was kept on purpose, so what the press owed the reader instead was an unmistakable
+   * "that worked": the dialog goes, and this line says what went where. A hint about one press,
+   * so it clears itself on the refile note's clock; a fresh answer is a fresh object and restarts
+   * it.
+   */
+  const [compareSent, setCompareSent] = useState<WishesSent | null>(null);
+  useEffect(() => {
+    if (compareSent === null) return;
+    const timer = setTimeout(() => setCompareSent(null), REFILE_NOTE_MS);
+    return () => clearTimeout(timer);
+  }, [compareSent]);
+
+  /**
    * The columns and the move targets: **every category the deck has, in `sortOrder`.**
    *
    * There used to be a filter *here*, driven by the seeded format spec — the sideboard dropped
@@ -1647,11 +1672,40 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * columns look like must not outlive the write that failed. The banner says why:
    * `reorderCategories` is in `writes` above.
    *
+   * **And it is dropped once the deck has been re-read after the write went through** (issue
+   * #553). It used to stand for as long as the server's list held the same number of piles, which
+   * is to say for the rest of the visit: a Ctrl+Z that put the old order back, a reorder in
+   * `CategoriesDialog`, a sync — every one changed `deck.categories` and none of them was drawn,
+   * so undoing a pile drag read as a key that did nothing. Not dropped *at* the answer, though:
+   * the write's `onSuccess` only starts the re-read, and a desk that fell back to the list it
+   * still holds would snap the pile home for the length of that round trip and then move it
+   * again. So a settled write records **which server list it settled over** (`settledOver`), and
+   * the preview stands until a different one arrives — the re-read carrying the new order, or
+   * anything after it.
+   *
    * Declared in front of the memo that reads it rather than beside the callback that writes it,
    * because a `useMemo` runs during the render it is written in and a `const` below it is a
    * temporal-dead-zone throw.
    */
-  const [localCategoryOrder, setLocalCategoryOrder] = useState<number[] | null>(null);
+  const [localCategoryOrder, setLocalCategoryOrder] = useState<{
+    ids: number[];
+    /** The server's list when the write answered, or `null` while it is still out. */
+    settledOver: typeof deck.categories | null;
+  } | null>(null);
+  // Cleared during render — React's own answer for state that has to follow a prop, and what
+  // keeps the superseded order from being drawn for one frame first.
+  if (
+    localCategoryOrder !== null &&
+    localCategoryOrder.settledOver !== null &&
+    localCategoryOrder.settledOver !== deck.categories
+  ) {
+    setLocalCategoryOrder(null);
+  }
+  /** The server's list as of the last commit, for the write's answer to record — see above. */
+  const serverCategoriesRef = useRef(deck.categories);
+  useEffect(() => {
+    serverCategoriesRef.current = deck.categories;
+  }, [deck.categories]);
 
   const categories = useMemo(() => {
     const rows = deck.categories;
@@ -1662,7 +1716,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     // nothing on the desk at all. Every other consumer of this array (the `Move to` submenu,
     // deck settings' "Add cards to", the quick zones) reads it in array order and gets the same
     // answer either way.
-    const picked = localCategoryOrder.flatMap((id, index) => {
+    const picked = localCategoryOrder.ids.flatMap((id, index) => {
       const found = byId.get(id);
       return found ? [{ ...found, sortOrder: index }] : [];
     });
@@ -1687,7 +1741,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * pile's drop-target registration, and one that changed with the deck would re-register a
    * dozen targets on every write — including the one this makes.
    */
-  const reorderCategories = meta.reorderCategories.mutate;
+  const reorderCategories = meta.reorderCategories.mutateAsync;
   const categoriesRef = useRef(categories);
   useEffect(() => {
     categoriesRef.current = categories;
@@ -1700,8 +1754,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // of the list, which is a whole reorder sent to say nothing.
       if (to < 0 || !ids.includes(categoryId)) return;
       const next = movedTo(ids, categoryId, to);
-      setLocalCategoryOrder(next);
-      reorderCategories(next, { onError: () => setLocalCategoryOrder(null) });
+      setLocalCategoryOrder({ ids: next, settledOver: null });
+      // Each arm touches the preview only while it is still **this** drag's — a second drag made
+      // before the first answered owns the desk now, and the first's answer is not about it.
+      void reorderCategories(next).then(
+        () =>
+          setLocalCategoryOrder((was) =>
+            was?.ids === next ? { ids: next, settledOver: serverCategoriesRef.current } : was,
+          ),
+        () => setLocalCategoryOrder((was) => (was?.ids === next ? null : was)),
+      );
     },
     [reorderCategories],
   );
@@ -2134,6 +2196,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     deck.missingToWishlist,
     deck.swapPrinting,
     ...deckTokens.writes,
+    // A batch whose last card went through and whose second did not is a refusal the deck has to
+    // be re-read after — the observers above would all read as a success.
+    lastBatch,
   ]);
   const failedAt = lastOfAny.isError ? lastOfAny.submittedAt : 0;
   useEffect(() => {
@@ -2590,16 +2655,25 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // the other two are a drop's alone now that the `Move…` select is gone, and the addressing is
   // still the drop's rather than the control's for the day one of them grows a control again.
   //
-  // Each takes the mutation's `mutate` rather than the mutation: TanStack hands back a fresh
-  // result object on every render, so a callback that depended on the whole thing would have a
-  // new identity every render — and these are what the drop targets are registered with, so
-  // that would be every group unregistering and re-registering itself in the middle of a drag.
-  // `mutate` is stable for the life of the component, which makes the stability
+  // Each takes the mutation's `mutateAsync` rather than the mutation: TanStack hands back a
+  // fresh result object on every render, so a callback that depended on the whole thing would
+  // have a new identity every render — and these are what the drop targets are registered with,
+  // so that would be every group unregistering and re-registering itself in the middle of a
+  // drag. `mutateAsync` is stable for the life of the component, which makes the stability
   // `useCategoryDrop` asks for true rather than merely intended.
-  const writeQuantity = deck.setQuantity.mutate;
-  const writeMove = deck.moveCard.mutate;
-  const writeAdd = deck.addCard.mutate;
-  const writeLabel = deck.setLabel.mutate;
+  //
+  // **`mutateAsync` and not `mutate`, because a drop can carry several cards** (issue #553). A
+  // `mutate` call's own callbacks belong to the *observer*, and the next call on the same one
+  // replaces them — so a four-card drop ran the landed glow and the caret hand-off for the
+  // fourth card only, and heard about the fourth card's refusal only. Each `mutateAsync` call
+  // answers with a promise of its own, and a `.then` on it is that card's and nobody else's.
+  // Every one is passed through {@link handled}, so a caller that ignores the answer — the
+  // stepper, a menu row — leaves no unhandled rejection behind: the observer's state still
+  // carries the refusal to the banner exactly as `mutate` did.
+  const writeQuantity = deck.setQuantity.mutateAsync;
+  const writeMove = deck.moveCard.mutateAsync;
+  const writeAdd = deck.addCard.mutateAsync;
+  const writeLabel = deck.setLabel.mutateAsync;
   const writeFinish = deck.setCardFinish.mutate;
 
   /**
@@ -2629,19 +2703,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
        * left to say on the way past. See {@link DeckSearchPanelProps}.
        */
     ) =>
-      writeAdd(
-        categoryId === AUTO_CATEGORY
-          ? { cardId, typeLine: typeLine ?? null, quantity: 1 }
-          : { cardId, categoryId, quantity: 1 },
-        // **`change.id` is the `deck_cards` row this write landed in**, which the editor marks
-        // for five seconds so the reader can find it in a deck they are not looking at. It was
-        // tested against a `NO_DECK_ROW` floor until 2026-08-25: the `own` add went through
-        // `collection_to_deck`, whose `deckCardId` is nullable on the wire, and a `null` arrived
-        // here as `0` — a row id no card has, armed against a timer. Every add is `deck_add_card`
-        // now, and **the floor is back for a second reason** (token stacks, spec §4.6): a token
-        // printing is filed as a token entry and answers `id: 0`, {@link NO_DECK_CARD}, which
-        // `markAdded` skips.
-        { onSuccess: (change) => markAdded(change.id) },
+      handled(
+        writeAdd(
+          categoryId === AUTO_CATEGORY
+            ? { cardId, typeLine: typeLine ?? null, quantity: 1 }
+            : { cardId, categoryId, quantity: 1 },
+        ).then(
+          // **`change.id` is the `deck_cards` row this write landed in**, which the editor marks
+          // for five seconds so the reader can find it in a deck they are not looking at. It was
+          // tested against a `NO_DECK_ROW` floor until 2026-08-25: the `own` add went through
+          // `collection_to_deck`, whose `deckCardId` is nullable on the wire, and a `null` arrived
+          // here as `0` — a row id no card has, armed against a timer. Every add is `deck_add_card`
+          // now, and **the floor is back for a second reason** (token stacks, spec §4.6): a token
+          // printing is filed as a token entry and answers `id: 0`, {@link NO_DECK_CARD}, which
+          // `markAdded` skips.
+          (change) => markAdded(change.id),
+        ),
       ),
     [writeAdd, markAdded],
   );
@@ -2762,29 +2839,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       const row = cards.find(
         (c) => c.cardId === cardId && c.categoryId === categoryId && c.finish === finish,
       );
-      writeQuantity({
-        cardId,
-        categoryId,
-        finish,
-        quantity,
-        held: row ? { deckCardId: row.id, quantity: row.quantity } : undefined,
-      });
+      return handled(
+        writeQuantity({
+          cardId,
+          categoryId,
+          finish,
+          quantity,
+          held: row ? { deckCardId: row.id, quantity: row.quantity } : undefined,
+        }),
+      );
     },
     [cards, writeQuantity, handOffTo],
   );
 
   const moveTo = useCallback(
-    (cardId: string, from: number, to: number, finish: DeckFinish) => {
-      writeMove(
-        { cardId, from, to, finish },
-        {
-          // The dropped card has left the pile it was in, so the caret goes to where it landed
-          // — which announces the category it is now in. The same hand-off the stepper's zero
-          // makes: it is the card that unmounts either way, and focus follows it.
-          onSuccess: () => handOffTo(to),
-        },
-      );
-    },
+    (cardId: string, from: number, to: number, finish: DeckFinish) =>
+      handled(
+        // The dropped card has left the pile it was in, so the caret goes to where it landed
+        // — which announces the category it is now in. The same hand-off the stepper's zero
+        // makes: it is the card that unmounts either way, and focus follows it.
+        writeMove({ cardId, from, to, finish }).then(() => handOffTo(to)),
+      ),
     [writeMove, handOffTo],
   );
 
@@ -2814,7 +2889,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * started in (a filter, a refetch, another surface's delete), and nothing about failing to
    * re-file a card that is gone is worth a sentence.
    */
-  const refileWrite = deck.refileCard.mutate;
+  const refileWrite = deck.refileCard.mutateAsync;
   const refile = useCallback(
     (cardId: string, from: number, finish: DeckFinish) => {
       // The finish is part of the `find` for the reason it is part of the write: a pile can
@@ -2822,18 +2897,23 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       const card = cards.find(
         (c) => c.cardId === cardId && c.categoryId === from && c.finish === finish,
       );
-      if (!card) return;
-      refileWrite(
-        { cardId, from, finish, typeLine: card.typeLine, categoryName: card.categoryName },
-        {
+      if (!card) return Promise.resolve();
+      return handled(
+        refileWrite({
+          cardId,
+          from,
+          finish,
+          typeLine: card.typeLine,
+          categoryName: card.categoryName,
+        }).then(
           // The caret follows the card to the pile that now has it, which announces that pile's
           // name — the same hand-off a drag onto a heading makes, and the only feedback a move
           // needs. When nothing moved there is nowhere to send it, and the sentence below is
           // what says so instead.
-          onSuccess: ({ moved, categoryId }) => {
+          ({ moved, categoryId }) => {
             if (moved && categoryId !== null) handOffTo(categoryId);
           },
-        },
+        ),
       );
     },
     [cards, refileWrite, handOffTo],
@@ -2848,26 +2928,44 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * a reader can do, only to how fast they can do it.
    */
   const applyDrop = useCallback(
-    (write: DeckWrite) => {
-      if (write.write === "add") addTo(write.cardId, write.categoryId);
+    (write: DeckWrite): Promise<unknown> => {
+      if (write.write === "add") return addTo(write.cardId, write.categoryId);
       // The quick zones' `Auto`, and the same call the toolbar's `Add to → Auto (by what it
       // does)` makes: the type line goes and the pile does not, because `useDeck.addCard` names
       // it. The one drop in this editor that points at no column — see {@link QuickZones}.
-      else if (write.write === "auto-add") addTo(write.cardId, AUTO_CATEGORY, write.typeLine);
+      if (write.write === "auto-add") return addTo(write.cardId, AUTO_CATEGORY, write.typeLine);
       // The same zone for a card the deck already holds, and the same rule — see {@link refile}.
-      else if (write.write === "auto-refile") refile(write.cardId, write.from, write.finish);
-      else if (write.write === "move") moveTo(write.cardId, write.from, write.to, write.finish);
-      else setQuantityAt(write.cardId, write.categoryId, write.finish, 0);
+      if (write.write === "auto-refile") return refile(write.cardId, write.from, write.finish);
+      if (write.write === "move") return moveTo(write.cardId, write.from, write.to, write.finish);
+      return setQuantityAt(write.cardId, write.categoryId, write.finish, 0);
     },
     [addTo, moveTo, refile, setQuantityAt],
   );
+
+  /**
+   * Wait out a batch of card writes and file **every** outcome as one {@link lastBatch}
+   * (issue #553) — the multi-card drop's and Delete's.
+   *
+   * A batch of one is not a batch: its only call is also its observer's newest, so the observer
+   * already tells the banner everything and a second record would be the same sentence twice.
+   *
+   * Two stamps, the moment it was fired and the moment it settled — `batchWrite` says which one
+   * it keeps, and why a refusal cannot keep the first.
+   */
+  const reportBatch = useCallback((presses: readonly Promise<unknown>[]) => {
+    if (presses.length < 2) return;
+    const firedAt = Date.now();
+    void Promise.allSettled(presses).then((results) =>
+      setLastBatch(batchWrite(results, firedAt, Date.now())),
+    );
+  }, [setLastBatch]);
 
   /**
    * A whole drop — **every card it was carrying** (issue #214), and the picked set stood down
    * afterwards.
    *
    * One write per card rather than a batched command, and that is a cost this feature accepts
-   * rather than hides. Each `mutate` is its own `deck_audit` row, so a four-card move is four
+   * rather than hides. Each call is its own `deck_audit` row, so a four-card move is four
    * entries and four presses of Ctrl+Z to reverse. Batching would be a Rust change to `deck_undo`
    * — a grain the audit log does not have — and it is worth having the gesture before the tidier
    * undo rather than neither.
@@ -2879,10 +2977,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const applyDrops = useCallback(
     (writes: DeckWrite[]) => {
-      for (const write of writes) applyDrop(write);
+      reportBatch(writes.map(applyDrop));
       if (writes.length > 1) setCardSelection(null);
     },
-    [applyDrop, setCardSelection],
+    [applyDrop, reportBatch, setCardSelection],
   );
 
   /**
@@ -3009,12 +3107,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
   const setCardLabel = useCallback(
     (card: DeckCard, labelId: number | null) =>
-      writeLabel({
-        cardId: card.cardId,
-        categoryId: card.categoryId,
-        finish: card.finish,
-        labelId,
-      }),
+      handled(
+        writeLabel({
+          cardId: card.cardId,
+          categoryId: card.categoryId,
+          finish: card.finish,
+          labelId,
+        }),
+      ),
     [writeLabel],
   );
 
@@ -3135,6 +3235,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           labels: deck.labels,
           addLabel: openAddLabel,
           remove: removeCard,
+          // The plural rows' outcomes, into the same record a multi-card drop and Delete use.
+          batch: reportBatch,
           // **The `Collection ▸` submenu's three rows** (2026-09-03, issue #350). All three are
           // callbacks and none of them is a mutation, which is this builder's contract — and
           // here it is load-bearing rather than ceremonial: two of the three *read* before they
@@ -3208,6 +3310,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       setFinishAt,
       openAddLabel,
       removeCard,
+      reportBatch,
       tracks,
       quickAdd,
       quickAddAndUnwish,
@@ -3937,6 +4040,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * reason: which bindings yield to a caret is a fact about each binding, not about matching a
    * chord. **A layer takes it too**: with a dialog or a confirmation open the deck is behind a
    * scrim, and a key that reached past it would act on a surface the reader cannot see.
+   * **And so does a modal this editor does not own** (issue #553): `AllPrintingsDialog` and
+   * `CardDetailModal` are mounted at `App` level, so `layer` knows nothing about them — and
+   * `openAllPrintings` leaves the picked set standing, so a Delete pressed on a printing tile cut
+   * two picked cards from behind the scrim with no confirmation. The test is `AppShell`'s own
+   * for `Ctrl+1…9`: any `[aria-modal="true"]` in the document, which every `Dialog` carries and
+   * which answers for a modal that is added later without anybody remembering this handler.
    * And **nothing is written for a set of one**, which is the
    * deliberate asymmetry — one card has a stepper, a menu row and a tray, all of them visible, and
    * a bare Delete that silently removed whatever was last clicked is a keystroke away from a deck
@@ -3948,7 +4057,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * remove mutation and this is not the place to add one.
    *
    * **What it costs is one press of Ctrl+Z per card**, because `deck_audit` has a row per write.
-   * Named rather than hidden: batching is a Rust change to `deck_undo`'s grain.
+   * Named rather than hidden: batching is a Rust change to `deck_undo`'s grain. What it no longer
+   * costs is a refusal: every card's outcome goes to {@link reportBatch}, so a cut the backend
+   * refused for the second card of four is said even when the fourth went through.
    */
   const layerOpen = layer !== null;
   useEffect(() => {
@@ -3956,15 +4067,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     const onKey = (event: KeyboardEvent) => {
       if (!matchesShortcut(REMOVE, event)) return;
       if (isTextField(event.target)) return;
+      if (document.querySelector('[aria-modal="true"]') !== null) return;
       const held = pickedRef.current;
       if (held.length < 2) return;
       event.preventDefault();
-      for (const card of held) setQuantityAt(card.cardId, card.categoryId, card.finish, 0);
+      reportBatch(held.map((card) => setQuantityAt(card.cardId, card.categoryId, card.finish, 0)));
       setCardSelection(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [layerOpen, setQuantityAt, setCardSelection]);
+  }, [layerOpen, setQuantityAt, reportBatch, setCardSelection]);
 
   /**
    * A press on a deck card, with the chords it was holding — the seam every view calls before it
@@ -5100,6 +5212,32 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         )}
       </AnimatePresence>
 
+      {/* The Compare dialog's bulk send, after the dialog has closed on it — see
+          {@link compareSent}. **Two elements for one sentence**, and the split is the point: a
+          live region that arrives with its words already inside announces nothing, so the
+          region is always mounted (and `sr-only`, so it costs the column no height while it is
+          empty) and the visible line is `aria-hidden` so it is not read a second time. Accent and
+          a check when something was wished for, the dim voice when nothing was — the stats
+          band's own pair for its inline press. */}
+      <p role="status" className="sr-only">
+        {compareSent ? wishesSentNote(compareSent) : ""}
+      </p>
+      <AnimatePresence initial={false}>
+        {compareSent && (
+          <motion.div {...statusLine} className="shrink-0 overflow-hidden" aria-hidden="true">
+            <p
+              className={cn(
+                "flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-2 text-xs",
+                compareSent.wishes > 0 ? "text-accent" : "text-dim",
+              )}
+            >
+              {compareSent.wishes > 0 && <CircleCheck className="size-3.5 shrink-0" />}
+              {wishesSentNote(compareSent)}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* A collection or wishlist add the reader made from a card's right-click, refused.
           Separate from the banner above because that one speaks for writes to **this deck** and
           this one is about the binder — and it has to be drawn *somewhere*, because the menu
@@ -5587,6 +5725,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         open={layer?.kind === "theoryDiff"}
         onDismiss={dismiss}
         onClose={close}
+        onSent={setCompareSent}
       />
       <DeckSettingsDialog
         deckId={deckId}
