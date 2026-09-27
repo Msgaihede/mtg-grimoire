@@ -295,6 +295,7 @@ describe("marks on the piles the reader switched off", () => {
         message:
           "Deadly Rollick's color identity (BG) is outside your commander's (W).",
         cardIds: ["c-Deadly Rollick"],
+        rowIds: [parked.id],
       },
     ]);
     expect(validateDeck(deck, spec("commander"))).toEqual([]);
@@ -318,6 +319,7 @@ describe("marks on the piles the reader switched off", () => {
         code: "banned",
         message: "Sol Ring is banned in Modern.",
         cardIds: ["c-Sol Ring"],
+        rowIds: [parked.id],
       },
     ]);
     expect(validateDeck(deck, spec("modern"))).toEqual([]);
@@ -378,6 +380,34 @@ describe("marks on the piles the reader switched off", () => {
     );
 
     expect(marks.flatMap((issue) => issue.cardIds ?? [])).toEqual(["c-Deadly Rollick"]);
+  });
+
+  /**
+   * Issue #554, and the other side of the switch: a Maybeboard switched **on** is part of the
+   * deck, so the deck itself — not only the marks — holds its card to the commander's identity.
+   * The identity pass read `main | side` while `SIZE_KINDS` read `maybe` too, so this card was
+   * counted toward the hundred and judged by nothing.
+   */
+  it("holds a switched-on Maybeboard card to the commander's colour identity", () => {
+    const active = card({
+      name: "Deadly Rollick",
+      categoryKind: "maybe",
+      categoryActive: true,
+      manaCost: "{3}{B}",
+      cmc: 4,
+      colors: "B",
+      colorIdentity: "BG",
+    });
+
+    expect(validateDeck([whiteCommander(), plains(98), active], spec("commander"))).toEqual([
+      {
+        severity: "error",
+        code: "color-identity",
+        message:
+          "Deadly Rollick's color identity (BG) is outside your commander's (W).",
+        cardIds: ["c-Deadly Rollick"],
+      },
+    ]);
   });
 
   /**
@@ -775,6 +805,38 @@ describe("legality (per printing — TRAP B)", () => {
         message:
           "Ancient Tomb is not in the card database, so it was not checked against Modern's rules.",
         cardIds: ["c-Ancient Tomb"],
+      },
+    ]);
+  });
+
+  /**
+   * Issue #554: an orphan's `typeLine` is null, so `isBasicLand` could not see a basic, and
+   * twenty orphaned Islands were held to Modern's four — "up to 4 copies of Island" under a
+   * warning saying the same rows "were not checked". A group made only of orphans is not counted
+   * at all now, and the warning is the whole answer.
+   */
+  it("does not count a group of orphans against the copy limit", () => {
+    const orphanedIsland = card({
+      name: "Island",
+      quantity: 20,
+      oracleId: null,
+      manaCost: null,
+      cmc: null,
+      typeLine: null,
+      oracleText: null,
+      colors: null,
+      colorIdentity: null,
+      legalities: null,
+      layout: null,
+      rarity: null,
+    });
+
+    expect(validateDeck(padTo(60, [orphanedIsland]), spec("modern"))).toEqual([
+      {
+        severity: "warning",
+        code: "orphan",
+        message: "Island is not in the card database, so it was not checked against Modern's rules.",
+        cardIds: ["c-Island"],
       },
     ]);
   });

@@ -190,10 +190,11 @@ export function buildCategoryMenu(category: DeckCategory, deps: CategoryMenuDeps
  * findable — the reader who has cleared this pile before looks for the row in the place it was.
  * `disabled` becomes `aria-disabled`, so it stays in the tab order and stays readable.
  *
- * The count is `cardCount`, **the variant on screen**, and never `cardCountAllVariants` — the
- * exact reverse of what the delete confirmation quotes, because a delete cascades through both
- * lists and a clear is scoped to one. On a theory-enabled deck the two numbers differ, and this
- * is the one that answers "is there anything in the column I am looking at".
+ * The count is `cardCount`, which answers "is there anything in the column I am looking at".
+ * Since user schema v53 (issue #561) a pile belongs to one list, so that is every copy the pile
+ * holds — the same number the delete confirmation quotes. Until then a pile was shared, and this
+ * row had to be careful to read the list on screen rather than an all-lists count that could
+ * leave it enabled over a column holding nothing.
  */
 function clearItem(category: DeckCategory, deps: CategoryMenuDeps): MenuItem {
   if (category.cardCount === 0) {

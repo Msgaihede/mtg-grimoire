@@ -851,3 +851,49 @@ describe("a companion in a Commander deck", () => {
     expect(validateDeck(deck, spec("commander"))).toEqual([]);
   });
 });
+
+/**
+ * Issue #554: `SIZE_KINDS` gained `maybe` so a switched-on Maybeboard counts toward the deck's
+ * size, and the starting deck a companion's condition reads stayed `main | commander` — so the
+ * same card was in the deck for the size rule and out of it for Lurrus and Yorion. The starting
+ * deck is `SIZE_KINDS` now, and each test below would pass against the old list only by the
+ * condition missing the Maybeboard's card.
+ */
+describe("a switched-on Maybeboard is part of the starting deck", () => {
+  const activeMaybe = (overrides: Partial<CardFacts>): CardFacts =>
+    card({ ...overrides, categoryKind: "maybe", categoryActive: true });
+
+  it("holds an active Maybeboard's permanent to Lurrus", () => {
+    const study = activeMaybe({
+      name: "Rhystic Study",
+      manaCost: "{2}{U}",
+      cmc: 3,
+      typeLine: "Enchantment",
+    });
+
+    expect(messages("Lurrus of the Dream-Den", [islands(59), study])).toEqual([
+      "Lurrus of the Dream-Den needs every permanent card in your deck to have mana value 2 or " +
+        "less; Rhystic Study does not.",
+    ]);
+  });
+
+  it("counts an active Maybeboard toward Yorion's minimum", () => {
+    expect(messages("Yorion, Sky Nomad", [islands(79), activeMaybe({ name: "Opt" })])).toEqual([]);
+  });
+
+  /** The switch still decides first: a Maybeboard switched off is out of the deck the engine
+   *  hands `companions.ts`, so its expensive permanent is nothing Lurrus is asked about. */
+  it("still leaves a switched-off Maybeboard out", () => {
+    const parked = card({
+      name: "Rhystic Study",
+      categoryKind: "maybe",
+      categoryActive: false,
+      manaCost: "{2}{U}",
+      cmc: 3,
+      typeLine: "Enchantment",
+    });
+    const deck = [islands(60), parked, companionCard("Lurrus of the Dream-Den")];
+
+    expect(validateDeck(deck, spec("modern"))).toEqual([]);
+  });
+});

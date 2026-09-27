@@ -9,11 +9,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the split itself; the user side is what
   has grown since, and this line carried the user figure and said eighteen until user schema v43,
   twenty-seven until v44, twenty-eight until v45, twenty-nine until v46, thirty until v52 and
-  thirty-one until v53 — a count in prose that no build checks, which is the rot this file's own
+  thirty-one until v54 — a count in prose that no build checks, which is the rot this file's own
   header warns about, so it carries none now. Both halves are
   `grep -c '^\s*("[a-z_]*", Side::User),'` and the same with `Side::Corpus` over
-  `schema.rs` — re-run 2026-09-27 at v53: **32** and **25**; **a bare `grep -c 'Side::User'`
-  over-counts** — 37 against 32 at v53, because `mod tests` matches the enum by name five more
+  `schema.rs` — re-run 2026-09-27 at v54: **32** and **25**; **a bare `grep -c 'Side::User'`
+  over-counts** — 37 against 32 at v54, because `mod tests` matches the enum by name five more
   times (this said four until v52's stray-table test began asking the registry). Count them,
   never add to a number written here; `src/lib/userTables.json` holds the same list and a Rust
   test holds the two equal.)
@@ -1062,6 +1062,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `duplicate_deck`, like it — **and unlike it, on a history row and on
   `deck_undo::DECK_FIELDS`**, because it is an arrangement the reader drags rather than a setting.
   [decks-storage.md](decks-storage.md) has the rest.
+  **v53 gives `deck_categories` a `variant`, so a deck's Theory and Actual lists stop sharing one
+  pile set** (2026-09-27, issue [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561)). One
+  transaction: the six capture triggers on `deck_categories` and `deck_cards` dropped first (v43's
+  move), `variant TEXT NOT NULL DEFAULT 'live'` added with no `CHECK`, both unique indexes rebuilt
+  as `(deck_id, variant, name)` and `(deck_id, variant, kind) WHERE kind <> 'main'`, and
+  `schema::split_theory_piles` — every pile of every deck with a plan cloned into the theory list
+  under a uid derived from the original's, the deck's theory cards repointed, and those decks'
+  undo journals cleared. `split::convert` runs the same function. The net for a group that did not
+  climb together, and the rule that it should: `src-tauri/CLAUDE.md`'s v53 entry and
+  [sync.md](sync.md) *A pile's list is on the wire since user schema v53*.
   **v52 makes a token's printings _entries_, and replaces `decks.token_stack` with
   `decks.token_mode`** (2026-09-26,
   [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §4). One
@@ -1192,7 +1202,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   re-pick, both mixed-version stalls, the reversion the gate closes and the per-pick savepoint by
   `deck_tokens.rs`'.
   [decks-storage.md](decks-storage.md) has the entries, the commands and the reconcile.
-  **v53 adds `sync_gone`, one tombstone per deleted row of a table other rows are filed under**
+  **v54 adds `sync_gone`, one tombstone per deleted row of a table other rows are filed under**
   (2026-09-27,
   [folder deletes across devices](../superpowers/specs/2026-09-27-folder-deletes-across-devices-design.md)
   §3.1). A tombstone here is a row saying a parent went — not the `del` op in `sync_ops` that
@@ -1215,16 +1225,19 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   because a rung is history while live code derives the list — so nothing `gone` answered the day
   before stops answering. ⚠️ **A delete applied from a peer before the upgrade is not recovered**:
   it ran behind the guard and recorded nothing anywhere. It owes its `USER_SCHEMA_SQL` lines and
-  **`UNDO_V53`**, for `UNDO_V37`'s loud reason (a bare `CREATE TABLE`), at the head of every
-  rewind chain `UNDO_V52` headed. ⚠️ **`UNDO_V53` drops the table and leaves the `sync_gone_*`
+  **`UNDO_V54`**, for `UNDO_V37`'s loud reason (a bare `CREATE TABLE`), at the head of every
+  rewind chain, ahead of `UNDO_V53`. ⚠️ **`UNDO_V54` drops the table and leaves the `sync_gone_*`
   triggers standing**, because they belong to the parent tables: a fixture that ran
   `capture::install` and then rewinds finds a delete from any of those tables, and a `DROP COLUMN`
   or `RENAME` on one, refused with `no such table: main.sync_gone` (measured against 3.53.0) — so
-  such a fixture may rewind v53 and nothing below it. No production path drops the table. **v53 is
-  the number token stacks PR 3 had planned** for a new `collection_folders.kind` word; that PR was
-  dropped the same day. [sync.md](sync.md) *Held while it can resolve, skipped when it cannot* has
-  what reads the table, and the folder delete that shipped beside it — one that would clear rows
-  out of a folder waits for the page's retry and re-homes what is left.
+  such a fixture may rewind v54 and nothing below it: `UNDO_V53` opens with a delete from
+  `deck_categories`, refused over `sync_gone_deck_categories` even when it matches no row
+  (measured against 3.53.0 on 2026-09-27). No production path drops the table. **It was written
+  as v53**, the number token stacks PR 3 had planned for a new `collection_folders.kind` word —
+  that PR was dropped the same day — **and renumbered to v54 at the merge with `main`**, whose
+  per-list piles (v53, above) had landed first. [sync.md](sync.md) *Held while it can resolve,
+  skipped when it cannot* has what reads the table, and the folder delete that shipped beside it —
+  one that would clear rows out of a folder waits for the page's retry and re-homes what is left.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every
@@ -1470,7 +1483,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `deck_meta::create_category` → `'user'`, `deck_meta::ensure_predefined_categories` → `'user'`,
   and `deck::duplicate_deck`, which **copies** the source pile's answer rather than re-deciding
   it) and no command parameter reaches it. **The point of storing it is that `category_for_name`
-  finds before it creates**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so a reader's own "Ramp"
+  finds before it creates**: `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)`, so a reader's own "Ramp"
   is found rather than re-made and keeps `'user'` forever, which is exactly the case a rule driven
   off the _name_ — "Ramp", "Draw", "Removal", "Land" are what people call their own piles — gets
   wrong. The backfill is a **one-time frozen guess**: `kind = 'main'` plus one of the 22 names

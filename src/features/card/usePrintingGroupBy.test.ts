@@ -58,7 +58,7 @@ describe("usePrintingGroupBy", () => {
     await waitFor(() =>
       expect(client.getQueryState(PRINTING_GROUP_BY_KEY)?.data).toBe("illustration"),
     );
-    expect(result.current.mode).toBe("artist");
+    expect(result.current.mode).toBe("released");
   });
 
   /**
@@ -78,7 +78,7 @@ describe("usePrintingGroupBy", () => {
     await waitFor(() =>
       expect(client.getQueryState(PRINTING_GROUP_BY_KEY)?.status).toBe("error"),
     );
-    expect(result.current.mode).toBe("artist");
+    expect(result.current.mode).toBe("released");
   });
 
   /**

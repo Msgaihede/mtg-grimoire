@@ -1457,9 +1457,9 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
             "collection_folders.idx_collection_folder_removed",
             // `DECK_CARD_GRAIN`, five terms since v19.
             "deck_cards.idx_deck_cards_grain",
-            // `DECK_CATEGORY_GRAIN`.
+            // `DECK_CATEGORY_GRAIN` — one name per list of a deck since v53.
             "deck_categories.idx_deck_categories_grain",
-            // Partial: one Sideboard, Commander, Companion and Maybeboard per deck.
+            // Partial: one Sideboard, Commander, Companion and Maybeboard per list since v53.
             "deck_categories.idx_deck_categories_kind",
             // `DECK_LABEL_GRAIN` — one app-wide list since v21.
             "deck_labels.idx_deck_labels_grain",
@@ -1576,6 +1576,191 @@ fn two_devices_adding_one_token_printing_end_with_one_entry() {
         on_a[0].1 == 2 || on_a[0].1 == 3,
         "a count is a field, so it is one device's value and never their sum: {on_a:?}"
     );
+}
+
+/// Every pile `conn` holds as `(variant, name, kind, sync_uid)`, in one order on every device.
+fn piles_of(conn: &Connection) -> Vec<(String, String, String, String)> {
+    let mut stmt = conn
+        .prepare("SELECT variant, name, kind, sync_uid FROM deck_categories ORDER BY variant, name")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// **A plan's pile never folds into the deck's pile of the same name** (user schema v53,
+/// [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561)) — the grain `META` restates,
+/// driven both ways it has to hold.
+///
+/// Across the list boundary: `a` has a live `Ramp` and a live `Sideboard`, then makes the plan's
+/// own `Ramp` and `Sideboard` and files a theory card in that `Ramp`. On `deck_id, name` the far
+/// device would find its live `Ramp` for the plan's and file the card there; on `deck_id, kind`
+/// it would find its live Sideboard for the plan's. Within one list: `b`, not having heard, makes
+/// the plan's `Sideboard` itself — and the two theory Sideboards are one pile under one uid once
+/// they meet, like any other pile two devices name alike. (The card is filed in the `Ramp` only
+/// `a` made: a child of a pile both devices made is filed under whichever uid loses the `min`,
+/// which is the grain's ordinary behaviour and not this test's subject.)
+#[test]
+fn a_plans_pile_never_folds_into_the_decks_pile_of_the_same_name() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    a.execute(
+        "INSERT INTO decks (name, format_key, theory_enabled, created_at, updated_at)
+         VALUES ('Planned', 'commander', 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let pile = |conn: &Connection, variant: &str, name: &str, kind: &str| {
+        conn.execute(
+            "INSERT INTO deck_categories
+                (deck_id, variant, name, kind, is_active, sort_order, created_at, updated_at)
+             SELECT id, ?1, ?2, ?3, 1, 0, unixepoch(), unixepoch() FROM decks",
+            [variant, name, kind],
+        )
+        .unwrap();
+    };
+    pile(&a, "live", "Ramp", "main");
+    pile(&a, "live", "Sideboard", "side");
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    pile(&a, "theory", "Ramp", "main");
+    pile(&a, "theory", "Sideboard", "side");
+    a.execute(
+        "INSERT INTO deck_cards
+            (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
+             quantity, created_at, updated_at)
+         SELECT deck_id, id, 'theory', 'sol', 'lea', '270', 'en', 'Sol Ring', 1,
+                unixepoch(), unixepoch()
+           FROM deck_categories WHERE variant = 'theory' AND name = 'Ramp'",
+        [],
+    )
+    .unwrap();
+    pile(&b, "theory", "Sideboard", "side");
+
+    let to_b = since(&a, &mut ma);
+    let to_a = since(&b, &mut mb);
+    assert!(
+        to_b.iter()
+            .filter(|op| op.table == "deck_categories")
+            .all(|op| op.fields.get("variant") == Some(&serde_json::json!("theory"))),
+        "a theory pile's insert carries its list: {to_b:?}"
+    );
+    let report = apply(&b, &to_b).unwrap();
+    assert_eq!(
+        unwritten(report),
+        (0, 0),
+        "b left something of a's unwritten"
+    );
+    let report = apply(&a, &to_a).unwrap();
+    assert_eq!(
+        unwritten(report),
+        (0, 0),
+        "a left something of b's unwritten"
+    );
+
+    let (on_a, on_b) = (piles_of(&a), piles_of(&b));
+    let shape: Vec<(&str, &str, &str)> = on_b
+        .iter()
+        .map(|(v, n, k, _)| (v.as_str(), n.as_str(), k.as_str()))
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            ("live", "Ramp", "main"),
+            ("live", "Sideboard", "side"),
+            ("theory", "Ramp", "main"),
+            ("theory", "Sideboard", "side"),
+        ],
+        "two lists, two piles of each name, and the two theory Sideboards one pile"
+    );
+    assert_eq!(
+        on_a, on_b,
+        "both devices hold the same piles under the same uids"
+    );
+
+    let (variant, pile): (String, String) = b
+        .query_row(
+            "SELECT c.variant, c.name FROM deck_cards dc
+               JOIN deck_categories c ON c.id = dc.category_id",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (variant.as_str(), pile.as_str()),
+        ("theory", "Ramp"),
+        "the plan's card landed in the deck's pile"
+    );
+}
+
+/// **A pile op with no `variant` still applies, and lands in the live list** — which is what
+/// every op a device sent before user schema v53 looks like, and what every pile was before the
+/// rung. `variant` joined both of the table's grains, so neither can bind on such an op; the
+/// insert goes in under its own uid and takes the column's default. The theory op beside it is
+/// the control: the same insert *with* its list lands in that list.
+#[test]
+fn a_pile_op_with_no_variant_applies_to_the_live_list() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    a.execute(
+        "INSERT INTO decks (name, format_key, theory_enabled, created_at, updated_at)
+         VALUES ('Planned', 'commander', 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    a.execute(
+        "INSERT INTO deck_categories
+            (deck_id, variant, name, kind, is_active, sort_order, created_at, updated_at)
+         SELECT id, 'theory', 'Draw', 'main', 1, 0, unixepoch(), unixepoch() FROM decks",
+        [],
+    )
+    .unwrap();
+    let theory = since(&a, &mut ma);
+    assert_eq!(theory.len(), 1);
+    let report = apply(&b, &theory).unwrap();
+    assert_eq!(unwritten(report), (0, 0));
+    let landed: String = b
+        .query_row(
+            "SELECT variant FROM deck_categories WHERE sync_uid = ?1",
+            [&theory[0].uid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        landed, "theory",
+        "a theory pile's insert applies to the theory list"
+    );
+
+    a.execute(
+        "INSERT INTO deck_categories
+            (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+         SELECT id, 'Ramp', 'main', 1, 1, unixepoch(), unixepoch() FROM decks",
+        [],
+    )
+    .unwrap();
+    let mut older = since(&a, &mut ma);
+    assert_eq!(older.len(), 1);
+    // The splice is what makes this an older sender: nothing in this build omits the field.
+    assert!(older[0].fields.remove("variant").is_some(), "{older:?}");
+    let report = apply(&b, &older).unwrap();
+    assert_eq!(
+        unwritten(report),
+        (0, 0),
+        "an op with no list was not applied"
+    );
+    let (variant, name): (String, String) = b
+        .query_row(
+            "SELECT variant, name FROM deck_categories WHERE sync_uid = ?1",
+            [&older[0].uid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((variant.as_str(), name.as_str()), ("live", "Ramp"));
 }
 
 /// **"Looks fine" travels**, which is the claim `sync_engine::commands` makes in prose and

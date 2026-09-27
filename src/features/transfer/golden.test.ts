@@ -94,8 +94,8 @@ describe("the corpus itself", () => {
 
   /**
    * A named category is one row of `deck_categories`, and `idx_deck_categories_grain` is
-   * `UNIQUE (deck_id, name)` — so `kind` and `is_active` are facts about *the category*, not
-   * about each card filed under it. Two cards naming one category and disagreeing about either
+   * `UNIQUE (deck_id, variant, name)` — so `kind` and `is_active` are facts about *the category*,
+   * not about each card filed under it. Two cards naming one category and disagreeing about either
    * is a state the database cannot hold, and a golden file pinning what the writer does with
    * one would be a fence around a case that can never arrive.
    *

@@ -541,12 +541,13 @@ export const Price: Story = {
  * The folders below are the `starter` seed's — `Ordered`, `Ordered / Backordered` and `Someday` —
  * so the rows are a real tree with a real nesting in it rather than one flat name.
  *
- * **What this page cannot show is the sentence that follows a press.** The live region names the
+ * **This story cannot show the sentence that follows a press.** The live region names the
  * folder (`Added 2 wishes to Ordered — one per card, …`) and says nothing extra at the root, and
  * both are gated on the *latch* — which is armed by a press and released the moment the shortfall
- * or the destination changes. A story's `send` is an idle `fn()` that never settles, so there is
- * no state here for that sentence to be in; it is `DeckStats.test.tsx`'s claim, along with the
- * latch releasing on a changed destination.
+ * or the destination changes. This story's `send` is the page's idle `fn()` that never settles,
+ * so there is no state here for that sentence to be in; {@link SentToWishlist} hands the strip a
+ * write that has already answered, and the folder clause and the latch releasing on a changed
+ * destination are `DeckStats.test.tsx`'s claims.
  */
 export const WishlistDestination: Story = {
   args: {
@@ -586,6 +587,56 @@ export const WishlistDestination: Story = {
     // next press would do is readable without opening anything.
     await userEvent.click(canvas.getByRole("option", { name: /Backordered/ }));
     await expect(destination).toHaveTextContent(/Backordered/);
+  },
+};
+
+/**
+ * **What a press that worked looks like** (issue #553): the answer in the accent, with a check.
+ *
+ * Pressing `Send missing to wishlist` twice doubles every wish — `add_wish` raises the one
+ * already there, and the reader chose to keep that fold — so the first press has to be
+ * unmistakably *done*. It used to answer in `text-dim`, the voice this strip keeps for the lines
+ * that have nothing to say. The zero arm (`Nothing to add — …`) keeps that voice and gets no
+ * check, because nothing was added; `DeckStats.test.tsx` holds that half.
+ *
+ * `send` is a write that has **already answered** two wishes, and the play is the press that arms
+ * the latch: the strip only speaks for a shortfall the reader actually pressed about, so an
+ * answer handed in without the press stays silent — which is why this needs a play at all.
+ */
+export const SentToWishlist: Story = {
+  args: {
+    send: {
+      mutate: fn(),
+      isPending: false,
+      isSuccess: true,
+      isError: false,
+      error: null,
+      data: 2,
+    },
+    cards: [
+      deckCard(printing("mh2", "138"), { quantity: 4, ownedQuantity: 1 }),
+      deckCard(printing("fut", "153"), { quantity: 4, ownedQuantity: 2 }),
+      deckCard(printing("lea", "288"), { quantity: 12, ownedQuantity: 12 }),
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // Empty and already in the tree before the press — a live region that arrives with its
+    // sentence in it announces nothing.
+    const region = canvas.getByRole("status");
+    await expect(region).toBeEmptyDOMElement();
+
+    await userEvent.click(canvas.getByRole("button", { name: "Send missing to wishlist" }));
+
+    await expect(region).toHaveTextContent(
+      "Added 2 wishes — one per card, for every copy you are short.",
+    );
+    await expect(region).toHaveClass("text-accent");
+    await expect(region.querySelector("svg.lucide-circle-check")).not.toBeNull();
+    // And the press is spent for this shortfall, saying why on the button itself.
+    await expect(
+      canvas.getByRole("button", { name: "Send missing to wishlist" }),
+    ).toHaveAttribute("aria-disabled", "true");
   },
 };
 

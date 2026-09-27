@@ -145,13 +145,20 @@ are all things no suite could have seen.
   warning, no unhandled rejection. Everything else was `502` from `mtgimg://` — see the
   unverified note below.
 
-**Three bugs found, none fixed in this pass. Two are still open; the second is closed and its
-row is struck rather than deleted** — see it for the two separate closures it turned out to
-have had, because "somebody fixed it and nobody struck the row" and "we deleted the feature"
-are resolutions a later reader has to be able to tell apart:
+**Three bugs found, none fixed in this pass. All three are closed now, and each row is struck
+rather than deleted** — see the second for the two separate closures it turned out to have had,
+because "somebody fixed it and nobody struck the row" and "we deleted the feature" are
+resolutions a later reader has to be able to tell apart. The first and third were the first
+kind: `9ea06b1a` fixed both on 2026-08-11, measured in the real window before and after, and the
+rows went on reading as open until 2026-09-27:
 
-1. **The editor's title row collapses the deck name to 18px and overflows into the format
-   select, at the app's own default window.** The row is `flex min-w-0 flex-1` holding the name
+1. ~~**The editor's title row collapses the deck name to 18px and overflows into the format
+   select, at the app's own default window.**~~ **Closed by `9ea06b1a`** (2026-08-11): the name
+   got a 10rem floor, the identity group wraps and the controls beside it yield instead, and the
+   commit re-measured zero spill at 1024–1440 in both Theory states with a 240px name at 1280.
+   **The format select it spilled onto is gone too** — `a6a3e667` (2026-08-24) rebuilt the
+   header as three lines and moved format and game into Deck settings, and `DeckEditor.test.tsx`'s
+   *"draws no format or game select of its own"* pins the absence. The original text: The row is `flex min-w-0 flex-1` holding the name
    input (`shrink: 1`) beside two `shrink-0` children — the variant tabs (102px; the same two
    buttons, which read `Theory | Live` since the move-on-enable change) and the
    "N cards differ" button (107px, and the `Compare` button since 2026-08-20) — which together
@@ -190,7 +197,9 @@ are resolutions a later reader has to be able to tell apart:
    already supported. `DecksPage.test.tsx` keeps a `coverKind: "custom"` row on purpose — it is
    what an un-upgraded peer can still push over sync — and asserts the tile draws card art for
    it rather than branching.
-3. **Table view starves the card name.** Seven fixed columns take **696px of 963px**, leaving the
+3. ~~**Table view starves the card name.**~~ **Closed by `9ea06b1a`** (2026-08-11): the fixed
+   columns gave up 56px, the name took a 12rem floor and the larger share with Type yielding to
+   it — 84px → **192px** at 963px and 272px at 1440. The original text: Seven fixed columns take **696px of 963px**, leaving the
    two `fr` columns 147px between them: **Card name gets 84px** (`minmax(0,2fr)`) and Type 63px,
    truncating names to ~10 characters, while the empty Labels column holds 112px and Owned 64px.
 

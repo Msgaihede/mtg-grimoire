@@ -5,7 +5,8 @@ spec approved. Written to land before token stacks PR 3 (Collection tokens), whi
 deleted a deck's token folder on every exit from Collection mode; **PR 3 was dropped the same day**
 (the reader's decision), and this stands on its own: today a deck deleted with a copy its group
 and the root both hold stops a paired device's sync for good. Builds on the delivery holds (#572,
-#574).
+#574). **The rung was written as user schema v53 and renumbered to v54 at the merge with `main`**,
+whose per-list piles (#561) took 53 first; the rung is v54 below.
 
 ## 1. The problem
 
@@ -112,7 +113,7 @@ CREATE TABLE sync_gone (
 - **`gone` reads it** in place of `sync_ops`: the page's delete set first, then
   `SELECT 1 FROM sync_gone WHERE tbl = ?1 AND uid = ?2`. One source, so an own delete and an
   applied one are asked the same way.
-- **The rung (user schema v53) backfills it** from this device's own history:
+- **The rung (user schema v54; written as v53) backfills it** from this device's own history:
   `INSERT OR IGNORE INTO sync_gone SELECT DISTINCT tbl, uid FROM sync_ops WHERE kind = 'del' AND
   tbl IN (<the seven, frozen in the rung>)`, so every delete `gone` could see yesterday it still
   sees. Deletes applied from peers before the upgrade left no row anywhere and are not recovered.
@@ -123,7 +124,7 @@ CREATE TABLE sync_gone (
   child of it on a later page would wait out the bound.
 - **Nothing clears it.** Leaving a group keeps it, as it keeps `sync_ops`; a resurrected parent
   is found by `resolve_parent` before `gone` is ever asked, so a stale tombstone is never read.
-- **A new user table owes its sites** (sync.md's list): `USER_SCHEMA_SQL` and `UNDO_V53`,
+- **A new user table owes its sites** (sync.md's list): `USER_SCHEMA_SQL` and `UNDO_V54`,
   `schema::TABLES` as `Side::User`, `mirror::watch::surface_of` (→ `None`, and its decided-about
   list), `changes::WRITTEN_BY_THE_APP` (it is `WITHOUT ROWID`, so the update hook never sees it,
   and the app writes it where no press does — `sync_peers`' footing), `src/lib/userTables.json`
@@ -264,7 +265,8 @@ record of the fix), *A parent deleted on a third device* (closed), *What is stil
 folder bullets removed, §3.5's residuals added). `src-tauri/CLAUDE.md`'s `sync_peers` bullet (the
 moot delete's "no capture spec names its table as a parent" clause) and the rung history.
 `data-and-sync.md`'s ladder. `apply.rs`'s module doc and `gone`'s doc. The token-stacks spec's
-§5 gets a one-line note that PR 3 was dropped and v53 went to `sync_gone`.
+§5 gets a one-line note that PR 3 was dropped and its number went elsewhere (`sync_gone` took
+v53, and was renumbered to v54 at the merge when the per-list piles took 53 on `main`).
 
 ## 4. Testing
 
@@ -289,8 +291,8 @@ describes a bug:
   `error_log` row.
 - **Tombstones**: an own delete, an applied delete and a cascaded one each write their row; a
   device with no group writes one too; `gone` answers from `sync_gone` alone.
-- **The backfill**: a v52 database whose `sync_ops` holds `del`s for a deck and a binder climbs to
-  v53 with both tombstoned and nothing else.
+- **The backfill**: a v53 database whose `sync_ops` holds `del`s for a deck and a binder climbs to
+  v54 with both tombstoned and nothing else.
 - **The backstop**: a TEMP trigger refusing a folder delete during apply — the group is dropped and
   recorded, the rest of the page applies, the next pull does not fail.
 - **The cascade fence**: every `ON DELETE CASCADE` key into `collection_folders` and

@@ -69,7 +69,7 @@ pub const MARKED_BY_COMMAND: &[&str] =
 /// prices (`price_history`) and a peer watermark (`sync_engine`). Every window is equally current
 /// about them, so nothing marks them.
 ///
-/// **`sync_gone` is here on a slightly different footing** (user schema v53). A press does reach
+/// **`sync_gone` is here on a slightly different footing** (user schema v54). A press does reach
 /// it — deleting a folder or a deck — but only through `sync_engine::capture`'s tombstone trigger,
 /// as a side effect of the app's own write rather than as anything the reader asked to change,
 /// and no window draws a tombstone: it is read by `sync_engine::apply` alone. So there is no

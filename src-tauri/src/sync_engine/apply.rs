@@ -199,7 +199,7 @@ enum Source {
 /// seeds its own `Recently removed` folder, so **two paired devices hold that row under two
 /// uids from the moment they meet** — and a uid-only rule would try to insert a second one and
 /// fail the index forever. `deck_categories` has a second as well:
-/// `idx_deck_categories_kind`, `UNIQUE (deck_id, kind) WHERE kind <> 'main'`.
+/// `idx_deck_categories_kind`, `UNIQUE (deck_id, variant, kind) WHERE kind <> 'main'`.
 ///
 /// A partial index needs no new machinery, because the `WHERE` clause can be written into the
 /// predicate: `kind = ? AND kind = 'removed'` matches the one holding area when the incoming row
@@ -270,17 +270,30 @@ const META: [Meta; 17] = [
     Meta {
         table: "deck_categories",
         order: 2,
+        // **Both per list since user schema v53**, `variant` in each where the two indexes
+        // carry it: a theory `Ramp` beside the deck's live one is two piles, and folding them on
+        // `deck_id, name` would put the plan's cards in the deck's pile on the far device. An
+        // older sender's op carries no `variant`, so neither grain can bind and its insert lands
+        // under its own uid in the column's `'live'` default.
         grains: &[
             Grain {
-                predicate: "deck_id = ? AND name = ?",
-                sources: &[Source::Parent("deck"), Source::Field("name")],
+                predicate: "deck_id = ? AND variant = ? AND name = ?",
+                sources: &[
+                    Source::Parent("deck"),
+                    Source::Field("variant"),
+                    Source::Field("name"),
+                ],
             },
             // `idx_deck_categories_kind`, and the `WHERE kind <> 'main'` is in the predicate:
-            // a deck has one Sideboard, one Commander, one Companion and one Maybeboard, and a
-            // renamed one would slip past the grain above.
+            // each list has one Sideboard, one Commander, one Companion and one Maybeboard, and
+            // a renamed one would slip past the grain above.
             Grain {
-                predicate: "deck_id = ? AND kind = ? AND kind <> 'main'",
-                sources: &[Source::Parent("deck"), Source::Field("kind")],
+                predicate: "deck_id = ? AND variant = ? AND kind = ? AND kind <> 'main'",
+                sources: &[
+                    Source::Parent("deck"),
+                    Source::Field("variant"),
+                    Source::Field("kind"),
+                ],
             },
         ],
         counters: &[],
@@ -1131,12 +1144,12 @@ fn classify(
 /// read.
 ///
 /// **One source for all of them**, so an own delete and an applied one are asked the same way.
-/// Until user schema v53 this read a `del` in this device's own `sync_ops`, and a delete a peer
+/// Until user schema v54 this read a `del` in this device's own `sync_ops`, and a delete a peer
 /// made left nothing there — `apply` runs inside `capture::suppressed`, and so does every cascade
 /// it sets off — so a child of it arriving on a later page waited out the bound and was dropped,
 /// recorded, while its own device kept it at the root where the key is `SET NULL` (§1.2). The
 /// tombstone trigger ignores that guard, which is its point. **A delete applied here before the
-/// v53 rung left no row**, since the rung backfills only this device's own `del`s, and is still
+/// v54 rung left no row**, since the rung backfills only this device's own `del`s, and is still
 /// read as missing.
 fn gone(
     conn: &Connection,
@@ -1183,7 +1196,7 @@ fn gone(
 /// wait of its own, because it only ever runs on a `Decide` pass — it had one until the whole moot
 /// decision moved to the retry, and two dragged-copy tests pin that the wait still happens
 /// (`a_copy_dragged_onto_a_…_root_twin_out_of_a_binder_moved_under_a_deleted_one_lands_once`).
-/// **Until user schema v53 a table any capture spec names as a parent was
+/// **Until user schema v54 a table any capture spec names as a parent was
 /// excluded here**, and the reason was `gone`: this delete is uncaptured and is no delete in the
 /// page, so while `gone` read only this device's own `sync_ops` it could not see it, and a peer
 /// that moved a folder under one deleted here and then filed a deck in it found the deck waiting

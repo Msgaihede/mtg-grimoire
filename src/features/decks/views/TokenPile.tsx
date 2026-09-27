@@ -73,6 +73,7 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { DeckFinishMark, theoryMatchLabel } from "../CardMarks";
 import {
+  deckCardScale,
   STACK_LIFTED_MARGIN,
   STACK_OPEN_ATTR,
   STACKED_CARD_BODY,
@@ -432,6 +433,8 @@ export function TokenGridPile({
   gap,
 }: {
   pile: TokenPile;
+  /** The wall's zoom — the gutter's, and nothing on the card: the tile's marks scale off
+   *  {@link tileWidth} through `deckCardScale`. */
   zoom: number;
   tileWidth: number;
   /** The wall's gutter at 1× — scaled here through `atLeast`, as the wall's own is. */
@@ -439,6 +442,10 @@ export function TokenGridPile({
 }) {
   const headingId = useId();
   const { marketplace } = useMarketplace();
+  // The tile's marks and chin at the tile's own width against the stacked card's, and never at
+  // the zoom: a tile is narrower than a stacked card at every stop, so the zoom would draw a
+  // stacked card's marks on it — `deckCardScale`'s doc, and issue #567. `zoom` is the gutter's.
+  const scale = deckCardScale(tileWidth);
   return (
     <div {...pileRootProps(headingId)} className="relative rounded-md">
       <GroupHeader
@@ -457,7 +464,7 @@ export function TokenGridPile({
         {pile.tokens.map((view) => (
           <li
             key={view.entryKey}
-            style={{ width: tileWidth, ...cardScaleVars(zoom) }}
+            style={{ width: tileWidth, ...cardScaleVars(scale) }}
             // `group` is the one thing here that is not the stack's, for `GridView`'s tile's
             // reason: nothing overlaps a tile, so the pointer is the honest question and
             // `REVEALED_ON_CARD` hangs off it. The resting shadow, since a tile is never fanned.
@@ -467,7 +474,7 @@ export function TokenGridPile({
               view={view}
               pile={pile}
               width={tileWidth}
-              zoom={zoom}
+              zoom={scale}
               currency={marketplace.currency}
             />
             <span

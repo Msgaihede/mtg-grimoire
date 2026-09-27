@@ -8,6 +8,8 @@ import {
   type SearchSortKey,
   type TagNamespace,
 } from "@/lib/ipc";
+import { BORDERS, type Border } from "@/lib/border";
+import { FINISHES, type Finish } from "@/lib/finish";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -73,9 +75,11 @@ function bare({ field, op, value, negated }: PredicateToken): QueryPredicate {
  * **So a tag folds back into the free text as its own value.** `atag:dragon` on the collection
  * page is a name-and-rules search for `dragon` rather than no filter at all: narrower than the
  * reader asked for in kind, never wider in extent. A **negated** tag folds the same way, because
- * the alternatives are worse — free text has no `-`, so the choice is between the word and
- * nothing, and nothing is the silent widening this whole function exists to refuse. The reader
- * can see the word did not do what they meant; they cannot see a term that was never sent.
+ * the alternatives are worse — free text's only `-` excludes a card *by name*, which would keep
+ * every dragon not called one and so widen exactly what the reader asked to narrow, so the choice
+ * is between the word and nothing, and nothing is the silent widening this whole function exists
+ * to refuse. The reader can see the word did not do what they meant; they cannot see a term that
+ * was never sent.
  *
  * Absent rather than empty on both fields, which is the rule every other filter in this app
  * follows: a blank `text` and an empty `predicates` are read as unset at the far end, and
@@ -319,6 +323,17 @@ export interface FilterState {
    *  pressed, for {@link rarities}' reason: a reader who narrowed to instants and sorceries has
    *  narrowed once. */
   types: readonly string[];
+  /** The border chips — `regular`/`borderless`/`fullart` (`@/lib/border`), ORed with each other.
+   *  One kind however many are pressed, for {@link types}' reason. */
+  borders: readonly Border[];
+  /**
+   * The Finish cell's chips, and **one field for two questions, depending on the surface**. On
+   * the card search it is the finishes a *printing* is published in (`printedFinishes` on the
+   * wire); on the deck editor's Collection tab, which counts with this function too, it is the
+   * finish one *copy* is in (`CollectionQuery.finishes`). Either way it is one control and one
+   * narrowing, so one kind — and a surface with no Finish cell passes `[]`.
+   */
+  finishes: readonly Finish[];
   /**
    * The price band's two ends, either usable alone. `undefined` is "this end is open".
    *
@@ -359,6 +374,10 @@ export function activeFilterCount(f: FilterState): number {
     // types* — and a reader told `Reset all 2` over one chip row has been given the wrong number
     // about one control.
     f.types.length > 0,
+    // One kind each, for the type row's reason: `Borderless` and `Full art` together are one
+    // narrowing of *which frame*, and three finishes pressed are one of *which finish*.
+    f.borders.length > 0,
+    f.finishes.length > 0,
     // One term for the pair, not two: a band is one narrowing however many of its ends the
     // reader has moved — the argument the mana row's `manaValues || manaX` makes.
     f.priceMin !== undefined || f.priceMax !== undefined,
@@ -504,6 +523,17 @@ export const CARD_TYPES: readonly string[] = [
  */
 export function typesParam(picked: readonly string[]): string[] | undefined {
   return picked.length > 0 ? [...picked].sort() : undefined;
+}
+
+/**
+ * The picked borders as the backend takes them, or nothing — in {@link BORDERS}' order rather
+ * than sorted, the way `useCollection` orders its finishes by `FINISHES`: the request then reads
+ * the way the chips do, and the order is still a pure function of the set, so picking
+ * `Full art` then `Borderless` costs no second round trip. Shared by all four hooks for
+ * {@link typesParam}'s reason.
+ */
+export function bordersParam(picked: readonly Border[]): Border[] | undefined {
+  return picked.length > 0 ? BORDERS.filter((b) => picked.includes(b)) : undefined;
 }
 
 // `sortCurrency` is gone, and so is the `currency` parameter it fed. It existed to send the
@@ -708,6 +738,14 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // The eight card-type chips — {@link CARD_TYPES}, ORed with each other and ANDed with
   // everything else, which is the rarity chips' shape exactly.
   const [types, setTypes] = useState<readonly string[]>([]);
+  // The border chips (issue #573) — the type chips' shape one dimension along, over two columns
+  // Scryfall stores (`@/lib/border` has the three words and the overlap between them).
+  const [borders, setBorders] = useState<readonly Border[]>([]);
+  // The Finish cell, over **the printing's published finishes** — Scryfall's `is:foil` rather
+  // than the collection's "which finish is this copy in". Named `finishes` here because that is
+  // the `FilterSurface` field the tray's cell reads; it reaches the wire as `printedFinishes`,
+  // never as `finishes`, which on the collection's flattened payload means the copy's finish.
+  const [finishes, setFinishes] = useState<readonly Finish[]>([]);
   const [sets, setSets] = useState<readonly string[]>(() =>
     options.initialSet ? [options.initialSet] : [],
   );
@@ -994,6 +1032,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // than inline: the collection, the wishlist and the deck panel all canonicalise this list, and
   // four copies of one sort is four places for the normal form to drift.
   const typesParamValue = typesParam(types);
+  const bordersParamValue = bordersParam(borders);
+  // In the app's own finish order rather than press order, for the same one-key-per-set reason.
+  const printedFinishesParam =
+    finishes.length > 0 ? FINISHES.filter((f) => finishes.includes(f)) : undefined;
 
   // Every input the request is built from, so a changed filter can never be answered by
   // another filter's cached pages.
@@ -1027,6 +1069,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     strictParam ? "strict" : "",
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
+    // Two segments that cannot be read as each other: each is a join over its own closed
+    // vocabulary, and the two vocabularies share no word.
+    bordersParamValue?.join(",") ?? "",
+    printedFinishesParam?.join(",") ?? "",
     manaParam?.join(",") ?? "",
     // **A segment of its own, and the whole feature turns on it being here.** X is a second
     // axis over the same chips, so a key that carried only the numerals would answer "3, and
@@ -1093,6 +1139,11 @@ export function useCardSearch(options: CardSearchOptions = {}) {
         colorsStrict: strictParam || undefined,
         sets: setsParam,
         types: typesParamValue,
+        borders: bordersParamValue,
+        // **`printedFinishes`, never `finishes`.** The Finish cell asks "is this printing
+        // published in foil" here, and `finishes` is the collection's word for the finish one
+        // copy is in — see `SearchRequest.printedFinishes`.
+        printedFinishes: printedFinishesParam,
         manaValues: manaParam,
         rarities: raritiesParam,
         // The band, at the marketplace this page is quoting. Absent ends are absent fields, so
@@ -1178,9 +1229,11 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // wall that chip filters have to describe one corpus, and a facet request carrying the whole
     // box would be counting over an FTS query the search never ran.
     text: parsed.text || undefined,
-    // **The typed terms, and only two of the twelve fields actually narrow a count.**
+    // **The typed terms, and only two of the thirteen fields actually narrow a count.**
     // `typeLine` and `oracleText` ride the FTS bitset `run_facets` already folds, so they narrow
-    // the counts for free; the index carries no power, toughness, artist or card-colour
+    // the counts for free — when positive: `run_facets` discards every negated text term, and a
+    // `name` term is never anything else, so `-bolt` leaves the counts where they were. The
+    // index carries no power, toughness, artist or card-colour
     // dimension, so the other ten leave the counts **wider than the wall**. That is spec §7's
     // fail-open decision rather than a gap to close here: `facets.ts` greys only what would
     // change nothing, so a count that is too high offers an option that turns out empty, where
@@ -1203,6 +1256,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     colorsStrict: strictParam || undefined,
     sets: setsParam,
     types: typesParamValue,
+    // Both ride for every other filter's reason — the counts greying a chip and the wall that chip
+    // filters describe one corpus — and both are dimensions `FacetResponse` now counts.
+    borders: bordersParamValue,
+    printedFinishes: printedFinishesParam,
     manaValues: manaParam,
     // Spelled exactly as the page's payload spells it — `|| undefined` and not `manaX` —
     // because React Query hashes this object with its `undefined` values dropped: a bare
@@ -1329,7 +1386,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       rewrite(termsBehind(key).reduce((query, token) => removeToken(query, token), debouncedText)),
     /** Flip one typed predicate between include and exclude — a chip's press. Rewrites each term
      *  where it stands rather than re-appending it, so the reader's own sentence keeps its
-     *  order. */
+     *  order. A `-bolt` chip does not survive its own include press: `bolt` is free text, which
+     *  draws no chip — `queryLanguage.ts`' `excludedName` says why. */
     togglePredicateChipMode: (key: string) => {
       const picked = predicateChips.find((c) => c.key === key);
       if (!picked) return;
@@ -1415,6 +1473,20 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      */
     types,
     toggleType: (type: string) => setTypes((picked) => toggleIn(picked, type)),
+    /**
+     * The border chips — `regular`, `borderless`, `fullart` — ORed with each other and ANDed with
+     * everything else, the type chips' shape. **Not a partition**: a borderless full-art printing
+     * answers both of the last two, and `regular` is the printing that is neither.
+     */
+    borders,
+    toggleBorder: (border: Border) => setBorders((picked) => toggleIn(picked, border)),
+    /**
+     * The Finish cell over **the printing's published finishes** — "comes in foil", not "a foil
+     * copy". A printing published in nonfoil and foil answers both chips. Sent as
+     * `printedFinishes`; the collection's surfaces fill the same cell with the copy's finish.
+     */
+    finishes,
+    toggleFinish: (finish: Finish) => setFinishes((picked) => toggleIn(picked, finish)),
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
     /**
@@ -1506,6 +1578,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       owned,
       rarities,
       types,
+      borders,
+      finishes,
       priceMin,
       priceMax,
     }),
@@ -1613,6 +1687,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       // never asked for. `NO_COLORS` clears the row and the flag together.
       setSets([]);
       setTypes([]);
+      setBorders([]);
+      setFinishes([]);
       setManaValues([]);
       setManaX(false);
       setOwned(undefined);
@@ -1643,6 +1719,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       setColorFilter(NO_COLORS);
       setSets([code]);
       setTypes([]);
+      setBorders([]);
+      setFinishes([]);
       setManaValues([]);
       setManaX(false);
       setOwned(undefined);
@@ -1711,6 +1789,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       !colorsParam &&
       !setsParam &&
       !typesParamValue &&
+      !bordersParamValue &&
+      !printedFinishesParam &&
       !manaParam &&
       !manaX &&
       owned === undefined &&

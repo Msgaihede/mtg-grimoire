@@ -564,7 +564,8 @@ describe("CardGrid shelves", () => {
    * cannot turn this into a test of the wrong row. The `+ 12` is the wall's own `p-3`.
    *
    * The virtualiser's trailing is-scrolling reset is a 150ms timer that fires after this test has
-   * unmounted, where it updates nothing.
+   * unmounted, where it updates nothing — as long as the environment is still up, which
+   * `src/test-setup.ts`'s scroll `afterAll` guarantees for the file's last one.
    */
   it("tells the sticky bar which shelf the reader has scrolled into", () => {
     const renderSticky = vi.fn<GridSections<GridCard>["renderSticky"]>(() => null);

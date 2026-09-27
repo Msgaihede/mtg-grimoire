@@ -2108,13 +2108,17 @@ impl Drop for RefreshGuard {
 
 /// Is a refresh in flight?
 ///
-/// **Test-only, unlike its two siblings**, and the reason is the wire contract:
-/// [`ComboStatus`] carries no `refreshing` field where `FeedStatus` and `TagStatus` both do, so
-/// nothing in production has a place to put the answer. A page learns a refresh is running from
-/// [`PROGRESS_EVENT`], which is the fast path and the only one that can say *how far in* it is.
-#[cfg(test)]
+/// **It was test-only until [`crate::reset::cache_clear`] needed it, and the status still does
+/// not carry it.** [`ComboStatus`] has no `refreshing` field where `FeedStatus` and `TagStatus`
+/// both do, and that is unchanged: a page learns a refresh is running from [`PROGRESS_EVENT`],
+/// which is the fast path and the only one that can say *how far in* it is. The cache clear's
+/// question is a different one — whether `data/tmp/spellbook-variants.json.gz` is in use —
+/// because a refresh downloads it and then reopens it to ingest, and a sweep landing between
+/// the two fails the refresh and costs another 27.5 MB at the next launch. Named for its
+/// siblings in [`crate::marketplace_feed`] and [`crate::tags`], which answer the same question
+/// over a list of names; here there is one file, so it is the flag.
 #[cfg(not(target_family = "wasm"))]
-fn is_refreshing() -> bool {
+pub(crate) fn any_refresh_running() -> bool {
     REFRESHING.load(Ordering::SeqCst)
 }
 
@@ -4577,10 +4581,10 @@ mod tests {
         {
             let held = RefreshGuard::claim().expect("first claim");
             assert!(RefreshGuard::claim().is_none(), "no second");
-            assert!(is_refreshing());
+            assert!(any_refresh_running());
             drop(held);
         }
-        assert!(!is_refreshing());
+        assert!(!any_refresh_running());
         assert!(RefreshGuard::claim().is_some(), "and again");
     }
 

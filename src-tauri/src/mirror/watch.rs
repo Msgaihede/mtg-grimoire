@@ -1180,7 +1180,7 @@ mod tests {
                 // the hook anyway — it is `WITHOUT ROWID`, like `muted_tags` — but the other
                 // two can, and "the hook cannot see it" is not a decision.
                 "sync_devices",
-                // The tombstones (user schema v53), in among pairing's three only because this
+                // The tombstones (user schema v54), in among pairing's three only because this
                 // list is in name order: they belong with sync's other three below. Which parent
                 // rows this device has seen deleted describes the conversation, not the
                 // collection — a mirrored file shows what is there, never what went — and the
@@ -1195,7 +1195,7 @@ mod tests {
                 // file twice for one write; the cursor table and the peer watermarks describe
                 // a conversation rather than a collection. `sync_state` and `sync_peers` are
                 // `WITHOUT ROWID` and could not reach the hook anyway, which is not a
-                // decision either. (v53's `sync_gone` is decided on the same two grounds, and
+                // decision either. (v54's `sync_gone` is decided on the same two grounds, and
                 // sorts above, between `sync_devices` and `sync_group`.)
                 "sync_ops",
                 "sync_peers",
