@@ -29,6 +29,7 @@ import { MotionConfig } from "motion/react";
 import { ContextMenuProvider } from "../src/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "../src/components/tooltip/TooltipProvider";
 import { CardToDeckProvider } from "../src/features/card/cardMenu";
+import { installKeyboardModality } from "../src/lib/keyboardModality";
 import { setArtMode } from "../.storybook/fake/images";
 
 export * from "../.storybook/fake/core";
@@ -151,8 +152,38 @@ function useAppSurface(): void {
   }, []);
 }
 
+/**
+ * What `main.tsx` installs for the app and `.storybook/preview.tsx` for the workbench: the
+ * `html[data-kbd]` attribute every focus ring in the app is gated on.
+ *
+ * `src/index.css` redefines the `focus-visible:` variant as `html[data-kbd] *:focus-visible` and
+ * blanks `html:not([data-kbd]) :focus-visible`, so without this a design built from the bundle
+ * shows **no keyboard focus ring anywhere** — Tab moves through it and nothing draws. Found on
+ * 2026-09-27 grading `TooltipProvider`'s `OnFocus`, whose reference shows the ring.
+ *
+ * Mounted from the provider rather than at module scope for the same reason as
+ * {@link useAppSurface}: the bundle is what rendered designs load, and a listener installed on
+ * import would reach a canvas that never asked for one. Counted, because a card mounts one provider
+ * per cell and the listeners only need to exist once per window.
+ */
+let modalityUsers = 0;
+let uninstallModality: (() => void) | null = null;
+
+function useKeyboardModality(): void {
+  useLayoutEffect(() => {
+    if (modalityUsers++ === 0) uninstallModality = installKeyboardModality(window);
+    return () => {
+      if (--modalityUsers === 0) {
+        uninstallModality?.();
+        uninstallModality = null;
+      }
+    };
+  }, []);
+}
+
 export function GrimoirePreviewProvider({ children }: { children: ReactNode }) {
   setArtMode("synthetic");
   useAppSurface();
+  useKeyboardModality();
   return <GrimoireWorld>{children}</GrimoireWorld>;
 }
