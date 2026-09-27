@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { Draggable } from "@dnd-kit/dom";
 import { dndId, dndManager, registerNow } from "@/lib/dndManager";
-import { useDndDragging, useDndDropTarget } from "@/lib/dndTarget";
+import { useDndDragging, useDndDropTarget, useDragRecord } from "@/lib/dndTarget";
 import { startPointerDrag } from "@/test-drag";
 
 /** A payload of this file's own, under a key nothing else in the app writes — so a reader that
@@ -39,8 +39,8 @@ function boxed(element: HTMLElement, top: number, height = 40): HTMLElement {
   return element;
 }
 
-function mountSource(id: number): HTMLElement {
-  const element = boxed(document.createElement("div"), 0);
+function mountSource(id: number, top = 0): HTMLElement {
+  const element = boxed(document.createElement("div"), top);
   element.textContent = "a thing";
   document.body.append(element);
   const draggable = new Draggable(
@@ -58,6 +58,10 @@ function mountSource(id: number): HTMLElement {
 interface Props {
   canDrop: (thing: Thing) => boolean;
   onDrop: (thing: Thing) => void;
+  /** The shelves' opt-in: arm on a payload that was already in the air at mount. */
+  armOnMount?: boolean;
+  /** The shelves' other opt-in: a collision only while the pointer is inside the target. */
+  pointerOnly?: boolean;
 }
 
 function mountTarget({
@@ -245,5 +249,181 @@ describe("useDndDragging", () => {
     const held = await startPointerDrag(element);
     expect(view.result.current).toBeNull();
     await held.cancel();
+  });
+});
+
+/**
+ * **A target that mounts in the middle of a drag.** Every target above is registered before the
+ * press, which is the case the `dragstart` listener was written for. A virtualised wall mounts its
+ * rows as they scroll in — and a reader carrying a card is exactly a reader who scrolls — so the
+ * shelves' headings ask for `armOnMount` (spec §6). The plain target beside it is the fence that
+ * the old rule is unchanged for everybody who did not ask.
+ */
+describe("useDndDropTarget with armOnMount", () => {
+  it("arms a target that mounts in the middle of a drag, and only when asked to", async () => {
+    const held = await startPointerDrag(mountSource(7));
+    const asked = mountTarget({ armOnMount: true });
+    const plain = mountTarget({ top: 400 });
+
+    expect(asked.state.armed).toBe(true);
+    expect(plain.state.armed).toBe(false);
+
+    await held.cancel();
+    expect(asked.state.armed).toBe(false);
+  });
+
+  it("does not arm a late target for a payload it would refuse", async () => {
+    const held = await startPointerDrag(mountSource(7));
+    const target = mountTarget({ armOnMount: true, canDrop: (thing) => thing.id !== 7 });
+
+    expect(target.state.armed).toBe(false);
+    await held.cancel();
+  });
+
+  it("takes the drop on a target that mounted mid-drag", async () => {
+    const onDrop = vi.fn();
+    const held = await startPointerDrag(mountSource(9));
+    const target = mountTarget({ armOnMount: true, onDrop });
+
+    await held.over(target.element);
+    expect(target.state.over).toBe(true);
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith({ id: 9 });
+  });
+
+  /** An `armOnMount` target reads the page's answer on every render rather than once at
+   *  `dragstart` — the counts a page gates on can land while the reader is still holding. */
+  it("follows the page's answer live while the drag is in the air", async () => {
+    const target = mountTarget({ armOnMount: true });
+    const held = await startPointerDrag(mountSource(9));
+    expect(target.state.armed).toBe(true);
+
+    target.rerender({ canDrop: () => false });
+    expect(target.state.armed).toBe(false);
+    await held.cancel();
+  });
+});
+
+describe("useDragRecord", () => {
+  it("answers the record in the air — before, during, after, and on a mount mid-drag", async () => {
+    const early = renderHook(() => useDragRecord());
+    expect(early.result.current).toBeNull();
+
+    const held = await startPointerDrag(mountSource(5));
+    expect(read(early.result.current!)).toEqual({ id: 5 });
+    const late = renderHook(() => useDragRecord());
+    expect(read(late.result.current!)).toEqual({ id: 5 });
+
+    await held.cancel();
+    expect(early.result.current).toBeNull();
+    expect(late.result.current).toBeNull();
+  });
+
+  it("answers null when disabled, whatever is in the air", async () => {
+    const off = renderHook(() => useDragRecord(false));
+    const held = await startPointerDrag(mountSource(5));
+
+    expect(off.result.current).toBeNull();
+    await held.cancel();
+  });
+});
+
+/**
+ * **A target that is over only while the pointer is inside it** — the shelves' opt-in, from the live
+ * pass's "Extra, found during 3". dnd-kit's default detector is `pointerIntersection ??
+ * shapeIntersection`, and the fallback compares the **dragged card's whole rectangle** with the
+ * target: a card carried over one shelf's tiles overlaps the next shelf's heading, which went over
+ * and took the drop. Measured in the shipped window: a card released on tile 50 of `Foils` filed
+ * into `Showcase`, 22px below.
+ *
+ * **Where the overlap is staged, and why there.** dnd-kit measures the carried card once, off the
+ * source's own box, and jsdom never re-runs the effect that would move that measurement with the
+ * pointer (`test-drag.ts`'s `settle` has the reading). So here the card's rectangle *is* the
+ * source's: a source at 230–270 overlaps the 200–240 target by 10px, and its centre — where the
+ * press lands — is 10px below the target. That is the shipped case exactly: the pointer outside, the
+ * card it carries reaching in. The pointer is then walked further off, so nothing is under it.
+ */
+describe("useDndDropTarget with pointerOnly", () => {
+  /** 10px of the carried card inside the 200–240 target; its centre 10px below it. */
+  const OVERLAPPING = 230;
+  /** Past the target and past the source: the pointer is over nothing at all. */
+  const OFF = { x: 100, y: 330 };
+
+  /** The fence for everybody who did not ask — the deck editor's piles, the sidebar, the quick
+   *  zones: a card whose rectangle overlaps a target still lands on it, as it always has. */
+  it("leaves a plain target taking a card that overlaps it with the pointer outside", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(7, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    expect(target.state.over).toBe(true);
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith({ id: 7 });
+  });
+
+  it("is not over, and takes nothing, while the pointer is outside it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(7, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    expect(target.state.armed).toBe(true);
+    expect(target.state.over).toBe(false);
+    await held.drop();
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  it("is over, and takes the drop, once the pointer is inside it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(7, OVERLAPPING));
+
+    await held.moveTo(OFF.x, OFF.y);
+    await held.over(target.element);
+    expect(target.state.over).toBe(true);
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith({ id: 7 });
+  });
+});
+
+/**
+ * **A pointer-inside target that has moved out from under the pointer takes nothing** — the live
+ * re-check's new finding 5. The wall autoscrolls while a reader holds a card still, and the
+ * collisions follow the moving rows about one update behind: a heading stayed the operation's
+ * target up to 16px after it had passed the pointer, so a release in that window filed the card
+ * into the heading just passed. A `pointerOnly` target promises a drop only from over it, so it
+ * checks the pointer against its own rect **as it is at the release**, not as it was at the last
+ * collision.
+ *
+ * The staging is the window itself: the pointer is over the target, then the target's box moves
+ * away with **no pointer move** — so no collision pass runs and the operation's target is still
+ * this one when the release arrives, exactly as it was in the shipped window.
+ */
+describe("useDndDropTarget, a target that moved away before the release", () => {
+  it("files nothing from a pointer-inside target the pointer is no longer inside", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop, pointerOnly: true });
+    const held = await startPointerDrag(mountSource(7));
+
+    await held.over(target.element);
+    expect(target.state.over).toBe(true);
+    // Autoscroll carries the row 200px up past the still pointer; nothing measures it again.
+    boxed(target.element, 0);
+    await held.drop();
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  /** The fence for everybody who did not ask: a plain target takes the drop its collision gave
+   *  it, as it always has — the deck editor's piles, zones and tray keep this exactly. */
+  it("leaves a plain target taking the drop the last collision gave it", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(7));
+
+    await held.over(target.element);
+    boxed(target.element, 0);
+    await held.drop();
+    expect(onDrop).toHaveBeenCalledWith({ id: 7 });
   });
 });

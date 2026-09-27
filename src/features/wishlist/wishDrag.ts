@@ -102,9 +102,11 @@ export function readWishDrag(data: Record<string, unknown>): WishDrag | null {
  *
  * **This is the wishlist paying what the collection did not.** Widening `CollectionDrop` was one
  * arm on a type that was already a union; here every target had `WishDrag` written into its props,
- * so the union is prop-type churn across six sites — {@link useWishDropTarget}, `WishFolderCard`,
+ * so the union was prop-type churn across six sites — {@link useWishDropTarget}, `WishFolderCard`,
  * `WishParentFolderCard`, `WishlistBreadcrumb`'s `Segment`, and the page's own `canFile`/`fileWish`.
- * **It is still cheaper than the alternative**, which was a second droppable per folder card:
+ * (The two cards went with the folder band on 2026-09-26; the shelves read this union through
+ * `WishShelfHeading.tsx`, whose targets come from `features/shelves/useShelfDrag`.)
+ * **It was still cheaper than the alternative**, which was a second droppable per folder card:
  * `@dnd-kit/dom` keys its registry by entity id, so two registrations on one element both stand and
  * `accepts()` keeps them apart — that really would work now, and it would split the `armed`/`over`
  * pair these cards fold into one. Two rings on one card, each answering about a different drag, is
@@ -178,7 +180,8 @@ export function wishDraggable({
  * gated by one `canDrop`.
  *
  * **One reader per element, and that is what the {@link WishDrop} union bought.** Since the search
- * column landed there are two things a folder card can be given — a wish being re-filed and a
+ * column landed there are two things a folder target can be given (a folder card until the
+ * shelves; a breadcrumb segment, a heading or an empty box since) — a wish being re-filed and a
  * printing being added — and the obvious alternative was a second `useDndDropTarget` beside this
  * one. dnd-kit would allow it; what it would cost is this hook's `armed`/`over` pair, which every
  * card folds into one ring and would then have to fold into one by hand from two.
@@ -206,10 +209,14 @@ export function useWishDropTarget({
   ref,
   canDrop,
   onDrop,
+  pointerOnly = false,
 }: {
   ref: RefObject<HTMLElement | null>;
   canDrop: (drop: WishDrop) => boolean;
   onDrop: (drop: WishDrop) => void;
+  /** A collision only while the pointer is inside the target — `useDndDropTarget`'s option, for a
+   *  thin target a carried card overlaps while the pointer is elsewhere. Off by default. */
+  pointerOnly?: boolean;
 }): { armed: boolean; over: boolean } {
-  return useDndDropTarget({ ref, read: readWishDrop, canDrop, onDrop });
+  return useDndDropTarget({ ref, read: readWishDrop, canDrop, onDrop, pointerOnly });
 }

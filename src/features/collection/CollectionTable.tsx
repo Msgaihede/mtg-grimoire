@@ -1,26 +1,39 @@
 import {
+  Fragment,
+  useCallback,
   useEffect,
+  useMemo,
   useRef,
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
-import { Lock, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
-import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
+import { TABLE_BAND_HEIGHT, VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { collectionDraggable } from "@/features/collection/collectionDrag";
 import { CONDITION_LABEL, CONDITION_NOT_SET, type Condition } from "@/lib/conditions";
+import { useDragRecord } from "@/lib/dndTarget";
 import { finishLabel, isFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
+import { readFolderDrag } from "@/lib/folderDrag";
 import type { CollectionRow, CollectionSortKey } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
+import {
+  SHELF_EMPTY_HEIGHT,
+  SHELF_INDENT_PX,
+  SHELF_RAIL_OFFSET_PX,
+  type LayoutRow,
+} from "@/lib/shelfLayout";
+import type { Shelf } from "@/lib/shelves";
 import type { SortSpec } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -78,11 +91,10 @@ function copyLabel(row: CollectionRow): string {
  * which is exactly where it says something. The name truncates last because it is what
  * identifies a row, the same conclusion the search table reached the hard way.
  *
- * **Still six with the folders, and that is why the filing shares the last column rather than
- * taking one of its own.** `Folder` is where `DeckCountCell` used to sit and where the removal
- * still does: one heading, two things, the row deciding which — the arrangement the derived mode
- * already proved this column can carry. A seventh column at 4.5rem would take the name to about
- * 44px at the width the paragraph above measured, which is the failure it exists to record.
+ * **Six, and the sixth is the removal's strip again.** Folders had it carry the drawer's name as
+ * well (`Folder`), and shelves took that back off: a shelved table draws each shelf's rows under
+ * that shelf's band, which names the drawer and wears its lock, so a column saying the band's word
+ * on every row under it was the same fact forty times. The 2.5rem it gave up goes back to the name.
  *
  * That squeeze is also why the two orders with no column stay on the filter bar's select
  * rather than becoming columns: there is no room, and this table has already given one up.
@@ -96,8 +108,6 @@ function columnsFor(
   tip: TooltipBinder,
   /** {@link CollectionTable}'s prop of the same name, threaded down to the one cell it fences. */
   quantityBlocked?: (row: CollectionRow) => string | null,
-  /** {@link CollectionTable}'s prop of the same name, threaded down to the Folder cell it marks. */
-  folderLocked?: (row: CollectionRow) => boolean,
 ): TableColumn<CollectionRow>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
@@ -216,7 +226,7 @@ function columnsFor(
 
           It prints `Foil`. Not `Foil · NONE`, which puts a storage token in a column a reader
           scans; not `Foil · —`, because an em dash is what this table draws for a *value* it
-          does not have (the root folder, an unpriced row) and a grade nobody claimed is not a
+          does not have (an orphan's name, an unpriced row) and a grade nobody claimed is not a
           missing value. The `<abbr>` and its `sr-only` twin go with it for the same reason:
           an abbreviation that expands to nothing, and a " (…)" read aloud after a finish, are
           two ways of announcing an absence that is better left silent. */
@@ -356,108 +366,180 @@ function columnsFor(
       },
     },
     {
-      key: "folder",
+      key: "remove",
+      width: "2rem",
       /**
-       * `4.5rem` is the width `DeckCountCell` was measured at for `11 decks` at 0.7rem, and a
-       * folder name is the same shape of thing: a short word the reader chose, truncating with
-       * its whole name on the tooltip. The 2.5rem over the icon button's 2rem comes off the
-       * name, the only flexing column — the same trade the derived mode made for the same
-       * column, and the reason this is *not* a seventh column: the header of this file argues
-       * six against seven with the figures, and at 1280px with the card pane open a seventh
-       * would take the name column to about 44px.
+       * **The removal, in a strip of its own** — where it stood before folders, and for the reason
+       * it stood there: offered on an empty row and nowhere else. **No shipped write produces one**
+       * (since schema v24 a stepper at zero deletes, and `collectionUpdate` has no caller), so this
+       * is the escape hatch for a row a hand-edited database or a future editor leaves behind, and
+       * it stays fenced on `quantity === 0` because on a row that still holds cards it would be a
+       * one-click way to lose the lot from a list that scrolls under the pointer.
        */
-      width: "4.5rem",
-      /**
-       * **Where the copy is filed, and the removal, under one heading — the row decides which.**
-       *
-       * `DeckCountCell` held this column while the collection was derived and PR 1 took it out,
-       * leaving a 2rem strip that was empty on every row but the rare emptied one. Folders give
-       * it something to say on **every** row instead, and it is a value already on the row rather
-       * than a hover query — a net deletion of a lazy per-row ipc call (spec §7.1).
-       *
-       * The header is visible now, where the removal's was `srOnlyHeader`: a column carrying a
-       * value on every row is a column a reader has to be able to name, and an unnamed one is
-       * announced as "column 6" for every row either way.
-       */
-      header: "Folder",
-      // The cell holds a control on an emptied row, so the row's own press must not also fire.
-      // `interactive` stamps `data-no-drag` and swallows the click and the two activation keys.
-      // It costs this cell as a grab handle and as a place to click the card open — the cheapest
-      // price available, since the name, Set and Value cells are all three still both.
+      header: "Remove",
+      srOnlyHeader: true,
+      // A control lives here on an empty row, so the row's own press must not also fire.
       interactive: true,
-      cellClassName: "flex items-center justify-between gap-1 text-xs text-dim",
-      cell: (row) => (
-        <>
-          {/* An em dash for a copy at the root, which is where every card starts and where a
-              deleted folder's cards return to. Not the word "Collection": the breadcrumb says
-              that about the *level*, and repeating it four hundred times down a column would be
-              a name for the absence of filing rather than a folder.
-
-              `folderName` is the row's own join, so a folder renamed in another window is named
-              by whatever the last read said. `null` with a `folderId` set cannot happen through
-              the join and reads as the root if it ever does — an em dash is the honest answer for
-              a drawer this row cannot name. */}
-          <span className="flex min-w-0 items-center gap-1">
-            {/* **The mark for a copy the reader has set aside** — issue #436, and this column is
-                where it goes because the lock is a fact about the *drawer*, which is the one
-                thing this cell says. A row is one entry and therefore one folder, so unlike the
-                wall's tile there is nothing to reconcile here: `folderLocked` is asked of the
-                row and answers about that drawer alone.
-
-                `role="img"` with its whole word as the name, `ElsewhereMark`'s arrangement: the
-                glyph says nothing on its own, and it sits in a cell rather than inside a
-                control, so naming itself costs nothing else its name. The word is `Locked`
-                because that is what `CollectionFolderCard`'s badge says one surface over — two
-                spellings of one state is how a reader concludes they are two states.
-
-                It costs the name column about 16px on a locked row, out of the 4.5rem the header
-                of this column argues for. That is paid deliberately: on a row that is set aside
-                the lock is the more important of the two facts, and the name keeps its
-                `whenClipped` tooltip. */}
-            {folderLocked?.(row) === true && (
-              <Lock role="img" aria-label="Locked" className="size-3 shrink-0" />
+      cellClassName: "flex items-center justify-end",
+      cell: (row) =>
+        row.quantity === 0 ? (
+          <button
+            type="button"
+            onClick={() => onRemove(row)}
+            aria-label={`Remove ${row.name ?? row.cardId} (${copyLabel(row)}) from your collection`}
+            {...tip("Remove from your collection", { describes: false })}
+            className={cn(
+              REVEAL_ON_HOVER,
+              "grid size-6 flex-none place-items-center rounded-md border border-border text-dim",
+              "transition-colors duration-150 hover:border-destructive/60 hover:text-destructive",
+              FOCUS,
+              "motion-reduce:transition-none",
             )}
-            <span className="min-w-0 truncate" {...tip(row.folderName, { whenClipped: true })}>
-              {row.folderName ?? "—"}
-            </span>
-          </span>
-          {/* Offered on an empty row and nowhere else — and **no shipped write can produce one
-              today, so this button is unreachable in the app as it stands**. Since schema v24
-              `collectionSetQuantity(id, 0)` deletes the row outright and the importer's `set`
-              mode does the same, and the v24 rung swept away every zero row that was already
-              stored. `collectionUpdate` is the one write left that keeps a row at zero — an
-              edit form sends eight fields at once and must not delete its own subject — and it
-              has no caller in `src/`: there is no entry editor yet.
-
-              It is kept rather than deleted because it is the **only** way out of that row if
-              one ever does appear (a hand-edited database, a future entry editor, a command
-              added without this table in mind), and a row that cannot be removed from the one
-              surface that lists it is a card the reader is stuck with. What it is not is
-              ordinary: nothing a reader can press reaches this branch, and a test that
-              exercises it is testing the escape hatch rather than the stepper. On a row that
-              still holds cards it would be a one-click way to lose the lot from a list that
-              scrolls under the pointer, which is why it stays fenced on `quantity === 0`. */}
-          {row.quantity === 0 && (
-            <button
-              type="button"
-              onClick={() => onRemove(row)}
-              aria-label={`Remove ${row.name ?? row.cardId} (${copyLabel(row)}) from your collection`}
-              {...tip("Remove from your collection", { describes: false })}
-              className={cn(
-                REVEAL_ON_HOVER,
-                "grid size-6 flex-none place-items-center rounded-md border border-border text-dim",
-                "transition-colors duration-150 hover:border-destructive/60 hover:text-destructive",
-                FOCUS,
-                "motion-reduce:transition-none",
-              )}
-            >
-              <Trash2 className="size-3.5" aria-hidden="true" />
-            </button>
-          )}
-        </>
-      ),
+          >
+            <Trash2 className="size-3.5" aria-hidden="true" />
+          </button>
+        ) : null,
     },
   ];
+}
+
+/**
+ * What a shelved table is handed (spec §3.10): the wall's own layout rows — `layoutShelves` over the
+ * page's sections, at one column — the loaded rows of each shelf, and the page's four drawings.
+ * The table draws what it is given and decides nothing about shelves; which is open, which is empty
+ * and which label comes first were all decided once, for the wall and the table together.
+ */
+export interface CollectionTableShelves {
+  layout: readonly LayoutRow[];
+  rowsOf: (shelfId: number) => readonly CollectionRow[];
+  /**
+   * Whether every page of the list has loaded. **Required rather than defaulted**, because the
+   * answer decides where the table stops drawing (see {@link shelvedRows}) and a default of "yes"
+   * would quietly draw every heading past the loaded rows for a caller that forgot to say.
+   */
+  complete: boolean;
+  renderHeading: (shelf: Shelf) => ReactNode;
+  renderLabel: (group: "decks" | "managed") => ReactNode;
+  renderEmpty: (shelf: Shelf) => ReactNode;
+  renderSticky: (shelf: Shelf | null, scrollToTop: () => void) => ReactNode;
+  /**
+   * The shelf whose heading band to bring into view — `CardGrid`'s `revealShelfId`, the table's
+   * half: Add folder's draft heading while its field is open, and afterwards the heading the caret
+   * is being handed back to (after Add folder in a heading, or a Move up / Move down). Handed to
+   * `VirtualTable` as that band's row index (`revealIndex`), which scrolls it clear of the header
+   * and the sticky bar and never moves focus — the heading takes the caret itself once it is drawn.
+   * A shelf with no band among the rows drawn (past the loaded edge, or not on this wall) reveals
+   * nothing.
+   */
+  revealShelfId?: number | null;
+}
+
+/** A band row: a label, a heading, or an empty folder's box — drawn by `VirtualTable` itself. */
+type Band =
+  | { kind: "label"; group: "decks" | "managed" }
+  | { kind: "heading"; shelf: Shelf }
+  | { kind: "empty"; shelf: Shelf };
+type TableRow = CollectionRow | { band: Band };
+
+/** `CollectionRow` has no `band` field, so its presence is the whole discriminant. */
+const isBand = (row: TableRow): row is { band: Band } => "band" in row;
+
+/** Which shelf's band a row is — its folder's id for a heading or an empty box, the group for a
+ *  label, which belongs to no shelf. `WishlistTable`'s keys, spelt the same way. */
+function bandKey(band: Band): string {
+  if (band.kind === "label") return `label:${band.group}`;
+  return band.kind === "heading" ? `band:${band.shelf.id}` : `empty:${band.shelf.id}`;
+}
+
+/**
+ * The layout as one list of table rows, and the shelf each row belongs to — a band per label,
+ * heading and empty row, and a shelf's loaded rows **once**, where its first run of tiles is. The
+ * layout is at one column, so a shelf has one tiles row per tile; the table draws entries rather
+ * than tiles, so it reads only where the shelf's rows start and draws every loaded row there.
+ *
+ * **While pages remain, it stops after the shelf holding the last loaded row** — the wishlist's
+ * `shelfTable` rule, reached from rows rather than counts because a collection shelf's count is in
+ * *tiles* and the table draws *entries*. The list is paged in shelf order, so that shelf is the
+ * edge of what has arrived. Drawn past it, every later shelf's band would stand over rows that
+ * are not there — `42 cards` over nothing — and `VirtualTable`, which asks for the next page when
+ * the rows it has drawn run low, would count those bands as rows and not ask until the reader had
+ * scrolled deep into them, then insert a page above the viewport. With nothing loaded yet the edge
+ * is the first shelf expecting rows, which is the one the first page is filling.
+ */
+function shelvedRows(
+  layout: readonly LayoutRow[],
+  rowsOf: (shelfId: number) => readonly CollectionRow[],
+  complete: boolean,
+): {
+  rows: TableRow[];
+  shelfAt: (Shelf | null)[];
+  /** The indent of the shelf each drawn entry is filed under — what its rails are counted from. */
+  indentOf: ReadonlyMap<TableRow, number>;
+} {
+  // The shelf the drawing stops after, or `null` to draw every one.
+  let edge: number | null = null;
+  if (!complete) {
+    for (const row of layout) {
+      if (row.kind !== "tiles") continue;
+      if (edge === null) edge = row.shelf.id;
+      if (rowsOf(row.shelf.id).length > 0) edge = row.shelf.id;
+    }
+  }
+  const rows: TableRow[] = [];
+  const shelfAt: (Shelf | null)[] = [];
+  const indentOf = new Map<TableRow, number>();
+  const drawn = new Set<number>();
+  for (const [index, row] of layout.entries()) {
+    // Past the edge shelf's rows: a label, heading or empty box for a later shelf ends the drawing.
+    if (edge !== null && drawn.has(edge) && (row.kind === "label" || row.shelf.id !== edge)) break;
+    if (row.kind === "label") {
+      rows.push({ band: { kind: "label", group: row.group } });
+      // A label belongs to the shelf it introduces — `shelfAtRow`'s rule.
+      const next = layout[index + 1];
+      shelfAt.push(next !== undefined && next.kind !== "label" ? next.shelf : null);
+    } else if (row.kind === "heading") {
+      rows.push({ band: { kind: "heading", shelf: row.shelf } });
+      shelfAt.push(row.shelf);
+    } else if (row.kind === "empty") {
+      rows.push({ band: { kind: "empty", shelf: row.shelf } });
+      shelfAt.push(row.shelf);
+    } else if (!drawn.has(row.shelf.id)) {
+      drawn.add(row.shelf.id);
+      for (const entry of rowsOf(row.shelf.id)) {
+        rows.push(entry);
+        shelfAt.push(row.shelf);
+        indentOf.set(entry, row.shelf.indent);
+      }
+    }
+  }
+  return { rows, shelfAt, indentOf };
+}
+
+/**
+ * **The rails** (spec §3.3), the table's half of `CardGrid`'s `ShelfRails`: one 1px line per level
+ * of indent, standing at the same offsets the wall's do, as tall as the row.
+ *
+ * **Positioned against the row, never against the cell**, and that is the one decision here. The
+ * name cell's `Needs review` sentence is `absolute inset-x-3` against the row, so a `relative` on
+ * the first cell would squeeze that sentence into the name column; the band's cell is not
+ * positioned either. So the rails sit in a zero-width `absolute inset-y-0 left-3` box — which
+ * resolves to the row in both, starts where the row's `px-3` content starts, and is the row's full
+ * height — and each rail stands `SHELF_RAIL_OFFSET_PX + level × SHELF_INDENT_PX` into it.
+ */
+function TableRails({ indent }: { indent: number }) {
+  if (indent <= 0) return null;
+  return (
+    <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-3">
+      {Array.from({ length: indent }, (_, level) => (
+        <span
+          key={level}
+          data-shelf-rail=""
+          className="absolute inset-y-0 border-l border-border"
+          style={{ left: SHELF_RAIL_OFFSET_PX + level * SHELF_INDENT_PX }}
+        />
+      ))}
+    </span>
+  );
 }
 
 /**
@@ -467,7 +549,7 @@ function columnsFor(
  * **Two payloads under two keys on one registration.** The **card** half is what a deck category
  * or the sidebar's Decks entry reads, and it carries no finish and no condition: a deck names a
  * printing, and the two columns that make this row an *entry* are exactly what such a drop cannot
- * answer. The **entry** half is what a folder card or a breadcrumb segment reads, and it is the
+ * answer. The **entry** half is what a shelf heading or a breadcrumb segment reads, and it is the
  * whole of what a filing write needs — the entry's id, its name for whatever says what moved, and
  * where it is filed now so a folder can refuse the row it already holds. `collectionDrag.ts`
  * argues at length why those are two keys rather than one; the short of it is that both readers
@@ -540,10 +622,10 @@ export function CollectionTable({
   onSetQuantity,
   onRemove,
   quantityBlocked,
-  folderLocked,
   rowMenu,
   rowMenuKey,
   marketplace,
+  shelves,
 }: {
   rows: CollectionRow[];
   /** Rows matching the filters, not rows loaded — what assistive tech is told the list is. */
@@ -589,28 +671,6 @@ export function CollectionTable({
    */
   quantityBlocked?: (row: CollectionRow) => string | null;
   /**
-   * Whether this row's copy is filed in a drawer the reader has set aside — issue #365 for the
-   * lock, issue #436 for why this table draws it at all.
-   *
-   * **The mark exists because the exclusion stopped.** Until 2026-09-09 the collection page
-   * asked its list with `excludeLocked: true`, so a locked drawer's copies were absent from
-   * this table and from the header above it — and absence *was* the statement. #436 put them
-   * back: a set-aside card is still owned, still worth what it is worth, and still the reader's
-   * to see. So the lock has to be legible on the copy instead, and the Folder cell is where it
-   * goes because the lock is a fact about the drawer.
-   *
-   * **The *effective* lock, and the caller is the only one who can answer it.** It inherits down
-   * the tree (`lockedFolderIds` in `lib/folderTree.ts`), so the honest answer is a walk over the
-   * whole cabinet and a row carries one `folderId`. A predicate here would be this table
-   * re-deriving a fact the page already holds — which is exactly what `CollectionPage`'s own
-   * rule forbids of the badge, the two greyed rows and the drag confirmation.
-   *
-   * Optional, and optional in {@link quantityBlocked}'s way rather than defaulted: absent, every
-   * row draws the plain cell it drew before the lock existed, which is what every story and
-   * every read-only mount of this table wants.
-   */
-  folderLocked?: (row: CollectionRow) => boolean;
-  /**
    * What a row offers on a right-click — a ready-made `onContextMenu` handler, one per row.
    *
    * A prop rather than a hook here, for the reason the two callbacks above it are props: a
@@ -628,67 +688,245 @@ export function CollectionTable({
   /** Which marketplace the Value column quotes. Passed rather than read here so the table and
    *  the header above it cannot disagree about what they are pricing in. */
   marketplace: Marketplace;
+  /**
+   * The shelves (spec §3.10). Absent: today's flat table over `rows`, which is what every story and
+   * every other mount of this table wants. Present: `rows` is ignored for drawing, and the table
+   * draws the layout's bands with each shelf's rows under its heading.
+   */
+  shelves?: CollectionTableShelves;
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the list
   // never has to know whether one is open, only which card is in it.
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   const tip = useTooltip();
+  /**
+   * `display: contents`, so this box has no layout of its own and the table's height chain
+   * (`min-h-0 flex-1` on `VirtualTable`'s root) is untouched — it exists only so the sticky bar's
+   * **Top** can find the scroller, which `VirtualTable` keeps to itself.
+   */
+  const frame = useRef<HTMLDivElement>(null);
+  /**
+   * **Top scrolls the table's scroller, which is not the `role="table"` element here.** While a
+   * sticky band is live `VirtualTable` moves the scroll container onto a plain `div` around the
+   * table — the bar may not be owned by a `role="table"` — so the scroller is the table's parent,
+   * and a Top aimed at the table itself would scroll nothing. The bar is drawn only while the
+   * band is live, so this is only ever pressed in that shape.
+   */
+  const scrollToTop = useCallback(() => {
+    const table = frame.current?.querySelector<HTMLElement>('[role="table"]');
+    const scroller = table?.parentElement;
+    if (scroller) scroller.scrollTop = 0;
+  }, []);
+
+  /**
+   * **Keyed on the layout, the lookup and the paging flag — never on the `shelves` object.** The
+   * page builds that object around four drawing callbacks that close over its mutations, and a
+   * `useMutation` result is a fresh object every render, so the object is new on every keystroke
+   * anywhere on the page. Keyed on it, every keystroke rebuilt the row list and handed
+   * `VirtualTable` a new `rows` — `CardGrid`'s `sections` rule (`GridSections`), the table's half.
+   * The drawings are read at draw time, through {@link band} and {@link stickyBand}.
+   */
+  const layout = shelves?.layout;
+  const rowsOfShelf = shelves?.rowsOf;
+  const complete = shelves?.complete ?? true;
+  const shelved = useMemo(
+    () => (layout && rowsOfShelf ? shelvedRows(layout, rowsOfShelf, complete) : null),
+    [layout, rowsOfShelf, complete],
+  );
+  const tableRows: TableRow[] = shelved ? shelved.rows : rows;
+  /** The requested shelf's heading band, as a row index — or nothing to reveal. */
+  const revealShelfId = shelves?.revealShelfId ?? null;
+  const revealIndex = useMemo(() => {
+    if (shelved === null || revealShelfId === null) return null;
+    const at = shelved.rows.findIndex(
+      (row) => isBand(row) && row.band.kind === "heading" && row.band.shelf.id === revealShelfId,
+    );
+    return at < 0 ? null : at;
+  }, [shelved, revealShelfId]);
+
+  /**
+   * **A band asked for past the loaded edge pages until it is drawn** (the final review's C-I1).
+   * {@link shelvedRows} stops after the shelf holding the last loaded row, so on any list longer
+   * than a page a heading laid out further down — Add folder's draft, last among its siblings, or a
+   * heading a caret request is waiting for — was simply not drawn: the naming field was invisible
+   * while it still held the Escape rung, and a later page mounted it under the reader and yanked
+   * the caret and the scroll with it. So while the requested heading is in the layout and not among
+   * the rows, the table asks for the next page, and again as each lands — the page's own guard
+   * (`hasNextPage`, not while one is fetching) is what keeps that to one request at a time.
+   *
+   * A shelf the layout does not hold at all asks for nothing: paging would never draw it.
+   */
+  const revealWaiting =
+    revealShelfId !== null &&
+    revealIndex === null &&
+    !complete &&
+    (layout?.some((row) => row.kind === "heading" && row.shelf.id === revealShelfId) ?? false);
+  useEffect(() => {
+    if (revealWaiting) onNeedNextPage();
+  }, [revealWaiting, shelved, onNeedNextPage]);
+
+  /**
+   * **The heading being dragged stays drawn wherever the table scrolls** (the final review's S-I3,
+   * `VirtualTable`'s `keepRow`). A heading band is a drag source inside a virtualised row, so one
+   * carried more than the overscan past the window unmounted its own source and the drag ended
+   * with it. Read off the drag in flight — the collection's own folder drag, never a card — as the
+   * band index of that folder's heading, or nothing.
+   */
+  const inFlight = useDragRecord(shelves !== undefined);
+  const carriedId =
+    inFlight === null ? null : (readFolderDrag(inFlight, "collection")?.folderId ?? null);
+  const keepRow = useMemo(() => {
+    if (shelved === null || carriedId === null) return null;
+    const at = shelved.rows.findIndex(
+      (row) => isBand(row) && row.band.kind === "heading" && row.band.shelf.id === carriedId,
+    );
+    return at < 0 ? null : at;
+  }, [shelved, carriedId]);
+
+  // A band never reaches a column's cell (`VirtualTable` draws it itself), so the guard below is
+  // for the type, which is the union. The first column also carries the row's rails and is
+  // indented by its shelf's depth, so the name lines up under its heading's title.
+  const columns = useMemo(
+    () =>
+      columnsFor(onSetQuantity, onRemove, marketplace, tip, quantityBlocked).map(
+        (column, index): TableColumn<TableRow> => ({
+          ...column,
+          cell: (row) => {
+            if (isBand(row)) return null;
+            const indent = index === 0 ? (shelved?.indentOf.get(row) ?? 0) : 0;
+            if (indent === 0) return column.cell(row);
+            return (
+              <>
+                <TableRails indent={indent} />
+                <span className="block min-w-0" style={{ paddingLeft: indent * SHELF_INDENT_PX }}>
+                  {column.cell(row)}
+                </span>
+              </>
+            );
+          },
+        }),
+      ),
+    [onSetQuantity, onRemove, marketplace, tip, quantityBlocked, shelved],
+  );
+
+  // Indented and railed exactly as the rows under it are. It changes with the page's drawings,
+  // which is every render — accepted: `VirtualTable` redraws the bands with it, and the row list
+  // above, which is what a relayout would cost, holds still.
+  //
+  // **Keyed by the shelf, so a band never changes which folder it draws.** `VirtualTable` keys its
+  // rows by position, so without a key a Move up / Move down re-used the heading at the old place
+  // for the folder that took it — `⋯` and all — and the caret the menu had just put back on the
+  // moved folder's `⋯` stayed there, on another folder's control. Keyed, the old heading goes with
+  // its folder: the caret falls to `<body>`, and the moved heading takes it back where it lands
+  // (`CollectionShelfHeading`'s `caret`). The keys are `WishlistTable`'s, spelt the same way.
+  const band = useCallback(
+    (row: TableRow): ReactNode => {
+      if (!isBand(row) || !shelves) return null;
+      const { band: b } = row;
+      if (b.kind === "label") {
+        return <Fragment key={bandKey(b)}>{shelves.renderLabel(b.group)}</Fragment>;
+      }
+      const indent = b.shelf.indent;
+      return (
+        <Fragment key={bandKey(b)}>
+          <TableRails indent={indent} />
+          <span
+            className="flex min-w-0 flex-1 items-center self-stretch"
+            style={{ paddingLeft: indent * SHELF_INDENT_PX }}
+          >
+            {b.kind === "heading" ? shelves.renderHeading(b.shelf) : shelves.renderEmpty(b.shelf)}
+          </span>
+        </Fragment>
+      );
+    },
+    [shelves],
+  );
+
+  // **Defined for the whole life of a shelved table, and `null` where there is nothing to pin** —
+  // never toggled between a function and `undefined`: that switches `VirtualTable` between its two
+  // root shapes (the table as its own scroller, and a plain scroller around it), which remounts the
+  // table and drops the caret on `<body>`. `null` while the row under the column header is itself
+  // a heading: the heading is its own bar, and a bar drawn over it would hide the controls it
+  // copies (Task 5's caller rule).
+  const stickyBand = useCallback(
+    (index: number): ReactNode => {
+      if (!shelved || !shelves) return null;
+      const row = shelved.rows[index];
+      if (row === undefined || (isBand(row) && row.band.kind === "heading")) return null;
+      return shelves.renderSticky(shelved.shelfAt[index] ?? null, scrollToTop);
+    },
+    [shelved, shelves, scrollToTop],
+  );
 
   return (
-    <VirtualTable
-      rows={rows}
-      columns={columnsFor(
-        onSetQuantity,
-        onRemove,
-        marketplace,
-        tip,
-        quantityBlocked,
-        folderLocked,
-      )}
-      label="Your collection"
-      // A collection total is counted in full, so there is no unknown-count case here.
-      total={total}
-      listKey={listKey}
-      sort={sort}
-      onSort={onSort}
-      // The reconciler's sentence is a band under the row it belongs to, and a virtualiser
-      // told every row is the same height would overlap the one below it by exactly that
-      // band.
-      extraHeight={(row) => (row.needsReview ? REVIEW_HEIGHT : 0)}
-      // A row opens the card, from the mouse and from the keyboard both.
-      onActivate={(row) => selectCard(row.cardId)}
-      isSelected={(row) => row.cardId === selectedCardId}
-      // Last, so it wins over the selection colour: a row holding no copies is a record of a
-      // card the user no longer holds, and it says so by receding rather than by
-      // disappearing (see the removal button's comment for the one write that still makes one).
-      rowClassName={(row) => (row.quantity === 0 ? "text-dim" : undefined)}
-      onNeedNextPage={onNeedNextPage}
-      // A right-click is not an activation: `onActivate` above is a left click and the two
-      // keys, and neither of them fires for this one — so the menu asks about the row without
-      // also opening the card in the pane.
-      //
-      // The row's own `onKeyDown` runs first and is not replaced: it answers Enter and Space
-      // (opening the card), and `menuKey` answers Shift+F10 and the ContextMenu key. Two
-      // handlers for one event, because the row already had one — dropping `props`' would take
-      // the keyboard's route to the *card* away in the act of adding one to its menu. A press
-      // inside the quantity stepper is left alone by the primitive, which tests for a field
-      // before it builds anything.
-      renderRow={(props, row) => (
-        <DraggableRow
-          entryId={row.id}
-          cardId={row.cardId}
-          name={row.name}
-          typeLine={row.typeLine}
-          folderId={row.folderId}
-          {...props}
-          onContextMenu={rowMenu?.(row)}
-          onKeyDown={(e) => {
-            props.onKeyDown?.(e);
-            rowMenuKey?.(row)(e);
-          }}
-        />
-      )}
-    />
+    <div ref={frame} className="contents">
+      <VirtualTable
+        rows={tableRows}
+        columns={columns}
+        label="Your collection"
+        // The data rows matching the filters; `VirtualTable` adds the bands it has loaded.
+        total={total}
+        listKey={listKey}
+        sort={sort}
+        onSort={onSort}
+        band={shelves ? band : undefined}
+        // An empty folder's band holds the dashed box, which is `SHELF_EMPTY_HEIGHT` tall with its
+        // gap; every other band is `TABLE_BAND_HEIGHT`. The reconciler's sentence is a band under
+        // the row it belongs to, and a virtualiser told every row is the same height would overlap
+        // the one below it by exactly that band.
+        extraHeight={(row) =>
+          isBand(row)
+            ? row.band.kind === "empty"
+              ? SHELF_EMPTY_HEIGHT - TABLE_BAND_HEIGHT
+              : 0
+            : row.needsReview
+              ? REVIEW_HEIGHT
+              : 0
+        }
+        stickyBand={shelves ? stickyBand : undefined}
+        revealIndex={revealIndex}
+        keepRow={keepRow}
+        // A row opens the card, from the mouse and from the keyboard both.
+        onActivate={(row) => {
+          if (!isBand(row)) selectCard(row.cardId);
+        }}
+        isSelected={(row) => !isBand(row) && row.cardId === selectedCardId}
+        // Last, so it wins over the selection colour: a row holding no copies is a record of a
+        // card the user no longer holds, and it says so by receding rather than by
+        // disappearing (see the removal button's comment for the one write that still makes one).
+        rowClassName={(row) => (!isBand(row) && row.quantity === 0 ? "text-dim" : undefined)}
+        onNeedNextPage={onNeedNextPage}
+        // A right-click is not an activation: `onActivate` above is a left click and the two
+        // keys, and neither of them fires for this one — so the menu asks about the row without
+        // also opening the card in the pane.
+        //
+        // The row's own `onKeyDown` runs first and is not replaced: it answers Enter and Space
+        // (opening the card), and `menuKey` answers Shift+F10 and the ContextMenu key. Two
+        // handlers for one event, because the row already had one — dropping `props`' would take
+        // the keyboard's route to the *card* away in the act of adding one to its menu. A press
+        // inside the quantity stepper is left alone by the primitive, which tests for a field
+        // before it builds anything.
+        renderRow={(props, row) =>
+          isBand(row) ? (
+            <div {...props} />
+          ) : (
+            <DraggableRow
+              entryId={row.id}
+              cardId={row.cardId}
+              name={row.name}
+              typeLine={row.typeLine}
+              folderId={row.folderId}
+              {...props}
+              onContextMenu={rowMenu?.(row)}
+              onKeyDown={(e) => {
+                props.onKeyDown?.(e);
+                rowMenuKey?.(row)(e);
+              }}
+            />
+          )
+        }
+      />
+    </div>
   );
 }

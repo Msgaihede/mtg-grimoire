@@ -1,49 +1,89 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
+import { ipc } from "@/lib/ipc";
 import { useAppStore, type SearchView } from "@/lib/store";
 import { WishlistPage } from "./WishlistPage";
 
 /**
  * The page, with the layout the store would be holding when a reader arrives at it.
  *
- * `wishlistView` lives in the store — where `"grid"` is the app's own default, because these are
- * cards the reader does not have yet and the picture is how you recognise what you are about to
- * buy — and `WishlistPage` reads it directly, so a story cannot pass it as a prop. `useState`'s
- * lazy initializer is `CollectionPage.stories.tsx`'s answer to that and for its reason: an effect
- * runs after the first paint, so a table story would render the wall for one frame first.
- *
- * **`"grid"`, not `"card"`.** The store's type is `SearchView = "table" | "grid"`, shared with
- * the other two lists; "card mode" is what the filter bar's toggle *calls* it — `LayoutToggle`'s
- * two buttons are named "Card view" and "Table view".
- *
- * **`flatten` is the second store field, and it is seeded here even though this page's default did
- * not move.** It used to be `useState` inside `useWishlist`; it is `wishlistFlattened` now, so it
- * outlives a story the way the layout does — and `CollectionPage.stories.tsx`'s copy of this note
- * carries the reason the two pages disagree about the default (that cabinet's root was narrowed to
- * "filed nowhere" and this one's was not). Written out rather than left implicit, so a story about
- * the cabinet cannot be quietly emptied by a default moving one file away. There is no setter to
- * call — the store publishes a **toggle** — so the seed is a plain `setState`, which deliberately
- * does not bump `flattenPulse` and so writes nothing back through `useFlattenPersistence`.
+ * `wishlistView` lives in the store and `WishlistPage` reads it directly, so a story cannot pass it
+ * as a prop. `useState`'s lazy initializer is `CollectionPage.stories.tsx`'s answer: an effect runs
+ * after the first paint, so a table story would render the wall for one frame first.
  */
-function Page({ view, flatten }: { view: SearchView; flatten: boolean }) {
-  useState(() => {
-    useAppStore.getState().setWishlistView(view);
-    useAppStore.setState({ wishlistFlattened: flatten });
-  });
+function Page({ view }: { view: SearchView }) {
+  useState(() => useAppStore.getState().setWishlistView(view));
   return <WishlistPage />;
+}
+
+/**
+ * The page over a world a story changed first, **through the commands** — `DecksPage.stories.tsx`'s
+ * `OrphanedCover`, for its reasons: it runs once, it is cached in the story's own client, and
+ * `staleTime: Infinity` keeps a window refocus from staging again. `open` hands the page a folder to
+ * open on its way in (`store.ts`'s `pendingFolder`), so a story about a deep level starts there
+ * rather than scrolling a virtualised wall to reach it.
+ */
+function Staged({
+  view,
+  stageKey,
+  stage,
+  open = false,
+}: {
+  view: SearchView;
+  stageKey: string;
+  stage: () => Promise<number>;
+  open?: boolean;
+}) {
+  useState(() => useAppStore.getState().setWishlistView(view));
+  const staged = useQuery({ queryKey: ["story", stageKey], queryFn: stage, staleTime: Infinity });
+  if (!staged.isSuccess) return null;
+  return open ? <OpenedAt folderId={staged.data} /> : <WishlistPage />;
+}
+
+function OpenedAt({ folderId }: { folderId: number }) {
+  useState(() => useAppStore.setState({ pendingFolder: { scope: "wishlist", id: folderId } }));
+  return <WishlistPage />;
+}
+
+/** Every loose wish filed into `Ordered` — the headline case (spec §1). Returns how many moved. */
+async function fileEverything(): Promise<number> {
+  // No `shelves` and no `folderId`: the root read, today's behaviour byte for byte.
+  const loose = await ipc.wishlistList({ limit: 500, offset: 0 });
+  for (const wish of loose.items) await ipc.wishlistSetFolder(wish.id, 1);
+  return loose.items.length;
+}
+
+/** `Someday`'s id, read off the seeded folder list rather than written down — nothing moves. */
+async function somedayId(): Promise<number> {
+  const someday = (await ipc.wishlistFolderList()).find((folder) => folder.name === "Someday");
+  if (someday === undefined) throw new Error("the starter seed has no Someday folder");
+  return someday.id;
+}
+
+/** Six folders nested under `Someday`, one loose wish filed at the bottom; returns `Lands`, the
+ *  level the story opens on — five headings deep from there, past the three-level indent cap. */
+async function nestSixDeep(): Promise<number> {
+  const lands = await ipc.wishlistFolderCreate(3, "Lands");
+  let parent = lands.id;
+  for (const name of ["Fetchlands", "Foils", "Showcase", "Japanese", "Signed"]) {
+    parent = (await ipc.wishlistFolderCreate(parent, name)).id;
+  }
+  const loose = await ipc.wishlistList({ limit: 1, offset: 0 });
+  await ipc.wishlistSetFolder(loose.items[0].id, parent);
+  return lands.id;
 }
 
 const meta = {
   title: "Wishlist/Page",
   component: Page,
   tags: ["autodocs"],
-  // The app's own opening state for both: the wall, and the cabinet rather than the flat list.
-  args: { view: "grid", flatten: false },
-  // Keyed on both, so changing either in Controls remounts and the initializer above runs again
-  // rather than writing to a store the mounted page is already subscribed to.
-  render: (args) => <Page key={`${args.view}:${String(args.flatten)}`} {...args} />,
+  // The app's own opening state: the wall.
+  args: { view: "grid" },
+  // Keyed on the view, so changing it in Controls remounts and the initializer above runs again.
+  render: (args) => <Page key={args.view} {...args} />,
   decorators: [
     // **This box stands in for `AppShell`'s `main`, and since 2026-09-08 the `overflow-auto` is
     // the load-bearing half of it.** In table view the page is `h-full`, so it needs a parent with
@@ -89,8 +129,9 @@ const meta = {
           "it all costs.\n\n" +
           "Driven end to end by `.storybook/fake/`. `starterWishes` seeds **eight wishes: five " +
           "loose at the root and three filed into the three folders of `starterWishFolders`** " +
-          "— so what every story here opens on is the root, and the filed three are behind a " +
-          "folder card ({@link Folders}) or one press of Flatten away ({@link Flattened}).\n\n" +
+          "— so every story here opens on the root's **shelves**: the five loose under **Not " +
+          "sorted**, the filed three under their folders' headings ({@link Shelves}), and deck " +
+          "4's list shut under **Managed by decks** ({@link ManagedWishlist}).\n\n" +
           "**The five at the root are five different answers to “is this filled?”**, and every " +
           "one of them is arithmetic the fake really does rather than a number written into a " +
           "fixture — `wishlist::OWNED_SQL` is mirrored by `db.ts`'s `ownedAgainstWish`. Measured " +
@@ -116,7 +157,7 @@ const meta = {
           "state used to end on — *“Add cards from search with the + on any row or tile”*, a view " +
           "sending the reader to another route to fill the list it is about. The column is " +
           "`WishlistSearchPanel` and is storied in full at `Wishlist/SearchPanel`; every `+` in " +
-          "it files into **the drawer on screen**, and a tile dropped on a folder card files " +
+          "it files into **the drawer on screen**, and a tile dropped on a heading files " +
           "there instead. Two `FilterBar`s are therefore mounted together on this page, told " +
           "apart by their boxes' names — `Search your wishlist` against `Search cards`.\n\n" +
           "**There is no `Large` story, and that is a fact about the seeds rather than about " +
@@ -154,19 +195,38 @@ const pageControl = (canvas: ReturnType<typeof within>, name: RegExp | string): 
   return found;
 };
 
+/** A shelf's heading by name — found by the chevron spec §3.2 names ("Collapse Binder"), then the
+ *  box `ShelfHeading` stamps, which is the heading's own. */
+const headingNamed = (canvas: ReturnType<typeof within>, name: string): HTMLElement => {
+  const chevron: HTMLElement = canvas.getByRole("button", {
+    name: new RegExp(`^(Collapse|Expand) ${name}$`),
+  });
+  const box = chevron.closest<HTMLElement>("[data-shelf-heading]");
+  if (box === null) throw new Error(`no heading box around ${name}`);
+  return box;
+};
+/** A header figure's value — a `<dd>` beside its `<dt>`. */
+const figureValue = (canvas: ReturnType<typeof within>, label: string) =>
+  canvas.getByText(label).nextElementSibling as HTMLElement;
+/** The path row's Add folder — the one on no heading and not in the search column. */
+const pathAddFolder = (canvas: ReturnType<typeof within>): HTMLElement => {
+  const found = canvas
+    .getAllByRole("button", { name: /^Add folder/ })
+    .find(
+      (b: HTMLElement) =>
+        b.closest("[data-shelf-heading]") === null &&
+        b.closest(`[aria-label="${PANEL_LABEL}"]`) === null,
+    );
+  if (!found) throw new Error("no Add folder on the path row");
+  return found;
+};
+const follows = (a: Node, b: Node) =>
+  (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
 /**
- * Five wishes, and the one number the view exists for.
- *
- * The total is counted over what each wish **wants**, which reverses what this story asserted
- * until 2026-09-08: it was summed over what was still missing, on the argument that a figure
- * charging the reader for cards already in the binder is a number nobody can act on. That
- * argument assumed the list knew what was in the binder, and it no longer asks. So $163.96 is all
- * four Counterspells plus Jace plus the foil Ragavan plus Rhystic Study.
- *
- * **And the unpriced note is on screen here now**, which is the same reversal from the other end:
- * the seed's Sol Ring has no price, and it used to be left out of the count because the binder
- * already covered it — a wish with nothing left to buy being nothing for a "could not price" note
- * to qualify. Every wish is a wish to buy now, so the one nobody quoted is counted.
+ * The root's shelves, and the arithmetic this story has always pinned — **which moved from the
+ * header to Not sorted's heading**. `$163.96` is the five loose wishes, and the header counts the
+ * whole wall now (spec §3.6): the five loose, the three filed, and the five in deck 4's shut list.
  *
  * **One tile, not the two this story used to assert.** The page drew `Still to buy (USD)` beside
  * `Still to buy (EUR)` while there was no way for a reader to say which they were shopping in;
@@ -183,9 +243,17 @@ const pageControl = (canvas: ReturnType<typeof within>, name: RegExp | string): 
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("$163.96")).toBeInTheDocument();
+    const loose = await waitFor(() => {
+      const box = canvasElement.querySelector<HTMLElement>('[data-shelf-heading="0"]');
+      if (box === null) throw new Error("no Not sorted shelf");
+      return box;
+    });
+    await expect(loose).toHaveTextContent("5 wishes · $163.96 · 1 unpriced");
+    await waitFor(async () => {
+      await expect(figureValue(canvas, "Wishes")).toHaveTextContent("13");
+    });
     await expect(canvas.getByText("Total cost (USD)")).toBeInTheDocument();
-    await expect(canvas.getByText("1 unpriced")).toBeInTheDocument();
+    await expect(figureValue(canvas, "Total cost (USD)")).not.toHaveTextContent("—");
     await expect(canvas.queryByText("€94.62")).not.toBeInTheDocument();
 
     // Five wishes, five tiles. One per **wish** and never per card, which is the reverse of the
@@ -221,82 +289,53 @@ export const Table: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // What assistive tech is told the list is: every matching row plus the header
-    // (`VirtualTable.tsx:181`), not the rows a virtualised list keeps in the DOM. A wishlist
-    // total is counted in full, so there is no unknown-count case here — unlike the search's.
-    await expect(await canvas.findByRole("table", { name: "Your wishlist" })).toHaveAttribute(
-      "aria-rowcount",
-      "6",
-    );
+    // `VirtualTable`'s rule 3: the data rows (5 loose + 2 in Ordered + 1 in Backordered = 8, deck 4's
+    // list shut), plus the header, plus six bands — Not sorted, Ordered, Backordered, Someday, the
+    // Managed by decks label and deck 4's heading.
+    const table = await canvas.findByRole("table", { name: "Your wishlist" });
+    await waitFor(async () => {
+      await expect(table).toHaveAttribute("aria-rowcount", "15");
+    });
     // The Wanted column's stepper, which is what the table says about copies now: it drew an
-    // `Owned` column reading `2 of 4 owned` beside it until 2026-09-08.
+    // `Owned` column reading `2 of 4 owned` beside it until 2026-09-08. **The first of two** —
+    // `Backordered` holds a second Counterspell of the same printing, one shelf down, and the
+    // loose one is drawn first because Not sorted is.
     await expect(
-      canvas.getByRole("spinbutton", { name: /Copies wanted of Counterspell/ }),
+      (await canvas.findAllByRole("spinbutton", { name: /Copies wanted of Counterspell/ }))[0],
     ).toHaveValue(4);
     await expect(canvas.queryByText(/owned/i)).toBeNull();
   },
 };
 
 /**
- * The cabinet, and the one arithmetic a folder card cannot get from the read it is drawn from.
+ * **Shelves** (spec §3): every wish at and below the root, one shelf per folder, nested — `Ordered`
+ * with `Backordered` under its rail, `Someday` over its dashed empty box, and deck 4's list shut
+ * under Managed by decks. A heading's figures are its folder's recursive total — `Ordered` reads
+ * three wishes: two of its own and `Backordered`'s one. **Its title opens it** (spec §3.7), and the
+ * page then *is* that folder: the breadcrumb names it and its sub-folder is the top shelf.
  *
- * `wishlist_folder_summary` answers **direct** counts — this folder’s own wishes, never its
- * sub-folders’ — so the page sums a node’s children on the way up, the same arithmetic
- * `buildFolderTree` already does for a deck folder’s `count`. `Ordered` is the seed that makes
- * that visible: two wishes of its own and a sub-folder holding a third, so a card reading its
- * summary row raw would say **2** over a drawer holding three.
- *
- * `Someday` is the other half of it. An empty folder has no summary row **at all**, because that
- * read groups the wishes — so a card fed a raw `Map.get` renders nothing at all here, and the
- * default that turns a missing key into zeros is what draws “0 wishes”.
- *
- * Drilling in replaces the level rather than filtering it: `wishlist_list` takes the folder, so
- * the root’s five wishes go, `Ordered`’s two arrive, and the header above counts what is on
- * screen rather than the whole list.
- *
- * **`New folder` is the wall’s first tile**, where it used to be a button in a row beside the
- * breadcrumb. A reader looking for a drawer is already looking at the wall, so the drawer that is
- * not there yet belongs in the same place — and it is drawn among the folders of *this* level,
- * which is where it would file the new one. `NewFolderCard` carries the visual argument: a folder
- * card’s footprint exactly, and solid-bordered where every card beside it is dashed, because the
- * dash means “provisional container” on every screen in this app and a button is not one.
- *
- * **Pressing it names the folder in the tile itself** ({@link NamingAFolder}), and a folder card’s
- * `Rename…` does the same thing on that card. Nothing opens above the wall for either — the strip
- * that used to is down to the two questions no 62px tile can hold, `Move to folder…` and
- * `Delete…`.
+ * **The table, so the whole tree is near the top of the list.** `src/stories.test.tsx` lays a
+ * virtualised wall out in a 600px window and, with no width to measure, one card column wide — so
+ * on the grid every heading below Not sorted's five tiles is outside the window and never drawn,
+ * and a play may only ask about rows near the top. The table's 40px bands keep every heading in it.
+ * {@link Default} is the grid's.
  */
-export const Folders: Story = {
-  // The cabinet is the subject, and no wall is drawn at all while the list is flattened.
-  args: { flatten: false },
+export const Shelves: Story = {
+  args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    const ordered = await waitFor(() => headingNamed(canvas, "Ordered"));
+    await waitFor(async () => {
+      await expect(ordered).toHaveTextContent(/3 wishes/);
+    });
+    const backordered = headingNamed(canvas, "Backordered");
+    await expect(follows(ordered, backordered)).toBe(true);
 
-    // Three seeded folders, two of them at the root — and the recursive total on the one that
-    // holds a sub-folder.
-    const ordered = await canvas.findByRole("button", { name: /^Ordered folder, 3 wishes/ });
+    await userEvent.click(within(ordered).getByRole("button", { name: "Ordered" }));
 
-    // First in the wall, asserted by position: a tile appended after the drawers is a control a
-    // reader has to scroll the band to find, and not having to is the whole of the move.
-    const wall = canvas.getByRole("list", { name: "Folders" });
-    const cards = within(wall).getAllByRole("listitem");
-    await expect(
-      within(cards[0]).getByRole("button", { name: "New folder" }),
-    ).toBeInTheDocument();
-    await expect(
-      canvas.getByRole("button", { name: "Someday folder, 0 wishes" }),
-    ).toBeInTheDocument();
-
-    await userEvent.click(ordered);
-
-    // The breadcrumb names where the reader is standing, and the last segment is not a link.
     const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
     await expect(within(trail).getByText("Ordered")).toHaveAttribute("aria-current", "page");
-    await expect(
-      await canvas.findByRole("button", { name: /^Backordered folder, 1 wish/ }),
-    ).toBeInTheDocument();
-
-    // The level, not a filter over the whole list: the root’s wishes are not here.
+    await expect(await waitFor(() => headingNamed(canvas, "Backordered"))).toBeInTheDocument();
     await waitFor(async () => {
       await expect(canvas.queryByText("Ragavan, Nimble Pilferer")).toBeNull();
     });
@@ -304,176 +343,197 @@ export const Folders: Story = {
 };
 
 /**
- * **A cabinet with nothing in it — and the one tile that can change that.**
+ * **The headline case** (spec §1): every loose wish filed. The old root asked for the wishes filed
+ * nowhere and drew a band of folder cards over nothing, with **Wishes 0** in the header. Every wish
+ * is on the wall now under its folder's heading, there is no Not sorted shelf, and the header
+ * counts all of them.
  *
- * This is the state every reader meets first, and until `New folder` moved into the wall it was
- * the state the wall was *not* drawn over: the band was gated on "this level holds drawers", which
- * was free while the button sat in a row of its own and became a trap door the moment it did not.
- * A wishlist nobody has filed would have had no folder card, therefore no wall, therefore no way
- * to make a first folder — a cabinet only somebody who already had one could open. The gate is
- * `!flatten` now, and {@link Flattened} is the other end of it.
+ * **Twelve, not thirteen, and the missing one is the grain working.** The loose Rhystic Study and
+ * the one already filed in `Ordered` are the same printing with no finish, so filing the loose one
+ * there lands on a taken grain and **merges** — one wish for two copies, `wishlist_set_folder`'s
+ * rule since schema v23 and the fake's `mergeWishOnto`. So `Ordered` reads seven: its own two, four
+ * of the five that arrived, and `Backordered`'s one.
+ */
+export const EverythingFiled: Story = {
+  render: (args) => (
+    <Staged key={args.view} view={args.view} stageKey="everything-filed" stage={fileEverything} />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const ordered = await waitFor(() => headingNamed(canvas, "Ordered"));
+    await waitFor(async () => {
+      await expect(figureValue(canvas, "Wishes")).toHaveTextContent("12");
+    });
+    await expect(canvasElement.querySelector('[data-shelf-heading="0"]')).toBeNull();
+    await waitFor(async () => {
+      await expect(ordered).toHaveTextContent(/7 wishes/);
+    });
+    await expect(await canvas.findByText("×4")).toBeInTheDocument();
+    await expect(canvas.queryByText(/Nothing on your wishlist yet/)).toBeNull();
+  },
+};
+
+/**
+ * **Past the three-level indent cap** (spec §3.3). Six folders under `Someday`, one wish at the
+ * bottom, and the page opened on `Lands` — **opening a folder resets the indentation**, so its
+ * sub-folders start at the left again. The heading five levels down keeps the third level's indent
+ * and says its path from the deepest indented ancestor instead, as buttons that open each.
  *
- * `seed: "empty"` is the only seeded world with no wishlist folders in it, so it is also the only
- * one that can show this. The page draws the tile alone, at a folder card's own height —
- * `FOLDER_CARD_HEIGHT`, the measured `min-h` that stops the band collapsing to a 20px strip when
- * there is no card beside it to stretch against — and no breadcrumb at all, because there is no
- * trail and nowhere for it to lead.
+ * Table view: the canvas's reference frame is "six levels deep, table view".
+ */
+export const DeepNesting: Story = {
+  args: { view: "table" },
+  render: (args) => (
+    <Staged key={args.view} view={args.view} stageKey="deep-nesting" stage={nestSixDeep} open />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
+    await expect(within(trail).getByText("Lands")).toHaveAttribute("aria-current", "page");
+    const signed = await waitFor(() => headingNamed(canvas, "Signed"));
+    const lead = within(signed)
+      .getAllByRole("button")
+      .filter((b) => ["Fetchlands", "Foils", "Showcase", "Japanese"].includes(b.textContent ?? ""));
+    await expect(lead.length).toBeGreaterThan(0);
+  },
+};
+
+/**
+ * **A search suspends collapse** (spec §3.4, decision 4). Deck 4's list is shut by default; typing
+ * a card in it opens its shelf, reads `1 of 5 wishes` on the heading, and hides every shelf with no
+ * match. Emptying the box shuts it again — nothing about the stored folds was written.
  *
- * **The floor lives in `FolderNameField` now rather than in `NewFolderCard`, and this story is
- * why it had to move**: the tile *becomes* the field when it is pressed, so a field sized only by
- * its own content would shrink the wall the moment a reader used it — and here, with nothing else
- * in the wall to stretch against, there would be nothing to hide it.
+ * It waits on **Not sorted** before typing rather than on the deck's heading, which is at the
+ * bottom of the wall and outside the story runner's 600px window (see {@link Shelves}); once the
+ * search has hidden every shelf with no match, the deck's is the top one.
+ */
+export const Filtering: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => headingNamed(canvas, "Not sorted"));
+
+    await userEvent.type(canvas.getByLabelText("Search your wishlist"), "copter");
+
+    await expect(await canvas.findByAltText("Smuggler's Copter")).toBeInTheDocument();
+    const deck = headingNamed(canvas, "Rhystic Testbed");
+    await expect(
+      within(deck).getByRole("button", { name: "Collapse Rhystic Testbed" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    await waitFor(async () => {
+      await expect(deck).toHaveTextContent("1 of 5 wishes");
+    });
+    await expect(canvasElement.querySelector('[data-shelf-heading="0"]')).toBeNull();
+  },
+};
+
+/**
+ * **A cabinet with nothing in it — and Add folder, which is how that changes.** The path row is
+ * drawn over an empty cabinet on purpose: gated on having folders, a reader who has never filed
+ * anything could never make their first. There is no breadcrumb, because there is no trail.
  */
 export const EmptyCabinet: Story = {
-  // {@link Folders}' reason: flattened there is no wall, so the trap door this story guards
-  // would be invisible rather than closed.
-  args: { flatten: false },
   parameters: { fake: { seed: "empty" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-
-    const wall = await canvas.findByRole("list", { name: "Folders" });
-    await expect(within(wall).getAllByRole("listitem")).toHaveLength(1);
+    const add = await waitFor(() => pathAddFolder(canvas));
     await expect(canvas.queryByRole("navigation", { name: "Wishlist folders" })).toBeNull();
 
-    // And it reaches something: a tile over an empty wall that opened nothing would look right in
-    // every screenshot and still be the trap door.
-    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+    await userEvent.click(add);
 
-    // The tile *is* the field — asserted by containment rather than by finding an input somewhere
-    // on the page, which is what a field back in a strip above the wall would also satisfy.
-    const field = await canvas.findByLabelText("New folder name");
-    await expect(within(wall).getAllByRole("listitem")[0]).toContainElement(field);
-    // Nothing above the wall says which level this is. The strip printed `in Wishlist` here, for a
-    // reader who could not see which level it was drawn over; the wall the field stands in is that
-    // sentence now.
-    await expect(canvas.queryByText("in Wishlist")).toBeNull();
+    const wall = await canvas.findByRole("group", { name: "Your wishlist" });
+    await expect(await within(wall).findByRole("textbox")).toHaveFocus();
   },
 };
 
 /**
- * **The field the tile becomes**, drawn where the folder it is naming will be.
- *
- * This is the state a screenshot of the wall could not previously show, because the field was
- * never in the wall: pressing `+ New folder` opened a bordered strip under the breadcrumb with an
- * input, `Create folder` and `Cancel` in words, and a line reading *in Wishlist*. Every one of
- * those re-established a context the reader could already see — the level is the wall they are
- * looking at, and the thing being named is going to appear in it — so the strip said, at the size
- * of a second panel, what the wall says by being on screen.
- *
- * What is worth looking at here rather than reading: the name is typed **on the line the folder's
- * name will occupy**, at the same track and the same footprint, so nothing reflows when the field
- * opens and nothing moves when it closes; ✓ and ✕ take the corner a folder card gives its `⋯`,
- * which is the one place on a card a reader has been taught to find its controls; and the tile
- * keeps its **solid** border while the drawers beside it stay dashed, because it is still a
- * control holding no folder yet. `FolderNameField` has the whole argument and its own stories
- * carry the field's states; what only this page can show is the field *in the wall*, with the
- * drawers it will stand beside on either side of it.
+ * **Adding a folder** (spec §3.8): the new folder appears where it will live — last among its
+ * siblings — as a heading whose name is the field, over an empty shelf. Typed on the line the name
+ * will occupy, so nothing reflows when ✓ lands. **Opened on `Someday`** — handed over as the page
+ * mounts, the way the home page's folder shortcuts do — so the field is on screen rather than
+ * below a virtualised wall.
  */
-export const NamingAFolder: Story = {
-  // {@link Folders}' reason — there is no wall to draw the field in while the list is flattened.
-  args: { flatten: false },
+export const AddingAFolder: Story = {
+  render: (args) => (
+    <Staged
+      key={args.view}
+      view={args.view}
+      stageKey="adding-a-folder"
+      stage={somedayId}
+      open
+    />
+  ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByRole("button", { name: /^Ordered folder/ });
+    const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
+    await expect(within(trail).getByText("Someday")).toHaveAttribute("aria-current", "page");
 
-    const wall = canvas.getByRole("list", { name: "Folders" });
-    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+    await userEvent.click(await waitFor(() => pathAddFolder(canvas)));
 
-    const field = await canvas.findByLabelText("New folder name");
-    const cards = within(wall).getAllByRole("listitem");
-    // In the tile's own `<li>` — the claim a query that only found the input would pass without,
-    // since a field back in a strip above the wall is also "on the page".
-    await expect(cards[0]).toContainElement(field);
-    // The control it replaced is out of the tree rather than sitting behind the field: two ways to
-    // start naming one folder is one of them doing nothing.
-    await expect(within(wall).queryByRole("button", { name: "New folder" })).toBeNull();
-    // And the drawers are still drawers — one field is open at a time across the whole wall.
-    await expect(
-      within(cards[1]).getByRole("button", { name: /^Ordered folder/ }),
-    ).toBeInTheDocument();
+    const field = await within(canvas.getByRole("group", { name: "Your wishlist" })).findByRole(
+      "textbox",
+    );
+    await expect(field).toHaveFocus();
+    await expect(field).toHaveValue("");
   },
 };
 
-/**
- * Flatten — every wish at once, wherever it is filed.
- *
- * The switch is not a filter and `resetAll` never touches it: it says how much of the tree is on
- * screen — which is why it rides the **filter bar** past that row’s second hairline, beside the
- * grid-or-table pair, where every control is about how the list is drawn rather than which rows
- * are in it. The breadcrumb stayed down with the cabinet, because where the reader is standing is
- * a place rather than a way of drawing.
- *
- * While it is on the whole wall goes — no folder card, no drill-down and no “New folder” tile,
- * the last because it lives *in* that wall now and a flattened list has no current folder to
- * create one inside. Every wish is captioned with the folder it is in instead, because without
- * that the flattened list is just the old list with more rows in it.
- *
- * Thirteen rows plus the header, which is the whole of `starterWishes`: the five at the root, the
- * three the folder cards were standing in front of, and the five in deck 4's managed wishlist —
- * which are listed here like any other wish, captioned with the deck's name, and draw no editing
- * control ({@link ManagedWishlist}).
- */
-export const Flattened: Story = {
-  // Off to begin with, so the press below is a real flip rather than whatever the store was
-  // holding. It is also this page's default — said out loud because the collection's is not.
-  args: { view: "table", flatten: false },
+/** **Renaming** (spec §3.8): the heading's name becomes the field, and its figures stay beside it
+ *  — which is how a reader checks they have the right drawer. The table, for {@link Shelves}'
+ *  reason: `Ordered`'s heading is near the top of the list there. */
+export const RenamingAFolder: Story = {
+  args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("Counterspell");
-    await expect(canvas.getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
+    const ordered = await waitFor(() => headingNamed(canvas, "Ordered"));
 
-    await userEvent.click(canvas.getByRole("button", { name: "Flatten" }));
+    await userEvent.click(within(ordered).getByRole("button", { name: /^Rename/ }));
 
-    await waitFor(async () => {
-      await expect(canvas.getByRole("table", { name: "Your wishlist" })).toHaveAttribute(
-        "aria-rowcount",
-        "14",
-      );
-    });
-    await expect(canvas.queryByRole("button", { name: /^Ordered folder/ })).toBeNull();
-    // The list itself, not only the cards in it: the tile is an `<li>` of this `<ul>`.
-    await expect(canvas.queryByRole("list", { name: "Folders" })).toBeNull();
-    await expect(canvas.queryByRole("button", { name: "New folder" })).toBeNull();
-
-    // Where each one is filed, in the caption beside its printing — `Wishlist` for the root.
-    await expect(canvas.getAllByText("Filed in").length).toBeGreaterThan(0);
+    const field = await within(ordered).findByRole("textbox");
+    await expect(field).toHaveValue("Ordered");
+    await expect(ordered).toHaveTextContent(/3 wishes/);
   },
 };
 
 /**
- * **A deck's managed wishlist** (user schema v48, issue #512) — deck 4's, which `starter` seeds
- * because a `Theory + Actual` deck with the switch on (its default) keeps one.
+ * **A heading mid-drag** (spec §3.9) — a story to drag in rather than to read, because the three
+ * landings only exist under a pointer, and `src/test-drag.ts` cannot be imported into a play.
  *
- * Two things are on screen that are the issue's own words. **A separate section with a special
- * icon**: the folder is not a card on the reader's wall but a door in a `Managed by decks` band
- * after it, wearing `Layers` — the collection's deck-group glyph, because it is the same fact —
- * solid-bordered and with no `⋯`, `PinnedFolders`' shape one cabinet over. **No editing by
- * hand**: inside it the `New folder` tile is gone, a line says whose list this is, and the wishes
- * draw no stepper, no pencil and no drag — every one of those writes is refused by the backend,
- * and the fake refuses them in the same words.
+ * Pick `Someday`'s heading up anywhere but its buttons: **every shelf folds to its heading** for the
+ * length of the drag, the nested `Backordered` included, so the whole tree is a column of targets.
+ * Over another heading, the top quarter puts it **before** (a gold line above), the bottom quarter
+ * **after** (below), and the middle **inside** (the heading's edge goes gold). `Ordered` onto its own
+ * `Backordered` marks nothing: a folder can never land in itself or below. Let go anywhere and the
+ * shelves unfold exactly as they were — nothing was written but the move itself. The breadcrumb's
+ * segments take a folder too, filing it last in that level. Deck 4's heading is not a source.
+ */
+export const DraggingAFolder: Story = {};
+
+/**
+ * **A deck's managed wishlist** (user schema v48, issue #512) — a shelf of its own under
+ * **Managed by decks**, wearing `Layers`, **shut by default** (spec §3.4: a derived list, not a
+ * binder), and with nothing on its heading that writes: no Add folder, no Rename, no `⋯`, no drag.
+ * Collapse all first, so its heading is near the top of a virtualised wall. Opening it by its title
+ * says whose list it is, and draws no stepper, no pencil and no Add folder inside.
  */
 export const ManagedWishlist: Story = {
-  args: { view: "grid", flatten: false },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    // The wall's first heading — the one row a play may count on being drawn (see {@link Shelves}).
+    await waitFor(() => headingNamed(canvas, "Not sorted"));
+    await userEvent.click(canvas.getByRole("button", { name: "Collapse all" }));
 
-    const section = await canvas.findByRole("list", { name: "Managed by decks" });
-    const door = await within(section).findByRole("button", {
-      name: /^Rhystic Testbed managed wishlist, 5 wishes/,
-    });
-    // Not a drawer on the reader's wall.
-    const wall = canvas.getByRole("list", { name: "Folders" });
-    await expect(within(wall).queryByText("Rhystic Testbed")).toBeNull();
-    await expect(canvas.queryByRole("button", { name: "Manage Rhystic Testbed" })).toBeNull();
+    const deck = await waitFor(() => headingNamed(canvas, "Rhystic Testbed"));
+    await expect(canvas.getByText("Managed by decks")).toBeInTheDocument();
+    await expect(deck.querySelector("svg.lucide-layers")).not.toBeNull();
+    await expect(within(deck).queryByRole("button", { name: /^Add folder/ })).toBeNull();
+    await expect(within(deck).queryByRole("button", { name: /^Rename/ })).toBeNull();
 
-    await userEvent.click(door);
+    await userEvent.click(within(deck).getByRole("button", { name: "Rhystic Testbed" }));
 
     await expect(await canvas.findByText(/Follows the deck “Rhystic Testbed”/)).toBeInTheDocument();
     await expect(await canvas.findByAltText("Smuggler's Copter")).toBeInTheDocument();
-    await expect(canvas.queryByRole("button", { name: "New folder" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /^Add folder/ })).toBeNull();
     await expect(canvas.queryByRole("spinbutton", { name: /^Copies wanted of/ })).toBeNull();
-    await expect(canvas.queryByRole("button", { name: /on your wishlist$/ })).toBeNull();
   },
 };
 
@@ -498,9 +558,12 @@ export const ManagedWishlist: Story = {
 export const EditingFromATile: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(
-      await canvas.findByRole("button", { name: /Edit Counterspell .* on your wishlist/ }),
-    );
+    // **The first of two** since the shelves: `Backordered` holds a second Counterspell of the same
+    // printing one shelf down, and the loose one — four copies — is drawn first, as Not sorted is.
+    const [edit] = await canvas.findAllByRole("button", {
+      name: /Edit Counterspell .* on your wishlist/,
+    });
+    await userEvent.click(edit);
 
     const panel = await canvas.findByRole("dialog", { name: "Edit Counterspell" });
     await expect(
@@ -537,27 +600,33 @@ export const CopiesFromATile: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const counterspell = "Copies wanted of Counterspell (MH2 267)";
+    // **The first of each pair** since the shelves: `Backordered` holds a second Counterspell and
+    // `Ordered` a second Rhystic Study, each the same printing one shelf down — the loose ones are
+    // drawn first, as Not sorted is, and those are the ones this story is about.
+    const first = (name: string) => canvas.getAllByRole("spinbutton", { name })[0];
 
-    await expect(await canvas.findByRole("spinbutton", { name: counterspell })).toHaveValue(4);
+    await expect((await canvas.findAllByRole("spinbutton", { name: counterspell }))[0]).toHaveValue(
+      4,
+    );
 
-    await userEvent.click(canvas.getByRole("button", { name: `Increase ${counterspell}` }));
+    await userEvent.click(canvas.getAllByRole("button", { name: `Increase ${counterspell}` })[0]);
 
     // Optimistic on the row's own number and then confirmed by the answer — `patchWish` twice,
     // which is what lets a reader hold `+` without the box computing from a stale value.
     await waitFor(async () => {
-      await expect(canvas.getByRole("spinbutton", { name: counterspell })).toHaveValue(5);
+      await expect(first(counterspell)).toHaveValue(5);
     });
 
     // The pencil is still beside it, so the printing, the folder and the named removal are all
     // still one press from the tile: the stepper is an addition rather than a rearrangement.
     await expect(
-      canvas.getByRole("button", { name: /^Edit Counterspell .* on your wishlist/ }),
+      canvas.getAllByRole("button", { name: /^Edit Counterspell .* on your wishlist/ })[0],
     ).toBeInTheDocument();
 
     // The floor, on the wish already sitting on it. Enabled is the whole assertion — what the
     // press would do belongs to {@link Removed}.
     await expect(
-      canvas.getByRole("button", { name: "Decrease Copies wanted of Rhystic Study (PCY 45)" }),
+      canvas.getAllByRole("button", { name: "Decrease Copies wanted of Rhystic Study (PCY 45)" })[0],
     ).toBeEnabled();
   },
 };
@@ -640,7 +709,9 @@ export const NoCollectionFilter: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("Sol Ring");
+    // Two Sol Rings on the root's wall since the shelves — the loose any-printing wish and
+    // `Ordered`'s pinned one — so this waits for either.
+    await canvas.findAllByText("Sol Ring");
 
     // Behind the Filters disclosure since this page started drawing the shared row — the box, the
     // colours, the order and the layout pair are what stay on the bar.
@@ -702,13 +773,18 @@ export const NeedsReview: Story = {
     await expect(
       await canvas.findByText(/Scryfall removed this printing from its database on 2026-07-31\./),
     ).toBeInTheDocument();
-    // The flag lists and never hides: the five unflagged wishes are still here with it, and the
-    // count in the header still counts all six.
-    await expect(canvas.getByText("Counterspell")).toBeInTheDocument();
-    await expect(canvas.getByRole("table", { name: "Your wishlist" })).toHaveAttribute(
-      "aria-rowcount",
-      "7",
-    );
+    // The flag lists and never hides: the unflagged wishes are still here with it — two
+    // Counterspells since the shelves, the loose one and `Backordered`'s — and the table counts
+    // every row. `VirtualTable`'s rule 3: 9 data rows (6 loose, the flagged one among them, 2 in
+    // Ordered, 1 in Backordered; deck 4's list shut), the header, and six bands — Not sorted,
+    // Ordered, Backordered, Someday, the Managed by decks label and deck 4's heading.
+    await expect(canvas.getAllByText("Counterspell").length).toBeGreaterThan(0);
+    await waitFor(async () => {
+      await expect(canvas.getByRole("table", { name: "Your wishlist" })).toHaveAttribute(
+        "aria-rowcount",
+        "16",
+      );
+    });
     await userEvent.click(pageControl(canvas, /^Show filters/));
     await expect(canvas.getByRole("button", { name: "Needs review" })).toBeInTheDocument();
   },
@@ -738,7 +814,9 @@ export const Busy: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const label = "Copies wanted of Counterspell (MH2 267)";
-    await userEvent.click(await canvas.findByRole("button", { name: `Decrease ${label}` }));
+    // The loose Counterspell — the first of two since the shelves, `Backordered` holding the other.
+    const [decrease] = await canvas.findAllByRole("button", { name: `Decrease ${label}` });
+    await userEvent.click(decrease);
 
     const alert = await canvas.findByRole("alert");
     await expect(alert).toHaveTextContent(
@@ -746,7 +824,7 @@ export const Busy: Story = {
         "Try that again in a moment.",
     );
     await waitFor(async () => {
-      await expect(canvas.getByRole("spinbutton", { name: label })).toHaveValue(4);
+      await expect(canvas.getAllByRole("spinbutton", { name: label })[0]).toHaveValue(4);
     });
   },
 };
@@ -765,27 +843,33 @@ export const Busy: Story = {
  * (It is also the reason that row is not a drag source and not clickable: there is no printing
  * for a drop or a pane to be about.)
  *
- * The header moves with it. Every page carries the same count of the whole list, so `patchWish`
- * decrements each page's copy — otherwise the figure the *first* page feeds would go on counting
- * a wish that is gone.
+ * The count moves with it — the table's and the header's both, since both are read off the
+ * per-shelf counts the removal re-reads.
+ *
+ * **Asked by the button's name rather than by the card's**, since the shelves: `Ordered` holds a
+ * pinned Sol Ring of its own on the same wall, so the word alone names two rows and only one of
+ * them is going.
  */
 export const Removed: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await canvas.findByText("Sol Ring");
+    const remove = "Remove Sol Ring (any printing) from your wishlist";
 
-    await userEvent.click(
-      canvas.getByRole("button", { name: "Remove Sol Ring (any printing) from your wishlist" }),
-    );
+    await userEvent.click(await canvas.findByRole("button", { name: remove }));
 
     await waitFor(async () => {
-      await expect(canvas.queryByText("Sol Ring")).toBeNull();
+      await expect(canvas.queryByRole("button", { name: remove })).toBeNull();
     });
-    await expect(canvas.getByRole("table", { name: "Your wishlist" })).toHaveAttribute(
-      "aria-rowcount",
-      "5",
-    );
+    // `VirtualTable`'s rule 3: 7 data rows left (4 loose, 2 in Ordered, 1 in Backordered; deck 4's
+    // list shut), the header, and the six bands — Not sorted, Ordered, Backordered, Someday, the
+    // Managed by decks label and deck 4's heading.
+    await waitFor(async () => {
+      await expect(canvas.getByRole("table", { name: "Your wishlist" })).toHaveAttribute(
+        "aria-rowcount",
+        "14",
+      );
+    });
     // A removal that succeeded says nothing: the row going is the whole report.
     await expect(canvas.queryByRole("alert")).toBeNull();
   },

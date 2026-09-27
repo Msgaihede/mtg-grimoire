@@ -14,7 +14,7 @@
  * Pure and dependency-free on purpose, so every surface that draws a wishlist folder — the page, the
  * card menu, the destination picker, the home widget — asks the one question the one way.
  */
-import type { WishlistFolder } from "@/lib/ipc";
+import type { ManagedWishlistMode, WishlistFolder } from "@/lib/ipc";
 
 /** The backend's refusal for every hand edit of a managed folder, verbatim — the fake answers it
  *  too, so a story cannot stand up a write the app refuses. */
@@ -48,4 +48,50 @@ export function managedWishFolders<T extends Pick<WishlistFolder, "managedDeckId
 /** The set of managed folder ids, for the per-row question "is this wish the deck's?". */
 export function managedIds(folders: readonly WishlistFolder[]): ReadonlySet<number> {
   return new Set(folders.filter(isManaged).map((folder) => folder.id));
+}
+
+/**
+ * What an **empty** managed folder says, by the Compare view its deck follows (live pass §13).
+ *
+ * The folder holds one view's own copies — `MANAGED_WISHLIST_HINT`'s words in
+ * `features/decks/managedWishlist.ts` — so "nothing in it" is a statement about that view and no
+ * other: an empty `missing` folder is a deck playing every planned card in *some* printing, which
+ * is not an empty `all` folder (the two lists agree outright) and says nothing either way about
+ * `other`'s substitutions. The one sentence this page had was `missing`'s, and it stood under every
+ * folder whatever it followed. `all`'s is the Compare dialog's own empty `All` answer.
+ *
+ * **Words, never a target**: the folder is app-owned and takes no drop, so this is said in a box
+ * and not in the dashed drawer a reader's empty folder draws.
+ */
+export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> = {
+  all: "The two lists agree — everything this deck's plan asks for is already in the deck.",
+  missing: "Nothing missing — this deck has every card its plan asks for.",
+  other: "No substitutions — nothing in this deck stands in for a printing its plan asks for.",
+};
+
+/**
+ * The sentence for a folder whose mode is not known — the deck list not read yet, or a deck this
+ * page cannot find (another window deleted it between the two reads). It claims nothing about any
+ * view, only what every managed folder is.
+ */
+export const MANAGED_EMPTY_UNKNOWN = "Nothing here — this folder follows its deck and fills itself.";
+
+/**
+ * {@link MANAGED_EMPTY} for a mode, or {@link MANAGED_EMPTY_UNKNOWN} where there is none to read —
+ * `off` included, which is a deck that keeps no folder and so cannot be the one on screen.
+ *
+ * **Named cases, never an index into the table.** The mode arrives over IPC from a column a later
+ * schema can widen, and the type is a promise `ipc.ts` makes by hand: a mode this build has no
+ * sentence for would index to `undefined` — or, for a name `Object.prototype` carries, to a
+ * function — and draw nothing where a sentence belongs. Anything unnamed is the unknown sentence.
+ */
+export function managedEmptySentence(mode: ManagedWishlistMode | undefined): string {
+  switch (mode) {
+    case "all":
+    case "missing":
+    case "other":
+      return MANAGED_EMPTY[mode];
+    default:
+      return MANAGED_EMPTY_UNKNOWN;
+  }
 }

@@ -1,3 +1,5 @@
+import { UNFILED_SHELF } from "./shelves";
+
 /**
  * A collection tile's identity — `` `${cardId}:${finish}` `` — and the **one** place in the app
  * that string is spelled.
@@ -39,7 +41,28 @@
  * and **rings the plain tile beside it**, or nothing where the reader holds no plain copy. That is
  * strictly better than the state before the split, where no tile of a printing was distinguishable
  * from any other, and under the CHECK constraint it describes 0 rows.
+ *
+ * ## The folder, on a wall drawn as shelves
+ *
+ * On the collection's shelves a tile belongs to **one** shelf (the folder-shelves spec's decision
+ * 11), so the same printing filed in two folders is a tile on each, and the key has to tell them
+ * apart: the optional third argument names the folder, as `` `${cardId}:${finish}@${folderId}` ``,
+ * and a copy filed in no folder reads `@unfiled`.
+ *
+ * - **Absent, the key is byte-identical to the one above**, which is what keeps the deck editor's
+ *   docked collection column merging copies across folders as it always has, and what the shelved
+ *   wall's ring is still built from — the ring compares against a tile's `ringKey`, the two-part
+ *   key, so opening a card rings **every** tile of it on screen, one per shelf.
+ * - **`null` and `0` are one key.** `null` is a row's own `folderId` for a copy filed nowhere and
+ *   `0` is `UNFILED_SHELF`, the wire's name for that same shelf; two spellings of one shelf keyed
+ *   apart would be two tiles for one set of copies. Neither can equal a folder's key, because no
+ *   folder id spells `unfiled`.
+ * - **`@` cannot occur in either part before it** — a card id is a Scryfall UUID and a finish is
+ *   one word — so the three parts cannot run into each other and two distinct triples never
+ *   spell one key.
  */
-export function tileKeyOf(cardId: string, finish: string | null): string {
-  return `${cardId}:${finish ?? "nonfoil"}`;
+export function tileKeyOf(cardId: string, finish: string | null, folderId?: number | null): string {
+  const key = `${cardId}:${finish ?? "nonfoil"}`;
+  if (folderId === undefined) return key;
+  return `${key}@${folderId === null || folderId === UNFILED_SHELF ? "unfiled" : folderId}`;
 }

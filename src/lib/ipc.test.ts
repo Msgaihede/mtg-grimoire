@@ -47,6 +47,7 @@ import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
 import setCompletionRs from "../../src-tauri/src/set_completion.rs?raw";
 import shareRs from "../../src-tauri/src/share/commands.rs?raw";
+import shelffoldsRs from "../../src-tauri/src/shelffolds.rs?raw";
 import startupRs from "../../src-tauri/src/startup.rs?raw";
 import startviewRs from "../../src-tauri/src/startview.rs?raw";
 import stickyNotesRs from "../../src-tauri/src/sticky_notes.rs?raw";
@@ -596,6 +597,78 @@ describe("ipc argument names match the Rust command signatures", () => {
     declares(wishlistRs, "wishlist_breakdown", "marketplace");
     declares(deckRs, "deck_values", "marketplace");
     declares(activityRs, "activity_recent", "limit");
+  });
+
+  /**
+   * **The Shelves wall's four commands, pinned on the day they were written.** Two counts that
+   * take a whole query under `query`, like `collection_list` beside them, and the folds pair —
+   * whose `changes` carries `null` for "take the override off", which a wrapper that dropped nulls
+   * on the way through would turn into a fold that can never be undone.
+   *
+   * The crate is read for each declaration and each registration rather than trusted — an
+   * unregistered command is a wrapper invoking nothing, and the wire name *is* the Rust name.
+   */
+  it("sends the shelf counts and the shelf folds under the names their commands declare", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    for (const [name, src] of [
+      ["collection.rs", collectionRs],
+      ["wishlist.rs", wishlistRs],
+      ["shelffolds.rs", shelffoldsRs],
+    ] as const) {
+      expect(src.length, `${name} was not read`).toBeGreaterThan(1_000);
+    }
+
+    invoke.mockResolvedValue([]);
+    await ipc.collectionShelfCounts({ shelves: [0, 12], limit: 0, offset: 0 });
+    expect(invoke).toHaveBeenLastCalledWith("collection_shelf_counts", {
+      query: { shelves: [0, 12], limit: 0, offset: 0 },
+    });
+    await ipc.wishlistShelfCounts({ shelves: [3], text: "bolt", limit: 0, offset: 0 });
+    expect(invoke).toHaveBeenLastCalledWith("wishlist_shelf_counts", {
+      query: { shelves: [3], text: "bolt", limit: 0, offset: 0 },
+    });
+
+    // `shelves` rides the two list reads too, verbatim and in order.
+    invoke.mockResolvedValue({ items: [], total: 0 });
+    await ipc.collectionList({ shelves: [12, 0], limit: 100, offset: 0 });
+    expect(invoke).toHaveBeenLastCalledWith("collection_list", {
+      query: { shelves: [12, 0], limit: 100, offset: 0 },
+    });
+    await ipc.wishlistList({ shelves: [0, 7], limit: 100, offset: 0 });
+    expect(invoke).toHaveBeenLastCalledWith("wishlist_list", {
+      query: { shelves: [0, 7], limit: 100, offset: 0 },
+    });
+
+    invoke.mockResolvedValue({ collection: { "12": true }, wishlist: {} });
+    await expect(ipc.shelfFolds()).resolves.toEqual({ collection: { "12": true }, wishlist: {} });
+    expect(invoke).toHaveBeenLastCalledWith("shelf_folds");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setShelfFolds("wishlist", { "7": true, "9": null });
+    expect(invoke).toHaveBeenLastCalledWith("set_shelf_folds", {
+      page: "wishlist",
+      changes: { "7": true, "9": null },
+    });
+
+    const declares = (src: string, command: string, param: string) =>
+      expect(src, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+    declares(collectionRs, "collection_shelf_counts", "query");
+    declares(wishlistRs, "wishlist_shelf_counts", "query");
+    declares(shelffoldsRs, "set_shelf_folds", "page");
+    declares(shelffoldsRs, "set_shelf_folds", "changes");
+    expect(shelffoldsRs, "`shelf_folds` takes something other than the app state").toMatch(
+      /fn shelf_folds\(\s*state: tauri::State<'_, Arc<AppState>>,?\s*\)/,
+    );
+    for (const registered of [
+      "collection::collection_shelf_counts,",
+      "wishlist::wishlist_shelf_counts,",
+      "shelffolds::shelf_folds,",
+      "shelffolds::set_shelf_folds,",
+    ]) {
+      expect(desktopRs).toContain(registered);
+    }
   });
 
   it("sends a prefetch batch under `cardIds` and `variant`", async () => {
@@ -4625,6 +4698,33 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   });
 
   /**
+   * **`shelves` on both folder-bearing queries, and the fold pages on both sides.**
+   *
+   * `CollectionQuery` and `WishlistQuery` are `#[serde(default)]`, so a `shelves` spelled
+   * differently on one side is **dropped** rather than refused — the wall would draw every row of
+   * every folder under the first heading, with nothing red. `tsFields` reads only a plain
+   * `export interface X {`, and both of these `extends CardFilters`, so their bodies are sliced
+   * here instead. `ShelfFoldPage` is a union rather than an interface, so it is held to the Rust
+   * struct's field list — which `shelffolds::PAGES` is held to by the crate's own test.
+   */
+  it("carries shelves on both folder-bearing queries, and the fold pages match the Rust struct", () => {
+    const extendsBody = (name: string): string => {
+      const start = ipcSource.indexOf(`export interface ${name} extends CardFilters {`);
+      expect(start, `\`${name}\` is not in ipc.ts`).toBeGreaterThan(-1);
+      const rest = ipcSource.slice(start);
+      return rest.slice(0, rest.search(/\r?\n\}/));
+    };
+    expect(rustFields(collectionRs, "CollectionQuery")).toContain("shelves");
+    expect(extendsBody("CollectionQuery")).toMatch(/^ {2}shelves\?: number\[\];/m);
+    expect(rustFields(wishlistRs, "WishlistQuery")).toContain("shelves");
+    expect(extendsBody("WishlistQuery")).toMatch(/^ {2}shelves\?: number\[\];/m);
+
+    const pages = rustFields(shelffoldsRs, "ShelfFolds");
+    expect(pages).toEqual(["collection", "wishlist"]);
+    expect([...tsUnion(ipcSource, "ShelfFoldPage")].sort()).toEqual([...pages].sort());
+  });
+
+  /**
    * **The other three card walls, pinned the same way and for a failure that has already
    * shipped.** `CardSummary` was the only DTO carrying `image_uris` until 2026-08-31, on the
    * belief that `search_cards` was the one card-bearing command a browser could call. It is
@@ -5029,6 +5129,14 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // one row here rather than two, and a second definition in the wishlist would be the drift
     // this row is meant to catch.
     ["BreakdownRow", collectionRs, "BreakdownRow"],
+    // **The Shelves wall's counts**, one struct for two commands exactly as `BreakdownRow` above
+    // is — defined in `collection.rs` and answered by `wishlist.rs` too, so one row. Every field
+    // is a figure a heading prints, and every drift is the quiet kind: a renamed `tiles` makes the
+    // grid reserve `undefined` slots for a shelf, and a renamed `value` is `undefined`, which is
+    // not `null`, so a shelf priced nowhere prints `$0.00` where it should print an em dash. A
+    // renamed `peek` is the quietest of the six: a collapsed heading draws no thumbnails, which is
+    // exactly what an empty shelf's heading looks like.
+    ["ShelfCount", collectionRs, "ShelfCount"],
     ["DeckValue", deckRs, "DeckValue"],
     ["ActivityEntry", activityRs, "ActivityEntry"],
     // **The notes feature's three, added with it** (2026-09-10, issue #447) — three rows for two

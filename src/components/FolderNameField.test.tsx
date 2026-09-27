@@ -259,6 +259,65 @@ describe("FolderNameField", () => {
   });
 
   /**
+   * **The heading size, from the Folder Shelves live pass (§10).** A shelf heading is a 40px row,
+   * `h-10` with a 1px border all round, so its content box — the box `items-center` centres in —
+   * is 38px and its centre line is 20px down. The tile's rename frame is 42px (`p-2.5` round a 20px
+   * line, plus two hairlines), so it stood 1px proud of the row top and bottom; and its pair hung at
+   * `top-1` of that frame, putting the ✓ and ✕ at 17 of 40 while the chevron, the glyph and the
+   * figures sat at 20. Measured identically for Add folder at the root, Add folder in a heading and
+   * Rename, on both pages.
+   *
+   * At heading size the frame is `h-9` — 36px, inside the 38 — and the pair is centred on it
+   * (`inset-y-0` with `items-center`) against a `relative` form, so it lands on the frame's centre,
+   * which `items-center` has put on the row's. Pinned as the classes that produce it: jsdom lays
+   * nothing out. **The tile's own geometry is the case above and must not move** — the default
+   * stays `tile` for every other caller.
+   */
+  it("fits a 40px heading at heading size, with ✓ and ✕ on the row's centre line", () => {
+    for (const mode of ["rename", "create"] as const) {
+      const view = render(
+        <FolderNameField
+          mode={mode}
+          size="heading"
+          label="Folder name"
+          initial={mode === "rename" ? "Trade binder" : ""}
+          submitLabel={mode === "rename" ? "Rename folder" : "Create folder"}
+          footer={<span>240 cards · $1,304.00</span>}
+          {...stubs()}
+        />,
+      );
+      const form = view.container.querySelector("form")!;
+      const frame = form.firstElementChild!;
+      const pair = form.querySelector(".absolute.right-1")!;
+
+      // The frame: 36px and nothing that grows it — no tile floor, no stretch, no padding block.
+      expect(frame.classList.contains("h-9")).toBe(true);
+      for (const tall of ["p-2.5", "min-h-[calc(3.75rem+2px)]", "h-full"]) {
+        expect(frame.classList.contains(tall)).toBe(false);
+      }
+      expect(form.classList.contains("h-full")).toBe(false);
+      // Room for the pair is unchanged: the pair did not get narrower, only lower. And it is the
+      // only utility setting the right padding — a `px-*` beside it would leave the winner to
+      // Tailwind's emit order.
+      expect(frame.classList.contains("pr-[4.125rem]")).toBe(true);
+      expect(frame.classList.contains("pl-2.5")).toBe(true);
+      expect(frame.classList.contains("px-2.5")).toBe(false);
+
+      // The pair: centred on the frame, not hung from its top.
+      expect(form.classList.contains("relative")).toBe(true);
+      expect(pair.classList.contains("inset-y-0")).toBe(true);
+      expect(pair.classList.contains("items-center")).toBe(true);
+      expect(pair.classList.contains("top-1")).toBe(false);
+
+      // The border still tells the two jobs apart, and the heading draws its own figures.
+      expect(frame.classList.contains("border-dashed")).toBe(mode === "rename");
+      expect(frame.classList.contains("border-accent")).toBe(true);
+      expect(screen.queryByText("240 cards · $1,304.00")).toBeNull();
+      view.unmount();
+    }
+  });
+
+  /**
    * **The figures line stays under a rename and has nothing to say on a create.** It is how a
    * reader checks they are renaming the drawer they meant — 240 cards is what tells `Trade binder`
    * from the empty one they made yesterday — and a folder that does not exist yet has no figures

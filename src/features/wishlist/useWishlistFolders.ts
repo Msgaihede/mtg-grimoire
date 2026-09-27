@@ -229,8 +229,10 @@ export function useWishlistFolders() {
 
   return {
     // Both passed straight through, so this hook's public surface is exactly what it was before
-    // the list became a hook of its own: `WishFolderCard`, `EditWish` and the wishlist page read
-    // `query` and `folders` off this object and must not have to know about the split.
+    // the list became a hook of its own: its callers read `query` and `folders` off this object
+    // and must not have to know about the split — grep `useWishlistFolders()` for them rather than
+    // trusting a list here, which named `WishFolderCard` for a day after that card went with the
+    // folder band (2026-09-26).
     query,
     folders,
     summary,

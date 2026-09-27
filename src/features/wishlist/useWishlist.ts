@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import { nextOffset } from "@/features/collection/useCollection";
 import {
   colorParam,
@@ -14,11 +19,20 @@ import {
   type ColorFilter,
   type ColorKey,
 } from "@/features/search/useCardSearch";
-import { ipc, type WishlistQuery, type WishlistSortKey } from "@/lib/ipc";
+import { useShelfFolds } from "@/features/shelves/useShelfFolds";
+import {
+  ipc,
+  type ShelfCount,
+  type WishlistPage,
+  type WishlistQuery,
+  type WishlistSortKey,
+} from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
+import { buildShelves, shelvesToCount, shelvesToFetch } from "@/lib/shelves";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
-import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { useWishlistFolderList } from "./useWishlistFolders";
+import { toShelfFolder } from "./wishShelfPlan";
 
 /**
  * Rows per request. The backend clamps at 500 and defaults to this. A wishlist is tens of
@@ -29,6 +43,35 @@ export const WISHLIST_PAGE_SIZE = 100;
 
 /** The sort key the backend understands. Re-exported so call sites keep one import. */
 export type WishlistSort = WishlistSortKey;
+
+/** The level segment of every key this hook builds — `null` is the root, a real level. */
+const levelSegment = (level: number | null): string => (level === null ? "root" : String(level));
+
+/**
+ * **One level as the page draws it** — the last level whose list and counts both answered for their
+ * own keys, and what they were asked with. It is what the page is drawn from while a walk to an
+ * uncached level is in flight (see `useWishlist`'s `shown`), and it is drawn **whole from the
+ * frame**: the pages and the counts are one answer about one level, and a held wall laid out with
+ * the *current* filtering and folds, or scrolled on the *current* list identity, would be the old
+ * level's rows under shelves they were never fetched for (review Minor 3). `useCollection`'s
+ * `ShownLevel` holds the same fields for the same reason.
+ */
+interface ShownLevel {
+  levelId: number | null;
+  pages: InfiniteData<WishlistPage, unknown> | undefined;
+  counts: ShelfCount[] | undefined;
+  /** Whether a filter was on, and the folds, as the frame's answers were asked for. */
+  filtering: boolean;
+  folds: Readonly<Record<string, boolean>>;
+  /** The list identity the frame's wall scrolls on — `queryKeyString` while it is held. */
+  scrollKey: string;
+  /** What a sweep of the frame's wall asks — the export's and the price sweep's scope while it is
+   *  held, so the sweep covers the wall on screen and not the level still arriving (review Minor
+   *  2). `countsKey` is its identity: the counts' own key, which every field of it is a segment
+   *  of, so the frame catches up when the scope moves and only then. */
+  filters: Omit<WishlistQuery, "limit" | "offset" | "sort">;
+  countsKey: string;
+}
 
 /**
  * The orders the filter bar's select offers.
@@ -129,21 +172,19 @@ export function activeFilterCount(f: WishlistFilterState): number {
  *
  * `useCollection`'s shape, minus everything a shopping list does not ask: one key built from
  * every input, `keepPreviousData` so a refined filter does not blank the list, and the same
- * short-page pager. There is no summary query — a wishlist fits in one page, so what it adds
- * up to is arithmetic over the rows on screen rather than a second round trip.
+ * short-page pager.
  *
- * @param options.flattenLocally Draw the list flat **without writing** `wishlistFlattened` —
- *   `useReviewHandoff`'s `reviewSweep`, `useCollection`'s parameter of the same name one cabinet
- *   over and for its reason. OR'd with the stored switch into the one `flatten` this hook sends
- *   and returns.
+ * **Two reads, not one, since the shelves (2026-09-26):** the list, and `wishlist_shelf_counts`
+ * over the same scope — the counts are what the header, the headings and every unfetched slot are
+ * drawn from, because the list only ever holds the shelves that are open.
+ *
  * @param options.initialNeedsReview The needs-review filter this list **mounts** with, read once by
  *   `useState` — `useCollection`'s parameter of the same name, and `useReviewHandoff` has the
- *   measurement behind it.
+ *   measurement behind it. **There is no `flattenLocally` beside it**, which `useReviewHandoff`'s
+ *   sweep was handed until Flatten went: the root's shelves already hold every wish, so a review
+ *   hand-off needs the filter and the root and nothing else (`WishlistPage` has the consume site).
  */
-export function useWishlist({
-  flattenLocally = false,
-  initialNeedsReview,
-}: { flattenLocally?: boolean; initialNeedsReview?: boolean } = {}) {
+export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boolean } = {}) {
   // Which marketplace this list quotes — an input to the query and part of its key, because
   // it decides what a Cost cell contains and not merely how it is written.
   const { marketplace } = useMarketplace();
@@ -184,29 +225,6 @@ export function useWishlist({
   // reads once as it renders and spends, so what arrives through it is a press made a moment ago
   // on another page rather than a memory.
   const [folderId, setFolderId] = useState<number | null>(null);
-  /**
-   * `true` ignores `folderId` and answers every wish wherever it is filed. Also navigation
-   * rather than a filter, for the same reason `folderId` is — Flatten is "how much of the
-   * tree am I looking at", not "which wishes qualify".
-   *
-   * **The one piece of this hook's state that is not `useState`**, `useCollection`'s twin and
-   * for its reason: whether the reader reads their list flat is how they read it at all, so it
-   * is held in the app store and persisted behind it. **`wishlistFlattened` is its own field
-   * and starts `false`**, where the collection's starts `true` — a shopping list of tens of rows
-   * is usually read whole, but its folders are how the reader groups what they are saving *for*,
-   * and a reader who flattened their cabinet was not saying anything about that.
-   *
-   * **Two selectors, never one object literal**: a selector returning a fresh object is a new
-   * reference on every store write, so this hook would re-render on a card zoom or a view
-   * switch. `FilterBar`'s `ViewToggle` reads its eight fields the same way.
-   *
-   * **What the list draws is the stored switch _or_ the caller's `flattenLocally`**, and the
-   * second is never written back — `useCollection`'s arrangement, where it is argued. The wire,
-   * the key and the returned `flatten` all read the combined value.
-   */
-  const flattenStored = useAppStore((s) => s.wishlistFlattened);
-  const flatten = flattenStored || flattenLocally;
-  const toggleFlatten = useAppStore((s) => s.toggleWishlistFlattened);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -244,7 +262,47 @@ export function useWishlist({
    */
   const terms = useMemo(() => searchTerms(debouncedText), [debouncedText]);
 
-  const filters: Omit<WishlistQuery, "limit" | "offset" | "sort"> = {
+  /**
+   * **The shelves this level draws (spec §5.1)** — built here, beside the wire, because the two id
+   * lists sent to Rust are functions of them and nothing else.
+   *
+   * `filtering` is the **debounced** answer: the list asks with `debouncedText`, and a flag that
+   * flipped on the keystroke would change the shelves sent a whole debounce before the text did —
+   * two reads for one search. Any chip counts, text or not (spec §3.4, decision 4).
+   *
+   * **Nothing is asked until the folder list has answered** ({@link ready}). A read before it is a
+   * read for Not sorted alone, then a second read for the wall a moment later — a flash of the
+   * wrong page. The folds are not waited for: `useShelfFolds` is prefetched in `AppShell` and at
+   * `staleTime: Infinity`, and an answer arriving late re-keys the read rather than wasting one.
+   */
+  const folderList = useWishlistFolderList();
+  const { folds, setFold, setMany } = useShelfFolds("wishlist");
+  const shelfFolders = useMemo(() => folderList.folders.map(toShelfFolder), [folderList.folders]);
+  const filtering =
+    activeFilterCount({
+      text: debouncedText,
+      format,
+      colors,
+      sets,
+      manaValues,
+      manaX,
+      rarities,
+      types,
+      needsReview,
+    }) > 0;
+  const shelves = useMemo(
+    () => buildShelves({ folders: shelfFolders, levelId: folderId, folds, filtering }),
+    [shelfFolders, folderId, folds, filtering],
+  );
+  /** What the list fetches: the open shelves, in the order they are drawn — which is the list's
+   *  first `ORDER BY` term, so the rows arrive in wall order. */
+  const fetchIds = useMemo(() => shelvesToFetch(shelves), [shelves]);
+  /** What the counts cover: every shelf at and below the level, shut ones included (spec §4.2). */
+  const countIds = useMemo(() => shelvesToCount(shelves), [shelves]);
+  const ready = !folderList.query.isPending;
+
+  /** Every filter as the backend reads it, and nothing about which shelves. */
+  const scope: Omit<WishlistQuery, "limit" | "offset" | "sort" | "shelves"> = {
     // A blank string and an empty term list are dropped rather than sent: the backend reads
     // them as unset anyway, and sending them would make the payload lie about intent.
     ...terms,
@@ -269,76 +327,58 @@ export function useWishlist({
     rarities: raritiesParam,
     // Sent only when it is set. `false` — "everything the sync did not touch" — is meaningful on
     // the wire, and `undefined` is not sent at all.
-    //
-    // **A `fulfilled` field stood beside this one until 2026-09-08.** It asked the backend which
-    // wishes the collection already covered, and the backend has stopped counting: the wishlist
-    // compares itself to the collection nowhere, because the reader is the one who decides a wish
-    // is done, by taking the card off the list.
     needsReview,
-    // `paperOnly` is deliberately absent: the wishlist forces it off, exactly as the
-    // collection does. A paper test over a printing that has left `cards` would throw away
-    // the rows this list exists to keep showing.
-    //
     // The marketplace is always sent: it is which prices the list is quoting rather than a
     // refinement that can be left off, and the backend's default happens to be one of the
     // five rather than "no opinion".
     marketplace: marketplace.id,
-    // Sent only when the reader is actually inside a folder. The root is `#[serde(default)]`
-    // on the other end, so an omitted field already reads as "the root" — sending `null`
-    // there would say the same thing over the wire, but this keeps the same rule `text`
-    // follows: a value the backend would infer anyway is dropped rather than spelled out.
-    folderId: folderId ?? undefined,
-    // Sent only when `true`. The backend's default is `false`, and sending it on every
-    // request would make the payload lie about intent — the rule the file already applies to
-    // `text` and `needsReview`.
-    flatten: flatten || undefined,
   };
 
-  // `["wishlist", …]`, so every write to *this* list refreshes it.
-  //
-  // **A collection write no longer fires it and no longer should.** The root was shared on the
-  // grounds that a wish counted the copies the binder held (`WishRow.ownedQuantity`, computed
-  // from `collection_entries`), so a stepper press two views away changed what this list said.
-  // Nothing on a wish is derived from a collection row now, so `AddToCollection` narrowed its
-  // invalidation to the list it actually wrote to — see the comment at that write.
-  const listKey = [
-    "wishlist",
-    "list",
+  /**
+   * **What the export sweep and the price sweep cover: the whole wall** — every shelf at and below
+   * the level, shut ones included, which is exactly what the header's `Wishes` counts. The folder
+   * and flatten fields that stood here are gone: an absent `folderId` meant "the root's loose
+   * wishes" and would now narrow a sweep of the wall to its first shelf. `shelves` absent keeps
+   * meaning what it always did for every caller that does not send it.
+   */
+  const filters: Omit<WishlistQuery, "limit" | "offset" | "sort"> = { ...scope, shelves: countIds };
+
+  // Every segment is a **string**, and the normalised one where there is a normal form: a key
+  // holding an array compares by structure, so `["W","U"]` and `["U","W"]` would be two entries
+  // for one answer. The params above have already put each in order.
+  const filterKey = [
     debouncedText,
-    // Every segment is a **string**, and the normalised one where there is a normal form: a key
-    // holding an array compares by structure, so `["W","U"]` and `["U","W"]` would be two entries
-    // for one answer. The four params above have already put each in order.
     format,
     colorsParam ?? "",
-    // Its own segment beside the letters, and load-bearing for the X chip's reason one field
-    // down: `WU` loose and `WU` strict are two different sets of wishes over the same local
-    // SQLite, so a key built from the letters alone would serve the strict press out of the
-    // loose list's cached pages.
+    // `WU` loose and `WU` strict are two different sets of wishes, so the flag has a segment.
     strictParam ? "strict" : "",
     setsParam?.join(",") ?? "",
     typesParamValue?.join(",") ?? "",
     manaParam?.join(",") ?? "",
-    // Its own segment, and load-bearing: X is a second axis over the same chips, so a key built
-    // from the numerals alone would serve "3, and also X" out of the pages cached for plain "3".
+    // X is a second axis over the same chips, so "3, and also X" must not be served from plain "3".
     manaX ? "x" : "",
     raritiesParam?.join(",") ?? "",
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
-    sort.map((t) => `${t.key}:${t.dir}`).join(","),
-    // On every order, not only a money one: two marketplaces are two answers to the same
-    // wishlist, and neither may be served from the other's cached page.
+    // Two marketplaces are two answers to the same wishlist.
     marketplace.id,
-    // Two folders are two lists, and flattened is a third: each keeps its own cached pages
-    // and its own scroll position (`queryKeyString` below is what resets it), rather than one
-    // list quietly showing another folder's page while the new one is still in flight.
-    folderId === null ? "root" : String(folderId),
-    flatten ? "flat" : "",
   ];
+  const scopeKey = [...filterKey, levelSegment(folderId)];
+  const sortKey = sort.map((t) => `${t.key}:${t.dir}`).join(",");
+  /**
+   * The list's **identity** — the level, the filters and the sort, and deliberately not the
+   * shelves it fetched. It is what {@link queryKeyString} publishes and the scroll reset follows,
+   * and folding a shelf changes what is fetched without making it another list.
+   */
+  const listIdentity = ["wishlist", "list", ...scopeKey, sortKey];
+  // `["wishlist", …]`, so every write to *this* list refreshes it.
+  const listKey = [...listIdentity, fetchIds.join(",")];
 
   const query = useInfiniteQuery({
     queryKey: listKey,
     queryFn: ({ pageParam }) =>
       ipc.wishlistList({
-        ...filters,
+        ...scope,
+        shelves: fetchIds,
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
@@ -348,9 +388,105 @@ export function useWishlist({
     initialPageParam: 0,
     getNextPageParam: (_last, pages) => nextOffset(pages),
     placeholderData: keepPreviousData,
+    enabled: ready,
   });
 
-  const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
+  /**
+   * The per-shelf counts (spec §4.2) — `["wishlist", …]` like the list, so `settleWhole`'s
+   * invalidation reaches it, and so does `crossWindow.ts`'s: `wishlist_entries` and
+   * `wishlist_folders` both map to the `["wishlist"]` root. No sort in the key, because a count
+   * cannot come back different for an order. `limit`/`offset` are required by `WishlistQuery` and
+   * read by nothing on this command.
+   */
+  const countsKey = ["wishlist", "shelfCounts", ...scopeKey, countIds.join(",")];
+  const countsQuery = useQuery({
+    queryKey: countsKey,
+    queryFn: () => ipc.wishlistShelfCounts({ ...scope, shelves: countIds, limit: 0, offset: 0 }),
+    placeholderData: keepPreviousData,
+    enabled: ready,
+  });
+
+  /**
+   * **A walk to a level the cache does not hold keeps drawing the level being left, whole, until the
+   * new one has answered — and then switches in one render** (live pass §14; `useCollection` holds
+   * the same rule, so the two pages walk alike).
+   *
+   * Both reads are `keepPreviousData`, so the moment the level changes each serves the *previous*
+   * level's answer as a placeholder — while the shelves, built from `folderId` right here, are
+   * already the new level's. Drawn as it arrives, that was a wall laid out for the new level from
+   * the old level's rows (the level's own wishes missing, then popping in above the first heading)
+   * under the old level's figures, for 36–106 ms; and the two reads land apart, so for a frame the
+   * figures could be one level's and the wall another's. So the page is handed a **drawn** level:
+   *
+   * - `shown` is the last level whose list **and** counts both answered for their own key — kept
+   *   whole ({@link ShownLevel}): its pages and its counts together, and the filtering, folds, list
+   *   identity and sweep scope they were asked with, so nothing drawn can mix two levels or two
+   *   questions. It is state written during render (React's "information from previous renders"),
+   *   and only when an answer or its question actually changes, so it costs one extra render per
+   *   answer and never an effect.
+   * - `levelHeld` is a level change in flight: the level asked for is not the one shown, and its
+   *   two answers are not both in. The page then gets `shown` — its level, shelves, rows, counts,
+   *   list identity, filtering, folds and sweep scope — and **nothing of the level being asked
+   *   for**. A filter typed or a shelf folded during the hold is drawn with the new level.
+   * - A read that **fails** counts as answered, so a refused level is switched to and says why
+   *   rather than holding the old one for ever.
+   *
+   * **A cached level answers in the render that asks for it**, so it switches with no hold — the
+   * behaviour the live pass measured as right, kept. And nothing but a level change holds: a new
+   * filter or a fold is the same level, drawn as it always was.
+   */
+  const listAnswered = query.isError || (query.data !== undefined && !query.isPlaceholderData);
+  const countsAnswered =
+    countsQuery.isError || (countsQuery.data !== undefined && !countsQuery.isPlaceholderData);
+  const answered = ready && listAnswered && countsAnswered;
+  const scrollKey = JSON.stringify(listIdentity);
+  const countsKeyString = JSON.stringify(countsKey);
+  const [shown, setShown] = useState<ShownLevel | null>(null);
+  if (
+    answered &&
+    (shown === null ||
+      shown.levelId !== folderId ||
+      shown.pages !== query.data ||
+      shown.counts !== countsQuery.data ||
+      shown.filtering !== filtering ||
+      shown.folds !== folds ||
+      shown.scrollKey !== scrollKey ||
+      shown.countsKey !== countsKeyString)
+  ) {
+    setShown({
+      levelId: folderId,
+      pages: query.data,
+      counts: countsQuery.data,
+      filtering,
+      folds,
+      scrollKey,
+      filters,
+      countsKey: countsKeyString,
+    });
+  }
+  const held = !answered && shown !== null && shown.levelId !== folderId ? shown : null;
+  const levelId = held === null ? folderId : held.levelId;
+  const drawnFiltering = held === null ? filtering : held.filtering;
+  const drawnFolds = held === null ? folds : held.folds;
+  // The held wall is laid out from the frame's filtering and folds, never the current ones — a
+  // filter typed or a shelf folded during the hold would otherwise re-lay the previous level's rows
+  // under shelves they were never fetched for.
+  const drawnShelves = useMemo(
+    () =>
+      held === null
+        ? shelves
+        : buildShelves({
+            folders: shelfFolders,
+            levelId: held.levelId,
+            folds: held.folds,
+            filtering: held.filtering,
+          }),
+    [held, shelves, shelfFolders],
+  );
+  const pages = held === null ? query.data : held.pages;
+  const counts = held === null ? countsQuery.data : held.counts;
+
+  const rows = useMemo(() => pages?.pages.flatMap((p) => p.items) ?? [], [pages]);
 
   return {
     text,
@@ -481,52 +617,65 @@ export function useWishlist({
       needsReview,
     }),
     /** Clear every filter at once. The sort is not a filter and stays: it is how the reader
-     *  reads, not what they are looking at. `folderId` and `flatten` stay for the same
-     *  reason: where the reader is standing, and whether they are ignoring the filing, are
-     *  navigation rather than something they narrowed, so clearing a search must not also
-     *  march them back to the root or drop them out of Flatten.
-     *
-     *  **`flatten` now lives in the app store (`wishlistFlattened`) and is persisted, which makes
-     *  that exclusion sharper rather than looser**: this function is a list of `set*` calls over
-     *  local state, and the one thing it must never grow is a reach into the store. A Reset all
-     *  that cleared it would write the reader's saved preference away, and it would still be gone
-     *  the next time they launched the app. */
+     *  reads, not what they are looking at. `folderId` stays for the same reason — where the reader
+     *  is standing is navigation — and so does every fold, which is `useShelfFolds`' and not a
+     *  `set*` this list may grow. */
     resetAll: () => {
       setText("");
       setFormat("");
+      // The `Exact` flag is cleared although it is not counted, and the asymmetry is the point:
+      // Reset all means "no filters", and a strict flag left standing over an empty colour row is
+      // exactly the leftover that would turn the reader's next colour press into an exact match
+      // they never asked for. `NO_COLORS` clears the row and the flag together.
       setColorFilter(NO_COLORS);
-      // Cleared although it is not counted, and the asymmetry is the point: Reset all means "no
-      // filters", and a strict flag left standing over an empty colour row is exactly the
-            setSets([]);
+      setSets([]);
       setTypes([]);
       setManaValues([]);
       setManaX(false);
       setRarities([]);
       setNeedsReview(undefined);
     },
-    /** Which folder the reader is standing in. `null` is the root wishlist — a real
-     *  destination, the same folder every unfiled wish lands in — and not "no folder chosen".
-     *  Navigation, not a filter: excluded from {@link WishlistFilterState} on purpose, so it
-     *  is invisible to {@link activeFilterCount} and untouched by `resetAll` above. */
-    folderId,
+    /** The level the page **draws** — where the reader is standing, as far as anything on screen
+     *  is concerned. `null` is the root wishlist — a real destination, the same folder every
+     *  unfiled wish lands in — and not "no folder chosen". Navigation, not a filter: excluded from
+     *  {@link WishlistFilterState} on purpose, so it is invisible to {@link activeFilterCount} and
+     *  untouched by `resetAll` above. **It lags {@link requestedFolderId} while a walk to an
+     *  uncached level is answering** (see `shown`), and equals it otherwise. */
+    folderId: levelId,
+    /** The level **asked for** — the last `openFolder`, drawn or not. What a render-phase hand-off
+     *  must compare against (comparing the drawn level, it would ask again on every render of the
+     *  hold), and what Escape walks up from, so two quick presses climb two levels. The
+     *  collection's hook publishes the same answer under the same name. */
+    requestedFolderId: folderId,
+    /** A walk to an uncached level is answering, and the page is still drawing the level before
+     *  it. Nothing may page the list in the meantime: the query is the new level's. */
+    levelHeld: held !== null,
     /** Open a folder, or `null` for the root. This hook only tracks where the reader now
      *  stands — it does not own the write that files a wish there, or the one that creates a
-     *  folder; both live on the page, beside the folder cards. */
+     *  folder; both live on the page, beside the headings. */
     openFolder: (id: number | null) => setFolderId(id),
     /**
-     * `true` ignores `folderId` and shows every wish regardless of filing — no folder cards,
-     * no drill-down, and every wish captioned with where it is filed instead. Also
-     * navigation, for the reason `folderId` is: it says how much of the tree is on screen,
-     * not which wishes qualify.
-     *
-     * The store's `wishlistFlattened`, read straight through — **or'd with the caller's
-     * `flattenLocally`**, which is the one way this can be `true` while the stored switch is off.
+     * The shelves at and below the **drawn** level, in tree order, shut ones included —
+     * `buildShelves`' answer, which the page draws from and re-asks with the folder being added
+     * put in.
      */
-    flatten,
-    /** Off shows the current folder; on shows the whole wishlist. The store's own action —
-     *  **toggle-only on purpose**, because a `set(value)` invites a caller to compute the next
-     *  state from a `flatten` it captured a render ago. */
-    toggleFlatten,
+    shelves: drawnShelves,
+    /** The same folders `shelves` was built from, as `buildShelves` takes them. */
+    shelfFolders,
+    /** The stored folds for this page — overrides only (spec §5.7) — **as the wall is drawn from**:
+     *  the held frame's while a level is held. `setFold` and `setMany` always write the reader's. */
+    folds: drawnFolds,
+    /** Fold one shelf: `true`/`false` stores an override, `null` returns it to its default. */
+    setFold,
+    /** Many folds in one write — Expand all and Collapse all. */
+    setMany,
+    /** A search or a filter is on — collapse is suspended (spec §3.4, decision 4). **The wall's
+     *  answer**: the held frame's while a level is held, which is what its shelves were laid out
+     *  from. */
+    filtering: drawnFiltering,
+    /** Per-shelf counts over every shelf at and below the drawn level; `undefined` until answered. */
+    counts,
+    countsQuery,
     /**
      * The marketplace every price on this view is quoted from — its label for the as-of
      * sentence and its currency for the formatter. The figures were decided by the query this
@@ -537,18 +686,39 @@ export function useWishlist({
      * Every filter as one object, without the paging — `useCollection`'s `filters` for the same
      * reason: `useExportScope`'s sweep asks for the whole filtered list, and that needs this
      * object plus a page size of its own (`SWEEP_PAGE`) rather than the 100-row page on screen.
+     *
+     * **The drawn wall's, so the held frame's while a level is held** (review Minor 2): an Export
+     * or an Optimise pressed during the hold covers what the page draws — the level its sentence
+     * names — and not the level still arriving.
      */
-    filters,
+    filters: held === null ? filters : held.filters,
     query,
     rows,
-    /** Wishes matching the filters, counted in full. `0` until the first page answers. */
-    total: query.data?.pages[0]?.total ?? 0,
     /**
-     * Identity of the current list, for anything that has to react to "this is a different
-     * list now" — the scroll reset, above all. Derived from the query key itself rather than
-     * rebuilt from the same fields, so the two cannot drift.
+     * Whether the drawn list has pages still to load — `getNextPageParam`'s own answer, asked of
+     * **the pages on screen**: the held level's while a walk is answering, and otherwise the query's,
+     * placeholder included.
+     *
+     * **Not `query.hasNextPage`, which is `false` while a new key's first page is loading** — it is
+     * asked of the new key's data, which does not exist yet, while the rows drawn are the previous
+     * key's (`keepPreviousData`). A fold or a move re-keys the list, so for that round trip the table
+     * read every shelf as complete, drew headings past the loaded edge with nothing under them, and
+     * a moved heading drawn there took the caret back — then vanished past the edge when the real
+     * first page arrived (the final review's W-I2).
      */
-    queryKeyString: JSON.stringify(listKey),
+    hasMore: pages !== undefined && nextOffset(pages.pages) !== undefined,
+    /** Wishes on the **open** shelves matching the filters, counted in full — the list's own
+     *  total. `0` until the first page answers. The whole wall's count is {@link counts}'. */
+    total: pages?.pages[0]?.total ?? 0,
+    /**
+     * Identity of the **drawn** list, for anything that has to react to "this is a different
+     * list now" — the scroll reset, above all, which must not fire on a level the page is not yet
+     * drawing. The query key less the shelves fetched, built from the same segments, so the two
+     * cannot drift. **The held frame's while a level is held**, whole — not its level under the
+     * current filter and sort, which reset the held wall's scroll on a keystroke made during the
+     * hold (review Minor 3).
+     */
+    queryKeyString: held === null ? scrollKey : held.scrollKey,
   };
 }
 

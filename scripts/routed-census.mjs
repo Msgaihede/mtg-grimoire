@@ -12,6 +12,7 @@
 // `sync_group_leave` landed. Both mistakes are the kind a reader cannot spot.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 
 // Repo-root relative, which is `build-wasm.mjs`'s convention: every script here is run from
 // the root by npm, and `import.meta.url` would need a Windows drive-letter fix-up to boot.
@@ -53,39 +54,61 @@ function commandsIn(path) {
   return out;
 }
 
-const route = readFileSync(join(ROOT, "web", "route.rs"), "utf8");
-const block = route.slice(route.indexOf("pub const COMMANDS"));
-const routed = new Set(
-  block.slice(0, block.indexOf("];")).match(/"[a-z_0-9]+"/g)?.map((s) => s.slice(1, -1)) ?? [],
-);
-
-const byFile = new Map();
-let total = 0;
-for (const path of rsFiles(ROOT).sort()) {
-  const found = commandsIn(path);
-  if (!found.length) continue;
-  total += found.length;
-  const missing = found.filter((c) => !routed.has(c));
-  if (missing.length) byFile.set(relative(ROOT, path).replaceAll("\\", "/"), missing.sort());
+/**
+ * The names `web::route::COMMANDS` advertises, read out of `route.rs`'s text.
+ *
+ * **Every `//` comment is stripped before a quoted word is matched**, because the array carries
+ * prose between its entries and prose quotes things: a comment there naming
+ * `cfg(not(target_family = "wasm"))` counted `wasm` as a routed command — one more than the array
+ * holds, and a ghost the check below then reported as a typo. No command name can contain `//`,
+ * so cutting each line there loses nothing the array says.
+ */
+export function routedNames(routeSource) {
+  const block = routeSource.slice(routeSource.indexOf("pub const COMMANDS"));
+  const code = block
+    .split("\n")
+    .map((line) => line.replace(/\/\/.*$/, ""))
+    .join("\n");
+  return new Set(
+    code.slice(0, code.indexOf("];")).match(/"[a-z_0-9]+"/g)?.map((s) => s.slice(1, -1)) ?? [],
+  );
 }
 
-const notRouted = [...byFile.values()].reduce((n, v) => n + v.length, 0);
-console.log(`commands in the crate   ${total}`);
-console.log(`named in COMMANDS       ${routed.size}`);
-console.log(`not routed              ${notRouted}\n`);
-for (const [file, names] of byFile) console.log(`  ${file.padEnd(26)} ${names.join(" ")}`);
+function main() {
+  const routed = routedNames(readFileSync(join(ROOT, "web", "route.rs"), "utf8"));
 
-// A name advertised that is not a command anywhere is a typo the drift fence cannot see: that
-// test calls every name and only checks it is not `Unknown`, which a misspelling would also be.
-const all = new Set(rsFiles(ROOT).flatMap(commandsIn));
-const ghosts = [...routed].filter((c) => !all.has(c)).sort();
-if (ghosts.length) console.log(`\n!! in COMMANDS but not a command anywhere: ${ghosts.join(" ")}`);
+  const byFile = new Map();
+  let total = 0;
+  for (const path of rsFiles(ROOT).sort()) {
+    const found = commandsIn(path);
+    if (!found.length) continue;
+    total += found.length;
+    const missing = found.filter((c) => !routed.has(c));
+    if (missing.length) byFile.set(relative(ROOT, path).replaceAll("\\", "/"), missing.sort());
+  }
 
-const want = process.argv.indexOf("--check");
-if (want !== -1) {
-  const expected = Number(process.argv[want + 1]);
-  if (routed.size !== expected) {
-    console.error(`\nFAIL routed is ${routed.size}, expected ${expected}`);
-    process.exitCode = 1;
+  const notRouted = [...byFile.values()].reduce((n, v) => n + v.length, 0);
+  console.log(`commands in the crate   ${total}`);
+  console.log(`named in COMMANDS       ${routed.size}`);
+  console.log(`not routed              ${notRouted}\n`);
+  for (const [file, names] of byFile) console.log(`  ${file.padEnd(26)} ${names.join(" ")}`);
+
+  // A name advertised that is not a command anywhere is a typo the drift fence cannot see: that
+  // test calls every name and only checks it is not `Unknown`, which a misspelling would also be.
+  const all = new Set(rsFiles(ROOT).flatMap(commandsIn));
+  const ghosts = [...routed].filter((c) => !all.has(c)).sort();
+  if (ghosts.length) console.log(`\n!! in COMMANDS but not a command anywhere: ${ghosts.join(" ")}`);
+
+  const want = process.argv.indexOf("--check");
+  if (want !== -1) {
+    const expected = Number(process.argv[want + 1]);
+    if (routed.size !== expected) {
+      console.error(`\nFAIL routed is ${routed.size}, expected ${expected}`);
+      process.exitCode = 1;
+    }
   }
 }
+
+// Run as a script, never on import — `ci-route.mjs`' guard, so a test can call `routedNames`
+// without the census reading the crate and printing it.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

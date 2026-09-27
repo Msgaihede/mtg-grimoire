@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import {
   colorParam,
   cycleTriState,
@@ -13,13 +18,29 @@ import {
   type ColorFilter,
   type ColorKey,
 } from "@/features/search/useCardSearch";
+import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import { CONDITIONS, type Condition } from "@/lib/conditions";
 import { FINISHES, type Finish } from "@/lib/finish";
-import { ipc, type CollectionQuery, type CollectionSortKey } from "@/lib/ipc";
+import { lockedFolderIds } from "@/lib/folderTree";
+import {
+  ipc,
+  type CollectionPage,
+  type CollectionQuery,
+  type CollectionSortKey,
+  type CollectionSummary,
+  type ShelfCount,
+} from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
+import {
+  buildShelves,
+  shelvesToCount,
+  shelvesToFetch,
+  visibleShelves,
+} from "@/lib/shelves";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
-import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { countsById, shelfFolderOf } from "./collectionShelfModel";
+import { useCollectionFolderList } from "./useCollectionFolders";
 
 /**
  * Rows per request. The backend clamps at 500 and defaults to this; a collection is
@@ -164,29 +185,62 @@ export function nextOffset(pages: readonly CountedPage[]): number | undefined {
 }
 
 /**
- * Filter state, the debounce, and the two queries behind the collection view.
+ * **One level as the page draws it** — the last level whose figures, shelf counts and list all
+ * answered for their own keys, and what they were asked with. It is what the page is drawn from
+ * while a walk to an uncached level is in flight (see `useCollection`'s `shown`), and it is drawn
+ * **whole from the frame**: the three answers are one answer about one level, and a held wall laid
+ * out with the *current* filtering and folds, scrolled on the *current* list identity or exported
+ * with the *current* filters would be the old level's rows under a question they were never asked.
+ * `useWishlist`'s `ShownLevel` holds the same fields for the same reason, less the figures its page
+ * has no read of its own for.
+ */
+interface ShownLevel {
+  levelId: number | null;
+  figures: CollectionSummary | undefined;
+  counts: ShelfCount[] | undefined;
+  pages: InfiniteData<CollectionPage> | undefined;
+  /** Whether a filter was on, and the folds, as the frame's answers were asked for. */
+  filtering: boolean;
+  folds: ReturnType<typeof useShelfFolds>["folds"];
+  /** What the wall resets its scroll on — held with the rest, so the jump lands with the wall. */
+  scrollKey: string;
+  /** What a sweep of the frame's wall asks — the export's scope while it is held, so an Export
+   *  pressed in that round trip covers the wall on screen and not the level still arriving.
+   *  `countsKey` is its identity: the counts' own key, which every field of it is a segment of, so
+   *  the frame catches up when the scope moves and only then. */
+  filters: Omit<CollectionQuery, "limit" | "offset" | "sort">;
+  countsKey: string;
+}
+
+/**
+ * Whether a read has answered **for its own key**: not still waiting for a first answer, and not
+ * showing the previous key's (`keepPreviousData`). A refusal counts as an answer — it is one, and a
+ * hold that waited out an error would never end.
+ */
+function answered(read: { isPending: boolean; isPlaceholderData: boolean }): boolean {
+  return !read.isPending && !read.isPlaceholderData;
+}
+
+/**
+ * Filter state, the debounce, the shelves, and the three queries behind the collection view.
  *
  * The same shape as `useCardSearch` — one key built from every input, `keepPreviousData` so
  * a refined filter does not blank the table — with the collection's own three filters and a
  * sort on top, and one addition of substance: the aggregate header is a **second query over
  * the same filters**, not a field of the page. A header that describes a different set of
  * rows than the table under it is worse than no header, and recomputing nine aggregates on
- * every scrolled page would be worse still.
+ * every scrolled page would be worse still. The per-shelf counts are the third, over the same
+ * scope again, for the headings.
  *
- * @param options.flattenLocally Draw the cabinet flat **without writing** `collectionFlattened` —
- *   `useReviewHandoff`'s `reviewSweep`, which a To review hand-off turns on so the flagged copies
- *   it counted across every drawer are on screen wherever they are filed. OR'd with the stored
- *   switch into the one `flatten` this hook sends and returns; see that field.
  * @param options.initialNeedsReview The needs-review filter this list **mounts** with — read once,
  *   by `useState`, and ignored afterwards. `CollectionPage` passes `useReviewHandoff`'s
  *   `initialNeedsReview`, which has to be the *initial* state rather than a render-phase write:
  *   TanStack's observer keeps the first render pass's options, so a filter switched on while
  *   rendering still fetched the unfiltered list once. `useReviewHandoff` has the measurement.
+ *   **There is no `flattenLocally` beside it any more**: that was the hand-off's sweep, a flat read
+ *   of every drawer, and the root's shelves are every drawer already.
  */
-export function useCollection({
-  flattenLocally = false,
-  initialNeedsReview,
-}: { flattenLocally?: boolean; initialNeedsReview?: boolean } = {}) {
+export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boolean } = {}) {
   // Which marketplace this list quotes — an input to both queries below, and part of both
   // keys: it decides what a Value cell contains, not merely how it is written.
   const { marketplace } = useMarketplace();
@@ -222,53 +276,26 @@ export function useCollection({
   // to. Not a filter, so `resetAll` leaves it alone.
   const [sort, setSort] = useState<SortSpec<CollectionSortKey>>([]);
   /**
-   * Which folder the reader is standing in — `null` is the **root of the cabinet**, the copies
-   * filed nowhere, exactly as it is on the wishlist.
+   * Which folder the reader is standing in — `null` is the **root of the cabinet**.
    *
-   * **`null` used to be every folder on this view, and Flatten is what took that job over.** The
-   * wire did not move with it: `CollectionQuery.folder_id` is still `None = every folder` (spec
-   * §8.4), chosen so that every caller written before folders existed — the plain-text mirror,
-   * the export sweep, the deck panel, the importer's preview — keeps asking the question it
-   * always asked. This view says the narrower thing with `rootOnly`, a field only it sends, so
-   * the third state arrived without touching anybody else's answer.
+   * **The level, and since shelves the level is what the wall covers from, never what it
+   * narrows to.** At the root the wall is every card — Not sorted, then every folder, then the
+   * app's own under **Decks** — and inside a folder it is that folder and everything under it
+   * (spec §3.1). The wire says so with `shelves`, never with `folderId` / `rootOnly`, which stay on
+   * `CollectionQuery` for the callers that send an unasked query (the mirror, the export sweep, the
+   * deck panel, the importer).
    *
    * Deliberately outside `CollectionFilterState`: it is navigation, not something the reader
-   * narrowed, so `activeFilterCount` never sees it and `resetAll` leaves it alone — the same
-   * reason `sort` is outside.
+   * narrowed, so `activeFilterCount` never sees it and `resetAll` leaves it alone.
+   *
+   * **`store.ts`'s `pendingFolder` is a one-shot hand-off, not a memory**: `CollectionPage` reads
+   * it once as it renders and spends it, so nothing restores a folder at launch.
+   *
+   * **This is where the reader *asked* to stand, and the level the queries are keyed on.** What the
+   * page draws can trail it by a round trip — see {@link ShownLevel} — so the hook publishes it as
+   * `requestedFolderId` and publishes the level on screen as `folderId`.
    */
-  const [folderId, setFolderId] = useState<number | null>(null);
-  /**
-   * `true` ignores `folderId` and answers every copy wherever it is filed. Also navigation
-   * rather than a filter, for the same reason `folderId` is — Flatten is "how much of the
-   * cabinet am I looking at", not "which copies qualify".
-   *
-   * **The one piece of this hook's state that is not `useState`**, and the difference is the
-   * reader's: where they are *standing* is this session's, but whether they read their cabinet
-   * flat is how they read it at all, so it is held in the app store and persisted behind it —
-   * `collectionFlattened`, which starts `true`. `folderId` deliberately did not follow: a folder
-   * restored at launch would open the app somewhere the reader did not navigate to.
-   *
-   * **`store.ts`'s `pendingFolder` is not that rule bending, and the distinction is the point.**
-   * It is a *one-shot hand-off* — one surface names a drawer, `CollectionPage` reads it once as
-   * it renders and spends it, and nothing survives to the next visit or the next launch. This
-   * state is still the whole of where the reader is standing; what arrives through that field is
-   * a press, made a moment ago on another page, rather than a memory.
-   *
-   * **Two selectors, never one object literal.** A selector returning a fresh `{ flatten, toggle }`
-   * is a new reference on every store write, so this hook — and the whole collection view under
-   * it — would re-render on a card zoom or a view switch. `FilterBar`'s `ViewToggle` reads its
-   * eight fields the same way and for the same reason.
-   *
-   * **What the list draws is the stored switch _or_ the caller's `flattenLocally`**, and the
-   * second is never written back: it is a page's reason to read the cabinet flat for a moment
-   * (a review hand-off, which counted every drawer) rather than the reader's preference, so it
-   * must neither survive the visit nor move the switch they persisted. Everything below — the
-   * wire, the key, the returned `flatten` — reads the combined value, so the page draws one
-   * cabinet rather than two that disagree.
-   */
-  const flattenStored = useAppStore((s) => s.collectionFlattened);
-  const flatten = flattenStored || flattenLocally;
-  const toggleFlatten = useAppStore((s) => s.toggleCollectionFlattened);
+  const [asked, setAsked] = useState<number | null>(null);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -313,6 +340,61 @@ export function useCollection({
    */
   const terms = useMemo(() => searchTerms(debouncedText), [debouncedText]);
 
+  /**
+   * **The shelves** (spec §5.1): the folder census, the level, the stored folds and whether a
+   * filter is on, built into the ordered list the wall is drawn from — by `lib/shelves.ts`, which
+   * is where the order is decided. This hook owns the inputs because two of them are its own
+   * state: where the reader stands, and what the filters are.
+   *
+   * `filtering` reads the **debounced** box, the same text the query sends, so collapse is
+   * suspended by the search that is actually on the wire rather than by a keystroke still waiting
+   * out `DEBOUNCE_MS`.
+   */
+  const folderList = useCollectionFolderList();
+  const { folds, setFold, setMany } = useShelfFolds("collection");
+  /**
+   * The drawers set aside, **every folder inside a locked one included** — `lockedFolderIds` is
+   * the single place that inheritance is computed on this side, and a shelf's `locked` is this
+   * answer, never `CollectionFolder.locked`. Published for the page, which reads the same set for
+   * its menu, its drag confirmation and its tiles.
+   */
+  const lockedIds = useMemo(() => lockedFolderIds(folderList.folders), [folderList.folders]);
+  const shelfFolders = useMemo(
+    () => folderList.folders.map((one) => shelfFolderOf(one, lockedIds)),
+    [folderList.folders, lockedIds],
+  );
+  const filtering =
+    activeFilterCount({
+      text: debouncedText,
+      format,
+      colors,
+      sets,
+      manaValues,
+      manaX,
+      rarities,
+      types,
+      priceMin,
+      priceMax,
+      finishes,
+      conditions,
+      needsReview,
+    }) > 0;
+  /** The shelves at the level the reader **asked** for — what the three queries below cover. The
+   *  wall is drawn from `shelves` further down, which is these once that level has answered. */
+  const askedShelves = useMemo(
+    () => buildShelves({ folders: shelfFolders, levelId: asked, folds, filtering }),
+    [shelfFolders, asked, folds, filtering],
+  );
+  const toCount = useMemo(() => shelvesToCount(askedShelves), [askedShelves]);
+  const toFetch = useMemo(() => shelvesToFetch(askedShelves), [askedShelves]);
+  /**
+   * **Nothing is asked until the census has answered.** Before it, `buildShelves` has no folders
+   * and the list would be Not sorted alone — the empty page of a reader who files everything,
+   * drawn for one round trip and then filled. A census that *fails* is not pending, and the page
+   * then draws what it can: the cards filed nowhere.
+   */
+  const censusReady = !folderList.query.isPending;
+
   const filters: Omit<CollectionQuery, "limit" | "offset" | "sort"> = {
     // Blank strings and empty term lists are dropped rather than sent: the backend reads them
     // as unset anyway, and sending them would make the payload lie about intent.
@@ -350,27 +432,17 @@ export function useCollection({
     // the list and the header both carry, so it belongs on the shared object and in the key
     // both queries are built from.
     marketplace: marketplace.id,
-    // Sent only when the reader is actually inside a folder, and **not at all while the list is
-    // flattened**: `folderId` outranks `rootOnly` on the other end, so an id riding along under
-    // Flatten would narrow the one thing Flatten exists to widen. Dropped rather than spelled as
-    // `null` for the rule `text` already follows — a value the backend would infer anyway is not
-    // put on the wire.
-    folderId: flatten ? undefined : (folderId ?? undefined),
-    // The root narrows now, and this is the field that says so: `folder_id IS NULL`, the copies
-    // filed nowhere. Sent only where it is true, by the same rule — `false` is the backend's
-    // default and a payload carrying it would be lying about intent.
+    // **Every shelf at and below the level, collapsed ones included** — what the wall covers,
+    // which is what the header counts and what an export of "matching your filters" exports.
+    // The list query below overrides it with the open shelves only. `folderId` and `rootOnly`
+    // are not sent: `shelves` outranks both on the other end.
     //
-    // Both fields ride on `filters` rather than beside it because `useExportScope`'s sweep reads
-    // this object: standing in a folder and pressing Export exports that drawer, and
-    // `everythingFilters` strips the lot to widen the sweep back out. **That strip is still
-    // sufficient here, and unlike the wishlist's it always will be — but the reason has changed
-    // even though the conclusion has not.** It used to be sufficient because there was only one
-    // field to strip; it is sufficient now because stripping *both* lands on absent + absent,
-    // which is "every folder", which is exactly what "everything" means. The wishlist has to say
-    // `flatten: true` a second way because its own strip lands on the root; this surface's strip
-    // lands on the widest answer there is, so the widest answer stays the one you get by asking
-    // nothing.
-    rootOnly: !flatten && folderId === null ? true : undefined,
+    // It rides on `filters` because `useExportScope`'s sweep reads this object: standing in a
+    // folder and pressing Export exports that folder *and everything under it*, which is what is
+    // on screen. `everythingFilters` strips it with the rest, and absent `shelves` + absent
+    // `folderId` + absent `rootOnly` is "every folder" — the widest answer, which is exactly what
+    // "everything" means.
+    shelves: toCount,
   };
 
   /**
@@ -415,51 +487,35 @@ export function useCollection({
     // sets, so a key that spelled both `""` would serve the complement from the other's cache.
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
     marketplace.id,
-    // Two folders are two lists, the root is a third and the flattened cabinet is a fourth: each
-    // keeps its own cached pages and its own scroll position (`queryKeyString` below is what
-    // resets it), rather than one list quietly showing another drawer's page while the new one
-    // is still in flight.
-    //
-    // One segment with three shapes, and the two words cannot collide with a folder id because
-    // `String(n)` is digits. **Flatten is read before the folder is**, which is the half worth
-    // writing down: flattened, neither `folderId` nor `rootOnly` reaches the wire, so "flattened
-    // while standing in the Binder" and "flattened at the root" are the *same request* and must
-    // not become two cache entries for one answer.
-    //
-    // In `filterKey` rather than beside the sort, because it is a statement about *which rows* —
-    // so the header's aggregates are re-run for the level on screen, which is the whole point of
-    // a header that describes what is under it.
-    flatten ? "flat" : folderId === null ? "root" : String(folderId),
+    // The level. `String(n)` is digits, so it cannot collide with `"root"`. The shelves
+    // themselves are keyed beside this rather than in it — see `countKey` and `fetchKey` below —
+    // so that `scrollKey`, which is built from this array, moves with the level and not with a
+    // collapse.
+    asked === null ? "root" : String(asked),
   ];
 
-  // `["collection", …]` on both, so the one `invalidateQueries({ queryKey: ["collection"] })`
-  // every write in the app already fires refreshes the table and the header together.
+  // `["collection", …]` on all three, so the one `invalidateQueries({ queryKey: ["collection"] })`
+  // every write in the app already fires refreshes the wall, the header and the headings together.
   const sortKey = sort.map((t) => `${t.key}:${t.dir}`).join(",");
-  const listKey = ["collection", "list", filterKey, sortKey];
+  /** Every shelf the wall covers — a new folder, a deleted one or a new level is a new list. */
+  const countKey = toCount.join(",");
+  /** The shelves drawn open — a collapse is a new list, and only for the list. */
+  const fetchKey = toFetch.join(",");
+  const listKey = ["collection", "list", filterKey, sortKey, fetchKey];
 
   const query = useInfiniteQuery({
     queryKey: listKey,
     queryFn: ({ pageParam }) =>
       ipc.collectionList({
         ...filters,
-        // **No `excludeLocked` here, and none on the summary below** — issue #436, which
-        // narrowed what the lock is for. This list sent `excludeLocked: true` from #365 until
-        // 2026-09-09, so a locked drawer's copies left the flattened wall and left the header's
-        // totals with them; the report was that a set-aside card is still a card the reader
-        // owns, and a collection page that will not count it is the app disagreeing with the
-        // cardboard on their shelf. The lock is about **what the app offers a deck**, not about
-        // what the reader has: `useCollectionSearch` still sends the flag unconditionally,
-        // `deck_theory::OWNED_SPARE_SQL` and `collection_source::Availability::ForDeck` still
-        // drop those copies, and a share still refuses to publish them.
+        // **The open shelves, in wall order** — the backend orders by position in this list and
+        // then by the sort, so the rows arrive shelf by shelf and a shelf's tiles are contiguous.
+        shelves: toFetch,
+        // **No `excludeLocked` here, and none on the summary below** — issue #436: a set-aside
+        // card is still a card the reader owns. The lock is marked on the tile and the heading.
         //
-        // **The mark is what replaced the exclusion, not nothing.** A locked copy is drawn on
-        // this wall and in the table wearing a `Lock` — `CollectionPage`'s `captionFor` and
-        // `CollectionTable`'s Folder cell — so "set aside" is legible on the copy rather than
-        // enforced by its absence. `CollectionQuery.exclude_locked` keeps its `false` default
-        // for the reason it always had: the mirror and the export sweep must never ask.
-        //
-        // Absent rather than `[]` when nothing is sorted, so an untouched table produces
-        // exactly the payload it always did.
+        // Absent rather than `[]` when nothing is sorted, so an untouched table produces exactly
+        // the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
         limit: COLLECTION_PAGE_SIZE,
         offset: pageParam,
@@ -467,21 +523,128 @@ export function useCollection({
     initialPageParam: 0,
     getNextPageParam: (_last, pages) => nextOffset(pages),
     placeholderData: keepPreviousData,
+    enabled: censusReady,
   });
 
   const summary = useQuery({
-    queryKey: ["collection", "summary", filterKey],
-    // **It asks exactly what the list above it asks, and matching is the point rather than a
-    // tidiness**: `collection::scope` is one predicate list and the header is the count of the
-    // rows underneath it, so a summary that asked a different question would price a wall the
-    // reader is not looking at. That is why widening this one could not be done on its own —
-    // issue #436 asked for the header, and a header counting 38 over a wall drawing 26 is a
-    // worse sentence than the one it replaced. Both widened together, in the same commit.
+    queryKey: ["collection", "summary", filterKey, countKey],
+    // **Every shelf the wall covers** (spec §3.6) — collapsed ones included — so `Cards`, `Unique`,
+    // `Value` and `For trade` are the reader's real figures whatever is folded. `filters` already
+    // carries `shelves: toCount`; the list above is the one query that narrows it.
     queryFn: () => ipc.collectionSummary({ ...filters, limit: 0, offset: 0 }),
     placeholderData: keepPreviousData,
+    enabled: censusReady,
   });
 
-  const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
+  /**
+   * One row per non-empty shelf, over the same scope and filters (spec §4.2) — what places every
+   * heading before a page of cards has arrived, what hides a shelf with no match under a filter,
+   * and what a heading's figures are summed from. `keepPreviousData` so a keystroke does not
+   * blank every heading's figures for a round trip: the last answer stands until the next lands.
+   */
+  const shelfCounts = useQuery({
+    queryKey: ["collection", "shelfCounts", filterKey, countKey],
+    queryFn: () => ipc.collectionShelfCounts({ ...filters, limit: 0, offset: 0 }),
+    placeholderData: keepPreviousData,
+    enabled: censusReady,
+  });
+
+  /**
+   * **The level on screen, which is not always the level asked for** (live pass, FAIL 14). Walking
+   * to a level none of the three reads has cached used to draw the new level's *shelves* over the
+   * old level's rows and counts — `keepPreviousData`'s placeholders — beside the old level's
+   * figures: for 36–106 ms `Showcase` was `Cards 5 · $13.55` over a wall missing its own leading
+   * row, then its cards popped in above the first heading. The rule, shared word for word with the
+   * wishlist: **until the new level's figures, shelf counts and first page have all answered, the
+   * page draws the previous level whole; it switches in one render once all three have.**
+   *
+   * So the hook keeps the last level it could draw whole — `shown`, a {@link ShownLevel} — and serves
+   * every level-shaped answer (the level, its shelves, the counts, the rows, the figures, the scroll
+   * key and the export's filters) from it while the asked level is still arriving. Three things make
+   * it the rule rather than a softer one:
+   *
+   * - **All three, each answered for the asked level's own key** — `isPlaceholderData` is how a
+   *   read says it is showing the previous key's answer, and `isPending` how it says it has none.
+   *   A refusal answers too, so a read that fails ends the hold and the page says so.
+   * - **The frame is a copy, not the placeholders.** The three reads cache apart: the figures and
+   *   the counts are keyed without the sort or the folds and the list with both, so a level visited
+   *   under another sort has its figures cached and its list not. Held on the placeholders alone,
+   *   that walk drew the *new* figures over the *old* wall — the very mix this exists to prevent.
+   * - **A level already answered switches at once**, frame or no frame: a cached level is drawn in
+   *   the render that asked for it, which the live pass measured as correct and is kept.
+   *
+   * `shown` is written **during render**, the way `CollectionPage` answers a `pendingFolder` — never
+   * from an effect (the lint rule and its cascading renders) and never from a ref read in render
+   * (React's `refs` rule) — and only when an answer or its question actually changed, so it costs one
+   * extra render per answer. It is `null` until a level has answered whole, so the first level a page
+   * ever draws — a hand-off included — is never held behind nothing. `held` is `shown` while a level
+   * change is in flight, and `null` otherwise: nothing but a level change holds, and a filter typed
+   * or a shelf folded during the hold is drawn with the new level. `useWishlist` spells it the same.
+   */
+  const scrollKey = JSON.stringify(["collection", "list", filterKey, sortKey]);
+  const countsKey = JSON.stringify(["collection", "shelfCounts", filterKey, countKey]);
+  const levelAnswered = answered(query) && answered(summary) && answered(shelfCounts);
+  const [shown, setShown] = useState<ShownLevel | null>(null);
+  if (
+    levelAnswered &&
+    (shown === null ||
+      shown.levelId !== asked ||
+      shown.figures !== summary.data ||
+      shown.counts !== shelfCounts.data ||
+      shown.pages !== query.data ||
+      shown.filtering !== filtering ||
+      shown.folds !== folds ||
+      shown.scrollKey !== scrollKey ||
+      shown.countsKey !== countsKey)
+  ) {
+    setShown({
+      levelId: asked,
+      figures: summary.data,
+      counts: shelfCounts.data,
+      pages: query.data,
+      filtering,
+      folds,
+      scrollKey,
+      filters,
+      countsKey,
+    });
+  }
+  const held = !levelAnswered && shown !== null && shown.levelId !== asked ? shown : null;
+  const levelId = held === null ? asked : held.levelId;
+  const drawnFiltering = held === null ? filtering : held.filtering;
+  const drawnFolds = held === null ? folds : held.folds;
+
+  /**
+   * The wall's shelves: the asked level's once it has answered, and until then the held level's —
+   * **built from the frame's filtering and folds**, never the current ones, so the held wall is the
+   * previous level whole rather than its rows under shelves laid out for a filter it never asked.
+   */
+  const heldShelves = useMemo(
+    () =>
+      held === null
+        ? null
+        : buildShelves({
+            folders: shelfFolders,
+            levelId: held.levelId,
+            folds: held.folds,
+            filtering: held.filtering,
+          }),
+    // Nothing of the asked level's in here: a filter or a fold changed during the hold re-lays the
+    // level being asked for, never the held one.
+    [held, shelfFolders],
+  );
+  const shelves = heldShelves ?? askedShelves;
+  const figures = held === null ? summary.data : held.figures;
+  const shelfCountRows = held === null ? shelfCounts.data : held.counts;
+  const pages = held === null ? query.data : held.pages;
+  const counts = useMemo(() => countsById(shelfCountRows), [shelfCountRows]);
+  /** The shelves that get a place on the wall — `lib/shelves.ts`'s rule, over the counts. */
+  const visible = useMemo(
+    () => visibleShelves(shelves, counts, drawnFiltering),
+    [shelves, counts, drawnFiltering],
+  );
+
+  const rows = useMemo(() => pages?.pages.flatMap((p) => p.items) ?? [], [pages]);
 
   return {
     text,
@@ -564,32 +727,59 @@ export function useCollection({
      *  offering the flagged rows, not cycling the chip the reader has not touched. */
     setNeedsReview,
     /**
-     * Which folder the reader is standing in. `null` is the root of the cabinet — a real
-     * destination, the drawer every unfiled copy lands in, and not "no folder chosen".
-     * Navigation, not a filter: excluded from {@link CollectionFilterState} on purpose, so it is
-     * invisible to {@link activeFilterCount} and untouched by `resetAll` below.
-     */
-    folderId,
-    /** Open a folder, or `null` for the root. This hook only tracks where the reader now is; it
-     *  does not create, rename, move or delete a folder — those live on the page, beside the
-     *  folder cards. */
-    openFolder: setFolderId,
-    /**
-     * `true` ignores `folderId` and shows every copy regardless of filing — no folder cards, no
-     * drill-down, and every row captioned with where it is filed instead. Also navigation, for
-     * the reason `folderId` is: it says how much of the cabinet is on screen, not which copies
-     * qualify.
+     * Which folder the reader is standing in **as the page draws it**. `null` is the root of the
+     * cabinet — a real destination, the drawer every unfiled copy lands in, and not "no folder
+     * chosen". Navigation, not a filter: excluded from {@link CollectionFilterState} on purpose, so
+     * it is invisible to {@link activeFilterCount} and untouched by `resetAll` below.
      *
-     * The store's `collectionFlattened`, read straight through — **or'd with the caller's
-     * `flattenLocally`**, which is the one way this can be `true` while the stored switch is off.
-     * The page and the filter bar read this and nothing else, so the list, the chip and the
-     * cabinet on screen all agree about which of the two is in force.
+     * **It trails {@link requestedFolderId} while a level nothing has cached is arriving** — see
+     * {@link ShownLevel} — so everything drawn from it (the path row, the wall, the export's
+     * sentence, the Share control) names the level that is on screen.
      */
-    flatten,
-    /** Off shows the current folder; on shows the whole collection. The store's own action —
-     *  **toggle-only on purpose**, because a `set(value)` invites a caller to compute the next
-     *  state from a `flatten` it captured a render ago. */
-    toggleFlatten,
+    folderId: levelId,
+    /**
+     * Where the reader last **asked** to stand — `folderId` one round trip early. The page's
+     * navigation reads this and nothing else does: Escape's step up (two presses in quick
+     * succession are two levels, not one level twice), and the two render-phase hand-offs, which
+     * would chase a level the queries have already moved to and loop.
+     */
+    requestedFolderId: asked,
+    /** Whether the page is still drawing the previous level while {@link requestedFolderId}
+     *  arrives. The rows on screen are that level's, so nothing may page past them meanwhile. */
+    levelHeld: held !== null,
+    /** Open a folder, or `null` for the root. This hook only tracks where the reader now is; it
+     *  does not create, rename, move or delete a folder — those live on the page, on the path row
+     *  and the shelf headings. */
+    openFolder: setAsked,
+    /**
+     * The wall's shelves at the level on screen, in drawing order, **as built** — collapsed ones and
+     * an empty Not sorted included. The page draws `visible`; this is what the fold controls and
+     * **Expand all** / **Collapse all** act on, and what a draft folder is added to.
+     */
+    shelves,
+    /** The shelves that get a place on the wall (`visibleShelves`). */
+    visible,
+    /** `collection_shelf_counts` by shelf id, or `null` before it has answered. */
+    counts,
+    /**
+     * Why the counts did not answer, or `null`. The page waits for the counts before it lays the
+     * wall out — a layout drawn from no counts would put an empty box under every folder for a
+     * round trip — so a refusal here has to be said rather than left as a wall that never arrives.
+     */
+    countsError: shelfCounts.isError ? shelfCounts.error : null,
+    /** Whether any search text or filter is on — collapse is suspended while it is (decision 4).
+     *  **The wall's answer**: while a level is held, the frame's, which is what its shelves were
+     *  laid out from. */
+    filtering: drawnFiltering,
+    /** The stored folds for this page (`useShelfFolds("collection")`) as the wall is drawn from —
+     *  the frame's while a level is held — and its two writes, which always write the reader's. */
+    folds: drawnFolds,
+    setFold,
+    setMany,
+    /** The folder census as `buildShelves` takes it — the page adds a draft to it while naming. */
+    shelfFolders,
+    /** {@link lockedFolderIds} over the census — the effective lock, computed once. */
+    lockedIds,
     /** The columns this list is ordered by, first one deciding. Empty is name order. */
     sort,
     /** One press on a column header. `additive` is Shift being held. */
@@ -694,23 +884,18 @@ export function useCollection({
       needsReview,
     }),
     /** Clear every filter at once, including the search box. The sort is not a filter and
-     *  stays: it is how the reader reads, not what they are looking at. `folderId` and `flatten`
-     *  stay for the same reason — where they are standing, and whether they are ignoring the
-     *  filing, are navigation rather than something they narrowed, so a Reset all must not march
-     *  them back out of the drawer they opened or drop them out of Flatten.
-     *
-     *  **`flatten` now lives in the app store (`collectionFlattened`) and is persisted, which
-     *  makes that exclusion sharper rather than looser**: this function is a list of `set*` calls
-     *  over local state, and the one thing it must never grow is a reach into the store. A
-     *  Reset all that cleared it would not merely re-file the wall — it would write the reader's
-     *  saved preference away, and it would still be gone the next time they launched the app. */
+     *  stays: it is how the reader reads, not what they are looking at. `folderId` stays for the
+     *  same reason — where they are standing is navigation — and so do the stored folds, which
+     *  this function never touches: a filter only ever *suspends* collapse, so clearing it hands
+     *  every fold back exactly as the reader left it. */
     resetAll: () => {
       setText("");
       setFormat("");
+      // `Exact` goes with the colours, although it is not counted, and the asymmetry is the point:
+      // Reset all means "no filters", and a strict flag left standing over an empty colour row is
+      // state with no control drawn for it.
       setColorFilter(NO_COLORS);
-      // Cleared although it is not counted, and the asymmetry is the point: Reset all means "no
-      // filters", and a strict flag left standing over an empty colour row is exactly the
-            setSets([]);
+      setSets([]);
       setTypes([]);
       setManaValues([]);
       setManaX(false);
@@ -732,19 +917,48 @@ export function useCollection({
      * list" needs and a request for "the page on screen" does not. `useExportScope`'s sweep is
      * the one other reader: exporting "matching your filters" means this object plus a page size
      * of its own (`SWEEP_PAGE`), never the 100-row page this view happens to have loaded.
+     *
+     * **Over the level the page draws**: while a level is held, the held level's filters **whole** —
+     * its shelves, and the text and chips its answers were asked with — so an Export pressed in that
+     * round trip sweeps the wall on screen, even with a filter typed since, and the sentence that
+     * names it — built from `folderId`, the level drawn — says the same thing the sweep does.
      */
-    filters,
-    query,
-    summary,
-    rows,
-    /** Rows matching the filters, counted in full. `0` until the first page answers. */
-    total: query.data?.pages[0]?.total ?? 0,
+    filters: held === null ? filters : held.filters,
     /**
-     * Identity of the current list, for anything that has to react to "this is a different
-     * list now" — the scroll reset, above all. Derived from the query key itself rather
-     * than rebuilt from the same fields, so the two cannot drift.
+     * The list read **for the level asked for** — for its paging and its refusal. The rows on
+     * screen are {@link rows}, which are the held level's while a level is held.
+     */
+    query,
+    /**
+     * `collection_summary` for the level on screen — the figures band. **Never the summary read
+     * itself**, which answers for the level asked for and would put that level's figures over the
+     * held level's wall: the one frame this hook exists to rule out.
+     */
+    figures,
+    /** The rows of the level on screen, in wall order. */
+    rows,
+    /** Rows matching the filters at the level on screen, counted in full. `0` until the first page
+     *  answers. */
+    total: pages?.pages[0]?.total ?? 0,
+    /**
+     * Whether every row of the level on screen has been loaded — what the table's shelved rows stop
+     * short of while pages remain. From the list drawn rather than from `query.hasNextPage`, which
+     * answers about the level asked for.
+     */
+    listComplete: nextOffset(pages?.pages ?? []) === undefined,
+    /**
+     * Identity of the current list — the rows being fetched, collapse included. Derived from the
+     * query key itself rather than rebuilt from the same fields, so the two cannot drift.
      */
     queryKeyString: JSON.stringify(listKey),
+    /**
+     * What the wall and the table reset their scroll on: the level, the filters and the sort —
+     * **not** which shelves are open. A reader who folds a shelf half-way down the wall is still
+     * reading the same wall, and throwing them back to the top for it would be the page moving
+     * under their hand. **The level on screen's**, so the wall jumps to the top as the new level
+     * is drawn rather than a round trip before, under the old one.
+     */
+    scrollKey: held === null ? scrollKey : held.scrollKey,
   };
 }
 

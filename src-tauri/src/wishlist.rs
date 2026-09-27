@@ -11,7 +11,7 @@
 //! state to preserve. A wish for none of something is not a wish, and [`set_wish_quantity`]
 //! takes a zero as the removal it can only be.
 
-use crate::collection::{valid_quantity, EntryChange};
+use crate::collection::{valid_quantity, EntryChange, ShelfCount};
 // The refusal a folder id nothing answers to gets — **and since 2026-09-09 only the tests below
 // name it here**. [`add_wish`] spelled both the lookup and the refusal out until then and calls
 // `wishlist_folders::require_folder` for both now, so the sentence arrives from the module that
@@ -116,7 +116,12 @@ pub struct WishlistQuery {
     /// implementation of arithmetic `folderTree.ts` already does.
     pub folder_id: Option<i64>,
     /// `true` ignores [`WishlistQuery::folder_id`] entirely and answers every wish, wherever
-    /// it is filed — the page's **Flatten** switch.
+    /// it is filed — **the every-folder answer**. The page stopped sending it when its Flatten
+    /// switch was deleted for the Shelves wall, which asks with [`Self::shelves`]; the callers
+    /// that mean the whole wishlist send it now — the Wishlist savings widget and the page's
+    /// savings hand-off (`wholeWishlistQuery`, for `wishlist_optimize`), the To review widget,
+    /// the export sweep, the shared binder's owned index, and the plain-text mirror's
+    /// `Source::WholeWishlist`.
     ///
     /// **This is what tells "the root" apart from "no folder filter"; a nullable field alone
     /// cannot.** `folder_id: None` already means the root, so there is no value left in that
@@ -124,6 +129,15 @@ pub struct WishlistQuery {
     /// the question. Default `false`, so every caller written before folders existed keeps
     /// reading the root — which is the list it has always shown.
     pub flatten: bool,
+    /// **The shelves to answer, in the order to answer them** — folder ids, `0` for the root
+    /// (`w.folder_id IS NULL`). [`crate::collection::CollectionQuery::shelves`] one table over,
+    /// and every rule there holds here: present, it replaces [`Self::folder_id`] and
+    /// [`Self::flatten`] outright; rows come back in list position, then the sort, then `w.id`;
+    /// an id no folder answers to matches nothing and refuses nothing; and **absent is today's
+    /// answer** — the root, or everything when flattened — which `wishlist_optimize`, the mirror
+    /// and the export sweep go on asking by saying nothing.
+    #[serde(default)]
+    pub shelves: Option<Vec<i64>>,
     pub limit: u32,
     pub offset: u32,
 }
@@ -205,8 +219,8 @@ pub struct WishRow {
     /// cheapest printing of its oracle card, so only a genuine orphan answers `None`.
     pub legalities: Option<String>,
     /// Where the wish is filed. `None` is the root, and it is on every row rather than
-    /// implied by the query because the **Flatten** view asks for every wish at once and
-    /// then has to say where each one lives.
+    /// implied by the query because a list can read many folders at once — the Shelves wall's
+    /// `shelves`, or `flatten` — and each row then has to say which shelf it belongs on.
     pub folder_id: Option<i64>,
     /// How many **other** wishes are on the list for the same oracle card — in another
     /// folder, at the root, pinned to another printing, in another finish. `0` is the
@@ -1280,8 +1294,8 @@ pub(crate) fn wishlist_scope(
         Some(false) => p.wheres.push("w.needs_review IS NULL".to_owned()),
         None => {}
     }
-    // Where the reader is standing. Flattened, they are standing everywhere and no term is
-    // pushed at all — which is not the same as `folder_id IS NULL`, and is the whole reason
+    // Which folder the list reads. With `flatten` it reads every folder and no term is pushed at
+    // all — which is not the same as `folder_id IS NULL`, and is the whole reason
     // [`WishlistQuery::flatten`] exists as a second field.
     //
     // **`IS`, never `=`.** The root is `folder_id IS NULL` and `= NULL` is not false but
@@ -1289,14 +1303,25 @@ pub(crate) fn wishlist_scope(
     // are in — a list that shows nothing, with no error and nothing in `error_log`. SQLite's
     // `IS` compares NULLs as equal and is the same device [`WISHLIST_GRAIN`]'s `coalesce`es
     // are, one operator instead of one wrapper per side.
-    if !q.flatten {
+    //
+    // **A shelves list replaces both of the questions above** — which folder, and whether every
+    // folder — for [`WishlistQuery::shelves`]' reason. The term is the
+    // collection's, over this table's column, so `0` is the root here exactly as it is there.
+    if let Some(shelves) = &q.shelves {
+        p.push(
+            crate::collection::shelf_term("w.folder_id", shelves),
+            Box::new(crate::collection::shelf_list(shelves)),
+        );
+    } else if !q.flatten {
         p.push("w.folder_id IS ?".to_owned(), Box::new(q.folder_id));
     }
     let where_sql = p.where_sql();
     (from, where_sql, p.params)
 }
 
-pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage, String> {
+/// The count and the page [`list_wishes`] steps — `collection::list_statements` one table over,
+/// split out for its reason: a test explains the very text the page runs.
+fn list_statements(q: &WishlistQuery) -> crate::collection::ListStatements {
     let limit = if q.limit == 0 {
         DEFAULT_LIMIT
     } else {
@@ -1308,26 +1333,31 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
     // different rules.
     let price = crate::sorting::row_price_expr(q.marketplace, WISH_PREFERRED_FINISH);
     let (from, where_sql, mut params) = wishlist_scope(q, &price);
+    let scope_params = params.len();
+    let count = format!("SELECT count(*) FROM {from} WHERE {where_sql}");
 
-    let total: i64 = conn
-        .query_row(
-            &format!("SELECT count(*) FROM {from} WHERE {where_sql}"),
-            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-
-    let order = crate::sorting::order_by(
+    let sorted = crate::sorting::order_by(
         q.sort.as_deref(),
         &crate::sorting::sorts_for(WISHLIST_SORTS, WISHLIST_PRICE_SORTS, UNIT_PRICE_ALIAS),
         "w.name ASC",
         "w.id ASC",
     );
+    // Shelves first, `collection::list_statements`' rule and its parameter order: the position
+    // binds the list a second time, after the scope's parameters the count binds and before
+    // `LIMIT ? OFFSET ?`.
+    let order = match &q.shelves {
+        Some(shelves) => {
+            params.push(Box::new(crate::collection::shelf_order(shelves)));
+            let position = crate::collection::shelf_position("w.folder_id");
+            format!("{position} ASC, {sorted}")
+        }
+        None => sorted,
+    };
     // The picture, off the very printing this read already joined — the one `art_card_id`
     // names — so the art and the id under it are one answer rather than two. `c` is the alias
     // `from` above gave that printing.
     let image_uris = crate::image_uri::front_face_selects("c").join(", ");
-    let sql = format!(
+    let page = format!(
         "SELECT w.id, w.oracle_id, w.card_id, w.name, w.set_code, w.collector_number, w.lang,
                 c.rarity, c.mana_cost, w.quantity, w.preferred_finish,
                 {price} AS {UNIT_PRICE_ALIAS},
@@ -1363,16 +1393,33 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
     );
     params.push(Box::new(limit));
     params.push(Box::new(q.offset));
+    crate::collection::ListStatements {
+        count,
+        page,
+        params,
+        scope_params,
+    }
+}
+
+pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage, String> {
+    let s = list_statements(q);
+    let total: i64 = conn
+        .query_row(
+            &s.count,
+            rusqlite::params_from_iter(s.count_params().iter().map(|p| p.as_ref())),
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
 
     // Where the image pair begins — the count of every column before it, which is what makes
     // it last. Written down rather than spelled inside the closure, for the reason the four
     // appended `r.get(N)`s above carry: this mapping is positional.
     const IMAGE_COL: usize = 20;
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&s.page).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(
-            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            rusqlite::params_from_iter(s.params.iter().map(|p| p.as_ref())),
             |r| {
                 Ok(WishRow {
                     id: r.get(0)?,
@@ -1409,6 +1456,85 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
     Ok(WishlistPage { items, total })
+}
+
+/// The wishlist's peek statement — `collection_peek_sql`'s shape over this table: per shelf, the
+/// first [`crate::collection::SHELF_PEEK`] cards by the wish's name then card id, one row per card.
+///
+/// **The id is `c.id` off [`priced_wishes`]' join**, which is the join [`wishlist_scope`] spells
+/// and so the very id a row's `art_card_id` carries: a pinned wish's own printing, an any-printing
+/// wish's cheapest printing at `price`. A genuine orphan has no picture and is left out. **No
+/// filter** — only shelf membership, for the collection's reason, and that membership is
+/// [`crate::collection::shelf_term`]'s for the shelves it is built for: a peek that leaves out the
+/// root searches `idx_wishlist_folder` rather than reading every wish.
+fn wishlist_peek_sql(price: &str, shelves: &[i64]) -> String {
+    format!(
+        "SELECT shelf, card_id FROM (
+             SELECT shelf, card_id,
+                    row_number() OVER (PARTITION BY shelf ORDER BY name, card_id) AS n
+               FROM (SELECT coalesce(w.folder_id, 0) AS shelf,
+                            c.id AS card_id,
+                            min(w.name) AS name
+                       FROM {from}
+                      WHERE {member} AND c.id IS NOT NULL
+                      GROUP BY shelf, c.id))
+          WHERE n <= {peek}
+          ORDER BY shelf, n",
+        from = priced_wishes(price),
+        member = crate::collection::shelf_term("w.folder_id", shelves),
+        peek = crate::collection::SHELF_PEEK,
+    )
+}
+
+/// One [`ShelfCount`] per non-empty shelf of wishes in the query's scope, ordered by folder id.
+///
+/// **The figures are [`wishlist_scope`] and nothing else**, so the counts and the list they size
+/// read the same rows; the peek is unfiltered ([`wishlist_peek_sql`]). A tile is a wish — one row
+/// is one tile on this wall — and `value` is `wishlist_folders::folder_summary`'s cost over the
+/// same `row_price_expr`, except that a shelf priced nowhere answers `None` rather than `0.0`: a
+/// heading has no room for the header's "n unpriced" note. **`unpriced` counts wishes (rows)**,
+/// not copies — the unit of the heading's "6 wishes", where the collection's counts copies for its
+/// "42 cards". `sort`, `limit` and `offset` are read by nothing here.
+pub fn shelf_counts(conn: &Connection, q: &WishlistQuery) -> Result<Vec<ShelfCount>, String> {
+    let price = crate::sorting::row_price_expr(q.marketplace, WISH_PREFERRED_FINISH);
+    let (from, where_sql, params) = wishlist_scope(q, &price);
+    let sql = format!(
+        "SELECT shelf,
+                count(*),
+                coalesce(sum(copies), 0),
+                sum(copies * unit_price),
+                coalesce(sum(CASE WHEN unit_price IS NULL THEN 1 ELSE 0 END), 0)
+           FROM (SELECT coalesce(w.folder_id, 0) AS shelf,
+                        w.quantity AS copies,
+                        {price} AS unit_price
+                   FROM {from} WHERE {where_sql})
+          GROUP BY shelf
+          ORDER BY shelf"
+    );
+    let mut counts = {
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+                |r| {
+                    Ok(ShelfCount {
+                        folder_id: r.get(0)?,
+                        tiles: r.get(1)?,
+                        copies: r.get(2)?,
+                        value: r.get(3)?,
+                        unpriced: r.get(4)?,
+                        peek: Vec::new(),
+                    })
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?
+    };
+    crate::collection::fill_peek(conn, &mut counts, |shelves| {
+        wishlist_peek_sql(&price, shelves)
+    })?;
+    Ok(counts)
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -1494,6 +1620,22 @@ pub async fn wishlist_list(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         list_wishes(&crate::sync::lock_db_read(&state), &query)
+    })
+    .await
+    .map_err(|e| format!("the wishlist could not be read: {e}"))?
+}
+
+/// The Shelves wall's per-shelf figures for the wishlist — and, summed, its header's Total cost.
+/// **Read-only** connection, blocking pool.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn wishlist_shelf_counts(
+    state: tauri::State<'_, Arc<AppState>>,
+    query: WishlistQuery,
+) -> Result<Vec<ShelfCount>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        shelf_counts(&crate::sync::lock_db_read(&state), &query)
     })
     .await
     .map_err(|e| format!("the wishlist could not be read: {e}"))?
@@ -3754,6 +3896,463 @@ mod tests {
         let mut expected = vec![root, ordered, someday];
         expected.sort_unstable();
         assert_eq!(found, expected, "the folder given is not read at all");
+    }
+
+    /// The shelves fixture, with every id named.
+    struct ShelvedWishes {
+        conn: Connection,
+        root: i64,
+        ordered_test: i64,
+        ordered_bolt: i64,
+        someday_bolt: i64,
+        someday_unpriced: i64,
+    }
+
+    /// `Ordered` (1) with `Someday` (2) inside it and `Empty` (3) beside it. At TCGplayer the Test
+    /// Card is 1.00, an any-printing Lightning Bolt is 5.00, and `unpriced` has no price at all.
+    fn shelved_wishes() -> ShelvedWishes {
+        let conn = seeded();
+        folder(&conn, 1, None, "Ordered");
+        folder(&conn, 2, Some(1), "Someday");
+        folder(&conn, 3, None, "Empty");
+        seed_card_with_prices(&conn, "unpriced", r#"["nonfoil"]"#, "{}");
+        let any = |oracle: &str, folder_id: Option<i64>, quantity: i64| WishInput {
+            oracle_id: Some(oracle.to_owned()),
+            folder_id,
+            quantity,
+            ..Default::default()
+        };
+        let at = |input: WishInput| add_wish(&conn, &input).unwrap().id;
+        let root = at(any("oracle-1", None, 1));
+        let ordered_test = at(any("oracle-1", Some(1), 2));
+        let ordered_bolt = at(any("o1", Some(1), 3));
+        let someday_bolt = at(any("o1", Some(2), 1));
+        let someday_unpriced = at(WishInput {
+            card_id: Some("unpriced".to_owned()),
+            folder_id: Some(2),
+            quantity: 1,
+            ..Default::default()
+        });
+        ShelvedWishes {
+            conn,
+            root,
+            ordered_test,
+            ordered_bolt,
+            someday_bolt,
+            someday_unpriced,
+        }
+    }
+
+    fn on_wish_shelves(shelves: Vec<i64>) -> WishlistQuery {
+        WishlistQuery {
+            shelves: Some(shelves),
+            limit: 50,
+            ..Default::default()
+        }
+    }
+
+    fn wish_ids(page: &WishlistPage) -> Vec<i64> {
+        page.items.iter().map(|r| r.id).collect()
+    }
+
+    #[test]
+    fn wishlist_shelves_order_the_list_by_position_then_sort_then_id() {
+        let s = shelved_wishes();
+
+        let page = list_wishes(&s.conn, &on_wish_shelves(vec![2, 0, 1])).unwrap();
+        assert_eq!(
+            wish_ids(&page),
+            vec![
+                s.someday_bolt,
+                s.someday_unpriced,
+                s.root,
+                s.ordered_bolt,
+                s.ordered_test
+            ],
+            "Someday, then the root, then Ordered — name order inside each"
+        );
+        assert_eq!(page.total, 5);
+
+        let by_quantity = list_wishes(
+            &s.conn,
+            &WishlistQuery {
+                sort: Some(vec![term("quantity", "asc")]),
+                ..on_wish_shelves(vec![1, 0])
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            wish_ids(&by_quantity),
+            vec![s.ordered_test, s.ordered_bolt, s.root],
+            "the sort reorders inside a shelf and never across one"
+        );
+
+        let window = list_wishes(
+            &s.conn,
+            &WishlistQuery {
+                limit: 2,
+                offset: 2,
+                ..on_wish_shelves(vec![2, 0, 1])
+            },
+        )
+        .unwrap();
+        assert_eq!(wish_ids(&window), vec![s.root, s.ordered_bolt]);
+        assert_eq!(window.total, 5);
+    }
+
+    /// The pinned precedence: a list beats the folder the query also names **and** Flatten.
+    #[test]
+    fn wishlist_shelves_win_over_folder_id_and_flatten() {
+        let s = shelved_wishes();
+        let ordered = list_wishes(
+            &s.conn,
+            &WishlistQuery {
+                folder_id: Some(2),
+                flatten: true,
+                ..on_wish_shelves(vec![1])
+            },
+        )
+        .unwrap();
+        assert_eq!(wish_ids(&ordered), vec![s.ordered_bolt, s.ordered_test]);
+        assert_eq!(ordered.total, 2);
+
+        let unfiled = list_wishes(
+            &s.conn,
+            &WishlistQuery {
+                flatten: true,
+                ..on_wish_shelves(vec![0])
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            wish_ids(&unfiled),
+            vec![s.root],
+            "`0` is the root, not everything"
+        );
+    }
+
+    /// Review Focus 5, one table over.
+    #[test]
+    fn wishlist_an_unknown_shelf_id_returns_no_rows_and_no_error() {
+        let s = shelved_wishes();
+        let gone = list_wishes(&s.conn, &on_wish_shelves(vec![99])).unwrap();
+        assert!(gone.items.is_empty());
+        assert_eq!(gone.total, 0);
+        assert!(shelf_counts(&s.conn, &on_wish_shelves(vec![99]))
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            list_wishes(&s.conn, &on_wish_shelves(vec![99, 2]))
+                .unwrap()
+                .total,
+            2
+        );
+        assert_eq!(
+            list_wishes(&s.conn, &on_wish_shelves(vec![]))
+                .unwrap()
+                .total,
+            0
+        );
+    }
+
+    /// A list naming one shelf twice answers its **first** place, one table over from
+    /// `collection::tests::a_list_naming_one_shelf_twice_answers_its_first_place`.
+    #[test]
+    fn wishlist_a_list_naming_one_shelf_twice_answers_its_first_place() {
+        let s = shelved_wishes();
+        let page = list_wishes(&s.conn, &on_wish_shelves(vec![1, 0, 1])).unwrap();
+        assert_eq!(
+            wish_ids(&page),
+            vec![s.ordered_bolt, s.ordered_test, s.root],
+            "Ordered at its first place, not its last"
+        );
+        assert_eq!(page.total, 3, "named twice, counted once");
+    }
+
+    /// **A shelf whose id is written inside another's keeps its own place.** The position is an
+    /// offset into `,12,0,1,2,`, so it is the commas either side of each id that stop `1` being
+    /// found inside `12` (no trailing comma) and `2` inside `12` (no leading one) — and either
+    /// mistake would file a shelf's rows at somebody else's place with every total still right.
+    #[test]
+    fn a_shelf_whose_id_is_inside_another_s_keeps_its_own_place() {
+        let s = shelved_wishes();
+        folder(&s.conn, 12, None, "Twelve");
+        let twelve = add_wish(
+            &s.conn,
+            &WishInput {
+                oracle_id: Some("o1".to_owned()),
+                folder_id: Some(12),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let page = list_wishes(&s.conn, &on_wish_shelves(vec![12, 0, 1, 2])).unwrap();
+        assert_eq!(
+            wish_ids(&page),
+            vec![
+                twelve,
+                s.root,
+                s.ordered_bolt,
+                s.ordered_test,
+                s.someday_bolt,
+                s.someday_unpriced
+            ]
+        );
+    }
+
+    /// What SQLite says it will do with a statement, one `detail` line per step.
+    fn plan_of(conn: &Connection, sql: &str, params: &[Box<dyn rusqlite::ToSql>]) -> Vec<String> {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        stmt.query_map(
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |r| r.get::<_, String>(3),
+        )
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+    }
+
+    /// `collection::tests::a_list_without_the_unfiled_shelf_is_searched_through_the_folder_index`
+    /// one table over: a list that leaves out the root reaches `idx_wishlist_folder`, the index
+    /// the root and a named folder have always used, and a list naming the root scans.
+    #[test]
+    fn a_wishlist_list_without_the_root_is_searched_through_the_folder_index() {
+        let s = shelved_wishes();
+
+        let filed = list_statements(&on_wish_shelves(vec![1, 2]));
+        for (what, plan) in [
+            (
+                "count",
+                plan_of(&s.conn, &filed.count, filed.count_params()),
+            ),
+            ("page", plan_of(&s.conn, &filed.page, &filed.params)),
+        ] {
+            assert!(
+                plan.iter().any(|d| d.starts_with("SEARCH w ")
+                    && d.contains("INDEX idx_wishlist_folder (folder_id=?)")),
+                "the {what} statement reaches the folder index: {plan:?}"
+            );
+        }
+
+        let rooted = list_statements(&on_wish_shelves(vec![0, 1]));
+        for (what, plan) in [
+            (
+                "count",
+                plan_of(&s.conn, &rooted.count, rooted.count_params()),
+            ),
+            ("page", plan_of(&s.conn, &rooted.page, &rooted.params)),
+        ] {
+            assert!(
+                plan.iter().any(|d| d.starts_with("SCAN w")),
+                "the {what} statement scans for a list naming the root: {plan:?}"
+            );
+            assert!(
+                !plan.iter().any(|d| d.contains("MULTI-INDEX OR")),
+                "the {what} statement takes no OR over the index: {plan:?}"
+            );
+        }
+    }
+
+    /// `collection::tests::a_peek_without_the_unfiled_shelf_is_searched_through_the_folder_index`
+    /// one table over: the peek reads every wish on the shelves it names and no filter narrows it,
+    /// so a peek inside a folder searches `idx_wishlist_folder`, and one naming the root scans.
+    #[test]
+    fn a_wishlist_peek_without_the_root_is_searched_through_the_folder_index() {
+        let s = shelved_wishes();
+        let price = crate::sorting::row_price_expr(
+            crate::sorting::Marketplace::default(),
+            WISH_PREFERRED_FINISH,
+        );
+        let peek_plan = |shelves: &[i64]| {
+            plan_of(
+                &s.conn,
+                &wishlist_peek_sql(&price, shelves),
+                &[Box::new(crate::collection::shelf_list(shelves)) as Box<dyn rusqlite::ToSql>],
+            )
+        };
+
+        let filed = peek_plan(&[1, 2]);
+        assert!(
+            filed.iter().any(|d| d.starts_with("SEARCH w ")
+                && d.contains("INDEX idx_wishlist_folder (folder_id=?)")),
+            "the peek reaches the folder index: {filed:?}"
+        );
+
+        let rooted = peek_plan(&[0, 1]);
+        assert!(
+            rooted.iter().any(|d| d.starts_with("SCAN w")),
+            "the peek scans for a list naming the root: {rooted:?}"
+        );
+        assert!(
+            !rooted.iter().any(|d| d.contains("MULTI-INDEX OR")),
+            "the peek takes no OR over the index: {rooted:?}"
+        );
+    }
+
+    /// **Absent is today's answer.** The other fences are `list_wishes_at_the_root_leaves_out_what_is_filed`,
+    /// `list_wishes_flattened_answers_every_wish_wherever_it_is`, `wishlist_optimize`'s tests and
+    /// `mirror::read::tests::the_whole_wishlist_means_every_folder_which_on_this_surface_takes_flatten`.
+    #[test]
+    fn a_wishlist_query_without_shelves_answers_exactly_what_it_did_before() {
+        let bare: WishlistQuery = serde_json::from_str("{}").unwrap();
+        assert_eq!(bare.shelves, None);
+        let asked: WishlistQuery = serde_json::from_str(r#"{"shelves":[2,0]}"#).unwrap();
+        assert_eq!(asked.shelves, Some(vec![2, 0]));
+
+        let s = shelved_wishes();
+        let root = list_wishes(&s.conn, &WishlistQuery::default()).unwrap();
+        assert_eq!(
+            wish_ids(&root),
+            vec![s.root],
+            "absent and unflattened is still the root"
+        );
+        let everything = list_wishes(
+            &s.conn,
+            &WishlistQuery {
+                flatten: true,
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            wish_ids(&everything),
+            vec![
+                s.ordered_bolt,
+                s.someday_bolt,
+                s.root,
+                s.ordered_test,
+                s.someday_unpriced
+            ],
+            "flattened is every wish in name order, the id breaking ties"
+        );
+    }
+
+    /// A [`ShelfCount`] in one line — `collection::tests::counted`, which this module cannot reach.
+    fn counted(
+        folder_id: i64,
+        tiles: i64,
+        copies: i64,
+        value: Option<f64>,
+        unpriced: i64,
+        peek: &[&str],
+    ) -> ShelfCount {
+        ShelfCount {
+            folder_id,
+            tiles,
+            copies,
+            value,
+            unpriced,
+            peek: peek.iter().map(|id| (*id).to_owned()).collect(),
+        }
+    }
+
+    /// One tile per **wish**, copies, cost and unpriced, per non-empty shelf — over the list's own
+    /// scope, so the search box and the filters narrow the figures. **The peek is unfiltered** and
+    /// is the id each wish's tile is drawn from: an any-printing Lightning Bolt peeks at
+    /// `bolt-2ed`, the cheapest printing its row's `art_card_id` already names (two 5.00s, the id
+    /// breaking the tie), and a pinned wish at its own printing.
+    #[test]
+    fn wishlist_shelf_counts_are_rows_copies_cost_and_unpriced_per_shelf() {
+        let s = shelved_wishes();
+        let every = vec![0, 1, 2, 3];
+
+        assert_eq!(
+            shelf_counts(&s.conn, &on_wish_shelves(every.clone())).unwrap(),
+            vec![
+                counted(0, 1, 1, Some(1.0), 0, &["card-1"]),
+                counted(1, 2, 5, Some(17.0), 0, &["bolt-2ed", "card-1"]),
+                counted(2, 2, 2, Some(5.0), 1, &["bolt-2ed", "unpriced"]),
+            ],
+            "Empty (3) answers no row at all"
+        );
+        // The peek's id and the tile's are one answer.
+        let drawn = list_wishes(&s.conn, &on_wish_shelves(vec![1])).unwrap();
+        assert!(drawn
+            .items
+            .iter()
+            .any(|w| w.id == s.ordered_bolt && w.art_card_id.as_deref() == Some("bolt-2ed")));
+
+        let searched = shelf_counts(
+            &s.conn,
+            &WishlistQuery {
+                cards: crate::filters::CardFilters {
+                    text: Some("bolt".into()),
+                    ..Default::default()
+                },
+                ..on_wish_shelves(every.clone())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            searched,
+            vec![
+                counted(1, 1, 3, Some(15.0), 0, &["bolt-2ed", "card-1"]),
+                counted(2, 1, 1, Some(5.0), 0, &["bolt-2ed", "unpriced"]),
+            ],
+            "the search narrows the figures and never the peek"
+        );
+
+        s.conn
+            .execute(
+                "UPDATE wishlist_entries SET needs_review = 'Flagged for the test.' WHERE id = ?1",
+                params![s.ordered_test],
+            )
+            .unwrap();
+        let flagged = shelf_counts(
+            &s.conn,
+            &WishlistQuery {
+                needs_review: Some(true),
+                ..on_wish_shelves(every.clone())
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            flagged,
+            vec![counted(1, 1, 2, Some(2.0), 0, &["bolt-2ed", "card-1"])]
+        );
+
+        let priced_nowhere = shelf_counts(
+            &s.conn,
+            &WishlistQuery {
+                cards: crate::filters::CardFilters {
+                    text: Some("unpriced".into()),
+                    ..Default::default()
+                },
+                ..on_wish_shelves(every)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            priced_nowhere,
+            vec![counted(2, 1, 1, None, 1, &["bolt-2ed", "unpriced"])],
+            "a shelf priced nowhere is `None`, never `Some(0.0)`"
+        );
+    }
+
+    /// **An unpriced wish for three copies is one unpriced on the wishlist**, because the heading
+    /// beside it counts wishes — the other half of
+    /// `collection::tests::an_unpriced_entry_of_three_copies_counts_three_unpriced_on_a_collection_shelf`,
+    /// where the same three copies are three.
+    #[test]
+    fn an_unpriced_wish_of_three_copies_counts_one_unpriced_on_the_wishlist() {
+        let s = shelved_wishes();
+        add_wish(
+            &s.conn,
+            &WishInput {
+                card_id: Some("unpriced".to_owned()),
+                folder_id: Some(3),
+                quantity: 3,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            shelf_counts(&s.conn, &on_wish_shelves(vec![3])).unwrap(),
+            vec![counted(3, 1, 3, None, 1, &["unpriced"])]
+        );
     }
 
     /// The "also on your list" mark, which is what makes the grain's fourth term affordable:

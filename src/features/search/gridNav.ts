@@ -17,6 +17,8 @@
  * are `CardGrid`'s.
  */
 
+import { rowOfTile, type ShelfLayout } from "@/lib/shelfLayout";
+
 /**
  * The tile an arrow key moves to, or `null` for a press this wall has no answer for.
  *
@@ -85,4 +87,61 @@ export function nextGridIndex(
 
   const next = Math.min(count - 1, Math.max(0, index + step));
   return next === index ? null : next;
+}
+
+/**
+ * {@link nextGridIndex} for a wall drawn as shelves — the same promises, over a layout whose rows
+ * are no longer one rectangle.
+ *
+ * `index` is still an **absolute** position, now in the flat tile order the shelves make together
+ * (`ShelfLayout.totalTiles` of them), for the same reason: selecting a card can re-run the column
+ * count under the very press being answered, and a (row, column) pair would not survive it.
+ *
+ * - **Left and right walk the flat order**, across a shelf's row boundaries and across shelves
+ *   alike, and neither end wraps — the reader asked for the next card, and the next card after a
+ *   shelf's last one is the first card of the next shelf that has any.
+ * - **Up and down move to the previous or next row of tiles**, which within a shelf is `columns`
+ *   away, and past a shelf's first or last row is the neighbouring shelf's nearest row. Headings,
+ *   labels, empty boxes and collapsed shelves are rows with no tiles in them and are stepped over.
+ *   The column is kept, clamped to the row's length — so Down onto a short row lands on its last
+ *   card, as it does on the flat wall.
+ * - **Up on the first row and Down on the last answer `null`.** This is where the two walls part:
+ *   on the flat wall a clamp there reads as Home or End, but here the row above the first is a
+ *   heading, and a caret that jumped sideways to the first card while the reader pressed Up would
+ *   be a move nobody asked for.
+ *
+ * A caret on a tile the layout no longer holds (a refetch shortened a shelf under it) is brought
+ * back onto the nearest tile that exists, as the flat wall does. `null` means the press was never
+ * this function's, and the caller leaves the event alone.
+ */
+export function nextShelfTileIndex(
+  layout: ShelfLayout,
+  index: number,
+  key: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown",
+): number | null {
+  const count = layout.totalTiles;
+  if (count <= 0) return null;
+  if (!Number.isInteger(index)) return null;
+
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    const next = Math.min(count - 1, Math.max(0, index + (key === "ArrowRight" ? 1 : -1)));
+    return next === index ? null : next;
+  }
+  // `CardGrid` reads `KeyboardEvent.key`, which is a `string`; a key that reached here by a cast
+  // is still not this function's to answer.
+  if (key !== "ArrowUp" && key !== "ArrowDown") return null;
+  if (index < 0 || index >= count) return Math.min(count - 1, Math.max(0, index));
+
+  const from = rowOfTile(layout, index);
+  if (from < 0) return null;
+  const here = layout.rows[from];
+  if (here.kind !== "tiles") return null;
+
+  const step = key === "ArrowDown" ? 1 : -1;
+  for (let at = from + step; at >= 0 && at < layout.rows.length; at += step) {
+    const row = layout.rows[at];
+    if (row.kind !== "tiles") continue;
+    return row.start + Math.min(index - here.start, row.end - row.start - 1);
+  }
+  return null;
 }

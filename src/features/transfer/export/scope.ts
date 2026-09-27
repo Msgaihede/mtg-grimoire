@@ -193,13 +193,15 @@ export function useExportScope(
  * Where on its surface a sweep is standing — the whole of what the two sentences below need in
  * order to name the thing doing the narrowing.
  *
- * **Two bits rather than one, because the top level is a narrowing with no name.** On the
- * wishlist an absent `folderId` means "the wishes filed nowhere" rather than "every wish"
- * (`WishlistQuery.folderId`, and `everythingFilters` above at length), so a reader standing at
- * the root of a cabinet holding twenty drawers is looking at a sweep that leaves all twenty out:
- * `folder` is `null` there and `narrows` is still `true`. Both off is a surface with no filing to
- * speak of — the collection, a wishlist nobody has filed, and a *flattened* one, where the level
- * on screen already is every folder.
+ * **Two bits rather than one, because the top level could be a narrowing with no name** — and
+ * until folder shelves (2026-09-26) the wishlist's was: an absent `folderId` means "the wishes
+ * filed nowhere" (`WishlistQuery.folderId`, and `everythingFilters` above at length), so a reader
+ * at the root of a cabinet holding twenty drawers was looking at a sweep that left all twenty out,
+ * with `folder` `null` and `narrows` `true`. **Since shelves neither page's root narrows**: each
+ * sweeps the wall it draws, every shelf at and below the level (the pages' `shelves`), and at the
+ * root that is every folder. So both pages fill `narrows` exactly when they stand inside a folder,
+ * where `folder` names it, and both off is the root of either cabinet. The two bits stay for a
+ * surface whose top level is still a narrowing; neither page is one today.
  */
 export interface ExportFiling {
   /** The folder the reader is standing in, or `null` — at the top level, and for a folder the
@@ -231,8 +233,9 @@ export function scopeLabel(total: number, everything: boolean, filing?: ExportFi
   if (everything) return `${count} ${noun}, ignoring your filters${andFolders(filing)}`;
   // The top level is deliberately unnamed here. It has no word a reader would recognise that is
   // not also the word for the whole list ("your wishlist" is the dialog's own title), and
-  // "3 cards in Wishlist" would read as the whole of it rather than as the level. What says the
-  // drawers are being left out at the root is {@link everythingLabel}'s offer to include them.
+  // "3 cards in Wishlist" would read as the whole of it rather than as the level. Since folder
+  // shelves nothing is left out at the root anyway: the sweep there is every shelf, and
+  // {@link ExportFiling} says so with `narrows: false`.
   const where = filing?.folder ? ` in ${filing.folder}` : "";
   return `${count} ${noun}${where} matching your filters`;
 }

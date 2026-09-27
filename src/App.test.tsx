@@ -8,6 +8,7 @@ const cardDetail = vi.hoisted(() => vi.fn());
 const cardPrintings = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
+const collectionShelfCounts = vi.hoisted(() => vi.fn());
 const wishlistList = vi.hoisted(() => vi.fn());
 const shareOpen = vi.hoisted(() => vi.fn());
 const deckList = vi.hoisted(() => vi.fn());
@@ -36,16 +37,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     listView: vi.fn().mockResolvedValue({}),
     setListView: vi.fn().mockResolvedValue(undefined),
     setCardZoom: vi.fn().mockResolvedValue(undefined),
-    // `useFlattenPersistence`' pair, the third row the shell reads on the way up — the two
-    // cabinets' Flatten switches. Mocked for `cardZoom`'s reason exactly: the read is a bare
-    // `void ipc.flattenState().then(…).catch(…)` inside a mount effect, and a `.catch` cannot
-    // catch the synchronous `TypeError` of calling `undefined`. Leaving it off failed **every**
-    // test in this file with `ipc.flattenState is not a function`, thrown out of the effect
-    // where nothing here could reach it. `{}` is a database nobody has pressed the switch in,
-    // so `hydrateFlatten` seeds nothing and both pages open on `store.ts`'s own defaults — the
-    // collection flattened, the wishlist not — which is what a fresh install draws.
-    flattenState: vi.fn().mockResolvedValue({}),
-    setFlattenState: vi.fn().mockResolvedValue(undefined),
+    // The shelves' stored folds, prefetched by the shell at launch (`usePrefetchShelfFolds`).
+    // Nothing folded: every shelf opens on its kind's default.
+    shelfFolds: vi.fn().mockResolvedValue({ collection: {}, wishlist: {} }),
     // The deck editor's search column reads which way it was last left, and writes on every
     // press. Mocked rather than left off for `cardZoom`'s reason one row up — the read is a
     // query and would merely fail, but a *press* calls the setter straight out of a click
@@ -192,6 +186,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // what they add up to.
     collectionList,
     collectionSummary,
+    // And, since folder shelves, how many cards each shelf holds — the census the wall is drawn
+    // over. Empty is the answer for an empty cabinet, and without it the page never leaves
+    // "Reading your collection…". The wishlist asks the same question of its own shelves.
+    collectionShelfCounts,
+    wishlistShelfCounts: vi.fn().mockResolvedValue([]),
     // And warms the art for everything it holds, on the first load that has rows. Mocked
     // even where the fixture is empty: the call site is `void ipc.prewarmCollection()
     // .catch(…)`, and a `.catch` cannot catch the synchronous `TypeError` of calling
@@ -579,6 +578,10 @@ beforeEach(() => {
     .mockImplementation((id: string) => Promise.resolve(id === "c2" ? M10_DETAIL : BOLT_DETAIL));
   cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  // Agrees with the empty list above: no shelf holds anything, so the wall draws nothing and the
+  // page says the collection is empty. A case that seeds rows seeds their shelf's count beside
+  // them, or `visibleShelves` hides an empty Not sorted and its rows with it.
+  collectionShelfCounts.mockReset().mockResolvedValue([]);
   wishlistList.mockReset().mockResolvedValue({ items: [], total: 0 });
   shareOpen.mockReset();
   deckList.mockReset().mockResolvedValue([]);
@@ -1052,6 +1055,11 @@ it("closes the card on Escape from inside a collection row's controls", async ()
     items: [BOLT_ENTRY, { ...BOLT_ENTRY, id: 8, name: "Counterspell", quantity: 0 }],
     total: 2,
   });
+  // Both rows are loose, so they sit on **Not sorted** — and that shelf is drawn only while its
+  // count says it holds something.
+  collectionShelfCounts.mockResolvedValue([
+    { folderId: 0, tiles: 2, copies: BOLT_ENTRY.quantity, value: null, unpriced: 0, peek: [] },
+  ]);
   // **The table, said out loud**, because the collection opens on art since 2026-08-26 and this
   // case is about a `role="row"` — the stepper it reaches for lives in a table cell, and a wall of
   // tiles has neither. The default is not what is under test here; the Escape protocol is.

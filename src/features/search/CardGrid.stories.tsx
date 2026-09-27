@@ -6,7 +6,8 @@ import { OwnedBadge } from "@/components/OwnedBadge";
 import type { DragPayload } from "@/features/decks/dnd";
 import { CARDS, type FakeCard } from "../../../.storybook/fake/cards";
 import { printing } from "../../../.storybook/fake/fixtures";
-import { CardGrid, type GridCard } from "./CardGrid";
+import { buildShelves, type ShelfFolder } from "@/lib/shelves";
+import { CardGrid, type GridCard, type GridSections } from "./CardGrid";
 
 /**
  * `GridCard` is the wall's whole contract — five fields, which both `CardSummary` and a mapped
@@ -560,4 +561,121 @@ export const InTheDockedPanel: Story = {
       </div>
     ),
   ],
+};
+
+/**
+ * The fixture cabinet, as the pages feed `buildShelves` — **and the shelves are `buildShelves`'
+ * own answer for it**, so the story can never draw a shelf the app would not (final review, ledger
+ * L87: a hand-written `Showcase` at depth 3 leading with `Fetchlands` alone was one). Binder ›
+ * Staples › Fetchlands › Foils › Showcase runs one level past the three-level indent cap; Spare is
+ * an empty folder; Atraxa is a deck group, stored open here so its cards show.
+ */
+const STORY_FOLDERS: ShelfFolder[] = [
+  { id: 1, parentId: null, name: "Binder", sortOrder: 0, kind: "folder", locked: false },
+  { id: 2, parentId: 1, name: "Staples", sortOrder: 0, kind: "folder", locked: false },
+  { id: 3, parentId: 2, name: "Fetchlands", sortOrder: 0, kind: "folder", locked: false },
+  { id: 6, parentId: 3, name: "Foils", sortOrder: 0, kind: "folder", locked: false },
+  { id: 4, parentId: 6, name: "Showcase", sortOrder: 0, kind: "folder", locked: false },
+  { id: 5, parentId: null, name: "Spare", sortOrder: 1, kind: "folder", locked: false },
+  {
+    id: 40,
+    parentId: null,
+    name: "Atraxa, Grand Unifier",
+    sortOrder: 0,
+    kind: "deck",
+    locked: false,
+  },
+];
+const STORY_SHELVES = buildShelves({
+  folders: STORY_FOLDERS,
+  levelId: null,
+  folds: { "40": false },
+  filtering: false,
+});
+
+/** Which fixture printings each shelf has loaded — module scope, so `tilesOf` holds still. */
+const SHELF_TILES = new Map<number, StoryCard[]>([
+  [0, ALL.slice(0, 3)],
+  [1, ALL.slice(3, 8)],
+  [2, ALL.slice(8, 11)],
+  [3, ALL.slice(11, 13)],
+  [6, ALL.slice(13, 14)],
+  [4, ALL.slice(14, 15)],
+  [40, ALL.slice(15, 17)],
+]);
+
+/** Each shelf's count — Staples' is ahead of its pages: six counted, three loaded, so the last
+ *  three draw as empty frames. */
+const SHELF_COUNTS = new Map<number, number>([
+  [0, 3],
+  [1, 5],
+  [2, 6],
+  [3, 2],
+  [6, 1],
+  [4, 1],
+  [5, 0],
+  [40, 2],
+]);
+
+const SHELVES: GridSections<StoryCard> = {
+  sections: STORY_SHELVES.map((shelf) => ({
+    shelf,
+    tileCount: SHELF_COUNTS.get(shelf.id) ?? 0,
+  })),
+  tilesOf: (id) => SHELF_TILES.get(id) ?? [],
+  renderHeading: (shelf) => (
+    <div className="flex h-10 items-center gap-1.5 text-sm">
+      {shelf.lead.map((name) => (
+        <span key={name} className="text-dim">
+          {name} ›
+        </span>
+      ))}
+      <h3 className="font-medium text-text">{shelf.name}</h3>
+    </div>
+  ),
+  renderEmpty: () => (
+    <div className="flex h-24 items-center justify-center rounded-md border border-dashed border-border text-sm text-dim">
+      Empty — drag cards here
+    </div>
+  ),
+  renderLabel: (group) => (
+    <p className="flex h-10 items-center text-xs font-medium uppercase tracking-wide text-dim">
+      {group === "decks" ? "Decks" : "Managed by decks"}
+    </p>
+  ),
+  renderSticky: (shelf, toTop) =>
+    shelf && (
+      <div className="flex h-9 items-center gap-2 border-b border-border bg-bg/95 px-3 text-sm">
+        <span className="min-w-0 flex-1 truncate">{shelf.path.join(" › ")}</span>
+        <button type="button" onClick={toTop} className="text-dim hover:text-text">
+          Top
+        </button>
+      </div>
+    ),
+};
+
+/**
+ * **Shelves** — the wall as the collection and the wishlist draw it (spec 2026-09-26): a heading
+ * per folder, each folder's cards under it, nested past the three-level indent cap — `Foils`, three
+ * folders down, leads with the whole chain (`Binder › Staples › Fetchlands`); `Showcase`, four
+ * down, keeps the same three-level indent and leads with `Foils` alone, the ancestor on the cap —
+ * an empty folder, the app-owned `Decks` group under its label, and a shelf whose count is ahead
+ * of its pages drawing the rest as empty frames. Scroll it to see the sticky bar take over from
+ * the heading it names.
+ *
+ * **No `play`, for {@link InTheDockedPanel}'s reason**: under Vitest this wall is one column wide
+ * and a few rows deep, so what the story is *about* — rails, short rows, the bar tracking its shelf
+ * — is a browser's question. The behaviour is `CardGrid.shelves.test.tsx`'s. The slots draw plain
+ * markup; the real heading, bar and empty box are `features/shelves/`' components, drawn by the
+ * pages' stories.
+ */
+export const Shelves: Story = {
+  args: {
+    rows: [],
+    sections: SHELVES,
+    label: "Your collection",
+    zoomSection: "collection",
+    selectionScope: "collection",
+    arrowNav: true,
+  },
 };

@@ -41,12 +41,12 @@ import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore } from "@/lib/store";
 import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
+import { usePrefetchShelfFolds } from "@/features/shelves/useShelfFolds";
 import { usePrefetchFolderPane } from "@/features/decks/useFolderPane";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useComboProgress } from "@/lib/useComboProgress";
 import { useCrossWindowRefresh } from "@/lib/useCrossWindowRefresh";
 import { useListViewPersistence } from "@/lib/useListViewPersistence";
-import { useFlattenPersistence } from "@/lib/useFlattenPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { useDeviceSyncInvalidation } from "@/lib/useDeviceSyncInvalidation";
 import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
@@ -369,11 +369,6 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // the reader is on. It renders nothing — the layouts go into the zustand store, where each page
   // already reads its own.
   useListViewPersistence();
-  // And the same arrangement a third time for the two cabinets' Flatten switch — one subscription
-  // writing one row, from the component that is mounted whichever page the reader is on. It
-  // renders nothing: the two booleans go into the zustand store, where the collection and the
-  // wishlist each read their own.
-  useFlattenPersistence();
   // And once more for the colours the reader has given the card marks — one read at launch, from
   // the component that is mounted whatever they are looking at. It renders nothing: the answer
   // becomes four custom properties on `:root`, which is where every mark that wears one already
@@ -406,6 +401,12 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // for all three, because they share one `app_meta` row and one query key. It renders nothing:
   // the answer goes into the query cache, where `useSearchOpen` reads it.
   usePrefetchSearchOpen();
+  // The collection's and the wishlist's stored folds (spec §5.7), for the same measurement one
+  // row up: asked by the page, the read would queue behind the page's own list read and every
+  // shelf the reader had folded would draw open for a round trip and then snap shut, with the
+  // wall below it re-laying itself out. One prefetch for both pages, because they share one
+  // `app_meta` row and one query key; `useShelfFolds` reads the entry this fills.
+  usePrefetchShelfFolds();
   // The decks page's folder tree — its width and whether it is railed — for the same measurement
   // one row over. The flash it prevents is the worse of the two: until the row lands the tree
   // answers with its shipped 208px and `collapsed: false`, so a reader who works railed watches

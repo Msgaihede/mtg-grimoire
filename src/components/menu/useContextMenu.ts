@@ -175,9 +175,10 @@ export function useContextMenu(): ContextMenuHandles {
      * pointer behind it opens under that pointer and one without opens at the button, exactly
      * where `menuKey` would have put it.
      *
-     * This is the app's first menu opened by a plain click — `WishFolderCard`'s trigger — and the
-     * anchoring lives here rather than at that call site because the arithmetic already existed
-     * here and nothing about it is that card's business.
+     * The app's first menu opened by a plain click was `WishFolderCard`'s trigger, deleted with
+     * the folder band on 2026-09-26; a shelf heading's `⋯` on both folder pages is the one that
+     * took its place. The anchoring lives here rather than at a call site because the arithmetic
+     * already existed here and nothing about it is any one trigger's business.
      */
     const menuClick = (build: () => MenuItem[]) =>
       opened<ReactMouseEvent>(build, (e, opener) =>

@@ -5,26 +5,38 @@ import { createElement, type ReactNode } from "react";
 // The sentinel by its name and never as `"NONE"`, which in this file would also sit two letters
 // from the local `NONE` — the no-filters fixture, and a different idea entirely.
 import { CONDITION_NOT_SET } from "@/lib/conditions";
-import type { CollectionPage, CollectionQuery } from "@/lib/ipc";
+import type { CollectionFolder, CollectionPage, CollectionQuery } from "@/lib/ipc";
+import { UNFILED_SHELF } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
 
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
+/** The folder census the shelves are built from, the per-shelf counts, and the stored folds —
+ *  the three reads this hook added with shelves. Answered on every mount, because an `ipc` mock
+ *  is an object literal and a command it does not carry is a synchronous `TypeError` inside a
+ *  hook. */
+const collectionFolderList = vi.hoisted(() => vi.fn());
+const collectionShelfCounts = vi.hoisted(() => vi.fn());
+const shelfFolds = vi.hoisted(() => vi.fn());
+const setShelfFolds = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { collectionList, collectionSummary },
+  ipc: {
+    collectionList,
+    collectionSummary,
+    collectionFolderList,
+    collectionShelfCounts,
+    shelfFolds,
+    setShelfFolds,
+  },
 }));
 
-import { activeFilterCount, nextOffset, useCollection } from "./useCollection";
+import { activeFilterCount, nextOffset, useCollection, type Collection } from "./useCollection";
 
 /**
- * Flatten lives in the app store now, and the app store is a **module singleton** — so unlike
- * every `useState` in this hook it is not handed back fresh to each `renderHook`. A test that
- * left it on would hand the next one a flattened cabinet, and the failure would land wherever
- * the file happens to run that test rather than where the bug is.
- *
- * The whole initial state rather than the one field, which is `store.test.ts`'s idiom: it cannot
- * go stale when the default moves, and it resets anything a later test in this file starts using.
+ * The app store is a module singleton, so unlike every `useState` in this hook it is not handed
+ * back fresh to each `renderHook`. Nothing here writes it any more — Flatten was its one field
+ * this hook read — but the reset is `store.test.ts`'s idiom and costs nothing to keep.
  */
 beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
 
@@ -164,6 +176,23 @@ const lastQuery = () =>
 const lastSummary = () =>
   collectionSummary.mock.calls[collectionSummary.mock.calls.length - 1][0] as CollectionQuery;
 
+/** What the shelf counts last asked — every shelf at and below the level, collapsed ones too. */
+const lastCounts = () =>
+  collectionShelfCounts.mock.calls[collectionShelfCounts.mock.calls.length - 1][0] as CollectionQuery;
+
+/** A folder row. `sortOrder` follows the id, so siblings draw in id order. */
+const folder = (id: number, over: Partial<CollectionFolder> = {}): CollectionFolder => ({
+  id,
+  parentId: null,
+  name: `F${id}`,
+  kind: "user",
+  deckId: null,
+  sortOrder: id,
+  locked: false,
+  syncUid: null,
+  ...over,
+});
+
 describe("useCollection", () => {
   beforeEach(() => {
     collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
@@ -176,6 +205,10 @@ describe("useCollection", () => {
       unpriced: 0,
       needsReview: 0,
     });
+    collectionFolderList.mockReset().mockResolvedValue([]);
+    collectionShelfCounts.mockReset().mockResolvedValue([]);
+    shelfFolds.mockReset().mockResolvedValue({ collection: {}, wishlist: {} });
+    setShelfFolds.mockReset().mockResolvedValue(undefined);
   });
 
   it("clears all nine filters at once", async () => {
@@ -468,203 +501,153 @@ describe("useCollection", () => {
   });
 
   /**
-   * The three states the collection's root gained when Flatten landed, read off the wire.
-   *
-   * This is the assertion that keeps `useCollection.ts`'s comments honest, and it is worth
-   * making at the payload rather than at the state: the meaning of an absent `folderId` did
-   * **not** change — it is still "every folder" on the other end, because the mirror, the
-   * export sweep, the deck panel and the importer's preview all ask their question by saying
-   * nothing. What changed is that this view now says the narrow thing explicitly.
-   *
-   * **The unflattened start is stated rather than assumed.** It used to be `useState(false)` and
-   * therefore free; the store's default is `true`, so this test would otherwise open on the third
-   * of its three states and never reach the first two.
+   * **The wire, at the root and inside a folder.** `shelves` replaces both old fields: the list
+   * is every shelf the wall draws, in the order it draws them — Not sorted, then the reader's
+   * tree depth-first — and inside a folder it starts with that folder's own (headless) shelf.
+   * `folderId` and `rootOnly` never ride beside it; the backend would ignore them, and a payload
+   * saying something the backend ignores is lying about intent.
    */
-  it("sends rootOnly at the root, folderId inside a folder, and neither when flattened", async () => {
-    useAppStore.setState({ collectionFlattened: false });
+  it("sends the shelves at and below the level, and never folderId or rootOnly", async () => {
+    collectionFolderList.mockResolvedValue([folder(3), folder(9, { parentId: 3 }), folder(4)]);
     const { result } = renderHook(() => useCollection(), { wrapper });
-    await waitFor(() => expect(collectionList).toHaveBeenCalled());
 
-    // The view opens at the root, which narrows now — `rootOnly` is what says which of the two
-    // things an absent `folderId` could mean is the one meant.
+    await waitFor(() => expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 3, 9, 4]));
     expect(lastQuery().folderId).toBeUndefined();
-    expect(lastQuery().rootOnly).toBe(true);
+    expect(lastQuery().rootOnly).toBeUndefined();
 
     act(() => result.current.openFolder(3));
 
-    await waitFor(() => expect(lastQuery().folderId).toBe(3));
-    // `folderId` outranks the flag on the other end, so a flag riding along beside it would be
-    // a payload saying something the backend then ignores.
-    expect(lastQuery().rootOnly).toBeUndefined();
-
-    act(() => result.current.openFolder(null));
-    act(() => result.current.toggleFlatten());
-
-    // Neither field: absent + absent is "every folder", which is exactly what Flatten asks for
-    // and the one state this query has always been able to answer.
-    await waitFor(() => expect(lastQuery().rootOnly).toBeUndefined());
+    await waitFor(() => expect(lastQuery().shelves).toEqual([3, 9]));
     expect(lastQuery().folderId).toBeUndefined();
-  });
-
-  /** Flatten while standing in a folder drops the id rather than intersecting with it — the
-   *  half `useCollection.ts` writes down at `filters.folderId`, and the one a reader would
-   *  see as a Flatten that showed one drawer. The start is stated for the reason the test above
-   *  states it: the store opens this view flattened. */
-  it("stops sending folderId the moment the list is flattened", async () => {
-    useAppStore.setState({ collectionFlattened: false });
-    const { result } = renderHook(() => useCollection(), { wrapper });
-    await waitFor(() => expect(collectionList).toHaveBeenCalled());
-
-    act(() => result.current.openFolder(3));
-    await waitFor(() => expect(lastQuery().folderId).toBe(3));
-
-    act(() => result.current.toggleFlatten());
-
-    await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
     expect(lastQuery().rootOnly).toBeUndefined();
-    // The reader has not left the folder — Flatten is a lens over where they are standing, so
-    // turning it back off puts them back in it rather than at the root.
-    expect(result.current.folderId).toBe(3);
-
-    act(() => result.current.toggleFlatten());
-
-    await waitFor(() => expect(lastQuery().folderId).toBe(3));
   });
 
   /**
-   * Flatten is navigation, not a filter — the same fence `folderId` and `sort` already sit
-   * behind. `useCollection.ts` states it at the selector, at `activeCount` and at `resetAll`;
-   * this is what keeps all three honest.
-   *
-   * **`resetAll` leaving it alone matters more now that it is store state, not less.** It is a
-   * list of `set*` calls over this hook's own `useState`s, and the one thing it must never grow
-   * is a reach into the store: `collectionFlattened` is persisted, so a Reset all that cleared it
-   * would throw away a preference that outlives the session rather than merely re-filing the wall.
-   * Asserted at the store as well as at the hook for exactly that reason.
-   *
-   * A real filter is on throughout, so a bug that folded navigation into the count could not
-   * hide behind "both read zero".
+   * **The list asks for the open shelves; the header and the counts ask for all of them** (spec
+   * §4.1–§4.3). A collapsed shelf's cards are never fetched, but its heading still states its
+   * figures and the header still counts it — so collapsing `3` takes `3` *and its child* off the
+   * list's wire and off neither of the others.
    */
-  it("neither counts flatten as a filter nor lets resetAll clear it", () => {
-    useAppStore.setState({ collectionFlattened: false });
+  it("fetches only the open shelves, and counts every one of them", async () => {
+    collectionFolderList.mockResolvedValue([folder(3), folder(9, { parentId: 3 }), folder(4)]);
+    shelfFolds.mockResolvedValue({ collection: { "3": true }, wishlist: {} });
+    renderHook(() => useCollection(), { wrapper });
+
+    await waitFor(() => expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 4]));
+    await waitFor(() => expect(lastSummary().shelves).toEqual([UNFILED_SHELF, 3, 9, 4]));
+    await waitFor(() => expect(lastCounts().shelves).toEqual([UNFILED_SHELF, 3, 9, 4]));
+  });
+
+  /** Deck groups and Recently removed start shut (spec §3.4): counted, never fetched. */
+  it("keeps the app's own folders shut until the reader opens one", async () => {
+    collectionFolderList.mockResolvedValue([
+      folder(3),
+      folder(20, { kind: "deck", deckId: 1, name: "Mono-Red Aggro" }),
+      folder(21, { kind: "removed", name: "Recently removed" }),
+    ]);
+    renderHook(() => useCollection(), { wrapper });
+
+    await waitFor(() => expect(lastSummary().shelves).toEqual([UNFILED_SHELF, 3, 20, 21]));
+    expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 3]);
+  });
+
+  /**
+   * **Review Focus 4 at the hook: a filter suspends collapse, and clearing it restores every
+   * fold without writing one.** The stored map is read, never rewritten, so Reset all is the
+   * whole of the way back.
+   */
+  it("fetches a collapsed shelf while a filter is on, and folds it again after Reset all", async () => {
+    collectionFolderList.mockResolvedValue([folder(3), folder(9, { parentId: 3 }), folder(4)]);
+    shelfFolds.mockResolvedValue({ collection: { "3": true }, wishlist: {} });
     const { result } = renderHook(() => useCollection(), { wrapper });
-    expect(result.current.flatten).toBe(false);
-    expect(result.current.activeCount).toBe(0);
+    await waitFor(() => expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 4]));
+
+    act(() => result.current.toggleFinish("foil"));
+
+    await waitFor(() => expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 3, 9, 4]));
+    expect(result.current.filtering).toBe(true);
+
+    act(() => result.current.resetAll());
+
+    await waitFor(() => expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 4]));
+    expect(result.current.filtering).toBe(false);
+    expect(setShelfFolds).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Nothing is asked before the folder census answers.** Built from an empty census the shelves
+   * would be Not sorted alone, and a reader who files everything would watch an empty page draw
+   * and then fill — the very page this design exists to remove.
+   */
+  it("waits for the folder census before asking for anything", async () => {
+    let answer: (folders: CollectionFolder[]) => void = () => {};
+    collectionFolderList.mockReturnValue(
+      new Promise<CollectionFolder[]>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionFolderList).toHaveBeenCalled());
+    expect(collectionList).not.toHaveBeenCalled();
+    expect(collectionSummary).not.toHaveBeenCalled();
+    expect(collectionShelfCounts).not.toHaveBeenCalled();
+
+    await act(async () => answer([folder(3)]));
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect((collectionList.mock.calls[0][0] as CollectionQuery).shelves).toEqual([
+      UNFILED_SHELF,
+      3,
+    ]);
+  });
+
+  /**
+   * Two levels are two lists, and a collapse is a third list **at the same scroll position**:
+   * `queryKeyString` moves with the fetched shelves, `scrollKey` — what the wall resets its scroll
+   * on — moves only with the level, the filters and the sort, so folding a shelf mid-scroll does
+   * not throw the reader back to the top.
+   */
+  it("keys a level apart, and a collapse into the list but not into the scroll position", async () => {
+    collectionFolderList.mockResolvedValue([folder(3), folder(4)]);
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 3, 4]));
+    const root = result.current.queryKeyString;
+    const scroll = result.current.scrollKey;
+
+    act(() => result.current.setFold(3, true));
+
+    await waitFor(() => expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 4]));
+    expect(result.current.queryKeyString).not.toBe(root);
+    expect(result.current.scrollKey).toBe(scroll);
+
+    // With the level **drawn**, not the moment it is asked for: the jump to the top lands with
+    // the new wall rather than a round trip early, under the old one (`useCollection`'s `shown`).
+    act(() => result.current.openFolder(3));
+    await waitFor(() => expect(result.current.folderId).toBe(3));
+    expect(result.current.scrollKey).not.toBe(scroll);
+
+    act(() => result.current.openFolder(null));
+    act(() => result.current.setFold(3, null));
+    await waitFor(() => expect(result.current.queryKeyString).toBe(root));
+  });
+
+  /** Reset all is about the filters: where the reader stands and what they folded are theirs. */
+  it("leaves the level and the stored folds alone on Reset all", async () => {
+    collectionFolderList.mockResolvedValue([folder(3)]);
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
 
     act(() => {
       result.current.setText("bolt");
       result.current.openFolder(3);
-      result.current.toggleFlatten();
     });
-
-    expect(result.current.flatten).toBe(true);
-    expect(result.current.activeCount).toBe(1);
-
     act(() => result.current.resetAll());
 
-    expect(result.current.activeCount).toBe(0);
     expect(result.current.text).toBe("");
-    // The two parts `resetAll` must not touch: a cleared search that also marched the reader
-    // back to the root, or out of Flatten, would be navigating on their behalf.
-    expect(result.current.flatten).toBe(true);
-    expect(result.current.folderId).toBe(3);
-    // …and the store still holds it, which is the half a `flatten` read off a stale render
-    // could not tell you. This is the assertion a `resetAll` that reset the store would fail.
-    expect(useAppStore.getState().collectionFlattened).toBe(true);
-  });
-
-  /**
-   * The hook reports the store's value and `toggleFlatten` writes it back — the whole of what
-   * moving Flatten out of `useState` had to preserve, checked in both directions.
-   *
-   * The store write is the one a reader cannot make: nothing on screen sets this field outright,
-   * so this stands in for the launch that hands the hook a remembered `true`.
-   */
-  it("reports the store's flatten and writes back through it", () => {
-    useAppStore.setState({ collectionFlattened: false });
-    const { result } = renderHook(() => useCollection(), { wrapper });
-    expect(result.current.flatten).toBe(false);
-
-    // The store moving is enough — the hook subscribes to the field rather than copying it.
-    act(() => useAppStore.setState({ collectionFlattened: true }));
-    expect(result.current.flatten).toBe(true);
-
-    act(() => result.current.toggleFlatten());
-    expect(useAppStore.getState().collectionFlattened).toBe(false);
-    expect(result.current.flatten).toBe(false);
-
-    act(() => result.current.toggleFlatten());
-    expect(useAppStore.getState().collectionFlattened).toBe(true);
-    expect(result.current.flatten).toBe(true);
-  });
-
-  /**
-   * **The collection opens flattened**, which is the one default that changed with the move —
-   * a cabinet is the reader's whole binder, and the drawers are how they file it rather than how
-   * they usually read it. The wishlist's twin field starts `false`, and this is where the two
-   * would be caught being the same field again.
-   */
-  it("starts flattened, because that is what the store remembers by default", async () => {
-    const { result } = renderHook(() => useCollection(), { wrapper });
-
-    expect(result.current.flatten).toBe(true);
-    // …and it reaches the wire as the flattened request rather than the root's.
-    await waitFor(() => expect(collectionList).toHaveBeenCalled());
-    expect(lastQuery().rootOnly).toBeUndefined();
-    expect(lastQuery().folderId).toBeUndefined();
-  });
-
-  /**
-   * The point of the move, stated as the thing `useState` could not do: two mounted hooks are
-   * two subscribers to one field, so a press on either agrees on both. Under `useState` each
-   * had a switch of its own and this read `true, false`.
-   *
-   * Not hypothetical — the collection page and its filter bar mount this hook's value from one
-   * call today, but a second surface over the same list is exactly what persistence invites.
-   */
-  it("agrees with a second hook mounted over the same store", () => {
-    useAppStore.setState({ collectionFlattened: false });
-    const first = renderHook(() => useCollection(), { wrapper });
-    const second = renderHook(() => useCollection(), { wrapper });
-
-    act(() => first.result.current.toggleFlatten());
-
-    expect(first.result.current.flatten).toBe(true);
-    expect(second.result.current.flatten).toBe(true);
-
-    act(() => second.result.current.toggleFlatten());
-
-    expect(first.result.current.flatten).toBe(false);
-    expect(second.result.current.flatten).toBe(false);
-  });
-
-  /**
-   * Three levels are three lists, and the key is what keeps them apart. Against local SQLite a
-   * collision answers instantly out of the wrong cache with nothing on screen to notice, which
-   * is why this is asserted on the key rather than on what came back.
-   */
-  it("keys the root, one folder and the flattened cabinet apart", () => {
-    useAppStore.setState({ collectionFlattened: false });
-    const { result } = renderHook(() => useCollection(), { wrapper });
-    const root = result.current.queryKeyString;
-
-    act(() => result.current.openFolder(3));
-    const folder = result.current.queryKeyString;
-
-    act(() => result.current.openFolder(null));
-    expect(result.current.queryKeyString).toBe(root);
-
-    act(() => result.current.toggleFlatten());
-    const flat = result.current.queryKeyString;
-
-    expect(new Set([root, folder, flat]).size).toBe(3);
-
-    // …and flattened is **one** list however the reader got there. Neither field reaches the
-    // wire under Flatten, so "flattened in the Binder" and "flattened at the root" are the same
-    // request, and two keys for it would be two cache entries for one answer.
-    act(() => result.current.openFolder(3));
-
-    expect(result.current.queryKeyString).toBe(flat);
+    // The level asked for at once, and the level drawn once it has answered — neither moved.
+    expect(result.current.requestedFolderId).toBe(3);
+    await waitFor(() => expect(result.current.folderId).toBe(3));
+    expect(setShelfFolds).not.toHaveBeenCalled();
   });
 
   /**
@@ -721,5 +704,322 @@ describe("useCollection", () => {
 
     await waitFor(() => expect(lastQuery().text).toBe("bolt"));
     expect(lastQuery().predicates).toBeUndefined();
+  });
+});
+
+/**
+ * **FAIL 14 of the Folder Shelves live pass: walking to a level nothing has cached.** For 36–106 ms
+ * the collection drew the new level's shelves over the old level's rows and counts — the three
+ * reads' `keepPreviousData` placeholders — beside the old level's figures (`Showcase` read
+ * `Cards 5 · $13.55` over a wall missing its own leading row). The rule, shared word for word with
+ * the wishlist: until the new level's figures, shelf counts and first page have all answered, the
+ * page draws the previous level whole, and it switches in one render once all three have.
+ *
+ * The cabinet is `F3` with `F9` inside it, and each level answers differently so a mix is visible:
+ * the root holds 30 cards over rows 1–3, `F3` 10 over rows 31–32, `F9` 5 over row 91. A read is
+ * told which level it is for by the first shelf it names — a level's own shelf leads its list.
+ */
+describe("walking to a level nothing has cached", () => {
+  type Level = number | null;
+  const FIGURES = new Map<Level, number>([
+    [null, 30],
+    [3, 10],
+    [9, 5],
+  ]);
+  const ROWS = new Map<Level, number[]>([
+    [null, [1, 2, 3]],
+    [3, [31, 32]],
+    [9, [91]],
+  ]);
+  const levelOf = (q: CollectionQuery): Level => {
+    const first = q.shelves?.[0];
+    return first === undefined || first === UNFILED_SHELF ? null : first;
+  };
+
+  /** Answers for the level named here are parked, per read, until a test lets them go. */
+  let parkedLevel: Level | undefined;
+  let parkOnly: "list" | undefined;
+  const parked: Record<"list" | "summary" | "counts", (() => void)[]> = {
+    list: [],
+    summary: [],
+    counts: [],
+  };
+  const reply = <T>(read: keyof typeof parked, q: CollectionQuery, value: T): Promise<T> =>
+    levelOf(q) === parkedLevel && (parkOnly === undefined || parkOnly === read)
+      ? new Promise((resolve) => parked[read].push(() => resolve(value)))
+      : Promise.resolve(value);
+  const release = async (read: keyof typeof parked) => {
+    await waitFor(() => expect(parked[read].length).toBeGreaterThan(0));
+    await act(async () => parked[read].splice(0).forEach((go) => go()));
+  };
+
+  beforeEach(() => {
+    parkedLevel = undefined;
+    parkOnly = undefined;
+    parked.list = [];
+    parked.summary = [];
+    parked.counts = [];
+    collectionFolderList.mockReset().mockResolvedValue([folder(3), folder(9, { parentId: 3 })]);
+    shelfFolds.mockReset().mockResolvedValue({ collection: {}, wishlist: {} });
+    setShelfFolds.mockReset().mockResolvedValue(undefined);
+    collectionList.mockReset().mockImplementation((q: CollectionQuery) => {
+      const ids = ROWS.get(levelOf(q)) ?? [];
+      return reply("list", q, { items: ids.map((id) => ({ id })), total: ids.length });
+    });
+    collectionSummary.mockReset().mockImplementation((q: CollectionQuery) =>
+      reply("summary", q, {
+        totalCards: FIGURES.get(levelOf(q)) ?? 0,
+        uniqueCards: 0,
+        entries: 0,
+        tradelistCards: 0,
+        value: 0,
+        unpriced: 0,
+        needsReview: 0,
+      }),
+    );
+    collectionShelfCounts.mockReset().mockImplementation((q: CollectionQuery) =>
+      reply(
+        "counts",
+        q,
+        (q.shelves ?? []).map((shelf) => ({
+          folderId: shelf,
+          tiles: 1,
+          copies: 1,
+          value: null,
+          unpriced: 0,
+          peek: [],
+        })),
+      ),
+    );
+  });
+
+  /** One render as the page would draw it: the level, what its figures say, its rows, and the
+   *  shelf the wall leads with. */
+  interface Drawn {
+    level: Level;
+    figures: number | undefined;
+    rows: string;
+    lead: number | undefined;
+  }
+  const mount = () => {
+    const drawn: Drawn[] = [];
+    const hook = renderHook(
+      () => {
+        const c = useCollection();
+        drawn.push({
+          level: c.folderId,
+          figures: c.figures?.totalCards,
+          rows: c.rows.map((r) => r.id).join(","),
+          lead: c.shelves[0]?.id,
+        });
+        return c;
+      },
+      { wrapper },
+    );
+    return { ...hook, drawn };
+  };
+  /** Every render drew one level: its own figures, its own rows and its own leading shelf — or,
+   *  before a level has ever answered (and before the census has, when there is no shelf to lead
+   *  with at all), nothing yet. Returns the renders that broke that. */
+  const allWhole = (drawn: readonly Drawn[]) =>
+    drawn.filter(
+      (d) =>
+        (d.figures !== undefined && d.figures !== FIGURES.get(d.level)) ||
+        (d.rows !== "" && d.rows !== ROWS.get(d.level)?.join(",")) ||
+        (d.lead !== undefined && d.lead !== (d.level ?? UNFILED_SHELF)),
+    );
+  const settledAt = async (result: { current: Collection }, level: Level) =>
+    waitFor(() => {
+      expect(result.current.folderId).toBe(level);
+      expect(result.current.figures?.totalCards).toBe(FIGURES.get(level));
+      expect(result.current.rows.map((r) => r.id)).toEqual(ROWS.get(level));
+    });
+
+  it("draws the level being left, whole, until all three reads of the new one have answered", async () => {
+    const { result, drawn } = mount();
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+
+    parkedLevel = 3;
+    act(() => result.current.openFolder(3));
+
+    // Asked for at once; drawn only once it has answered.
+    expect(result.current.requestedFolderId).toBe(3);
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.folderId).toBe(9);
+    expect(result.current.figures?.totalCards).toBe(5);
+    expect(result.current.rows.map((r) => r.id)).toEqual([91]);
+
+    // Two of three is not enough, in either order.
+    await release("list");
+    expect(result.current.folderId).toBe(9);
+    expect(result.current.figures?.totalCards).toBe(5);
+    await release("summary");
+    expect(result.current.folderId).toBe(9);
+    expect(result.current.rows.map((r) => r.id)).toEqual([91]);
+
+    await release("counts");
+    await settledAt(result, 3);
+    expect(result.current.levelHeld).toBe(false);
+    // And no render in the whole walk mixed two levels.
+    expect(allWhole(drawn)).toEqual([]);
+  });
+
+  /**
+   * **The held figures are a copy, not the placeholders.** The figures and the counts are keyed
+   * without the sort; the list is keyed with it. So `F3`, visited once, then left and re-sorted,
+   * has its figures cached and its list not — and a hold made of `keepPreviousData` alone would
+   * draw `F3`'s cached `10` over `F9`'s wall, the very mix the rule forbids.
+   */
+  it("keeps the figures it was drawn with when only the new level's list is missing", async () => {
+    const { result, drawn } = mount();
+    act(() => result.current.openFolder(3));
+    await settledAt(result, 3);
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+    act(() => result.current.setSortKey("price"));
+    await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "price", dir: "desc" }]));
+
+    parkedLevel = 3;
+    parkOnly = "list";
+    act(() => result.current.openFolder(3));
+
+    expect(result.current.folderId).toBe(9);
+    expect(result.current.figures?.totalCards).toBe(5);
+
+    await release("list");
+    await settledAt(result, 3);
+    expect(allWhole(drawn)).toEqual([]);
+  });
+
+  /** **A level already answered switches in the render that asks for it** — the live pass's
+   *  cached walks were right, and a hold that waited on a background refetch would break them. */
+  it("switches at once to a level it has already drawn", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(3));
+    await settledAt(result, 3);
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+
+    parkedLevel = 3;
+    act(() => result.current.openFolder(3));
+
+    expect(result.current.levelHeld).toBe(false);
+    expect(result.current.folderId).toBe(3);
+    expect(result.current.figures?.totalCards).toBe(10);
+    expect(result.current.rows.map((r) => r.id)).toEqual([31, 32]);
+  });
+
+  /** **A refusal is an answer.** A hold that waited for data a read will never bring would keep the
+   *  page on the level the reader left for as long as they stayed — so a failed read ends it, and
+   *  the page is on the new level saying why. */
+  it("moves on when a read of the new level is refused", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+    collectionSummary.mockRejectedValueOnce("database is locked");
+
+    act(() => result.current.openFolder(3));
+
+    await waitFor(() => {
+      expect(result.current.folderId).toBe(3);
+      expect(result.current.figures).toBeUndefined();
+    });
+    expect(result.current.levelHeld).toBe(false);
+    expect(result.current.rows.map((r) => r.id)).toEqual([31, 32]);
+  });
+
+  /**
+   * **An Export pressed during a hold sweeps the wall on screen** (review Minor 2). `filters` is what
+   * `useExportScope` sweeps, and its `shelves` said the level asked for while the page — and the
+   * dialog's sentence, built from `folderId` — said the level being left.
+   */
+  it("hands the export the level it draws while a level is held", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+
+    parkedLevel = 3;
+    act(() => result.current.openFolder(3));
+
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.filters.shelves).toEqual([9]);
+
+    await release("list");
+    await release("summary");
+    await release("counts");
+    await settledAt(result, 3);
+    expect(result.current.filters.shelves).toEqual([3, 9]);
+  });
+
+  /** **The held level's filters whole, not its shelves spliced into the current ones.** A chip
+   *  pressed during the hold belongs to the level being asked for; swept with the held wall, the
+   *  export would write the rows on screen narrowed by a filter they were never fetched under. */
+  it("keeps a filter pressed during the hold out of the export until the level it belongs to is drawn", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+
+    parkedLevel = 3;
+    act(() => result.current.openFolder(3));
+    act(() => result.current.toggleFinish("foil"));
+
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.filters.shelves).toEqual([9]);
+    expect(result.current.filters.finishes).toBeUndefined();
+
+    await release("list");
+    await release("summary");
+    await release("counts");
+    await waitFor(() => expect(result.current.folderId).toBe(3));
+    expect(result.current.filters.finishes).toEqual(["foil"]);
+  });
+
+  /**
+   * **The held wall is laid out from the frame's own filtering and folds** (review Minor 3's
+   * collection half). A filter switched on during the hold belongs to the level being asked for;
+   * laid out under it, the previous level's rows would sit under shelves they were never fetched
+   * for — a wall that is neither level.
+   */
+  it("lays the held level out from the filter it was fetched under", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(9));
+    await settledAt(result, 9);
+
+    parkedLevel = 3;
+    act(() => result.current.openFolder(3));
+    const heldShelves = result.current.shelves;
+    act(() => result.current.toggleFinish("foil"));
+
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.filtering).toBe(false);
+    // Not re-laid at all: the same shelves, built from the frame.
+    expect(result.current.shelves).toBe(heldShelves);
+
+    await release("list");
+    await release("summary");
+    await release("counts");
+    await waitFor(() => expect(result.current.folderId).toBe(3));
+    expect(result.current.filtering).toBe(true);
+  });
+
+  /** And from the folds it was fetched under: a shelf folded during the hold is folded on the level
+   *  being asked for, whose list is fetched without it — never on the held wall, whose rows for it
+   *  are on screen. */
+  it("lays the held level out from the folds it was fetched under", async () => {
+    const { result } = mount();
+    act(() => result.current.openFolder(3));
+    await settledAt(result, 3);
+
+    parkedLevel = 9;
+    act(() => result.current.openFolder(9));
+    act(() => result.current.setFold(9, true));
+    // The fold is written and its optimistic answer has reached the hook.
+    await waitFor(() => expect(setShelfFolds).toHaveBeenCalled());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
+
+    expect(result.current.levelHeld).toBe(true);
+    expect(result.current.folderId).toBe(3);
+    expect(result.current.shelves.find((shelf) => shelf.id === 9)?.collapsed).toBe(false);
   });
 });

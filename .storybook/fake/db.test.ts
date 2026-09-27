@@ -10001,12 +10001,6 @@ describe("the busy fault", () => {
       // write validates. Valid all the same, for `zoom`'s reason: a handler that validated before
       // taking the lock would fail this loop by answering `Ok` instead of BUSY.
       view: "grid",
-      // `set_flatten_state`'s second argument, and the **third** write to share the `section`
-      // above — which is why that key carries three values beside it rather than three sections.
-      // `"deck"` is a section name none of the three validates, so all three are valid here for
-      // `zoom`'s reason: a handler that validated before taking the lock would fail this loop by
-      // answering `Ok` instead of BUSY.
-      flattened: true,
       // `set_mark_color`'s own key. It is the **fourth** write to take two arguments of its own,
       // and the one collision it brings is `color` above — which belongs to the three label
       // writes and is `"ember"`, a word this write would refuse. That is harmless for the reason
@@ -10345,7 +10339,8 @@ describe("the busy fault", () => {
     // **third** write to take two arguments of its own and the third to share `section`, and it
     // is the first of those three whose body is a spread with only *half* a validation: the
     // section can be blank and the value cannot be junk, because a `bool` off the IPC boundary
-    // has no junk state.
+    // has no junk state. It went again on 2026-09-26 with folder shelves, and the figure below is
+    // one lower for it.
     // Folder reordering then added **three**, 70 -> 73 — one per cabinet
     // (`deck_folder_reorder`, `collection_folder_reorder`, `wishlist_folder_reorder`), and for
     // once the handler count and the delta are the same figure. All three take
@@ -10634,10 +10629,13 @@ describe("the busy fault", () => {
     // number survived and the figure below is the parse above re-run on the merged tree. That is
     // the case the paragraph above was written for, arriving before the ink was dry.
     // 120 → 121 on 2026-09-24 with `collection_removed_clear` (issue #506).
+    // 121 → 122 on 2026-09-26 with `set_shelf_folds` — an `app_meta` write through
+    // `sync::with_write`, whose read half `shelf_folds` is not in this table — and back to 121
+    // the same day when folder shelves took `set_flatten_state` out.
     // 121 → 123 on 2026-09-26 with user schema v52's token writes: the three retired
     // (`deck_token_set`, `_clear`, `_add`) and five in their place (`deck_token_set_quantity`,
-    // `_swap`, `_add_printing`, `_state`, `_reset`), all plain `sync::with_write`. Arithmetic
-    // against one tree — re-run the sweep after the next merge.
+    // `_swap`, `_add_printing`, `_state`, `_reset`), all plain `sync::with_write`.
+    // 123 when the two met on 2026-09-27 — read from `left` after the merge, never added to.
     expect(names).toHaveLength(123);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
@@ -11154,62 +11152,6 @@ describe("the whole command table", () => {
     expect(() => w.set_card_zoom({ section: "", zoom: 1 })).toThrow(/cannot be blank/);
     // Refused, and the entry each would have overwritten is still the one that was chosen.
     expect(db.cardZoom.deck).toBe(0.7);
-  });
-
-  /**
-   * The seventh `app_meta` row, and the one that is **half of each** of its two object-shaped
-   * neighbours — which is why the questions asked of it are a subset rather than a copy.
-   *
-   * Like the zoom's and the layout's, there is no single default to fall back on: the collection
-   * opens flattened and the wishlist does not, so an absent key is the only thing that can stand
-   * for a switch nobody has pressed, and the whole answer is the two pages the row actually
-   * names. Unlike them, there is no unusable **value** to ask about — a `bool` off the IPC
-   * boundary is one of two things — so the write's only refusal is the blank section, and the
-   * read's only filter is the same key.
-   *
-   * The round trip is what the pair is for, and it has to run **in both directions**: `false` is
-   * a choice a reader made rather than a switch withdrawn, and on the collection it is the only
-   * thing that can beat a `true` default. A fake that stored `true` and deleted on `false` would
-   * pass every flattening assertion and lose the un-flattening for good.
-   */
-  it("answers only the pages it has a switch for, remembers both directions, and refuses a blank section", () => {
-    expect(readHandlers(makeDb()).flatten_state()).toEqual({});
-    expect(readHandlers(makeDb({ flattenState: { collection: false } })).flatten_state()).toEqual({
-      collection: false,
-    });
-
-    // One unusable key costs one page. A blank section is what a hand-edit leaves behind — the
-    // write below refuses it — and it is no reason to forget the entry beside it.
-    expect(
-      readHandlers(makeDb({ flattenState: { wishlist: true, "": true } })).flatten_state(),
-    ).toEqual({ wishlist: true });
-
-    const db = makeDb();
-    const w = writeHandlers(db);
-    // Two cabinets, two independent memories — the whole reason the value is an object, and the
-    // reason it matters more here than for the two rows above: the defaults differ, so a write
-    // that leaked across would not merely be wrong, it would be wrong in a way that looks right.
-    w.set_flatten_state({ section: "collection", flattened: false });
-    w.set_flatten_state({ section: "wishlist", flattened: true });
-    expect(readHandlers(db).flatten_state()).toEqual({ collection: false, wishlist: true });
-
-    // The way back. `false` wrote an entry above; `true` has to overwrite it rather than the read
-    // falling back on the store's own default.
-    w.set_flatten_state({ section: "collection", flattened: true });
-    expect(readHandlers(db).flatten_state().collection).toBe(true);
-
-    // **The section name is not validated and must not be**: which pages have a cabinet is
-    // TypeScript's vocabulary and `flatten.rs` deliberately does not know them, which is what
-    // `isFlattenSection` exists for on the other side.
-    w.set_flatten_state({ section: "shoebox", flattened: true });
-    expect(readHandlers(db).flatten_state().shoebox).toBe(true);
-
-    // The blank one is the whole of the validation, and there is deliberately no second refusal
-    // beside it — see this test's note.
-    expect(() => w.set_flatten_state({ section: "", flattened: true })).toThrow(/cannot be blank/);
-    // `Object.keys` rather than `toHaveProperty("")` — an empty path is not a key vitest's
-    // matcher can be asked about, it throws inside the matcher itself.
-    expect(Object.keys(db.flattenState)).not.toContain("");
   });
 
   /**
@@ -18624,5 +18566,185 @@ describe("the starting view", () => {
    *  it that every string on this table has. */
   it("reads a hand-emptied row as home", () => {
     expect(readHandlers(makeDb({ startView: "   " })).start_view()).toBe("home");
+  });
+});
+
+describe("shelves", () => {
+  /**
+   * One world for every shelf question: a locked binder with a sleeve inside it, an empty folder,
+   * a spare drawer, rows at the root — and two wishlist folders. At TCGplayer `BOLT` nonfoil is
+   * 620.00 and its foil is unpriced, `BOLT_2X2` nonfoil is 2.50, `FOIL_ONLY` foil is 164.95.
+   */
+  function shelvedDb(): FakeDb {
+    return makeDb({
+      collectionFolders: [
+        // Locked, so the precedence case can prove a shelves list serves it whole.
+        { id: 11, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0, locked: true },
+        { id: 12, parentId: 11, name: "Sleeve", kind: "user", deckId: null, sortOrder: 0, locked: false },
+        { id: 13, parentId: null, name: "Empty", kind: "user", deckId: null, sortOrder: 1, locked: false },
+        { id: 14, parentId: null, name: "Spare", kind: "user", deckId: null, sortOrder: 2, locked: false },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, folderId: 11, condition: "NM", quantity: 2 }),
+        entry({ id: 2, cardId: BOLT.id, folderId: 11, condition: "LP", quantity: 1 }),
+        entry({ id: 3, cardId: BOLT.id, folderId: 11, finish: "foil", quantity: 1 }),
+        entry({ id: 4, cardId: BOLT.id, folderId: 12, quantity: 1 }),
+        entry({ id: 5, cardId: BOLT_2X2.id, quantity: 3 }),
+        entry({ id: 6, cardId: FOIL_ONLY.id, folderId: 14, finish: "foil", quantity: 1 }),
+      ],
+      wishlistFolders: [
+        { id: 21, parentId: null, name: "Ordered", sortOrder: 0 },
+        { id: 22, parentId: 21, name: "Someday", sortOrder: 0 },
+      ],
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id, folderId: 21, quantity: 2 }),
+        wish({ id: 2, cardId: BOLT_2X2.id, folderId: 21, quantity: 1 }),
+        wish({ id: 3, cardId: BOLT.id, folderId: 22, quantity: 1, preferredFinish: "foil" }),
+        wish({ id: 4, cardId: BOLT_2X2.id, quantity: 4 }),
+      ],
+    });
+  }
+
+  it("orders collection_list and scopes collection_summary by shelves, which beat every folder field", () => {
+    const r = readHandlers(shelvedDb());
+    const ids = (query: CollectionQuery) => r.collection_list({ query }).items.map((row) => row.id);
+
+    // Position first — the sleeve, Not sorted, the binder — then the default order inside a shelf.
+    expect(ids({ shelves: [12, 0, 11], limit: 0, offset: 0 })).toEqual([4, 5, 1, 2, 3]);
+    expect(r.collection_list({ query: { shelves: [12, 0, 11], limit: 2, offset: 2 } })).toMatchObject({
+      total: 5,
+    });
+    // A stale folder id, the root flag and the lock are all ignored beside a list.
+    expect(
+      ids({ shelves: [11], folderId: 12, rootOnly: true, excludeLocked: true, limit: 0, offset: 0 }),
+    ).toEqual([1, 2, 3]);
+    // Review Focus 5: an id nothing answers to is nothing, not an error.
+    expect(ids({ shelves: [99], limit: 0, offset: 0 })).toEqual([]);
+
+    const header = r.collection_summary({ query: { shelves: [11, 12], limit: 0, offset: 0 } });
+    expect([header.entries, header.totalCards]).toEqual([4, 5]);
+  });
+
+  it("answers collection_shelf_counts per non-empty shelf: tiles by printing and finish, copies, value, unpriced", () => {
+    const r = readHandlers(shelvedDb());
+    const every = [0, 11, 12, 13, 14];
+    expect(r.collection_shelf_counts({ query: { shelves: every, limit: 0, offset: 0 } })).toEqual([
+      { folderId: 0, tiles: 1, copies: 3, value: 7.5, unpriced: 0, peek: [BOLT_2X2.id] },
+      // NM and LP of one printing are one tile; its unpriced foil is the second.
+      { folderId: 11, tiles: 2, copies: 4, value: 1860, unpriced: 1, peek: [BOLT.id] },
+      // The same printing one folder down is a tile of its own.
+      { folderId: 12, tiles: 1, copies: 1, value: 620, unpriced: 0, peek: [BOLT.id] },
+      // 13 is empty and answers no row.
+      { folderId: 14, tiles: 1, copies: 1, value: 164.95, unpriced: 0, peek: [FOIL_ONLY.id] },
+    ]);
+    expect(
+      r.collection_shelf_counts({ query: { shelves: every, text: "bolt", limit: 0, offset: 0 } }),
+    ).toEqual([
+      { folderId: 0, tiles: 1, copies: 3, value: 7.5, unpriced: 0, peek: [BOLT_2X2.id] },
+      { folderId: 11, tiles: 2, copies: 4, value: 1860, unpriced: 1, peek: [BOLT.id] },
+      { folderId: 12, tiles: 1, copies: 1, value: 620, unpriced: 0, peek: [BOLT.id] },
+    ]);
+    expect(
+      r.collection_shelf_counts({ query: { shelves: every, finishes: ["foil"], limit: 0, offset: 0 } }),
+    ).toEqual([
+      { folderId: 11, tiles: 1, copies: 1, value: null, unpriced: 1, peek: [BOLT.id] },
+      { folderId: 14, tiles: 1, copies: 1, value: 164.95, unpriced: 0, peek: [FOIL_ONLY.id] },
+    ]);
+  });
+
+  it("orders wishlist_list by shelves and answers wishlist_shelf_counts one tile per wish", () => {
+    const r = readHandlers(shelvedDb());
+    const ids = (query: WishlistQuery) => r.wishlist_list({ query }).items.map((row) => row.id);
+
+    expect(ids({ shelves: [22, 0, 21], limit: 0, offset: 0 })).toEqual([3, 4, 1, 2]);
+    expect(ids({ shelves: [21], folderId: 22, flatten: true, limit: 0, offset: 0 })).toEqual([1, 2]);
+    expect(ids({ shelves: [99], limit: 0, offset: 0 })).toEqual([]);
+
+    expect(r.wishlist_shelf_counts({ query: { shelves: [0, 21, 22], limit: 0, offset: 0 } })).toEqual([
+      { folderId: 0, tiles: 1, copies: 4, value: 10, unpriced: 0, peek: [BOLT_2X2.id] },
+      { folderId: 21, tiles: 2, copies: 3, value: 1242.5, unpriced: 0, peek: [BOLT.id, BOLT_2X2.id].sort() },
+      // A shelf priced nowhere is `null`, never `0`.
+      { folderId: 22, tiles: 1, copies: 1, value: null, unpriced: 1, peek: [BOLT.id] },
+    ]);
+  });
+
+  it("counts an unpriced entry of three copies as three on the collection and one on the wishlist", () => {
+    // `BOLT`'s foil is unpriced at TCGplayer. The collection's heading counts cards, so its three
+    // copies are three unpriced — `collection_summary`'s unit; the wishlist's counts wishes, so
+    // the one wish is one.
+    const r = readHandlers(
+      makeDb({
+        collectionEntries: [entry({ id: 1, cardId: BOLT.id, folderId: null, finish: "foil", quantity: 3 })],
+        wishlistEntries: [wish({ id: 1, cardId: BOLT.id, quantity: 3, preferredFinish: "foil" })],
+      }),
+    );
+    expect(r.collection_shelf_counts({ query: { shelves: [0], limit: 0, offset: 0 } })).toEqual([
+      { folderId: 0, tiles: 1, copies: 3, value: null, unpriced: 3, peek: [BOLT.id] },
+    ]);
+    expect(r.collection_summary({ query: { shelves: [0], limit: 0, offset: 0 } }).unpriced).toBe(3);
+    expect(r.wishlist_shelf_counts({ query: { shelves: [0], limit: 0, offset: 0 } })).toEqual([
+      { folderId: 0, tiles: 1, copies: 3, value: null, unpriced: 1, peek: [BOLT.id] },
+    ]);
+  });
+
+  it("peeks at the first four distinct cards of a shelf by name, whatever the filter", () => {
+    // Six cards with six different names, filed in corpus order, plus the alphabetically first one
+    // again at another grade — one printing, one picture.
+    const six = [...new Map(CARDS.map((c) => [c.name, c])).values()].slice(0, 6);
+    const byName = [...six].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const firstFour = byName.slice(0, 4).map((c) => c.id);
+    const r = readHandlers(
+      makeDb({
+        collectionEntries: [
+          ...six.map((c, i) => entry({ id: i + 1, cardId: c.id, condition: "NM" })),
+          entry({ id: 7, cardId: byName[0].id, condition: "LP" }),
+        ],
+      }),
+    );
+
+    const all = r.collection_shelf_counts({ query: { shelves: [0], limit: 0, offset: 0 } });
+    expect(all).toHaveLength(1);
+    expect(all[0].peek).toEqual(firstFour);
+
+    // A filter matching one card narrows the figures and never the peek.
+    const one = r.collection_shelf_counts({
+      query: { shelves: [0], conditions: ["LP"], limit: 0, offset: 0 },
+    });
+    expect(one[0]).toMatchObject({ tiles: 1, copies: 1, peek: firstFour });
+  });
+
+  it("round-trips shelf_folds through set_shelf_folds, and null takes an override back off", () => {
+    const db = makeDb();
+    const r = readHandlers(db);
+    const w = writeHandlers(db);
+    expect(r.shelf_folds()).toEqual({ collection: {}, wishlist: {} });
+
+    w.set_shelf_folds({ page: "collection", changes: { "11": true, "0": false } });
+    w.set_shelf_folds({ page: "wishlist", changes: { "21": true } });
+    expect(r.shelf_folds()).toEqual({ collection: { "0": false, "11": true }, wishlist: { "21": true } });
+
+    w.set_shelf_folds({ page: "collection", changes: { "11": null, "404": null } });
+    expect(r.shelf_folds()).toEqual({ collection: { "0": false }, wishlist: { "21": true } });
+
+    // A copy, not the store: a caller mutating the answer changes nothing.
+    r.shelf_folds().collection["0"] = true;
+    expect(db.shelfFolds.collection["0"]).toBe(false);
+  });
+
+  it("refuses set_shelf_folds for a page with no shelves, a key that is not a folder id, and under a sync", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    expect(() => w.set_shelf_folds({ page: "decks", changes: { "1": true } })).toThrow(
+      /collection or the wishlist/,
+    );
+    expect(() =>
+      w.set_shelf_folds({ page: "collection", changes: { "11": true, binder: true } }),
+    ).toThrow(/folder id/);
+    expect(db.shelfFolds).toEqual({ collection: {}, wishlist: {} });
+
+    const busy = makeDb({ fault: "busy" });
+    expect(() =>
+      writeHandlers(busy).set_shelf_folds({ page: "collection", changes: { "11": true } }),
+    ).toThrow(/busy/i);
   });
 });
