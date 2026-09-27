@@ -274,10 +274,14 @@ export function QuickAdd({
      * **Escape's second rung in this one field, and it is not a second registration.**
      *
      * The rung above owns the press while the list is up and consumes it in the **capture**
-     * phase — so by the time this target-phase handler runs, `listOpen` is exactly the test for
-     * "somebody nearer has already spent it". Guarding on the flag rather than on
-     * `e.defaultPrevented` says which layer that was, and keeps the two branches from ever
-     * double-firing on one press.
+     * phase, so by the time this target-phase handler runs the press says so itself:
+     * `defaultPrevented`, which `clearFieldOnEscape` reads. **Not `listOpen`**, which is what
+     * guarded this until 2026-09-28 and says which layer spent it only in jsdom. In the shipped
+     * window React re-renders *between* the rung's listener and this one — Chromium runs a
+     * microtask checkpoint after every listener of a trusted event, and the rung's
+     * `setOpen(false)` is flushed in it — so this handler ran from a render where the list was
+     * already shut, and one press closed the list **and** emptied the field. `QuickAdd.test.tsx`
+     * stands that checkpoint in; the whole reading is on `clearFieldOnEscape`.
      *
      * With the list closed and text in the field, that text is what the press is for: without
      * this the `"navigation"` rung would take it and close the deck the reader was about to add
@@ -288,7 +292,7 @@ export function QuickAdd({
      * suggestions under it at all — the whole first 300ms of typing, and every miss — and those
      * are the presses this exists for.
      */
-    if (!listOpen) clearFieldOnEscape(e, text, () => setText(""));
+    clearFieldOnEscape(e, text, () => setText(""));
     // Nothing to move through, so the arrows keep their native meaning — Home and End really do
     // belong to the caret in a text field with no list under it.
     if (options.length === 0) return;
