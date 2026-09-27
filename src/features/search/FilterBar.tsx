@@ -1,7 +1,6 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { ArrowUp } from "lucide-react";
 import { motion } from "motion/react";
-import { Dialog } from "@/components/Dialog";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import {
@@ -28,10 +27,8 @@ import {
   CONDITION_NOT_SET,
   type Condition,
 } from "@/lib/conditions";
-import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import { FINISHES, FINISH_LABEL, type Finish } from "@/lib/finish";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
-import { LAYER } from "@/lib/layers";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { TRANSITION } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
@@ -39,7 +36,6 @@ import { formatPrice } from "@/lib/prices";
 import type { SortDir } from "@/lib/sort";
 import { useAppStore, type ListSection } from "@/lib/store";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
-import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import { SetCombobox } from "./SetCombobox";
@@ -735,26 +731,6 @@ export function FilterBar<SortKey extends string>({
   const [trayOpen, setTrayOpen] = useState(false);
   const trayId = useId();
   /**
-   * Whether this is a phone: the row is a 44px strip over a sheet holding everything else,
-   * instead of the wrapped row of controls with the tray in the flow under it — **the one thing
-   * here that asks about the window rather than about its own box.**
-   *
-   * Everything else here lays out through `@container/fb`, and that is the right mechanism for
-   * every other fold: this component is the search page's 1500px bar *and* the deck editor's
-   * 206px docked panel, so a question about width is a question about which box it is in. This
-   * one is not a question about width. It asks whether the reader is on a phone — whether the
-   * only surface on screen is the wall this row sits above, and whether a 381px bar over a 922px
-   * tray therefore has anywhere to go. A 206px docked panel is narrow and is emphatically **not**
-   * that: it sits beside a deck on a desktop window, and a modal over the whole app for its
-   * filters would take the deck away to answer a question about the panel.
-   *
-   * So the branch is the window's, and `useNarrowWindow` is the app's one such branch — its own
-   * doc sets the test for a second one ("name the box the question is about"), and the box here
-   * is the window. It is a boolean, so above the phone width nothing below it renders and the
-   * other four surfaces get the tree they had.
-   */
-  const narrow = useNarrowWindow();
-  /**
    * How many printings each option would leave, or `undefined` when that is not known.
    *
    * Every control below reads it through `facets.ts`, which is where the rule lives:
@@ -863,16 +839,20 @@ export function FilterBar<SortKey extends string>({
   }));
 
   /**
-   * The box the reader types in, written once and mounted in one of two places — the bar's own
-   * row above the phone width, and the strip below it.
+   * **The bar's own row — one flex container for both lines, ordered rather than duplicated.**
    *
-   * **A value rather than a copy per place**, which is the row's own arrangement rule read one
-   * level up: two mounted boxes would be two tab stops and two accessible names for one filter,
-   * and a `getByLabelText` that starts throwing "found multiple". Only the classes differ, and
-   * they differ inside the one `cn` below where the two spellings can be read against each other.
+   * The obvious build is a `<div>` per breakpoint with `hidden` on the ones that do not
+   * apply — and it puts two mana-value groups and two sort pickers in the tree at once, which
+   * is two controls with one accessible name, two tab stops for one filter, and a
+   * `getByLabelText` that starts throwing "found multiple". So the items are written once and
+   * the arrangement is `order` plus a `basis-full` spacer that forces a line break. The order
+   * numbers below are the whole layout; each item carries its own.
+   *
+   * The gaps close as the box narrows — 12px, 10px, 8px — because at 640 the same gaps that
+   * gave a 1500px bar its air are what tip the second line into a third.
    */
-  const searchField = (
-    <>
+  const row = (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-2 @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:gap-x-3">
       {/* The name is the surface's — see {@link FilterLabels}, and the two questions it keeps
           apart. */}
       <label htmlFor={`${labels.idStem}-text`} className="sr-only">
@@ -897,87 +877,21 @@ export function FilterBar<SortKey extends string>({
         // a box the reader types into must not, or the native ✕ slides out from under the
         // pointer clearing it. Issue #179 — the reason is on the constant. It is also where the
         // finger's floor comes from: `FILTER_SHAPE`'s `coarse:min-h-[var(--target-min)]` is what
-        // makes this box 44 tall on the strip without a number being written a second time here.
+        // makes this box 44 tall under a coarse pointer without a number being written a second
+        // time here.
         //
         // **A whole line to itself below 640** (`basis-full`), which is the one control here
         // that earns it: it is the only one whose usefulness scales with its width, and in a
         // 206px panel a box sharing a line with six colour chips is four characters wide.
         // Above that it is `flex-1` again and capped, so a maximised window does not hand it
         // half the bar.
-        //
-        // **On the strip it is `flex-1` on the only line there is, and it drops `order-[1]`
-        // with the rest of the row.** The strip holds two items and nothing else sets an
-        // `order`, so an `order-[1]` here would put the box *after* the button that opens the
-        // sheet. `flex-1` is what `basis-full` amounts to there anyway — `FiltersButton` carries
-        // `shrink-0`, so the box takes everything the button leaves either way — and it is the
-        // spelling that says so.
         className={cn(
           FILTER_FIELD,
           FILTER_FOCUS,
-          narrow
-            ? "min-w-0 flex-1 border-border bg-surface px-3 placeholder:text-dim focus:border-accent"
-            : "order-[1] min-w-0 basis-full border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
-          !narrow &&
-            "@min-[640px]/fb:max-w-[min(34%,460px)] @min-[640px]/fb:flex-1 @min-[640px]/fb:basis-48",
+          "order-[1] min-w-0 basis-full border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
+          "@min-[640px]/fb:max-w-[min(34%,460px)] @min-[640px]/fb:flex-1 @min-[640px]/fb:basis-48",
         )}
       />
-    </>
-  );
-
-  /**
-   * The disclosure the tray opens from — one button, mounted in one of two places for the reason
-   * the box above is: the count it carries and the panel it names are one control, and a second
-   * copy would be a second `aria-controls` pointing at the same `id`.
-   */
-  const filtersButton = (
-    <FiltersButton
-      open={trayOpen}
-      count={search.activeCount}
-      onToggle={() => setTrayOpen((open) => !open)}
-      controls={trayId}
-      // The word appears at 900 rather than at 640, because it is the widest thing in the
-      // right-hand group and the second line has to hold the mana values at their full 396px
-      // before it holds anything else. **Never hidden on the strip**: it is the only labelled
-      // control left there, and a bar of one text box and one unlabelled icon says nothing about
-      // where the rest of the filters went.
-      labelClass={narrow ? undefined : "hidden @min-[900px]/fb:inline"}
-      // Fills what the colours leave of its line below 640, where there is no spacer to push
-      // it right and a 44px button floating beside six chips reads as a seventh chip. On the
-      // strip it takes its own width and the box beside it takes the rest, which is the button's
-      // own `shrink-0` doing the work rather than anything said here.
-      className={narrow ? undefined : "order-[5] flex-1 @min-[640px]/fb:flex-none"}
-    />
-  );
-
-  /**
-   * **The bar's own row — one flex container for both lines, ordered rather than duplicated.**
-   *
-   * The obvious build is a `<div>` per breakpoint with `hidden` on the ones that do not
-   * apply — and it puts two mana-value groups and two sort pickers in the tree at once, which
-   * is two controls with one accessible name, two tab stops for one filter, and a
-   * `getByLabelText` that starts throwing "found multiple". So the items are written once and
-   * the arrangement is `order` plus a `basis-full` spacer that forces a line break. The order
-   * numbers below are the whole layout; each item carries its own.
-   *
-   * The gaps close as the box narrows — 12px, 10px, 8px — because at 640 the same gaps that
-   * gave a 1500px bar its air are what tip the second line into a third.
-   *
-   * **Mounted in one of two places since 2026-08-29, and that is the whole of 9c's Task 2.** In
-   * the flow above the phone width; inside the sheet below it, where the two items it does not
-   * draw — the search box and the `Filters` button — are the strip instead. Nothing new arranges
-   * it there: the sheet is under 640, so the same `order` numbers and the same two `basis-full`
-   * breaks stack it as the colours, the mana values, and then the sort beside the view controls.
-   * A value rather than a second copy, for the reason stated three paragraphs up: the failure a
-   * duplicate causes is two accessible names per filter, and it is silent.
-   */
-  const row = (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-2 @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:gap-x-3">
-      {/* The two the strip keeps, drawn here only when there is no strip — this row is the whole
-          of the bar above the phone width and the sheet's contents below it, and below it these
-          two are on the bar instead. `false` renders nothing, so the desktop tree is the tree it
-          was; what a `true` here would cost is the box and the button mounted twice at once, which
-          is two tab stops and two accessible names for each of them. */}
-      {!narrow && searchField}
 
       {/* Wider than the other groups' `gap-1`: a pressed chip's ring reaches 4px past its
           edge, and at 4px apart two pressed chips look like one welded object.
@@ -1025,7 +939,19 @@ export function FilterBar<SortKey extends string>({
           Gone below 640, where the Filters button takes the rest of the colours' line itself. */}
       <div aria-hidden="true" className="order-[4] hidden flex-1 @min-[640px]/fb:block" />
 
-      {!narrow && filtersButton}
+      <FiltersButton
+        open={trayOpen}
+        count={search.activeCount}
+        onToggle={() => setTrayOpen((open) => !open)}
+        controls={trayId}
+        // The word appears at 900 rather than at 640, because it is the widest thing in the
+        // right-hand group and the second line has to hold the mana values at their full 396px
+        // before it holds anything else.
+        labelClass="hidden @min-[900px]/fb:inline"
+        // Fills what the colours leave of its line below 640, where there is no spacer to push
+        // it right and a 44px button floating beside six chips reads as a seventh chip.
+        className="order-[5] flex-1 @min-[640px]/fb:flex-none"
+      />
 
       {/* A hairline between the filters and the two controls that are not filters. Only at the
           widest, where the sort sits on this line and would otherwise read as one more thing
@@ -1276,13 +1202,6 @@ export function FilterBar<SortKey extends string>({
    * `flex-1` search box and slid nine colour chips left under the finger that had just pressed
    * one; under a rule below every control, an appearing chip moves only the wall of cards, and
    * a wall that has just been re-queried is moving anyway.
-   *
-   * **This shape is the bar's, at every width but the phone's.** It followed the controls it
-   * states into the sheet for one day (2026-08-29, 9c's Task 2) and came back out the same week:
-   * a statement about filters that is only readable behind the disclosure those filters are
-   * behind states nothing a reader can act on. {@link statedFiltersStrip} below is what a phone
-   * draws instead, and its own note carries the decision, the two shapes it was chosen over and
-   * what the second line costs.
    */
   const statedFilters = (
     <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
@@ -1310,362 +1229,42 @@ export function FilterBar<SortKey extends string>({
     </div>
   );
 
-  /**
-   * **The same statement on a phone — the real chips, on a scrolling second line of the strip.**
-   *
-   * 9c's Task 3, and the one decision that plan deliberately left open. **Markus chose this shape
-   * on 2026-08-29**, over the two below.
-   *
-   * **Why chips at all, when the strip has 44px and the wall is short of room.** The row above
-   * exists because *a filter behind a shut disclosure has no control on screen at all* — that is
-   * {@link statedFilters}' whole argument, and on a phone every filter but the text is behind
-   * one. The failure it is drawn against is **Reset all counting a filter the reader cannot
-   * see**: a badge reading `4` says how much is on and nothing about what, so a reader cannot
-   * tell whether pressing Reset all takes away something they wanted. Chips are the only shape
-   * that answers that — the search read in a glance, undone one filter at a time — and each one
-   * is still removable by its own ✕, so the row is a control and not a caption.
-   *
-   * **The two shapes rejected, and why they lost rather than merely came second.**
-   * 1. **The badge alone**, which is how F3 was costed and what Task 2 shipped for a day. It is
-   *    free and it is the failure above written out: `4` is not a sentence, and finding out which
-   *    four is a press into a modal that covers the wall the reader is asking about.
-   * 2. **`Filters · red, rare, +3` — the button names them.** One line, no new surface, and it
-   *    was the close one. It loses on two counts: the strip's button is ~100px beside a `flex-1`
-   *    box on a 320px content line, so the truncation rule would be doing all the work and `+3`
-   *    is the badge again with extra steps; and a name is not a control — undoing one filter
-   *    still means opening the sheet, so the *second* half of "read in a glance and undone one
-   *    filter at a time" is lost outright.
-   *
-   * **What it costs, and the plan's 151px was wrong for this layout.** 151 is what this row
-   * measured *stacked and wrapped* in the old bar. `ActiveFilterChip` is `h-[1.625rem]` — 26px —
-   * so on one line the chips themselves are 26. What sets the line is `ResetAll`, which is the
-   * filter family's 36px and `FILTER_SHAPE`'s `coarse:min-h-[var(--target-min)]` **44** on a
-   * finger. So the strip is **44 at rest and 44 + 8 + 44 = 96 with a filter on**. Against the
-   * 436px wall measured on the device (OnePlus, Chrome 152, portrait, 2026-08-29) that is 1.84
-   * tile rows at rest and **1.62** with a filter on, at the shipped 237px row — two whole cards
-   * either way. It was never a space decision.
-   *
-   * **44 is also what the chips' own targets already are**, which is the half of that cost that
-   * is not a cost. `ActiveFilterChip` draws 26px of ink inside a 44px `::before` — its doc says
-   * so, and says the overlap between adjacent lines is the price. Drawing this line at 26 would
-   * not have made those targets smaller; it would have left them reaching 9px up into the search
-   * box and 9px down into the first row of cards. A 44px line is where they fit.
-   *
-   * **Drawn only when there is something to state**, which is the one place this parts company
-   * with the row above. That row is unconditional because an appearing `Reset all` used to take
-   * its width out of a `flex-1` search box and slide nine chips under the finger pressing one.
-   * Here it takes no width from anything: the line arrives *under* the strip and the only thing
-   * it moves is the wall — which is the same answer that rule already reached, and it is what
-   * keeps the shut, unfiltered phone at the 44px Task 2 measured.
-   *
-   * **`Reset all` is pinned outside the scroller, at the right end of the line.** It is the same
-   * failure mode wearing a different hat: a Reset all the reader cannot see while looking at the
-   * chips it would undo is no better than a count they cannot read. Inside the scroller it would
-   * scroll away from exactly the chips it is about; on the first line it would take ~118px off a
-   * 320px content box that a `flex-1` search box and a 100px button already share.
-   *
-   * **One scrolling line and never a wrapped one.** Wrapping is what made this row 151px, and a
-   * row that grows a line each time a filter goes on is the wall moving under a reader who is
-   * narrowing it. The chips carry `shrink-0` themselves, so nowrap plus `overflow-x-auto` is the
-   * whole mechanism.
-   *
-   * **{@link DROP_MARK_ROOM}, because a scroller clips at its padding box.** `FOCUS` stands 4px
-   * proud of a chip's border box, so the first and last chip of a flush row lose that side of
-   * their ring — `dropMarks.ts`' rule reached from the same end it was written at, and `CardGrid`
-   * reaches the same 6 from the other side with `scroll-m-1.5`. The `-mx-1.5` against it puts the
-   * *ink* back on the strip's own content edge, so the first chip lines up with the box above it
-   * and the last one sits a `gap-2` from Reset all. Nothing vertical is clawed back the same way:
-   * the line is 44 for Reset all's sake and the 38px scroller is centred inside it with room to
-   * spare.
-   *
-   * **No `touch-action` here.** `src/index.css:464` already applies one to whatever is mid-drag,
-   * and a second registration on one element silently replaces the first. A horizontal scroller
-   * inside a vertical one needs nothing declared anyway — the browser routes a horizontal pan to
-   * this box and a vertical one to the page, which is the behaviour `overflow-x-auto` asks for.
-   *
-   * **And no second copy in the sheet.** Two mounted `ResetAll`s are two tab stops and two
-   * accessible names for one control, which is the same rule that keeps one `FilterTray` and one
-   * search box mounted in one of two places. The sheet loses nothing a reader needs: every
-   * control in it states its own filter in its own vocabulary — a gold border on a picker, two
-   * bright chips out of six — and that is precisely what this row stands in for when they are off
-   * screen. The accepted cost is that clearing everything from inside the sheet is a dismiss and
-   * then a press, on a strip where the button is already waiting with the count on it.
-   */
-  const statedFiltersStrip = chips.length > 0 && (
-    <div className="flex basis-full items-center gap-2">
-      <div
-        className={cn(
-          // No `flex-wrap`: this is the one line, and the chips are `shrink-0`.
-          "-mx-1.5 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto",
-          DROP_MARK_ROOM,
-        )}
-      >
-        {chips.map((chip) => (
-          <ActiveFilterChip key={chip.label} label={chip.label} onRemove={chip.remove} />
-        ))}
-      </div>
-      {/* `shrink-0` so a long statement scrolls rather than crushing the way to undo it. The
-          scroller's `flex-1` basis is 0, so this keeps its content width whenever there is any
-          free space at all — the class is what holds when there is not. */}
-      <div className="shrink-0">
-        <ResetAll count={search.activeCount} onReset={search.resetAll} />
-      </div>
-    </div>
-  );
-
   return (
-    // **A fragment, and the sheet is the container box's *sibling* rather than its child.** That
-    // is a containing-block rule, not tidiness: `@container/fb` below is `container-type:
-    // inline-size`, which applies **layout containment**, and a layout-contained box is the
-    // containing block for every `fixed` descendant under it. `Dialog`'s scrim is a bare
-    // `fixed inset-0` with no correction of its own — unlike the dropdowns, whose
-    // `usePopupPlacement` measures a zero-size frame precisely so it can subtract whatever
-    // containing block it landed in — so a sheet mounted *inside* the bar would stretch to the
-    // bar's own box instead of the window, and the scrim would cover the filter row it came out
-    // of rather than the view behind it. **jsdom applies no stylesheet and computes no
-    // containment**, so nothing in the suite can see that failure; what the suite pins instead
-    // is the structure — the sheet is not a descendant of the container box.
-    <>
-      {/* **A named container, and the name is what keeps it from being claimed by another.**
-          `@container` variants bind to the nearest ancestor container, so an unnamed one here
-          would be the box any future `@container` in a card tile or a panel resolved against.
-          Everything below reads `/fb` explicitly. */}
-      <div className="@container/fb flex flex-col gap-2">
-        {/*
-          **The strip: the search box, one `Filters` button, and nothing else.**
+    // **A named container, and the name is what keeps it from being claimed by another.**
+    // `@container` variants bind to the nearest ancestor container, so an unnamed one here would
+    // be the box any future `@container` in a card tile or a panel resolved against. Everything
+    // below reads `/fb` explicitly.
+    //
+    // **Nothing that has to cover the window may be mounted inside it.** `container-type:
+    // inline-size` applies **layout containment**, and a layout-contained box is the containing
+    // block for every `fixed` descendant under it — so a `Dialog`, whose scrim is a bare
+    // `fixed inset-0` with no correction of its own, opened from in here would stretch to this
+    // bar rather than to the window. The dropdowns escape it the other way: `usePopupPlacement`
+    // measures a zero-size frame precisely so it can subtract whatever containing block it landed
+    // in. **jsdom applies no stylesheet and computes no containment**, so nothing in the suite
+    // can see the failure; `src/CLAUDE.md` carries the rule.
+    <div className="@container/fb flex flex-col gap-2">
+      {row}
 
-          Measured on the device on 2026-08-29 (OnePlus, Chrome 152, portrait): the shut bar was
-          **381px of a 545px content box** and the wall got **99** — 0.42 of a tile row, so a
-          reader on a phone was shown no whole card. With everything else in the sheet the bar is
-          **44** and the wall gets **436**, which is **1.84** rows at the shipped 237px row: two
-          whole cards and most of the next two. ⚠️ **It is not two rows** — that needs 474 — and
-          the "two full rows" the option story costed was against a 390px window, a 170px tile and
-          a 602px content box, all three of which the hardware disagrees with.
-
-          **44 is `FILTER_SHAPE`'s and is not written here.** Both controls are built on it, and
-          its `coarse:min-h-[var(--target-min)]` is the finger's floor — so the strip's height is
-          the filter family's one answer rather than a second number at this site.
-
-          **The four classes that make the pin honest, none of which jsdom can see:**
-
-          - **`sticky top-0` sticks against the *scroller's padding box***, and the scroller is
-            `AppShell`'s `main` (`relative min-h-0 flex-1 overflow-auto p-5`). A pinned strip
-            therefore sits flush against the top of that padding box, 20px above where the content
-            begins at rest — so `-mt-5 pt-5` is what puts the strip's own box over that gutter
-            while its contents stay exactly where they were.
-          - **`-mx-5 px-5` covers the rest of the same gutter.** With the top 20px covered
-            vertically, the 20px columns either side of it are still transparent, and cards
-            scrolling up show through them beside a bar that looks solid.
-          - **`bg-bg`, opaque and `main`'s own colour**, or the wall is legible straight through
-            the strip.
-          - **`LAYER.header`, taken from `src/lib/layers.ts` and never a bare `z-`.** That rung is
-            named for exactly this pairing — a sticky header against the rows scrolling under it —
-            and `layers.test.ts` sweeps `src/` for the literal.
-
-          **Two things about the pin are honestly untested, and both are written here rather than
-          left to be discovered.**
-
-          **It engages on three of the four card pages now, and the paragraph that stood here said
-          it could not.** That was true of the layout it described: every wall this row sat above
-          was its own scroller (`CardGrid`'s `overflow-auto`, the tables' virtualiser) and all five
-          pages were `h-full` flex columns, so `main` never scrolled. `CardGrid` gained `grow` on
-          2026-09-03 and the search page took it; the collection and the wishlist took it on
-          2026-09-08. On those three, **in grid view**, the wall is as tall as its rows and `main`
-          is the scroller — so the pin is live and the classes below are load-bearing rather than
-          speculative. In table view all three are still `h-full` columns over a bounded
-          `VirtualTable`, and the Tags page is still bounded in both, so the pin is inert there;
-          nobody should read a scroll-locked page as evidence either way.
-
-          **And `-mt-5` assumes this row is the first thing in `main`, which is true on one page
-          of four.** Only the search page puts the bar straight under `main`'s 20px of padding.
-          Tags draws `TagChips` above it at `gap-3`, the collection a summary header and the
-          needs-review row at `gap-4`, the wishlist a `FigureRow` at `gap-4` — so on those three
-          the 20px the strip reaches up is the gap **plus** the last 8px, 4px and 4px of the box
-          above, and `bg-bg` paints over them. At rest that is a visible bite out of the element
-          above; pinned it is exactly right, because by then that element has scrolled away. There
-          is no class that tells the two apart (CSS has no `:stuck`) and this component cannot see
-          which page it is on, so the choice is the plan's and the number is here to be argued
-          with on the device.
-
-          **Argued, and `-mt-5 pt-5` is gone: it can only cost.** As first written that read *the
-          pin cannot engage in this layout — all four pages are `flex h-full flex-col`, so a section
-          exactly fills `main` and `main` never scrolls*, and it ended **put `-mt-5 pt-5` back in
-          the same commit as whatever makes `main` scroll**. Three commits have since made `main`
-          scroll (2026-09-03 and 2026-09-08, above) and the class is still not back, because the
-          premise it rested on was only half the argument and the other half did not move: the
-          bleed is right **while pinned** and a bite out of the box above **at rest**, CSS has no
-          `:stuck`, and this component cannot see which page it is on. What changed is that the
-          wrong state is no longer the only state — it is now grid-at-rest and the whole of table
-          view, on the two pages that draw something above this bar. That is still most of the time,
-          so the trade is unchanged and the class stays out; what is gone is the promise that a
-          scrolling `main` would be reason enough to add it. `-mx-5 px-5` stays for the opposite
-          trade: invisible at rest (it paints `bg-bg` over `main`'s own `bg-bg` gutters) and correct
-          the moment anything does scroll under it.
-
-          Worth being plain about what this does and does not buy, because the option story's
-          name is misleading: **the 337px this task returns to the wall comes from the bar being
-          44px instead of 381px, not from the pin.** F3 is "a one-line bar" first and "sticky"
-          second, and only the first half is doing work here.
-        */}
-        {narrow ? (
-          <div
-            className={cn(
-              // **`flex-wrap` and a `basis-full` child, never a nested box per line** — the same
-              // arrangement rule the bar's own `row` follows, and here it buys one more thing:
-              // the strip stays *one* element, so the pin, the gutter cover, the opacity and the
-              // rung are still four requirements of the one box a test reaches through the search
-              // field.
-              // A wrapper per line would have put the sticky box one level up from every
-              // assertion about it.
-              "sticky top-0 -mx-5 flex flex-wrap items-center gap-2 bg-bg px-5",
-              LAYER.header,
-            )}
-          >
-            {searchField}
-            {filtersButton}
-            {/* The second line, and it is drawn only when there is something to state — see the
-                value's own note for the shape, the two it was chosen over, and the 44/96 it
-                costs. */}
-            {statedFiltersStrip}
-          </div>
-        ) : (
-          row
-        )}
-
-        {/* **In the flow at every width but the phone's**, where the same tray is the sheet
-            below instead. One `FilterTray`, mounted in one of two places — never two copies —
-            for the reason the bar's own arrangement is `order` and a `basis-full` break rather
-            than a `<div>` per breakpoint: two mounted copies is two tab stops and two accessible
-            names per filter, and a `getByLabelText` that starts throwing "found multiple". */}
-        {!narrow && trayOpen && (
-          <FilterTray
-            id={trayId}
-            search={search}
-            cells={tray}
-            labels={labels}
-            formatOptions={formatOptions}
-          />
-        )}
-
-        {/* The chips and Reset all, under the controls that made them. **On a phone they are the
-            strip's second line instead** — mounted up there rather than here, one copy in one of
-            two places, and in the sheet neither. See {@link statedFiltersStrip}. */}
-        {!narrow && statedFilters}
-
-        {/* The chips a typed `otag:ramp` produces, and the note an unknown tag name gets. Under the
-            stated filters rather than among them: these are the *query's* own terms, which the box
-            above still holds the text of, and a reader looking for why a name did not resolve is
-            looking under the box they typed it into. Renders nothing at all until there is
-            something to say.
-
-            **It stays on the bar on a phone, where everything else left.** It is the answer to
-            something the reader typed into the box directly above it — an unresolved tag name is
-            why the wall is empty — so a note about it behind a disclosure would be an error
-            message the reader has to go looking for. It draws nothing until there is. */}
-        <TagQueryRow search={search} />
-      </div>
-
-      {/*
-        **The whole row as a sheet, below the phone width and nowhere else** — the tray since
-        2026-08-29, and since the strip landed the same day, everything else the bar used to draw
-        except the search box and the button that opens this.
-
-        `src/CLAUDE.md`'s rule decides the shape and needs no extending: a surface that is
-        *consulted* is a `Dialog` over a scrim, and only a surface *worked out of* earns a place
-        in the layout. The tray is consulted — a reader opens it, sets a filter and goes back to
-        the wall — so this is 9b's deck-search overlay read the other way round, and copying that
-        pattern here would be the wrong half of the same rule.
-
-        **Why it has to be a sheet at all**, measured on the device on 2026-08-29: the open tray
-        is **922px** against a **545px** content box, so it is not merely tight — it is four
-        times the room there is. Shut, the bar is still 381px of that 545 and the wall gets 99,
-        which is 0.42 of a tile row.
-
-        **Gated on `useNarrowWindow()`, and the gate is the load-bearing line here.** This row is
-        drawn on five surfaces — the search page, the Tags page, both tabs of the deck editor's
-        docked panel, the collection and the wishlist — and four of them have no phone in them.
-        Above the phone width nothing below renders at all, so the desktop tree is byte for byte
-        what it was; `FilterBar.test.tsx` mutates this gate away and asserts a desktop surface
-        goes red, because the failure it guards is a 1500px bar losing its controls to a sheet
-        nobody asked for.
-      */}
-      {narrow && (
-        <Dialog
-          open={trayOpen}
-          // Not from {@link FilterLabels}, and the omission is deliberate. That interface names
-          // the two things two mounted rows would *collide* over — a box's accessible name and
-          // an `id` stem — and neither is at stake here: the sheet's own controls keep the
-          // stem's ids, and a dialog is entitled by the button the reader just pressed with only
-          // one of them open at a time. A third field would be a question every surface has to
-          // answer to say "Filters".
-          title="Filters"
-          closeLabel="Close filters"
-          // **Full width, and the height is the shell's existing clamp rather than a class of its
-          // own.** `size` carries a height as readily as a width since it was renamed from
-          // `width` on 2026-09-03 — so this sheet *could* name one, and deliberately does not:
-          // the height rule it would be reaching for is already written as the panel's
-          // `max-h-full` against the scrim's `grid-rows-[minmax(0,1fr)]`, the pair `Dialog.tsx`
-          // spells out and `src/CLAUDE.md` names, which bounds the panel to the scrim's content
-          // box and hands the overflow to the body's own scroller below. On a 696px phone
-          // viewport that is 664px of panel over a tray measured at 922, so the clamp *is* the
-          // full height here and a `h-full` would buy nothing but a half-empty sheet on a surface
-          // with three cells in it. A height class here would therefore be a second answer to a
-          // question this shell has already settled, on a file every dialog in the app is drawn
-          // by — which is exactly what folding the last three copies in on 2026-08-16 was for.
-          size="w-full"
-          onDismiss={() => setTrayOpen(false)}
-          onClose={() => setTrayOpen(false)}
-        >
-          {/*
-            **The sheet carries its own `@container/fb`, and without it four rules inside the
-            tray would silently stop applying.** A container query resolves against the nearest
-            ancestor carrying `container-type`, and a `Dialog` panel is not inside the bar's box
-            — so the tray's `@min-[640px]/fb` and `@min-[900px]/fb` variants (the cell grid's
-            one-to-two-to-three columns, and the rarity and condition chips' grid-to-flow) would
-            have no container to resolve against, fall to their base arrangement, and say
-            nothing about it. **jsdom applies no container query**, so the suite could not have
-            caught it either; what it pins instead is this ancestor's existence.
-
-            Naming it `/fb` rather than inventing a second name is the honest spelling, not a
-            convenience: the component's own rule is that it lays out by **its own width and not
-            the window's**, and inside the sheet the sheet's width is what "its own" means. The
-            three thresholds go on meaning what they mean — where a line's contents stop fitting
-            — and at the phone widths this branch covers, the sheet is under 640 and the base
-            arrangement is what those rules were already choosing.
-
-            `min-h-0 flex-1 overflow-y-auto` is the body contract `Dialog` states: the panel is
-            the `flex flex-col` that bounds it, and this is what actually scrolls the 922px. The
-            `flex flex-col gap-2` on top of it is the bar's own stack, spelled the same way and at
-            the same gap — two blocks in the order the bar draws them, so a reader who has used
-            this row on a desktop meets it here in the order they know.
-
-            **The stated filters are not the third block, since 9c's Task 3.** They are the
-            strip's second line now, on the other side of this scrim — see
-            {@link statedFiltersStrip} for why, and for the cost of the one thing that leaves
-            here: `Reset all` is a dismiss and a press away rather than in reach of the controls
-            that made the count. What the sheet keeps is every control stating its own filter in
-            its own vocabulary, which is what those chips stand in for when they are off screen.
-            A copy in both places is not the fix: two mounted `ResetAll`s are two tab stops and
-            two accessible names for one control, which is the same reason there is one `row` and
-            one `FilterTray` mounted in one of two places rather than a copy per surface.
-          */}
-          <div className="@container/fb flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-5">
-            {/* **The bar's row, mounted here instead of in the flow** — every control the strip
-                shed, laid out by the same `order` numbers and the same two `basis-full` breaks it
-                uses at any width under 640: the colours, the mana values, then the sort beside the
-                view controls. The two items it does not draw here are the two that are the strip. */}
-            {row}
-            <FilterTray
-              id={trayId}
-              search={search}
-              cells={tray}
-              labels={labels}
-              formatOptions={formatOptions}
-            />
-          </div>
-        </Dialog>
+      {trayOpen && (
+        <FilterTray
+          id={trayId}
+          search={search}
+          cells={tray}
+          labels={labels}
+          formatOptions={formatOptions}
+        />
       )}
-    </>
+
+      {statedFilters}
+
+      {/* The chips a typed `otag:ramp` produces, and the note an unknown tag name gets. Under the
+          stated filters rather than among them: these are the *query's* own terms, which the box
+          above still holds the text of, and a reader looking for why a name did not resolve is
+          looking under the box they typed it into. Renders nothing at all until there is
+          something to say. */}
+      <TagQueryRow search={search} />
+    </div>
   );
 }
 

@@ -28,7 +28,7 @@ function cardSource(top: number): HTMLElement {
   return element;
 }
 
-/** One navigation entry, drawn as the rail's row and the phone's tab both register theirs. */
+/** One navigation entry, registered the way the rail's row registers its own. */
 function Entry({ drop }: { drop: SidebarDrop }) {
   const ref = useRef<HTMLDivElement>(null);
   const { over } = useSidebarDropTarget({ ref, drop, dragging: true });

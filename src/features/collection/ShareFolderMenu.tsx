@@ -40,7 +40,6 @@ import { useCallback, useMemo, useRef, useState, type JSX, type MouseEvent } fro
 import { Dialog } from "@/components/Dialog";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuItem } from "@/components/menu/types";
-import { useTooltip } from "@/components/tooltip/useTooltip";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { BUTTON } from "@/features/settings/controls";
 import { OpenShareDialog } from "@/features/share/OpenShareDialog";
@@ -50,7 +49,6 @@ import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CollectionFolder, type ShareFields, type ShareRow } from "@/lib/ipc";
 import { SUPPORTER_KEY, supporterState } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
-import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 
 /**
@@ -81,9 +79,9 @@ export const UNLOCK_FIRST = "unlock it first";
 /**
  * The entry point's name, spelled once.
  *
- * It is the button's `aria-label`, its visible words above the phone fold and its tooltip below
- * one — three places that must not drift, since WCAG 2.5.3 asks that the visible label be
- * contained in the accessible name and here they are the same string.
+ * It is the button's `aria-label` and its visible words — two places that must not drift, since
+ * WCAG 2.5.3 asks that the visible label be contained in the accessible name and here they are the
+ * same string.
  */
 export const OPEN_A_SHARE = "Open a shared collection";
 
@@ -186,30 +184,6 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
   const client = useQueryClient();
   const { menuClick } = useContextMenu();
   const setActiveView = useAppStore((s) => s.setActiveView);
-  const tip = useTooltip();
-
-  /**
-   * **Below the phone fold both buttons are glyphs, and the word is what gives way.**
-   *
-   * `ImportExportPair`'s own rule — *the word gives way as the column narrows, never the
-   * control* — applied by the caller, because only the caller knows what it is competing with
-   * for the line. Here that is a great deal: this group and that pair share the figures band's
-   * right-hand end, and worded they come to **421.67px** against the phone's **335px** row,
-   * which took `Export` off the window entirely (measured in the shipped WebView2 at 390×844,
-   * 2026-09-08). Two glyph pairs are about 156px and leave the figures beside them their room.
-   *
-   * **`useNarrowWindow` and not a container query, and the reason is this component rather than
-   * this row**: `@container` makes a box the containing block for every `fixed` descendant, and
-   * three dialogs are mounted below this one — a query here would clamp their scrims to the
-   * band. It is a *consumption* of the shell's own answer rather than a second viewport branch,
-   * which is `ScannerPage`'s precedent: the question is whether the app is in its phone shape,
-   * and the shell has already decided that.
-   *
-   * **It is the quality half rather than the correctness half.** What keeps the row inside the
-   * window at every other width is `FigureRow`'s actions box being shrinkable, so a block whose
-   * content wraps falls onto two lines; see `components/Figure.tsx`.
-   */
-  const compact = useNarrowWindow();
 
   /**
    * The membership, through the one key and the one reading of the four fields.
@@ -444,13 +418,10 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
             // long as the menu is up. `CollectionFolderCard`'s `⋯` makes the same declaration.
             aria-haspopup="menu"
             onClick={openMenu}
-            // Bound exactly when the word is not there to be read. `describes: false`, because
-            // the sentence is identical to the `aria-label` above.
-            {...(compact ? tip(shareName, { describes: false }) : {})}
-            className={cn(SHARE_BUTTON, compact ? "w-9 px-0" : "gap-1.5 px-2.5")}
+            className={SHARE_BUTTON}
           >
             <Share2 className="size-4 shrink-0" aria-hidden="true" />
-            {!compact && "Share"}
+            Share
           </button>
         )}
         <button
@@ -462,15 +433,10 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
             setNote(null);
             setOpening(true);
           }}
-          {...(compact ? tip(OPEN_A_SHARE, { describes: false }) : {})}
-          className={cn(
-            SHARE_BUTTON,
-            compact ? "w-9 px-0" : "gap-1.5 px-2.5",
-            target !== null && connected && "border-l border-border",
-          )}
+          className={cn(SHARE_BUTTON, target !== null && connected && "border-l border-border")}
         >
           <Link2 className="size-4 shrink-0" aria-hidden="true" />
-          {!compact && OPEN_A_SHARE}
+          {OPEN_A_SHARE}
         </button>
       </div>
 
@@ -543,7 +509,8 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
 
 /** One button of the pair. `ImportExportPair`'s box, so the two groups read as one row. */
 const SHARE_BUTTON = cn(
-  "inline-flex h-9 shrink-0 items-center justify-center whitespace-nowrap text-xs text-dim",
+  "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap px-2.5",
+  "text-xs text-dim",
   "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
   FOCUS,
 );

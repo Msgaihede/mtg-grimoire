@@ -285,11 +285,9 @@ Every one of these has its measurement and its story in
   that traps nothing as well as on one that traps both. **Do not "simplify" this by mounting a
   hint inside a deck table row**: the trap is a property of the caller, and a hook whose placement
   depended on which caller drew it would be four answers to one question. **The
-  sweep is done**: every real tooltip in the app binds through `useTooltip()`. **Two native
-  `title`s survive on purpose, and they are the same one drawn twice** — the drag-inert entry in
-  `AppShell.tsx`'s rail and its twin in `BottomTabBar.tsx` (added 2026-08-29 with the phone's tab
-  bar; the *row* is duplicated on purpose while the drop wiring is shared through
-  `useSidebarDropTarget`) — because Chromium
+  sweep is done**: every real tooltip in the app binds through `useTooltip()`. **One native
+  `title` survives on purpose** — the drag-inert entry in `AppShell.tsx`'s rail, whose twin in
+  `BottomTabBar.tsx` went with the phone layout on 2026-09-27 — because Chromium
   freezes `:hover` at a drag's origin for the whole drag, so the attribute's sentence is never
   seen mid-drag and is read instead through the accname spec's description fallback. Everything
   else `title=` still finds in the tree is a component **prop** — drawn as a heading
@@ -437,10 +435,13 @@ Every one of these has its measurement and its story in
   `Dialog` paragraph above. **jsdom has no layout engine, so nothing in the suite can go red
   for this** — build a modal on `Dialog` rather than beside it, and check a new one in the
   running window at a short viewport with more content than fits.
-  **What it is clamped _to_ is 90vh above the phone fold and the whole window below it, and a host
-  spells neither** (2026-09-08). `Dialog`'s scrim is `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`: 24px
-  across, 5vh down, so a dialog whose body outgrows the window leaves glass above and below and
-  reads as a panel over the app rather than as a page. It is stated as an **inset** rather than as
+  **What it is clamped _to_ is 90vh at `sm` (640px) and above and the whole window below it, and a
+  host spells neither** (2026-09-08). `Dialog`'s scrim is `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`:
+  24px across, 5vh down, so a dialog whose body outgrows the window leaves glass above and below
+  and reads as a panel over the app rather than as a page. The below-`sm` rung is under the
+  desktop floor and no shipped window draws it; it stays on purpose (the owner's call, 2026-09-27,
+  when the phone layout went) because it is correct at any width — never read it as a phone
+  target. It is stated as an **inset** rather than as
   a `max-h` on the panel for two reasons that are both load-bearing. The scrim is where this shell
   states insets, so `max-h-full` stays the one height rule and only the box it is a percentage of
   moves; and a `sm:max-h-…` would sit on the same property as `CardDetailModal`'s
@@ -448,7 +449,7 @@ Every one of these has its measurement and its story in
   ones** — so the shell would have silently replaced that host's own ceiling at every width ≥640.
   Two things follow for a host. **Do not name a `max-h` in `size`**: `cn`'s `tailwind-merge`
   deletes the shell's `max-h-full` the moment you do, and below `sm` — where every dialog fills
-  the phone's glass — yours alone would float. And **a host that genuinely needs a tighter ceiling
+  the window — yours alone would float. And **a host that genuinely needs a tighter ceiling
   spells it as `min-[640px]:max-h-…`**, matching the card modal's family, never `sm:`.
 - **An anchored popup is pinned to, and grows from, the corner nearest its trigger's own edge**
   — `right-0`/`origin-top-right` at the right end of a row, `left-0`/`origin-top-left` at the
@@ -813,12 +814,14 @@ Every one of these has its measurement and its story in
   a `transform` is. `Dialog`'s scrim is a bare `fixed inset-0` and corrects for nothing, so a
   dialog opened from inside a container box stretches to **that box** rather than to the window:
   the scrim covers the row it came out of and the panel is clamped to a filter bar. Found
-  2026-08-29 building the phone's filter sheet, where `FilterBar`'s root became a **fragment** so
-  the sheet is the container box's *sibling*. **jsdom applies no stylesheet and computes no
-  containment**, so nothing in the suite can see the failure — pin the *structure* instead (the
-  dialog is not a descendant of the container), which is what `FilterBar.test.tsx` does. The
-  dropdowns escape this a different way and their own comment says so: `usePopupPlacement`
-  measures a zero-size frame precisely to subtract whatever containing block it landed in.
+  2026-08-29 building the phone's filter sheet, when `FilterBar`'s root became a **fragment** so
+  the sheet could be the container box's *sibling*; the sheet and the test pinning that went with
+  the phone layout on 2026-09-27, the root is one `@container/fb` element again, and the note over
+  it says nothing that must cover the window may mount inside it. **jsdom applies no stylesheet
+  and computes no containment**, so nothing in the suite can see the failure — pin the
+  *structure* instead: the dialog is not a descendant of the container. The dropdowns escape
+  this a different way and their own comment says so: `usePopupPlacement` measures a zero-size
+  frame precisely to subtract whatever containing block it landed in.
   **Settings met the same rule from the inside on 2026-09-03, and the lesson is where a container
   may not go rather than where a dialog may not.** That page's panels mount their dialogs inline —
   grep `ConfirmDialog` under `src/features/settings/` for the census, since none of them writes
@@ -1077,15 +1080,9 @@ Every one of these has its measurement and its story in
   reference to something the palette decides later.
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
   with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
-- **`useNarrowWindow` is the app's one viewport branch, and a new consumer is a _reader_ of it
-  rather than a second branch.** `viewports.ts` demands a reason at the site of any branch on
-  width; consuming an answer the shell has already decided needs no new one, and the test for a
-  genuinely *second* branch is unchanged — name the box the question is about, and if it is not
-  the window, this is not the mechanism. `ScannerPage` is the case that settled the wording: a
-  narrow window stacks the camera above the verdict where a wide one stands them side by side,
-  which is the shell's own question. **The hook's doc names its readers rather than counting
-  them** — a count is a fact about a tree and every branch has a different one — and
-  `grep -n "useNarrowWindow()" src/` is the census.
+- **There is no viewport branch in the app.** The desktop window's floor is `DESKTOP_FLOOR_PX`
+  (1024, quoted from `tauri.conf.json`) and every fold answers its own box; the one branch there
+  was, `useNarrowWindow`, went with the phone layout on 2026-09-27.
 - **`Core.call` takes `(command, args?: CallArgs, options?: CallOptions)`**, where `CallArgs` is
   `Record<string, unknown> | Uint8Array`. It widened for one *shape* of call, which two wrappers
   make — `ipc.scannerFrame` and `ipc.scannerCapture`, the only two that pass raw bytes and

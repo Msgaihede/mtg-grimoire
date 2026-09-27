@@ -220,26 +220,10 @@
   --sidebar-ring: var(--color-accent);
 }
 
-/* The environment, rather than the palette — which is why this is a `:root` block of its own and
-   not four more lines in the one above. That block and `.dark` carry *identical* values on
-   purpose, and these have no `.dark` twin to carry: they are not a colour, and a second theme
-   would not move them.
-
-   The four edges the OS reserves — a notch, a rounded corner, a home indicator, a landscape
-   cutout. **They are `0px` in every context until `index.html` carries `viewport-fit=cover`**,
-   which is why that meta and these four ship together: half of this pair is dead code without
-   the other.
-
-   The `0px` fallback is load-bearing rather than defensive. A browser that does not know `env()`
-   treats the whole declaration as invalid, and a `padding-top` that fails to parse is not zero —
-   it is whatever the cascade had before it. On desktop and in WebView2 every one of these is
-   `0px` and the block costs nothing. */
+/* Not the palette — which is why this is a `:root` block of its own and not one more line in the
+   one above. That block and `.dark` carry *identical* values on purpose, and this has no `.dark`
+   twin to carry: it is not a colour, and a second theme would not move it. */
 :root {
-  --safe-t: env(safe-area-inset-top, 0px);
-  --safe-r: env(safe-area-inset-right, 0px);
-  --safe-b: env(safe-area-inset-bottom, 0px);
-  --safe-l: env(safe-area-inset-left, 0px);
-
   /* The smallest a control may be when a finger is aiming at it. WCAG 2.5.5 (AAA) asks 44×44 CSS
      px; 2.5.8 (AA) asks 24×24, which this app already clears everywhere. 44 is the number because
      the AA floor is a floor for a *pointer*, and the surfaces this token is for have no pointer at
@@ -249,8 +233,8 @@
      spacing scale, and putting it in the spacing namespace would generate `p-target-min` and
      `gap-target-min` — two utilities that mean nothing and one that means this.
 
-     **Nothing in the app reads it yet**, and that is deliberate: which control grows, and where,
-     is a design decision and belongs to 9b. */
+     It is read through the `coarse:` variant above, by the controls that grow for a finger —
+     grep `var(--target-min)` for which, since a list written here is a fact about one tree. */
   --target-min: 44px;
 }
 

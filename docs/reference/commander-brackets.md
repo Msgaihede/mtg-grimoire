@@ -1235,8 +1235,8 @@ full size, with nothing collapsed and nothing abbreviated. **Nothing about the b
 differently.
 
 **The panel is `w-[62rem] h-[54rem]`, and the width is arithmetic rather than taste.** `minWidth`
-is **1024** (`src-tauri/tauri.conf.json`) and `Dialog`'s scrim spends **24px a side** above the
-phone fold, so **976px** is every pixel the smallest window this app can be has to give. 62rem is
+is **1024** (`src-tauri/tauri.conf.json`) and `Dialog`'s scrim spends **24px a side** at `sm`
+(640px) and above, so **976px** is every pixel the smallest window this app can be has to give. 62rem is
 **992** — over that by 16, which the shell's own `max-w-full` absorbs — where 72rem would be 176px
 of panel a reader could never see. Everything else here is `w-[45rem]` or `w-[55rem]`; a split
 pane wants more than either, so this is the widest dialog the app ships. **The height is fixed,
