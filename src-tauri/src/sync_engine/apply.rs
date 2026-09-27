@@ -7,7 +7,8 @@
 //! 2. **A row is found by grain, then by uid, then inserted** — and where a grain match carries
 //!    a different uid, both devices set the row's uid to `min(theirs, ours)`, which converges
 //!    with no alias table — except onto a row this page deletes, whose uid the sender retired, so
-//!    the incoming uid wins outright. A folder's or a deck's delete that would clear rows out of
+//!    the incoming uid wins outright; and a group whose own ops end in a delete is found by its
+//!    uid alone, never by grain. A folder's or a deck's delete that would clear rows out of
 //!    it waits for the page's second attempt, then re-homes whatever is still filed there itself,
 //!    merging each onto the root's twin under the lower uid ([`rehome`]).
 //! 3. **Foreign uids become local ids.** A parent the device has never seen is a *deferral*, not
@@ -1265,6 +1266,27 @@ fn absent_value(p: &Parent) -> Sql {
 /// the very row the insert had just landed on, and the peer lost its holding area or a deck's
 /// group with nothing recorded (spec 2026-09-27 §3.3, as amended). Under the incoming uid the
 /// retried delete finds no row to take. [`adopt_uid`]'s taken-check still applies.
+///
+/// # A group whose own ops end in a delete is found by its uid alone
+///
+/// The other half of the same fact. Where the group's **own** incoming ops fold to deleted
+/// ([`Group::resolved`]), the sender made that row and discarded it, so its delete can only ever
+/// mean a row wearing that uid — and a grain match could only hand it a row this device keeps.
+/// Two ways that happened, both a row deleted with nothing recorded: `reset::clear_collection`
+/// run twice between two pulls (or a deck switched to Virtual and back twice) sends `del R`,
+/// `put R'` + `del R'`, `put R''` on one partial grain, and on the retry the `R'` group grain-hit
+/// `R''`, adopted by `min` and deleted it; and a copy a sender added and removed again grain-hit
+/// a copy of that printing the peer had made itself, and deleted that. So no grain is asked, and
+/// a row not wearing the uid is simply not this group's to delete — a baseline put and a later
+/// delete of it in one first-contact page included, which leaves the peer's own twin standing on
+/// purpose.
+///
+/// **Keyed on the group's own fold, and not on the page's delete set**, which is `deleted`'s
+/// other use above: a row deleted and put back in one page — an edit on a third device beating
+/// the delete, add-wins — names its uid in a `del` and still folds to a row that exists. That
+/// group grain-matches like any put, so a twin this device made on its own meets it as one row;
+/// found by its uid alone it inserted beside the twin and was dropped as unbuildable
+/// (`a_row_deleted_and_put_back_in_one_page_still_meets_its_twin`).
 fn find_row(
     conn: &Connection,
     meta: &Meta,
@@ -1273,7 +1295,8 @@ fn find_row(
     deleted: &BTreeSet<(&str, &str)>,
 ) -> Result<Found, String> {
     let op_uid = g.ops[0].uid.clone();
-    for grain in meta.grains {
+    let grains: &[Grain] = if g.resolved.deleted { &[] } else { meta.grains };
+    for grain in grains {
         if let Some(values) = grain_values(grain, g, parents) {
             let found: Option<String> = conn
                 .query_row(

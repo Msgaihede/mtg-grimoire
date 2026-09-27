@@ -3008,7 +3008,7 @@ fn the_round_cap_advances_watermarks_by_the_committed_passes_blocks() {
 }
 
 // ---------------------------------------------------------------------------------------
-// A delete that would drop two rows onto one grain — spec 2026-09-27 §3.3
+// A delete that would clear rows out of a folder waits, then re-homes them — spec 2026-09-27 §3.3
 // ---------------------------------------------------------------------------------------
 
 /// A user binder named `name`, and its id.
@@ -3277,6 +3277,27 @@ fn folder_uids(conn: &Connection, kind: &str) -> Vec<String> {
 /// **What makes it red**: `find_row` adopting `min` on a grain hit whose uid this page deletes.
 #[test]
 fn a_collection_cleared_on_one_device_keeps_the_re_made_folders_on_the_other() {
+    a_collection_cleared_crosses_keeping_the_last_re_made_folders(1);
+}
+
+/// **...and cleared twice between two pulls, it keeps the folders the second clear made.** The
+/// page on each partial grain is `del R`, then `put R'` and `del R'`, then `put R''` — the same
+/// shape a deck switched to Virtual and back twice makes of its group. `R'` was made and discarded
+/// on the sender, and its group grain-hit whatever stood on its grain: first the old row (renamed
+/// to `R'`, then waiting to be deleted and rolled back), and on the retry `R''`, which it adopted
+/// by `min` and then deleted — the peer lost its holding area and the deck's group again, in
+/// either order of the two new uids.
+///
+/// **What makes it red**: `find_row` grain-matching a group whose own uid this page deletes.
+#[test]
+fn a_collection_cleared_twice_on_one_device_keeps_the_last_re_made_folders_on_the_other() {
+    a_collection_cleared_crosses_keeping_the_last_re_made_folders(2);
+}
+
+/// The two tests above: holding areas that have met, a deck group and `Recently removed` each
+/// holding a copy the root holds too, old folder uids forced low, then `clear_collection` on the
+/// sender `clears` times before the peer pulls.
+fn a_collection_cleared_crosses_keeping_the_last_re_made_folders(clears: usize) {
     let (a, b) = (paired("dev-a"), paired("dev-b"));
     let (mut ma, mut mb) = (0, 0);
     holding_areas_meet(&a, &b, &mut ma, &mut mb);
@@ -3319,14 +3340,19 @@ fn a_collection_cleared_on_one_device_keeps_the_re_made_folders_on_the_other() {
         });
     }
 
-    crate::reset::clear_collection(&a).unwrap();
+    for _ in 0..clears {
+        crate::reset::clear_collection(&a).unwrap();
+    }
     let rb = apply(&b, &since(&a, &mut ma)).unwrap();
 
     assert_eq!(unwritten(rb), (0, 0), "{rb:?}");
     for kind in ["removed", "deck"] {
         let (on_a, on_b) = (folder_uids(&a, kind), folder_uids(&b, kind));
         assert_eq!(on_b.len(), 1, "b holds {on_b:?} as its {kind} folders");
-        assert_eq!(on_b, on_a, "b's {kind} folder is not the one a re-made");
+        assert_eq!(
+            on_b, on_a,
+            "b's {kind} folder is not the one a re-made last"
+        );
     }
     assert_eq!(qty(&b), (0, 0), "the clear must cross");
     assert!(skips(&b).is_empty(), "{:?}", skips(&b));
@@ -3363,6 +3389,130 @@ fn a_new_root_copy_and_a_binder_that_folds_into_it_land_at_the_senders_count() {
     assert_eq!(qty(&b), (1, 3));
     assert_eq!(folders(&b), 0);
     assert_eq!(uids_of_copies(&a), uids_of_copies(&b));
+}
+
+/// **A copy made and deleted on the sender between two pulls never deletes the peer's own copy
+/// of that printing.** `b` holds a root copy `a` has never seen; `a` adds one on the same grain
+/// and deletes it before `b` pulls. The page's group for it folds to deleted, and its insert
+/// carries a whole grain, so a grain match landed it on `b`'s copy — which the delete then took.
+/// The sender made and discarded that row, so its delete can only ever mean a row wearing its
+/// own uid.
+///
+/// **What makes it red**: `find_row` grain-matching a group whose own uid this page deletes.
+#[test]
+fn a_row_made_and_deleted_on_the_sender_never_deletes_a_local_twin() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    add_copy(&b);
+    let before = uids_of_copies(&b);
+
+    add_copy(&a);
+    a.execute("DELETE FROM collection_entries", []).unwrap();
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+
+    assert_eq!(unwritten(rb), (0, 0), "{rb:?}");
+    assert_eq!(
+        qty(&b),
+        (1, 1),
+        "b's own copy did not survive a's discarded one"
+    );
+    assert_eq!(uids_of_copies(&b), before, "b's own copy was renamed");
+
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+    assert_eq!(qty(&a), (1, 1));
+    assert_eq!(uids_of_copies(&a), before);
+}
+
+/// **...but a row deleted and put back in one page still meets its twin.** `a` makes a copy and
+/// `c` receives it; `a` deletes it while `c` edits it, so the page `b` pulls — `a`'s insert and
+/// delete, `c`'s later edit — names the copy's uid in a delete and still folds to a row that
+/// exists: add-wins. `b` holds its own copy of the printing, which neither of the others has seen.
+/// Keyed on the page's deletes, the group skipped the grain, found nothing by its uid, and its
+/// insert hit `idx_collection_grain` beside `b`'s copy — dropped as a row this database cannot
+/// build. Keyed on the group's own fold, it grain-matches `b`'s copy as any put does, and the two
+/// copies are one row.
+///
+/// **What makes it red**: `find_row` skipping the grain because the page deletes the group's uid,
+/// where the group's own ops do not end in a delete.
+#[test]
+fn a_row_deleted_and_put_back_in_one_page_still_meets_its_twin() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    add_copy(&b);
+    add_copy(&a);
+    let uid: String = a
+        .query_row("SELECT sync_uid FROM collection_entries", [], |r| r.get(0))
+        .unwrap();
+    let made = since(&a, &mut ma);
+    apply(&c, &made).unwrap();
+    let _ = since(&c, &mut mc);
+
+    a.execute("DELETE FROM collection_entries", []).unwrap();
+    c.execute("UPDATE collection_entries SET notes = 'kept on c'", [])
+        .unwrap();
+    let mut page = made;
+    page.extend(since(&a, &mut ma));
+    page.extend(since(&c, &mut mc));
+    let about: Vec<Op> = page.iter().filter(|op| op.uid == uid).cloned().collect();
+    assert!(
+        about.iter().any(|op| op.kind == Kind::Del) && !fold(&about).deleted,
+        "the premise: the page deletes the copy and puts it back: {about:?}"
+    );
+
+    let rb = apply(&b, &page).unwrap();
+
+    assert_eq!(unwritten(rb), (0, 0), "{rb:?}");
+    assert_eq!(
+        qty(&b),
+        (1, 2),
+        "b's copy and the put-back one are not one row"
+    );
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+}
+
+/// **Two copies filed on the peer into two sub-folders of a binder the sender deletes end as one
+/// root row on both** — the collection's form of the wishlist test above. The page re-files
+/// neither, so the retry re-homes them itself, one at a time: the first reaches the root and the
+/// second folds into it under the lower uid, which the sender's grain match adopts too. Since
+/// every clearing delete waits, this is the one test where `rehome` folds two collection rows onto
+/// each other rather than finding the page's re-filing already done.
+#[test]
+fn two_copies_filed_into_a_deleted_binders_sub_folders_end_as_one_root_row() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let outer = binder(&a, "Outer", None);
+    binder(&a, "One", Some(outer));
+    binder(&a, "Two", Some(outer));
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    crate::collection_folders::delete_folder(&a, outer).unwrap();
+    for name in ["One", "Two"] {
+        let id: i64 = b
+            .query_row(
+                "SELECT id FROM collection_folders WHERE name = ?1",
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap();
+        file_copies(&b, Some(id), 1);
+    }
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+
+    assert_eq!((unwritten(ra), unwritten(rb)), ((0, 0), (0, 0)));
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 2), "{who}: one root row of two");
+        assert_eq!(folders(c), 0, "{who} still holds a binder");
+    }
+    assert_eq!(
+        uids_of_copies(&a),
+        uids_of_copies(&b),
+        "the two devices kept different uids"
+    );
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
 }
 
 /// **A copy filed on the peer into the binder being deleted survives on both, as one row.**

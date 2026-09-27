@@ -181,9 +181,11 @@ Every `DELETE` `apply` issues — `write_group`'s delete arm and the moot delete
   ordinary press, not a corner). So a delete whose doomed set is non-empty waits for the retry, and
   **a grain match onto a row this page deletes adopts the incoming uid rather than `min`**
   (`find_row`): the sender retired the old uid, so the re-made row keeps the new one, and the
-  retried delete finds nothing to take. **And a group whose own uid the page deletes finds its row
-  by uid alone, never by grain** (amended again at the scoped re-review): the sender made and
-  discarded that row, so its delete can only take a row wearing its own uid — without the rule, a
+  retried delete finds nothing to take. **And a group whose own ops end in a delete finds its row
+  by uid alone, never by grain** (amended again at the scoped re-review, and narrowed from "whose
+  uid the page deletes" so that a row deleted and put back in one page — add-wins — still meets its
+  twin): the sender made and discarded that row, so its delete can only take a row wearing its own
+  uid — without the rule, a
   collection cleared twice between two pulls (or a deck toggled Virtual on, off, on, off) had its
   middle folder grain-match the one re-made after it and delete it, and a copy made and removed on
   the sender deleted a local twin the peer had made on its own.
