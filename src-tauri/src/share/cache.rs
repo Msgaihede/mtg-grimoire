@@ -10,9 +10,7 @@
 //! does not name has left, whether it was withdrawn from another device or never existed here.
 //!
 //! Everything in this file is a pure function of the database plus its arguments — no clock, no
-//! network — which is what lets `share::publish`'s two-step be tested without an HTTP mock. (That
-//! module is spelled without a link here: it does not exist on the browser build and this one
-//! does, which is the same reason the two are separate files.)
+//! network — which is what lets [`super::publish`]'s two-step be tested without an HTTP mock.
 
 use super::commands::ShareRow;
 use rusqlite::{params, Connection, OptionalExtension};

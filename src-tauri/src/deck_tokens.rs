@@ -246,20 +246,13 @@ pub struct DeckTokenRow {
     /// Whether this is the implicit entry of a token with no entries in this list — the one the
     /// first write to it materialises (rule 2).
     pub implicit: bool,
-    /// Where the picture of **this entry's printing** is, per variant — **the web target's and
-    /// the phone's only way to draw one**, and the reason this field is on a struct that is
-    /// otherwise all facts about a token rather than about an image.
-    ///
-    /// `mtgimg://` is a Tauri custom protocol, so a browser has none to ask and `cardArtSrc`
-    /// falls through to whatever URL the row carried: without this every tile on the wall
-    /// draws the no-art frame there while the desktop draws art, which is the failure four
-    /// other surfaces shipped with on 2026-08-31.
+    /// Where the picture of **this entry's printing** is, per variant.
     ///
     /// **[`Self::card_id`]'s printing and never the resolver's**, which is the whole of
     /// [`drawn_for`]: the two are the same row for an implicit entry and different for exactly
-    /// the entries the reader picked, so taking the resolver's would draw the deck's default
-    /// Treasure on a tile the reader chose the other Treasure for, on the web and on the phone
-    /// only — a wrong picture rather than a missing one.
+    /// the entries the reader picked, so taking the resolver's would describe the deck's default
+    /// Treasure on a tile the reader chose the other Treasure for — a wrong picture rather than
+    /// a missing one.
     ///
     /// Built by [`crate::image_uri::front_face_map`] rather than read off `image_uris`
     /// directly, because a `double_faced_token` carries **no** top-level blob — all 120 such
@@ -814,9 +807,8 @@ struct Drawn {
 ///
 /// **The entry's printing and never the resolver's**, and getting it the other way round is a
 /// *wrong* picture rather than a missing one — the deck's default Treasure drawn on the tile the
-/// reader chose the other Treasure for, on the web and on the phone alone, where no `mtgimg://`
-/// corrects it. The chin under it would then name a set the art is not from, and the pile
-/// heading would sum the wrong printing's price.
+/// reader chose the other Treasure for. The chin under it would then name a set the art is not
+/// from, and the pile heading would sum the wrong printing's price.
 ///
 /// The extra row read is skipped whenever the entry *is* the resolver's printing, which is every
 /// implicit entry; the price is one read either way. **A printing that has left the corpus
@@ -2503,7 +2495,6 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
 /// is `card_printings`, which already answers on a token — its predicate is
 /// `oracle_id = ?1 AND is_paper = 1` and every token row satisfies both — so this feature adds no
 /// second read command.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_tokens(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2525,7 +2516,6 @@ pub async fn deck_tokens(
 /// Plain [`crate::sync::with_write`] and **not** `with_write_owned`, for all five writes: that one
 /// is for the commands that move copies across the collection/deck boundary, and no token write
 /// touches the collection.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_token_set_quantity(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2547,7 +2537,6 @@ pub async fn deck_token_set_quantity(
 
 /// [`swap`]'s command. `from` is `{ cardId, finish }` or `null` for the implicit entry; `to` is
 /// always a printing and a finish, the picker's grain.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_token_swap(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2569,7 +2558,6 @@ pub async fn deck_token_swap(
 
 /// [`add_printing`]'s command — one copy of a printing in a finish, rule 5. A `null` finish is
 /// the printing's default.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_token_add_printing(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2594,7 +2582,6 @@ pub async fn deck_token_add_printing(
 /// `app` here** — Tauri injects a `tauri::State` by its type and never by its name, which is what
 /// frees the name for the argument the page sends. (The retired `deck_token_set` took
 /// `tokenState` instead, and `src/lib/ipc.ts` had to know the rename.)
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_token_state(
     app: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2611,7 +2598,6 @@ pub async fn deck_token_state(
 }
 
 /// [`reset`]'s command.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_token_reset(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -6192,11 +6178,6 @@ mod tests {
 
     /// **The picture reaches the wire from both columns, and from both entrances.**
     ///
-    /// The web build and the phone have no `mtgimg://` to ask, so `cardArtSrc` draws whatever
-    /// URL the row carried and nothing else — a row with no `image_uris` is a wall of no-art
-    /// frames there while the desktop draws art, which is the failure four other surfaces
-    /// shipped with on 2026-08-31 and which no test in jsdom can see.
-    ///
     /// Three things at once, because each is a separate way to get it wrong:
     ///
     /// 1. **The derived row**, resolved through the tie-break, off the top-level blob.
@@ -6271,8 +6252,7 @@ mod tests {
     ///
     /// Those two are the same row for every implicit entry, so the only fixture that can tell
     /// them apart is one holding a second printing with a picture of its own — and the failure is
-    /// a *wrong* picture rather than a missing one, on the web and on the phone alone, which
-    /// nothing in jsdom and nothing on the desktop can see.
+    /// a *wrong* picture rather than a missing one.
     #[test]
     fn an_entrys_printing_brings_its_own_picture() {
         let conn = open();

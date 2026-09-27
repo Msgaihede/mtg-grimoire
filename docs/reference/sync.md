@@ -25,8 +25,8 @@ still no password and nothing to log into. Which account does what is settled in
 
 PR 6 carries both of the blobs that protocol produces **by hand**: the invite as a QR code or a
 typed code, and the sealed group key as a second blob. There is no network of any kind. Two
-windows side by side, or a phone photographing a laptop, complete a pairing with the app
-offline.
+windows side by side, or one machine's camera reading another's screen, complete a pairing with
+the app offline.
 
 That split is not a compromise. **A pairing that never touches a network cannot be attacked by a
 network**, so every test here is about the protocol rather than about the transport, and PR 7
@@ -48,7 +48,7 @@ is documented where the relay's other routes are.
 ## The protocol, step by step
 
 **Rewritten 2026-08-31 for one-sided pairing.** Until this branch B's response and A's sealed key
-were both retyped by hand — the second one phone→PC, the hard direction — through
+were both retyped by hand — the second one back the other way, the hard direction — through
 `sync_pairing_respond` and `sync_pairing_complete`. Both commands are gone from the IPC surface;
 `sync_pairing_poll` reads either blob back from the relay's rendezvous and runs their old bodies
 internally, so the crypto they perform is unchanged and only how it is invoked moved.
@@ -258,10 +258,7 @@ fragment is load-bearing rather than cosmetic.**
 fragment is never sent to a server, so the relay still never learns the invite — the whole reason
 the code stayed 105 characters instead of shrinking to the ~16 the public key alone would need.
 Put the code in the path instead and the relay would hold A's public key and the one-time token,
-and the six digits would become the sole defence by the back door. It also sidesteps a web-target
-problem: the app shell answers any navigation once its service worker is installed, but a QR scan
-is by definition a first visit, and a path-shaped deep link would need a server rewrite that does
-not exist — the server only ever sees `/pair`.
+and the six digits would become the sole defence by the back door.
 
 **Measured: 162 bytes, a version-9 QR at error-correction level M** (176-byte capacity; version 8
 holds 152 and does not fit) — 53×53 modules, 61 with the four-module quiet zone `QrCode.tsx` draws.
@@ -283,19 +280,10 @@ enough to read across a desk, and a copy button. **That is the fallback for a re
 with their phone's own camera app; the primary path is the app's own scanner, which reads the QR
 directly and never opens a URL at all.**
 
-⚠️ **This paragraph named a third thing — an `intent://` link into the Android app, "gated on
-`/.well-known/assetlinks.json`" — and both halves were wrong, so both are gone (2026-08-31).**
-`assetlinks.json` gates an `https` **App Link**; it has never gated a custom scheme, and the app
-declared no `mtggrimoire` scheme, so that button was dead on arrival. Worse, the App Link it was
-paired with was a *trap*: nothing in this app reads a launch intent, so the day a real signing
-fingerprint went up, Android would have started handing `https://…/pair#<code>` to the app instead
-of the browser — the app opening on its ordinary window with the code nowhere, and this page,
-which is the only thing that shows a camera-app scan to the reader, unreachable from a scan. The
-button, the `autoVerify` intent-filter and the `assetlinks.json` route are all removed;
-`relay/src/pair.ts` and `gen/android/app/src/main/AndroidManifest.xml` each carry the argument at
-their own site, and [the deploy runbook](hosted-relay-deploy.md) records that its step 9 was
-deleted rather than deferred. Deep-linking into the app is a coherent follow-up whose *first* step
-is the intent handling.
+**The page offers no link into the app.** Nothing in the app reads a launch argument, so a link
+would open its ordinary window with the code nowhere; `relay/src/pair.ts` carries that argument at
+its own site. Deep-linking into the app is a coherent follow-up whose *first* step is the launch
+handling.
 
 ---
 
@@ -369,19 +357,17 @@ pair on 2026-08-29, which is where [the baseline design](../superpowers/specs/20
 ```
 
 Two identical rows with a Remove button each, and nothing on the screen saying which press
-removed the phone. `identity::mint_name` is the fix, called from `ensure` on the insert and on
+removed which machine. `identity::mint_name` is the fix, called from `ensure` on the insert and on
 no other path.
 
 | Target | What it reads | Where it comes from |
 | --- | --- | --- |
 | Windows | `MAIN-PC` | `COMPUTERNAME`. Measured on this machine, 2026-08-29, debug |
 | Linux / macOS | `HOSTNAME`, or `Desktop` | a shell variable that a process usually does **not** inherit, so the fallback is the ordinary answer there rather than the exceptional one |
-| Android | `OnePlus 12` | `android.os.Build.MODEL` over JNI. **Not a hostname** — Android answers `localhost` on every handset, which would be the same bug one platform over |
-| Web | `Chrome on Windows` | `navigator.userAgent`, read by reflection off the global so it answers in a Worker as well as in a page. A browser has no hostname and nothing to ask for one |
 
-**Three arms because they are three different questions**, and every one of them is infallible:
-failing to read a name must never stop a device minting an identity, so each falls back to a word
-rather than returning an error.
+**One question — the machine's hostname — and it is infallible**: failing to read a name must
+never stop a device minting an identity, so it falls back to a word rather than returning an
+error.
 
 **The privacy trade was made knowingly and is the reader's, not this file's.** The comment on the
 old constant argued the other way — a hostname is often a person's own name and it would travel
@@ -390,15 +376,6 @@ to every paired device without anybody choosing to send it — and that cost is 
 pays for it is that a roster a reader cannot act on is the worse failure, and that
 `sync_device_rename` is still one press away on every row the panel draws, this device's own
 included. That press is why the panel keeps **Rename** beside the pill rather than replacing it.
-
-**Two dependency notes, because the obvious route for the Android arm does not work here.**
-`jni` was already in `Cargo.lock` through `tao`, `wry` and `tauri`, so `Cargo.toml`'s line is a
-direct edge rather than a new crate — `tauri-plugin-fs`'s case. **`ndk-context` is not in this
-tree at all** and was deliberately not added: nothing calls `initialize_android_context`, so
-`android_context()` would answer a null VM pointer and the model lookup would fall back on every
-phone forever — code that compiles, ships and can never run. The VM comes from
-`tauri::tao::platform::android::prelude::main_android_context` instead, which is where the runtime
-this app is actually built on keeps the pointer the activity handed it.
 
 **`ensure` mints on absence only, and that is what makes the change safe to ship.** An existing
 install keeps whatever name it has — including "This device" — and a reader who renamed is never
@@ -410,8 +387,7 @@ exactly that mutation.
 
 **Nothing here asserts a literal hostname.** The value differs on every desk and CI is nobody's
 desk, so the tests assert the shape: a non-empty name, not the placeholder every install used to
-share, and the same answer twice. Only `browser_label` is checkable by value, because it is a pure
-function over a string and the desktop suite is the one place it can run at all.
+share, and the same answer twice.
 
 ---
 
@@ -576,7 +552,7 @@ a tree.
 > It keeps whatever it already synced — this app cannot reach into it and take that back, and no
 > server has a copy to delete.
 
-A dialog that said only "Remove" would imply a lost phone had been wiped, which is the opposite
+A dialog that said only "Remove" would imply a lost laptop had been wiped, which is the opposite
 of what happens.
 
 **There is still no "Rotate key now", and its reason has expired.** `identity::rotate_key` was
@@ -692,8 +668,7 @@ Here is what replaced each, and — for the scanner — the wrong reasoning this
 what chasing it cost.
 
 **The scanner exists, and it is a component rather than a native plugin.** One `<QrScanner
-onCode={…} />` opens the camera, draws frames to a `<canvas>`, and decodes with `jsQR` — desktop,
-Android and the later web build all get one implementation rather than three, because
+onCode={…} />` opens the camera, draws frames to a `<canvas>`, and decodes with `jsQR`, because
 `BarcodeDetector` is `undefined` in WebView2 (measured below) and a platform decoder was never on
 the table. The raw string it reads goes through the same `Invite::decode` a pasted code always
 did: `decode` takes everything after the last `#` before it filters, so a URL and a bare code both
@@ -856,8 +831,7 @@ that process shares the one `AppState`, the one write connection and therefore t
 `sync_identity` — so two windows pairing would be one device reading its own invite. The
 crossed halves ([§the two blobs](#the-two-blobs)) are covered by
 `two_databases_pair_and_agree_on_the_key`, which drives two connections in one process; that is
-the strongest evidence available until a second device exists, and the Android build merged on
-the same day is the obvious one.
+the strongest evidence available until a second device exists.
 
 **Also not shown here: the upgrade.** A worktree is a fresh install, so this pass exercised
 `USER_SCHEMA_SQL` and never ran the `migrate_user` rung. The `split::extract_user_file` fix — the
@@ -1375,8 +1349,8 @@ running last year's rules forever.
 gives the table and the rowid but **no values**. `preupdate_hook` does give values but fires
 *before commit*, so an in-memory buffer is the only record of an op between the commit and the
 drain, and a crash there loses an op: a device diverged for good, silently. A trigger runs
-inside the caller's transaction, rolls back with it, cannot be forgotten by a write site added
-next year, and is identical on native and on wasm.
+inside the caller's transaction, rolls back with it, and cannot be forgotten by a write site added
+next year.
 
 Three things about SQLite, all measured against **3.53.0 on 2026-08-28**, decide the rest — and
 the plan this was built from had the first two wrong:
@@ -1610,8 +1584,7 @@ and the sentence was there again.
 
 Without it, an edit made *after* seeing a peer's op can carry a stamp that sorts *before* it, and
 last-writer-wins is decided by whose clock ran faster. `apply` ends by pulling `sync_clock` past
-the batch's latest stamp — `hlc::Hlc::observe` spelled in SQL, because `SystemTime::now()`
-**panics on `wasm32-unknown-unknown`** and this module compiles for the web target.
+the batch's latest stamp — `hlc::Hlc::observe` spelled in SQL.
 
 ### A held op holds the watermark
 
@@ -2033,9 +2006,8 @@ would clear (`sync_engine/apply/rehome.rs`'s `doomed`):
   visible; a stalled sync is neither.
 
 All of it runs inside `apply`'s `capture::suppressed`, so every device derives the same re-homing
-from the same delete, and `rehome.rs` borrows only the every-target halves of
-`collection_folders` and `wishlist_folders`, so the browser build re-homes as the desktop does.
-What it leaves is under *What is still owed*. **And for whatever files into a folder next**: a
+from the same delete, and `rehome.rs` borrows its two merges, `collection_folders::refile_entry`
+and `wishlist_folders::refile_wish`, rather than spelling a third. What it leaves is under *What is still owed*. **And for whatever files into a folder next**: a
 folder deleted on a peer re-homes its leftover copies to the **root**, as `SET NULL` does, and a
 sweep that files them somewhere else afterwards must be a derived write behind
 `capture::suppressed`, like `reconcile`, or both devices sweep the same copy and the destination
@@ -2092,9 +2064,8 @@ an unknown set**: its kind still reaches the panel, and the next pull starts ove
 (`a_hold_written_before_its_blocks_were_stored_reads_and_starts_over`). `noted` is the unreadable
 envelopes this hold's pulls have already written to `error_log`, by device and stamp, so a held page
 handed back on every trip records each once (below); it is left out while empty. `since` is SQL's
-`unixepoch()`, because `sync_engine` compiles for wasm and `SystemTime::now()` panics there. It is
-a `sync_state` key and no schema rung, it survives a restart, `identity::leave_group` deletes it
-with the group (`leaving_clears_a_held_pull` — a count left behind would carry into the next
+`unixepoch()`. It is a `sync_state` key and no schema rung, it survives a restart,
+`identity::leave_group` deletes it with the group (`leaving_clears_a_held_pull` — a count left behind would carry into the next
 group's first wait), and a newer hold is never released by pull count or time
 (`a_newer_hold_is_never_released_by_the_waiting_bound`). `sync_relay_status` reads its kind into
 `RelayStatus.pullHeld` — `"newer" | "waiting" | null`, and **`null` whenever the device is in no
@@ -2364,12 +2335,12 @@ stands on, which is current only if that is the relay's — so no shipped client
 the next epoch, and anything further is a **422**. Beside that, `/claim` mints a fresh secret on
 every press and records the claiming device in `entitlements.refresh_device`, and an accepted
 rotation whose manifest omits that device sets both to NULL. **They close one hole between them,
-with a third change**: a lost phone that pressed Connect and was then removed keeps whatever its
+with a third change**: a lost laptop that pressed Connect and was then removed keeps whatever its
 `user.db` holds, and `/rotate` used to accept the refresh secret — so whoever held that file could
 publish `{epoch: 1e9, keys: {}}`, every remaining device would read a higher epoch with no blob for
 itself, and `check_keys` would take each of them out of the group. **`/rotate` now takes the
 group's current auth and nothing else**: no shipped client ever presented the secret there
-(`client::post_rotation` always sends the group auth), and a removed phone still logged into
+(`client::post_rotation` always sends the group auth), and a removed laptop still logged into
 Patreon could otherwise press Connect, be handed a fresh secret recorded against itself, and
 publish a manifest naming itself back in. The retirement still matters for `/token`'s refresh
 door, where a removed device's secret would otherwise go on minting tokens for the group. A secret
@@ -2537,7 +2508,7 @@ sync.
 
 **The two doors fail differently on the same status code, and that is the sharpest thing here.** A
 401 on the refresh door says the *secret* is dead, which is not the same as the membership: every
-`/claim` mints a fresh secret, so a Connect press on the phone leaves the desktop holding one the
+`/claim` mints a fresh secret, so a Connect press on one device leaves another holding one the
 relay will never accept again. So `entitlement::refused_secret` drops the secret and asks the
 group door — which mints for a superseded secret, and refuses a lapse too, because the relay's
 revocation marks the row `dead` and leaves its group auth in place. Only both refusals revoke the
@@ -2830,13 +2801,8 @@ frame is a hint and is never itself the cursor advancing.
 **The three original reasons, and what actually happened:**
 
 1. **"`reqwest` has no WebSocket client, and the obvious addition, `tokio-tungstenite`, does not
-   compile to `wasm32-unknown-unknown`."** True, and irrelevant once nothing on the wasm target
-   names the crate: `tokio-tungstenite` sits in `Cargo.toml`'s existing
-   `[target.'cfg(not(target_family = "wasm"))'.dependencies]` block, and every line of
-   `sync_engine::live` — the only module that touches it — carries the same `cfg`, not just the
-   dependency declaration. `sync_engine` as a whole still compiles for wasm, which `lib.rs`'s
-   module doc states as the point rather than a bonus, and `npm run verify` cannot see whether the
-   gate is right — only CI's `wasm` job builds that target.
+   compile to `wasm32-unknown-unknown`."** True, and irrelevant: the socket is opened by the
+   desktop's Rust process, and `sync_engine::live` is the only module that touches the crate.
 2. **"A WebSocket from the page would need the CSP widened."** It would not, and this is the half
    the record had backwards: `connect-src 'self' ipc: http://ipc.localhost` governs the
    **webview's** connections, and the socket that shipped is opened by `tokio-tungstenite` inside
@@ -2847,7 +2813,7 @@ frame is a hint and is never itself the cursor advancing.
    native HTTP or WebSocket client in the Rust process is **exempt** from it rather than permitted
    by it. Nothing in `connect-src` was ever consulted for either connection. The substantive claim
    is unchanged and is the stronger one: `tauri.conf.json` was not edited by this change and the
-   page was granted nothing. A fourth reason the record never named: a browser's own `WebSocket` constructor
+   page was granted nothing. A fourth reason the record never named: the page's own `WebSocket` constructor
    cannot set an `Authorization` header, so a socket opened from the page would have forced the
    relay's bearer gate onto a query parameter or a subprotocol — a relay change, and a worse one.
    Opening it from Rust keeps the existing gate unchanged.
@@ -2876,9 +2842,9 @@ as *"for compute requests billing-only"*, and whether it applies to the free pla
 counter is genuinely ambiguous. Every figure above assumes the pessimistic 1:1 — it barely bites,
 because protocol pings are free and the client sends almost nothing else inbound.
 
-What changed against the old manual baseline: a change made on a phone now reaches the desktop
-within a few seconds, rather than at the next press of **Sync now**. What did not change: the core
-still compiles to wasm, and the CSP still grants nothing.
+What changed against the old manual baseline: a change made on one device now reaches another
+within a few seconds, rather than at the next press of **Sync now**. What did not change: the CSP
+still grants nothing.
 
 **One correction to the plan, and it is the difference between a stall and a loss.** The plan says
 an envelope that will not open must not advance the cursor past it. That is right for exactly one
@@ -2964,8 +2930,7 @@ table that will not exist until v30, on every database that climbs through v29 a
 **`sync_clock` is seeded in the rung *and* in `USER_SEED_SQL`.** Every capture trigger joins it,
 and a join against an empty table produces no row — so a file that never got the seed records no
 ops at all, silently, which is the worst way for a sync to not happen. The rung reaches upgraded
-files; the seed reaches converted and fresh ones, and the browser has only ever had the second
-kind.
+files; the seed reaches converted and fresh ones.
 
 The user side is **twenty-two tables and thirty-six indexes** now, up from eighteen and
 twenty-three.
@@ -3058,50 +3023,12 @@ difference, over 1 069 rows.
 
 ---
 
-## The engine compiles for wasm, and nobody had tried
-
-Spec §2's premise is one dataset across three platforms, so the conflict engine has to be one
-implementation — and `wire` seals every batch with `sync_pair::crypto`, which makes a browser
-that cannot open an envelope a browser that cannot sync. PR 4 gated `AppState.pairing` off wasm
-and said in its own comment that the gate was temporary. This is the half of it that could be
-lifted.
-
-`crypto`, `invite` and `identity` are in `lib.rs`'s every-target column now; `pairing` stays
-gated, because it is `#[tauri::command]`s over `AppState` and is the desktop's IPC surface rather
-than a piece of the protocol. So is `sync_engine::commands`, for the same reason. Everything else
-in `sync_engine` — `hlc`, `capture`, `merge`, `apply`, `wire`, `client` — compiles there.
-
-**Two dependency edits were what it took, and neither is a workaround; each removes something the
-tree did not need.**
-
-- **`chacha20poly1305` gets `default-features = false`.** Its default set enables
-  `aead/getrandom`, which pulls `rand_core 0.6` and with it **`getrandom 0.2`** — the one major
-  in this tree that refuses `wasm32-unknown-unknown` outright, with a `compile_error!` pointing
-  at a `js` feature. Nothing here uses what it buys: `AeadCore::generate_nonce` is unreachable,
-  because `crypto::seal` draws its own 24 bytes.
-- **`getrandom` moves 0.3 → 0.4**, which is the edit its own comment already told the next reader
-  to make: `x25519-dalek 3.0.0` resolves **0.4.3**, so declaring 0.3 stood two majors in the tree
-  and switched a browser backend on in only one of them — the build failed inside the *other*.
-  No code changed.
-
-Plus `getrandom`'s `wasm_js` feature in the web target block. **A `.cargo/config.toml` carrying
-`--cfg getrandom_backend="wasm_js"` was written first and then deleted**: 0.3 needs that flag and
-0.4 does not, established by removing the file and watching the wasm build stay green. Worth
-recording, because the file would have been a trap — `scripts/build-wasm.mjs` runs cargo from the
-repository root and CI's wasm job runs it from `src-tauri`, and cargo reads its config by walking
-up from the **current** directory, not the manifest's.
-
-Verified with `cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings`, exit 0, and
-`cargo tree --target wasm32-unknown-unknown -d` lists no duplicate `getrandom` at all. It needs
-clang on `PATH`; on this machine that is `C:\Program Files\LLVM\bin`.
-
----
-
 ## The first end-to-end pass, 2026-08-29
 
-**Two real devices over the deployed relay.** A Windows desktop and a OnePlus 12 (`CPH2581`),
-both debug builds off `main` at the pairing-baseline merge, both driven over CDP — 9222 for the
-desktop's WebView2, 9333 forwarded to `webview_devtools_remote_<pid>` on the phone.
+**Two real devices over the deployed relay.** A Windows desktop and, as the second device, a debug
+build of the Android app this repository had until 2026-09-27 — both off `main` at the
+pairing-baseline merge, both driven over CDP. What the pass proved is about the engine and the
+relay rather than about either platform, which is why it is kept.
 
 **The relay was deployed for this pass and each device was pointed at it by hand**, through
 `sync_state.relay_url` typed by the reader — which is what the app offered on 2026-08-29 and is
@@ -3117,9 +3044,9 @@ for the secrets that are not — **three of them**, per the correction in the re
 | | before | after |
 | --- | --- | --- |
 | Desktop collection | 275 entries | 275 |
-| **Phone collection** | **0 entries** | **275** |
-| Ops deferred on the phone | 1, permanently | **0** |
-| Ops applied on the phone | 0 | 1 069 |
+| **Second device's collection** | **0 entries** | **275** |
+| Ops deferred on the second device | 1, permanently | **0** |
+| Ops applied on the second device | 0 | 1 069 |
 
 The deferral was correct and permanent: the one captured op was a `put collection_entries` naming
 a folder by uid, and the folder's own op had never been written, so it waited for something that
@@ -3132,18 +3059,18 @@ did not exist.
 | Ops in one baseline | **1 069** — the figure §11 of the design predicted, unchanged |
 | `deck_audit` rows among them | 28 |
 | Desktop build + seal + push | **694 ms** |
-| Phone pull + apply of all 1 069 | **1 543 ms** |
 | Deferred | **0** |
 | `needs_review` raised on either device | **0** — no resurrection, no broken cycle |
 | One full 200-op stored relay row | **186 299 B**, against a 2 MB cap (`wire::tests`, debug) |
 
-Both directions fired: the phone emitted its own baseline back and the desktop applied 1 070. The
+Both directions fired: the second device emitted its own baseline back and the desktop applied
+1 070. The
 second sync on each device emitted **0** — the marker holds.
 
 ### Every field agrees
 
 ```
-field        desktop      phone
+field        desktop      second
 entries      275          275
 cards        330          330
 unique       272          272
@@ -3173,8 +3100,8 @@ Re-pairing was driven end to end over CDP. Both devices independently derived th
 digits — `144733` — before anything was confirmed, which is the property the ceremony exists for.
 
 **The first Sync of the session answered `baselineOps: 0`, and that was correct.** Both devices
-had revoked each other minutes earlier — the desktop marked the phone at one stamp, the phone
-marked the desktop 16 seconds later, both landing on epoch 1. The trigger skips a revoked peer,
+had revoked each other minutes earlier — each marked the other, 16 seconds apart, both landing on
+epoch 1. The trigger skips a revoked peer,
 so it did. It is worth recording that the *right* answer looked exactly like the feature not
 working, and that the roster was what said otherwise.
 
@@ -3196,13 +3123,6 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 
 ### Traps this pass paid for
 
-- **The debug APK is `com.mtggrimoire.app.debug`**, not the identifier in `tauri.conf.json` —
-  `applicationIdSuffix = ".debug"`. `monkey` answers "No activities found to run" for the
-  unsuffixed name, which reads like a broken build.
-- **Two clangs, and each leg needs the other one.** `wasm32` needs `C:\Program Files\LLVM\bin`;
-  `aarch64-linux-android` needs the **NDK's** toolchain first on PATH, or `ring` fails with
-  `fatal error: 'assert.h' file not found` — an error that names a missing C header when the
-  cause is a clang with no Android sysroot. Neither is on PATH by default.
 - **A failed `sync_pairing_complete` clears the pending state**, so a mangled sealed key costs the
   whole handshake and the *second* attempt reports "There is no pairing in progress" — which
   names the wrong cause. Marshal the 224-char blob through `JSON.stringify`, never through shell
@@ -3228,7 +3148,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   response and `client.rs:917`'s `response.text()` has no cap, so a peer offline through a
   50 000-row import pulls 250 envelopes in one body — **~46.6 MB**, held as row strings plus the
   `JSON.stringify` copy at **~95 MB inside a 128 MB isolate shared with every other group's**
-  Durable Object, and over 150 MB peak on the phone. This is reachable today at
+  Durable Object, and over 150 MB peak on the pulling device. This is reachable today at
   `wire::BATCH = 200` and has nothing to do with automatic sync — what automatic sync changes is
   how often the path is taken: a `head` frame that wakes a peer holding a 250-row backlog *is*
   this path, where before it needed a reader to press **Sync now** by hand onto a device that had
@@ -3336,8 +3256,8 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   host, and step 2 of the runbook records what the deploy itself found.
 - ~~**A `Leave group` press.**~~ **Built 2026-08-30** — `sync_group_leave`, and a press on the
   panel beside *Pair a device*, drawn on a paired device and on no other. See "The departure"
-  under §7.6. What it is still owed is the **live pass**: leaving on the phone and watching the
-  desktop's roster lose it, which is the check that found the group-key migration gap on its first
+  under §7.6. What it is still owed is the **live pass**: leaving on one device and watching
+  another's roster lose it, which is the check that found the group-key migration gap on its first
   press.
 - **The device cap is not deployed.** `group_devices`, the `device` field on both `/token` doors
   and on `/claim`, `/claim`'s rebind and `/rotate`'s `keepOnly` are all written and tested and
@@ -3376,7 +3296,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   corpus and is still unbounded. A pruner would have to keep whatever the two readers above can
   still need, which is a decision nobody has taken.
 - ~~**Nothing has been driven in the shipped window.**~~ **Done 2026-08-29** — the relay is
-  deployed and a desktop and a phone converged over it. See "The first end-to-end pass" below.
+  deployed and two devices converged over it. See "The first end-to-end pass" above.
 - **The bulk-import cost.** 4.22× is measured and unaddressed; see above.
 - **A persistent push failure still retries every ~3 s while the socket is up.** The outbox gate
   (`live::outbox_has_work`) improved this — before it, *every* commit rang the bell whether or
@@ -3387,13 +3307,10 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   **socket** — how long `connect_once` waits before dialing again after a disconnect — not the
   trip ladder, so a trip that keeps failing over a socket that stays up has no error backoff of
   its own.
-- **`Wake::Resume` is declared but never constructed.** Its mechanism is real but unwired —
-  `live::resume()` only sets the `FOREGROUND` atomic and never calls
-  `sched.wake(Wake::Resume, …)`. The catch-up still happens: the outer loop dials on resume
-  regardless, and `connect_once` fires `Wake::Reconnect` on every socket that comes up, so
-  `Resume` is redundant rather than missing. But `Wake::Exit` was deleted from this very enum
-  for being never-constructed, and this one now sits in the state that condemned it — either
-  arm it or delete it.
+- ~~**`Wake::Resume` is declared but never constructed.**~~ **Deleted 2026-09-27**, with the
+  foreground gate it belonged to (`live::resume`, `live::pause`, `Disconnect::Paused` and the
+  `sync_live_foreground` command), when the Android build was removed. `connect_once` fires
+  `Wake::Reconnect` on every socket that comes up, which was always the catch-up.
 - **`WAKE_LOCK_WAIT`'s one-second timeout can drop a single wake.** `outbox_has_work` tries the
   write connection for one second and answers `false` on a miss rather than waiting longer or
   asking again on its own. If another writer holds `state.db` for longer than that with no

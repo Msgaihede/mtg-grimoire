@@ -10,11 +10,8 @@
 # Workflows never install a toolchain of their own: `.github/actions/rust-toolchain` reads the
 # channel below, and `scripts/toolchain.test.mjs` fails if any workflow names one directly.
 #
-# Targets are **not** listed. The `wasm` and `android` jobs add the one each needs, and listing
-# them here would have every checkout download them. Locally, after moving the pin, re-add
-# `wasm32-unknown-unknown` (for `npm run build:wasm`) and the Android triples (for
-# `tauri android build`) with `rustup target add` — they are per-toolchain, so the old pin's do
-# not carry over. `llvm-tools-preview` for `npm run test:coverage:rust` is the same.
+# Locally, after moving the pin, re-add `llvm-tools-preview` (for `npm run test:coverage:rust`)
+# with `rustup component add` — components are per-toolchain, so the old pin's do not carry over.
 [toolchain]
 channel = "1.98.1"
 components = ["rustfmt", "clippy"]

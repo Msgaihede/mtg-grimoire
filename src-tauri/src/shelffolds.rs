@@ -33,13 +33,11 @@
 //!   once and writes it optimistically, so it is on `multi-window.md`'s per-window list.
 //! * **No migration**: `app_meta` is schema v6's key/value table, and this is a key in it.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key.
@@ -148,7 +146,6 @@ pub fn store(
 /// wall that cannot read the row draws every shelf at its default, which is what the frontend
 /// does with an empty map anyway. `(async)` for `search_open`'s reason — it takes `db_read`'s
 /// mutex while a window may be drawing its first frame.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn shelf_folds(state: tauri::State<'_, Arc<AppState>>) -> ShelfFolds {
     stored(&crate::sync::lock_db_read(state.inner()))
@@ -157,7 +154,6 @@ pub fn shelf_folds(state: tauri::State<'_, Arc<AppState>>) -> ShelfFolds {
 /// Set or remove folded-shelf overrides on one page. Refuses an unknown page and a key that is not
 /// a folder id, and answers [`crate::db::BUSY`] while a sync holds the write connection — a refusal
 /// the frontend swallows, `set_search_open`'s trade: the fold holds for this session either way.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_shelf_folds(
     state: tauri::State<'_, Arc<AppState>>,
@@ -341,8 +337,8 @@ mod tests {
     }
 
     /// The wire: the two page names `ShelfFoldPage` spells, both always present, and a `null` in
-    /// the change set arriving as `None` — which is what Tauri's deserializer and `web::route`'s
-    /// `field` both hand `set_shelf_folds`.
+    /// the change set arriving as `None` — which is what Tauri's deserializer hands
+    /// `set_shelf_folds`.
     #[test]
     fn the_folds_cross_the_wire_under_the_names_the_page_uses() {
         let folds = ShelfFolds {

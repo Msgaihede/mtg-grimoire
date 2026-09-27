@@ -37,8 +37,8 @@ const DECK_CARDS: DeckCard[] = [
  * drawn off `/cover/<deckId>`. Four stories went with them — `AFileChosen`, `ACustomCover`,
  * `Uploading` and `PickerUnavailable` — and so did the workbench gap the last of those existed
  * to story, since the OS file picker is no longer a control this component has. A cover is a
- * card id: a short string that syncs, that is identical on desktop, web and Android, and that
- * needs no encoder, no directory and no URL scheme.
+ * card id: a short string that syncs, that is identical on every device, and that needs no
+ * encoder, no directory and no URL scheme.
  *
  * **The search half is live against the fake's `search_cards`**, so typing here really asks the
  * backend, uncollapsed and with the unplayable printings left in: four Lightning Bolts come back

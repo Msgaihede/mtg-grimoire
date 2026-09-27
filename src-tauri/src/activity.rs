@@ -48,11 +48,9 @@
 //!
 //! [`payload`]: ActivityEntry::payload
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
 use serde::Serialize;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The two scopes an `activity` row can carry, which are the two the table's CHECK admits.
@@ -275,7 +273,6 @@ pub fn recent(conn: &Connection, limit: u32) -> Result<Vec<ActivityEntry>, Strin
 
 /// The home page's feed. **Read-only** connection, blocking pool — as every read in this app is,
 /// so drawing the home page never queues behind a sync.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn activity_recent(
     state: tauri::State<'_, Arc<AppState>>,

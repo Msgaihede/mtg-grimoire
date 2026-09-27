@@ -108,14 +108,9 @@ pub fn ingest_gz(
 
 /// The ingest as an object the caller pushes into, rather than a loop that pulls.
 ///
-/// **Why both shapes exist.** [`ingest_stream`] takes an `Iterator`, which is the right
-/// thing on a desktop reading a file: `next()` blocks and that is free. A browser has no
-/// such iterator to offer — `reqwest::Response::bytes_stream()` yields a `Stream` whose
-/// `next()` must be awaited, and `wasm32-unknown-unknown` has no thread to block while it
-/// resolves. So the state the loop was keeping in locals moves in here, `ingest_stream`
-/// becomes a four-line driver, and the browser writes the other driver.
-///
-/// One drain, two drivers. Peak memory is unchanged: one chunk plus one batch.
+/// [`ingest_stream`] is the driver: it takes an `Iterator` of chunks and pushes each one here,
+/// and the state a read loop would keep in locals lives in this struct. Peak memory is one
+/// chunk plus one batch.
 pub struct StreamIngest<'a> {
     db: &'a Mutex<Connection>,
     stats: IngestStats,
@@ -237,10 +232,9 @@ impl<'a> StreamIngest<'a> {
             });
         }
 
-        // The swap is the last thing and belongs to whichever entry point ran the ingest, so
-        // it lives here rather than in `ingest_gz` - both callers need it, and a stream that
-        // filled staging and never swapped would leave the reader's `cards` table untouched
-        // while reporting success.
+        // The swap is the last thing and belongs to the sink, so it lives here rather than in
+        // `ingest_gz`: a stream that filled staging and never swapped would leave the
+        // reader's `cards` table untouched while reporting success.
         {
             let conn = crate::db::lock_blocking(self.db);
             schema::swap_staging(&conn)?;
@@ -252,8 +246,8 @@ impl<'a> StreamIngest<'a> {
 
 /// Ingest from a stream of byte chunks - gzipped or not, the decoder decides.
 ///
-/// The platform-neutral entry point: desktop feeds it a file and the browser feeds it
-/// `fetch`. Peak memory is one chunk plus one batch, exactly as the file version was.
+/// [`ingest_gz`] feeds it a file. Peak memory is one chunk plus one batch, exactly as the file
+/// version was.
 pub fn ingest_stream(
     db: &Mutex<Connection>,
     chunks: impl Iterator<Item = std::io::Result<Vec<u8>>>,
@@ -451,9 +445,7 @@ mod tests {
         )
     }
 
-    /// The sink and the iterator entry point must agree row for row. This is what makes the
-    /// browser's async loop legitimate: it drives the same object, and the desktop's own
-    /// tests are what prove the object is right.
+    /// The sink and the iterator entry point must agree row for row.
     ///
     /// **What this can and cannot catch, measured rather than assumed.** `ingest_gz` calls
     /// `ingest_stream`, which is now four lines over `StreamIngest` — so both sides of this
@@ -1124,8 +1116,7 @@ mod tests {
         assert_eq!(b.inserted, 50);
     }
 
-    /// The browser case: fetch already decompressed the body, so the same content arrives
-    /// plain. It must ingest identically.
+    /// The same content, not gzipped, must ingest identically.
     #[test]
     fn ingest_stream_accepts_already_decompressed_bytes() {
         let lines: Vec<String> = (0..30).map(card_line).collect();

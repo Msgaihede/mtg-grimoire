@@ -1,63 +1,25 @@
-//! The crate's module map, and nothing else.
-//!
-//! **The first block below compiles for `wasm32-unknown-unknown`; the second does not.**
-//! Two of the exclusions are permanent (spec §6.3): the portable `update` swap and `window`'s
-//! Win32 snap layouts. The rest are "not yet" — they are ported with the commands that
-//! need them. `images` is neither: on web the image cache is Cache Storage rather than a
-//! filesystem, so it is a rewrite and not a port.
-//!
-//! **`mirror` and `transfer` were two of that permanent four until 2026-08-31, and what
-//! changed is a decision rather than a discovery.** The mirror writes ~350 files so that
-//! *other programs* can read them, and neither a browser nor an Android app has a folder that
-//! serves that — so on those two targets the folder becomes a zip the reader asks for
-//! ([`mirror::snapshot`]). A zip needs the renderer, and the renderer never touched a
-//! filesystem: `mirror::{layout, paths, read, readme, snapshot}` and the whole of [`transfer`]
-//! moved up here, while `mirror::{run, settings, watch}` — `std::fs`, the `update_hook` and
-//! the thread — stayed behind a gate that moved down into `mirror/mod.rs`. **The golden fence
-//! did not move and did not weaken**: `src/features/transfer/__golden__/` goes on fencing the
-//! Rust writer against the TypeScript one byte for byte, on three targets instead of one.
-//!
-//! **A module's side is decided by what is *in* it, not by where its commands are, and that
-//! is what moved eleven of them on 2026-08-29.** The deck domain, the collection, the
-//! wishlist and both folder tables were on the right because each file ends in a block of
-//! `#[tauri::command]` wrappers — while everything above that block is `&Connection` in and
-//! a DTO out. Gating the *wrappers* and leaving the module puts the SQLite underneath them
-//! on both targets, which is the shape [`search`] has always had: two gated commands in an
-//! ungated module, and `run_search` reachable from [`web::route`] because of it.
-//!
-//! **Compiling for wasm is not the same as being reachable from a browser.** These modules
-//! build there; [`web::route`] answers four commands, and until a `match` arm names one the
-//! page still gets `unknown command`. The two halves are deliberately separate PRs — this
-//! one cannot change desktop behaviour, and the one that adds arms cannot fail to compile.
+//! The crate's module map, and nothing else: the command registry and the app's startup are
+//! `desktop.rs`'s.
 
-// ── Every target ─────────────────────────────────────────────────────────────────
 /// **The collection's and the wishlist's history, and the feed that reads it beside
 /// [`deck_audit`].** A table, a `record` that takes the caller's `&Connection` so a row lands
 /// inside the transaction of the change it describes, and one query. No clock beyond SQLite's
-/// own `unixepoch()`, no filesystem and no network — so it is on the every-target half.
+/// own `unixepoch()`, no filesystem and no network.
 pub mod activity;
-/// **The `app_meta` key–value store, carved out of [`update`] so both targets have it.**
-/// Eleven modules keep view state in that one table and only `update` swaps an `.exe`; a
-/// re-export from there does not work, because a name re-exported from a gated module is
-/// invisible on wasm exactly when it is wanted.
+/// **The `app_meta` key–value store, carved out of [`update`].** Eleven modules keep view state
+/// in that one table and only `update` swaps an `.exe`.
 pub mod app_meta;
-/// **The card pane, moved here on 2026-08-30** for the deck domain's reason and with the same
-/// finding: its six command wrappers sit in a block and everything else is `&Connection` in,
-/// DTO out - no filesystem, no `tokio`, no `reqwest` anywhere in the file. `card_detail` is
-/// the command the reader hit first on the phone.
+/// **The camera-permission handler for the in-app QR scanner.** `#[cfg(windows)]` inside:
+/// WebView2 needs `webview2-com` COM interop, and everywhere else `camera::install` is a no-op.
+pub mod camera;
+/// **The card pane.** Its six command wrappers sit in a block and everything else is
+/// `&Connection` in, DTO out.
 pub mod card;
 pub mod card_row;
 pub mod cardtypes;
-/// **The deck domain, and the ten modules below it, moved here on 2026-08-29** — they were
-/// under "Desktop and Android" because of where their *commands* were, not because of
-/// anything in them. Every one is `&Connection` in and a DTO out, with no `tauri::`, no
-/// `tokio` and no filesystem: `deck.rs`'s 4 444 lines of real code contain no `tauri::`
-/// reference before line 3992, where its command wrappers begin in one block.
-///
-/// **The gate did not go away, it moved onto the wrappers** — the shape [`search`] has had
-/// all along, and the reason `run_search` is reachable from [`web::route`] while
-/// `list_decks` was not. Nothing here is routed by that module yet; PR 10 does that, and
-/// what this buys is that it *can* be.
+/// **Which user tables a commit wrote, told to every open window.** It rides the write
+/// connection's update hook and lives on `AppState` beside `mirror`. See the module doc.
+pub mod changes;
 pub mod collection;
 pub mod collection_alloc;
 pub mod collection_folders;
@@ -69,7 +31,7 @@ pub mod deck_audit;
 /// **The home page's Deck completion read and To review's deck-card count** — how much of each
 /// deck the reader holds and what the rest costs, by the deck editor's own rules and through its
 /// own two pool functions, and how many deck rows are flagged. No table of its own, no clock and
-/// no network, so it sits on the every-target half with the deck modules.
+/// no network.
 pub mod deck_completion;
 pub mod deck_meta;
 pub mod deck_missing;
@@ -77,7 +39,7 @@ pub mod deck_missing;
 /// renderer: a note's body is CommonMark stored as text, because a markdown reader in this crate
 /// would be a second implementation of the TypeScript one and `src/features/transfer/__golden__`
 /// is the fence that exists to make exactly that pair go red. Nothing in it reaches a filesystem
-/// or a network, so it sits on the every-target half of this map like the eleven around it.
+/// or a network.
 pub mod deck_notes;
 pub mod deck_pull;
 pub mod deck_quick_add;
@@ -85,7 +47,7 @@ pub mod deck_theory;
 /// **The tokens and emblems a deck needs, derived — and which printings of them the reader keeps,
 /// stored.** Which tokens a deck makes is derived (schema v37): it reads `all_parts` out of each
 /// deck card's gzip `raw` blob, which is [`card::meld_parts`]' one trick applied to a different
-/// `component`, so it is a sibling of that function and not of the eleven modules around it.
+/// `component`, so it is a sibling of that function.
 /// Which printings the reader keeps, in which finish and how many, is stored — the entries of
 /// `deck_token_printings` since user schema v52, which nothing can derive. Nothing here reaches a
 /// filesystem or a network.
@@ -96,17 +58,15 @@ pub mod deck_undo;
 /// a write whose only refusal is a width outside a storage band — and it is filed up here rather
 /// than beside the view-state run below for the reason the module under it gives: the decks page's
 /// own settings are what somebody looking between `deck_undo` and `errors` came here to find.
-/// Nothing in it touches the filesystem, `tokio` or the network, so it is on the every-target half
-/// of this map like the rest of them.
 pub mod deckpane;
 /// **A view-state module wearing the deck domain's name.** It is [`listview`]'s shape exactly —
 /// one `app_meta` row, an infallible read and a write whose only refusal is a blank — and it is
 /// filed here rather than beside its four siblings below because a `decksort` between
 /// `deck_undo` and `errors` is where the next person looking for the deck gallery's settings
-/// will look. Nothing in it touches the filesystem, `tokio` or the network, so it is on the
-/// every-target half of this map like the rest of them.
+/// will look.
 pub mod decksort;
 pub mod errors;
+pub mod export;
 pub mod feed;
 pub mod filters;
 /// **[`markcolors`]'s shape with a document instead of a map.** One `app_meta` row, an
@@ -115,25 +75,22 @@ pub mod filters;
 /// has never heard of survives a round trip, which is what stops an older build quietly
 /// emptying a newer one's row.
 pub mod home;
-/// **The resolution rule under the image cache, and the reason it is on this side of the
-/// map while [`images`] is not.** Two columns of `cards`, the precedence between them and
-/// one predicate over a string — no filesystem, no protocol handler, nothing a browser
-/// lacks. `search.rs` puts a card's URL on a result row from here, and `images` composes
-/// the same three pieces into a cached fetch.
+/// **The resolution rule under the image cache.** Two columns of `cards`, the precedence
+/// between them and one predicate over a string — no filesystem and no protocol handler.
+/// `search.rs` puts a card's URL on a result row from here, and [`images`] composes the same
+/// three pieces into a cached fetch.
 pub mod image_uri;
+pub mod images;
+pub mod import;
 pub mod index;
 pub mod ingest;
 pub mod legalities;
-/// **The four view-state modules, three of them moved here on 2026-08-30.** `listview`,
-/// `nav`, `searchopen` and `zoom` each keep one setting in `app_meta` and answer it
-/// back - two commands apiece and no filesystem, no `tokio` and no `reqwest` between them.
-/// `listview`, `nav` and `zoom` were on the other side only because [`app_meta`] used to live
-/// inside the portable updater; PR 10a moved the store and this moves the modules that lean on it
-/// hardest. [`searchopen`] was born here, on 2026-09-07, when `deck.rs`'s one boolean row became a
-/// map three docked search columns share. **They are not the only ones of this shape in the
-/// crate** — [`deckpane`], [`decksort`] and [`markcolors`] are three more, filed where the page
-/// they belong to would be looked for rather than in this run; the run is a place in the
-/// alphabet, not the list of view-state modules.
+/// **The four view-state modules.** `listview`, `nav`, `searchopen` and `zoom` each keep one
+/// setting in `app_meta` and answer it back - two commands apiece. [`searchopen`] arrived on
+/// 2026-09-07, when `deck.rs`'s one boolean row became a map three docked search columns share.
+/// **They are not the only ones of this shape in the crate** — [`deckpane`], [`decksort`] and
+/// [`markcolors`] are three more, filed where the page they belong to would be looked for rather
+/// than in this run; the run is a place in the alphabet, not the list of view-state modules.
 pub mod listview;
 pub mod maintenance;
 /// **A theory deck's managed wishlist** (user schema v48, issue #512) — a wishlist folder each
@@ -144,130 +101,99 @@ pub mod managed_wishlist;
 /// There the frontend owns which walls exist and this crate owns the two words a wall may be
 /// drawn in; here the frontend owns which *marks* exist and this crate owns only the shape a
 /// colour may have. One `app_meta` row, an infallible read and a write whose refusals are a
-/// blank key and anything that is not `#rrggbb` — no filesystem, no clock and no network, so it
-/// is on the every-target half of this map with its four siblings.
+/// blank key and anything that is not `#rrggbb` — no filesystem, no clock and no network.
 pub mod markcolors;
-/// **The stored marketplace id is every target's; telling the mirror about a change is not.**
-/// `stored` and `store` are one settings row, and `deck_meta`'s readback quotes the first of
-/// them on every platform — so the module is here and `set_marketplace_now`, which calls
-/// `AppState.mirror` (a field wasm's `AppState` does not have), carries the gate instead.
+/// **The stored marketplace id.** `stored` and `store` are one settings row, and `deck_meta`'s
+/// readback quotes the first of them; `set_marketplace_now` also tells the mirror about a
+/// change.
 pub mod marketplace;
-/// **Half of it, and the half is the point — see `mirror/mod.rs` for the line.** The tree
-/// ([`mirror::layout`]), the names ([`mirror::paths`]), the four listings ([`mirror::read`])
-/// and the renderer ([`mirror::snapshot`]) touch no filesystem and no clock, so a browser can
-/// build the same files and hand them over as one zip. `run`, `settings` and `watch` — the
-/// folder, the two `app_meta` settings and the thread — carry the gate inside that module.
+pub mod marketplace_feed;
+/// **The plain-text mirror** — the decks, the collection and the wishlist written to a folder a
+/// reader can open without the app. Its module doc says which half touches the filesystem.
 pub mod mirror;
 pub mod nav;
 /// **The home page's New printings feed** — reprints of cards the reader's watched decks already
 /// hold, newest first. Two `SELECT`s over `deck_cards` and the corpus plus one `app_meta` row for
 /// the *seen* cursor; no table of its own, no filesystem and no network, and its only clock is
-/// SQLite's `date('now')` — so it answers in a browser exactly as it does on the desktop.
+/// SQLite's `date('now')`.
 pub mod new_printings;
+pub mod paths;
 /// **The home page's Price movers history** — user schema v45, a snapshot of today's price per
 /// owned printing and a read that compares against one. The day is SQLite's `date('now')`, never
-/// `SystemTime::now()`, and nothing in it reaches a filesystem or a network, so the snapshot runs
-/// at a browser launch and after a browser feed store exactly as it does on the desktop.
+/// `SystemTime::now()`, and nothing in it reaches a filesystem or a network.
 pub mod price_history;
 /// **[`home`]'s shape with a list instead of a document** — the cards this device opened most
 /// recently, one `app_meta` row of ids and times, joined with the corpus at read time. Its clock is
-/// SQLite's `unixepoch()` rather than `SystemTime::now()`, which panics here, so it is on the
-/// every-target half of this map with the rest of the view state.
+/// SQLite's `unixepoch()` rather than `SystemTime::now()`.
 pub mod recent_cards;
-/// **Three of Settings' four clears, moved here on 2026-08-31** — the deck domain's move a
-/// day earlier, arrived at from the same finding. `clear_collection`, `clear_wishlist` and
-/// `clear_decks` are `&Connection` in and a DTO out; what was holding the whole module on
-/// the other side was the block of `#[tauri::command]` wrappers at its foot, and the gate
-/// moved onto them.
-///
-/// **`clear_cache` is the one that did not come**, and it is the only thing in the file that
-/// does not compile here: its `cache` parameter is [`images`]' type, and on web the byte
-/// cache is Cache Storage rather than a directory. That is the same rewrite-not-a-port
-/// `images` itself is, and it carries its own gate at its own site.
+pub mod reconcile;
+/// **Settings' four clears.** `clear_collection`, `clear_wishlist` and `clear_decks` are
+/// `&Connection` in and a DTO out; `clear_cache` takes [`images`]' byte cache as well.
 pub mod reset;
+/// **The card scanner, and its stored preferences and review tray.** See `scanner`'s own doc for
+/// the request body and the asset load order. Its commands are registered in `desktop.rs`.
+pub mod scanner;
 pub mod schema;
+pub mod scryfall;
 pub mod search;
 pub mod searchopen;
 /// **How much of each set the reader owns**, for the home page's Set completion widget. One
-/// grouped `SELECT` over the collection, `cards` and `sets` — no table of its own and nothing a
-/// browser lacks.
+/// grouped `SELECT` over the collection, `cards` and `sets` — no table of its own.
 pub mod set_completion;
-/// **Ungated, and only the upload is not.** Rendering a collection folder as a share snapshot
-/// is SQLite in and JSON out — the shape [`search`] has always had — so it builds wherever the
-/// collection does; the publish that puts the bytes on the relay carries its own gate at its
-/// own site.
+/// **A collection folder, published read-only.** Rendering a folder as a share snapshot is
+/// SQLite in and JSON out; the publish puts the bytes on the relay.
 pub mod share;
 /// **Which shelves the reader folded, per page** — one `app_meta` row, [`searchopen`]'s shape one
 /// level deeper: an infallible read, a write that refuses an unknown page or a key that is not a
-/// folder id, and `None` taking an override back off. No filesystem, no clock and no network, so
-/// it is on the every-target half of this map and its two commands carry the gate.
+/// folder id, and `None` taking an override back off. No filesystem, no clock and no network.
 pub mod shelffolds;
 pub mod slug;
 pub mod sorting;
-/// **Compiles for wasm and can never succeed there**, which is cheaper than gating it and is
-/// the same trade [`combos::ingest_gz`] makes. Every path in here is `std::fs`, which builds
-/// for `wasm32-unknown-unknown` and answers `Unsupported` at run time; its one caller,
-/// [`schema::prepare_data_dir`], is reached only from `desktop::init_state`. A browser has no
-/// legacy `mtg.db` to convert — its OPFS pool was created by a build that already had two
-/// files — so there is nothing here for the web target to call.
+/// **A pre-27 single-file `mtg.db`, taken apart into `user.db` and `corpus.db`.** Its one
+/// caller, [`schema::prepare_data_dir`], is reached only from `desktop::init_state`.
 pub mod split;
+/// **Whether the background startup has landed, as the webview asks it.** Managed Tauri state
+/// and one `#[tauri::command]`. See the module doc for why startup left the UI thread.
+pub mod startup;
 /// **[`nav`]'s shape with a word instead of a bit, and [`listview`]'s split.** Which view the
 /// app opens on is one `app_meta` row; *which views exist* is TypeScript's, so this module
 /// stores a non-empty word and validates nothing else. A Rust-side allow-list would make every
 /// new view a Rust change and would strand a reader on a page a downgrade no longer draws.
 pub mod startview;
 /// **The home page's sticky notes** — the first user table that hangs off nothing, and five
-/// commands over it. SQLite in and a DTO out with no clock beyond `unixepoch()`, so the module
-/// is on this half and only its `#[tauri::command]` wrappers are gated: [`web::route`] calls
-/// the same functions the desktop wrappers do.
+/// commands over it. SQLite in and a DTO out with no clock beyond `unixepoch()`.
 pub mod sticky_notes;
 pub mod sync;
-/// **Every layer of the engine compiles for wasm, and that is the point rather than a bonus.**
-/// The conflict rules are one implementation on three targets (spec §2), so a layer that
-/// only built on the desktop would be a second copy of them waiting to be written — and
-/// `wire` seals every batch with [`sync_pair::crypto`], so a browser that could not open an
-/// envelope would be a browser that cannot sync. The one module inside it that is gated is
-/// `commands`, which is `#[tauri::command]`s and therefore not a layer of anything.
+/// **The sync engine.** `wire` seals every batch with [`sync_pair::crypto`]; `commands` is its
+/// `#[tauri::command]`s.
 pub mod sync_engine;
-/// **Three of its four layers compile for wasm; `pairing` does not and never will.**
-/// That module is `#[tauri::command]`s and a state machine over `AppState`, which is the
-/// desktop's IPC surface; `crypto`, `invite` and `identity` are pure functions and three
-/// SQLite tables, and [`sync_engine::wire`] seals every batch with the first of them. A
-/// browser that could not open an envelope would be a browser that cannot sync.
+/// **Pairing, in four layers.** `pairing` is `#[tauri::command]`s and a state machine over
+/// `AppState`; `crypto`, `invite` and `identity` are pure functions and three SQLite tables, and
+/// [`sync_engine::wire`] seals every batch with the first of them.
 pub mod sync_pair;
+pub mod tags;
 /// **The Rust half of an export, and the second implementation the golden fence exists for.**
-/// `src/features/transfer/export/` is the first; this one is here because a backup cannot ask
-/// the page to render a file — the mirror thread cannot, and neither can a Worker building a
-/// zip. Pure formatting: `&[Card]` and two enums in, a `String` out, with no filesystem, no
-/// clock and no `tauri::` anywhere in it, which is why it compiles for the browser as it
-/// stands. `src/features/transfer/__golden__/` is one corpus and one golden set that both
-/// suites assert byte equality against, and it goes on doing that unchanged.
+/// `src/features/transfer/export/` is the first; this one is here because the mirror thread
+/// cannot ask the page to render a file. Pure formatting: `&[Card]` and two enums in, a `String`
+/// out, with no filesystem, no clock and no `tauri::` anywhere in it.
+/// `src/features/transfer/__golden__/` is one corpus and one golden set that both suites assert
+/// byte equality against.
 pub mod transfer;
 /// **The home page's Coming soon read** — sets with printings announced for the next N days,
-/// read off `cards` rather than `sets` because the browser build never fills `sets`. One
-/// `SELECT` whose only clock is SQLite's `date('now')`, so it answers on every target.
+/// read off `cards`. One `SELECT` whose only clock is SQLite's `date('now')`.
 pub mod upcoming_sets;
-/// **The version, the release history and the clock they were read at — but never the swap.**
-/// This module was §6.3's second permanent exclusion and only half of it ever was one: the
-/// `.exe` replacement, the staging and the relaunch are Windows to the bone, while
-/// `UpdateStatus`, [`update::history`] and the pure version comparison underneath them are a
-/// `serde` struct and two `app_meta` reads. The half that swaps a file keeps the gate, item
-/// by item; the half that *reports* is here, so `update_status` and `update_history` can be
-/// answered on a target that has no executable to replace.
-///
-/// **What that buys is not a Download button, it is a decidable one.** `UpdatePanel` chooses
-/// what to draw from `installKind`, which is an answer from this module — so where the
-/// command did not answer at all, the panel read the silence as "not managed" and offered
-/// controls a browser cannot honour. [`update::InstallKind::Web`] is the answer that was
-/// missing.
+/// **The version, the release history and the portable swap.** `UpdateStatus` and
+/// [`update::history`] are a `serde` struct and two `app_meta` reads; the `.exe` replacement,
+/// the staging and the relaunch are the rest.
 pub mod update;
 /// **The home page's Collection value graph** — user schema v50's `price_snapshots.copies`
 /// multiplied back out into what the collection was worth each day, split four ways, with a live
 /// point for today. One read over the table [`price_history`] writes and the collection
-/// [`collection`] summarises; its only clock is SQLite's `date('now')`, so it answers in a browser
-/// exactly as it does on the desktop.
+/// [`collection`] summarises; its only clock is SQLite's `date('now')`.
 pub mod value_history;
-pub mod web;
+/// **What size a window opens at, and where** — the first one's, and every one
+/// [`window::open_new`] opens behind a relaunch or Ctrl+Shift+N.
+pub mod window;
 pub mod wishlist;
 pub mod wishlist_folders;
 /// **The wishlist's cheapest-printing sweep** — issue #352, and two commands rather than one
@@ -280,59 +206,5 @@ pub mod wishlist_folders;
 pub mod wishlist_optimize;
 pub mod zoom;
 
-// ── Desktop and Android ──────────────────────────────────────────────────────────
-/// **The camera-permission handler for the in-app QR scanner.** `#[cfg(windows)]` inside:
-/// WebView2 needs `webview2-com` COM interop and every other target this module compiles
-/// for (Linux, macOS, Android) makes `camera::install` a no-op — Android's grant is the
-/// manifest permission instead, and no other desktop platform this crate ships for is a
-/// webview2 target. It is here rather than in the "Every target" block above for `images`'
-/// and `scryfall`'s reason: `desktop::run` is its only caller, and that module does not build
-/// for wasm.
-#[cfg(not(target_family = "wasm"))]
-pub mod camera;
-/// **Which user tables a commit wrote, told to every open window.** Non-wasm because it rides the
-/// write connection's update hook and lives on `AppState` beside `mirror`; its emitter is
-/// `#[cfg(desktop)]` inside, because only the desktop opens a second window. See the module doc.
-#[cfg(not(target_family = "wasm"))]
-pub mod changes;
-#[cfg(not(target_family = "wasm"))]
-pub mod export;
-#[cfg(not(target_family = "wasm"))]
-pub mod images;
-pub mod import;
-pub mod marketplace_feed;
-#[cfg(not(target_family = "wasm"))]
-pub mod paths;
-#[cfg(not(target_family = "wasm"))]
-pub mod picked;
-#[cfg(not(target_family = "wasm"))]
-pub mod reconcile;
-/// **The card scanner, and its stored preferences and review tray.** Non-wasm for the crate's
-/// reason: the web build has no detector, and the page says so. See `scanner`'s own doc for the
-/// two body shapes and the asset load order. Its commands are registered in `desktop.rs`.
-#[cfg(not(target_family = "wasm"))]
-pub mod scanner;
-#[cfg(not(target_family = "wasm"))]
-pub mod scryfall;
-/// **Whether the background startup has landed, as the webview asks it.** Non-wasm because it is
-/// managed Tauri state and one `#[tauri::command]`; the browser's gate is `WebBoot`, which waits on
-/// its Worker instead. See the module doc for why startup left the UI thread.
-#[cfg(not(target_family = "wasm"))]
-pub mod startup;
-pub mod tags;
-#[cfg(not(target_family = "wasm"))]
-// Desktop only. `open_sized_to_monitor` calls `WebviewWindow::center()`, which tauri
-// declares `#[cfg(desktop)]` (tauri/src/window/mod.rs:1924) — so this module is not merely
-// useless on a phone, it does not compile there. Android's window is the activity and the
-// OS sizes it.
-//
-// **`desktop` already excludes wasm and is not a second spelling of the gate above.** It is
-// `tauri_build`'s cfg, emitted from `build.rs` — which returns before `tauri_build::build()`
-// runs for a wasm `TARGET`, so nothing sets it there.
-#[cfg(desktop)]
-pub mod window;
-
-#[cfg(not(target_family = "wasm"))]
 mod desktop;
-#[cfg(not(target_family = "wasm"))]
 pub use desktop::run;

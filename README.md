@@ -49,17 +49,8 @@ own `CLAUDE.md` (`src/`, `src-tauri/`, `src/features/decks/`, `src/features/tran
   ships; on Linux, the WebKitGTK stack CI installs: `libwebkit2gtk-4.1-dev`, `build-essential`,
   `libxdo-dev`, `libssl-dev`, `libayatana-appindicator3-dev` and `librsvg2-dev`.
 
-Only for the other targets:
-
-- **Web build** (`npm run build:wasm`) — `rustup target add wasm32-unknown-unknown`, clang 18 or
-  later (LLVM on Windows; MSVC cannot emit wasm), and `wasm-bindgen-cli` at the exact version
-  `src-tauri/Cargo.toml` pins (`=0.2.127` today) — the script refuses a mismatch. See
-  [web-target.md](docs/reference/web-target.md).
-- **Android** — the Android SDK and NDK plus the four Android Rust targets; see
-  [android-target.md](docs/reference/android-target.md).
-
-Rust targets and components are per toolchain, so after `rust-toolchain.toml` moves, the extra
-targets above (and `llvm-tools-preview` for Rust coverage) need adding again.
+Rust components are per toolchain, so after `rust-toolchain.toml` moves, `llvm-tools-preview`
+(for Rust coverage) needs adding again.
 
 ### Commands
 
@@ -69,8 +60,8 @@ targets above (and `llvm-tools-preview` for Rust coverage) need adding again.
 - `npm run storybook` — the component workbench, on a fake backend
 
 Pull requests are gated on `ci-ok`, which aggregates the frontend build, lint and sharded
-Vitest legs, the Storybook build, a Rust matrix across Windows and Linux, and the web and
-Android compile gates — each run only when the change can have broken it. Versions are derived
+Vitest legs, the Storybook build and a Rust matrix across Windows and Linux — each run only
+when the change can have broken it. Versions are derived
 from conventional commits by release-please — never edit a version by hand.
 
 ### Test coverage

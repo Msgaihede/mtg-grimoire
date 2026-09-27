@@ -14,12 +14,10 @@
 use crate::collection_folders::{FOLDER_NOT_YOURS, USER_KIND};
 use crate::deck_meta::FOLDER_GONE;
 use crate::schema::{COLLECTION_GRAIN, FINISHES};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The NA condition scale, in descending order, with the **not-set sentinel in front of it**.
@@ -388,7 +386,6 @@ fn folder_named(conn: &Connection, folder_id: Option<i64>, kinds: &[&str]) -> Re
 /// `removed` folder named here is a stale client or a bug.
 const READER_FOLDERS: &[&str] = &[USER_KIND];
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// …and what a **deck-driven write** may file into, which is the reader's drawers plus the group
 /// of the deck that same press answers for.
 ///
@@ -416,7 +413,6 @@ const READER_FOLDERS: &[&str] = &[USER_KIND];
 /// write naming it would be cardboard that arrives already discarded.
 pub(crate) const DECK_WRITE_FOLDERS: &[&str] = &[USER_KIND, DECK_KIND];
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// `COLLECTION_FOLDER_KINDS[1]` — the one folder that stands for a deck.
 ///
 /// By index rather than by spelling, [`crate::collection_alloc`]'s rule: the word here and the
@@ -516,8 +512,8 @@ fn card_name_of(conn: &Connection, card_id: &str) -> Result<Option<String>, Stri
 /// [`add_entry_filed`] deliberately is not.** The two callers that reach past this door are a
 /// bulk import — which records one row carrying its count — and `deck_quick_add::quick_add`,
 /// which writes a `deck_audit` row and by the feed's first rule must not write a second line
-/// about the same press. Both production callers of *this* function (`collection_add` and the
-/// web target's route) are the reader's own gesture, which is what makes this the right rung.
+/// about the same press. The production caller of *this* function, `collection_add`, is the
+/// reader's own gesture, which is what makes this the right rung.
 ///
 /// **The upsert and its feed row are one savepoint** ([`crate::db::in_savepoint`], issue #550).
 /// Neither command wrapper opens a transaction, so until then the upsert autocommitted on its
@@ -728,7 +724,6 @@ pub struct ImportCommitOutcome {
     pub removed: i64,
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// [`add_entry`] with one clause changed: the grain's quantity is **written**, not accumulated.
 /// A `set` import means "this file's number is the truth", not "add these copies to what is
 /// already there" — the collection's own asymmetry [`set_quantity`] already carries, reused here
@@ -848,9 +843,6 @@ fn set_entry(
 /// is "nothing was updated", which is exactly what happened. Clamped rather than restructured:
 /// `added` and `removed` each name statements that ran, and making `updated` the subtraction of
 /// two counts that can overlap is what costs the invariant, not the counters themselves.
-/// **`pub(crate)` since 2026-08-29**, with the one-PR `allow(dead_code)` gone: `web::route`
-/// is the second caller. The *file read* stayed behind — this takes already-parsed items, so
-/// it is an ordinary port where `import_read_file` is not.
 pub(crate) fn commit_import(
     conn: &Connection,
     items: &[CollectionImportItem],
@@ -1275,7 +1267,8 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
     // edit. Ten of the eleven terms are `coalesce(<patch>, <the source's own>)` — the grain
     // **after** the patch rather than before it, which is `reconcile::collision_target`'s rule
     // and its reason. `card_id` and `lang` are properties of the printing and no patch reaches
-    // them; `folder_id` is `collection_folders`' to move and no patch reaches that either, so
+    // them — [`set_entry_printing`] is the write that does, and it has a probe of its own for
+    // this reason's mirror image; `folder_id` is `collection_folders`' to move and no patch reaches that either, so
     // both are read straight off the source row. Spelled out rather than interpolated from
     // `schema::COLLECTION_GRAIN` for that constant's own reason: it is a list of expressions
     // over one row, and this compares the same list between two.
@@ -1390,6 +1383,234 @@ fn record_edit(
     .map_err(|e| e.to_string())
 }
 
+/// What [`set_entry_printing`] says when it was handed no printing at all.
+///
+/// A blank id is a caller sending an empty text input rather than a card, and it gets a sentence
+/// of its own rather than [`printing_of`]'s: "no card with the id `` is in the card database" is
+/// true, and names a lookup the reader never asked for.
+const NO_PRINTING: &str = "Changing a printing needs the printing to change it to.";
+
+/// What [`set_entry_printing`] says when the two ids are printings of *different cards*.
+///
+/// `deck::swap_printing`'s sentence one table over, and for its reason: which two were paired is
+/// the whole question, so it names both — the one the row holds as `cards` has it, and the one
+/// it was asked to become. The second half is re-spelled rather than borrowed because that one
+/// is about what a *deck* plays, and this is about what a pile of cardboard *is*.
+fn not_the_same_card(from: &str, to: &str) -> String {
+    format!(
+        "`{to}` is not another printing of `{from}`. Changing a printing changes which \
+         printing these copies are, never which card they are."
+    )
+}
+
+/// Change which printing a collection entry is — the card pane's "Use this printing", and
+/// [issue #564](https://github.com/Msgaihede/mtg-grimoire/issues/564).
+///
+/// **The one write that reaches `collection_entries.card_id` after the row exists.** Until this,
+/// a reader who had filed a Bolt under the wrong set could correct its finish, its condition and
+/// every field of the editor, and not the one fact the row is *about*: [`update_entry`]'s
+/// [`EntryPatch`] names neither `card_id` nor `lang`, deliberately, because they are properties
+/// of the printing and a patch that could set them could disagree with the card it named. The
+/// way out was to delete the row and add it again, which throws away what the reader paid, the
+/// day they bought it and their note. This is `wishlist::set_wish_printing` one table over, and
+/// its shape is that function's, clause for clause, where the two tables agree.
+///
+/// **All four printing columns move together, and none of them is the caller's.** `card_id` is
+/// what was asked for; `set_code`, `collector_number` and `lang` are read off `cards` by
+/// [`printing_of`] in the same transaction — [`EntryInput`]'s rule, for its reason: a caller that
+/// could supply them could describe a printing other than the one it named. An id `cards` does
+/// not have is refused in [`add_entry`]'s words, because it is [`printing_of`]'s sentence and the
+/// same fact; a blank one is [`NO_PRINTING`]; a row id nothing answers to is [`GONE`], the
+/// module's word for an adjustment that has nothing to adjust.
+///
+/// **The printing the row already holds is a no-op**, answered with the row's own
+/// [`EntryChange`] and **no feed row**: nothing changed, and a line reading *Edited Lightning
+/// Bolt · printing* over a press that picked the printing already there would be the feed
+/// describing a change that did not happen. It is checked before the printing is looked up, so
+/// a row whose printing has left `cards` can still be "changed" to itself without a refusal.
+///
+/// # Another printing of the same card, and never another card
+///
+/// The two ids' `oracle_id`s are compared and a mismatch is refused ([`not_the_same_card`]),
+/// which is `deck::swap_printing`'s fence and **not** the wishlist's. `set_wish_printing`
+/// deliberately does not police it, and says why: a wish is something the reader does not have,
+/// and the worst a mispaired call does there is describe it as the wrong cardboard. Here the row
+/// *is* cardboard — four copies repointed from Lightning Bolt to Black Lotus would be the
+/// collection claiming four Lotuses at the same count, priced at Lotus prices, silently. The
+/// pane offers only the card's own printings, but a fence in the UI is exactly what could be
+/// wrong.
+///
+/// Both sides have to resolve for there to be a comparison, and that is swap_printing's rule
+/// verbatim ([`crate::deck::oracle_of`] is the one read of it): **a row whose printing has left
+/// `cards` is let through**, because its oracle id is unknowable and refusing on "cannot tell"
+/// would fence the copies onto a dead printing — the one row this write most needs to be able to
+/// move, since repointing it *is* the cure `needs_review` asks for.
+///
+/// # The finish is not re-checked against the new printing
+///
+/// **[`add_entry`] does not police a finish against `cards.finishes`, so neither does this.** It
+/// asks [`valid_finish`] whether the word is one of [`FINISHES`] and nothing more, and a foil row
+/// of a printing Scryfall lists as nonfoil-only is a row the collection can already hold today —
+/// by an add, an import or a reconcile. A second, stricter rule here would make a repoint refuse
+/// a row the table is perfectly happy with, and would be the first place in the module to have
+/// an opinion about it. The finish rides across unchanged; [`update_entry`] is where it changes.
+///
+/// # A repoint onto a grain the collection already holds folds into it
+///
+/// `card_id` and `lang` are the first and fourth terms of [`COLLECTION_GRAIN`], so a reader can
+/// ask a row to become one they already have — the LEA Bolt repointed to M10 while an M10 row at
+/// the same finish, condition and folder is standing there. That is [`update_entry`]'s collision
+/// read from its last side, and it is answered the same way, by [`fold_entry`]: the quantities
+/// sum into the survivor, the source is deleted, and **the answer names the survivor's id and
+/// quantity**, with `removed: false` because the copies are emphatically still in the
+/// collection. The target is looked up by **every** term — the new printing's `card_id` and
+/// `lang`, and the source's own other nine, **the folder included** — so an M10 row in another
+/// binder is not the row in the way and is left alone: filing is `collection_folders`' to move,
+/// and a fold that matched across folders is the exact bug the eleventh term exists to make
+/// impossible.
+///
+/// # `needs_review` is cleared, but only on the path that keeps the row
+///
+/// Choosing a printing **is** the review, as `set_wish_printing` has it: the only sentences that
+/// column carries are the reconciler's, and both are about an id — "Scryfall merged this
+/// printing into …", "Scryfall removed this printing …" — that the row no longer holds once this
+/// write lands. On the folding path the source goes and its flag with it, and the survivor's is
+/// left alone for `reconcile`'s fold rule: that sentence is about the row that is staying, and
+/// this press was not about it.
+///
+/// # The rest
+///
+/// **One `edit` row in [`crate::activity`] on both success paths**, `{"fields":["printing"]}` —
+/// the word `set_wish_printing` already writes, so `activityText.ts` prints *Edited Lightning Bolt
+/// · printing* for both tables with no new vocabulary. The facts are read **before** the write,
+/// [`update_entry`]'s rule: on the folding path the row they describe is about to stop existing,
+/// and the name is the old printing's, which is the card the reader was looking at when they
+/// pressed. `delta` is 0 — which printing a pile is, is not a count.
+///
+/// **Captured for sync by the ordinary trigger** and needing nothing of its own:
+/// `sync_engine::capture`'s `collection_entries` spec lists all four printing columns and
+/// `needs_review` as fields, so the in-place path is one `put`, and the fold is a `put` on the
+/// survivor and a `delete` of the source — the same two ops [`update_entry`]'s fold makes.
+///
+/// One transaction, for the reason every fold in this crate is one: mid-merge the copies are in
+/// both rows or in neither.
+pub fn set_entry_printing(
+    conn: &Connection,
+    id: i64,
+    card_id: &str,
+) -> Result<EntryChange, String> {
+    let card_id = card_id.trim();
+    if card_id.is_empty() {
+        return Err(NO_PRINTING.to_owned());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // Before anything is decided: the repoint can fold this row into another and take it with
+    // it, and a `None` here is the same [`GONE`] the statements below would answer later.
+    let Some(facts) = entry_facts(&tx, id)? else {
+        return Err(GONE.to_owned());
+    };
+    // `entry_facts` reads `card_id` off the entry itself, so it is never `None` for a row that
+    // exists — the `Option` is the feed's, which shares the struct with rows that have no card.
+    if facts.card_id.as_deref() == Some(card_id) {
+        return Ok(EntryChange {
+            id,
+            quantity: facts.quantity,
+            removed: false,
+        });
+    }
+    let (set_code, collector_number, lang) = printing_of(&tx, card_id)?;
+
+    if let Some(from) = facts.card_id.as_deref() {
+        if let (Some(from_oracle), Some(to_oracle)) = (
+            crate::deck::oracle_of(&tx, from)?,
+            crate::deck::oracle_of(&tx, card_id)?,
+        ) {
+            if from_oracle != to_oracle {
+                // Both resolved, so both are in `cards` and both have a name to give.
+                let to_name = card_name_of(&tx, card_id)?.unwrap_or_else(|| card_id.to_owned());
+                let from_name = facts.card_name.clone().unwrap_or_else(|| from.to_owned());
+                return Err(not_the_same_card(&from_name, &to_name));
+            }
+        }
+    }
+
+    // The grain the repoint is *about to land on*: the new printing's two terms, and the
+    // source's own nine. Spelled out rather than interpolated from [`COLLECTION_GRAIN`] for
+    // [`update_entry`]'s reason — that constant is a list of expressions over one row, and this
+    // compares the same list between two. At most one row can match, because these eleven terms
+    // *are* `idx_collection_grain`.
+    let target: Option<i64> = tx
+        .query_row(
+            "SELECT t.id FROM collection_entries t, collection_entries s
+              WHERE s.id = ?1 AND t.id <> s.id
+                AND t.card_id = ?2
+                AND t.lang = ?3
+                AND t.finish = s.finish
+                AND t.condition = s.condition
+                AND t.altered = s.altered
+                AND t.signed = s.signed
+                AND t.proxy = s.proxy
+                AND t.misprint = s.misprint
+                AND coalesce(t.serial_number,'') = coalesce(s.serial_number,'')
+                AND coalesce(t.grading,'') = coalesce(s.grading,'')
+                AND coalesce(t.folder_id, 0) = coalesce(s.folder_id, 0)",
+            params![id, card_id, lang],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    let change = match target {
+        Some(target) => {
+            fold_entry(&tx, target, id).map_err(|e| e.to_string())?;
+            let quantity: i64 = tx
+                .query_row(
+                    "SELECT quantity FROM collection_entries WHERE id = ?1",
+                    params![target],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            EntryChange {
+                id: target,
+                quantity,
+                removed: false,
+            }
+        }
+        None => {
+            // A plain `UPDATE` and not [`PATCH_SQL`]'s `OR IGNORE`: the one constraint this
+            // statement could trip is the grain index, and the read above has just said no row
+            // holds that grain — so a failure here is a real error and should say so.
+            tx.execute(
+                "UPDATE collection_entries SET
+                    card_id = ?2, set_code = ?3, collector_number = ?4, lang = ?5,
+                    needs_review = NULL, updated_at = unixepoch()
+                  WHERE id = ?1",
+                params![id, card_id, set_code, collector_number, lang],
+            )
+            .map_err(|e| e.to_string())?;
+            EntryChange {
+                id,
+                quantity: facts.quantity,
+                removed: false,
+            }
+        }
+    };
+
+    // `["printing"]`, the payload table's own word and `set_wish_printing`'s — see the doc.
+    crate::activity::record(
+        &tx,
+        crate::activity::COLLECTION,
+        crate::activity::EDIT,
+        facts.card_id.as_deref(),
+        facts.card_name.as_deref(),
+        &serde_json::json!({ "fields": ["printing"] }),
+        0,
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(change)
+}
+
 /// Delete the row outright — the **unconditional** delete, where [`set_quantity`]'s zero and
 /// [`fold_entry`] are the two conditional ones.
 ///
@@ -1444,12 +1665,14 @@ pub(crate) fn delete_entry(conn: &Connection, id: i64) -> Result<EntryChange, St
 /// Fold `source` into `target` and delete it — the crate's answer to "one collection row
 /// becomes another", with no opinion at all about *why* the two are one row.
 ///
-/// Three callers ask that question three ways and share this answer:
+/// Four callers ask that question four ways and share this answer:
 /// [`update_entry`], where the reader edited a row onto a grain another row holds;
-/// `reconcile::fold_into_existing`, where an upstream id merge repointed one onto another; and
-/// `collection_folders::merge_entry`, where a card was filed — by a drag, or by the re-filing a
-/// folder delete does one row at a time — into a folder that already holds its printing. It
-/// lived in the reconciler until schema v24 made the third and the first possible in one release.
+/// [`set_entry_printing`], where they repointed one onto a printing another row already holds
+/// at that grain; `reconcile::fold_into_existing`, where an upstream id merge repointed one onto
+/// another; and `collection_folders::merge_entry`, where a card was filed — by a drag, or by the
+/// re-filing a folder delete does one row at a time — into a folder that already holds its
+/// printing. It lived in the reconciler until schema v24 made the fourth and the first possible
+/// in one release; the second arrived with issue #564.
 ///
 /// **This is the only copy in the crate, and that is the point.** The reconciler and the folder
 /// tree each carried their own spelling of these statements while v24 was being built. Two
@@ -1493,11 +1716,11 @@ pub(crate) fn delete_entry(conn: &Connection, id: i64) -> Result<EntryChange, St
 /// Every statement is inside the caller's transaction, so a pass that fails takes the whole
 /// fold back with it.
 ///
-/// **It records no [`crate::activity`] row**, and none of its three callers would want it to: a
+/// **It records no [`crate::activity`] row**, and none of its four callers would want it to: a
 /// fold is a *consequence* of the write that made two rows one, and each of those records the
-/// press that caused it — [`update_entry`] an `edit`, `collection_folders::merge_entry` the
-/// `move` or the folder delete above it, and `reconcile::fold_into_existing` an upstream id
-/// merge nobody pressed at all.
+/// press that caused it — [`update_entry`] and [`set_entry_printing`] an `edit`,
+/// `collection_folders::merge_entry` the `move` or the folder delete above it, and
+/// `reconcile::fold_into_existing` an upstream id merge nobody pressed at all.
 pub(crate) fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite::Result<()> {
     tx.execute(
         "UPDATE collection_entries AS t SET
@@ -1520,7 +1743,6 @@ pub(crate) fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite:
     Ok(())
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_add(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1534,7 +1756,6 @@ pub async fn collection_add(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_set_quantity(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1549,7 +1770,6 @@ pub async fn collection_set_quantity(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1564,7 +1784,27 @@ pub async fn collection_update(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
+/// "Use this printing" on a collection entry — see [`set_entry_printing`] for the fold, which is
+/// why this answers an [`EntryChange`] whose `id` is not always the `id` it was given.
+///
+/// **`with_write_owned` and not plain `sync::with_write`**, which is where it parts from
+/// `wishlist_set_printing`: the facet index's `owned` dimension is keyed by printing, so moving
+/// copies from one printing to another changes what it counts, where a wish changes nothing the
+/// index knows about. It is `collection_update`'s wrapper for `collection_update`'s reason.
+#[tauri::command]
+pub async fn collection_set_printing(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: i64,
+    card_id: String,
+) -> Result<EntryChange, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::collection_source::with_write_owned(&state, |c| set_entry_printing(c, id, &card_id))
+    })
+    .await
+    .map_err(|e| format!("the collection could not be written: {e}"))?
+}
+
 #[tauri::command]
 pub async fn collection_remove(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1586,7 +1826,6 @@ pub async fn collection_remove(
 /// import dialog sends the group of the deck it just wrote a list into, so the list and the
 /// copies backing it agree the moment the dialog closes — see [`DECK_WRITE_FOLDERS`], which is the
 /// only place in the crate that fence is wider than the reader's own drawers.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1741,9 +1980,9 @@ pub struct CollectionQuery {
     ///
     /// **Who asks: the deck builder's Collection Search tab, and nothing else** — the surface
     /// whose question is "what can I build with today", which is the one thing a set-aside
-    /// drawer is not part of. Who does not: the mirror, the export sweep, the web route's
-    /// passthrough, and `a_query_that_never_asks_still_sees_a_locked_folders_copies` is the
-    /// fence around that silence.
+    /// drawer is not part of. Who does not: the mirror and the export sweep, and
+    /// `a_query_that_never_asks_still_sees_a_locked_folders_copies` is the fence around that
+    /// silence.
     ///
     /// **The collection page was on that first list until 2026-09-09 and is on the second now**
     /// ([#436](https://github.com/Msgaihede/mtg-grimoire/issues/436)). Its list and its header
@@ -1896,21 +2135,13 @@ pub struct CollectionRow {
     /// whose name I could not find" — `collection_entries.folder_id` is a real foreign key, so
     /// the id and the name arrive together or not at all.
     pub folder_name: Option<String>,
-    /// The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser
-    /// can reach**, and `None` when this printing has none worth fetching.
+    /// The front face's picture on `cards.scryfall.io`, by variant, and `None` when this
+    /// printing has none worth fetching.
     ///
     /// [`crate::search::CardSummary::image_uris`] carries the argument in full and it is not
     /// repeated here. One variant ([`crate::image_uri::LIST_VARIANT`]), face 0 only, the
     /// face-first precedence, and the `soon.jpg` fence — every one of them applied by
     /// [`crate::image_uri::front_face_map`] and none of them respelled on this row.
-    ///
-    /// **It is here because `collection_list` is routed on web** (`web/route.rs`'s `COMMANDS`)
-    /// and `mtgimg://` is a Tauri custom protocol wasm cannot register with a browser. Without
-    /// it the collection wall draws named, artless frames in a browser while the search wall
-    /// beside it draws pictures — which is exactly what shipped, and what the device pass of
-    /// 2026-08-30 could not see because the collection was empty. On the desktop it is
-    /// *ignored*: `cardArtSrc` takes the local cache, whose bytes are already re-encoded to
-    /// the variant's exact size.
     ///
     /// `None` for an orphan, whose printing has left `cards` — the same answer, in the same
     /// shape, as every other card-derived field on this row.
@@ -2539,7 +2770,6 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
 
 /// The collection list. **Read-only** connection, blocking pool — as every read in this
 /// app is, so a list never queues behind a sync.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2553,7 +2783,6 @@ pub async fn collection_list(
     .map_err(|e| format!("the collection could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_summary(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2728,7 +2957,6 @@ pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfC
 
 /// The Shelves wall's per-shelf figures. **Read-only** connection, blocking pool, like
 /// [`collection_list`] beside it.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_shelf_counts(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2898,7 +3126,6 @@ pub fn breakdown(
 /// [`crate::collection_folders::collection_folder_summary`]'s spelling for the same argument:
 /// an id this build does not know lands on TCGplayer through
 /// [`crate::sorting::Marketplace::from_opt`] rather than failing the whole request.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_breakdown(
     state: tauri::State<'_, Arc<AppState>>,
@@ -3840,9 +4067,8 @@ mod tests {
             "the backup's own header counts them too"
         );
 
-        // The wire's spelling and its default, which is where this is really decided: the web
-        // route's passthrough hands `scope` whatever JSON arrived, so an omitted field has to
-        // parse to `false` rather than to a narrowing or an error.
+        // The wire's spelling and its default, which is where this is really decided: an
+        // omitted field has to parse to `false` rather than to a narrowing or an error.
         let bare: CollectionQuery = serde_json::from_str("{}").unwrap();
         assert!(
             !bare.exclude_locked,
@@ -6719,11 +6945,9 @@ mod tests {
     }
 
     /// **A collection row carries the front face's image URL, at the index the appended pair
-    /// put it at** — the field the web build's wall has no other way to get a picture from.
+    /// put it at.**
     ///
-    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register one with a browser, so
-    /// in a browser a tile draws this or draws the no-art frame. Four printings, because the
-    /// four ways this can be wrong fail apart: a missing
+    /// Four printings, because the four ways this can be wrong fail apart: a missing
     /// [`crate::image_uri::is_fetchable`] lands Scryfall's error page under `display`; a
     /// printing with neither image column must answer `None` and not an empty map; a reversed
     /// precedence draws a `meld` card's melded picture where its front belongs; and the pair
@@ -7712,6 +7936,240 @@ mod tests {
             0,
             "which is the same rollback, seen from the other table"
         );
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * `set_entry_printing` — issue #564, `set_wish_printing`'s tests one table over.
+     * ---------------------------------------------------------------------------------- */
+
+    /// The four printing columns of one row, as the table holds them.
+    fn printing_columns(conn: &Connection, id: i64) -> (String, String, String, String) {
+        conn.query_row(
+            "SELECT card_id, set_code, collector_number, lang FROM collection_entries
+              WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    }
+
+    /// **All four move together, and three of them come from `cards`.** `bolt-lea` to `bolt-jp`
+    /// changes every one — set, number *and* language — so a write that refreshed only the id
+    /// would leave a row printed as an English Alpha Bolt over a Japanese 4ED picture. And the
+    /// reconciler's flag goes, because choosing a printing is the review it was asking for.
+    #[test]
+    fn set_entry_printing_repoints_a_row_and_refreshes_its_set_number_and_language() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        conn.execute(
+            "UPDATE collection_entries SET needs_review = 'Scryfall merged this printing'
+              WHERE id = ?1",
+            params![added.id],
+        )
+        .unwrap();
+
+        let change = set_entry_printing(&conn, added.id, "bolt-jp").unwrap();
+
+        assert_eq!(
+            change.id, added.id,
+            "nothing folded, so the row keeps its id"
+        );
+        assert_eq!(change.quantity, 2);
+        assert!(!change.removed);
+        assert_eq!(
+            printing_columns(&conn, added.id),
+            ("bolt-jp".into(), "4ed".into(), "209".into(), "ja".into())
+        );
+        let review: Option<String> = conn
+            .query_row(
+                "SELECT needs_review FROM collection_entries WHERE id = ?1",
+                params![added.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(review, None, "choosing a printing is the review");
+    }
+
+    #[test]
+    fn set_entry_printing_refuses_a_card_the_database_does_not_have() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+
+        let err = set_entry_printing(&conn, added.id, "bolt-unhinged").unwrap_err();
+
+        assert_eq!(
+            err,
+            printing_of(&conn, "bolt-unhinged").unwrap_err(),
+            "the same sentence `add_entry` gives the same fact"
+        );
+        assert_eq!(printing_columns(&conn, added.id).0, "bolt-lea");
+    }
+
+    /// A blank id is an empty text input rather than a printing, and a stale id is [`GONE`] —
+    /// the module's word for an adjustment with nothing to adjust.
+    #[test]
+    fn set_entry_printing_refuses_a_blank_id_and_answers_gone_for_a_missing_row() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+
+        assert_eq!(
+            set_entry_printing(&conn, added.id, "  ").unwrap_err(),
+            NO_PRINTING
+        );
+        assert_eq!(
+            set_entry_printing(&conn, 4242, "bolt-jp").unwrap_err(),
+            GONE
+        );
+    }
+
+    /// **The fence `set_wish_printing` does not have and `deck::swap_printing` does**: a row is
+    /// cardboard, and repointing it to another oracle card would claim copies of a card nobody
+    /// owns. Refused before anything is written — the row, and the feed, are as they were.
+    #[test]
+    fn set_entry_printing_refuses_a_printing_of_a_different_card() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 4)).unwrap();
+        let before = feed(&conn).len();
+
+        let err = set_entry_printing(&conn, added.id, "card-1").unwrap_err();
+
+        assert_eq!(err, not_the_same_card("Lightning Bolt", "Test Card"));
+        assert_eq!(printing_columns(&conn, added.id).0, "bolt-lea");
+        assert_eq!(feed(&conn).len(), before, "a refusal records nothing");
+    }
+
+    /// **A row whose printing has left `cards` can be moved**, and has to be: its oracle id is
+    /// unknowable, and refusing on "cannot tell" would fence the copies onto a dead printing —
+    /// the one row this write is the cure for.
+    #[test]
+    fn set_entry_printing_moves_a_row_whose_printing_has_left_the_card_database() {
+        let conn = seeded();
+        let orphan = filed_in(&conn, "bolt-gone", None, 3);
+
+        let change = set_entry_printing(&conn, orphan, "bolt-jp").unwrap();
+
+        assert_eq!(change.id, orphan);
+        assert_eq!(
+            printing_columns(&conn, orphan),
+            ("bolt-jp".into(), "4ed".into(), "209".into(), "ja".into())
+        );
+    }
+
+    /// The printing the row already holds changes nothing, and a feed line saying it did would
+    /// describe a press that did not happen.
+    #[test]
+    fn set_entry_printing_to_the_printing_it_already_holds_is_a_no_op() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        let before = feed(&conn).len();
+
+        let change = set_entry_printing(&conn, added.id, "bolt-lea").unwrap();
+
+        assert_eq!(change.id, added.id);
+        assert_eq!(change.quantity, 2);
+        assert!(!change.removed);
+        assert_eq!(feed(&conn).len(), before, "no edit row for no edit");
+    }
+
+    /// **A repoint onto a taken grain folds, and the answer names the survivor.** Two Alpha
+    /// Bolts repointed onto three 4ED Bolts at the same finish, condition and folder are one row
+    /// of five — `update_entry`'s collision, reached through the printing rather than a patch.
+    #[test]
+    fn set_entry_printing_folds_onto_a_row_the_grain_already_holds() {
+        let conn = seeded();
+        let lea = add_entry(
+            &conn,
+            &EntryInput {
+                notes: Some("from the binder at the shop".into()),
+                ..input("bolt-lea", "nonfoil", 2)
+            },
+        )
+        .unwrap();
+        let jp = add_entry(&conn, &input("bolt-jp", "nonfoil", 3)).unwrap();
+
+        let change = set_entry_printing(&conn, lea.id, "bolt-jp").unwrap();
+
+        assert_eq!(change.id, jp.id, "the answer names the surviving row");
+        assert_eq!(change.quantity, 5, "the two quantities summed");
+        assert!(!change.removed, "the copies are still in the collection");
+        assert_eq!(entry_count(&conn), 1);
+        let notes: Option<String> = conn
+            .query_row(
+                "SELECT notes FROM collection_entries WHERE id = ?1",
+                params![jp.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            notes.as_deref(),
+            Some("from the binder at the shop"),
+            "`fold_entry`'s rule: the survivor had no note, so it takes the folded row's"
+        );
+    }
+
+    /// **The folder is the grain's eleventh term, and the probe asks it.** A 4ED Bolt filed in a
+    /// binder is not the row a root Alpha Bolt collides with — a fold that matched across
+    /// folders would move copies out of a drawer the reader put them in on purpose.
+    #[test]
+    fn set_entry_printing_does_not_fold_across_folders() {
+        let conn = seeded();
+        let binder = crate::collection_folders::create_folder(&conn, None, "Binder A")
+            .unwrap()
+            .id;
+        let filed = add_entry(
+            &conn,
+            &EntryInput {
+                folder_id: Some(binder),
+                ..input("bolt-jp", "nonfoil", 3)
+            },
+        )
+        .unwrap();
+        let root = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+
+        let change = set_entry_printing(&conn, root.id, "bolt-jp").unwrap();
+
+        assert_eq!(change.id, root.id, "repointed in place, not folded");
+        assert_eq!(change.quantity, 2);
+        assert_eq!(entry_count(&conn), 2);
+        let held: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = ?1",
+                params![filed.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(held, 3, "the binder's row is left exactly as it was");
+    }
+
+    /// One `edit` row carrying the wishlist's own field word, named for the printing the reader
+    /// was looking at when they pressed — and one on the folding path too, because the fold is
+    /// the app's answer to the press and not a second thing that happened.
+    #[test]
+    fn set_entry_printing_records_one_printing_edit_on_both_paths() {
+        let conn = seeded();
+        let lea = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        set_entry_printing(&conn, lea.id, "bolt-jp").unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].scope, crate::activity::COLLECTION);
+        assert_eq!(rows[0].kind, crate::activity::EDIT);
+        assert_eq!(rows[0].delta, 0, "which printing a pile is, is not a count");
+        assert_eq!(
+            rows[0].card_id.as_deref(),
+            Some("bolt-lea"),
+            "read before the write"
+        );
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(payload(&rows[0])["fields"], serde_json::json!(["printing"]));
+
+        // The fold: another Alpha Bolt row, repointed onto the 4ED row the first one became.
+        let again = add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        set_entry_printing(&conn, again.id, "bolt-jp").unwrap();
+        let edits = feed(&conn)
+            .into_iter()
+            .filter(|r| r.kind == crate::activity::EDIT)
+            .count();
+        assert_eq!(edits, 2, "one line per press, the folding one included");
     }
 
     /* ---------------------------------------------------------------------------------- *

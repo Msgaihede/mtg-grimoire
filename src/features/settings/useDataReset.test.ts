@@ -15,20 +15,6 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { collectionClear, wishlistClear, decksClear, cacheClear, combosClear, combosRefresh },
 }));
 
-/**
- * The metered-link guard, standing in for the provider.
- *
- * Its default is the desktop one — `AskFirst`'s own `RUN_IT`, synchronous and a pass-through —
- * so every other test here reads as though the wrapper were not there. Mocked rather than driven
- * through `FeedDownloadProvider` because the real one branches on `isWebTarget()` and probes a
- * size over `fetch`, and what this hook owes the guard is one call with one feed id.
- */
-const askFirst = vi.hoisted(() => vi.fn((_feed: string, run: () => void) => run()));
-vi.mock("@/pwa/FeedDownloadProvider", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/pwa/FeedDownloadProvider")>()),
-  useFeedDownload: () => askFirst,
-}));
-
 import { useDangerZone, useLocalCache } from "./useDataReset";
 
 /** What a settled combo table answers back. Only the two figures the sentence reads matter. */
@@ -79,9 +65,6 @@ beforeEach(() => {
   cacheClear.mockReset().mockResolvedValue({ files: 20, bytes: 4_000, rows: 20, failed: 0 });
   combosClear.mockReset().mockResolvedValue({ ...COMBOS, combos: 0, cards: 0, stale: true });
   combosRefresh.mockReset().mockResolvedValue(COMBOS);
-  // `mockClear` and not `mockReset`: the default pass-through implementation is what every test
-  // but one relies on, and a reset would take it away.
-  askFirst.mockClear();
 });
 
 describe("useDangerZone", () => {
@@ -250,24 +233,6 @@ describe("useLocalCache", () => {
     // `force: true` and not the default: the schedule is weekly, so an honoured throttle would
     // leave the table this press has just emptied empty until the next launch that is due.
     expect(combosRefresh).toHaveBeenCalledWith(true);
-  });
-
-  /**
-   * **The guard wraps the press, not the mutation.** 27.5 MB gzipped: on the web target that is
-   * a question before it is a download, and a reader who answers Not now must be left with a
-   * button that has done nothing and a table still full — so nothing is cleared and `pending`
-   * never rises. On desktop the same call is a synchronous pass-through and costs a frame of
-   * nothing.
-   */
-  it("puts the metered-link question before the 27.5 MB", () => {
-    askFirst.mockImplementationOnce(() => {});
-    const { result } = renderHook(() => useLocalCache(), { wrapper });
-
-    act(() => result.current.combos.run());
-
-    expect(askFirst).toHaveBeenCalledWith("combos", expect.any(Function));
-    expect(combosClear).not.toHaveBeenCalled();
-    expect(result.current.combos.pending).toBe(false);
   });
 
   /**

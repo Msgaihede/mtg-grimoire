@@ -23,7 +23,6 @@ use crate::search::SearchRequest;
 use crate::sync::{lock_db_read, AppState};
 use serde::Serialize;
 use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 #[derive(Debug, Default, Serialize)]
@@ -961,6 +960,26 @@ fn tag_narrowing(
     Ok(narrowed)
 }
 
+/// The docs one FTS `MATCH` string reaches, as a bitset.
+///
+/// **`ix.capacity`, never a row count.** It is already word-rounded, and it is the figure every
+/// bitset in the index was built against — `BitSet::and` takes the shorter operand, so a text
+/// set built to any other size would silently truncate every base it narrows and send back
+/// counts that are low. Low counts grey out options that would have worked, which hides cards
+/// and which nobody reports.
+fn fts_docs(conn: &rusqlite::Connection, capacity: usize, query: &str) -> Result<BitSet, String> {
+    let mut stmt = conn
+        .prepare("SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?")
+        .map_err(|e| e.to_string())?;
+    let mut rows = stmt.query([query]).map_err(|e| e.to_string())?;
+    let mut b = BitSet::new(capacity);
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let doc: i64 = row.get(0).map_err(|e| e.to_string())?;
+        b.set(doc as u32);
+    }
+    Ok(b)
+}
+
 /// Facet counts for one search, over the published index. Pure over the state so it is
 /// testable without a Tauri app; [`facet_cards`] is the only caller in production.
 ///
@@ -993,15 +1012,15 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
     // instead of everything, and grey every option over a page that is full. It stays `None`
     // all the way into [`compute`], and a tag term beside it does not fill the hole.
     //
-    // ⚠️ **The negatives are DISCARDED and the counts therefore read high under a `-t:` or a
-    // `-o:` term — or a `-bolt`, since a name term is always negated and rides this same
-    // list.** This is the module note's rule applied deliberately rather than an
-    // oversight: excluding them would need a bitset complement, [`BitSet`] has `and` and no
-    // `and_not`, and growing the index is out of scope (spec §11). A count that is too high
-    // leaves an option live that returns fewer cards than it advertised — one press wasted —
-    // where a count that is too low greys out an option that would have worked, which hides
-    // cards and which nobody reports. Same direction as every other fail-open here.
-    let (query, _negated_text) = crate::filters::fts_match(
+    // **The negatives are subtracted, since 2026-09-27 (issue #552).** A `-t:` or a `-o:` term
+    // — or a `-bolt`, since a name term is always negated and rides this same list — is one
+    // `NOT IN` subquery per term in `run_search`, and here it is the same `MATCH` resolved to
+    // rowids and taken away with [`and_not`]. Until then they were discarded on the stated
+    // ground that `BitSet` had no complement; [`and_not`] was in this file all along, so the
+    // counts read high under every negated text term for no reason the index imposed. A
+    // negative with no positive beside it subtracts from `ix.all`, [`tag_narrowing`]'s rule
+    // for an exclude with no include, and for its reason.
+    let (query, negated_text) = crate::filters::fts_match(
         crate::filters::nonblank(&req.text),
         req.predicates.as_deref().unwrap_or(&[]),
     );
@@ -1022,7 +1041,7 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
     // path the unfiltered browse takes, and it is the commonest request there is. Both halves
     // are decided *before* the lock rather than inside it, so nothing here can hold `db_read`
     // for the length of a request that had nothing to ask it.
-    if query.is_none() && probes.is_empty() {
+    if query.is_none() && negated_text.is_empty() && probes.is_empty() {
         return Ok(compute(&ix, req, None));
     }
 
@@ -1031,26 +1050,14 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
     // **The one thing that still needs the database**: neither FTS nor the tag closures has a
     // precomputed bitset, so each is resolved to rowids and turned into one. Text is 25 ms at
     // 100 129 matches, which is the floor for any design (measured 2026-08-11).
-    let text = match query {
+    let mut text = match query {
         None => None,
-        Some(query) => {
-            let mut stmt = conn
-                .prepare("SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?")
-                .map_err(|e| e.to_string())?;
-            let mut rows = stmt.query([query]).map_err(|e| e.to_string())?;
-            // **`ix.capacity`, never a row count.** It is already word-rounded, and it is the
-            // figure every bitset in the index was built against — `BitSet::and` takes the
-            // shorter operand, so a text set built to any other size would silently truncate
-            // every base it narrows and send back counts that are low. Low counts grey out
-            // options that would have worked, which hides cards and which nobody reports.
-            let mut b = BitSet::new(ix.capacity);
-            while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-                let doc: i64 = row.get(0).map_err(|e| e.to_string())?;
-                b.set(doc as u32);
-            }
-            Some(b)
-        }
+        Some(query) => Some(fts_docs(&conn, ix.capacity, &query)?),
     };
+    for negative in &negated_text {
+        let hit = fts_docs(&conn, ix.capacity, negative)?;
+        text = Some(and_not(&text.unwrap_or_else(|| ix.all.clone()), &hit));
+    }
 
     let tags = tag_narrowing(&ix, &probes, &conn)?;
     drop(conn);
@@ -1079,7 +1086,6 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
 /// runs inline on the IPC thread, and the FTS half of this is blocking SQLite work. It reads
 /// through `db_read` like every other read, so a text facet during a sync is not stuck behind
 /// the ingest.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn facet_cards(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2094,13 +2100,13 @@ mod tests {
     /// would count a text term and ignore a typed one, and every chip would advertise cards
     /// the wall does not show.
     ///
-    /// ⚠️ **The second half is the fail-open direction, asserted so it cannot drift into a
-    /// silent regression.** A *negated* text term is dropped here, because excluding it
-    /// needs a bitset complement this index has no operator for — so `-t:instant` counts
-    /// three where the wall shows one. Counting high leaves an option live that returns
-    /// fewer cards than it promised; counting low would grey out an option that works.
+    /// **The second half is the negated term, subtracted since 2026-09-27 (issue #552).** It
+    /// was dropped until then, so `-t:instant` counted three where the wall showed one — the
+    /// fail-open direction, but for a reason that was never true: [`and_not`] was already in
+    /// this file. It now counts exactly what the wall shows, and with no positive term beside it
+    /// the subtraction starts from every card.
     #[test]
-    fn a_type_line_predicate_narrows_every_count_and_a_negated_one_fails_open() {
+    fn a_type_line_predicate_narrows_every_count_and_so_does_a_negated_one() {
         let state = state_with_seeded_cards("predicate-facets");
         {
             let conn = crate::db::lock_blocking(&state.db);
@@ -2132,11 +2138,51 @@ mod tests {
         assert_eq!(f.sets.get("rav").copied(), Some(1));
         assert_eq!(f.sets.get("alc").copied(), Some(0), "offered, and empty");
 
-        let wide = run_facets(&state, &req(|r| r.predicates = term(true))).unwrap();
+        let excluded = run_facets(&state, &req(|r| r.predicates = term(true))).unwrap();
         assert_eq!(
-            wide.total, 3,
-            "every paper printing: the negative is dropped rather than counted"
+            excluded.total, 1,
+            "Sol Ring alone: every paper printing but the two instants"
         );
+        assert_eq!(
+            excluded.sets.get("lea").copied(),
+            Some(1),
+            "Sol Ring, not Bolt"
+        );
+        assert_eq!(
+            excluded.sets.get("rav").copied(),
+            Some(0),
+            "Helix is excluded"
+        );
+    }
+
+    /// A negated *name* beside positive free text — `lightning -helix` — is the free text's set
+    /// with the name's taken away, which is what `run_search`'s `NOT IN` answers. Before issue
+    /// #552 the negative was dropped here and the count said two.
+    #[test]
+    fn a_negated_name_is_taken_out_of_the_free_texts_count() {
+        let state = state_with_seeded_cards("negated-name-facets");
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+                .unwrap();
+        }
+        crate::index::lifecycle::build_now(&state).unwrap();
+
+        let f = run_facets(
+            &state,
+            &req(|r| {
+                r.text = Some("lightning".into());
+                r.predicates = Some(vec![crate::filters::QueryPredicate {
+                    field: crate::filters::PredicateField::Name,
+                    op: crate::filters::PredicateOp::Colon,
+                    value: "helix".into(),
+                    negated: true,
+                }]);
+            }),
+        )
+        .unwrap();
+        assert_eq!(f.total, 1, "Lightning Bolt, and not Lightning Helix");
+        assert_eq!(f.sets.get("rav").copied(), Some(0));
     }
 
     /// **All-punctuation input leaves nothing to match on, and the answer is no text clause

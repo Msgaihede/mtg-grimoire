@@ -12,8 +12,8 @@
  *
  * ## It has no write path, and that is the whole of the read-only guarantee
  *
- * There is no read-only mode anywhere on this app's data path: `lock_db_read` returns the *write*
- * connection on wasm, and `@/lib/writes` is only about which mutation owns an error banner. So
+ * There is no read-only mode anywhere on this app's data path — nothing a view can switch on that
+ * refuses a mutation — and `@/lib/writes` is only about which mutation owns an error banner. So
  * the guarantee here is structural — this view renders a **fetched document** and nothing in
  * `src/features/share/` names an ipc mutation. `readOnly.test.ts` is that fence, and it is a
  * source sweep rather than a runtime check because there is nothing at runtime to check.
@@ -798,11 +798,11 @@ function Binder({
 /**
  * One copy in somebody else's binder, with the reader's own two figures under it.
  *
- * **`cardId` *and* `imageUrl`, and both are needed.** `cardArtSrc` picks between them by build:
- * the desktop app draws the picture out of its own image cache over `mtgimg://`, which is a
- * printing the reader's corpus almost certainly already has, and the web build draws the
- * `cards.scryfall.io` URL the snapshot carries. Passing only the URL — which is what the public
- * viewer does — would leave every frame in the shipped window empty.
+ * **`cardId`, and never the snapshot's `img`.** The app draws the picture out of its own image
+ * cache over `mtgimg://`, which is a printing the reader's corpus almost certainly already has.
+ * The `cards.scryfall.io` URL the snapshot carries is the public viewer's picture — it has no
+ * protocol to ask, and hands it to `CardArt` as `remoteSrc` — and passing it here would fetch
+ * over the network a picture the cache can already serve.
  */
 function SharedTile({
   card,
@@ -851,7 +851,7 @@ function SharedTile({
       }
     >
       <div className="relative">
-        <CardArt cardId={card.id} name={card.n} imageUrl={card.img} finish={marked} />
+        <CardArt cardId={card.id} name={card.n} finish={marked} />
         {picked !== null && (
           // Top-left, which is the corner this wall leaves free: the finish chip owns top-right
           // everywhere in the app and the copy count owns bottom-left here. Backed the same way

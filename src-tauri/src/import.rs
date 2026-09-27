@@ -74,13 +74,11 @@
 //! Nothing here reads `raw`: every fact an import needs has had a column since schema v5, and
 //! `raw` is a gzip BLOB that `json_extract` refuses (CLAUDE.md).
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension, Params, Row, Statement};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The largest decklist file this app will read, in bytes.
@@ -711,7 +709,6 @@ pub fn resolve_lines(
 /// is six prepared statements and a few hundred index lookups — 11.6 ms for a 105-line
 /// commander list, measured over the live corpus — which is small but not free, and it must
 /// never queue behind an ingest.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn import_resolve(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1186,7 +1183,6 @@ pub fn commit_import(
 ///
 /// The **write** connection through [`crate::sync::with_write`], answering [`crate::db::BUSY`]
 /// if it cannot be had.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1213,7 +1209,6 @@ pub async fn deck_import_commit(
     .map_err(|e| format!("the decklist could not be imported: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// A decklist file the reader picked, as text.
 ///
 /// **It takes a path, not bytes** — the page asks the OS for a name and Rust opens the file,
@@ -1228,46 +1223,34 @@ pub async fn deck_import_commit(
 ///
 /// * **The size is bounded by how much is read, not by `metadata()`.** [`MAX_IMPORT_BYTES`] is a
 ///   fence rather than a truncation — a 200 MB file the reader pointed at by mistake costs one
-///   megabyte to refuse rather than two hundred. It was a `metadata()` check until the Android
-///   target arrived: a `content://` URI has no size to stat, so the bound moved into the read
-///   itself. It is the same constant the paste path uses, so the two cannot disagree about how
-///   long a decklist may be.
+///   megabyte to refuse rather than two hundred. It is the same constant the paste path uses, so
+///   the two cannot disagree about how long a decklist may be.
 /// * **Lossy UTF-8 deliberately**: a Windows-1252 apostrophe in one card name should cost that
 ///   one name, not the other hundred lines. `from_utf8_lossy` turns the bad byte into `U+FFFD`,
 ///   which no card name bears, so the line it damages comes back as an unmatched name in the
 ///   preview, quoted — a thing the reader can act on — while every other line resolves. A
 ///   `from_utf8` here would answer `Err` for the whole file and tell them nothing about which
 ///   line it was.
-fn read_import_file(app: &tauri::AppHandle, picked: &str) -> Result<String, String> {
-    crate::picked::open_read(app, picked)
-        .map_err(open_failed)
+fn read_import_file(path: &str) -> Result<String, String> {
+    std::fs::File::open(path)
+        .map_err(|e| open_failed(format!("could not open {path}: {e}")))
         .and_then(read_bounded)
 }
 
-#[cfg(not(target_family = "wasm"))]
-/// What a source this app cannot open says, keeping the OS's own reason.
-///
-/// A free function rather than an inline `format!` so the tests can assert the sentence without
-/// an `AppHandle` — `not found` and `access denied` are different things for the reader to do
-/// something about, and dropping the tail would make them the same message.
+/// What a source this app cannot open says, keeping the OS's own reason — `not found` and
+/// `access denied` are different things for the reader to do something about, and dropping the
+/// tail would make them the same message.
 fn open_failed(e: String) -> String {
     format!("That file could not be opened — {e}")
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// The cap and the lossy decode, over anything readable.
-///
-/// Separate from the open because that is where the platforms differ and this is where they do
-/// not: the bytes behind a `content://` descriptor and the bytes behind a path are read the
-/// same way, and the tests are about the bytes.
 fn read_bounded(mut reader: impl std::io::Read) -> Result<String, String> {
     use std::io::Read as _;
 
-    // **A bounded read rather than a `metadata()` check**, and the change is Android's: a
-    // `content://` URI names a row in a ContentProvider and has no size to stat, so the ceiling
-    // has to be enforced by how much is read. `take(MAX + 1)` then a length test is the whole
-    // of it — one byte over the limit is read and refused, and nothing larger is ever in
-    // memory, which keeps what the fence was for: a 200 MB file the reader pointed at by
+    // **A bounded read rather than a `metadata()` check.** `take(MAX + 1)` then a length test is
+    // the whole of it — one byte over the limit is read and refused, and nothing larger is ever
+    // in memory, which keeps what the fence was for: a 200 MB file the reader pointed at by
     // mistake costs a megabyte, not two hundred.
     let mut bytes = Vec::new();
     reader
@@ -1294,10 +1277,9 @@ fn read_bounded(mut reader: impl std::io::Read) -> Result<String, String> {
 ///
 /// On the blocking pool like its two siblings, because a file on a network share or a slow
 /// stick is a disk wait, and the async runtime is not where a disk wait belongs.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
-pub async fn import_read_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || read_import_file(&app, &path))
+pub async fn import_read_file(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || read_import_file(&path))
         .await
         .map_err(|e| format!("the decklist file could not be read: {e}"))?
 }
@@ -2823,26 +2805,17 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// [`read_import_file`] with the `AppHandle` taken out, which is the whole of the
-    /// difference: that argument exists so Android can hand a `content://` URI to the
-    /// ContentResolver, and on this machine the open falls through to the same
-    /// `std::fs::File::open` it always did. `tauri::test::mock_app` is not available here —
-    /// this crate enables no `tauri::test` feature — and every assertion below is about the
-    /// bytes or the sentence rather than about the handle.
+    /// [`read_import_file`] over a `Path`.
     fn read_file(path: &std::path::Path) -> Result<String, String> {
-        crate::picked::open_path(path.to_str().unwrap())
-            .map_err(open_failed)
-            .and_then(read_bounded)
+        read_import_file(path.to_str().unwrap())
     }
 
     /// The cap is a **fence**, and the half worth pinning is that it costs a megabyte rather
     /// than the whole file.
     ///
-    /// It was read off `metadata()` until the Android target arrived, and a `content://` URI
-    /// has no size to stat — so the bound is now `take(MAX + 1)` and a length test. What that
-    /// buys is unchanged: a 200 MB file the reader pointed at by mistake never reaches memory,
-    /// because the reader stops one byte past the cap. The refusal no longer quotes the file's
-    /// real size, which is exactly what a ContentProvider cannot tell it.
+    /// The bound is `take(MAX + 1)` and a length test: a 200 MB file the reader pointed at by
+    /// mistake never reaches memory, because the reader stops one byte past the cap. The
+    /// refusal does not quote the file's real size, because a bounded read never learns it.
     ///
     /// What this test can see is the message and the fact that no text came back; the bound
     /// itself is structural. Note the fixture is one byte over [`MAX_IMPORT_BYTES`] — the cap is

@@ -122,14 +122,13 @@ picks it up from any directory under the root.
   **An `sqlite_master` read in a test needs the same care** — unqualified it is `main`'s, so a
   guard written before the split silently halves its own scope; `schema::tests::master` and
   `watch::every_table_in_the_schema_has_been_decided_about`'s `UNION ALL` are the two answers.
-- **Seven connections, not two**, re-counted 2026-09-08 (the census below said six and was one
-  short — it had missed the snapshot archive's). `AppState.db` writes
+- **Six connections, not two.** `AppState.db` writes
   (`desktop::init_state`) and `AppState.db_read` is `SQLITE_OPEN_READ_ONLY` (the same
-  function); **five** more are opened outside it — the facet index's two
+  function); **four** more are opened outside it — the facet index's two
   (`index::lifecycle::build_now`, `invalidate_owned`), the mirror thread's
-  (`mirror::watch::watch`), the settings panel's `Rebuild now`
-  (`mirror::settings::rebuild_now`) and the archive's (`mirror::snapshot::build_now`).
-  **Every one reads tables from both files**, so all seven go through `db::open_write` /
+  (`mirror::watch::watch`) and the settings panel's `Rebuild now`
+  (`mirror::settings::rebuild_now`).
+  **Every one reads tables from both files**, so all six go through `db::open_write` /
   `db::open_read`, which attach the corpus. One that attached only half does not error: it
   reports an empty collection, or a cold index. `grep -rn "db::open_read(\|db::open_write("
   src-tauri/src/` is the census — every other hit is below a `#[cfg(test)]`.
@@ -714,13 +713,10 @@ shared_cell` walks both into two databases and compares them column by column.
     stream → a temp file under `tmp/` → 64 KB chunks → `feed::frame::Decoder`, which sniffs the
     gzip magic and decompresses → `feed::frame::Elements`, which frames one `variants[]` element
     at a time by brace depth → `serde_json::from_slice` on that one element. One variant is live
-    at a time. **Push-shaped rather than pull, and that is what the web target cost**: the
-    `DeserializeSeed` over the array this module shipped with drives `read()` and blocks until it
-    gets bytes, which a browser stream with no thread behind it can never satisfy. `read_file`
-    and the seed remain as the file-shaped entry point the tests use; `ingest_gz` goes through
-    `read_stream`. `MAX_FEED_BYTES` is checked against the
-    declared `Content-Length` **and** against the running total, because a chunked response
-    declares nothing.
+    at a time. `ingest_gz` goes through `read_stream`; `read_file` and the `DeserializeSeed` over
+    the array remain as the file-shaped entry point the tests use. `MAX_FEED_BYTES` is checked
+    against the declared `Content-Length` **and** against the running total, because a chunked
+    response declares nothing.
   - **Corpus schema 2 (2026-09-08) added four prose columns and is gated on the table's SHAPE,
     never on the version number.** `combos` gained `mana_needed`, `easy_prerequisites`,
     `notable_prerequisites` and `description`, all `TEXT NOT NULL DEFAULT ''` in the feed's own
@@ -788,9 +784,7 @@ shared_cell` walks both into two databases and compares them column by column.
     per-connection and nothing in the signature says who set it. One transaction, for the swap's
     reason. **What makes the clear honest is `conditional_etag`**, which asks whether there are
     *rows* before replaying an ETag — so a cleared database really re-downloads instead of being
-    told 304 into staying empty. `combos_clear` is the wrapper, and it *routes* on the web target
-    where `combos_refresh` does not: the seam is the work — synchronous, connection-only, no
-    network — and never the neighbouring name.
+    told 304 into staying empty. `combos_clear` is the wrapper.
   - **The rows are the feed's facts and the crate concludes nothing from them.** `bracket_tag` is
     Spellbook's editorial letter carried through verbatim and the column takes **no CHECK**,
     because the vocabulary is theirs and an eighth letter must be a skipped variant rather than a
@@ -1317,27 +1311,8 @@ shared_cell` walks both into two databases and compares them column by column.
 seven formats, so the day the app will not start the cards are still the reader's. Full record,
 with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
 
-- **The gate is on three files, not on the module, and putting it back on the module breaks the
-  browser.** `layout`, `paths`, `read`, `readme` and `snapshot` compile for every target — they
-  touch no filesystem and no clock — and `run`, `settings` and `watch` carry
-  `#[cfg(not(target_family = "wasm"))]` inside `mirror/mod.rs`. **Web and Android have no folder
-  and get the same files as one archive instead** (`mirror::snapshot`, `mirror_backup_zip` /
-  `mirror_backup_save`): OPFS is invisible to every other program and `tauri-plugin-dialog`'s
-  manifest records Android as having no folder picker, so a continuously-written folder there
-  would be the feature's name without the feature. `mirror_status`, `mirror_set_enabled`,
-  `mirror_set_root` and `mirror_rebuild` stay desktop-only, and `BackupPanel` splits above its
-  hooks so the archive half never polls a command `web::route` does not answer.
 - **One renderer, and a second one would be a third writer outside the golden fence.**
-  `snapshot::render` is what both `run::run_pass` and `snapshot::render_all` call.
-  `every_file_in_the_archive_is_byte_identical_to_the_one_the_mirror_writes` runs a real pass into
-  a `tempfile` root and compares, so that is checked rather than argued from the call graph — and
-  `each_list_is_rendered_with_its_own_surfaces_columns` covers what the comparison structurally
-  cannot: a change to which fields `render` asks for moves both sides together and left all 140
-  `mirror` tests green when it was mutated on 2026-08-31.
-- **`SystemTime::now()` PANICS on wasm rather than erroring, so the archive's clock is
-  `SELECT strftime(…)`.** It only ever falls back — a clock that will not answer costs the file
-  its date and nothing else. The same trap is why `zip` keeps `default-features = false`: with the
-  `time` feature on, `DateTime::default_for_write()` reaches for that clock on its own.
+  `run::render` is what `run::run_pass` renders every file through.
 - **There is one `update_hook`, on the one write connection, and it is the whole of how the
   mirror — and, since 2026-09-20, every other window — learns anything.**
   `watch::install_hook` is installed on `AppState.db` from `setup`, and
@@ -1466,20 +1441,14 @@ with the arithmetic behind the 105-character code and the crate pins, is
   device it was. Re-minting on anything that looked wrong turns a restore into a silent fork,
   where two machines both believe they are the same device and both write under that id.
 - **A device names itself after the machine it is, and `identity::mint_name` is the one place
-  that happens** (2026-08-29). Three `cfg` arms, because they are three different questions: the
-  hostname on the desktop (`COMPUTERNAME`, or `HOSTNAME` elsewhere), `android.os.Build.MODEL` over
-  JNI on a phone — **never a hostname there, Android answers `localhost` on every handset** — and
-  a label off `navigator.userAgent` in a browser, which has no hostname to ask for. **Every arm is
-  infallible**: failing to read a name may not stop a device minting an identity, so each falls
-  back to a word. It is called from `ensure` **on the insert and nowhere else** — an existing
-  install keeps the name it has, including the old shared `"This device"`, and a reader who
-  renamed is never renamed back. The privacy cost the deleted comment argued (a hostname travels
-  to every device in the group) is real, was overruled by the reader on the evidence of a roster
-  with two identical rows, and is paid for by `rename_device` staying one press away. **The
-  Android VM comes from tao and `ndk-context` is deliberately absent** — nothing in this tree
-  initialises it, so `android_context()` would answer a null pointer and that arm would fall back
-  on every phone forever. Full record, with the table of what each target reads:
-  [sync.md](../docs/reference/sync.md).
+  that happens** (2026-08-29). One question, the hostname (`COMPUTERNAME` on Windows, `HOSTNAME`
+  elsewhere), and **it is infallible**: failing to read a name may not stop a device minting an
+  identity, so it falls back to a word. It is called from `ensure` **on the insert and nowhere
+  else** — an existing install keeps the name it has, including the old shared `"This device"`,
+  and a reader who renamed is never renamed back. The privacy cost the deleted comment argued (a
+  hostname travels to every device in the group) is real, was overruled by the reader on the
+  evidence of a roster with two identical rows, and is paid for by `rename_device` staying one
+  press away. Full record: [sync.md](../docs/reference/sync.md).
 - **A removal rotates the key, publishes the rotation, and commits only when the relay accepts
   it — in that order, and the order is the rule.** `pairing::remove_device` refuses a group with
   no membership, makes a round trip that emits no baseline, calls `identity::plan_rotation` (which
@@ -1875,11 +1844,6 @@ record, with every measurement, is
   `entitlement.rs`.** **The 401 rule still does not invert**: a lapse is never an `error_log`
   row, and the manager excludes one the same way, by asking `membership_ended` first. Full
   reasoning in `entitlement.rs`'s module doc.
-- **`sync_engine` compiles for `wasm32-unknown-unknown` and that is a requirement, not a bonus** —
-  spec §2's one-implementation rule. Only `sync_engine::commands` is gated off it, because a
-  `#[tauri::command]` does not exist in a browser. So are `sync_pair::pairing` and nothing else in
-  that module: `crypto`, `invite` and `identity` are every-target since PR 7. `SystemTime::now()`
-  panics there, which is why `apply`'s clock advance is spelled in SQL.
 
 ## Hard rules — decks (storage side)
 
@@ -2510,6 +2474,14 @@ The rules, and where each is enforced, are in
   and never a boolean.
 - Failures fold into `error_log` through `errors::record`, which returns `()` and is called
   inside the caller's transaction — it can never fail the thing it describes.
+- **`feed::frame`'s two framers refuse rather than accumulate**, and the guard is not
+  diagnostics: an uncapped framer found 63 elements in a 610.2 MB document and grew its buffer
+  to 609.82 MB *without erroring*. `Elements::push` and `Lines::push` answer
+  `Result<(), Overlong>` and cap at 8 MiB — four times the largest peak ever measured here
+  (2.01 MB against the real combo document). `peak_buffer()` is still what a test reads; this is
+  what stops a real run paying for it. **`Elements` stops at the array's own `]`**: without that
+  it framed every depth-0 object in the rest of the document, and both feeds carry keys after
+  their array.
 
 ## Images and the `mtgimg://` protocol
 
@@ -2536,10 +2508,9 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 ## Tauri capabilities
 
 - **`@tauri-apps/plugin-dialog` names files and never opens them, and the capability says so.**
-  `capabilities/desktop.json` and `capabilities/mobile.json` both grant
-  **`dialog:allow-open`** (choosing a decklist to import; it was granted for choosing a deck
-  cover, and that caller went on 2026-08-31 while the grant stayed, because
-  `import_read_file` had always needed it too) and
+  `capabilities/desktop.json` grants **`dialog:allow-open`** (choosing a decklist to import; it
+  was granted for choosing a deck cover, and that caller went on 2026-08-31 while the grant
+  stayed, because `import_read_file` had always needed it too) and
   **`dialog:allow-save`** (naming an export's destination, added 2026-08-14) — never
   `dialog:default`, so message, ask and confirm stay unreachable from the webview however the
   plugin is initialised. The app's own questions are drawn in the page instead, which is
@@ -2556,14 +2527,10 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   `open()` gave and Rust read the *image* — and it is the one place this habit has ever been
   undone: custom deck covers went on 2026-08-31 and a cover became a card id, so the picker it
   needed is not narrower, it is absent. Deleting the caller is the cheapest form of this rule
-  there is, and `picked.rs`'s module doc counts the survivors. **`rfd` entered `Cargo.lock` transitively** as one of the dialog
-  plugin's own dependencies and is **unreachable**. **`tauri-plugin-fs` came in the same way and
-  is no longer unreachable — on Android only**, where `lib.rs` registers it under
-  `#[cfg(target_os = "android")]` because a picked file there is a `content://` URI rather than a
-  path. It is still granted **no `fs:` permission on any platform**: the ACL gates commands the
-  *webview* invokes, and `picked.rs` reaches `Fs::open` from Rust, where the ACL is not in the
-  path. See the Android section below. Adding a plugin means adding its narrowest permission,
-  never its `:default`.
+  there is. **`rfd` entered `Cargo.lock` transitively** as one of the dialog plugin's own
+  dependencies and is **unreachable**, and **`tauri-plugin-fs` came in the same way**: nothing
+  registers it and it is granted **no `fs:` permission**. Adding a plugin means adding its
+  narrowest permission, never its `:default`.
 - **`tauri-plugin-clipboard-manager` is granted `clipboard-manager:allow-write-text` and
   deliberately not the read half.** Nothing in this app reads the clipboard; `:default` grants
   both, and a page that can read the clipboard can read whatever the reader last copied out of
@@ -2622,70 +2589,17 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   in `src/lib/window.ts`. A mismatch creates no overlay, raises no error and logs nothing: the
   button keeps working and Snap Layouts simply never appear, which is a regression neither a test
   nor a launch can catch. `TitleBar.test.tsx` pins the frontend half.
-- **`capabilities/` is two files and `platforms` is why** (2026-08-28). `default.json` targeted
-  every platform because there was only one; `desktop.json` carries
-  `"platforms": ["windows", "linux", "macOS"]` and the shipped permission set unchanged, and
-  `mobile.json` carries `["android"]` and four absences, each a decision:
-  **`desktop.json`'s `windows` is `["main", "window-*"]` since 2026-09-20**, not `["main"]` —
-  capability labels accept globs, and the second window is `window-2`, the third `window-3`, from
-  `window::LABEL_PREFIX` (a test pins the glob against that constant). Without the second entry a
-  new window is granted **nothing**: no `core:`, so `listen` rejects and `core/tauri.ts` swallows
-  the rejection, and no window verbs, dialog, clipboard or snap-layout either — a window that
-  draws and hears nothing, with no error anywhere. `mobile.json` is untouched, because a phone
-  opens no second window.
-  **no `core:window:` verbs** — `minimize`, `toggle_maximize` and `start_dragging` are all
-  `#[cfg(desktop)]` in tauri 2.11.5 and are not commands on Android at all, and the fourth,
-  `close`, would kill the app from a button no phone user is looking for;
-  **no `snap-layout:`** (no caption to park an overlay over);
-  **no `mcp-bridge:`** (an unauthenticated WebSocket that evaluates arbitrary JavaScript, and
-  `tauri android dev` is a *debug* build, so `#[cfg(debug_assertions)]` alone would put it on a
-  phone); and **`opener` narrowed from `:default`** to `allow-open-url` + `allow-default-urls`,
-  because the third verb reveals an item in a directory and the plugin's own manifest records
-  Android as not supporting it. **`platforms` filters before permission resolution** — a
-  nonexistent permission planted in `desktop.json` fails the Windows build and is invisible to
-  the `aarch64-linux-android` one, which is how that was established rather than assumed.
-- **`tauri-plugin-fs` is a dependency with no permission, deliberately, and this paragraph exists
-  to stop the next edit granting one.** On Android a file the reader picks is a `content://` URI:
-  `tauri-plugin-dialog`'s `DialogPlugin.kt` fires `ACTION_GET_CONTENT`/`ACTION_CREATE_DOCUMENT`
-  and returns `uri.toString()`, so `std::fs` of one answers "No such file or directory".
-  (**`ACTION_GET_CONTENT`, not `ACTION_OPEN_DOCUMENT`** — this page said the latter until
-  2026-08-31. The plugin carries a literal `// TODO: ACTION_OPEN_DOCUMENT ??` on the line above,
-  which is presumably where the mistake came from. It is not pedantry: the two take their file
-  filter differently, and `android-target.md` §4 records what that costs.)
-  `src/picked.rs` is the one place that knows the difference, and `Fs::open` resolves the URI
-  through the ContentResolver into a **`std::fs::File`** built from the descriptor — a Rust-side
-  method on managed state, with no `invoke` crossing the boundary. **The page's filesystem access
-  is unchanged: none**, and
-  `the_mobile_capability_drops_every_verb_the_platform_has_no_answer_for` asserts no `fs:` entry
-  exists. `open_read` answers a concrete `File` rather than a boxed `Read` because
-  `image::ImageReader` needed `Seek` and `encode_cover` reopened its source. **That caller went
-  on 2026-08-31 with the custom deck cover and the return type did not follow it** — both
-  survivors read a decklist straight through and would take a plain `Read` — because `Seek` is a
-  property of the descriptor the ContentResolver hands back, not of whoever happens to be
-  reading it, and narrowing a return type to today's callers is how the next one becomes a port.
-- **Android is native, and the wasm constraints are the web target's alone.** The mobile build is
-  this same crate compiled for `aarch64-linux-android`, so it has `rusqlite` with `bundled`, a
-  real filesystem, `tokio`, threads and WAL. It is the fact most easily lost, and a plan that
-  treats Android as a wasm port is wrong from its first line.
-- **`cfg(desktop)` and `cfg(mobile)` are real cfgs**, emitted by `tauri_build::build()`, so cargo
-  checks every gate. Two things are gated because they **cannot compile** on Android —
-  `tauri_plugin_single_instance::init` (an empty crate there) and `window.rs`, whose
-  `open_sized_to_monitor` and `open_new` both reach `#[cfg(desktop)]` window verbs (`center()`,
-  and `WebviewWindowBuilder::from_config` over a desktop window config). **It was three until
-  2026-09-20**, the third being `focus_existing_window` (`unminimize()` likewise) — the function
-  the single-instance callback used to call, deleted when a relaunch started opening a window
-  instead of bringing one forward. Five more are gated because they **must not run**: the
-  `--await-predecessor` handshake, the mirror's hook and thread, `update::clean_up`, the daily
-  update check, and `changes::spawn_emitter` — the cross-window refresh has nothing to emit where
-  the OS runs one window per app. **`mirror/`, `transfer/` and `update.rs`
-  still compile there and that is deliberate** — `AppState` names two mirror types, and in a
-  library crate a `pub fn` in a `pub mod` raises no `dead_code`, so not *running* them costs
-  nothing where not *compiling* them costs a six-file ripple. (**The `get_app_meta` half of that
-  argument moved out on 2026-08-29**: eleven modules called it and only `update.rs` swaps an
-  `.exe`, so the store is [`app_meta.rs`](src/app_meta.rs) now and compiles for every target.
-  The mirror half stands.) When adding a `cfg`, prefer a `bool` parameter over a `cfg!` inside a body —
-  `paths::data_dir_for` and `update::install_kind_for` both do this, so both arms compile and are
-  tested on every platform. Full record: [android-target.md](../docs/reference/android-target.md).
+- **`capabilities/desktop.json` is the one capability file, and its `windows` is
+  `["main", "window-*"]` since 2026-09-20**, not `["main"]` — capability labels accept globs, and
+  the second window is `window-2`, the third `window-3`, from `window::LABEL_PREFIX` (a test pins
+  the glob against that constant). Without the second entry a new window is granted **nothing**:
+  no `core:`, so `listen` rejects and `core/tauri.ts` swallows the rejection, and no window verbs,
+  dialog, clipboard or snap-layout either — a window that draws and hears nothing, with no error
+  anywhere.
+- **`cfg(windows)` still matters, because CI compiles the Linux desktop build too.** When adding a
+  `cfg`, prefer a `bool` parameter over a `cfg!` inside a body — `update::classify` takes
+  `windows: bool` and `detect_install_kind` hands it `cfg!(windows)`, so both arms compile and are
+  tested on every platform.
 - `tauri.conf.json` is embedded at **compile time** — editing it needs a Rust rebuild
   (`touch src-tauri/src/main.rs`), not just a dev-server restart. `"dragDropEnabled": false` is
   load-bearing; re-enabling it kills all in-app drag-and-drop on Windows. **So are the window's
@@ -2747,11 +2661,9 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 The whole record, including the pipeline the crate implements:
 [docs/reference/card-scanner.md](../docs/reference/card-scanner.md) — §9 and §10 are this side.
 
-- **`card-scanner` is a `path` dependency in the non-wasm block and never in the wasm one.** The
-  web build has no detector, the page says so, and the wasm clippy job never sees the crate. It
-  is deliberately not a workspace member, so its three tools keep building into
-  `crates/card-scanner/target/`. Its features here are `corpus` (labels out of `corpus.db`, and
-  it unifies with this manifest's `rusqlite = "0.40"`) and `ocr`.
+- **`card-scanner` is a `path` dependency and deliberately not a workspace member**, so its three
+  tools keep building into `crates/card-scanner/target/`. Its features here are `corpus` (labels
+  out of `corpus.db`, and it unifies with this manifest's `rusqlite = "0.40"`) and `ocr`.
 - **The `[profile.dev.package.image]` / `.imageproc` overrides live in _this_ manifest, and
   repeating them in the crate's is not enough.** Cargo reads `[profile.*]` from the **build root
   only**, so the crate's own copies do nothing the moment `src-tauri` takes it as a dependency.
@@ -2773,21 +2685,18 @@ The whole record, including the pipeline the crate implements:
 - **`cfg(scanner_assets)` is on only when all three of `scanner-assets/card-hashes.bin`,
   `text-detection.rten` and `text-recognition.rten` exist** — `build.rs` decides, `scanner.rs`
   `include_bytes!`s under it. A bundle embedded without its models, or the reverse, is a
-  half-shipped scanner. Three rules hold it: the `rustc-check-cfg` line sits **above** the wasm
-  early return, or that target meets an unknown cfg; `rerun-if-changed` names the directory and
-  only the files **present**, because a path that does not exist reruns the script on every build
-  — the tracked `scanner-assets/README.md` is what keeps the directory there; and the embedded
+  half-shipped scanner. Two rules hold it: `rerun-if-changed` names the directory and only the
+  files **present**, because a path that does not exist reruns the script on every build — the
+  tracked `scanner-assets/README.md` is what keeps the directory there; and the embedded
   bytes reach `load` as an `Embedded` argument, never a `cfg!` inside it, so both arms compile and
   are tested in every build. `npm run scanner:assets` fills the directory from the
   `scanner-bundle-v<FORMAT_VERSION>` release and `release.yml` fails a leg without them; a dev
   checkout that never ran it embeds nothing, which is expected.
   [card-scanner.md](../docs/reference/card-scanner.md) §10.
 - **`scanner_frame` and `scanner_capture` are the only commands in this crate that take a raw
-  body**, and each takes two shapes: on desktop the JPEG is `InvokeBody::Raw` with its JSON in a
-  header — `x-scanner-options` for the frame, `x-scanner-capture` for the sidecar; on Android
-  Tauri carries no raw bytes at all (`tauri::ipc::Request`'s own doc: "on all platforms except
-  Android"), so the same commands also accept `{ jpeg: "<base64>", options | sidecar }`. **A
-  frame's absent or malformed header is a shrug and defaults; a capture's _present but
+  body**: the JPEG is `InvokeBody::Raw` with its JSON in a header — `x-scanner-options` for the
+  frame, `x-scanner-capture` for the sidecar — and a JSON body is refused. **A frame's absent or
+  malformed header is a shrug and defaults; a capture's _present but
   unreadable_ one is a refusal** — a defaulted slider costs one frame, a defaulted sidecar
   writes an unlabelled capture the reader believes they labelled.
   **A page putting JSON in either header must escape every non-ASCII character as `\uXXXX`** —
@@ -2805,7 +2714,7 @@ The whole record, including the pipeline the crate implements:
   than through `db::open_read`, because `Reference::load_labels` reads an unqualified
   `FROM cards` — the corpus has to be `main` and there is nothing on the user side to attach.
 - **The scanner's state is `app.manage`d beside `AppState`, not a field inside it.** It is
-  optional, desktop/Android only, and shares nothing with the rest of the app but the data
+  optional, and shares nothing with the rest of the app but the data
   directory and that one read. **The session touches neither database; the reader's scanner
   prefs and review tray are two `app_meta` rows in `user.db`** (2026-09-15) — `scanner_prefs` and
   `scanner_tray`, each one JSON value written whole — which is why `scanner_prefs`,
@@ -2835,83 +2744,6 @@ The whole record, including the pipeline the crate implements:
   not. [card-scanner.md](../docs/reference/card-scanner.md) §9 and
   [multi-window.md](../docs/reference/multi-window.md) §5.
 
-## The web target
-
-- **`src-tauri/src/lib.rs` is the module map, and the split in it is binding.** A module in the
-  "Every target" block must compile for `wasm32-unknown-unknown`, which means no `tauri::`, no
-  `tokio::fs`, no `std::thread` — and **no `SystemTime::now()` or `Instant::now()`, both of
-  which panic there**. Those two imports are gated off the target in `sync.rs`, `combos.rs` and
-  `db.rs` rather than only their callers, so the names are not even in scope to reach for.
-- **Gate the commands, not the module — a module's side is decided by what is _in_ it.** Eleven
-  modules moved to "Every target" on 2026-08-29 (the deck domain, the collection, the wishlist,
-  both folder tables, `marketplace`) and **not one line of their SQLite changed**: each file
-  ends in a contiguous block of `#[tauri::command]` wrappers and is `&Connection` in, DTO out,
-  above it — `deck.rs` has no `tauri::` reference in its first 3 991 lines. `search.rs` is the
-  pattern: ungated module, `#[cfg(not(target_family = "wasm"))]` on each of its two commands,
-  which is why `run_search` is reachable from `web::route` and `list_decks` was not until this
-  landed. **A new command goes in the module its data lives in, with the gate on the wrapper.**
-- **Compiling for wasm is not being reachable from a browser**, and conflating the two is how a
-  "ported" module still answers `unknown command`. [`web::route`] is a `match` on the command
-  *name*; a module can build for the target and route nothing. The two are deliberately separate
-  PRs — the gate move cannot change desktop behaviour, the routing cannot fail to compile.
-- **A download is a `#[wasm_bindgen]` export, never a routed command, and the name looking like
-  every other command's is the trap.** `web::route::COMMANDS` answers *queries*: synchronous,
-  connection-only, no network. `combos_refresh`, `oracle_tags_refresh`, `art_tags_refresh` and
-  `marketplace_feed_refresh` are none of those, so they are entries in `web::glue` beside
-  `ingest_cards` — `ingest_combos`, `ingest_tags`, `ingest_prices` — and
-  `src/lib/core/browser.ts` diverts the four command *names* onto them. **The branch lives in
-  the core and nowhere else**: no Settings panel has an `isWebTarget()` in it, `ipc.combosRefresh`
-  reaches the export on a browser and the Tauri command on a desktop, and progress arrives on
-  the desktop's own event name because Rust builds the `{ event, payload }` envelope. Adding one
-  of these four to `COMMANDS` would be the wrong seam.
-- **`web::glue` is compiled only for wasm, so no test on any host reaches a line of it.** Every
-  ingest therefore keeps its *sink* in the every-target module the data lives in —
-  `ingest::StreamIngest`, `combos::StreamRead`, `tags::StreamTags`,
-  `marketplace_feed::StreamRead` — and `glue.rs` is a driver over it. A rule that migrates into
-  that file is a rule with no coverage.
-- **Every bulk ingest is push-shaped, and the file driver is the second driver rather than the
-  first.** `Deserializer::from_reader` and `BufRead::lines()` are *pull* parsers: they call
-  `read()` when they want more and block until they get it, and `wasm32-unknown-unknown` has no
-  thread to block while an awaited `Stream` resolves. So the state a read loop kept in locals
-  lives in a sink, `ingest_gz` is a 64 KiB read loop over it, and the browser writes the other
-  driver. One drain, two drivers.
-- **`feed::frame`'s two framers refuse rather than accumulate**, and the guard is not
-  diagnostics: the spike's framer found 63 elements in a 610.2 MB document and grew its buffer
-  to 609.82 MB *without erroring*. `Elements::push` and `Lines::push` answer
-  `Result<(), Overlong>` and cap at 8 MiB — four times the largest peak ever measured here
-  (2.01 MB against the real combo document). `peak_buffer()` is still what a test reads; this is
-  what stops a real run paying for it. **`Elements` stops at the array's own `]`**: without that
-  it framed every depth-0 object in the rest of the document, and both feeds carry keys after
-  their array.
-- **A browser reads no ETag, so no ingest here can take a 304.** A cross-origin `fetch` exposes
-  no `ETag` header unless the host names it in `Access-Control-Expose-Headers`. Each export
-  honours the weekly throttle instead — `force` skips it, exactly as the desktop command's does
-  — and the tag ingest still stores the descriptor's `updated_at`, which is the other half of
-  the desktop's freshness evidence.
-- **`-D warnings` on the wasm clippy job makes a stranded import a red build**, and moving a gate
-  strands them by the dozen. Gate the `use` line with the same attribute rather than deleting it;
-  desktop still needs it. For a **private helper** whose only callers were the commands, prefer
-  `#[cfg_attr(target_family = "wasm", allow(dead_code))]` over a `#[cfg]` — the precedent is
-  `sync::with_write`, and the reason is that those helpers are exactly what `web::route` will
-  call next, so keeping them compiling is the point.
-- **`npm run verify` cannot see any of this; the `wasm` CI job is what does.** Measured: with a
-  `use tauri::Manager` added to `search.rs`, `cargo test` passes 1 495 and desktop
-  `clippy -D warnings` is silent, while the wasm leg fails with `unresolved import tauri`.
-- **`build.rs` asks `TARGET`, never `cfg!`** — a build script compiles for the host. It returns
-  before `tauri_build::build()` for a wasm target and emits `cargo:rustc-check-cfg` for
-  `desktop` and `mobile` on the way out, because `#[cfg(desktop)]` in the map would otherwise be
-  an unknown cfg name there. `scanner_assets`' check-cfg line is emitted **before** that return
-  for the same reason; the cfg itself is only ever set after it (see "Card scanner").
-- **The web target opens the same pair on OPFS** — `db::open_pooled_pair` is `db::open_write`
-  with bare names, because the pool is the filesystem. Both files answer `delete` to
-  `PRAGMA journal_mode = WAL`, which is why `db::apply_pragmas` returns the journal instead of
-  assuming one.
-- **`schema::migrate_user` creates the user file's shape when there is none**, and that arm
-  exists for the browser alone: there is no `mtg.db` for `split::convert` to take apart there.
-  Its absence failed in one place only — the facet index, which reads `collection_entries`.
-- **The first run is not yet reliable.** Read
-  [web-target.md](../docs/reference/web-target.md) before touching the wasm ingest.
-
 ## Further reading
 
 | Doc | What it holds |
@@ -2926,10 +2758,9 @@ The whole record, including the pipeline the crate implements:
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs`, the v26 rung and **corpus schema 2** — the feed measured end to end, what is kept and what is skipped, **both** match queries and the card side's three statements, the shape gate and why a version gate skips every fresh install, the launch gate and the clear, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
-| [home-page.md](../docs/reference/home-page.md) | `home.rs`, `startview.rs` and `activity.rs` (v44) — the layout document whose vocabulary is TypeScript's and what keeps its round trip, why an empty widget list is a layout, the activity log's three rules and the write-site census, why `activity` is not synced where `deck_audit` is, and the nine commands routed on both targets |
+| [home-page.md](../docs/reference/home-page.md) | `home.rs`, `startview.rs` and `activity.rs` (v44) — the layout document whose vocabulary is TypeScript's and what keeps its round trip, why an empty widget list is a layout, the activity log's three rules and the write-site census, why `activity` is not synced where `deck_audit` is, and the nine commands |
 | [collection-sharing.md](../docs/reference/collection-sharing.md) | `share/` and the second Worker (v41) — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher exists to avoid, the two-step upload, both partial indexes and the one that refused nothing, the `live`/`lapsed`/`revoked` pass, and what is not deployed |
 | [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the seventeen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
-| [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |
 | [multi-window.md](../docs/reference/multi-window.md) | `changes.rs`, `window.rs`'s `open_new` and the scanner's lease — why a second *process* stays refused, the commit-driven mask and both of the update hook's blind spots, the emitter's locked take, and the live pass behind every figure |
-| [card-scanner.md](../docs/reference/card-scanner.md) | `scanner.rs` and the crate behind it — the pipeline and every measurement, the three evidence tiers and their weights, both tracker verdicts, the debug server, §9's first commands, two body shapes and lazy asset load, and §10's embedded assets and their load order, the filters mask, Fast and Exact, `decision_seq`, the `app_meta` tray and the synthetic evaluation |
+| [card-scanner.md](../docs/reference/card-scanner.md) | `scanner.rs` and the crate behind it — the pipeline and every measurement, the three evidence tiers and their weights, both tracker verdicts, the debug server, §9's first commands, the raw body and lazy asset load, and §10's embedded assets and their load order, the filters mask, Fast and Exact, `decision_seq`, the `app_meta` tray and the synthetic evaluation |

@@ -474,7 +474,8 @@ and a grep that cannot see a conflict clause is a census that silently under-rep
 | `collection.rs` · `set_quantity` | 2 | records | `quantity`, or `remove` when the step lands on zero and the row goes |
 | `collection.rs` · `PATCH_SQL` (`update_entry`, both paths) | 1 | records | `edit`, through `record_edit`; `delta` is `0` even when the patch names a quantity — an edit form is not a stepper |
 | `collection.rs` · `delete_entry` | 1 | a consequence | `remove_entry` without the feed row; the import's zero arm reaches it so a file does not write a line per zeroed row |
-| `collection.rs` · `fold_entry` | 2 | a consequence | the grain collapsing two rows into one; all three callers record their own event |
+| `collection.rs` · `set_entry_printing` | 1 | records | `edit` with `fields: ["printing"]` on both paths, the wishlist's word; the fold it can end in is `fold_entry`'s two. Added 2026-09-27 (issue #564), after the count above was taken |
+| `collection.rs` · `fold_entry` | 2 | a consequence | the grain collapsing two rows into one; all four callers record their own event |
 | `collection_folders.rs` · `create_folder` / `rename_folder` / `delete_folder` | 3 | records | one `collection/folder` line each, through `record_folder` |
 | `collection_folders.rs` · `set_folder_locked` | 1 | a consequence | a lock changes what the app offers from a drawer, not what drawers exist or what is in them |
 | `collection_folders.rs` · `move_folder` | 1 | a consequence | re-parenting a drawer changes no card and no folder's existence |
@@ -527,11 +528,9 @@ lines, and the reason is what the two tables hold rather than any difference in 
 costs is only that the follow-up above can no longer be read as "the sync layer has not learned a
 new table lately" — it has, and this one was not it.
 
-## 6. The commands, on both targets
+## 6. The commands
 
-Each goes **in the module its data lives in, with the gate on the wrapper** — `search.rs` is the
-pattern — and **each is routed on the web target as well**, because every one is a synchronous,
-connection-only query, which is exactly what `web::route` answers.
+Each goes **in the module its data lives in** — `search.rs` is the pattern.
 
 | Command | Module | Answers |
 | --- | --- | --- |
@@ -552,9 +551,8 @@ connection-only query, which is exactly what `web::route` answers.
 | `deck_review_count` | `deck_completion.rs` | how many `deck_cards` rows carry a `needs_review` sentence (§15) |
 | `upcoming_sets` | `upcoming_sets.rs` | `{ today, sets: [{ code, name, releasedAt, previewed, inDecks }] }` — sets not yet out, soonest first (§15) |
 
-Registration is three places, and a command missing from one of them answers `unknown command` at
-runtime with nothing red: `lib.rs`'s module map, `desktop.rs`'s `generate_handler!` list, and
-`web::route`'s `COMMANDS` **plus** a `match` arm.
+Registration is two places — `lib.rs`'s module map and `desktop.rs`'s `generate_handler!` list —
+and a command missing from the second answers `unknown command` at runtime with nothing red.
 
 **The notes module is the first entry in this table that writes**, and the three things it does
 *not* write are each a decision rather than an omission. There is no `touch_deck`, no
@@ -690,8 +688,8 @@ From the design's §9, plus two the build itself turned up:
   branch is proven in its own unit test only.
 * ~~**`sticky_note_reorder` is built and reaches no press.**~~ **Wired the same day**, and the
   entry is kept because the reason it was ever true is the useful part. The command shipped end to
-  end — the function and its tests in `sticky_notes.rs`, the registration in `lib.rs`,
-  `desktop.rs` and `web/route.rs`, the handler in the Storybook fake, `ipc.stickyNoteReorder` and
+  end — the function and its tests in `sticky_notes.rs`, the registration in `lib.rs` and
+  `desktop.rs`, the handler in the Storybook fake, `ipc.stickyNoteReorder` and
   `reorder` on `useStickyNotes`' API — with **nothing in the UI calling it**, because the
   affordance it was written for belonged to a third layout: an *Index* list with drag handles,
   drawn against the design canvas and then rejected. Board and Pad both shipped without a drag and
@@ -709,14 +707,6 @@ From the design's §9, plus two the build itself turned up:
   runs. Deck completion's bridge (§15) was copied from it and fixed on the way: it queues the
   invalidation and a microtask sends it once. The same fix belongs here; **a follow-up, not a
   difference of design.**
-* **The browser build answers two round-two questions with less, and says so.** To review draws
-  no `Scanned cards` row there (there is no scanner, and `scanner_tray` is not routed), and draws
-  its `Deck cards` row **without a press**, because `sync_review_list` is not routed either and the
-  Needs review panel would have nothing to show — the row's hint sends the reader to the desktop
-  app. And Coming soon cannot drop a `token`, `promo`, `memorabilia` or `minigame` set there,
-  because that word is `sets.set_type` and the browser build never fills `sets`: the layout filter
-  is the whole rule, so a set of one of those types whose cards carry an ordinary layout would be
-  listed. Neither is a refusal; both are §15's.
 * **Wishlist savings can offer a printing in another language**, because
   `wishlist_optimize_plan` has no language filter and the card draws exactly what the sweep dialog
   will offer. A language rule belongs to the plan and would change both surfaces at once; it is
@@ -784,14 +774,8 @@ each wrote a **v43** on 2026-09-10. Main landed first, so `activity` renumbered 
 ladder's ordinary rule, taken before the merge rather than after it, because fixture names collide
 as well as rung numbers.
 
-Three things happened in that merge and they are not the same shape:
+Two things happened in that merge that still matter, and they are not the same shape:
 
-* **`web::route`'s command count went red, and both sides were right.** The notebook branch routed
-  eight commands and this one routed nine, each writing its own number against a shared **149** —
-  **both correct on their own branch and wrong in the merge.** The merged answer is **166**,
-  `awk`'d off the merged array literal rather than added: the arithmetic happens to agree this
-  time and would not have if either branch had also *removed* a route. That test's own comment now
-  carries the sixth iteration of the same instruction, which is why it is repeated here.
 * **Several tests assert *head* rather than their own rung**, so they went red on a renumbering that
   did not change anything they were about. That is the cheap failure — it is loud, and the fix is
   mechanical.
@@ -802,8 +786,7 @@ Three things happened in that merge and they are not the same shape:
 
 The counts this branch moved, and the command that answers each, so the next reader re-derives
 rather than trusts (a rule the grid redesign below followed for its own two rungs): `USER_SCHEMA_VERSION` is `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs`;
-the user-table count is the `Side::User` entries in `schema::TABLES`; the routed-command count is
-`COMMANDS.len()` as the build computes it, which is why no document here writes it down twice.
+the user-table count is the `Side::User` entries in `schema::TABLES`.
 
 ## 11. The grid redesign (2026-09-15)
 
@@ -835,8 +818,8 @@ A JSON list of `{ cardId, at }`, newest first, deduplicated and capped at 24, **
 every other `app_meta` row. `CardDetailModal` records the card it opens, once per distinct card
 (a ref that survives StrictMode's double mount), and ignores a refusal: a missed entry costs one
 tile. The read joins `cards` in one statement through `json_each`, keeping list order and skipping
-an id the corpus no longer holds without dropping it from the row. The clock is `unixepoch()`,
-because `SystemTime::now()` panics on the web target. Tiles draw a whole card (`grid` variant) so
+an id the corpus no longer holds without dropping it from the row. The clock is `unixepoch()`.
+Tiles draw a whole card (`grid` variant) so
 the printed artist credit is on screen — the design's `art` crop would have owed a credit line.
 
 ### Set completion — corpus schema 4, `sets.printed_size`
@@ -848,8 +831,7 @@ table that holds rows and not one size, so an existing database fills the column
 rather than at the next bulk rotation. **`owned` counts slots, not printings**: a collector number
 counts by its leading digits when it starts with one (`123a` fills 123) and not at all when it does
 not (`★12`), inside `1..=size`, so a set can never read more than complete; with no size known every
-distinct number counts and the widget draws a count with no percentage. The browser build never
-fills `sets`, so `size` is always `null` there.
+distinct number counts and the widget draws a count with no percentage.
 
 ### Price movers — user schema 45, `price_snapshots`
 
@@ -1111,7 +1093,7 @@ of the first, so nothing is ever drawn into unbudgeted space.
 
 *Last visit* is **`app_meta.new_printings_seen`**, `recent_cards`' shape and its reason: `config`
 round-trips through older builds, and a cursor an older build rewrites is a cursor that lies. The
-clock is the **caller's** — `SystemTime::now()` panics on wasm.
+clock is the **caller's**.
 
 ⚠️ **The cursor is read once per mount and held**, which the design does not say and which is the
 difference between a mark that works and one that does not: the widget writes the cursor when it
@@ -1128,14 +1110,9 @@ has been reprinted* is a claim about a comparison nobody made), and **`decksWatc
 the list**, because a reader watching nothing has an empty list for a reason that has nothing to do
 with reprints.
 
-### Both commands are routed on both targets
+### Both commands are registered in `desktop.rs`
 
-`new_printings` and `mark_new_printings_seen` are registered in `desktop.rs`'s `invoke_handler`
-**and** named in `web/route.rs`'s `COMMANDS` with a match arm each — a command missing there is
-dead on the web and Android builds, as `price_movers` and `set_completion` already are not.
-The route count's literal was re-derived at that merge off the merged array with that comment's
-own `awk` rather than by adding two to the old figure; the build answers the count, so no figure
-is written here.
+`new_printings` and `mark_new_printings_seen` are registered in `desktop.rs`'s `invoke_handler`.
 
 `src/lib/ipc.test.ts` carries three mirror rows (`NewPrintingDeck`, `NewPrinting`, `NewPrintings` —
 nested two deep, `PriceMovers`' reason: a field renamed inside the deck entry leaves both structs
@@ -1144,14 +1121,6 @@ checked rather than trusted: renaming `seen_at` to `seen_when` in the crate turn
 row red.
 
 ### Limitations worth writing down
-
-**A row's thumb was blank on the web and Android targets, and for this kind that is closed**
-(issue #514, 2026-09-24). `NewPrinting` carried no `imageUris`, so `cardArtSrc` — which on those
-targets answers the *supplied* URL and ignores the `mtgimg://` one — had nothing to draw. It
-carries `image_uri::front_face_map`'s answer now, and the thumb passes its `display` entry, because
-`LIST_VARIANTS` is `display` and `art` and no `thumb` travels. **`recentCards` still has the gap**:
-its `RecentCard` carries none, and its tiles are entirely card art, so closing it there is the same
-field on that command.
 
 **The Storybook corpus cannot exercise the language rule, and one story is deliberately absent.**
 The fake's only two-language card is Lightning Bolt's Japanese `sta 105`, released 2021-04-23 —
@@ -1311,7 +1280,7 @@ from NULL counts, and the widget to drawing that state over it.
 answers `{ buckets, points, today }`: every kept period before today, oldest first, plus a live
 point for today, each carrying its total, one value per bucket and `moved`. `today` is
 `unixepoch(date('now'))`, SQLite's UTC midnight, so the page reads no clock — `price_history`'s
-rule, since `SystemTime::now()` panics on the web target.
+rule.
 
 **A period is a day inside `DAILY_DAYS` and a seven-day bucket beyond it**, the prune's own bucket:
 `CAST(julianday(day) AS INTEGER) / 7`, fixed windows that do not split at New Year.
@@ -1568,16 +1537,15 @@ history shorter than the range, which draws what exists and labels its first dat
 starts <date>* rather than stretching a week across a quarter's axis. The marketplace is
 `useMarketplace()`'s — the currency, and the *N unpriced* note beside the figure.
 
-### Registered where §6 says, on both targets
+### Registered where §6 says
 
-`value_history.rs` sits in `lib.rs`'s every-target block, and the command in `desktop.rs`'s
-`generate_handler!` and in `web::route`'s `COMMANDS` with a match arm — the three places where a
-missing registration answers `unknown command` with nothing red. `src/lib/ipc.test.ts` carries
+`value_history.rs` sits in `lib.rs`'s module map, and the command in `desktop.rs`'s
+`generate_handler!`, where a missing registration answers `unknown command` with nothing red.
+`src/lib/ipc.test.ts` carries
 mirror rows for `ValueBucket`, `ValuePoint` and `ValueHistory` against the crate's source and a
 `declares` case for both argument names. The Storybook fake stores `copies` beside each fake
 snapshot, holds unpriced holdings as NULL prices, and derives the answer by the same rules rather
-than aliasing a DTO. No route count or test
-count is written here; the build answers both.
+than aliasing a DTO. No test count is written here; the build answers it.
 
 **Out of scope, deliberately:** dragging the card is the page's, Customize gains nothing beyond the
 registry row, and there is no backfill.
@@ -1594,7 +1562,7 @@ completion**, **To review**, **Wishlist savings** and **Coming soon**. The desig
 against; **where this section and the spec disagree, this section is the build**, and each
 disagreement is stated at its site. Each kind is a `WIDGET_META` row, a body in
 `src/features/home/widgets/` and at most one new read, and the new reads — `deck_completion`,
-`deck_review_count` and `upcoming_sets` — are routed on both targets (§6's table).
+`deck_review_count` and `upcoming_sets` — are in §6's table.
 
 **Catalogue only, and Rust's vocabulary untouched.** `DEFAULT_LAYOUT` did not move in any of its
 three copies — §3's note has the reason — and `home.rs` gained nothing, which is §1's promise and
@@ -1782,7 +1750,7 @@ widget of the four out of step.
 `count(*)` of `deck_cards` rows whose `needs_review` is not NULL — the count
 `sync_engine/commands.rs` takes for this one table, so the row and the Needs review panel it opens
 say one number. **Not `sync_relay_status.reviewCount`**, which sums every flagged table into one
-figure, is desktop-only and takes the write lock. The binder count is `SummaryWidget`'s own read
+figure and takes the write lock. The binder count is `SummaryWidget`'s own read
 through `collectionTotalKey`, one fetch between the two cards. The wishes are the `total` of a
 one-row page, `flatten: true` so a wish filed in a drawer counts — `limit: 1` rather than `0`,
 which the backend reads as its default page. And Recently removed is **found in
@@ -1808,10 +1776,6 @@ panel's own figures; it now also invalidates the root the cleared row's table is
 (`TABLE_ROOT`, through `reviewRootOf` — never `["sync"]`), so To review, the binder's banner and
 the wishlist's chip drop the row without waiting for an unrelated write. `TABLE_ROOT` is total over
 `ReviewTable`, so a table added there without a root is a red build.
-
-**On the browser build** the tray is neither read nor drawn, and the deck-cards row is drawn without
-a press — §8 has both. `web` is a prop defaulting to `isWebTarget()`, because that answer is a
-build-time define the workbench folds to the desktop one; a story names it and the page never does.
 
 **`Recently removed` is a switch, on by default**, because that folder is a holding area rather than
 a problem, and a reader who keeps it as an archive should be able to take the row away.
@@ -1914,16 +1878,15 @@ reads 581 on the same copy now. The statement costs what it did: medians of five
 **40.2 → 40.6 ms at 90 days and 40.5 → 41.5 ms at 365** through `node:sqlite` (release SQLite, not the
 app; the app's own time is the table at this section's head).
 
-**It reads `cards`, not `sets`, because the browser build never fills `sets`** —
-`sync::insert_sets` is gated off the wasm target — while every card row carries its own `set_code`,
-`set_name` and `released_at`. `sets` is `LEFT JOIN`ed for the one word only it knows, and **where it
-has a row**, `set_type` `token`, `promo`, `memorabilia` and `minigame` drop out; where it has none
-the layout filter is the whole rule (§8). A row with no type is kept.
+**It reads `cards`, not `sets`**, because every card row carries its own `set_code`, `set_name`
+and `released_at`. `sets` is `LEFT JOIN`ed for the one word only it knows, and **where it has a
+row**, `set_type` `token`, `promo`, `memorabilia` and `minigame` drop out; where it has none the
+layout filter is the whole rule. A row with no type is kept.
 
 **A set drops out once any of its paper cards has released**, asked of every card the set has
 rather than only the window's. The List, Foundations Commander and Special Guests each gained
 future-dated printings on the dev corpus, and a card date alone would have announced a set from 2020
-as coming soon. It is asked of `cards` too, so it holds in a browser — and it is a `HAVING`, run
+as coming soon. It is asked of `cards` too, and it is a `HAVING`, run
 once per set, **never a term in the row filter**, where it walked the set once per printing in the
 window instead (`upcoming_sets_for`'s comment has that cost).
 

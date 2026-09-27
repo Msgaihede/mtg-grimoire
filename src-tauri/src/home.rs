@@ -79,11 +79,9 @@
 //! in this app is, and a home page is a thing about the screen in front of the reader rather than
 //! about the collection.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key. The table is the *application's*, deliberately not `sync_meta`.
@@ -384,7 +382,6 @@ pub fn store(conn: &Connection, layout: &HomeLayout) -> Result<(), String> {
 /// reason: a sync body runs inline on the IPC thread, and this one takes `db_read`'s mutex, which
 /// a search may hold for tens of milliseconds — and this is called while the window is drawing
 /// its first frame.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn home_layout(state: tauri::State<'_, Arc<AppState>>) -> HomeLayout {
     stored(&crate::sync::lock_db_read(state.inner()))
@@ -397,7 +394,6 @@ pub fn home_layout(state: tauri::State<'_, Arc<AppState>>) -> HomeLayout {
 /// than [`crate::nav::set_nav_collapsed`]'s: the reader has just dragged a widget somewhere and
 /// is looking at the result, so the page says the arrangement did not save rather than leaving
 /// them to find out at the next launch.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_home_layout(
     state: tauri::State<'_, Arc<AppState>>,

@@ -19,10 +19,6 @@
 //! landed, by which time the page's re-filing has taken what it moves — into a folder the page
 //! makes late, or a deck's group the deciding pass itself lands — and left only the rows it never
 //! mentioned for [`rehome`] (§3.3, as amended at the final review).
-//!
-//! **Every-target, like the rest of `sync_engine`**: the two merges it borrows,
-//! `collection_folders::refile_entry` and `wishlist_folders::refile_wish`, sit on the every-target
-//! half of their modules, so the browser build re-homes exactly as the desktop does.
 
 use rusqlite::Connection;
 
@@ -32,7 +28,7 @@ use rusqlite::Connection;
 ///
 /// **Test-only, because nothing else reads it**: `doomed` spells each path in its own SQL rather
 /// than walking this list, so in a build without the fence it is dead code, and `-D warnings`
-/// refuses one (measured on the `wasm` leg's clippy). What keeps the list and `doomed` agreeing
+/// refuses one. What keeps the list and `doomed` agreeing
 /// is the order a change meets them in: the fence fails on a new cascade key until it is written
 /// here, and writing it here is the moment to teach `doomed` the path.
 #[cfg(test)]

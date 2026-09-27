@@ -211,17 +211,13 @@ function ImportBody({
     readFile.reset();
     setPicking(true);
     try {
-      // **Which picker this is depends on the build, and this file does not know which.**
-      // `../files` is the seam: on desktop and Android `dialog:allow-open` answers a *path*
-      // and `import_read_file` opens it in Rust, which is why no `fs:` permission is needed
-      // here either; on the web target there is no path at all and the page holds the `File`
-      // an `<input type=file>` handed it. Both answer a `PickedDecklist` and both are read by
-      // the same mutation below.
-      const picked = await pickDecklist();
+      // `dialog:allow-open` answers a *path* and `import_read_file` opens it in Rust, which is
+      // why no `fs:` permission is needed here — `../files` is where both halves live.
+      const path = await pickDecklist();
       // A cancelled picker is not a failure — it is the most ordinary way to use a file dialog
       // after changing your mind.
-      if (picked !== null) {
-        readFile.mutate(picked, { onSuccess: (contents) => setText(contents) });
+      if (path !== null) {
+        readFile.mutate(path, { onSuccess: (contents) => setText(contents) });
       }
     } catch (e) {
       setPickerFailure(ipcError(e));
