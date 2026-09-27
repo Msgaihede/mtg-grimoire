@@ -38,6 +38,7 @@ jobs:
       powershell: ${{ steps.classify.outputs.powershell }}
       wasm: ${{ steps.classify.outputs.wasm }}
       android: ${{ steps.classify.outputs.android }}
+      storybook: ${{ steps.classify.outputs.storybook }}
     steps:
       # The classification is a diff against the base, so this needs history, not a
       # depth-1 checkout. 188 commits of text — the full fetch costs a second or two.
@@ -47,9 +48,10 @@ jobs:
 
       # The router is a dependency-free Node script, so no `npm ci` — only a pinned Node, for the
       # reason the `wasm` job pins its clang: whatever the runner image ships is not a contract.
+      # `.nvmrc` is that pin for every job and workflow here, and for a contributor's machine.
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Classify the changed paths
         id: classify
@@ -86,7 +88,7 @@ jobs:
           # missing one reads as `''`, every job gated on it skips, and `ci-ok` counts a skip
           # as a pass — so a router that printed nothing would take the gate green having run
           # nothing. Fail here instead.
-          for job in frontend rust powershell wasm android; do
+          for job in frontend rust powershell wasm android storybook; do
             grep -Eqx "$job=(true|false)" <<< "$flags" \
               || { echo "ci-route.mjs printed no '$job=true|false' line:" >&2; echo "$flags" >&2; exit 1; }
           done
@@ -100,39 +102,86 @@ jobs:
             echo "$flags" | sed 's/^\([a-z]*\)=\(.*\)$/| \1 | `\2` |/'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # **Five legs in parallel, where this was one serial job of 8–12 minutes.** Vitest alone was
+  # 345–415 s for ~390 files on one runner, behind `npm run build` and `eslint .`, with
+  # `build-storybook` after it — and branch protection is `strict`, so every merge into `main`
+  # re-queues every open PR behind that whole critical path. One leg builds and lints; four split
+  # the test files with vitest's `--shard`, which divides the collected files deterministically,
+  # so a leg runs the same files on every run and a failure names its shard. Storybook's build is
+  # a job of its own below.
+  #
+  # **The matrix is safe here because `ci-ok` reads `needs.frontend.result`**, which is
+  # `failure` when any leg fails — the protected name is still `ci-ok`, never a leg's.
+  # `fail-fast: false` so one red shard does not cancel the others and hide their failures.
   frontend:
-    name: frontend
+    name: frontend (${{ matrix.part }})
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: build + lint
+          - part: vitest 1/4
+            shard: 1/4
+          - part: vitest 2/4
+            shard: 2/4
+          - part: vitest 3/4
+            shard: 3/4
+          - part: vitest 4/4
+            shard: 4/4
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        if: ${{ !matrix.shard }}
+        run: npm run build
+
+      - name: Lint
+        if: ${{ !matrix.shard }}
+        run: npm run lint
+
+      # No test reads `dist/` — `npm run build` feeds nothing here, which is what lets the shards
+      # start at the same moment as the build leg rather than behind it.
+      - name: Test (${{ matrix.shard }})
+        if: ${{ matrix.shard }}
+        run: npm run test:run -- --shard=${{ matrix.shard }}
+
+  # The only gate the `.mdx` catalogue page has. Stories are `.tsx` under `src/`, so `tsc` and
+  # ESLint already see them; `.storybook/DesignSystem.mdx` is seen by neither — `tsc` reads only
+  # `.ts`/`.tsx`, and `eslint` reports "File ignored because no matching configuration was
+  # supplied". It covers more than MDX: the Storybook build is also what compiles
+  # `.storybook/preview.css` and the fake backend's entry points.
+  #
+  # **A job of its own since issue #559**, where it was the last step of `frontend` and a serial
+  # minute or two on the critical path. It has its own `changes` output because it reads less
+  # than `frontend` does: no `src-tauri/` or `crates/` file (the fake's parity with
+  # `generate_handler!` is a vitest test, `.storybook/fake/parity.test.ts`, and runs in
+  # `frontend`), and no `scripts/`. A job gated on a `changes` output belongs in every list of
+  # jobs — `JOBS`, the classify check, `changes.outputs`, and `ci-ok`'s `needs` and loop.
+  storybook:
+    name: storybook
+    needs: changes
+    if: needs.changes.outputs.storybook == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci
 
-      - name: Build
-        run: npm run build
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Test
-        run: npm run test:run
-
-      # The only gate the `.mdx` catalogue page has. Stories are `.tsx` under `src/`, so `tsc`
-      # and ESLint already see them; `.storybook/DesignSystem.mdx` is seen by neither — `tsc`
-      # reads only `.ts`/`.tsx`, and `eslint` reports "File ignored because no matching
-      # configuration was supplied". It covers more than MDX: the Storybook build is also what
-      # compiles `.storybook/preview.css` and the fake backend's entry points.
-      #
-      # In `frontend` rather than a job of its own because `frontend` already feeds `ci-ok`,
-      # the one protected check; a new job would need adding to that aggregator's `needs:` to
-      # have any teeth at all.
       - name: Build Storybook
         run: npm run build-storybook
 
@@ -174,9 +223,8 @@ jobs:
           mkdir -p dist
           echo '<!doctype html><title>ci stub</title>' > dist/index.html
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # `rust-toolchain.toml`'s pin, never `stable` — see that file.
+      - uses: ./.github/actions/rust-toolchain
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -247,7 +295,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
 
       - run: npm ci
@@ -266,10 +314,9 @@ jobs:
             exit 1
           fi
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain
         with:
           targets: wasm32-unknown-unknown
-          components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -332,7 +379,7 @@ jobs:
           mkdir -p dist
           echo '<!doctype html><title>ci stub</title>' > dist/index.html
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-toolchain
         with:
           targets: aarch64-linux-android
 
@@ -410,7 +457,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, frontend, rust, powershell, wasm, android]
+    needs: [changes, frontend, rust, powershell, wasm, android, storybook]
     runs-on: ubuntu-22.04
     steps:
       - name: Fail unless every dependency succeeded or was deliberately skipped
@@ -421,8 +468,9 @@ jobs:
           POWERSHELL: ${{ needs.powershell.result }}
           WASM: ${{ needs.wasm.result }}
           ANDROID: ${{ needs.android.result }}
+          STORYBOOK: ${{ needs.storybook.result }}
         run: |
-          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST powershell=$POWERSHELL wasm=$WASM android=$ANDROID"
+          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST powershell=$POWERSHELL wasm=$WASM android=$ANDROID storybook=$STORYBOOK"
 
           # `changes` is the one dependency that may never be skipped or fail. It decides
           # what the other two do, so if it dies they skip — and a rule that reads a skip
@@ -432,7 +480,7 @@ jobs:
           # A skip here is a deliberate answer from `changes`: that part of the repo did
           # not change, so it has nothing to prove. Every job gated on a `changes` output
           # belongs in this loop — one left out is a job whose failure the gate ignores.
-          for result in "$FRONTEND" "$RUST" "$POWERSHELL" "$WASM" "$ANDROID"; do
+          for result in "$FRONTEND" "$RUST" "$POWERSHELL" "$WASM" "$ANDROID" "$STORYBOOK"; do
             case "$result" in
               success|skipped) ;;
               *) exit 1 ;;

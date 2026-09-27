@@ -1,0 +1,67 @@
+// The toolchain pins, held to the workflows that must read them. A pin nobody reads is a comment:
+// `rust-toolchain.toml` says 1.98.1 and a workflow that still installs `dtolnay/rust-toolchain@stable`
+// builds with whatever stable is current — which is the drift the pin exists to stop, and the one
+// place it would go unnoticed is `release.yml`, whose binaries nobody lints.
+import { describe, expect, it } from "vitest";
+import toolchainToml from "../rust-toolchain.toml?raw";
+import rustAction from "../.github/actions/rust-toolchain/action.yml?raw";
+import nvmrc from "../.nvmrc?raw";
+import packageJson from "../package.json?raw";
+
+// Every workflow, so a new one is held to the same rules the day it lands.
+const WORKFLOWS = import.meta.glob("/.github/workflows/*.yml", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
+describe("rust-toolchain.toml", () => {
+  it("pins an exact release, never a channel name", () => {
+    const channel = /^channel = "([^"]+)"$/m.exec(toolchainToml)?.[1];
+    expect(channel).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  // The composite action parses the file with `sed`; this is the shape that `sed` expects.
+  it("is the shape the composite action reads", () => {
+    expect(rustAction).toContain(
+      `sed -n 's/^channel *= *"\\([^"]*\\)".*$/\\1/p' rust-toolchain.toml`,
+    );
+    expect(rustAction).toContain("toolchain: ${{ steps.read.outputs.channel }}");
+  });
+});
+
+describe("every workflow", () => {
+  const entries = Object.entries(WORKFLOWS);
+
+  it("is found", () => {
+    expect(entries.map(([path]) => path)).toEqual(
+      expect.arrayContaining([
+        "/.github/workflows/ci.yml",
+        "/.github/workflows/release.yml",
+        "/.github/workflows/scanner-bundle.yml",
+      ]),
+    );
+  });
+
+  it.each(entries)("%s installs Rust only through the pinned action", (_path, src) => {
+    expect(src).not.toMatch(/dtolnay\/rust-toolchain/);
+    expect(src).not.toMatch(/rustup (?:default|toolchain install|update)/);
+  });
+
+  it.each(entries)("%s takes Node from .nvmrc", (_path, src) => {
+    expect(src).not.toMatch(/node-version:/);
+    const setups = src.match(/uses: actions\/setup-node@/g)?.length ?? 0;
+    const pinned = src.match(/node-version-file: \.nvmrc/g)?.length ?? 0;
+    expect(pinned).toBe(setups);
+  });
+});
+
+describe(".nvmrc", () => {
+  it("is a bare major at or above package.json's engines floor", () => {
+    const major = Number(nvmrc.trim());
+    expect(nvmrc.trim()).toMatch(/^\d+$/);
+    const floor = /^>=(\d+)/.exec(JSON.parse(packageJson).engines?.node ?? "")?.[1];
+    expect(floor).toBeDefined();
+    expect(major).toBeGreaterThanOrEqual(Number(floor));
+  });
+});
