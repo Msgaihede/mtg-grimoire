@@ -65,10 +65,6 @@
   // included here demands a built declaration beside it (TS6305), and nothing builds that
   // project.
   "include": ["src", "share"],
-  /* The two files that belong to `tsconfig.sw.json` instead. They are compiled with
-     `lib.webworker`, where `self` is a `ServiceWorkerGlobalScope`; in this program `self` is a
-     `Window` and every line of `sw.ts` is an error. `swCore.ts` stays in BOTH programs — it
-     names only types the two libraries share. */
-  "exclude": [".claude", "src/pwa/sw.ts", "src/pwa/sw-env.d.ts"],
+  "exclude": [".claude"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

@@ -52,12 +52,10 @@
 //!   out lately of what you play*, not *what you are missing*, and the deck popover names the
 //!   copies either way.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key. The table is the application's, deliberately not `sync_meta` — a mark
@@ -170,9 +168,7 @@ pub struct NewPrinting {
     pub lang: String,
     /// The printing's front-face picture per variant, from [`crate::image_uri::front_face_map`] —
     /// the crate's one rule for which column, which face and which host, read here rather than
-    /// respelled. **On the wire because the web and Android targets draw only a URL they are
-    /// handed** — `cardArtSrc` ignores the `mtgimg://` route there — so without it their thumb is
-    /// blank. `None` for a printing with no fetchable picture anywhere, never an empty map.
+    /// respelled. `None` for a printing with no fetchable picture anywhere, never an empty map.
     pub image_uris: Option<BTreeMap<String, String>>,
     /// The watched decks holding this card, by deck name.
     pub decks: Vec<NewPrintingDeck>,
@@ -492,10 +488,6 @@ fn seen_at(conn: &Connection) -> Option<i64> {
 }
 
 /// Move the *seen* cursor to `at`, in unix seconds.
-///
-/// The clock is the caller's for [`crate::recent_cards::record`]'s reason: `SystemTime::now()`
-/// panics on `wasm32-unknown-unknown` rather than erroring, and this module is on the
-/// every-target half of the map.
 pub fn mark_seen(conn: &Connection, at: i64) -> Result<(), String> {
     crate::app_meta::set_app_meta(conn, K_NEW_PRINTINGS_SEEN, &at.to_string())
         .map_err(|e| format!("the new printings you have seen could not be recorded: {e}"))
@@ -508,7 +500,6 @@ pub fn mark_seen(conn: &Connection, at: i64) -> Result<(), String> {
 /// one is narrowed again here: `days` into `1..=MAX_DAYS`, `limit` into
 /// `0..=`[`NEW_PRINTINGS_READ`], an unknown `scope` into `all`, and `langs` to codes of the right
 /// shape, capped at `MAX_LANGS`. A hand-edited row cannot ask for the whole corpus.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn new_printings(
@@ -538,13 +529,11 @@ pub async fn new_printings(
         .map_err(|e| format!("the new printings could not be read: {e}"))?
 }
 
-/// Move the *seen* cursor to `at`. The clock is the **caller's**, never `SystemTime::now()`,
-/// which panics on the wasm target — [`crate::recent_cards::record`]'s rule, one command over.
+/// Move the *seen* cursor to `at`, which is the caller's clock.
 ///
 /// Answers [`crate::db::BUSY`] if a sync holds the write connection, like every write command
 /// here. **The caller ignores a refusal**: a cursor that did not move costs a row of gold dots
 /// the reader has already looked at, and a widget that raised an error over it would be worse.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn mark_new_printings_seen(
     state: tauri::State<'_, Arc<AppState>>,

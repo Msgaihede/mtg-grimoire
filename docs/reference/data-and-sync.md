@@ -211,14 +211,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
   **To a reader, the pictures are free.** A collapsed browse is ~147 ms carrying them and ~150 ms
   without; the wall's own request is ~137 ms either way. Those differences sit under the IPC hop
-  and the paint that follow them, and the 123 B a row the payload grew buys the browser build a
-  wall that can draw art at all — `mtgimg://` is a Tauri protocol and wasm cannot register a URL
-  scheme, so on web the URL travels with the row or there is no picture.
+  and the paint that follow them. The 123 B a row bought the browser build a wall that could draw
+  art at all, since `mtgimg://` is a Tauri protocol; that build was removed on 2026-09-27, and
+  the field now travels with the row unread until a follow-up takes it out.
 
 - **2026-08-31 doubled those two `json_extract`s to four, and the query cost was *not*
   re-measured.** `image_uri::LIST_VARIANTS` gained `art` beside `display`, because a deck cover,
   a folder card's member strip, both halves of the cover picker and the theory diff all draw the
-  frameless crop and every one of them was a blank frame in a browser — five surfaces, five
+  frameless crop and every one of them was a blank frame in the browser build — five surfaces, five
   readers, which is what that constant's doc asks for before a name goes on it. **The payload
   was re-measured** the same way the figure above was taken (debug, `run_search`, a byte copy of
   the dev pair, one collapsed 50-row page, `serde_json`): 23 196 B with no field → 29 346 B with
@@ -661,8 +661,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `CREATE TRIGGER`s, and `ALTER TABLE` rewrites a trigger the way it rewrites a reference — so
   `sync_ins_deck_tags` would survive as a second, older trigger firing on `deck_labels` beside the
   `sync_ins_deck_labels` that `capture::install` then creates, and every insert would emit two
-  ops. Dropping them costs nothing: `prepare_database` calls `install` immediately afterwards, on
-  every target, so the gap is shut before anything can write.
+  ops. Dropping them costs nothing: `prepare_database` calls `install` immediately afterwards,
+  so the gap is shut before anything can write.
   Third, **`deck_audit` is a full rebuild**, v29's `error_log` argument exactly — `kind` sits
   inside a CHECK and SQLite has no `ALTER … CHECK`. The rows are rewritten on the way across, and
   the payload key moves through **`json_insert` then `json_remove` rather than a text
@@ -1062,6 +1062,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `duplicate_deck`, like it — **and unlike it, on a history row and on
   `deck_undo::DECK_FIELDS`**, because it is an arrangement the reader drags rather than a setting.
   [decks-storage.md](decks-storage.md) has the rest.
+  **v53 gives `deck_categories` a `variant`, so a deck's Theory and Actual lists stop sharing one
+  pile set** (2026-09-27, issue [#561](https://github.com/Msgaihede/mtg-grimoire/issues/561)). One
+  transaction: the six capture triggers on `deck_categories` and `deck_cards` dropped first (v43's
+  move), `variant TEXT NOT NULL DEFAULT 'live'` added with no `CHECK`, both unique indexes rebuilt
+  as `(deck_id, variant, name)` and `(deck_id, variant, kind) WHERE kind <> 'main'`, and
+  `schema::split_theory_piles` — every pile of every deck with a plan cloned into the theory list
+  under a uid derived from the original's, the deck's theory cards repointed, and those decks'
+  undo journals cleared. `split::convert` runs the same function. The net for a group that did not
+  climb together, and the rule that it should: `src-tauri/CLAUDE.md`'s v53 entry and
+  [sync.md](sync.md) *A pile's list is on the wire since user schema v53*.
   **v52 makes a token's printings _entries_, and replaces `decks.token_stack` with
   `decks.token_mode`** (2026-09-26,
   [the token-stacks spec](../superpowers/specs/2026-09-26-token-stacks-design.md) §4). One
@@ -1437,7 +1447,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `deck_meta::create_category` → `'user'`, `deck_meta::ensure_predefined_categories` → `'user'`,
   and `deck::duplicate_deck`, which **copies** the source pile's answer rather than re-deciding
   it) and no command parameter reaches it. **The point of storing it is that `category_for_name`
-  finds before it creates**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so a reader's own "Ramp"
+  finds before it creates**: `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)`, so a reader's own "Ramp"
   is found rather than re-made and keeps `'user'` forever, which is exactly the case a rule driven
   off the _name_ — "Ramp", "Draw", "Removal", "Land" are what people call their own piles — gets
   wrong. The backfill is a **one-time frozen guess**: `kind = 'main'` plus one of the 22 names

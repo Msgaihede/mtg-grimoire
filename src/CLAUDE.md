@@ -100,12 +100,15 @@ Every one of these has its measurement and its story in
   to pass `decoding="async"` by hand no longer pass anything. Every figure and both A/Bs:
   [image-cache.md](../docs/reference/image-cache.md).
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
-  no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
-  search's, the collection's, the wishlist's and the three docked search columns — all of them
-  `features/search/CardGrid`, which is the one wall. Grep `from "@/components/CardArt"` for the
-  census rather than trusting a list here. **This sentence named two callers that are not that
-  wall — the deck's own `DeckTokensPanel` and `TokenArtPicker`, which draw tokens rather than deck
-  rows — and that was never the whole census**: the views' token pile was a third until
+  no-art fallback and the foil marking, in one place. **Its picture is the `mtgimg://` protocol's,
+  built by `cardImageUrl` from the card id, unless the caller passes `remoteSrc` — and only the
+  share viewer's `share/ShareTile.tsx` does**, because that page has no protocol to ask.
+  **Every wall of card faces draws it**: the search's, the collection's, the wishlist's and the
+  three docked search columns — all of them `features/search/CardGrid`, which is the one wall.
+  Grep `from "@/components/CardArt"` for the census rather than trusting a list here. **This
+  sentence named two callers that are not that wall — the deck's own `DeckTokensPanel` and
+  `TokenArtPicker`, which draw tokens rather than deck rows — and that was never the whole
+  census**: the views' token pile was a third until
   2026-09-26, and the home page's widgets, `CombosDialog` and the shared binder draw `CardArt`
   outside the wall too. The two it named are still the **deck's** only ones; the token pile left
   for the second list below (token stacks, spec §3.2). A surface
@@ -243,16 +246,16 @@ Every one of these has its measurement and its story in
   exactly what a broken name still passes. jsdom trims the same way, so the fence is cheap:
   `toHaveAccessibleName`, on the element, with the whole phrase.
 - **A view whose guarantee is "it cannot write" needs a source sweep, because there is no
-  read-only mode on this app's data path.** `lock_db_read` returns the *write* connection on
-  wasm, and `@/lib/writes` is only about which mutation owns the error banner — so a flag would
-  be a claim. `src/features/share/readOnly.test.ts` is the shape to copy: an `import.meta.glob`
-  over the subtree, `ipc.<name>` matched against two enumerated lists, four back doors
-  (`ipc["…"]`, a binding taken off `ipc`, `ipc` passed as an argument, a namespace import)
-  refused outright, and an anti-vacuity guard so a moved directory cannot turn the guarantee into
-  a green build over an empty set. **The permitted write goes on its own list** — `WRITES`, not
-  two more entries on `READS` — so a diff that touches it is a diff about the view's promise. It stays total only while the calls are made **in** the swept
-  files, which is why that view writes its own paging loop rather than importing a helper that
-  would take the callback elsewhere.
+  read-only mode on this app's data path.** `@/lib/writes` is only about which mutation owns the
+  error banner — so a flag would be a claim. `src/features/share/readOnly.test.ts` is the shape
+  to copy: an `import.meta.glob` over the subtree, `ipc.<name>` matched against two enumerated
+  lists, four back doors (`ipc["…"]`, a binding taken off `ipc`, `ipc` passed as an argument, a
+  namespace import) refused outright, and an anti-vacuity guard so a moved directory cannot turn
+  the guarantee into a green build over an empty set. **The permitted write goes on its own
+  list** — `WRITES`, not two more entries on `READS` — so a diff that touches it is a diff about
+  the view's promise. It stays total only while the calls are made **in** the swept files, which
+  is why that view writes its own paging loop rather than importing a helper that would take the
+  callback elsewhere.
 - **This app starts no native drag, and `lib/nativeDrag.ts` refuses every one the page would
   begin** (issue #473, 2026-09-19). Every drag is dnd-kit's pointer gesture and `CardImage` is
   `draggable={false}`, so the native drags left were accidents: a **text selection** pulled out of
@@ -1074,47 +1077,19 @@ Every one of these has its measurement and its story in
   reference to something the palette decides later.
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
   with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
-- **`src/lib/platform.ts` is the only place the page asks what platform it is on**, and it asks
-  the **user agent** — `src/lib/images.ts`'s `imageOrigin()` is the shipped precedent, and a
-  reader needs the answer synchronously during its first render. It answers `false` for
-  anything it does not recognise, which is what keeps jsdom and Storybook on the desktop shape
-  without either of them having to say so; the token is `Android` and not `Linux` or `Mobile`,
-  because an Android agent is a Linux one with one extra word. **Name a reader, never count
-  them** — a count is a fact about a tree and every branch has a different one;
-  `grep -n "isAndroid(" src/` is the census — **and since 2026-09-20 that grep is no longer the
-  whole of it**, because the module exports a second answer built on the first. `isDesktop()` is
-  `!isWebTarget() && !isAndroid()`, the question *a second window exists here*, and its readers
-  reach `isAndroid` only through it, so they do not appear in that sweep at all:
-  `grep -n "isDesktop()" src/` is theirs. Both readers are one chord —
-  `AppShell` binds `Ctrl+Shift+N` behind it and `KeyMap` filters `desktopOnly` rows with the same
-  call, so the panel cannot list a chord this build does not bind (see
-  [keyboard-shortcuts.md](../docs/reference/keyboard-shortcuts.md)). `AppShell` reads `isAndroid`
-  itself for the caption (three of
-  `TitleBar`'s four verbs are `#[cfg(desktop)]` in tauri and `capabilities/mobile.json` grants
-  none of them); `BackupPanel` reads it to fold the panel away (the mirror is desktop-only by
-  decision); and `ipc.ts`'s `scannerFrame` / `scannerCapture` read it to choose a body shape.
-  **That last one is the reader the note here used to ask to justify itself, and the answer is
-  that it does not belong behind the core boundary**: a core is a fact about the *build* and both
-  legs are the Tauri build, so a core split could not see the difference. The difference is
-  Tauri's own, per OS — raw IPC bytes "on all platforms except Android" — and it is met in the
-  one wrapper that meets it. `UpdatePanel` is deliberately *not* a reader: it branches on the
-  backend's own `installKind`, because two independent answers to one question are free to
-  disagree. See [android-target.md](../docs/reference/android-target.md).
 - **`useNarrowWindow` is the app's one viewport branch, and a new consumer is a _reader_ of it
   rather than a second branch.** `viewports.ts` demands a reason at the site of any branch on
   width; consuming an answer the shell has already decided needs no new one, and the test for a
   genuinely *second* branch is unchanged — name the box the question is about, and if it is not
   the window, this is not the mechanism. `ScannerPage` is the case that settled the wording: a
-  phone stacks the camera above the verdict where a desk stands them side by side, which is the
-  shell's own question. **The hook's doc names its readers rather than counting them**, for the
-  reason above, and `grep -n "useNarrowWindow()" src/` is that census too.
+  narrow window stacks the camera above the verdict where a wide one stands them side by side,
+  which is the shell's own question. **The hook's doc names its readers rather than counting
+  them** — a count is a fact about a tree and every branch has a different one — and
+  `grep -n "useNarrowWindow()" src/` is the census.
 - **`Core.call` takes `(command, args?: CallArgs, options?: CallOptions)`**, where `CallArgs` is
   `Record<string, unknown> | Uint8Array`. It widened for one *shape* of call, which two wrappers
   make — `ipc.scannerFrame` and `ipc.scannerCapture`, the only two that pass raw bytes and
-  headers — and **the browser core rejects a `Uint8Array` with `RAW_CALL_UNAVAILABLE` before it
-  reaches the Worker**. That constant is also the sentence the Scanner's web view draws,
-  imported rather than respelled, so a reader who somehow pressed Scan gets the message the page
-  already showed them.
+  headers.
 - **A JSON header value must be written with `asciiJson`, never with bare `JSON.stringify`.** A
   header value is bytes, and three layers disagree about which bytes are allowed: `JSON.stringify`
   leaves non-ASCII as itself, a browser sends 0x80–0xFF as Latin-1 and throws outright above
@@ -1300,4 +1275,4 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
 | `features/decks/` | Has its own `CLAUDE.md` — the deck domain rules live there |
 | `features/tags/` | Browse by what a card **is of**. Storied under `Tags/*`; the wall is `features/search`'s, reused with collapse off |
 | `features/share/` | Somebody else's binder, read-only — the guarantee is structural and `readOnly.test.ts` is the fence. [collection-sharing.md](../docs/reference/collection-sharing.md) |
-| `share/` (repo root) | **Not part of this program's bundle** — the *public* web viewer, a second Vite entry over the same `src/` components, with no `ipc`, no core, no wasm and no service worker. In `tsconfig.json`'s `include`, built by `npm run share:build`, which **neither `verify` nor CI runs** |
+| `share/` (repo root) | **Not part of this program's bundle** — the *public* web viewer, a second Vite entry over the same `src/` components, with no `ipc` and no core. In `tsconfig.json`'s `include`, built by `npm run share:build`, which **neither `verify` nor CI runs** |

@@ -348,7 +348,7 @@ fn currency(market: crate::sorting::Marketplace) -> &'static str {
     }
 }
 
-/// `flate2` is already a dependency and already compiles for wasm through `rust_backend`.
+/// `flate2` is already a dependency.
 pub fn gzip(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     e.write_all(bytes).map_err(|e| e.to_string())?;

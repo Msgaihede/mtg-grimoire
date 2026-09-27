@@ -36,9 +36,7 @@
 //! a supported state, and the app it describes is the app before this module existed.
 
 use super::{Dataset, TagStatus};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The event a refresh reports itself through.
@@ -68,10 +66,9 @@ pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 /// above and below reaches [`super`] through it.
 /// Scryfall's name for this bulk entry, **and this dataset's `operation` in `error_log`**.
 ///
-/// It lives here rather than in [`crate::scryfall`] because it is read on every target: it is
-/// the key [`super::is_refreshing`] answers a status query from, so a browser needs it even
-/// though a browser never downloads the file it names. `scryfall` aliases this rather than
-/// holding its own, so the two cannot drift.
+/// It lives here rather than in [`crate::scryfall`] because it is this dataset's own name: it
+/// is the key [`super::is_refreshing`] answers a status query from. `scryfall` aliases this
+/// rather than holding its own, so the two cannot drift.
 pub const BULK_NAME: &str = "art_tags";
 
 pub const ART: Dataset = Dataset {
@@ -111,7 +108,6 @@ pub type ArtTagProgress = super::TagProgress;
 /// Download the Art Tags file if it has changed and rebuild the taxonomy from it.
 ///
 /// `force` skips the weekly throttle, not the ETag check.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn art_tags_refresh(
     state: tauri::State<'_, Arc<AppState>>,
@@ -129,7 +125,6 @@ pub async fn art_tags_refresh(
 ///
 /// `async`, and answered on the blocking pool, because a sync command body runs inline on the
 /// IPC thread and this takes `db_read`'s mutex.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn art_tags_status(
     state: tauri::State<'_, Arc<AppState>>,
@@ -140,7 +135,6 @@ pub async fn art_tags_status(
         .map_err(|e| format!("could not read the art tag status: {e}"))
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// Refresh the taxonomy at startup if it is due.
 ///
 /// **Silent, best-effort and never blocking** — [`super::refresh_if_due`]'s contract. The

@@ -35,7 +35,7 @@ function category(over: Partial<DeckCategory> & { id: number; name: string }): D
     sortOrder: over.id,
     cardCount: 0,
     totalPrice: null,
-    cardCountAllVariants: 0,
+    variant: "live",
     ...over,
   };
 }

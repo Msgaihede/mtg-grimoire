@@ -1,9 +1,9 @@
 //! The card scanner inside the app: the crate's [`Session`] behind its commands, and the
 //! reader's scanner preferences and review tray beside them.
 //!
-//! **Its own managed state, not a field on `AppState`.** It is optional and desktop/Android
-//! only, it loads lazily, and the only thing it shares with the rest of the app is the data
-//! directory and one read of `corpus.db` for labels. `app.manage` holds it beside `AppState`.
+//! **Its own managed state, not a field on `AppState`.** It is optional, it loads lazily, and
+//! the only thing it shares with the rest of the app is the data directory and one read of
+//! `corpus.db` for labels. `app.manage` holds it beside `AppState`.
 //! The two exceptions are [`scanner_prefs`] and [`scanner_tray`] (and their setters), which are
 //! `app_meta` rows and so take `AppState` like every other stored preference — they touch no
 //! session and must answer before the session has loaded. The setters take this state as well,
@@ -18,11 +18,10 @@
 //! [`scanner_status`] reports the exact path it looked at for each, and [`Asset::source`] says
 //! which of the three answered, so "no bundle" is never the whole message.
 //!
-//! **[`scanner_frame`] is the one command that takes a raw body.** On desktop the JPEG is the
-//! request body and the options are a header; on Android Tauri carries no raw bytes
-//! (`tauri::ipc::Request`'s own doc: "on all platforms except Android"), so the same command
-//! also accepts `{ "jpeg": "<base64>", "options": {…} }` as ordinary arguments. Both land in
-//! [`frame_payload`], which is the whole difference.
+//! **[`scanner_frame`] and [`scanner_capture`] take a raw body.** The JPEG is the request body
+//! and its JSON rides in a header — [`OPTIONS_HEADER`] for a frame, [`CAPTURE_HEADER`] for a
+//! capture. [`frame_payload`] and [`capture_payload`] read the two, and refuse a JSON body in
+//! words.
 //!
 //! **The seventh connection.** Labels are loaded on a read-only connection opened for the
 //! load and dropped after — never `AppState.db_read`, the rule the mirror thread and
@@ -51,7 +50,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
 use card_scanner::filters::ScanFilters;
 use card_scanner::index::Bundle;
 use card_scanner::ocr::TitleReader;
@@ -66,9 +64,9 @@ use crate::sync::AppState;
 pub const BUNDLE_FILE: &str = "card-hashes.bin";
 pub const DETECTION_MODEL: &str = "models/text-detection.rten";
 pub const RECOGNITION_MODEL: &str = "models/text-recognition.rten";
-/// The header a desktop frame carries its `FrameOptions` in, as JSON.
+/// The header a frame carries its `FrameOptions` in, as JSON.
 pub const OPTIONS_HEADER: &str = "x-scanner-options";
-/// The header a desktop capture carries its `Sidecar` in, as JSON.
+/// The header a capture carries its `Sidecar` in, as JSON.
 pub const CAPTURE_HEADER: &str = "x-scanner-capture";
 /// Candidates per frame — the debug server's `--top` default.
 const TOP: usize = 5;
@@ -653,7 +651,7 @@ pub fn tray_commit(
     })
 }
 
-/// The frame and its options, from either body shape. See the module doc.
+/// The frame from the request body and its options from [`OPTIONS_HEADER`]. See the module doc.
 pub fn frame_payload(
     body: &InvokeBody,
     headers: &HeaderMap,
@@ -667,27 +665,11 @@ pub fn frame_payload(
                 .unwrap_or_default();
             Ok((bytes.clone(), opts))
         }
-        InvokeBody::Json(value) => {
-            let jpeg = value
-                .get("jpeg")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| "the frame has no `jpeg` field".to_string())?;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(jpeg)
-                .map_err(|e| format!("the frame's base64 did not decode: {e}"))?;
-            let opts = value
-                .get("options")
-                .cloned()
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|e| format!("the frame's options did not parse: {e}"))?
-                .unwrap_or_default();
-            Ok((bytes, opts))
-        }
+        InvokeBody::Json(_) => Err("the frame has to arrive as a raw request body".to_string()),
     }
 }
 
-/// The capture and its sidecar, from either body shape.
+/// The capture from the request body and its sidecar from [`CAPTURE_HEADER`].
 ///
 /// **A sidecar header that is there and unreadable is a refusal, where an unreadable options
 /// header in [`frame_payload`] is a shrug — and the asymmetry is the point.** A defaulted
@@ -713,23 +695,7 @@ fn capture_payload(body: &InvokeBody, headers: &HeaderMap) -> Result<(Vec<u8>, S
             };
             Ok((bytes.clone(), sidecar))
         }
-        InvokeBody::Json(value) => {
-            let jpeg = value
-                .get("jpeg")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| "the capture has no `jpeg` field".to_string())?;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(jpeg)
-                .map_err(|e| format!("the capture's base64 did not decode: {e}"))?;
-            let sidecar = value
-                .get("sidecar")
-                .cloned()
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|e| format!("the capture's sidecar did not parse: {e}"))?
-                .unwrap_or_default();
-            Ok((bytes, sidecar))
-        }
+        InvokeBody::Json(_) => Err("the capture has to arrive as a raw request body".to_string()),
     }
 }
 
@@ -946,7 +912,6 @@ pub async fn set_scanner_tray(
 /// written whole, and a window that has lost the scanner is a window whose tray may be older than
 /// the stored one — its commit would file rows another window has already filed, and store a tray
 /// over theirs.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn scanner_tray_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1459,21 +1424,12 @@ mod tests {
     }
 
     #[test]
-    fn a_json_body_carries_the_frame_as_base64_for_android() {
-        let body =
-            InvokeBody::Json(serde_json::json!({ "jpeg": "AQID", "options": { "decide_at": 6 } }));
-        let (jpeg, opts) = frame_payload(&body, &HeaderMap::new()).expect("payload");
-        assert_eq!(jpeg, vec![1, 2, 3]);
-        assert_eq!(opts.decide_at, 6.0);
-    }
-
-    #[test]
-    fn a_json_body_with_no_frame_is_a_sentence_not_a_panic() {
-        let body = InvokeBody::Json(serde_json::json!({ "options": {} }));
-        let err = frame_payload(&body, &HeaderMap::new()).expect_err("no jpeg");
-        assert!(err.contains("jpeg"), "{err}");
-        let body = InvokeBody::Json(serde_json::json!({ "jpeg": "not base64!" }));
-        assert!(frame_payload(&body, &HeaderMap::new()).is_err());
+    fn a_json_body_is_a_sentence_not_a_panic() {
+        let body = InvokeBody::Json(serde_json::json!({ "jpeg": "AQID", "options": {} }));
+        let err = frame_payload(&body, &HeaderMap::new()).expect_err("a json frame");
+        assert!(err.contains("raw request body"), "{err}");
+        let err = capture_payload(&body, &HeaderMap::new()).expect_err("a json capture");
+        assert!(err.contains("raw request body"), "{err}");
     }
 
     #[test]
@@ -1488,19 +1444,6 @@ mod tests {
         assert_eq!(jpeg, vec![7]);
         assert_eq!(sidecar.expected, "Plains");
         assert_eq!(sidecar.votes, "8.0");
-    }
-
-    #[test]
-    fn a_json_capture_carries_the_frame_and_its_sidecar_for_android() {
-        let body = InvokeBody::Json(
-            serde_json::json!({ "jpeg": "AQID", "sidecar": { "expected": "Plains" } }),
-        );
-        let (jpeg, sidecar) = capture_payload(&body, &HeaderMap::new()).expect("payload");
-        assert_eq!(jpeg, vec![1, 2, 3]);
-        assert_eq!(sidecar.expected, "Plains");
-        // Every other field defaults rather than refusing: `Sidecar` is `#[serde(default)]`
-        // and a capture with only a name typed is the common one.
-        assert_eq!(sidecar.votes, "");
     }
 
     /// The page escapes non-ASCII as `\uXXXX` before the JSON goes on the wire, so the header

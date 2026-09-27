@@ -20,20 +20,17 @@
 //!   out rather than leaving two, so the list is a set ordered by recency — which is what a tile
 //!   row can draw without a key collision, and what a reader means by *recently*.
 //!
-//! **No clock in Rust.** `SystemTime::now()` panics on `wasm32-unknown-unknown` rather than
-//! erroring, and this module is on the every-target half of the map, so the time is SQLite's own
-//! `unixepoch()` — the clock every `created_at` in the schema is written from. [`record`] takes the
-//! time as an argument so a test can say when; [`record_now`] is what both targets' commands call.
+//! **No clock in Rust.** The time is SQLite's own `unixepoch()` — the clock every `created_at` in
+//! the schema is written from. [`record`] takes the time as an argument so a test can say when;
+//! [`record_now`] is what the command calls.
 //!
 //! **Not synced**, for [`crate::home`]'s reason: `app_meta` is in no `SYNCED_TABLES` entry, and
 //! which cards were open on *this* screen is a fact about the screen rather than the collection.
 //! No migration either — this is a key in schema v6's table.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key.
@@ -126,10 +123,7 @@ pub fn record(conn: &Connection, card_id: &str, now: i64) -> Result<(), String> 
         .map_err(|e| format!("could not remember the card you opened: {e}"))
 }
 
-/// [`record`] at SQLite's `unixepoch()` — the call both targets' commands make.
-///
-/// The clock is asked of the database rather than of the process because `SystemTime::now()`
-/// panics on wasm; see the module doc.
+/// [`record`] at SQLite's `unixepoch()` — the call the command makes. See the module doc.
 pub fn record_now(conn: &Connection, card_id: &str) -> Result<(), String> {
     let now: i64 = conn
         .query_row("SELECT unixepoch()", [], |r| r.get(0))
@@ -202,7 +196,6 @@ pub fn recent(conn: &Connection, limit: u32) -> Vec<RecentCard> {
 /// **Infallible by signature**, [`crate::home::home_layout`]'s contract and for its reason, and
 /// `#[tauri::command(async)]` for that command's reason too: it takes `db_read`'s mutex, which a
 /// search may hold, while the home page is drawing.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn recent_cards(state: tauri::State<'_, Arc<AppState>>, limit: u32) -> Vec<RecentCard> {
     recent(&crate::sync::lock_db_read(state.inner()), limit)
@@ -214,7 +207,6 @@ pub fn recent_cards(state: tauri::State<'_, Arc<AppState>>, limit: u32) -> Vec<R
 /// **The caller ignores a refusal**, [`crate::nav::set_nav_collapsed`]'s reading: a missed entry
 /// costs one tile on the home page and nothing the reader is looking at now, and a card modal that
 /// raised an error because a sync was running would be a far worse trade.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn record_recent_card(
     state: tauri::State<'_, Arc<AppState>>,

@@ -443,7 +443,7 @@ describe("useWishDestinationName", () => {
   });
 
   /**
-   * **The folder's own name, never its path.** A call site writes `Sent. 4 wishes updated in
+   * **The folder's own name, never its path.** A call site writes `… 4 wishes updated in
    * ${name}.`, and `…in Ordered / Someday.` is a file path read aloud. The dropdown is what
    * disambiguates two drawers sharing a name, and it has already done so by the time this sentence
    * is written — which is why the folder asked about here is one of the two `Someday`s.

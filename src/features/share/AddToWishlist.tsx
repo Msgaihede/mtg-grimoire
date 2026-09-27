@@ -57,6 +57,7 @@ import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import type { ShareCard } from "@/lib/shareSnapshot";
 import { cn } from "@/lib/utils";
+import { refreshCardSearches } from "@/lib/searchMarks";
 import { crossReference, wishGrainKey, type OwnedIndex } from "./useOwnedIndex";
 
 /**
@@ -237,7 +238,7 @@ export function AddToWishlist({
       // until it is re-read. The search's `wishlisted` badge is the other reader.
       if (added > 0) {
         void client.invalidateQueries({ queryKey: ["wishlist"] });
-        void client.invalidateQueries({ queryKey: ["cards", "search"] });
+        void refreshCardSearches(client);
       }
     }
     onAdded(`Added ${cards(added)} to ${named}.`);

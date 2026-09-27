@@ -36,13 +36,11 @@
 
 use crate::collection::{valid_quantity, EntryChange, ZERO_ADD};
 use crate::deck_meta::{DeckCategoryRow, DeckLabelRow};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The variant this module means when it says "the deck": what is actually sleeved up.
@@ -689,7 +687,9 @@ pub struct DeckPatch {
     /// picks is `src/features/decks/autoCategory.ts` — a card's Oracle tags read as a
     /// conclusion — and Rust neither knows nor may learn it. What Rust does own is the fence:
     /// a non-zero id here must name a category **of this deck** ([`category_of_deck`]), because
-    /// nothing in the DDL says so.
+    /// nothing in the DDL says so — and, since user schema v53, **of its live list**: the setting
+    /// is one per deck and names an Actual pile, which the Theory tab resolves by name among the
+    /// plan's piles (TypeScript's conclusion again). A theory pile id is refused.
     pub default_category_id: Option<i64>,
     /// Which Commander bracket the reader says this deck is — schema v26.
     ///
@@ -1034,13 +1034,6 @@ pub struct DeckRow {
     /// went — so `display` is here because [`crate::image_uri::LIST_VARIANTS`] emits the pair
     /// and not because anything on a gallery reads it.
     ///
-    /// **Why it is on the wire at all**, [`crate::search::CardSummary::image_uris`]' argument
-    /// in full: `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme
-    /// with a browser, so on web and on Android the URL travels with the row or the tile draws
-    /// nothing. That is what it was doing — every deck cover in a browser was a blank frame the
-    /// moment PR #327 made the card crop the only cover. On desktop this is ignored, because
-    /// `src/lib/images.ts`'s `cardArtSrc` takes the local cache.
-    ///
     /// `None` for a deck with no cover, for a cover whose printing has left `cards`, and for a
     /// printing with no fetchable image — three states the tile draws identically, because from
     /// the reader's side they are one: nothing to show yet. The first two heal on the next sync,
@@ -1147,7 +1140,11 @@ fn printing_row(conn: &Connection, card_id: &str) -> Result<Option<Printing>, St
 /// all 116 k of them, but the column is), and a null is as uncomparable as a missing row —
 /// folding it into the SQL rather than into a `match` is what keeps a caller from reading
 /// `Some(null)` as an oracle two printings could share.
-fn oracle_of(conn: &Connection, card_id: &str) -> Result<Option<String>, String> {
+///
+/// **`pub(crate)` for `collection::set_entry_printing`**, which asks [`swap_printing`]'s question
+/// of a collection row and must get the same answer to it — a second spelling of "can these two
+/// be compared" is the one that forgets the NULL.
+pub(crate) fn oracle_of(conn: &Connection, card_id: &str) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT oracle_id FROM cards WHERE id = ?1 AND oracle_id IS NOT NULL",
         params![card_id],
@@ -1201,7 +1198,8 @@ fn card_gone(category: &str) -> String {
     format!("That card is not in this deck's {category} category any more.")
 }
 
-/// Check that a category id names a category **of this deck**, and answer its name.
+/// Check that a category id names a category **of this deck and of this list**, and answer its
+/// name.
 ///
 /// The fence every card command opens with, and it is not decoration: nothing in the DDL
 /// stops `deck_cards.category_id` pointing at a category of a *different* deck — the FK only
@@ -1210,22 +1208,43 @@ fn card_gone(category: &str) -> String {
 /// `set_card_label`'s label id draw the same two-sentence distinction, and for the same reason:
 /// "gone" and "not yours" are different things to tell a stale editor.
 ///
+/// **And a third sentence since user schema v53** (issue #561): a pile belongs to one list, so a
+/// card written into `variant` may only be filed under a pile of that list
+/// ([`crate::deck_meta::CATEGORY_WRONG_LIST`]). The two tables share the word and no key joins
+/// them, which is the same absence the deck half of this fence exists for — a theory card filed
+/// under a live pile would be counted on a tab that does not draw it and draw a column on the
+/// other.
+///
 /// Returning the name rather than `()` is what lets [`card_gone`] name the category the reader
 /// is looking at without a second query.
-fn category_of_deck(conn: &Connection, deck_id: i64, category_id: i64) -> Result<String, String> {
-    conn.query_row(
-        "SELECT deck_id, name FROM deck_categories WHERE id = ?1",
-        params![category_id],
-        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
-    )
-    .optional()
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| crate::deck_meta::CATEGORY_GONE.to_owned())
-    .and_then(|(owner, name)| {
-        (owner == deck_id)
-            .then_some(name)
-            .ok_or_else(|| crate::deck_meta::CATEGORY_WRONG_DECK.to_owned())
-    })
+fn category_of_deck(
+    conn: &Connection,
+    deck_id: i64,
+    variant: &str,
+    category_id: i64,
+) -> Result<String, String> {
+    let (owner, list, name) = conn
+        .query_row(
+            "SELECT deck_id, variant, name FROM deck_categories WHERE id = ?1",
+            params![category_id],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| crate::deck_meta::CATEGORY_GONE.to_owned())?;
+    if owner != deck_id {
+        return Err(crate::deck_meta::CATEGORY_WRONG_DECK.to_owned());
+    }
+    if list != variant {
+        return Err(crate::deck_meta::CATEGORY_WRONG_LIST.to_owned());
+    }
+    Ok(name)
 }
 
 /// What a category is called, or `None` for [`AUTO_CATEGORY`] and for a pile that is not there.
@@ -2073,7 +2092,15 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    crate::deck_meta::ensure_predefined_categories(&tx, id)?;
+    crate::deck_meta::ensure_predefined_categories(&tx, id, LIVE)?;
+    // **And the plan's own four, when the deck is born with one** (user schema v53, issue #561).
+    // A pile belongs to one list, so a theory list has its own Commander, Sideboard, Companion
+    // and Maybeboard — made here for the reason the live ones are, or the Theory tab would open
+    // on a deck whose rules zones do not exist yet. A deck born without a plan gets them when
+    // [`update_deck`] switches it on.
+    if input.theory_enabled.unwrap_or(false) {
+        crate::deck_meta::ensure_predefined_categories(&tx, id, THEORY)?;
+    }
     // **And the group its copies sit in — unless there are no copies to sit in it.** For the
     // categories' reason exactly one table over:
     // schema v25 gave one to every deck that already existed, and a deck made afterwards needs
@@ -2363,8 +2390,14 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // exactly as [`category_of_deck`] is where the same rule lives for every card write. The
     // name it hands back is what the history row below quotes, so the check costs no second
     // query. `Some(0)` is Auto and names no category, so it is not asked about.
+    //
+    // **And of the live list** (user schema v53): the setting is one per deck and Deck settings
+    // offers the Actual list's piles, so a theory pile is refused here in the fence's own words.
+    // On the Theory tab the editor resolves the default by the live pile's *name* among the
+    // plan's piles — a conclusion drawn in TypeScript, from a fact that has to be a live pile for
+    // the name to mean the same thing on every device.
     let default_category_name = match patch.default_category_id.filter(|c| *c != AUTO_CATEGORY) {
-        Some(category_id) => Some(category_of_deck(&tx, id, category_id)?),
+        Some(category_id) => Some(category_of_deck(&tx, id, LIVE, category_id)?),
         None => None,
     };
     // **The kind is a pair, and it is resolved into one before a single value is bound.** See
@@ -2538,9 +2571,18 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // the raw field would leave a `patch { theoryEnabled: false, virtualOnly: true }` one
     // careless edit away from pouring the live list into a plan of a deck that is about to have
     // no cardboard at all. One value, read the same way the UPDATE bound it.
-    let will_move = theory_enabled == Some(true)
-        && !before.theory_enabled
-        && crate::deck_theory::theory_is_empty(&tx, id)?;
+    let switching_on = theory_enabled == Some(true) && !before.theory_enabled;
+    let will_move = switching_on && crate::deck_theory::theory_is_empty(&tx, id)?;
+    // **The piles before the switch, for the step's pile diff** (user schema v53, issue #561).
+    // The plan keeps piles of its own now, so switching it on can *make* piles — the move clones
+    // every live pile into the plan, and either arm makes the plan's four predefined zones where
+    // it has none — and an undo that put the flag and the cards back while leaving those piles
+    // standing would leave theory piles nobody made on a deck with no plan. Read on the
+    // transition only, the same condition that makes anything here.
+    let piles_before = match switching_on {
+        true => Some(crate::deck_undo::category_ids(&tx, id)?),
+        false => None,
+    };
     let cards_before = match will_move {
         true => Some((
             crate::deck_undo::read_variant(&tx, id, LIVE)?,
@@ -2585,6 +2627,14 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         crate::deck_theory::move_live_into_theory(&tx, id)?;
         move_live_tokens_into_theory(&tx, id)?;
         crate::deck_tokens::reconcile_in(&tx, id, &[LIVE, THEORY])?;
+    }
+    // **The plan's own rules zones, whichever arm ran.** The move has cloned every live pile,
+    // predefined ones included, so on that arm this finds all four and writes nothing — unless the
+    // live list lacked one. On the arm that does not move (a plan already started) the plan's
+    // piles are whatever it was left with, and a plan with no Sideboard of its own is a Theory tab
+    // with nowhere to put a sideboard card.
+    if switching_on {
+        crate::deck_meta::ensure_predefined_categories(&tx, id, THEORY)?;
     }
     let tokens_moved = match tokens_before {
         Some(tokens_was) => Some((tokens_was, token_entries_of(&tx, id)?)),
@@ -2689,6 +2739,13 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 undo.push(undo_tokens);
                 redo.push(redo_tokens);
             }
+        }
+        // The piles the switch made, last on the undo side and first on the redo side —
+        // `push_made_categories` owns that order: an undo deletes them only once the `Op::Variant`
+        // pair above has emptied them (a pile delete CASCADEs), and a redo restores them before
+        // the theory rows that are filed under them come back.
+        if piles_before.is_some() {
+            crate::deck_undo::push_made_categories(&tx, id, piles_before, &mut undo, &mut redo)?;
         }
         crate::deck_undo::record_step(&tx, audit_id, id, &crate::deck_undo::Step::new(undo, redo))?;
     }
@@ -3499,8 +3556,9 @@ struct CopiedCard {
 /// happen (a card's label is a label of its own deck) but is the honest answer if it ever does.
 ///
 /// The copy is **not** handed [`crate::deck_meta::ensure_predefined_categories`]: it inherits
-/// the source's four, because every deck has them — the v8 migration backfilled every deck
-/// that predates it and [`create_deck`] seeds every one made since. Topping up afterwards
+/// the source's four per list, because every deck has them — the v8 migration backfilled every
+/// deck that predates it and [`create_deck`] seeds every one made since, and a theory list gets
+/// its own from [`create_deck`] or [`update_deck`]'s switch (user schema v53). Topping up afterwards
 /// would be a second write with a failure mode of its own (a user category named "Sideboard"
 /// collides with the seeded one on `DECK_CATEGORY_GRAIN`) in exchange for an invariant that
 /// already holds.
@@ -3571,9 +3629,13 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
     // Read then write, one row at a time with `RETURNING id`, rather than one
     // `INSERT … SELECT`: the map from old id to new is the whole point, and a set insert
     // answers no ordered list of ids to build one from.
-    let categories: Vec<(i64, String, String, bool, i64, String)> = tx
+    //
+    // **Both lists' piles, each keeping its `variant`** (user schema v53, issue #561): a pile
+    // belongs to one list, so the copy's theory cards are remapped onto the copy's theory piles
+    // through the same map, and a theory pile that shares a name with a live one stays two piles.
+    let categories: Vec<(i64, String, String, String, bool, i64, String)> = tx
         .prepare(
-            "SELECT id, name, kind, is_active, sort_order, origin FROM deck_categories
+            "SELECT id, variant, name, kind, is_active, sort_order, origin FROM deck_categories
               WHERE deck_id = ?1 ORDER BY id",
         )
         .map_err(|e| e.to_string())?
@@ -3585,13 +3647,14 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
                 r.get(3)?,
                 r.get(4)?,
                 r.get(5)?,
+                r.get(6)?,
             ))
         })
         .map_err(|e| e.to_string())?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
     let mut category_map: HashMap<i64, i64> = HashMap::new();
-    for (old, name, kind, is_active, sort_order, origin) in categories {
+    for (old, variant, name, kind, is_active, sort_order, origin) in categories {
         // **`origin` is copied rather than re-decided**, and it is the fourth write site of a
         // column with only four ([`crate::deck_meta::DeckCategoryRow::origin`]). Duplicating a
         // deck copies its piles; it does not *make* them, so a pile the app invented stays
@@ -3602,10 +3665,11 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
         let new: i64 = tx
             .query_row(
                 "INSERT INTO deck_categories
-                    (deck_id, name, kind, is_active, sort_order, origin, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, unixepoch(), unixepoch())
+                    (deck_id, variant, name, kind, is_active, sort_order, origin,
+                     created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, unixepoch(), unixepoch())
                  RETURNING id",
-                params![copy, name, kind, is_active, sort_order, origin],
+                params![copy, variant, name, kind, is_active, sort_order, origin],
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
@@ -4090,8 +4154,11 @@ pub fn add_card(
     // arm gets it free from the fence it runs anyway; the name arm trims the caller's string
     // the way `category_for_name` did before storing it, so the two arms record the same word
     // for the same category.
+    //
+    // **Both arms are the list being written** (user schema v53): an id of the other list's
+    // pile is refused, and a name is found or made among this list's piles only.
     let (category_id, category) = match category_id {
-        Some(id) => (id, category_of_deck(&tx, deck_id, id)?),
+        Some(id) => (id, category_of_deck(&tx, deck_id, variant, id)?),
         // Unreachable past the guard above, and written as a second refusal rather than an
         // `expect` so that an edit which ever drops that guard answers the sentence instead
         // of panicking in a user's face.
@@ -4100,7 +4167,7 @@ pub fn add_card(
                 return Err(NO_CATEGORY.to_owned());
             };
             (
-                crate::deck_meta::category_for_name(&tx, deck_id, name)?,
+                crate::deck_meta::category_for_name(&tx, deck_id, variant, name)?,
                 name.trim().to_owned(),
             )
         }
@@ -4197,7 +4264,7 @@ pub fn set_card_quantity(
     valid_quantity(quantity, "deck quantity")?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     touch_deck(&tx, deck_id)?;
-    let category = category_of_deck(&tx, deck_id, category_id)?;
+    let category = category_of_deck(&tx, deck_id, variant, category_id)?;
 
     // The row as it is now, read before either branch writes. The history needs all three
     // columns — the count it is moving *from*, and the name the line will be read by once the
@@ -4305,14 +4372,14 @@ pub fn set_card_quantity(
 /// [`crate::import::commit_import`] a command rather than a loop over `add_card`, and the
 /// answer is the same: one transaction, one history row.
 ///
-/// ## Scope: this variant, and deliberately not both
+/// ## Scope: this variant, which is the pile's own
 ///
-/// The opposite of [`crate::deck_meta::delete_category`], which takes the live list and the
-/// theory list together because `deck_cards.category_id` is `ON DELETE CASCADE` and a category
-/// is not variant-scoped. A clear is not a delete: the pile survives, and what a reader is
-/// pointing at when they clear a stack is the list on screen. So the `WHERE` carries `variant`
-/// like every other card command, and the confirmation says out loud that the other list is
-/// untouched.
+/// A clear is not a delete: the pile survives, and what a reader is pointing at when they clear
+/// a stack is the list on screen. So the `WHERE` carries `variant` like every other card command.
+/// Since user schema v53 a pile belongs to one list and [`category_of_deck`] refuses a `variant`
+/// that is not the pile's, so the scope is the pile's own list and there is no other list's half
+/// of it to leave standing — the distinction this section used to draw against
+/// [`crate::deck_meta::delete_category`], while a pile was shared by both lists, no longer arises.
 ///
 /// ## An empty pile writes nothing
 ///
@@ -4357,7 +4424,7 @@ pub fn clear_category(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // The fence before the count, as every card command opens: a category of *another* deck
     // must not be counted, let alone emptied, and nothing in the DDL says so.
-    let category = category_of_deck(&tx, deck_id, category_id)?;
+    let category = category_of_deck(&tx, deck_id, variant, category_id)?;
     // Summed **before** the delete, and in copies rather than rows — two printings at 2 and 3
     // is 5 cards, which is the number the confirmation quoted and the number the day header
     // adds up. `delete_category` counts the same way one module over.
@@ -4581,9 +4648,11 @@ pub fn move_card(
     // — `add_card`'s rule, and this command grew the same second arm. Undoing a move that
     // invented a `Ramp` column has to take the column away with the card that made it.
     let categories_before = crate::deck_undo::category_ids(&tx, deck_id)?;
-    let from = category_of_deck(&tx, deck_id, from_category_id)?;
+    // **Both ends are this list's piles** (user schema v53): a move is within one list, and a
+    // target of the other list is refused rather than carrying a card across the tabs.
+    let from = category_of_deck(&tx, deck_id, variant, from_category_id)?;
     let (to_category_id, to) = match to_category_id {
-        Some(id) => (id, category_of_deck(&tx, deck_id, id)?),
+        Some(id) => (id, category_of_deck(&tx, deck_id, variant, id)?),
         // Unreachable past the guard above, and written as a second refusal rather than an
         // `expect` for `add_card`'s reason: an edit that ever drops that guard answers the
         // sentence instead of panicking in a reader's face.
@@ -4592,7 +4661,7 @@ pub fn move_card(
                 return Err(NO_CATEGORY.to_owned());
             };
             (
-                crate::deck_meta::category_for_name(&tx, deck_id, name)?,
+                crate::deck_meta::category_for_name(&tx, deck_id, variant, name)?,
                 name.trim().to_owned(),
             )
         }
@@ -4782,7 +4851,7 @@ pub fn swap_printing(
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     touch_deck(&tx, deck_id)?;
-    let category = category_of_deck(&tx, deck_id, category_id)?;
+    let category = category_of_deck(&tx, deck_id, variant, category_id)?;
 
     // The name comes across with the quantity because a refusal below has to say what is in
     // the deck, and the row's own denormalized name is what the deck list is showing. The set
@@ -4955,7 +5024,7 @@ pub fn set_card_finish(
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     touch_deck(&tx, deck_id)?;
-    let category = category_of_deck(&tx, deck_id, category_id)?;
+    let category = category_of_deck(&tx, deck_id, variant, category_id)?;
 
     // What the printing is actually sold in. A finish the object does not come in is not a
     // choice the reader can make, whatever the menu happened to be drawing — and the menu
@@ -5232,18 +5301,13 @@ pub struct DeckCardRow {
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
     /// still holds — so a collection that shrank under a stored claim reads honestly.
     pub owned_quantity: i64,
-    /// The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser
-    /// can reach**, and `None` when this printing has none worth fetching.
+    /// The front face's picture on `cards.scryfall.io`, by variant, and `None` when this
+    /// printing has none worth fetching.
     ///
     /// [`crate::search::CardSummary::image_uris`] carries the argument in full: one variant
     /// ([`crate::image_uri::LIST_VARIANT`], which is what `DECK_CARD_VARIANT` is on the other
     /// side), face 0, the face-first precedence and the `soon.jpg` fence, every one of them
     /// [`crate::image_uri::front_face_map`]'s and none of them respelled here.
-    ///
-    /// **Two surfaces read it and both had to be wired**: `views/GridView` draws a
-    /// `components/CardArt`, which takes the URL as a prop, and `CardStack` builds its own
-    /// `<img>` src — so it is the one that has to put both candidates through `cardArtSrc`
-    /// itself. `deck_get` is routed on web and `mtgimg://` is not reachable there.
     ///
     /// `None` for an orphan, whose printing has left `cards` — the same answer as every other
     /// card fact on this row, and the state `CardArt` already draws "No card" for.
@@ -6442,12 +6506,10 @@ pub fn decks_playing(conn: &Connection, keys: &[String]) -> Result<Vec<i64>, Str
 
 /// What a deck write says when its worker thread died under it. Never a user's problem —
 /// the write itself answers [`crate::db::BUSY`] when the database is busy.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck could not be written: {e}")
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6459,7 +6521,6 @@ pub async fn deck_create(
         .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6482,7 +6543,6 @@ pub async fn deck_update(
 /// **No `AppHandle`, where every other wrapper in this pair has one**: this took one solely to
 /// resolve the covers directory so the deck's `<id>.webp` could go with it, and custom covers
 /// went on 2026-08-31.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_delete(state: tauri::State<'_, Arc<AppState>>, id: i64) -> Result<(), String> {
     let state = state.inner().clone();
@@ -6503,7 +6563,6 @@ pub async fn deck_delete(state: tauri::State<'_, Arc<AppState>>, id: i64) -> Res
 ///
 /// **No `AppHandle`, for [`deck_delete`]'s reason**: it carried one only to resolve the covers
 /// directory the copy's own `<id>.webp` was written into.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_duplicate(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6522,7 +6581,6 @@ pub async fn deck_duplicate(
 
 /// File a deck under a folder, or with `folderId: null` back at the root of the tree — the one
 /// thing [`DeckPatch`] cannot express. See [`set_folder`].
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_set_folder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6544,7 +6602,6 @@ pub async fn deck_set_folder(
 /// would read, because every other write changes something a gallery draws. This changes one
 /// thing the *editor* will read on its next open, and a caller that re-rendered a deck tile over
 /// it would be redrawing for a scroll position.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_set_view_state(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6561,7 +6618,6 @@ pub async fn deck_set_view_state(
 
 /// The deck gallery. **Read-only** connection, blocking pool — as every read in this app
 /// is, so a gallery never queues behind a sync.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<DeckRow>, String> {
     let state = state.inner().clone();
@@ -6572,7 +6628,6 @@ pub async fn deck_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Dec
 
 /// Every deck's printed mana costs, for the gallery's colour bars. **Read-only** connection,
 /// blocking pool, and no arguments — see [`pip_costs`] for why the whole wall is one read.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_pip_costs(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6586,9 +6641,8 @@ pub async fn deck_pip_costs(
 /// Everything the Commander bracket estimate is made of, for the decks named. **Read-only**
 /// connection, blocking pool.
 ///
-/// `deck_ids` reaches the wire as `deckIds`, which `web::route`'s arm and `src/lib/ipc.ts` both
-/// spell that way — `invoke` matches a command's parameters by name, so the two have to agree.
-#[cfg(not(target_family = "wasm"))]
+/// `deck_ids` reaches the wire as `deckIds`, which `src/lib/ipc.ts` spells that way —
+/// `invoke` matches a command's parameters by name, so the two have to agree.
 #[tauri::command]
 pub async fn deck_bracket_reads(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6604,7 +6658,6 @@ pub async fn deck_bracket_reads(
 
 /// One deck, one variant's cards, every category and label, every fact the validator needs.
 /// **Read-only** connection.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_get(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6633,7 +6686,6 @@ pub async fn deck_get(
 /// a page makes of them — greying a destination, refusing a drop, explaining why — is
 /// TypeScript's, this crate's boundary as usual. A deck with an empty live list and a deck id
 /// with no deck both answer `[]`; [`deck_get`] is where "is there a deck" is asked.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_played_keys(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6652,7 +6704,6 @@ pub async fn deck_played_keys(
 /// [`deck_played_keys`] read from the collection's end, and the one the copies page wants: it
 /// holds a row and asks which decks that row may be filed into. `AND` and not `OR` — see
 /// [`decks_playing`] — and an empty `keys` answers `[]`, because nobody plays nothing.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_ids_playing(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6667,7 +6718,6 @@ pub async fn deck_ids_playing(
 }
 
 /// The format rules as data, for the picker and the validation engine. **Read-only.**
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn format_specs_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6687,7 +6737,6 @@ pub async fn format_specs_list(
 /// the picker no longer offers; see [`last_deck_format`]. The `Result` is `spawn_blocking`'s
 /// join and nothing else, because the read itself has no failure mode: `get_app_meta` reads an
 /// unreadable row as `None`.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_last_format(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6706,7 +6755,6 @@ pub async fn deck_last_format(
 /// every press had before the button could offer one, and the destination a caller that sends
 /// nothing still gets. A folder that is not there is refused by name before a single wish is
 /// written, including for a deck that turns out to be short of nothing.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_missing_to_wishlist(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6726,7 +6774,6 @@ pub async fn deck_missing_to_wishlist(
 
 /// Put copies into a category. **`categoryId` or `categoryName`, and at least one** — see
 /// [`add_card`] for which wins when both arrive.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn deck_add_card(
@@ -6761,7 +6808,6 @@ pub async fn deck_add_card(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_set_card_quantity(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6795,7 +6841,6 @@ pub async fn deck_set_card_quantity(
 
 /// Answers the copies it removed, so the caller can say what happened without re-reading the
 /// deck to work it out.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_clear(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6822,7 +6867,6 @@ pub async fn deck_category_clear(
 
 /// Answers the copies it removed, so the caller can say what happened without re-reading the
 /// deck to work it out.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_clear(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6847,7 +6891,6 @@ pub async fn deck_clear(
 /// target, which is [`add_card`]'s arrangement and is documented on [`move_card`]. Answers the
 /// category the copies are now in, because the name arm's caller has no other way to learn what
 /// was found or made.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn deck_move_card(
@@ -6884,7 +6927,6 @@ pub async fn deck_move_card(
 
 /// The card pane's "Use this printing". `deckId` like every other card write's, because
 /// `decks.id` is an integer everywhere it is written.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_swap_printing(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6919,7 +6961,6 @@ pub async fn deck_swap_printing(
 /// The deck card menu's `Set as foil` and the card pane's own button. `fromFinish` is the row
 /// being addressed and `toFinish` what it should become — both `null` for the regular copy,
 /// which is the only spelling of it that reaches the column.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn deck_set_card_finish(
@@ -7055,7 +7096,6 @@ pub fn deck_values_for(
 /// anything the app does not recognise is TCGplayer — [`crate::sorting::Marketplace::from_opt`]'s
 /// rule for every list query, so a marketplace this build has never heard of costs a fallback
 /// rather than a failed page.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_values(
     state: tauri::State<'_, Arc<AppState>>,
@@ -7128,26 +7168,39 @@ mod tests {
         conn
     }
 
-    /// The deck's predefined category of one `kind` — the row [`create_deck`] seeded through
-    /// `deck_meta::ensure_predefined_categories`. Panics rather than creating one: a deck
-    /// missing a predefined kind is a broken invariant, not a fixture to paper over.
+    /// The deck's **live** predefined category of one `kind` — the row [`create_deck`] seeded
+    /// through `deck_meta::ensure_predefined_categories`. Panics rather than creating one: a
+    /// deck missing a predefined kind is a broken invariant, not a fixture to paper over.
+    ///
+    /// Live only, since user schema v53: each list has its own four zones, so a deck with a plan
+    /// holds two rows of every kind and "the Sideboard" has to say which list it means.
     fn kind_of(conn: &Connection, deck_id: i64, kind: &str) -> i64 {
         conn.query_row(
-            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND kind = ?2",
-            params![deck_id, kind],
+            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND variant = ?2 AND kind = ?3",
+            params![deck_id, LIVE, kind],
             |r| r.get(0),
         )
-        .unwrap_or_else(|e| panic!("deck {deck_id} has no `{kind}` category: {e}"))
+        .unwrap_or_else(|e| panic!("deck {deck_id} has no live `{kind}` category: {e}"))
     }
 
-    /// The deck's main pile, made on first ask.
+    /// The deck's live main pile, made on first ask.
     ///
     /// There is no predefined `main` category — a deck may own any number of them, so the
     /// schema predefines none — and this is `deck_meta::category_for_name`, which is exactly
     /// the call [`add_card`]'s name arm makes. So a test that asks for it twice gets one
     /// category, the same way the app does.
     fn main_of(conn: &Connection, deck_id: i64) -> i64 {
-        crate::deck_meta::category_for_name(conn, deck_id, "Main deck").unwrap()
+        crate::deck_meta::category_for_name(conn, deck_id, LIVE, "Main deck").unwrap()
+    }
+
+    /// The **plan's** pile standing for a live one — `deck_meta::counterpart_in`, found or made
+    /// as a copy of it (same name, or same kind for a predefined zone).
+    ///
+    /// Since user schema v53 a pile belongs to one list and every card write refuses a pile of
+    /// the other, so a test that files a `theory` card "into the Main deck" files it here: the
+    /// plan's own Main deck, which is what the Theory tab would show under that name.
+    fn plan_pile(conn: &Connection, deck_id: i64, live_pile: i64) -> i64 {
+        crate::deck_meta::counterpart_in(conn, deck_id, THEORY, live_pile).unwrap()
     }
 
     /// [`add_card`] by explicit category, in the live variant, **as the regular copy** — the
@@ -7369,9 +7422,20 @@ mod tests {
         assert_eq!(count(&conn, "deck_cards"), 2);
 
         // …and so is `variant`: a change tried out in Theory is a row of its own, never a
-        // draft that could silently overwrite the deck as it is sleeved.
-        let theory =
-            add_card(&conn, deck.id, "bolt-jp", Some(main), None, THEORY, None, 3).unwrap();
+        // draft that could silently overwrite the deck as it is sleeved. (Filed under the plan's
+        // own Main deck, since a pile belongs to one list — user schema v53.)
+        let plan_main = plan_pile(&conn, deck.id, main);
+        let theory = add_card(
+            &conn,
+            deck.id,
+            "bolt-jp",
+            Some(plan_main),
+            None,
+            THEORY,
+            None,
+            3,
+        )
+        .unwrap();
         assert_ne!(theory.id, second.id);
         assert_eq!(
             theory.quantity, 3,
@@ -7596,16 +7660,17 @@ mod tests {
     /// `Clear stack` empties **one pile of one variant**, and the two things it must not
     /// reach are the other pile and the other list.
     ///
-    /// The theory half is the one worth the seeding: a clear is the opposite of
-    /// [`crate::deck_meta::delete_category`], which takes both lists because the CASCADE does.
-    /// Nothing in the `WHERE` would go red if `variant` were dropped from it — the live rows
-    /// still vanish — so the theory row is what pins the scope.
+    /// The theory half is the one worth the seeding. Since user schema v53 the plan keeps a
+    /// "Main deck" of its own, so the theory row sits in a different pile of the same name —
+    /// the one the Theory tab draws beside this one — and a clear of the live pile must leave it
+    /// exactly where it was.
     #[test]
     fn clearing_a_stack_empties_one_pile_of_one_variant() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
         let side = kind_of(&conn, deck.id, "side");
+        let plan_main = plan_pile(&conn, deck.id, main);
 
         add(&conn, deck.id, "bolt-lea", main, 4);
         add(&conn, deck.id, "bolt-m10", main, 3);
@@ -7614,7 +7679,7 @@ mod tests {
             &conn,
             deck.id,
             "bolt-lea",
-            Some(main),
+            Some(plan_main),
             None,
             THEORY,
             None,
@@ -7637,11 +7702,15 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         // Sideboard first: it is a seeded predefined pile, and `main_of` creates "Main deck" on
-        // first ask, so the id it gets is the higher one.
+        // first ask, so the id it gets is the higher one — and the plan's pile is made after it.
         assert_eq!(
             rows,
-            vec![(side, LIVE.to_owned(), 2), (main, THEORY.to_owned(), 1)],
-            "the theory copy in the same pile stays, and so does the other pile's live row"
+            vec![
+                (side, LIVE.to_owned(), 2),
+                (plan_main, THEORY.to_owned(), 1)
+            ],
+            "the theory copy in the plan's pile of that name stays, and so does the other \
+             pile's live row"
         );
 
         let history = crate::deck_audit::list(&conn, deck.id, 10).unwrap();
@@ -7779,12 +7848,13 @@ mod tests {
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
+        let plan_main = plan_pile(&conn, deck.id, main);
         add(&conn, deck.id, "bolt-lea", main, 2);
         add_card(
             &conn,
             deck.id,
             "bolt-lea",
-            Some(main),
+            Some(plan_main),
             None,
             THEORY,
             None,
@@ -7793,7 +7863,10 @@ mod tests {
         .unwrap();
         file_into_group(&conn, deck.id, "bolt-lea", 2);
 
-        assert_eq!(clear_category(&conn, deck.id, main, THEORY).unwrap(), 2);
+        assert_eq!(
+            clear_category(&conn, deck.id, plan_main, THEORY).unwrap(),
+            2
+        );
 
         assert_eq!(
             folder_copies(&conn, group_of(&conn, deck.id), "bolt-lea"),
@@ -7857,6 +7930,7 @@ mod tests {
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
         let side = kind_of(&conn, deck.id, "side");
+        let plan_main = plan_pile(&conn, deck.id, main);
 
         add(&conn, deck.id, "bolt-lea", main, 2);
         add(&conn, deck.id, "bolt-m10", main, 3);
@@ -7865,7 +7939,7 @@ mod tests {
             &conn,
             deck.id,
             "serra-lea",
-            Some(main),
+            Some(plan_main),
             None,
             THEORY,
             None,
@@ -7899,7 +7973,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            vec![(main, THEORY.to_owned(), 1)],
+            vec![(plan_main, THEORY.to_owned(), 1)],
             "every live pile went and the plan is untouched"
         );
         assert_eq!(
@@ -7925,7 +7999,7 @@ mod tests {
                 &conn,
                 deck.id,
                 "serra-lea",
-                Some(pile),
+                Some(plan_pile(&conn, deck.id, pile)),
                 None,
                 THEORY,
                 None,
@@ -8017,7 +8091,7 @@ mod tests {
             &conn,
             deck.id,
             "bolt-lea",
-            Some(main),
+            Some(plan_pile(&conn, deck.id, main)),
             None,
             THEORY,
             None,
@@ -8253,7 +8327,7 @@ mod tests {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
-        let theirs = crate::deck_meta::create_category(&conn, deck.id, "Removal").unwrap();
+        let theirs = crate::deck_meta::create_category(&conn, deck.id, LIVE, "Removal").unwrap();
         add(&conn, deck.id, "bolt-lea", main, 4);
 
         let to = move_card(
@@ -8344,20 +8418,21 @@ mod tests {
     }
 
     /// A move re-files a card; it never promotes a plan into the deck. The two variants hold
-    /// the same printing in the same category, and moving one leaves the other exactly where
-    /// it was.
+    /// the same printing in a pile of the same name — each list's own "Main deck" since user
+    /// schema v53 — and moving one leaves the other exactly where it was.
     #[test]
     fn a_move_stays_inside_its_own_variant() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
         let side = kind_of(&conn, deck.id, "side");
+        let plan_main = plan_pile(&conn, deck.id, main);
         add(&conn, deck.id, "bolt-lea", main, 4);
         add_card(
             &conn,
             deck.id,
             "bolt-lea",
-            Some(main),
+            Some(plan_main),
             None,
             THEORY,
             None,
@@ -8386,7 +8461,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            vec![(LIVE.to_owned(), side, 4), (THEORY.to_owned(), main, 2)],
+            vec![
+                (LIVE.to_owned(), side, 4),
+                (THEORY.to_owned(), plan_main, 2)
+            ],
             "the live copies moved and the theory row did not follow them"
         );
     }
@@ -8783,13 +8861,17 @@ mod tests {
         assert_eq!((swapped.folded, swapped.quantity), (false, 3));
     }
 
-    /// A copy is a copy of the whole deck: its cards in **both** variants, its categories and
-    /// its labels as **new rows**, and none of its state.
+    /// A copy is a copy of the whole deck: its cards in **both** variants, its categories —
+    /// **both lists' piles, each keeping its list** (user schema v53) — and its labels as **new
+    /// rows**, and none of its state.
     ///
     /// The remap is the part that fails invisibly. `deck_cards.category_id` is an id, so a
     /// copy that carried the source's would file the copy's cards under the *original's*
     /// piles — and deleting the original would then take the copy's cards with it through
-    /// `ON DELETE CASCADE`. Deleting the source at the end is what proves it did not.
+    /// `ON DELETE CASCADE`. Deleting the source at the end is what proves it did not. The plan's
+    /// "Main deck" shares its name with the live one, so a copy that lost `variant` would either
+    /// fail the grain or file the theory row under a live pile; the variant join below is what
+    /// says it did neither.
     #[test]
     fn duplicate_copies_categories_labels_and_both_variants_but_not_the_cards_it_holds() {
         let conn = seeded();
@@ -8804,7 +8886,7 @@ mod tests {
             &conn,
             deck.id,
             "bolt-m10",
-            Some(main),
+            Some(plan_pile(&conn, deck.id, main)),
             None,
             THEORY,
             None,
@@ -8835,27 +8917,33 @@ mod tests {
         );
 
         // Its categories and labels are its own rows, with its own ids, and every one of them
-        // came across.
-        let categories: Vec<(String, String, bool)> = conn
+        // came across — each in the list it belonged to.
+        let categories: Vec<(String, String, String, bool)> = conn
             .prepare(
-                "SELECT name, kind, is_active FROM deck_categories WHERE deck_id = ?1
-                  ORDER BY sort_order, id",
+                "SELECT variant, name, kind, is_active FROM deck_categories WHERE deck_id = ?1
+                  ORDER BY variant, sort_order, id",
             )
             .unwrap()
-            .query_map(params![copy.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_map(params![copy.id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
+        let pile = |variant: &str, name: &str, kind: &str, active: bool| {
+            (variant.to_owned(), name.to_owned(), kind.to_owned(), active)
+        };
         assert_eq!(
             categories,
             vec![
-                ("Commander".to_owned(), "commander".to_owned(), true),
-                ("Sideboard".to_owned(), "side".to_owned(), true),
-                ("Companion".to_owned(), "companion".to_owned(), true),
-                ("Maybeboard".to_owned(), "maybe".to_owned(), false),
-                ("Main deck".to_owned(), "main".to_owned(), true),
+                pile(LIVE, "Commander", "commander", true),
+                pile(LIVE, "Sideboard", "side", true),
+                pile(LIVE, "Companion", "companion", true),
+                pile(LIVE, "Maybeboard", "maybe", false),
+                pile(LIVE, "Main deck", "main", true),
+                pile(THEORY, "Main deck", "main", true),
             ],
-            "every category, in the order it was in, active flags and all"
+            "every category, in the order it was in, active flags and lists and all"
         );
         let shared: i64 = conn
             .query_row(
@@ -8909,6 +8997,20 @@ mod tests {
             ],
             "both variants, filed under the copy's own categories, label remapped"
         );
+        let crossed: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_cards dc JOIN deck_categories cat
+                    ON cat.id = dc.category_id
+                  WHERE dc.deck_id = ?1 AND cat.variant <> dc.variant",
+                params![copy.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            crossed, 0,
+            "and every row sits in a pile of its own list — the theory Bolts in the copy's \
+             plan pile, not in its live pile of the same name"
+        );
 
         assert_eq!(
             count(&conn, "collection_entries"),
@@ -8945,7 +9047,7 @@ mod tests {
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         // `main_of` is `category_for_name`, so this pile is app-made; the other is the reader's.
         let auto = main_of(&conn, deck.id);
-        let mine = crate::deck_meta::create_category(&conn, deck.id, "Flex slots").unwrap();
+        let mine = crate::deck_meta::create_category(&conn, deck.id, LIVE, "Flex slots").unwrap();
         assert_eq!(origin_of(&conn, auto), "auto", "the premise, not the claim");
         assert_eq!(origin_of(&conn, mine.id), "user");
 
@@ -9068,8 +9170,7 @@ mod tests {
         assert_eq!(decks[1].card_count, 0);
     }
 
-    /// **A deck row carries the *cover printing's* picture** — the gallery tile's only way to
-    /// draw a cover on web or on the phone, where `mtgimg://` is a scheme no browser has.
+    /// **A deck row carries the *cover printing's* picture.**
     ///
     /// It is the one field on `DeckRow` that describes a different row, and the join it comes
     /// off is `LEFT JOIN cards c ON c.id = d.cover_card_id` — the same one `cover_artist` uses.
@@ -9198,7 +9299,7 @@ mod tests {
             &conn,
             deck.id,
             "bolt-m10",
-            Some(main),
+            Some(plan_pile(&conn, deck.id, main)),
             None,
             THEORY,
             None,
@@ -9336,7 +9437,7 @@ mod tests {
             &conn,
             deck.id,
             "serra-lea",
-            Some(main),
+            Some(plan_pile(&conn, deck.id, main)),
             None,
             THEORY,
             None,
@@ -9546,7 +9647,7 @@ mod tests {
             &conn,
             deck.id,
             "bolt-m10",
-            Some(main),
+            Some(plan_pile(&conn, deck.id, main)),
             None,
             THEORY,
             None,
@@ -9910,8 +10011,19 @@ mod tests {
         assert_eq!(deck.folder_id, Some(folder));
         assert!(deck.theory_enabled);
         // And the four categories are still seeded in the same transaction — the widened
-        // INSERT is one bigger statement inside it, not a second path around it.
-        assert_eq!(count(&conn, "deck_categories"), 4);
+        // INSERT is one bigger statement inside it, not a second path around it. Four **per
+        // list** since user schema v53: a deck born with a plan gets the plan's own four too.
+        assert_eq!(count(&conn, "deck_categories"), 8);
+        assert_eq!(
+            count(
+                &conn,
+                &format!(
+                    "deck_categories WHERE deck_id = {} AND variant = '{THEORY}'",
+                    deck.id
+                )
+            ),
+            4
+        );
     }
 
     /// `folder_id: None` at create is **the root of the tree**, and it earns a test of its own
@@ -9990,11 +10102,13 @@ mod tests {
         assert_eq!(count(&conn, "deck_audit"), 0);
     }
 
-    /// Theory at create **sets the column and seeds nothing**, which is not what
+    /// Theory at create **sets the column and seeds no cards**, which is not what
     /// [`DeckPatch::theory_enabled`] does: flipping that switch on an existing deck copies its
     /// live list into an empty theory one, because an empty plan beside a full deck reads as
     /// data loss rather than as a blank page. A deck one statement old has no live list, so
-    /// there is nothing that could read as anything.
+    /// there is nothing that could read as anything. (It does seed the plan's four predefined
+    /// *piles* since user schema v53 — piles, not cards, and
+    /// [`a_create_carrying_every_field_reads_back_with_all_of_them`] counts them.)
     ///
     /// The second half is the half that makes the first honest: the patch route still seeds, so
     /// this is a create that has nothing to copy and not a seeding rule that was removed.
@@ -10755,9 +10869,8 @@ mod tests {
                 // be `undefined` — which `tokenRail.tsx` reads as *last*, so the pile would snap
                 // back on every open with no type error anywhere.
                 "tokenRailIndex": 2,
-                // The cover printing's picture, spelled out key by key: this is the deck
-                // gallery's only way to draw a cover on web and on the phone, and it is a map
-                // rather than a URL because `LIST_VARIANTS` decides what a row carries.
+                // The cover printing's picture, spelled out key by key: it is a map rather than
+                // a URL because `LIST_VARIANTS` decides what a row carries.
                 "imageUris": {
                     "art": "https://cards.scryfall.io/art/front/0/0/bolt.webp?17",
                     "display": "https://cards.scryfall.io/display/front/0/0/bolt.webp?17"
@@ -12572,7 +12685,7 @@ mod tests {
     fn deleting_the_default_pile_puts_the_deck_back_on_auto() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        let pile = crate::deck_meta::create_category(&conn, deck.id, "Removal")
+        let pile = crate::deck_meta::create_category(&conn, deck.id, LIVE, "Removal")
             .unwrap()
             .id;
         update_deck(
@@ -12606,7 +12719,7 @@ mod tests {
     fn a_duplicate_files_into_its_own_copy_of_the_default_pile() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        let pile = crate::deck_meta::create_category(&conn, deck.id, "Removal")
+        let pile = crate::deck_meta::create_category(&conn, deck.id, LIVE, "Removal")
             .unwrap()
             .id;
         update_deck(
@@ -12842,10 +12955,10 @@ mod tests {
     fn one_printing_in_two_piles_shares_one_pool_in_read_order() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        let first = crate::deck_meta::create_category(&conn, deck.id, "Burn spells")
+        let first = crate::deck_meta::create_category(&conn, deck.id, LIVE, "Burn spells")
             .unwrap()
             .id;
-        let second = crate::deck_meta::create_category(&conn, deck.id, "Flex slots")
+        let second = crate::deck_meta::create_category(&conn, deck.id, LIVE, "Flex slots")
             .unwrap()
             .id;
         add(&conn, deck.id, "bolt-lea", first, 2);
@@ -12891,7 +13004,7 @@ mod tests {
     fn an_inactive_category_is_handed_nothing_and_a_named_one_is() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        let mine = crate::deck_meta::create_category(&conn, deck.id, "Flex slots").unwrap();
+        let mine = crate::deck_meta::create_category(&conn, deck.id, LIVE, "Flex slots").unwrap();
         let scratch = kind_of(&conn, deck.id, "maybe");
         file_into_group(&conn, deck.id, "bolt-lea", 4);
 
@@ -12919,17 +13032,21 @@ mod tests {
         );
     }
 
-    /// One theory row of the plan, added to the deck's Main deck pile.
+    /// One theory row of the plan, added to the plan's pile standing for the live pile
+    /// `category_id` names ([`plan_pile`]).
     ///
     /// Spelled once because the seven tests below all want the same three lines of `add_card`
     /// with `THEORY` in the sixth slot, and the argument that actually varies between them is
-    /// where the *cardboard* is rather than how the row was written.
+    /// where the *cardboard* is rather than how the row was written. The live pile is mapped
+    /// here rather than at each call site because since user schema v53 the plan keeps piles of
+    /// its own, and a predefined zone's copy keeps the zone's `is_active` — so the plan's
+    /// Maybeboard is seeded off exactly as the live one is.
     fn plan(conn: &Connection, deck_id: i64, card_id: &str, category_id: i64, quantity: i64) {
         add_card(
             conn,
             deck_id,
             card_id,
-            Some(category_id),
+            Some(plan_pile(conn, deck_id, category_id)),
             None,
             THEORY,
             None,
@@ -12939,12 +13056,13 @@ mod tests {
     }
 
     /// [`owned_of`] read of the **plan** rather than of the sleeved deck — the number the Theory
-    /// tab's `N of M missing` band subtracts.
+    /// tab's `N of M missing` band subtracts. `category_id` is the live pile [`plan`] was given,
+    /// read back through the same [`plan_pile`] mapping.
     fn plan_owned_of(conn: &Connection, deck_id: i64, card_id: &str, category_id: i64) -> i64 {
         let detail = get_deck(conn, deck_id, THEORY, ANY_MARKET)
             .unwrap()
             .unwrap();
-        card_row(&detail, card_id, category_id).owned_quantity
+        card_row(&detail, card_id, plan_pile(conn, deck_id, category_id)).owned_quantity
     }
 
     /// **Rule 2, rewritten on 2026-09-09**
@@ -13114,7 +13232,8 @@ mod tests {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
-        let scratch = crate::deck_meta::category_for_name(&conn, deck.id, "Maybeboard").unwrap();
+        let scratch =
+            crate::deck_meta::category_for_name(&conn, deck.id, LIVE, "Maybeboard").unwrap();
         own(&conn, "bolt-lea", 4);
         plan(&conn, deck.id, "bolt-lea", scratch, 4);
         plan(&conn, deck.id, "bolt-lea", main, 4);
@@ -13139,7 +13258,7 @@ mod tests {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
-        let side = crate::deck_meta::category_for_name(&conn, deck.id, "Sideboard").unwrap();
+        let side = crate::deck_meta::category_for_name(&conn, deck.id, LIVE, "Sideboard").unwrap();
         own(&conn, "bolt-lea", 3);
         plan(&conn, deck.id, "bolt-lea", main, 2);
         plan(&conn, deck.id, "bolt-lea", side, 2);
@@ -13152,10 +13271,11 @@ mod tests {
             "three copies, four wanted: one pool between the two piles, not three each"
         );
         // Which pile is served first is `read_deck_cards`' `ORDER BY cat.sort_order, cat.id`, and
-        // here that is the **Sideboard** — it is one of the four piles `create_deck` seeds, where
-        // `main_of` creates `Main deck` on first ask and it takes the higher id. Asserted rather
-        // than left to the sum above, because "the first row down the page takes it" is the
-        // property that makes the answer deterministic at all.
+        // here that is the **Sideboard** — the plan's copies keep their live piles' `sort_order`,
+        // and the live Sideboard is one of the four piles `create_deck` seeds, where `main_of`
+        // creates `Main deck` on first ask, after them. Asserted rather than left to the sum
+        // above, because "the first row down the page takes it" is the property that makes the
+        // answer deterministic at all.
         assert_eq!((in_side, in_main), (2, 1));
     }
 
@@ -13911,10 +14031,15 @@ mod tests {
         }
     }
 
-    /// **Rules 4 and 6.** One read answers with one variant's cards and **every** category and
-    /// label the deck owns — an empty category still draws its column, an inactive one always
-    /// draws, and a label nobody is wearing is still in the palette. The cards come back in
-    /// category `sort_order`, then the row's own name, then row id.
+    /// **Rules 4 and 6.** One read answers with one variant's cards and **every** category of
+    /// that variant's list — an empty category still draws its column, an inactive one always
+    /// draws — and every label that list wears. The cards come back in category `sort_order`,
+    /// then the row's own name, then row id.
+    ///
+    /// **"Every category" is one list's since user schema v53** (issue #561): the Theory read
+    /// used to draw exactly the Actual list's columns, and a pile made on one tab appeared on the
+    /// other. This deck never switched its plan on, so its plan holds the one pile its theory row
+    /// was filed into and nothing else.
     #[test]
     fn the_read_scopes_cards_by_variant_and_answers_with_every_category_and_label() {
         let conn = seeded();
@@ -13922,6 +14047,7 @@ mod tests {
         let main = main_of(&conn, deck.id);
         let side = kind_of(&conn, deck.id, "side");
         let scratch = kind_of(&conn, deck.id, "maybe");
+        let plan_main = plan_pile(&conn, deck.id, main);
         let label = crate::deck_meta::create_label(&conn, Some(deck.id), "Flex", "amber").unwrap();
         crate::deck_meta::create_label(&conn, Some(deck.id), "Unworn", "slate").unwrap();
         // Written so the reading order is neither the insert order nor the category order a
@@ -13937,7 +14063,7 @@ mod tests {
             &conn,
             deck.id,
             "serra-8ed",
-            Some(main),
+            Some(plan_main),
             None,
             THEORY,
             None,
@@ -13958,7 +14084,7 @@ mod tests {
             &conn,
             deck.id,
             "serra-8ed",
-            main,
+            plan_main,
             THEORY,
             None,
             Some(label.id),
@@ -14041,19 +14167,14 @@ mod tests {
             "the other list is its own list"
         );
         assert_eq!(
-            theory.categories.len(),
-            live.categories.len(),
-            "and it draws exactly the same columns"
-        );
-        assert_eq!(
             theory
                 .categories
                 .iter()
-                .find(|c| c.id == main)
-                .unwrap()
-                .card_count,
-            7,
-            "with the counts of the variant that was asked for"
+                .map(|c| (c.id, c.variant.as_str(), c.name.as_str(), c.card_count))
+                .collect::<Vec<_>>(),
+            vec![(plan_main, THEORY, "Main deck", 7)],
+            "and it draws its own columns — the plan's Main deck, with the plan's count — and \
+             none of the live list's"
         );
         // **And the labels are counted over that same variant**, which they briefly were not:
         // `get_deck` threaded its variant into the category list and not into the label list, so
@@ -14394,7 +14515,8 @@ mod tests {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
-        let spells = crate::deck_meta::category_for_name(&conn, deck.id, "Burn spells").unwrap();
+        let spells =
+            crate::deck_meta::category_for_name(&conn, deck.id, LIVE, "Burn spells").unwrap();
         file_into_group(&conn, deck.id, "bolt-lea", 1);
         add(&conn, deck.id, "bolt-lea", main, 2);
         add(&conn, deck.id, "bolt-lea", spells, 3);
@@ -14484,7 +14606,7 @@ mod tests {
             &conn,
             deck.id,
             "bolt-m10",
-            Some(main),
+            Some(plan_pile(&conn, deck.id, main)),
             None,
             THEORY,
             None,
@@ -14971,11 +15093,7 @@ mod tests {
     // Undoing a game change is `deck_undo.rs`'s `deck_update (game)` case, driven there over
     // the same sweep every other deck-level column goes through.
 
-    /// **A deck card carries the front face's image URL** — what the editor's Grid and Stacks
-    /// views have no other way to draw a picture from in a browser.
-    ///
-    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register one with a browser, so
-    /// without this a deck opened on the web build is a wall of named, artless frames.
+    /// **A deck card carries the front face's image URL.**
     ///
     /// **`bolt-m10` is the row that makes the offset visible at all.** The pair starts directly
     /// after `c.promo_types`, and with only top-level pictures in the fixture a read one column
@@ -15207,7 +15325,7 @@ mod tests {
     /// A pile of the deck's own beside `Main deck`, so a card can sit in two of them.
     /// [`main_of`]'s call, one name over.
     fn side_of(conn: &Connection, deck_id: i64) -> i64 {
-        crate::deck_meta::category_for_name(conn, deck_id, "Sideboard").unwrap()
+        crate::deck_meta::category_for_name(conn, deck_id, LIVE, "Sideboard").unwrap()
     }
 
     #[test]
@@ -15236,7 +15354,18 @@ mod tests {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
         let main = main_of(&conn, deck);
-        add_card(&conn, deck, "serra-lea", Some(main), None, THEORY, None, 1).unwrap();
+        let plan_main = plan_pile(&conn, deck, main);
+        add_card(
+            &conn,
+            deck,
+            "serra-lea",
+            Some(plan_main),
+            None,
+            THEORY,
+            None,
+            1,
+        )
+        .unwrap();
 
         assert_eq!(played_keys(&conn, deck).unwrap(), Vec::<String>::new());
         assert!(!plays_card(&conn, deck, "serra-lea").unwrap());
@@ -15870,7 +15999,7 @@ mod tests {
         let main = main_of(&conn, deck.id);
         let commander = kind_of(&conn, deck.id, "commander");
         let maybe = kind_of(&conn, deck.id, "maybe");
-        let bench = crate::deck_meta::category_for_name(&conn, deck.id, "Bench").unwrap();
+        let bench = crate::deck_meta::category_for_name(&conn, deck.id, LIVE, "Bench").unwrap();
 
         add(&conn, deck.id, "bolt-lea", main, 2); // 2 × 400.00 = 800.00
         add(&conn, deck.id, "serra-lea", commander, 1); // 1 × 120.00 = 120.00
@@ -15929,7 +16058,7 @@ mod tests {
             &conn,
             deck.id,
             "serra-lea",
-            Some(main),
+            Some(plan_pile(&conn, deck.id, main)),
             None,
             THEORY,
             None,
@@ -16048,6 +16177,8 @@ mod tests {
             (Some(r#"["nonfoil"]"#), None),
             (Some(r#"["nonfoil","foil"]"#), None),
             (Some(r#"["foil","etched"]"#), None),
+            // A repeated word is counted twice, as `parseFinishes` keeps it twice.
+            (Some(r#"["foil","foil"]"#), None),
             // An unknown word is dropped before counting, as `parseFinishes` drops it.
             (Some(r#"["foil","glossy"]"#), Some("foil")),
             (Some("not json"), None),

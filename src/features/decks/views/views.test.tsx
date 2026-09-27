@@ -1,9 +1,4 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { isWebTarget } from "@/pwa/target";
-
-// The build flag `cardArtSrc` branches on. `false` is what `__CORE__` already answers under
-// vitest, so this changes nothing here until a case below asks for a browser.
-vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -157,7 +152,7 @@ function category(over: Partial<DeckCategory> = {}): DeckCategory {
     sortOrder: 1,
     cardCount: 0,
     totalPrice: null,
-    cardCountAllVariants: over.cardCount ?? 0,
+    variant: "live",
     // A pile the reader made, unless a fixture says otherwise — and the default matters here in
     // a way it does not in most files: `buildGroups` drops an **empty** `origin: "auto"` pile,
     // so a fixture that drifted to `"auto"` would silently take a group out of every column
@@ -275,7 +270,10 @@ const BANNED: ValidationIssue = {
   cardIds: ["c-Sol Ring"],
 };
 
-const VIOLATIONS = new Map<string, ValidationIssue[]>([["c-Sol Ring", [BANNED]]]);
+/** Keyed by the Sol Ring row's slot, which is how `violationsBySlot` files a mark (issue #554). */
+const VIOLATIONS = new Map<string, ValidationIssue[]>([
+  [deckCardSlot(CARDS[0].categoryId, CARDS[0].cardId, CARDS[0].finish), [BANNED]],
+]);
 
 const GROUPS: CardGroup[] = buildGroups(
   CARDS,
@@ -4653,33 +4651,16 @@ describe("StackView arrow keys", () => {
 });
 
 /**
- * **The deck editor's Grid view in a browser.** `deck_get` is routed on web and `mtgimg://` is
- * not reachable there, so a deck opened in a browser was a wall of named, artless frames.
- *
- * **The two views are one implementation of that now, and this block's old reason has reversed.**
- * It said the tile draws `components/CardArt` and only has to hand the URL down, while its sibling
- * `CardStack` builds its own `<img>` and therefore calls `cardArtSrc` itself — "the two being
- * different shapes is exactly why neither test covers the other". Both halves are false: there is
- * one `DeckCardFace`, both views put it inside their own button, and the `cardArtSrc` call is
- * inside it. So the branch these two cases exercise is literally the same line
- * `CardStack.test.tsx`'s pair exercises, and **for the desktop/web choice itself this coverage is
- * now a duplicate** — that is written down rather than acted on, because deleting a case is a
- * decision for whoever owns the pair and not something to infer from a refactor.
- *
- * What it still earns its keep for is the **wiring**, which is a different claim from the branch:
- * `GridView` is a second caller of that face, at a different width, and nothing in the type system
- * says a tile has to hold one — a tile that went back to drawing a frame of its own, or that
- * narrowed the row before passing it and dropped `imageUris`, would draw a broken image in a
- * browser with `CardStack.test.tsx` still green. These two cases are what would go red for it,
- * addressed the way that file addresses the same picture (`container.querySelector("img")`) since
- * the face's `<img>` is decoration and has no `alt` to be found by.
+ * **The deck editor's Grid view draws the deck's own `DeckCardFace`**, as `CardStack` does, so the
+ * picture it asks for is the face's — the local cache, even for a row that carries a Scryfall URL.
+ * `GridView` is a second caller of that face at a different width, and nothing in the type system
+ * says a tile has to hold one, so this is the case that would go red for a tile that went back to
+ * drawing a picture of its own. Addressed the way `CardStack.test.tsx` addresses the same picture
+ * (`container.querySelector("img")`), since the face's `<img>` is decoration and has no `alt` to
+ * be found by.
  */
 describe("the deck grid's art", () => {
   const SCRYFALL = { display: "https://cards.scryfall.io/display/front/s/o/sol.webp?1706230661" };
-
-  afterEach(() => {
-    vi.mocked(isWebTarget).mockReturnValue(false);
-  });
 
   const draw = () =>
     render(
@@ -4695,14 +4676,7 @@ describe("the deck grid's art", () => {
       />,
     );
 
-  it("draws the row's own picture in a browser", () => {
-    vi.mocked(isWebTarget).mockReturnValue(true);
-    const { container } = draw();
-
-    expect(container.querySelector("img")).toHaveAttribute("src", SCRYFALL.display);
-  });
-
-  it("keeps drawing the cached protocol picture on desktop", () => {
+  it("draws the cached protocol picture for a row that carries a URL", () => {
     const { container } = draw();
 
     const src = container.querySelector("img")?.getAttribute("src");

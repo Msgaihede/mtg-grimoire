@@ -29,12 +29,7 @@
 //! refused — so nothing is ever granted to a page that never asks, and a reader who is not on
 //! the scanner never had a live camera in the first place.
 //!
-//! Windows only for now. Android's grant is the manifest permission in
-//! `gen/android/app/src/main/AndroidManifest.xml` (`android.permission.CAMERA` plus a
-//! `required="false"` `uses-feature`, so the app still installs on a camera-less device) —
-//! whether `wry`'s Android backend answers `onPermissionRequest` on its own, or needs a
-//! Kotlin shim, is **unverified** and is not this task's job to settle. See the task report
-//! for exactly what is owed there.
+//! Windows only for now.
 
 /// Installs the camera-permission handler on `window`'s underlying platform webview.
 ///
@@ -45,9 +40,7 @@
 /// "the scanner doesn't work" has a breadcrumb pointing at this file instead of nothing.
 /// Nothing about opening the app may fail over this.
 ///
-/// A no-op off Windows. Android needs no handler installed here at all (its grant is the
-/// manifest permission), and no other desktop platform this crate ships for is a webview2
-/// target.
+/// A no-op off Windows: no other platform this crate ships for is a webview2 target.
 pub fn install(window: &tauri::WebviewWindow) {
     #[cfg(windows)]
     install_windows(window);

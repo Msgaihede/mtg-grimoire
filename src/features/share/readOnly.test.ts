@@ -2,9 +2,8 @@
  * The shared view's read-only guarantee, as a source sweep — because there is nothing at runtime
  * to check.
  *
- * **There is no read-only mode anywhere on this app's data path.** `lock_db_read` returns the
- * *write* connection on wasm, and `@/lib/writes` is only about which mutation owns an error
- * banner. So a flag would be a claim rather than a fence. What this view actually has is a
+ * **There is no read-only mode anywhere on this app's data path.** `@/lib/writes` is only about
+ * which mutation owns an error banner. So a flag would be a claim rather than a fence. What this view actually has is a
  * stronger property: it renders a **fetched document**, and nothing in `src/features/share/`
  * names a mutation. That is checkable, and this is the check.
  *

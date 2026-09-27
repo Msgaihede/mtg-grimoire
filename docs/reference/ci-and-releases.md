@@ -17,7 +17,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `scanner-bundle.yml` — tests only, because that crate is not rustfmt-clean and
   carries four pre-existing clippy warnings, both listed in
   [card-scanner.md](card-scanner.md) §8; until that step `session::tests` was fenced by
-  `npm run verify` and by nothing in CI), a **`wasm`** job (below) and a `powershell` job (below).
+  `npm run verify` and by nothing in CI) and a `powershell` job (below). The `wasm` and
+  `android` compile gates went with the web and Android builds, which were removed on 2026-09-27.
   **`ci-ok` is the one protected check** — branch protection
   pins names by string and a matrix job's name embeds its matrix values, so the aggregator is
   what has teeth and the matrix underneath stays free. `enforce_admins` is **false**: a red PR
@@ -28,20 +29,19 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`git diff --name-only --no-renames`, so it needs `fetch-depth: 0`) and pipes the paths to
   **`scripts/ci-route.mjs`** (moved out of an inline `case` on 2026-09-26, with `case`'s
   first-match-wins order and `*`-crosses-`/` matching kept), which routes each one:
-  `src-tauri/**` → **`frontend`, `rust`, `wasm` and `android`**; `src/**`, `public/**`,
+  `src-tauri/**` → **`frontend` and `rust`**; `src/**`, `public/**`,
   `index.html`, **`.storybook/**`** (its own arm since 2026-09-27 — it used to fall to the
   fail-safe and run the Rust matrix), the lockfiles and the frontend's configs → `frontend`
   **and `storybook`**, plus **`scripts/` because `eslint .` lints it** (its ignore list does
   not name it) → `frontend` alone;
-  **`rust-toolchain.toml` and `.github/actions/rust-toolchain/`** → `frontend`, `rust`, `wasm`
-  and `android`; **`release.yml` and `scanner-bundle.yml` → `frontend`**, because
+  **`rust-toolchain.toml` and `.github/actions/rust-toolchain/`** → `frontend` and `rust`;
+  **`release.yml` and `scanner-bundle.yml` → `frontend`**, because
   `scripts/toolchain.test.mjs` reads every workflow (below); `.nvmrc` → every job that installs
   Node;
   **`src/features/transfer/__golden__/**` and `src/lib/userTables.json` → `frontend` and
-  `rust`**; `src/workers/**`, `src/web/**`, `src/lib/core/**`, `scripts/build-wasm.mjs` and
-  `vite.web.config.ts` → `frontend` **and `wasm`**;
+  `rust`**;
   `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router itself → **every job**;
-  **`crates/*` → `frontend`, `rust`, `wasm` and `android`** (declared 2026-09-08 — it is what
+  **`crates/*` → `frontend` and `rust`** (declared 2026-09-08 — it is what
   the fail-safe below was already doing for the `card-scanner` crate, whose `.rs` files
   `ipc.test.ts` reads as text and whose `scripts/*.mjs` `eslint .` lints);
   prose and editor/release bookkeeping → neither; and **anything unrecognised → every**
@@ -49,59 +49,6 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   That last arm is the fail-safe that makes the lists safe to be wrong in the cheap
   direction — a new root config file or a new top-level directory gets full CI until someone
   narrows it deliberately. Only the "neither" arm can wrongly skip work, so it stays small.
-- **The `wasm` job compiles the crate for `wasm32-unknown-unknown`, and it exists because a
-  fully green `npm run verify` can ship a broken web target.** The crate is one crate with two
-  targets: a `use tauri::` added to a module on the wasm side of `lib.rs`'s module map compiles
-  on desktop, passes every test, and fails only there. That is the same shape `cargo fmt` and
-  `clippy` had until 2026-09-27, when `npm run verify` gained `lint:rust` — and it is why
-  `src-tauri/*` routes here as well as to `rust`.
-  Linux-only, and not as a preference — this compiles SQLite's C amalgamation to wasm32 with
-  clang, which is the same compiler on every host, so a Windows leg would prove the same thing
-  more slowly. **No measured figure in this repo has ever come off a Linux build**; this job is
-  a compile gate, not a source of numbers. It installs clang and a `wasm-bindgen-cli` **pinned
-  to the `wasm-bindgen` crate's exact version** (a mismatch is not a build error — it fails at
-  run time inside the generated glue, complaining about an import nobody wrote), and it needs
-  **no `dist/` stub** unlike the `rust` job, because `build.rs` returns before
-  `tauri_build::build()` runs for a wasm `TARGET`. Removing that early return was measured: the
-  build panics with ``missing `cargo:dev` instruction``, because `tauri` itself is target-gated
-  off this build and its build script never emitted the metadata `tauri_build` reads back.
-  Its `npm run build:wasm` step greps the generated glue for every `#[wasm_bindgen]` entry
-  point the Worker imports, which is **the one check no compiler can make**: deleting that
-  attribute was run as a mutation on 2026-08-28 and compiled clean with no error and no
-  warning, because the function stays `pub` in a `pub mod`.
-- **The `android` job cross-compiles the crate for `aarch64-linux-android`, added 2026-08-29,
-  and it exists because `main` can stop cross-compiling with nothing going red.** It already
-  had: **#270 fixed exactly that break, and the way anybody found out was building an APK by
-  hand** — which is not something CI has ever done and not something anybody does on a
-  schedule. The crate is one crate with three targets, and a green `npm run verify` proves the
-  host alone.
-
-  **It is `cargo build --lib --locked --target aarch64-linux-android` and deliberately not an
-  APK build.** Assembling an APK needs Gradle, a full SDK and a signing story; the
-  cross-compile needs only the NDK, and it catches the class of failure this is for — a
-  desktop-only `use`, a dependency that will not build for the triple, a `cfg` that leaves a
-  module unreachable. **It proves nothing about the app running on a phone**; that is still a
-  hardware pass, and no measured figure in this repo has ever come off a Linux build.
-
-  **Two environment facts, and each fails as something other than itself.** `cargo` and
-  `cc-rs` have never heard of `NDK_HOME` — that is the Tauri CLI's variable and this job does
-  not go through the CLI — so it puts the NDK's `bin` on `PATH` (without it `cc-rs` reports
-  ``failed to find tool "clang"`` while compiling `libsqlite3-sys` and `ring`) and sets
-  `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` explicitly (without it `rustc` reports
-  ``linker `cc` not found``). Both paths are checked and named before the build runs, because
-  neither error mentions the NDK. The linker is the **API 26** binary, which is `minSdk` in
-  `gen/android/app/build.gradle.kts` rather than a choice made in CI.
-
-  **It needs the `dist/` stub that the `wasm` job does not.** `build.rs` returns early for a
-  wasm `TARGET` so `tauri_build` never runs there; for the Android triple it does, and
-  `frontendDist: "../dist"` has to exist.
-
-  **The routing was tested against the workflow's own `case` block rather than a copy of it**
-  (2026-08-29, ten paths): `src-tauri/*` → `rust`, `wasm`, `android`; `src-tauri/gen/android/*`
-  → nothing, which stays correct because the cross-compile reads no Gradle file;
-  `build.gradle.kts` and `AndroidManifest.xml` → `rust` alone, because they are `include_str!`
-  test inputs rather than build inputs; a `.ps1` → `powershell` alone; an unrecognised path →
-  every build job including this one.
 - **The `powershell` job runs `.claude/skills/running-the-app/lock.test.ps1` on
   `windows-latest`, and its routing arm has two constraints that are not stylistic.**
   It must sit **above** `src-tauri/*` and `scripts/*` in the `case`, which is first-match-wins:
@@ -140,8 +87,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   its mirror rows, and six tests read the share golden
   `src-tauri/src/share/__golden__/snapshot.json` — while **Rust tests read `src/lib/userTables.json` (`changes`), the whole
   `src/features/transfer/__golden__/` directory (`transfer::{card,fields,write}`) and
-  `share-worker/wrangler.jsonc` (`share::publish`)**, every one inside `#[cfg(test)]`, so
-  `wasm` and `android` are not involved. Those figures are the day's, and nothing relies on
+  `share-worker/wrangler.jsonc` (`share::publish`)**, every one inside `#[cfg(test)]`. Those
+  figures are the day's, and nothing relies on
   them: **`scripts/ci-route.test.mjs` derives the census from the sources on every run** and
   fails when a file is read by a job the router does not send it to, or crosses the boundary and
   is not routed to both `frontend` and `rust`. Reverting either half of the fix was run as a
@@ -168,9 +115,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   new stable's lints could turn every PR red with no code change, and a release binary was built
   by whatever stable was current. The file pins **1.98.1** (the current stable on the day) with
   `rustfmt` and `clippy`; `.github/actions/rust-toolchain` reads the channel with `sed` and hands
-  it to `dtolnay/rust-toolchain@master`, which does not read the file itself. Targets are not in
-  the file — the `wasm` and `android` jobs pass theirs to the action — so a local
-  `rustup target add` is needed after a pin moves. **`scripts/toolchain.test.mjs` is the fence**:
+  it to `dtolnay/rust-toolchain@master`, which does not read the file itself.
+  **`scripts/toolchain.test.mjs` is the fence**:
   it globs every workflow and fails on a direct `dtolnay/rust-toolchain` use, a `rustup`
   install, or a `node-version:` that is not `node-version-file: .nvmrc`, and on a channel that is
   not an exact `x.y.z`. **Node is pinned the same way**: `.nvmrc` (24, the version the app is

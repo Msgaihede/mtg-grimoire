@@ -512,13 +512,10 @@ fn take_lone_wish(
 /// plus verb and do not stutter. The pair reads as a set with `deck_missing_to_wishlist`, which
 /// lives in [`crate::deck`] and is a different module's command about the same shortfall.
 pub mod commands {
-    #[cfg(not(target_family = "wasm"))]
     use super::{
         plan as read_plan, to_collection as record, MissingOutcome, MissingPick, MissingRow,
     };
-    #[cfg(not(target_family = "wasm"))]
     use crate::sync::AppState;
-    #[cfg(not(target_family = "wasm"))]
     use std::sync::Arc;
 
     /// [`super::plan`]'s command. **Read-only** connection, and no marketplace: nothing in the
@@ -526,7 +523,6 @@ pub mod commands {
     ///
     /// Cheap enough to re-ask after any write, and the editor does: this is the read that says
     /// whether the last press emptied the list.
-    #[cfg(not(target_family = "wasm"))]
     #[tauri::command]
     pub async fn deck_missing_plan(
         state: tauri::State<'_, Arc<AppState>>,
@@ -544,7 +540,6 @@ pub mod commands {
     /// that more plainly than any of the four writes before it: the facet index's `owned`
     /// dimension is built by counting `collection_entries` rows, the three movers can at most fold
     /// one away, [`crate::deck_quick_add`] makes one — and this makes several in a single press.
-    #[cfg(not(target_family = "wasm"))]
     #[tauri::command]
     pub async fn deck_missing_to_collection(
         state: tauri::State<'_, Arc<AppState>>,

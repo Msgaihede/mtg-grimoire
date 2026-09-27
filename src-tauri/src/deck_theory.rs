@@ -45,12 +45,10 @@
 //! writes the user makes against it.
 
 use crate::deck::{entry_finish, entry_spellings, played_finish};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What is actually sleeved up — `DECK_VARIANTS[0]` by index, [`crate::deck`]'s discipline.
@@ -200,11 +198,6 @@ pub struct TheoryDiffRow {
     /// beside the name, at the arrangement the editor's zone rows use, so `display` rides along
     /// because [`crate::image_uri::LIST_VARIANTS`] emits the pair rather than because anything
     /// on this dialog wants it.
-    ///
-    /// **Why it is on the wire**, [`crate::search::CardSummary::image_uris`]' argument in full:
-    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme with a
-    /// browser, so on web and on Android a row draws its own picture or draws none. On desktop
-    /// it is ignored — `src/lib/images.ts`'s `cardArtSrc` takes the local cache.
     ///
     /// **`None` is the ordinary answer for an orphan**, whose printing has left `cards` and
     /// whose join therefore answers NULL in both columns — the same rows
@@ -610,8 +603,33 @@ fn grouped_diff(
     Ok(diff)
 }
 
+/// Every live pile of a deck, in the order the Actual tab draws them — what the theory switch
+/// clones, empty piles included.
+fn live_piles(tx: &Connection, deck_id: i64) -> Result<Vec<i64>, String> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND variant = ?2
+              ORDER BY sort_order, id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![deck_id, LIVE], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
 /// **Move** the live list into the theory one: the same rows, re-labelled, leaving `live`
 /// empty.
+///
+/// **Every live pile is cloned into the plan and each card is filed into its clone** (user
+/// schema v53, issue #561) — [`crate::deck_meta::counterpart_in`], so a plan pile of the same name
+/// (or, for a predefined zone, the same kind) is used where one exists and made otherwise, as a
+/// copy of the live one. The live piles **stay**, empty: the Actual list keeps the structure the
+/// reader built, and from this press on the two lists' piles are independent — renaming one, or
+/// switching a Sideboard off, touches one tab. Empty live piles are cloned too, because the
+/// columns the reader made are part of the deck they built and the plan is that deck. The piles
+/// this makes are undone by the caller's step (`deck_undo::push_made_categories`).
 ///
 /// What switching the theory list on actually does. The deck the reader has spent their evening
 /// building **is the plan** — they typed it out of a list, not out of a box — and the live list
@@ -643,13 +661,17 @@ fn grouped_diff(
 /// row is a line and a copy is a card, and this app counts decks in cards everywhere else, so the
 /// number is not one to put in front of a reader as it stands.
 pub(crate) fn move_live_into_theory(tx: &Connection, deck_id: i64) -> Result<usize, String> {
-    let moved = tx
-        .execute(
-            "UPDATE deck_cards SET variant = ?2, updated_at = unixepoch()
-              WHERE deck_id = ?1 AND variant = ?3",
-            params![deck_id, THEORY, LIVE],
-        )
-        .map_err(|e| e.to_string())?;
+    let mut moved = 0;
+    for pile in live_piles(tx, deck_id)? {
+        let plan_pile = crate::deck_meta::counterpart_in(tx, deck_id, THEORY, pile)?;
+        moved += tx
+            .execute(
+                "UPDATE deck_cards SET variant = ?2, category_id = ?4, updated_at = unixepoch()
+                  WHERE deck_id = ?1 AND variant = ?3 AND category_id = ?5",
+                params![deck_id, THEORY, LIVE, plan_pile, pile],
+            )
+            .map_err(|e| e.to_string())?;
+    }
     tx.execute(
         "UPDATE decks SET last_variant = ?2 WHERE id = ?1",
         params![deck_id, THEORY],
@@ -933,7 +955,6 @@ pub(crate) fn wanted(
 }
 
 /// What a write here says when its worker thread died under it.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck could not be written: {e}")
 }
@@ -955,8 +976,9 @@ fn unfinished(e: tauri::Error) -> String {
 /// every row, joins categories and rolls up what the deck's group holds, which is a great deal
 /// of work for a mark.
 /// This command answers neither a comparison nor a priced row: one indexed scan of `deck_cards`,
-/// four columns, a LEFT JOIN to `cards` for the name alone, and no marketplace. The join arrived
-/// with the loose tier on 2026-09-07 and is a primary-key lookup per group; what the founding
+/// five columns, a LEFT JOIN to `cards` for the name and the printing's finishes, and no
+/// marketplace. The join arrived with the loose tier on 2026-09-07 (the finishes rode it on
+/// 2026-09-27, for [`played_finish`]) and is a primary-key lookup per group; what the founding
 /// argument was really against is still absent — this does not price a row, does not roll up what
 /// the group holds, and does not become a second `deck_get`. `DeckEditor.test.tsx` pins the first
 /// reason from the frontend side — nothing may call `deck_get` for the list the reader is not on.
@@ -980,10 +1002,11 @@ fn unfinished(e: tauri::Error) -> String {
 ///
 /// **The rows therefore fold here rather than in the caller**, which is the one thing that had to
 /// change with it: two `Vec` entries spelling one key were harmless while a set was being built
-/// out of them, and would be a silently halved quantity now. `GROUP BY dc.card_id, dc.finish` is
-/// exactly [`group_key`]'s own grain — SQLite groups two NULL finishes together, which is the
-/// regular copy — so the same card filed as Ramp and as Main deck is still **one** planned card,
-/// now with both piles counted rather than one key printed twice.
+/// out of them, and would be a silently halved quantity now. `GROUP BY dc.card_id, dc.finish` does
+/// most of it — SQLite groups two NULL finishes together, which is the regular copy — so the same
+/// card filed as Ramp and as Main deck is still **one** planned card, with both piles counted
+/// rather than one key printed twice. It is no longer the whole of [`group_key`]'s grain, which is
+/// what the next paragraph is about.
 ///
 /// **The SQL groups on the stored finish and Rust finishes the fold on the played one** (issue
 /// #563). A foil-only printing the plan holds once unsaid and once as `foil` is two SQL groups and
@@ -1039,7 +1062,6 @@ pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<TheorySlot>, 
 
 /// [`theory_slots`]'s command. **Read-only** connection, and no marketplace: nothing here is
 /// priced.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_slots(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1054,7 +1076,6 @@ pub async fn deck_theory_slots(
 }
 
 /// What the plan wants and the deck does not have. **Read-only** connection.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_diff(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1077,7 +1098,6 @@ pub async fn deck_theory_diff(
 /// every press had before the dialog could offer one, and the destination a caller that sends
 /// nothing still gets. A folder that is not there is refused by name before a single wish is
 /// written.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_missing_to_wishlist(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1136,8 +1156,25 @@ mod tests {
         .id
     }
 
+    /// The **live** list's pile of this name, found or made. A case hands it to [`add`] for
+    /// either list and [`in_list`] carries it across — the lists keep separate piles since user
+    /// schema v53 (issue #561), and one name per case reads better than two ids.
     fn category(conn: &Connection, deck_id: i64, name: &str) -> i64 {
-        crate::deck_meta::category_for_name(conn, deck_id, name).unwrap()
+        crate::deck_meta::category_for_name(conn, deck_id, LIVE, name).unwrap()
+    }
+
+    /// The **theory** list's pile of this name, found or made — for the cases that write to the
+    /// plan's pile itself rather than filing a card into it, such as switching it off.
+    fn theory_category(conn: &Connection, deck_id: i64, name: &str) -> i64 {
+        crate::deck_meta::category_for_name(conn, deck_id, THEORY, name).unwrap()
+    }
+
+    /// The pile of `variant` standing for `cat` — `cat` itself when it is already that list's,
+    /// else the other list's pile of the same name (or kind), made there if it is missing. Every
+    /// card write refuses a pile of the other list (`deck_meta::CATEGORY_WRONG_LIST`), so a
+    /// theory write goes through this.
+    fn in_list(conn: &Connection, deck_id: i64, variant: &str, cat: i64) -> i64 {
+        crate::deck_meta::counterpart_in(conn, deck_id, variant, cat).unwrap()
     }
 
     fn add(conn: &Connection, deck_id: i64, card: &str, cat: i64, variant: &str, quantity: i64) {
@@ -1145,7 +1182,8 @@ mod tests {
     }
 
     /// The same add, naming the object played — `None` is the regular copy, which
-    /// `deck::normalise_finish` stores as NULL.
+    /// `deck::normalise_finish` stores as NULL. `cat` is carried into the list being written by
+    /// [`in_list`], so a case may name the live pile for a theory add.
     fn add_finish(
         conn: &Connection,
         deck_id: i64,
@@ -1159,7 +1197,7 @@ mod tests {
             conn,
             deck_id,
             card,
-            Some(cat),
+            Some(in_list(conn, deck_id, variant, cat)),
             None,
             variant,
             finish,
@@ -1420,7 +1458,9 @@ mod tests {
 
         // And each side is summed across its piles rather than compared pile by pile: two here
         // and two there is four wanted, which is what the deck has.
-        crate::deck::set_card_quantity(&conn, id, "bolt-lea", removal, THEORY, None, 2).unwrap();
+        let plan_removal = in_list(&conn, id, THEORY, removal);
+        crate::deck::set_card_quantity(&conn, id, "bolt-lea", plan_removal, THEORY, None, 2)
+            .unwrap();
         add(&conn, id, "bolt-lea", burn, THEORY, 2);
         assert!(theory_diff(&conn, id, ANY_MARKET).unwrap().is_empty());
     }
@@ -1456,9 +1496,7 @@ mod tests {
         );
     }
 
-    /// **A diff row carries its printing's picture** — the dialog draws the `art` crop beside
-    /// each name, and on web and on Android that URL travels with the row or the frame stays
-    /// blank: `mtgimg://` is a Tauri custom protocol and wasm can register no scheme.
+    /// **A diff row carries its printing's picture.**
     ///
     /// **`bolt-m10` is shaped like a `meld` printing here** — all four variants in *both*
     /// columns, every one a different URL — because that is the only shape where each way of
@@ -1734,6 +1772,42 @@ mod tests {
         );
     }
 
+    /// The press the Compare dialog makes, for issue #563's card. Its `only` keys are built off the
+    /// diff rows, whose finish is the played one, so the dialog ticks `palantir-hoc|foil`, and that
+    /// is the spelling the press has to find. The wish is pinned to the foil, the only finish the
+    /// printing exists in. The pre-fix spelling `palantir-hoc|` names nothing now and writes nothing.
+    #[test]
+    fn the_press_finds_a_foil_only_line_by_its_played_key() {
+        let conn = seeded();
+        foil_only(&conn);
+        let id = deck(&conn, "Palantír");
+        let main = category(&conn, id, "Main deck");
+        add_finish(&conn, id, "palantir-hoc", main, THEORY, None, 2);
+        add_finish(&conn, id, "palantir-hoc", main, LIVE, Some("foil"), 1);
+
+        let stale = ["palantir-hoc|".to_owned()];
+        assert_eq!(
+            missing_to_wishlist(&conn, id, Some(&stale), None).unwrap(),
+            0
+        );
+
+        let ticked = ["palantir-hoc|foil".to_owned()];
+        assert_eq!(
+            missing_to_wishlist(&conn, id, Some(&ticked), None).unwrap(),
+            1
+        );
+        assert_eq!(
+            pinned_wishes(&conn),
+            vec![(
+                "o3".to_owned(),
+                "palantir-hoc".to_owned(),
+                Some("foil".to_owned()),
+                1
+            )],
+            "one copy short, wished for as the foil"
+        );
+    }
+
     /// **Only a printing with no choice is folded.** One sold in both finishes keeps the regular
     /// copy and the foil apart exactly as `the_diff_tells_a_foil_from_the_regular_copy` says —
     /// an unsaid row there is the regular copy, and the plan's foil is not answered by it.
@@ -1767,7 +1841,8 @@ mod tests {
 
     /// An inactive category counts toward nothing — on **both** sides. A card parked in the
     /// theory Maybeboard is not a decision the user made, and one parked in the live
-    /// Maybeboard is not a card the deck has.
+    /// Maybeboard is not a card the deck has. Each list has its own Maybeboard since user schema
+    /// v53, and the plan's is made by [`add`] as a copy of the live one — switched off with it.
     #[test]
     fn the_diff_reads_neither_sides_inactive_categories() {
         let conn = seeded();
@@ -1775,7 +1850,8 @@ mod tests {
         let main = category(&conn, id, "Main deck");
         let maybe: i64 = conn
             .query_row(
-                "SELECT id FROM deck_categories WHERE deck_id = ?1 AND kind = 'maybe'",
+                "SELECT id FROM deck_categories
+                  WHERE deck_id = ?1 AND variant = 'live' AND kind = 'maybe'",
                 params![id],
                 |r| r.get(0),
             )
@@ -2898,14 +2974,16 @@ mod tests {
 
     /// An inactive pile is excluded from the **quantity** too, not merely from the key list —
     /// the plan is not asking for a card it has parked in the Maybeboard, so those copies may
-    /// not swell the number the tick counts down from.
+    /// not swell the number the tick counts down from. **The plan's own Maybeboard** is the one
+    /// switched off: each list has its own since user schema v53, and the live one's switch
+    /// reaches no theory row.
     #[test]
     fn theory_slots_leave_a_switched_off_pile_out_of_the_count() {
         let conn = seeded();
         let d = deck(&conn, "Burn");
         set_theory(&conn, d, true);
         let main = category(&conn, d, "Main deck");
-        let maybe = category(&conn, d, "Maybeboard");
+        let maybe = theory_category(&conn, d, "Maybeboard");
         add(&conn, d, "bolt-lea", main, THEORY, 2);
         add(&conn, d, "bolt-lea", maybe, THEORY, 3);
         conn.execute(
@@ -2984,14 +3062,15 @@ mod tests {
     }
 
     /// `diff_select`'s rule, read by the same reasoning: a card parked in an inactive pile is
-    /// not something the user has decided to play, so the plan is not asking for it.
+    /// not something the user has decided to play, so the plan is not asking for it. The pile is
+    /// the plan's own, for the reason the case above gives.
     #[test]
     fn theory_slots_skips_a_switched_off_pile() {
         let conn = seeded();
         let d = deck(&conn, "Burn");
         set_theory(&conn, d, true);
         let main = category(&conn, d, "Main deck");
-        let maybe = category(&conn, d, "Maybeboard");
+        let maybe = theory_category(&conn, d, "Maybeboard");
         add(&conn, d, "bolt-lea", main, THEORY, 1);
         add(&conn, d, "serra-lea", maybe, THEORY, 1);
         conn.execute(

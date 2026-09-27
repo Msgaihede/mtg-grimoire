@@ -31,8 +31,7 @@ describe("the Tauri core", () => {
 
   it("hands the event payload to the handler, not the envelope", async () => {
     // Tauri wraps a payload in { event, id, payload }. Every caller in ipc.ts already
-    // unwraps it; the Core interface makes that the boundary's job instead, so a browser
-    // implementation does not have to fake an envelope it has no reason to have.
+    // unwraps it; the Core interface makes that the boundary's job instead.
     let sink: ((e: { payload: unknown }) => void) | undefined;
     listen.mockImplementation((_name: string, cb: (e: { payload: unknown }) => void) => {
       sink = cb;

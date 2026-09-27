@@ -12,18 +12,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-
-/**
- * **The one mock in this file, and it makes the suite agree with the bundle rather than with the
- * repo's default.**
- *
- * `vite.share.config.ts` defines `__CORE__` as `"web"`; `vite.config.ts` — which vitest inherits
- * — defines it as `"tauri"`. `cardArtSrc` branches on exactly that, so under the suite's default
- * a tile with `cardId={null}` draws the no-picture fallback and **no `<img>` at all**, which is
- * not what a reader of this page ever sees. Mocked, the wall draws the `cards.scryfall.io` URL
- * the snapshot carries, which is the whole of how this page gets its pictures.
- */
-vi.mock("@/pwa/target", () => ({ isWebTarget: () => true }));
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { parseSnapshot, type ShareSnapshot } from "@/lib/shareSnapshot";
 import golden from "../src-tauri/src/share/__golden__/snapshot.json?raw";
@@ -340,10 +328,9 @@ describe("snapshotHref", () => {
 /**
  * **The bundle has no core, and this is the fence.**
  *
- * `share/` is loaded by a stranger's browser from a Discord link. The web target's own core
- * would meet that reader with a 2.6 MB wasm module, a 75 MB corpus ingest and an OPFS pool that
- * refuses a second tab — so the viewer imports none of it, and an `ipc` import would drag a
- * Tauri boundary into a bundle that has none.
+ * `share/` is loaded by a stranger's browser from a Discord link, with no Tauri behind it — so
+ * the viewer imports no core and no `ipc`, either of which would drag a Tauri boundary into a
+ * bundle that has none.
  *
  * A `grep` over `share/*.tsx` would only catch the first hop. This walks the graph, and it has to
  * walk **all** of it — the fence exists to survive edits nobody has made yet, so the two ways a
@@ -412,7 +399,7 @@ describe("the viewer's import graph", () => {
     return null;
   }
 
-  const FORBIDDEN = ["@/lib/core", "@/lib/ipc", "@/workers", "@/features", "@tauri-apps/"];
+  const FORBIDDEN = ["@/lib/core", "@/lib/ipc", "@/features", "@tauri-apps/"];
 
   it("finds a side-effect and a dynamic import, not only a `from`", () => {
     const specs = specifiersOf(`
@@ -421,12 +408,12 @@ describe("the viewer's import graph", () => {
       export * from "./b";
       const lazy = await import("@/features/late");
       // a comment naming "@/lib/ipc" must not count
-      /* nor a block one naming "@/workers/x" */
+      /* nor a block one naming "@/lib/core/x" */
     `);
     expect(specs).toEqual(["@/lib/a", "@/lib/side-effect", "./b", "@/features/late"]);
   });
 
-  it("reaches no core, no ipc, no worker and no feature", () => {
+  it("reaches no core, no ipc and no feature", () => {
     const seen = new Set<string>();
     const queue = Object.keys(own)
       .filter((key) => !key.endsWith(".test.tsx"))

@@ -5,13 +5,6 @@ const listen = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
-// **Defaulted to `false`, which is the desktop shape every other assertion in this file
-// assumes.** `ipc.scannerFrame` is the one wrapper whose *call shape* depends on the OS, so
-// the two legs have to be drivable from here; a real `isAndroid()` would answer off jsdom's
-// user agent and pin only whichever leg that happens to be. Each Android case arms it with a
-// single `mockReturnValueOnce`, so the mock never leaks past the call it was written for.
-vi.mock("@/lib/platform", () => ({ isAndroid: vi.fn(() => false) }));
-
 // Read as text, not imported as a module: this pair is the only thing in the build that
 // compares the hand-written mirror below with the crate it mirrors. `viewports.test.ts`
 // reads `tauri.conf.json` the same way, for the same reason — Rust owns the fact and
@@ -74,7 +67,6 @@ import cardnessRs from "../../crates/card-scanner/src/cardness.rs?raw";
 import trimRs from "../../crates/card-scanner/src/trim.rs?raw";
 import ipcSource from "./ipc.ts?raw";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
-import { isAndroid } from "@/lib/platform";
 import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "@/features/scanner/fixtures";
 import { SCANNER_OPEN_ELSEWHERE } from "@/features/scanner/verdictText";
@@ -1269,10 +1261,9 @@ describe("ipc argument names match the Rust command signatures", () => {
   it("sends every category command under the name its command declares", async () => {
     invoke.mockResolvedValue([]);
     await ipc.deckCategoryList(4, "theory", "manapool");
-    // The variant scopes the two **counts** on each row and nothing else — the list of
-    // categories is the same either way, which is what keeps the editor's columns still while
-    // the reader switches lists. The marketplace scopes one of those two numbers: `totalPrice`
-    // is a sum *at* a marketplace, and two of them are not conversions of each other.
+    // The variant picks which list's piles come back — each list has its own since user schema
+    // v53 (issue #561). The marketplace scopes one of the two numbers on each: `totalPrice` is a
+    // sum *at* a marketplace, and two of them are not conversions of each other.
     expect(invoke).toHaveBeenCalledWith("deck_category_list", {
       deckId: 4,
       variant: "theory",
@@ -1280,8 +1271,13 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
 
     invoke.mockResolvedValue({ id: 7 });
-    await ipc.deckCategoryCreate(4, "Ramp");
-    expect(invoke).toHaveBeenCalledWith("deck_category_create", { deckId: 4, name: "Ramp" });
+    await ipc.deckCategoryCreate(4, "theory", "Ramp");
+    // A pile is made in one list — the variant is part of its grain, not a filter on its counts.
+    expect(invoke).toHaveBeenCalledWith("deck_category_create", {
+      deckId: 4,
+      variant: "theory",
+      name: "Ramp",
+    });
 
     await ipc.deckCategoryRename(7, "Acceleration");
     // `id`, not `deckId`: a category names its own deck, so a rename does not.
@@ -2364,9 +2360,8 @@ describe("ipc argument names match the Rust command signatures", () => {
    * up-to-date taxonomy read as due on every launch and cost an API call per start.
    *
    * The refresh that used to share this case went with its wrapper on 2026-09-27 — nothing but
-   * this file and one story ever called `ipc.oracleTagsRefresh`. The command's `force` spelling is
-   * still pinned where the command is still sent: `src/workers/db.test.ts` and
-   * `src/lib/core/browser.test.ts`.
+   * this file and one story ever called `ipc.oracleTagsRefresh`. Nothing on this side sends the
+   * command any more, so there is no spelling of its `force` argument here to pin.
    */
   it("asks for the tag status with no arguments", async () => {
     const status = {
@@ -3397,17 +3392,13 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * **Two call shapes for one command, and this is the only pin either of them has.**
+   * **The call shape, and this is the only pin it has.**
    *
-   * A camera frame has no fields to name, so on desktop it is Tauri's raw byte body with the
-   * detector options riding in a header — and on Android Tauri carries no raw bytes at all
-   * ("on all platforms except Android", its own doc on `Request`), so the same command takes
-   * `{ jpeg, options }` as ordinary named arguments. Nothing type-checks either half: the
-   * desktop leg's header *name* is a string on both sides, and the Android leg's argument names
-   * are matched by `invoke` at run time. A misspelling on either is a scanner that reports
-   * "no card" for every frame on exactly one of the two platforms.
+   * A camera frame has no fields to name, so it is Tauri's raw byte body with the detector
+   * options riding in a header. Nothing type-checks it: the header *name* is a string on both
+   * sides, and a misspelling is a scanner that reports "no card" for every frame.
    */
-  it("scanner_frame sends the frame as bytes with its options in a header on desktop", async () => {
+  it("scanner_frame sends the frame as bytes with its options in a header", async () => {
     const jpeg = new Uint8Array([1, 2, 3]);
     await ipc.scannerFrame(jpeg, DEFAULT_SCANNER_OPTIONS);
     expect(invoke).toHaveBeenCalledWith("scanner_frame", jpeg, {
@@ -3415,24 +3406,12 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
   });
 
-  it("scanner_frame sends the frame as base64 arguments on Android", async () => {
-    vi.mocked(isAndroid).mockReturnValueOnce(true);
-    await ipc.scannerFrame(new Uint8Array([1, 2, 3]), DEFAULT_SCANNER_OPTIONS);
-    expect(invoke).toHaveBeenCalledWith("scanner_frame", {
-      jpeg: "AQID",
-      options: DEFAULT_SCANNER_OPTIONS,
-    });
-  });
-
-  it("scanner_capture carries the sidecar the same two ways", async () => {
+  it("scanner_capture carries the sidecar the same way", async () => {
     const sidecar = { expected: "Plains", reported: "", confidence: "", votes: "8.0", distance: "74" };
     await ipc.scannerCapture(new Uint8Array([9]), sidecar);
     expect(invoke).toHaveBeenCalledWith("scanner_capture", new Uint8Array([9]), {
       headers: { "x-scanner-capture": JSON.stringify(sidecar) },
     });
-    vi.mocked(isAndroid).mockReturnValueOnce(true);
-    await ipc.scannerCapture(new Uint8Array([9]), sidecar);
-    expect(invoke).toHaveBeenCalledWith("scanner_capture", { jpeg: "CQ==", sidecar });
   });
 
   /**
@@ -4467,14 +4446,6 @@ describe("pairing", () => {
     expect(invoke).toHaveBeenCalledWith("sync_now");
   });
 
-  it("tells the socket whether the app is in front under `on`", async () => {
-    invoke.mockResolvedValue(undefined);
-
-    await ipc.syncLiveForeground(true);
-
-    expect(invoke).toHaveBeenCalledWith("sync_live_foreground", { on: true });
-  });
-
   it("reads the socket's current state with no arguments", async () => {
     invoke.mockResolvedValue("connecting");
 
@@ -4582,9 +4553,7 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   });
 
   /**
-   * The field this whole pin was added for. Named on its own as well as counted above,
-   * because the failure it guards is silent in a way the others are not: a search wall on the
-   * web build draws no art at all without it, and jsdom has no network to notice.
+   * The field this whole pin was added for, named on its own as well as counted above.
    */
   it("names the front face's image URLs on both sides", () => {
     expect(rustFields(searchRs, "CardSummary")).toContain("image_uris");
@@ -4717,21 +4686,17 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   });
 
   /**
-   * **The other three card walls, pinned the same way and for a failure that has already
-   * shipped.** `CardSummary` was the only DTO carrying `image_uris` until 2026-08-31, on the
-   * belief that `search_cards` was the one card-bearing command a browser could call. It is
-   * not — `collection_list`, `wishlist_list` and `deck_get` are all in `web/route.rs`'s
-   * `COMMANDS` — so those three walls drew named, artless frames on the web build while the
-   * search wall beside them drew pictures.
+   * **The other three card walls, pinned the same way.** `CardSummary` was the only DTO
+   * carrying `image_uris` until 2026-08-31, when `collection_list`, `wishlist_list` and
+   * `deck_get` grew it too.
    *
    * Nothing in jsdom can notice a missing picture, and nothing in the build type-checks this
    * mirror against the crate, so the field name on both sides is the whole of the fence.
    *
    * **It is not only the walls, which is why the list below is longer than that paragraph.**
-   * Five more surfaces read `cardImageUrl` directly and were found blank on the phone the same
-   * day: the deck gallery's cover, a folder card's strip of member art, the cover picker's
-   * preview and its choice tiles, and the theory diff's row thumbnails. Two more DTOs carry the
-   * field for them, and both are pinned here rather than trusted — see the rows themselves.
+   * Two more DTOs carry the field — for the deck gallery's cover, a folder card's strip of
+   * member art, the cover picker's preview and its choice tiles, and the theory diff's row
+   * thumbnails — and both are pinned here rather than trusted; see the rows themselves.
    */
   // Annotated rather than inferred: without the tuple type TypeScript widens each row to
   // `string[]` and the three arguments below lose their names.
@@ -4742,10 +4707,7 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // this file calls it `DeckCard`, so the mapping is spelled out rather than assumed.
     ["DeckCard", deckRs, "DeckCardRow"],
     // **The two rows that are not card walls, added 2026-08-31 with the surfaces that needed
-    // them.** A deck's gallery tile, a folder card's strip of member art, the cover picker's
-    // preview and the theory diff's row thumbnails all drew `mtgimg://` directly, so all four
-    // were blank in a browser and on the phone — the gallery from the day a card-art crop
-    // became the *only* deck cover. `DeckRow.image_uris` is the **cover printing's** picture,
+    // them.** `DeckRow.image_uris` is the **cover printing's** picture,
     // off the same `LEFT JOIN cards c ON c.id = d.cover_card_id` its `cover_artist` comes from,
     // not the deck's own; `TheoryDiffRow.image_uris` is the row's printing.
     ["DeckRow", deckRs, "DeckRow"],
@@ -5375,8 +5337,6 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
    *
    * The parity row above cannot make it: parity catches a field renamed on *one* side, and both
    * sides dropping the picture together is a green table and a dialog of named, artless frames.
-   * The web build and the phone have no `mtgimg://` to fall back on, so there this field is the
-   * only picture there is.
    */
   it("names the front face's image URLs on both sides of the combo piece", () => {
     expect(

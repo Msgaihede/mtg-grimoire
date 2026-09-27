@@ -129,8 +129,7 @@ pub struct QuickAddWish {
     pub preferred_finish: Option<String>,
     /// The named printing's picture, front face, exactly as
     /// [`crate::search::CardSummary::image_uris`] — `None` for an any-printing wish or a printing
-    /// the corpus no longer holds. Carried for the web build, which cannot draw from the
-    /// `mtgimg:` cache.
+    /// the corpus no longer holds.
     pub image_uris: Option<BTreeMap<String, String>>,
 }
 
@@ -527,11 +526,8 @@ fn take_wish(tx: &Connection, wish_id: i64, card_id: &str, quantity: i64) -> Res
 /// `src/lib/ipc.ts` invokes — while the crate says [`super::wishes`] and [`super::quick_add`],
 /// which are module plus verb and do not stutter.
 pub mod commands {
-    #[cfg(not(target_family = "wasm"))]
     use super::{card_wishes as read_wishes, quick_add as add, QuickAddOutcome, QuickAddWish};
-    #[cfg(not(target_family = "wasm"))]
     use crate::sync::AppState;
-    #[cfg(not(target_family = "wasm"))]
     use std::sync::Arc;
 
     /// [`super::card_wishes`]' command — every wish for the card, any printing and any finish,
@@ -552,7 +548,6 @@ pub mod commands {
     /// offered on one, and the write it leads *to*
     /// ([`deck_quick_add_to_collection`]) refuses on its own account. A fence added here would be
     /// a second answer to a question this command cannot be asked.
-    #[cfg(not(target_family = "wasm"))]
     #[tauri::command]
     pub async fn deck_quick_add_wishes(
         state: tauri::State<'_, Arc<AppState>>,
@@ -576,7 +571,6 @@ pub mod commands {
     /// counting `collection_entries` rows, and this is the only deck-boundary write that
     /// *creates* one. [`crate::collection_alloc::commands`] and [`crate::deck_pull::commands`]
     /// carry the same note about moving them.
-    #[cfg(not(target_family = "wasm"))]
     #[tauri::command]
     #[allow(clippy::too_many_arguments)]
     pub async fn deck_quick_add_to_collection(

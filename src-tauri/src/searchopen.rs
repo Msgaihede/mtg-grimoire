@@ -34,12 +34,10 @@
 //! `app_meta` key (v25's `deck_driven_collection`) was a passenger on a rung already doing
 //! structural work, and a standalone `DELETE FROM app_meta` rung has no precedent here.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key. The table is the *application's*, deliberately not `sync_meta` — a row in
@@ -164,7 +162,6 @@ pub fn store(conn: &Connection, section: &str, open: bool) -> Result<(), String>
 /// reason: a sync body runs inline on the IPC thread, and this one takes `db_read`'s mutex, which
 /// a search may hold for tens of milliseconds — and this is called while the window is drawing its
 /// first frame.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn search_open(state: tauri::State<'_, Arc<AppState>>) -> BTreeMap<String, bool> {
     stored(&crate::sync::lock_db_read(state.inner()))
@@ -177,7 +174,6 @@ pub fn search_open(state: tauri::State<'_, Arc<AppState>>) -> BTreeMap<String, b
 /// reason: the frontend writes optimistically and keeps the reader's choice for the session either
 /// way, so a BUSY during a first-run sync costs them nothing they can see now and only the next
 /// launch's starting state.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_search_open(
     state: tauri::State<'_, Arc<AppState>>,

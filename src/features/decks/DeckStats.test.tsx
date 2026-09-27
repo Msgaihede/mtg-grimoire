@@ -1511,6 +1511,58 @@ describe("DeckStats", () => {
   });
 
   /**
+   * **And says it so it is seen** (issue #553). Pressing twice doubles every wish — the fold is
+   * kept, by the reader's choice — and the answer that should have stopped the second press was
+   * drawn in the dim voice this strip keeps for lines with nothing to say. A write that landed is
+   * accent with `CircleCheck` beside it; the glyph is decoration, so it is hidden from the
+   * accessibility tree and adds nothing to the sentence the region announces.
+   *
+   * Classes rather than colours, because jsdom applies no stylesheet — what is checked is that
+   * the success arm asks for the accent and the dim voice is gone from it.
+   */
+  it("draws a successful write in the accent, with a check", async () => {
+    await press(short(), sender({ isSuccess: true, data: 2 }));
+
+    const region = screen.getByRole("status");
+    expect(region).toHaveClass("text-accent");
+    expect(region).not.toHaveClass("text-dim");
+    const check = region.querySelector("svg");
+    expect(check).not.toBeNull();
+    expect(check).toHaveClass("lucide-circle-check");
+    expect(check).toHaveAttribute("aria-hidden", "true");
+    // The glyph adds no text of its own, so the region still says exactly the sentence.
+    expect(region.textContent).toBe(
+      "Added 2 wishes — one per card, for every copy you are short.",
+    );
+  });
+
+  /**
+   * **Zero stays dim and draws no check**: nothing was added, and a tick beside "Nothing to add"
+   * would be a receipt for a write that did not happen.
+   */
+  it("leaves the nothing-added sentence dim, with no check", async () => {
+    await press(short(), sender({ isSuccess: true, data: 0 }));
+
+    const region = screen.getByRole("status");
+    expect(region).toHaveClass("text-dim");
+    expect(region).not.toHaveClass("text-accent");
+    expect(region.querySelector("svg")).toBeNull();
+  });
+
+  /**
+   * **The region is the same element in every arm**, empty before any press — the class moves
+   * and the element does not, because a live region that arrives with its sentence already in it
+   * announces nothing. The check is not drawn into the empty region either.
+   */
+  it("keeps the live region mounted and empty until a press answers", () => {
+    strip(short(), sender());
+
+    const region = screen.getByRole("status");
+    expect(region).toBeEmptyDOMElement();
+    expect(region.querySelector("svg")).toBeNull();
+  });
+
+  /**
    * Zero is **not** "they were already wished for", and the backend is why: it counts the
    * shortfall from a freshly reallocated deck *before* it writes anything, and skips a row
    * whose printing has no `oracle_id`. So zero means the recount found nothing short, or that

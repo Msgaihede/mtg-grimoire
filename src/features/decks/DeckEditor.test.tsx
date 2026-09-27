@@ -131,6 +131,7 @@ const deckUndoState = vi.hoisted(() => vi.fn());
 const deckUndoApply = vi.hoisted(() => vi.fn());
 const deckRedoApply = vi.hoisted(() => vi.fn());
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
+const deckTheoryMissingToWishlist = vi.hoisted(() => vi.fn());
 // Which rows of the plan the Live list is standing in for -- the four views' theory tick.
 // Two columns of one indexed scan, and the only read the editor makes of the list the
 // reader is *not* looking at.
@@ -259,6 +260,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckUndoApply,
     deckRedoApply,
     deckTheoryDiff,
+    deckTheoryMissingToWishlist,
     deckTheorySlots,
     deckFolderList,
     importResolve,
@@ -429,10 +431,10 @@ function category(
     isActive: kind !== "maybe",
     origin: "user",
     sortOrder: id - 1,
-    // The heading counts the rows it was handed, so these three are read by nothing here.
+    variant: "live",
+    // The heading counts the rows it was handed, so these two are read by nothing here.
     cardCount: 0,
     totalPrice: null,
-    cardCountAllVariants: over.cardCount ?? 0,
     ...over,
   };
 }
@@ -991,6 +993,7 @@ beforeEach(() => {
   deckUndoApply.mockReset().mockResolvedValue(undefined);
   deckRedoApply.mockReset().mockResolvedValue(undefined);
   deckTheoryDiff.mockReset().mockResolvedValue([]);
+  deckTheoryMissingToWishlist.mockReset().mockResolvedValue(1);
   // A plan that asks for nothing: the tick is drawn by the tests that are about it and by
   // no other, so a card name assertion elsewhere never has to know this mark exists.
   deckTheorySlots.mockReset().mockResolvedValue([]);
@@ -4301,6 +4304,46 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **The Compare dialog closes on a sent shopping list, and the editor says what was sent**
+   * (issue #553). A second press wishes for the same copies again — `add_wish`'s fold, kept on
+   * purpose — so the press owes the reader an unmistakable answer instead: the dialog goes, and the
+   * sentence it can no longer draw is drawn here.
+   */
+  it("closes Compare on a sent shopping list and says what was sent", async () => {
+    withPlan();
+    deckTheoryDiff.mockResolvedValue([
+      {
+        cardId: "c-Bear",
+        name: "Bear",
+        categoryName: "Main deck",
+        quantity: 1,
+        unitPrice: 0.25,
+        setCode: "m21",
+        collectorNumber: "1",
+        finish: null,
+        ownedSpare: 0,
+        heldAsOtherPrinting: 0,
+      },
+    ]);
+    await open();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Compare" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /^Send 1 selected to wishlist/ }),
+    );
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(deckTheoryMissingToWishlist).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole("status")
+          .some((region) => region.textContent?.startsWith("Sent from the plan to your wishlist")),
+      ).toBe(true),
+    );
+  });
+
+  /**
    * A deck opens on the tab it was left on, which is the whole point of the three columns.
    *
    * Restoring writes **nothing** back: it is a read of what is already stored, and a restore
@@ -5339,7 +5382,7 @@ describe("DeckEditor drag and drop", () => {
       await userEvent.type(field, "Removal");
       await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
-      await waitFor(() => expect(deckCategoryCreate).toHaveBeenCalledWith(4, "Removal"));
+      await waitFor(() => expect(deckCategoryCreate).toHaveBeenCalledWith(4, "live", "Removal"));
       // The id the create answered with, not the name — the second write addresses a row.
       await waitFor(() =>
         expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", 9, null, "live", null, 1),
@@ -7090,10 +7133,10 @@ describe("DeckEditor — a category's menu", () => {
   /**
    * The deck the fixtures build has `cardCount: 0` on every pile, so `Clear stack…` is greyed
    * there — this is the deck the four cases below need: a Main deck holding four copies of one
-   * card in the live list, and one in the theory list it must not reach.
+   * card in the live list.
    */
   function withCardsInMain() {
-    const main = category(1, "Main deck", "main", { cardCount: 4, cardCountAllVariants: 5 });
+    const main = category(1, "Main deck", "main", { cardCount: 4 });
     const categories = [main, ...CATEGORIES.slice(1)];
     deckGet.mockResolvedValue(detail({}, [bolt()], categories));
     deckCategoryList.mockResolvedValue(categories);
@@ -7134,15 +7177,14 @@ describe("DeckEditor — a category's menu", () => {
   });
 
   /**
-   * **The question counts the list on screen and says the other one is safe.**
+   * **The question counts the pile, names the list on screen, and says nothing about the other.**
    *
-   * `cardCount` is variant-scoped and `cardCountAllVariants` is not, so the difference is the
-   * copies in the list the reader is *not* looking at — and a clear cannot reach them. Quoting
-   * the wrong one of the two here would overstate a destructive press, which is the one
-   * direction a confirmation must never be wrong in. (The delete confirmation quotes the other
-   * number, correctly, because that command cascades through both lists.)
+   * A pile belongs to one list since user schema v53 (issue #561), so its `cardCount` is every
+   * copy it holds and the other list has nothing filed here to reassure the reader about. The
+   * sentence that used to say "…filed here in the other list is untouched" must not come back:
+   * it would be a promise about cards that cannot be in this pile.
    */
-  it("counts the variant on screen and says the other list is untouched", async () => {
+  it("counts the pile on screen and says nothing about the other list", async () => {
     withCardsInMain();
     await open();
     await rightClickGroup(MAIN);
@@ -7152,12 +7194,7 @@ describe("DeckEditor — a category's menu", () => {
     await waitFor(() =>
       expect(within(dialog).getByText(/4 cards in it leave the actual list/)).toBeVisible(),
     );
-    // **Through the verb, not up to it.** `/1 card filed here in the other list/` passed against
-    // "…other list are untouched" as readily as against the "is" that agrees with one card, so
-    // the assertion could not fail for the thing it looks like it is checking.
-    expect(
-      within(dialog).getByText(/1 card filed here in the other list is untouched/),
-    ).toBeInTheDocument();
+    expect(within(dialog).queryByText(/in the other list/)).not.toBeInTheDocument();
   });
 
   /** A refused clear is said **inside** the dialog, for the reason the delete's refusal is: the
@@ -7562,6 +7599,10 @@ describe("DeckEditor reordering the deck's piles", () => {
    * Read off the grips' own names, because that is the one thing on screen that states a position.
    */
   it("draws the new order before the write has answered", async () => {
+    // **An answer that never comes**, so what is drawn can only be the preview. This test used to
+    // let the write succeed against a `deck_get` that still answered the old order, and passed
+    // only because the preview outlived every re-read (issue #553) — the bug below, asserted.
+    deckCategoryReorder.mockReturnValue(new Promise(() => {}));
     await openWithPiles();
     const user = userEvent.setup();
 
@@ -7570,6 +7611,36 @@ describe("DeckEditor reordering the deck's piles", () => {
 
     expect(await screen.findByRole("button", { name: "Move Ramp, 3 of 3" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Move Removal, 2 of 3" })).toBeInTheDocument();
+  });
+
+  /**
+   * **And once the write has answered and the deck been read again, the deck's own order is what
+   * is drawn** (issue #553). The preview used to stand for the rest of the visit whenever the
+   * server's list held the same number of piles — so Ctrl+Z put the old order back in the database
+   * and nothing on the desk moved, which read as an undo that did nothing.
+   *
+   * Two re-reads, in the order the backend would give them: the reorder's own, carrying the new
+   * order (which must not snap the pile back on the way), then the undo's, carrying the old one.
+   */
+  it("draws the order an undo puts back after a reorder", async () => {
+    const reordered = [1, 2, 7, 6, 5].map((id, sortOrder) => ({
+      ...PILES.find((pile) => pile.id === id)!,
+      sortOrder,
+    }));
+    await openWithPiles();
+    deckGet.mockResolvedValue(detail({}, [bolt()], reordered));
+    const user = userEvent.setup();
+
+    grip("Ramp", "2 of 3").focus();
+    await user.keyboard("{ArrowRight}");
+    await waitFor(() => expect(deckGet.mock.calls.length).toBeGreaterThan(1));
+    expect(await screen.findByRole("button", { name: "Move Ramp, 3 of 3" })).toBeInTheDocument();
+
+    deckGet.mockResolvedValue(detail({}, [bolt()], PILES));
+    await user.keyboard("{Control>}z{/Control}");
+    await waitFor(() => expect(deckUndoApply).toHaveBeenCalled());
+
+    expect(await screen.findByRole("button", { name: "Move Ramp, 2 of 3" })).toBeInTheDocument();
   });
 
   /** A lie about what the deck's columns look like must not outlive the write that failed — and
@@ -7868,6 +7939,70 @@ describe("DeckEditor multi-select", () => {
     await userEvent.keyboard("{Delete}");
 
     await waitFor(() => expect(deckToCollection).toHaveBeenCalledTimes(2));
+  });
+
+  /**
+   * **A refusal in the middle of a batch is said, even when the batch ended well** (issue #553).
+   * Each card is its own call on one `useMutation` observer, and an observer remembers only its
+   * newest call — so the second card's refusal used to roll its row back in silence because the
+   * last card's write had gone through. The banner now counts the whole batch.
+   */
+  it("says which part of a Delete was refused when the last card went through", async () => {
+    deckToCollection.mockRejectedValueOnce("The database is busy with a sync.");
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await userEvent.keyboard("{Delete}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "1 of 2 cards was not changed — The database is busy with a sync.",
+    );
+  });
+
+  /** The drop's half of the same fault: a two-card drag onto a pile where the first move is
+   *  refused and the second lands. */
+  it("says which part of a multi-card drop was refused", async () => {
+    deckMoveCard.mockRejectedValueOnce("That card is not in the pile any more.");
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await pointerDrag(row("Lightning Bolt"), boxed(group("Sideboard"), 300, 80));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "1 of 2 cards was not changed — That card is not in the pile any more.",
+    );
+  });
+
+  /**
+   * **Delete stays behind a modal the editor does not own** (issue #553). `AllPrintingsDialog`
+   * and `CardDetailModal` are mounted at `App` level, so the editor's own `layer` is `null` while
+   * either is up — and `openAllPrintings` leaves the picked set standing, so a Delete pressed on
+   * a printing tile cut both picked cards from behind the scrim. Stood in for here by the one
+   * attribute every `Dialog` carries, which is what the handler asks.
+   */
+  it("leaves Delete alone while an app-level modal is open", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    const tile = document.createElement("button");
+    modal.append(tile);
+    document.body.append(modal);
+    try {
+      tile.focus();
+      await userEvent.keyboard("{Delete}");
+
+      expect(deckToCollection).not.toHaveBeenCalled();
+      expect(deckSetCardQuantity).not.toHaveBeenCalled();
+      expect(marked()).toHaveLength(2);
+    } finally {
+      modal.remove();
+    }
   });
 
   /**

@@ -1,23 +1,12 @@
-//! The `app_meta` key–value store: one table, two functions, every target.
+//! The `app_meta` key–value store: one table, two functions.
 //!
-//! **Carved out of `update.rs` for the reason [`crate::image_uri`] was carved out of
-//! `images.rs`.** `update` is the portable updater — `zip`, `tokio`, and an `.exe` swapped
-//! on disk — so it is `#[cfg(not(target_family = "wasm"))]` in `lib.rs`. But it also held
-//! `app_meta`, which is neither: it is one SQLite table read and written by modules across the
-//! crate that have nothing to do with updating anything (`grep -rln "app_meta::" src-tauri/src`
-//! is the census; a count here is a fact about one tree). `searchopen.rs` remembers which docked
-//! search columns are open in it; `shelffolds.rs` remembers which shelves the reader folded on
-//! the collection and the wishlist; `zoom`, `nav` and `listview` keep their view state here.
-//!
-//! So the *storage* moved to a module both builds compile, and the *updater* stayed behind.
-//! All sixty call sites moved with it — `crate::update::get_app_meta` is now
-//! `crate::app_meta::get_app_meta` everywhere, in eleven files. A re-export from `update`
-//! was tried first and does not work: `update` is itself gated, so a name re-exported from
-//! it is invisible on wasm exactly when it is needed. Renaming is what actually compiles.
-//!
-//! **No `#[cfg]` on this module, deliberately** — the same rule `image_uri` states. A module
-//! gated to `wasm32-unknown-unknown` is invisible to `cargo test`, and this one is too small
-//! and too widely called to be covered on one target only.
+//! **Carved out of `update.rs`.** `update` is the portable updater — `zip`, `tokio`, and an
+//! `.exe` swapped on disk — but it also held `app_meta`, which is neither: it is one SQLite
+//! table read and written by modules across the crate that have nothing to do with updating
+//! anything (`grep -rln "app_meta::" src-tauri/src` is the census; a count here is a fact about
+//! one tree). `searchopen.rs` remembers which docked search columns are open in it;
+//! `shelffolds.rs` remembers which shelves the reader folded on the collection and the wishlist;
+//! `zoom`, `nav` and `listview` keep their view state here.
 //!
 //! **Both functions swallow their errors on the read side and surface them on the write
 //! side**, which is the asymmetry the original carried and worth keeping visible: a missing
