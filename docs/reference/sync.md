@@ -1660,7 +1660,7 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
 
 | The group | Class | Holds its device? | Recorded? |
 | --- | --- | --- | --- |
-| Names a parent deleted here — a `del` for its uid in this device's own `sync_ops`, served by `idx_sync_ops_row` — or deleted in this page, and the parent's foreign key **cascades** | **moot** — and the row goes here too, where this device holds it and the group's placement under that parent stands | no | no — the convergent outcome |
+| Names a parent deleted here — a `del` for its uid in this device's own `sync_ops`, served by `idx_sync_ops_row` — or deleted in this page, and the parent's foreign key **cascades** | **moot** — and the row goes here too, where this device holds it, the group's placement under that parent stands, and no synced table files rows under it (never a folder) | no | no — the convergent outcome |
 | The same, but the key is **`SET NULL`** (`collection_entries.folder_id`, `wishlist_entries.folder_id`, `decks.folder_id`, `deck_cards.label_id`) | **not deferred** — written without that parent | no | no |
 | Any reason, and an op in it was sealed by a **newer** schema | **held · newer** | yes, with no bound | no — the Sync panel says it |
 | An unknown parent, from a same or older schema | **held · waiting** | yes, until the client's bound | only when released |
@@ -1686,12 +1686,30 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
   too and wins there, so the row is leaving the pile when the delete lands — and deleting it here
   would lose a row both devices place elsewhere
   (`a_stale_move_into_a_deleted_pile_leaves_a_card_this_device_moved_since`, red against the
-  unconditional delete). A delete this database refuses — a folder whose `SET NULL` entries land
-  on a grain the root already holds — leaves the row where it is, as moot always did, rather than
-  failing the apply on every pull. ⚠️ **Read off the code and unmeasured**: the peer's own outcome
-  is not order-free either — its applier takes a page parents first, so a delete and a later move
-  of the same row in one page cascade the row before the move is attempted, and the move rebuilds
-  it only where that device's history holds the row's insert.
+  unconditional delete). ⚠️ **Read off the code and unmeasured**: the peer's own outcome is not
+  order-free either — its applier takes a page parents first, so a delete and a later move of the
+  same row in one page cascade the row before the move is attempted, and the move rebuilds it only
+  where that device's history holds the row's insert.
+  **Never for a table another table's spec names as a parent** (`apply::is_a_parent`, read off
+  `capture::TABLES`) — the three folder tables, and a deck, a pile, a label and a note, which moot
+  never finds here anyway. The scoped re-review of this delete found why: it is uncaptured and no
+  delete in the page, so `gone` cannot see it. A peer that moves a folder under one deleted here and
+  then files a deck in it sends a deck naming a folder nothing here says is gone; the deck waits
+  out the bound and the release drops it, every card in it with it — where on the peer the delete
+  cascades the folder and `SET NULL` puts the deck at the root
+  (`a_deck_filed_into_a_folder_moved_under_one_this_device_deleted_survives_on_both`, and
+  `a_copy_filed_into_a_binder_moved_under_one_this_device_deleted_survives_on_both` for the
+  collection's cabinet; both red with the folder tables back in). For those the moot arm is what it
+  was before the delete: consume the group and touch nothing, so the moved folder stays where it
+  was here while the peer's cascade takes it — a folder one device holds and the other does not,
+  with everything filed in it kept on both.
+  **A moot `deck_cards` row on the live list goes without `release_group_copies`**, so copies its
+  deck's group held for it stay in the group, claimed by no row — which is what the peer's own
+  cascade leaves too, since a foreign-key cascade releases nothing, so the two agree.
+  A delete this database refuses leaves the row where it is, as moot always did, rather than
+  failing the apply on every pull — nothing on the tables it reaches refuses one today, and
+  `a_moot_delete_this_database_refuses_leaves_the_row_and_applies_the_rest` stands a TEMP trigger
+  in for the first thing that will.
 - **The `SET NULL` row is an amendment, and a measurement made it.** The design called every child
   of a deleted parent moot, which holds only where the delete would have taken the child with it.
   Where the key is `SET NULL` the delete left its children in place with the column cleared, and
@@ -1881,9 +1899,11 @@ The cursor-carrying loop the limit needs must walk to the head, and only then ma
   read off the code and unmeasured). A removal makes every remaining device forget the superseded
   keys (`identity::supersede` → `forget_superseded`, *One correction to the plan* below). The held
   page is sealed under the epoch before the removal, so once this device has adopted the rotation,
-  `pull` cannot open those envelopes, steps over them as unreadable, and — nothing being held any
-  more — advances. The newer device's ops since the hold began are lost after the upgrade, and any
-  other device's collateral held with them. It is the documented *a removal costs the backlog
+  `pull` cannot open those envelopes and steps over them as unreadable. Whether the cursor then
+  advances turns on what the newer device wrote since: if nothing, nothing is held any more and it
+  advances; if it went on writing at the new epoch, those batches still hold the cursor as newer
+  and apply after the upgrade. **The part sealed before the removal is lost either way**, and any
+  other device's collateral held behind it. It is the documented *a removal costs the backlog
   behind it*, now as long as the hold: a hold that lasts until the reader updates can straddle any
   number of rotations, where an ordinary backlog is a few trips. It breaks spec §2's "nothing of
   that device's stream is lost meanwhile" for exactly that case. **What would let the keys be
@@ -2895,8 +2915,9 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   `Err("UNIQUE constraint failed: index 'idx_collection_grain'")` through `?` — the whole apply
   fails, and the same page fails it again on every pull, so that device's sync stops. A throwaway
   probe — a binder holding one copy of a printing the root also holds, deleted through
-  `delete_folder` on one device and applied on the other — reproduced it. The moot row's own delete
-  is fenced against the same collision (it keeps the row); the applier's ordinary delete is not.
+  `delete_folder` on one device and applied on the other — reproduced it. The moot row's delete
+  never reaches a folder table and fences any refusal (it keeps the row); the applier's ordinary
+  delete is not fenced.
 - **An open Sync panel can show a stale `pullHeld`.** `RelayStatus` is under `SYNC_KEY`, which
   `useDeviceSyncInvalidation` refreshes on `sync:applied` — and `live::trip` and `sync_now` emit that
   only when a trip pulled or pushed something, while `pulled` counts newly applied ops only, on

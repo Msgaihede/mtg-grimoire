@@ -78,8 +78,9 @@
 //! a parent whose key is `SET NULL` — a binder, a deck folder, a label — is not a deferral at
 //! all when it is gone, and the child is written without it, which is what the child's own
 //! device does to it when the delete arrives there. **A moot row this device already holds goes
-//! too**, where the group's placement under the deleted parent is the one that stands: that is
-//! what the delete's cascade does to it on the device that sent the group. A moot or dropped
+//! too**, where the group's placement under the deleted parent is the one that stands and no
+//! synced table files rows under it: that is what the delete's cascade does to it on the device
+//! that sent the group. A folder moot here is consumed and left standing. A moot or dropped
 //! group is *consumed*: it holds nothing, the ops after it apply, and the watermark passes it.
 //! `client::pull` holds `PULL_CURSOR` while either held count is non-zero, so the relay hands the
 //! page back, and ends a waiting hold at its bound by applying the page once more with
@@ -133,9 +134,12 @@ pub struct ApplyReport {
     /// cascades to them. The convergent outcome — the delete would have taken the child with it
     /// on any device that held both — and recorded nowhere. **A row this device already holds
     /// under the group's uid is deleted with it**, when the group's placement under that parent
-    /// is the one the fold says stands: a peer that moved the row there loses it to the delete's
-    /// cascade, and so does this device. Where this device placed the row somewhere later, the
-    /// delete reaches the peer with the row on its way there, and it is left alone.
+    /// is the one the fold says stands and no synced table files rows under it: a peer that moved
+    /// the row there loses it to the delete's cascade, and so does this device. Where this device
+    /// placed the row somewhere later it is left alone, because that move reaches the peer too —
+    /// though what the peer then holds depends on its own history: it applies the delete first,
+    /// parents before children, and the move rebuilds the row there only if it holds the row's
+    /// insert. A folder is never deleted this way; see `cascade_onto_the_row_here`.
     pub moot: usize,
     /// Ops consumed because nothing that can arrive will let them apply: a table this build does
     /// not sync, a row it cannot build, or a released wait. Each group is an `error_log` row
@@ -981,26 +985,43 @@ fn gone(
 
 /// A group made moot by a cascading parent that is gone, about a row **this device already
 /// holds**: delete that row, as the delete's cascade does on the device that sent the group — but
-/// only when the group's placement under that parent is the one that stands.
+/// only when the group's placement under that parent is the one that stands, and never for a row
+/// other rows are filed under.
 ///
 /// A peer moves a card into a pile deleted here. On the peer the card is in that pile when the
 /// delete arrives, and the cascade takes it; consuming the move here and touching nothing left the
 /// card in its old pile on this device alone (the final review of the delivery holds). **The fold
 /// over this device's own history decides whether the placement stands**: where this device moved
-/// the row somewhere later, that move reaches the peer too and wins there, so the row is on its way
-/// out of the pile when the delete lands — and deleting it here would lose a row the peer keeps.
+/// the row somewhere later, that move reaches the peer too, and deleting the row here would lose
+/// one the peer may keep. ⚠️ **What the peer keeps is not order-free**: its applier takes a page
+/// parents first, so a delete and a later move of the same row in one page cascade the row before
+/// the move is attempted, and the move rebuilds it there only where that device's own history
+/// holds the row's insert — otherwise the move is a row it cannot build, skipped, and the two
+/// differ the other way (sync.md, *Held while it can resolve, skipped when it cannot*).
+///
+/// **Not for a table any capture spec names as a parent** ([`is_a_parent`]) — the three folder
+/// tables, and the tables whose rows moot never finds here anyway (a deck, a pile, a label, a
+/// note). The delete is uncaptured and is no delete in the page, so `gone` cannot see it: a peer
+/// that moved a folder under one deleted here and then filed a deck in it would find the deck
+/// waiting on a folder nothing says is gone, and the release would drop the deck and every card
+/// in it — where on the peer the same delete cascades the folder and `SET NULL` puts the deck at
+/// the root (the scoped re-review of this delete). For those the moot arm stays what it was:
+/// consume the group and touch nothing.
 ///
 /// Inside the pass's savepoint, like every other write of a round, so a round that is rolled back
 /// takes the delete with it. A row that is not here deletes nothing. **A delete this database
 /// refuses leaves the row where it is**, which is what the moot arm did before it deleted
-/// anything: a folder's `SET NULL` entries landing on a grain the root already holds fail
-/// `idx_collection_grain`, and letting that fail the apply would fail it on every pull after.
+/// anything: nothing on the tables this reaches refuses one today, and a refusal that escaped
+/// would fail the apply on every pull after.
 fn cascade_onto_the_row_here(
     conn: &Connection,
     meta: &Meta,
     g: &Group,
     p: &Parent,
 ) -> Result<(), String> {
+    if is_a_parent(meta.table) {
+        return Ok(());
+    }
     let uid = &g.ops[0].uid;
     let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
     all.extend(local_history(conn, meta.table, std::slice::from_ref(uid))?);
@@ -1020,6 +1041,15 @@ fn cascade_onto_the_row_here(
         Err(_) => "ROLLBACK TO sync_moot_row; RELEASE sync_moot_row",
     };
     conn.execute_batch(end).map_err(|e| e.to_string())
+}
+
+/// Whether any synced table's capture spec names `table` as a parent — a table other rows are
+/// filed under. **Read off [`capture::TABLES`] rather than listed**, so a synced table that grows a
+/// child is excluded from the moot delete the day its spec says so.
+fn is_a_parent(table: &str) -> bool {
+    capture::TABLES
+        .iter()
+        .any(|s| s.parents.iter().any(|p| p.table == table))
 }
 
 /// Whether deleting the row `p` names deletes the `table` row that names it — `ON DELETE

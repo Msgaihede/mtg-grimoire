@@ -2098,7 +2098,8 @@ pub fn convert_legacy_picks_after_pull(conn: &Connection) -> Result<(), String> 
 /// failed the whole pass. **Its clear is written behind `capture::suppressed`**, and that part is
 /// deliberate: a nameless pick was never announced under any name, so a captured clear would be a
 /// sparse `{card_id, quantity}` update for a uid no peer holds, carrying no grain term to be
-/// matched by — deferred on every peer, and this device's stream held behind it for good. The
+/// matched by — a row no peer can build, skipped and recorded in every peer's `error_log` since
+/// 2026-09-27 (deferred before that, with this device's later ops in the page lost behind it). The
 /// entries themselves are announced whole, as every conversion's are.
 /// `a_nameless_pick_on_a_paired_device_is_named_and_stalls_no_peer` holds both halves.
 ///
@@ -5760,8 +5761,9 @@ mod tests {
     /// NULL into `sync_ops.uid NOT NULL` and failed the whole pass. It is named with the insert
     /// trigger's own mint first — no op, `sync_uid` is on no capture spec — and its clear goes
     /// uncaptured, because a pick never announced under any name has no peer that could find a
-    /// sparse clear for it: captured, the clear defers on the peer and holds this device's
-    /// stream there for good. The entries are announced whole, and the peer builds both.
+    /// sparse clear for it: captured, the clear is a row the peer cannot build, skipped and
+    /// recorded there since 2026-09-27 — deferred before that, with this device's later ops in
+    /// the page lost behind it. The entries are announced whole, and the peer builds both.
     #[test]
     fn a_nameless_pick_on_a_paired_device_is_named_and_stalls_no_peer() {
         use crate::sync_engine::apply::apply;

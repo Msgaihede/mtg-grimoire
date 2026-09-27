@@ -1655,8 +1655,10 @@ record, with every measurement, is
   review's I1 — and `identity::leave_group` deletes the key with the group.
   Everything else is **consumed** and blocks nothing: a child of a parent deleted here or in the
   page is **moot** where the key cascades — and a row this device holds under its uid is deleted,
-  as the sender's cascade takes it, where the fold says the group's placement stands — and written
-  without it where the key is `SET NULL`;
+  as the sender's cascade takes it, where the fold says the group's placement stands and no capture
+  spec names its table as a parent (`apply::is_a_parent`; a folder deleted uncaptured here left the
+  peer's later children waiting on a parent `gone` could not see, and the release dropped them) —
+  and written without it where the key is `SET NULL`;
   an unknown table or an unbuildable row from a same or older schema is **dropped**, one
   `error_log` row (`Source::Relay`, `apply`) folded per table. **Do not hold the cursor on
   anything that cannot resolve**: the relay compacts nothing above a device's ack, so that hold
@@ -1666,10 +1668,12 @@ record, with every measurement, is
   upgrade or not — which a v51 client still does, so every device is updated before it syncs
   across v52. **A future `LIMIT` on `pull` must page to the end before a hold is decided**, or a
   held cursor never reaches the page that resolves it. ⚠️ **A newer hold that spans a device
-  removal loses what it held**: a removal forgets the superseded keys, so the held page no longer
-  opens, is stepped over as unreadable, and the cursor advances — the documented *a removal costs
-  the backlog behind it*, now as long as the hold. The relay refusing a push below the group's
-  epoch is the recorded follow-up that would let the keys be kept.
+  removal loses what it held**: a removal forgets the superseded keys, so the held page's
+  pre-removal envelopes no longer open and are stepped over as unreadable. The cursor advances
+  unless the newer device's new-epoch batches still hold it, and the pre-removal part is lost
+  either way: the documented *a removal costs the backlog behind it*, now as long as the hold.
+  The relay refusing a push below the group's epoch is the recorded follow-up that would let the
+  keys be kept.
   [sync.md](../docs/reference/sync.md) *Held while it can resolve, skipped when it cannot*.
 - **Six tables can hold a `needs_review` sentence** since v29, and `sync_engine::commands::REVIEWABLE`
   is the list, held to `sqlite_master` by a test. The sentences are Rust's, following
