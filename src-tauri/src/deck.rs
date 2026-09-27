@@ -3655,8 +3655,8 @@ pub fn pip_costs(conn: &Connection) -> Result<Vec<DeckPipCosts>, String> {
 /// filters on [`Self::category_active`], dedupes on [`Self::name`], counts
 /// [`Self::game_changer`], and its `textOf` reads [`Self::oracle_text`] and [`Self::faces`]. That
 /// is every field it touches, so this row is its input exactly and not a narrowed [`DeckCardRow`]
-/// — which carries thirty-odd columns, a price expression and four image URLs per card, none of
-/// which a bracket estimate has any use for.
+/// — which carries thirty-odd columns and a price expression per card, none of which a bracket
+/// estimate has any use for.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BracketCardRow {
