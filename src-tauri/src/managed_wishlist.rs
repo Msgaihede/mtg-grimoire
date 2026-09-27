@@ -41,7 +41,9 @@
 //! `deck_cards`, to the `decks` columns that decide eligibility or the folder's name, to a
 //! category's switch (an inactive pile counts toward nothing, so it changes the diff), and — since
 //! the Tokens subfolder — to its `deck_token_printings` and `deck_tokens`, because a token stepper
-//! writes nothing a card trigger watches. Every
+//! writes nothing a card trigger watches. **The token marks go to a table of their own**, which
+//! only [`settle`] reads: the card marks are also `deck_tokens::reconcile_dirty`'s input, and a
+//! token write gives that reconcile nothing to do. Every
 //! user-facing write goes through `with_write` — sync's `run_once` and the web target's routes
 //! included — so [`settle`] runs after each one and rewrites only the decks it touched. A sweep
 //! of every theory deck after every write would put a diff per deck behind a zoom press.
@@ -167,29 +169,33 @@ fn arm_sql() -> String {
 
          -- The two token tables (the token-improvements spec §3.8): a stepper, a swap, an add
          -- or a remove writes `deck_token_printings` and nothing a card trigger watches, and a
-         -- token's legacy count on `deck_tokens` is an implicit entry's quantity.
+         -- token's legacy count on `deck_tokens` is an implicit entry's quantity. **Their own
+         -- table**, which `settle` alone reads: `deck_tokens::reconcile_dirty` reads the one
+         -- above, and a token write has no card to reconcile against — marked there, every
+         -- stepper press on any deck would run a derivation over both lists for nothing.
+         CREATE TEMP TABLE IF NOT EXISTS managed_wishlist_token_dirty (deck_id INTEGER);
          CREATE TEMP TRIGGER IF NOT EXISTS mw_entry_ins AFTER INSERT ON main.deck_token_printings
          BEGIN
-             INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.deck_id);
+             INSERT INTO temp.managed_wishlist_token_dirty VALUES (NEW.deck_id);
          END;
          CREATE TEMP TRIGGER IF NOT EXISTS mw_entry_upd AFTER UPDATE ON main.deck_token_printings
          BEGIN
-             INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.deck_id);
-             INSERT INTO temp.managed_wishlist_dirty VALUES (OLD.deck_id);
+             INSERT INTO temp.managed_wishlist_token_dirty VALUES (NEW.deck_id);
+             INSERT INTO temp.managed_wishlist_token_dirty VALUES (OLD.deck_id);
          END;
          CREATE TEMP TRIGGER IF NOT EXISTS mw_entry_del AFTER DELETE ON main.deck_token_printings
          BEGIN
-             INSERT INTO temp.managed_wishlist_dirty VALUES (OLD.deck_id);
+             INSERT INTO temp.managed_wishlist_token_dirty VALUES (OLD.deck_id);
          END;
          CREATE TEMP TRIGGER IF NOT EXISTS mw_token_ins AFTER INSERT ON main.deck_tokens BEGIN
-             INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.deck_id);
+             INSERT INTO temp.managed_wishlist_token_dirty VALUES (NEW.deck_id);
          END;
          CREATE TEMP TRIGGER IF NOT EXISTS mw_token_upd AFTER UPDATE ON main.deck_tokens BEGIN
-             INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.deck_id);
-             INSERT INTO temp.managed_wishlist_dirty VALUES (OLD.deck_id);
+             INSERT INTO temp.managed_wishlist_token_dirty VALUES (NEW.deck_id);
+             INSERT INTO temp.managed_wishlist_token_dirty VALUES (OLD.deck_id);
          END;
          CREATE TEMP TRIGGER IF NOT EXISTS mw_token_del AFTER DELETE ON main.deck_tokens BEGIN
-             INSERT INTO temp.managed_wishlist_dirty VALUES (OLD.deck_id);
+             INSERT INTO temp.managed_wishlist_token_dirty VALUES (OLD.deck_id);
          END;
 
          CREATE TEMP TRIGGER IF NOT EXISTS mw_guard_wish_ins
@@ -247,13 +253,22 @@ fn armed(conn: &Connection) -> Result<bool, String> {
 
 /// Rewrite the managed folder of every deck a write since the last call touched. A no-op on a
 /// connection [`arm`] never ran on.
+///
+/// **Two dirty tables, both read and both emptied here**: the card marks, which
+/// `deck_tokens::reconcile_dirty` also reads (and never clears, so it must run first), and the
+/// token marks, which nothing else reads — see [`arm_sql`] on why they are kept apart.
 pub fn settle(conn: &Connection) -> Result<(), String> {
     if !armed(conn)? {
         return Ok(());
     }
     let dirty: Vec<i64> = {
         let mut stmt = conn
-            .prepare("SELECT DISTINCT deck_id FROM temp.managed_wishlist_dirty ORDER BY deck_id")
+            .prepare(
+                "SELECT deck_id FROM temp.managed_wishlist_dirty
+                 UNION
+                 SELECT deck_id FROM temp.managed_wishlist_token_dirty
+                 ORDER BY deck_id",
+            )
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| r.get(0))
@@ -264,8 +279,11 @@ pub fn settle(conn: &Connection) -> Result<(), String> {
     if dirty.is_empty() {
         return Ok(());
     }
-    conn.execute("DELETE FROM temp.managed_wishlist_dirty", [])
-        .map_err(|e| e.to_string())?;
+    conn.execute_batch(
+        "DELETE FROM temp.managed_wishlist_dirty;
+         DELETE FROM temp.managed_wishlist_token_dirty;",
+    )
+    .map_err(|e| e.to_string())?;
     let mut first_err = None;
     for deck_id in dirty {
         if let Err(e) = settle_deck(conn, deck_id) {
@@ -523,9 +541,16 @@ fn fill(
     }
     // What is left is new. Through the wishlist's own quiet door, so the grain, the
     // canonicalisation and the denormalised columns are that module's — and no feed line,
-    // because nobody pressed anything.
+    // because nobody pressed anything. Sorted to the whole key, finish included, so a foil and a
+    // regular want of one printing are inserted in the same order on every device and every run
+    // rather than in the map's.
     let mut fresh: Vec<_> = want.into_values().collect();
-    fresh.sort_by(|a, b| a.name.cmp(&b.name).then(a.card_id.cmp(&b.card_id)));
+    fresh.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then(a.card_id.cmp(&b.card_id))
+            .then(a.finish.cmp(&b.finish))
+    });
     for w in fresh {
         crate::wishlist::add_wish_silent(
             tx,
@@ -774,8 +799,9 @@ mod tests {
     }
 
     /// Review Focus 5: **All to Missing takes the Tokens subfolder and its wishes away and keeps
-    /// the card wishes** — in the same folder, not a rebuilt one, and with no Treasure left over
-    /// at the root, which is where the child's wishes would land if the child went first.
+    /// the card wishes** — in the same folder, not a rebuilt one, and as the same row rather than
+    /// a deleted and re-added one, with no Treasure left over at the root, which is where the
+    /// child's wishes would land if the child went first.
     #[test]
     fn switching_from_all_to_missing_removes_the_subfolder_and_keeps_the_card_wishes() {
         let conn = db();
@@ -787,6 +813,15 @@ mod tests {
             tokens_folder(&conn, d).is_some(),
             "the premise: All made it"
         );
+        let bolt_wish = |conn: &Connection| -> i64 {
+            conn.query_row(
+                "SELECT id FROM wishlist_entries WHERE folder_id = ?1 AND card_id = 'bolt'",
+                params![parent],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let kept = bolt_wish(&conn);
 
         mode(&conn, d, "missing");
         settle(&conn).unwrap();
@@ -795,6 +830,7 @@ mod tests {
         assert_eq!(treasure_wishes(&conn), 0, "the child's wishes went with it");
         assert_eq!(folder(&conn, d).map(|f| f.0), Some(parent));
         assert_eq!(wishes(&conn, parent), vec![("bolt".to_owned(), 2)]);
+        assert_eq!(bolt_wish(&conn), kept, "the card wish is the row it was");
     }
 
     /// **A step on a token re-settles the wishlist**, like a step on a card: the dirty triggers
@@ -1220,6 +1256,80 @@ mod tests {
             ),
             0,
             "a derived wish must not become an op"
+        );
+    }
+
+    /// The same promise for the **Tokens** subfolder, both ways: the child's insert with its
+    /// wishes, and its drop when the mode stops including tokens, leave no op — the child is as
+    /// derived as its parent.
+    #[test]
+    fn the_tokens_subfolder_is_never_captured_for_sync() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = tithe_deck(&conn, "all");
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        // The token entries *are* captured, so this device records ops at all.
+        assert!(count("SELECT count(*) FROM sync_ops WHERE tbl = 'deck_token_printings'") > 0);
+        let wishlist_ops = "SELECT count(*) FROM sync_ops
+                             WHERE tbl IN ('wishlist_entries', 'wishlist_folders')";
+
+        settle(&conn).unwrap();
+        let (child, _, _) = tokens_folder(&conn, d).expect("All with a token want makes it");
+        assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 2)]);
+        assert_eq!(count(wishlist_ops), 0, "the child's insert is not an op");
+
+        mode(&conn, d, "missing");
+        settle(&conn).unwrap();
+        assert!(tokens_folder(&conn, d).is_none());
+        assert_eq!(count(wishlist_ops), 0, "and neither is its drop");
+    }
+
+    /// **A token write marks only the settle's own table**, never the card table
+    /// `deck_tokens::reconcile_dirty` reads — so a stepper press on a deck with no managed
+    /// wishlist runs no reconcile — while a card write still marks the card table (the control,
+    /// without which an empty table proves nothing). `a_token_step_re_settles_the_wishlist` is
+    /// the other half: the token mark still reaches the settle.
+    #[test]
+    fn a_token_step_marks_only_the_settles_own_table() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = deck(&conn, "Plain", false);
+        put(&conn, d, "live", "tithe", 1);
+        settle(&conn).unwrap();
+        let marks = |table: &str| -> i64 {
+            conn.query_row(&format!("SELECT count(*) FROM temp.{table}"), [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            (
+                marks("managed_wishlist_dirty"),
+                marks("managed_wishlist_token_dirty")
+            ),
+            (0, 0),
+            "the premise: settled"
+        );
+
+        // The implicit Treasure, materialised and stepped: `deck_token_printings` alone.
+        crate::deck_tokens::set_quantity(&conn, d, "live", "o-treasure", None, 2).unwrap();
+        assert_eq!(
+            marks("managed_wishlist_dirty"),
+            0,
+            "nothing for the reconcile"
+        );
+        assert!(marks("managed_wishlist_token_dirty") > 0);
+        settle(&conn).unwrap();
+        assert_eq!(
+            marks("managed_wishlist_token_dirty"),
+            0,
+            "the settle drains it"
+        );
+
+        put(&conn, d, "live", "bolt", 1);
+        assert!(
+            marks("managed_wishlist_dirty") > 0,
+            "a card write still marks"
         );
     }
 

@@ -81,6 +81,15 @@ pub struct WishlistFolder {
     /// the root, named after its deck, and every hand-made write to it or to a wish inside it is
     /// refused with [`crate::managed_wishlist::MANAGED`].
     pub managed_deck_id: Option<i64>,
+    /// Whether this is a deck's **Tokens** subfolder rather than its own folder —
+    /// `wishlist_folders.managed_tokens`, user schema v54 (the token-improvements spec §3.8).
+    ///
+    /// **On the wire because it is the child's identity**: the child carries the deck's
+    /// [`Self::managed_deck_id`] too, so that id alone cannot tell the two apart, and the column is
+    /// what the schema made the answer — never the name `Tokens`, which a reader's own folder or a
+    /// deck can also have, and never `parent_id`, which says where the child hangs rather than
+    /// what it is. `false` for every folder the reader made.
+    pub managed_tokens: bool,
 }
 
 /// What one folder tile is drawn from — the four numbers, per folder, in one round trip.
@@ -125,12 +134,14 @@ fn folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<WishlistFolder> {
         name: r.get(2)?,
         sort_order: r.get(3)?,
         managed_deck_id: r.get(4)?,
+        // `INTEGER NOT NULL DEFAULT 0`, read as SQLite's boolean: `0` false, anything else true.
+        managed_tokens: r.get(5)?,
     })
 }
 
 fn read_folder(conn: &Connection, id: i64) -> Result<Option<WishlistFolder>, String> {
     conn.query_row(
-        "SELECT id, parent_id, name, sort_order, managed_deck_id
+        "SELECT id, parent_id, name, sort_order, managed_deck_id, managed_tokens
            FROM wishlist_folders WHERE id = ?1",
         params![id],
         folder_row,
@@ -144,7 +155,7 @@ fn read_folder(conn: &Connection, id: i64) -> Result<Option<WishlistFolder>, Str
 pub fn list_folders(conn: &Connection) -> Result<Vec<WishlistFolder>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, parent_id, name, sort_order, managed_deck_id
+            "SELECT id, parent_id, name, sort_order, managed_deck_id, managed_tokens
                FROM wishlist_folders ORDER BY sort_order, id",
         )
         .map_err(|e| e.to_string())?;
@@ -1167,6 +1178,47 @@ mod tests {
             params![card_id, quantity],
         )
         .unwrap();
+    }
+
+    /// **`managedTokens` is read off the column and reaches the wire by that name** — the Tokens
+    /// subfolder's identity (user schema v54), which the frontend needs because the child carries
+    /// its deck's `managedDeckId` as well. Three rows that differ in exactly the fields that could
+    /// be mistaken for it: a reader's folder named `Tokens`, a deck's own folder, and its child.
+    /// Written straight into the table, with no guard armed on this connection, because the
+    /// managed wishlist's own module is what makes the real pair.
+    #[test]
+    fn a_folder_says_whether_it_is_a_decks_tokens_subfolder() {
+        let conn = conn();
+        conn.execute_batch(
+            "INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Tokens', 0, 0, 0);
+             INSERT INTO wishlist_folders
+                 (id, parent_id, name, sort_order, created_at, updated_at, managed_deck_id)
+             VALUES (2, NULL, 'Izzet', 1, 0, 0, 7);
+             INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at,
+                                           managed_deck_id, managed_tokens)
+             VALUES (3, 2, 'Tokens', 0, 0, 0, 7, 1);",
+        )
+        .unwrap();
+
+        let read: Vec<(i64, Option<i64>, bool)> = list_folders(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|f| (f.id, f.managed_deck_id, f.managed_tokens))
+            .collect();
+        assert_eq!(
+            read,
+            vec![(1, None, false), (3, Some(7), true), (2, Some(7), false)]
+        );
+        assert!(read_folder(&conn, 3).unwrap().unwrap().managed_tokens);
+
+        assert_eq!(
+            serde_json::to_value(read_folder(&conn, 3).unwrap().unwrap()).unwrap(),
+            serde_json::json!({
+                "id": 3, "parentId": 2, "name": "Tokens", "sortOrder": 0,
+                "managedDeckId": 7, "managedTokens": true
+            })
+        );
     }
 
     /// Where a wish is filed, straight from the column.

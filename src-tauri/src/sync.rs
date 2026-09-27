@@ -569,8 +569,10 @@ pub(crate) fn with_write<T>(
             // `reconcile::apply` takes this connection through `lock_db`, not through here, so
             // the marks it leaves are reconciled at the NEXT write that comes through here.
             // **Before the settle and not after it**, because the settle empties the dirty table
-            // this reads; neither writes anything the other reads, so the order costs nothing
-            // else. Logged, never failing the write, for the settle's reason.
+            // this reads — and because the reconcile's deletions are token entries, which a
+            // managed wishlist's Tokens subfolder counts and whose triggers mark the settle's own
+            // token table, so settling second files the reconciled count in the same write.
+            // Logged, never failing the write, for the settle's reason.
             crate::deck_tokens::reconcile_dirty_logged(&conn);
             crate::managed_wishlist::settle_logged(&conn);
             out
