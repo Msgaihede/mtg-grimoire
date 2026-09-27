@@ -1422,8 +1422,8 @@ column got. It is the one class the two elements have to agree on.
 Proven 2026-09-08 over the built stylesheet rather than in the window — the main checkout's
 debug app was running outside any lock, and under the single-instance guard a worktree launch
 exits with no window — with a harness carrying both elements' exact class strings over a
-1920×1080 stand-in, at the wide arm's box in a 1280- and a 900-wide window (444×560 and
-254×560): with the class the canvas's frame sits on the picture's edge in both, and with
+1920×1080 stand-in, at the video box beside the panel column in a 1280- and a 900-wide window
+(444×560 and 254×560): with the class the canvas's frame sits on the picture's edge in both, and with
 `object-fit: fill` forced beside it the same frame is stretched to the whole box.
 
 **Two things the panel column draws are the *last* read rather than this frame's**, and they are
@@ -1434,18 +1434,15 @@ starts or stops, and by the `clearReads()` the Reset press calls beside `scanner
 is `live.html`'s own `lastOcr`. Read straight off the verdict, the Readouts panel says
 `(nothing read)` three frames in four about a tier that read the card correctly.
 
-**The two arms of the layout size the video box by opposite mechanisms, and the narrow one has
-to.** Wide, the row is the height and the video takes what the `w-80 shrink-0` panel column
-leaves. Narrow, the row is a *scrolling column*: a zero-basis `flex-1` under a scrolling parent
-yields all its free space to a `shrink-0` sibling, so one opened developer panel whose intrinsic
-height reached the container's would collapse the camera to ~0px. So on a phone the box is
-`w-full shrink-0` at the **camera's own `aspectRatio`**, falling back to 4:3 while the stream has
-no shape to report — an unset ratio there is the collapse again.
-
-**`useNarrowWindow` is read, not branched on.** A phone stacks the camera above the verdict
-where a desk stands them side by side, and what that asks is whether the app is in its phone
-shape — an answer the shell has already decided. `viewports.ts` demands a reason at the site of
-any branch on width; the reason here is that there is no new branch.
+**The row is the height, and the video box takes what the `w-80 shrink-0` panel column and the
+status line leave.** The camera stands beside the verdict at every width the desktop window can
+be. **Until 2026-09-27 the layout had a second, narrow arm** — the phone's, read off
+`useNarrowWindow` — which stacked the camera above the verdict in a *scrolling column* and so had
+to size the video box the opposite way: a zero-basis `flex-1` under a scrolling parent yields all
+its free space to a `shrink-0` sibling, so one opened developer panel would have collapsed the
+camera to ~0px, and the box was `w-full shrink-0` at the camera's own `aspectRatio` instead, 4:3
+until the stream reported a shape. That arm went with the phone layout, and the trap it records
+is the reason a future scrolling layout here cannot reuse this `flex-1` box.
 
 ### Navigation
 
