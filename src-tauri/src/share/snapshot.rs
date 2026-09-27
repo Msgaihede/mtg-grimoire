@@ -265,8 +265,8 @@ fn read_cards(
     // table, so there is nothing to escape) is the answer on the day it is.
     let holes = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     // Where the image pair begins — the count of every column before it. Written down rather
-    // than spelled inside the closure, for `deck.rs`'s reason: a number left behind reads a
-    // folder uid as a URL, and nothing errors.
+    // than spelled inside the closure, because a number left behind when a column is added
+    // above it reads a folder uid as a URL, and nothing errors.
     const IMAGE_COL: usize = 10;
     let sql = format!(
         "SELECT e.card_id, c.name, e.set_code, e.collector_number, e.lang, e.finish, e.quantity,
@@ -289,8 +289,7 @@ fn read_cards(
             // rather than being dropped — `COLLECTION_DEFAULT_ORDER`'s own `coalesce`.
             let name: Option<String> = r.get(1)?;
             let condition: String = r.get(7)?;
-            let img = crate::image_uri::front_face_map(|i| r.get(IMAGE_COL + i))?
-                .and_then(|m| m.get(crate::image_uri::LIST_VARIANT).cloned());
+            let img = crate::image_uri::front_face_uri(|i| r.get(IMAGE_COL + i))?;
             Ok(ShareCard {
                 n: name.unwrap_or_else(|| card_id.clone()),
                 id: card_id,

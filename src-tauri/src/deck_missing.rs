@@ -62,7 +62,7 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 /// Reused verbatim rather than respelled — this crate's standing rule, and the same one that
 /// keeps [`crate::collection::ZERO_ADD`] a single sentence for two tables. Both of these are
@@ -138,11 +138,6 @@ pub struct MissingRow {
     /// and never for the write**: this press writes no `deck_cards` row, so there is no pile for
     /// the copies to land in and nothing here is an argument to anything.
     pub categories: Vec<String>,
-    /// The printing's picture, front face — taken off the deck row rather than queried again, so
-    /// [`crate::image_uri::front_face_map`]'s precedence keeps its one home. Never `None` in
-    /// practice, because [`plan`] has already dropped the orphans that are the only rows
-    /// [`crate::deck::live_shortfall`] answers `None` for.
-    pub image_uris: Option<BTreeMap<String, String>>,
     /// Every wishlist line these copies could take down, best first —
     /// [`crate::deck_quick_add::wishes`]' answer for this printing and finish, **verbatim**. It is
     /// the same function the per-card menu calls, so the two entrances cannot come to disagree
@@ -265,7 +260,6 @@ pub fn plan(conn: &Connection, deck_id: i64) -> Result<Vec<MissingRow>, String> 
             finish: row.finish,
             short: row.short,
             categories: row.categories,
-            image_uris: row.image_uris,
             wishes,
         });
     }

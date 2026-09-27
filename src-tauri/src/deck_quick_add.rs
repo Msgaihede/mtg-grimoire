@@ -70,7 +70,6 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
-use std::collections::BTreeMap;
 
 /// What [`quick_add`] says when the wish it was pointed at is not there any more.
 ///
@@ -133,10 +132,6 @@ pub struct QuickAddWish {
     /// The finish the wish asks for in the **wishlist's** spelling (`nonfoil`/`foil`/`etched`),
     /// or `None` for a wish that takes any finish.
     pub preferred_finish: Option<String>,
-    /// The named printing's picture, front face, exactly as
-    /// [`crate::search::CardSummary::image_uris`] — `None` for an any-printing wish or a printing
-    /// the corpus no longer holds.
-    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// What one quick add recorded.
@@ -219,14 +214,11 @@ const CARD_WISH_SQL: &str = "WHERE (w.card_id = ?1
 /// The `SELECT` both reads share, with the `WHERE … ORDER BY` left for each to supply — one
 /// column list, so the positional read in [`run_wishes`] cannot come to disagree with either.
 fn wish_select(tail: &str) -> String {
-    let image_uris = crate::image_uri::front_face_selects("c").join(", ");
     format!(
         "SELECT w.id, w.quantity, w.folder_id, f.name,
-                w.card_id, w.name, w.set_code, w.collector_number, w.preferred_finish,
-                {image_uris}
+                w.card_id, w.name, w.set_code, w.collector_number, w.preferred_finish
            FROM wishlist_entries w
            LEFT JOIN wishlist_folders f ON f.id = w.folder_id
-           LEFT JOIN cards c ON c.id = w.card_id
           {tail}"
     )
 }
@@ -260,10 +252,6 @@ fn run_wishes(
                 set_code: r.get(6)?,
                 collector_number: r.get(7)?,
                 preferred_finish: r.get(8)?,
-                // From 9 — the (top-level, face) pairs `front_face_selects` added.
-                image_uris: crate::image_uri::front_face_map(|i| {
-                    r.get::<_, Option<String>>(9 + i)
-                })?,
             })
         })
         .map_err(|e| e.to_string())?;

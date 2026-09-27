@@ -84,7 +84,7 @@ use crate::sync::AppState;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
@@ -1405,10 +1405,6 @@ pub struct ComboPiece {
     /// error — see [`Self::name`]. A piece in that state still carries its name, its quantity
     /// and its [`owned`](Self::owned) count, because none of those came from `cards`.
     pub card_id: Option<String>,
-    /// The front face's picture for that printing, per variant. `None` alongside a `None`
-    /// [`card_id`](Self::card_id), and also for a printing the corpus has no fetchable image
-    /// for — [`crate::image_uri::front_face_map`]'s rule, not one respelled here.
-    pub image_uris: Option<BTreeMap<String, String>>,
     /// Copies of this card the reader owns, across **every printing and every finish**.
     ///
     /// `0` is an answer rather than a gap: this panel exists to tell a reader which of a
@@ -1757,14 +1753,6 @@ fn page_sql(owned_only: bool) -> String {
     }
 }
 
-/// Where [`pieces_sql`]'s image expressions start — one past `card_id`, the last named column.
-///
-/// Named rather than inlined for [`crate::deck_tokens`]' reason, and it carries that module's
-/// failure too: the pair is (top-level, face) and `for_face` prefers the face, so a read one
-/// column out still answers a perfectly real URL — the right picture from the wrong slot. It
-/// moves with every column added to the list above it.
-const PIECE_IMAGE_COL: usize = 7;
-
 /// Every card of every combo on one page, in one statement.
 ///
 /// **One statement over the page's ids, and the pieces are matched back to their combos by
@@ -1783,8 +1771,7 @@ const PIECE_IMAGE_COL: usize = 7;
 ///   id. Verbatim on purpose: the art in this panel and the art of a token derived from the
 ///   same oracle card must not disagree about which printing *is* that card, and two orderings
 ///   that mean to be the same are two orderings that will not be. A `LEFT JOIN`, so a piece the
-///   corpus has never synced answers `NULL` for the id and for all four picture columns rather
-///   than dropping the piece.
+///   corpus has never synced answers `NULL` for the id rather than dropping the piece.
 /// * **The owned count is [`crate::collection_source::copies_of_oracle`]** under
 ///   [`Availability::Everything`](crate::collection_source::Availability::Everything), which is
 ///   this crate's single definition of *copies of an oracle card*. **`Everything` and not
@@ -1799,7 +1786,7 @@ const PIECE_IMAGE_COL: usize = 7;
 fn pieces_sql(conn: &Connection, holes: &str) -> String {
     format!(
         "SELECT p.combo_id, p.oracle_id, p.name, p.quantity, p.must_be_commander,
-                {owned}, d.id, {images}
+                {owned}, d.id
            FROM combo_cards p
            LEFT JOIN cards d
              ON d.id = (SELECT n.id FROM cards n WHERE n.oracle_id = p.oracle_id
@@ -1813,7 +1800,6 @@ fn pieces_sql(conn: &Connection, holes: &str) -> String {
             "p.oracle_id",
             crate::collection_source::Availability::Everything,
         ),
-        images = crate::image_uri::front_face_selects("d").join(", "),
     )
 }
 
@@ -1991,9 +1977,6 @@ pub fn card_combos(
                         must_be_commander: r.get(4)?,
                         owned: r.get(5)?,
                         card_id: r.get(6)?,
-                        image_uris: crate::image_uri::front_face_map(|i| {
-                            r.get::<_, Option<String>>(PIECE_IMAGE_COL + i)
-                        })?,
                     },
                 ))
             })
@@ -3363,9 +3346,7 @@ mod tests {
 
     // ---- one card's combos ------------------------------------------------------------
 
-    /// A `cards` row carrying everything the default-printing tie-break sorts on **and** a
-    /// picture in both variants, so an assertion about which printing was named is also an
-    /// assertion about whose art came back with it.
+    /// A `cards` row carrying everything the default-printing tie-break sorts on.
     fn seed_printing(
         conn: &Connection,
         id: &str,
@@ -3377,14 +3358,8 @@ mod tests {
     ) {
         conn.execute(
             "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
-                                released_at, image_uris, raw)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'en', 'normal', ?6,
-                     json_object(
-                       'display',
-                       'https://cards.scryfall.io/display/front/0/0/' || ?1 || '.webp?1',
-                       'art',
-                       'https://cards.scryfall.io/art/front/0/0/' || ?1 || '.webp?1'),
-                     '{}')",
+                                released_at, raw)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'en', 'normal', ?6, '{}')",
             params![id, oracle, name, set_code, collector_number, released_at],
         )
         .unwrap();
@@ -3729,15 +3704,13 @@ mod tests {
         let orb = &c3b.pieces[1];
         assert_eq!(orb.oracle_id, "o-nothing");
         assert_eq!(orb.card_id, None, "no `cards` row to name a printing from");
-        assert_eq!(orb.image_uris, None, "and therefore no picture");
         assert_eq!(orb.owned, 0, "which is an answer, not a gap");
         assert_eq!(orb.quantity, 1);
     }
 
     /// **The default printing is [`crate::deck_tokens`]' tie-break, and both halves of it are
     /// measured.** The Basalt pair differ on release date; the Curio pair were released the
-    /// same day and can only be split by set code. The art comes off the row that won, so this
-    /// is also the assertion that the picture and the id describe the same printing.
+    /// same day and can only be split by set code.
     #[test]
     fn a_pieces_default_printing_is_the_token_resolvers_tie_break() {
         let db = card_combo_db();
@@ -3756,19 +3729,6 @@ mod tests {
             by_oracle("o-curio").card_id.as_deref(),
             Some("p-curio-a"),
             "released the same day, so the lowest set code wins"
-        );
-        assert_eq!(
-            by_oracle("o-basalt").image_uris.as_ref().unwrap()["display"],
-            "https://cards.scryfall.io/display/front/0/0/p-basalt-new.webp?1",
-            "the art belongs to the printing that was named"
-        );
-        assert!(
-            by_oracle("o-basalt")
-                .image_uris
-                .as_ref()
-                .unwrap()
-                .contains_key("art"),
-            "both list variants, folded up by `front_face_map`"
         );
     }
 
@@ -4036,10 +3996,10 @@ mod tests {
 
     /// [`card_combos`] over [`search_combo_db`] with the three narrowings named.
     ///
-    /// **`None, None` at a call site is the positional trap `deck::IMAGE_COL` warns about, read
-    /// one module over**: `search` and `card_count` are adjacent and both `Option`, so the one
-    /// spelling that swaps them silently is exactly the one every default call uses. Every
-    /// assertion below goes through this, and the compiler checks the order once.
+    /// **`None, None` at a call site is a positional trap**: `search` and `card_count` are
+    /// adjacent and both `Option`, so the one spelling that swaps them silently is exactly the
+    /// one every default call uses. Every assertion below goes through this, and the compiler
+    /// checks the order once.
     fn ask(
         conn: &Connection,
         search: Option<&str>,
@@ -4340,10 +4300,6 @@ mod tests {
                     quantity: 1,
                     must_be_commander: false,
                     card_id: Some("p-altar".into()),
-                    image_uris: Some(BTreeMap::from([(
-                        "art".to_owned(),
-                        "https://cards.scryfall.io/art/front/0/0/p-altar.webp?1".to_owned(),
-                    )])),
                     owned: 2,
                 }],
             }],
@@ -4374,9 +4330,6 @@ mod tests {
                         "quantity": 1,
                         "mustBeCommander": false,
                         "cardId": "p-altar",
-                        "imageUris": {
-                            "art": "https://cards.scryfall.io/art/front/0/0/p-altar.webp?1"
-                        },
                         "owned": 2,
                     }],
                 }],
