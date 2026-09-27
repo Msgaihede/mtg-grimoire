@@ -5,7 +5,9 @@ protocol). **TS owns domain logic** (deck validation, import/export parsing). Ru
 _facts_; TypeScript draws _conclusions_. Keep that boundary.
 
 `cargo test` and `cargo clippy -D warnings` run from here; `npm run verify` at the root runs
-both plus the frontend.
+both, `cargo fmt --check` and the frontend. (It ran neither `clippy` nor `fmt` until 2026-09-27,
+while this line said it ran the first.) The toolchain is `rust-toolchain.toml`'s pin — rustup
+picks it up from any directory under the root.
 
 ## Hard rules — database
 
@@ -151,6 +153,15 @@ both plus the frontend.
   mean `main`, which after the split is a 1.3 MB file — measured, `page_count` 323 against
   `corpus.page_count` 192 149 — so `needs_conversion` and `freelist_pages` take a schema
   argument and `vacuum_into_incremental` runs `VACUUM corpus`.
+- **Both ladders commit each rung with its version stamp in one transaction** — the corpus one
+  since [issue #550](https://github.com/Msgaihede/mtg-grimoire/issues/550), which found a kill
+  between its bare `CREATE`s and the stamp stopping every later launch on `table cards already
+  exists`. **A `migrate_corpus` failure no longer stops a launch**: `prepare_database` detaches the
+  corpus, deletes it and builds it again at head (a resync, nothing the reader wrote) — unless the
+  error says nothing about the file (busy, locked, read-only, full, I/O), which stops the launch
+  as before. **`migrate_user` copies `user.db` to `backups/user.v{N}.db` with `VACUUM INTO` before
+  its first owed rung**, never overwriting a copy and keeping the newest three; a failed copy is
+  logged and the climb goes on.
 - Only `schema::migrate_user` / `migrate_corpus` may stop a launch. `prepare_database`'s other
   steps (an FTS rebuild an interrupted compaction owed; the staging table an interrupted ingest
   left; `managed_wishlist::settle_all`; and v52's pair, `deck_tokens::convert_legacy_picks_at_launch`
@@ -160,7 +171,8 @@ both plus the frontend.
   meanwhile, because a conversion before the device has heard its group reverted a peer's later
   edits; the repair after it and suppressed) are logged and left owing — their likeliest cause is a full
   or read-only disk,
-  and `init_state` turns any error into "move it aside", which that disk cannot do. **A corpus
+  and `init_state` turns any error into a refusal to start, which does that disk no good (it no
+  longer says "move it aside": `user.db` is the one file nothing can rebuild). **A corpus
   that will not open is not one of those failures**: it is deleted and rebuilt, and the
   collection is untouched — `split::tests::a_destroyed_corpus_costs_a_resync_and_nothing_else`.
 - **`card_migrations` is on the user side and that is a correctness requirement.** Its rows are

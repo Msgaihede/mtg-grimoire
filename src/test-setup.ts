@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { frame, frameData, MotionGlobalConfig } from "motion/react";
-import { afterEach } from "vitest";
+import { afterAll, afterEach } from "vitest";
 
 /**
  * Every `motion` animation lands on its final value in one frame, for the whole suite.
@@ -78,6 +78,28 @@ frame.render = inline(frame.render);
 // `globals: true`, which this project does not. Without it every render stacks up in the
 // same `document.body` and the second test in a file sees two of everything.
 afterEach(cleanup);
+
+/**
+ * **A file that scrolled a virtualised list waits out the scroll's trailing timer before its
+ * environment goes.** `@tanstack/virtual-core` answers every `scroll` event with a debounced
+ * is-scrolling reset — `isScrollingResetDelay`, 150ms — on a plain Node timer, and neither
+ * `unmount()` nor Testing Library's `cleanup` cancels it. Fired inside the file it updates an
+ * unmounted component and nothing happens. Fired after the jsdom environment has been torn down,
+ * React's `resolveUpdatePriority` reads `window` and the run fails with an unhandled
+ * `ReferenceError: window is not defined`, attributed to whichever file was last on the worker —
+ * with every test green.
+ *
+ * It is a race on the file's last 150ms, which is why it stayed latent on one serial runner and
+ * surfaced the first time CI split the suite into shards (PR #581, `CardGrid.shelves.test.tsx`).
+ * Reproduced by scrolling a `useVirtualizer` list, unmounting it and deleting `window` for 250ms:
+ * the same stack, frame for frame. Only a file that dispatched a `scroll` pays the wait, and it
+ * pays it once — scroll events do not bubble, so the listener captures on `document`.
+ */
+let scrolled = false;
+document.addEventListener("scroll", () => (scrolled = true), { capture: true });
+afterAll(async () => {
+  if (scrolled) await new Promise((resolve) => setTimeout(resolve, 200));
+});
 
 // jsdom has no layout engine and no ResizeObserver. The card grid measures its container
 // to decide how many columns fit, so without this every grid test renders nothing — and

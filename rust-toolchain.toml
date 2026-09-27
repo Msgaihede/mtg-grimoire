@@ -1,0 +1,21 @@
+# The Rust toolchain every build of this repo uses — `cargo` run anywhere under the root, every
+# CI job, every release leg and the scanner-bundle workflow alike.
+#
+# **Pinned, never `stable`.** CI runs `clippy -D warnings`, and a new stable ships new lints: with
+# a floating channel one Rust release could turn every open PR red with no change to the code,
+# and a release binary was built by whatever stable happened to be current that day. Moving the
+# pin is a deliberate commit that runs the whole gate — `rust-toolchain.toml` routes to every
+# job that compiles Rust in `scripts/ci-route.mjs`.
+#
+# Workflows never install a toolchain of their own: `.github/actions/rust-toolchain` reads the
+# channel below, and `scripts/toolchain.test.mjs` fails if any workflow names one directly.
+#
+# Targets are **not** listed. The `wasm` and `android` jobs add the one each needs, and listing
+# them here would have every checkout download them. Locally, after moving the pin, re-add
+# `wasm32-unknown-unknown` (for `npm run build:wasm`) and the Android triples (for
+# `tauri android build`) with `rustup target add` — they are per-toolchain, so the old pin's do
+# not carry over. `llvm-tools-preview` for `npm run test:coverage:rust` is the same.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

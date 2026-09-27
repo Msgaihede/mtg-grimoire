@@ -146,7 +146,8 @@ no combo" and "we have never downloaded the list" have to be two different sente
 
 - `npm run tauri dev` — run the app (Vite HMR + Rust rebuild). Takes the `app` lock: only
   one app runs across every worktree. See the `running-the-app` skill.
-- `npm run verify` — build + lint + Vitest + cargo test. **Run before every commit.**
+- `npm run verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test. **Run
+  before every commit.** Rust is pinned by `rust-toolchain.toml` and Node by `.nvmrc`.
 - `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
 - `npm run test:coverage` / `test:coverage:rust` — coverage. **The Rust one's number is not
   `cargo llvm-cov`'s**: that counts the inline `#[cfg(test)]` modules, where every line is

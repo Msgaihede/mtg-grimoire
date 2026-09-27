@@ -719,8 +719,10 @@ Every one of these has its measurement and its story in
   its number as a **CSS `zoom` on the grid box** rather than as a multiplier on a tile's width —
   the only section that does, because a widget is a box of type and a bigger box at the same type
   size shows *more* small rows rather than reading as a zoom. See `features/home/HomePage.tsx` and
-  [home-page.md](../docs/reference/home-page.md) §4. `deck` is one key for **both** deck views, because Stacks and Grid
-  are two drawings of the same pile and switching view must not resize the cards. Each starts at
+  [home-page.md](../docs/reference/home-page.md) §4. `deck` is the deck editor's **Stacks** and `deckGrid` its
+  **Grid** — one key until issue #567 (2026-09-27), when the reader asked for the two views to zoom
+  apart; what keeps them looking alike is the tile's marks scaling off its width
+  (`features/decks/CardStack.tsx`'s `deckCardScale`), not a shared number. Each starts at
   `DEFAULT_ZOOM`, each is stepped along the same ladder, and each is handed back when the reader
   returns to that section.
   **This reverses the single shared `cardZoom` that was here until 2026-08-14**, whose argument was

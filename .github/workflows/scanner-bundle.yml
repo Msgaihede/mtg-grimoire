@@ -29,7 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      # `rust-toolchain.toml`'s pin, never `stable` — see that file.
+      - uses: ./.github/actions/rust-toolchain
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -37,7 +38,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       # The declaration is `u16`. A grep that matches nothing fails the step here, rather than
       # publishing to `scanner-bundle-v`.

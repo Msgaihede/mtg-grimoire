@@ -1,0 +1,34 @@
+# The one place a workflow installs Rust. It reads the channel out of `rust-toolchain.toml` and
+# hands it to `dtolnay/rust-toolchain`, so the version is written down exactly once and a new
+# stable cannot reach CI or a release without a commit that moves the pin.
+#
+# `dtolnay/rust-toolchain` does not read `rust-toolchain.toml` itself, and `@stable` beside the
+# file would install one toolchain and then have rustup silently fetch a second — without the
+# targets and components the job asked for — the first time `cargo` runs under the repo root.
+name: Pinned Rust toolchain
+description: Installs the toolchain rust-toolchain.toml names, with rustfmt, clippy and any extra targets.
+inputs:
+  targets:
+    description: Comma-separated extra targets, e.g. wasm32-unknown-unknown.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Read rust-toolchain.toml
+      id: read
+      shell: bash
+      run: |
+        set -euo pipefail
+        channel=$(sed -n 's/^channel *= *"\([^"]*\)".*$/\1/p' rust-toolchain.toml)
+        # A shape change to the file must fail here, not install `stable` by default.
+        [ -n "$channel" ] || { echo "rust-toolchain.toml names no channel" >&2; exit 1; }
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.read.outputs.channel }}
+        targets: ${{ inputs.targets }}
+        # The same two `rust-toolchain.toml` lists. Named again because rustup installs a toolchain
+        # file's components only when the file is what installed the toolchain.
+        components: rustfmt, clippy

@@ -259,15 +259,16 @@ it says `tags: ["autodocs"]`.
   utilities to users: measured, `dist/assets/index-*.css` 119,935 → **119,126** bytes, 11 rules
   dropped and 0 added. Stories cannot be fenced off the same way and should not be — a
   `.stories.tsx` is under `src/`, which `@source "../src"` must scan.
-- **`npm run build-storybook` runs in CI's `frontend` job**, and it is the **only** gate the
+- **`npm run build-storybook` runs in CI's `storybook` job**, and it is the **only** gate the
   `.mdx` page has. Stories are `.tsx` under `src/`, so `tsc` and ESLint already see them;
   `DesignSystem.mdx` is seen by neither — `tsc` reads only `.ts`/`.tsx` however the `include`
   glob is written, and `eslint` answers "File ignored because no matching configuration was
   supplied" (both measured 2026-08-10). Before this step the page could break and nothing would
   say so. It earns itself on more than MDX: a **CSS comment cannot hold a glob containing a
   star-slash** — that closes the comment — and `storybook build` is what caught exactly that in
-  `preview.css` while this task was being written. `frontend` feeds `ci-ok`, the one protected
-  check, which is why the step lives there rather than in a job of its own.
+  `preview.css` while this task was being written. It was a step of `frontend` until
+  2026-09-27, when it moved to a job of its own (issue #559) to take it off `frontend`'s serial
+  path; the new job is in `ci-ok`'s `needs` and loop, which is what gives it teeth.
 - **A green Storybook proves nothing about the shipped window.** It runs in a normal browser:
   no WRY OLE drop target, no `mtgimg://` protocol handler. **Drag-and-drop and image loading
   remain the live CDP pass's to prove** — see [live-ui-verification.md](live-ui-verification.md), and note that the same is true

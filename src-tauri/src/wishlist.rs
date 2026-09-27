@@ -424,30 +424,38 @@ fn wish_folder_name(conn: &Connection, folder_id: Option<i64>) -> Result<Option<
 /// `deck_audit` row to suppress against and nothing anywhere went red. What closed it is
 /// [`add_wish_silent`] plus [`record_wishes_added`]: **a bulk operation records one row carrying
 /// its count in the payload**, which is [`crate::activity`]'s second rule and the spec's.
+///
+/// **The insert and its feed row are one savepoint** ([`crate::db::in_savepoint`], issue #550),
+/// `collection::add_entry`'s rule one table over: the command wrapper opens no transaction, so a
+/// `wish_folder_name` or activity insert that failed after an autocommitted upsert answered an
+/// error over copies already wished for, and a second press added them again. It nests, so a
+/// caller holding its own transaction still owns the write.
 pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, String> {
-    let (change, card_id, name) = insert_wish(conn, input)?;
-    crate::activity::record(
-        conn,
-        crate::activity::WISHLIST,
-        crate::activity::ADD,
-        card_id.as_deref(),
-        Some(&name),
-        &serde_json::json!({
-            "folder": wish_folder_name(conn, input.folder_id)?,
-            "finish": input.preferred_finish,
-        }),
-        // The copies the *press* asked for, not the row's new total — a second add of a card
-        // already wished for is `+1`, and the day header sums presses. The `<= 0` arm is
-        // [`insert_wish`]'s own normalisation restated rather than threaded back out of it: a
-        // wish for no copies is a wish for one, there and here.
-        if input.quantity <= 0 {
-            1
-        } else {
-            input.quantity
-        },
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(change)
+    crate::db::in_savepoint(conn, "wish_add", || {
+        let (change, card_id, name) = insert_wish(conn, input)?;
+        crate::activity::record(
+            conn,
+            crate::activity::WISHLIST,
+            crate::activity::ADD,
+            card_id.as_deref(),
+            Some(&name),
+            &serde_json::json!({
+                "folder": wish_folder_name(conn, input.folder_id)?,
+                "finish": input.preferred_finish,
+            }),
+            // The copies the *press* asked for, not the row's new total — a second add of a
+            // card already wished for is `+1`, and the day header sums presses. The `<= 0` arm
+            // is [`insert_wish`]'s own normalisation restated rather than threaded back out of
+            // it: a wish for no copies is a wish for one, there and here.
+            if input.quantity <= 0 {
+                1
+            } else {
+                input.quantity
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(change)
+    })
 }
 
 /// [`add_wish`]'s write with **no feed row**, for a caller that records the whole run itself.
@@ -817,31 +825,37 @@ pub(crate) fn commit_import(
 /// upstream silently destroy a row. Zero is a thing a stepper can mean; minus one is not.
 /// The refusal is [`crate::collection::valid_quantity`]'s, verbatim, because "the same
 /// refusal" is the claim — a second copy of the sentence is a second thing to drift.
+///
+/// **The write and its feed row are one savepoint** — [`add_wish`]'s rule and issue #550's
+/// reason.
 pub fn set_wish_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
     valid_quantity(quantity, "wishlist quantity")?;
-    // Read before the write and **never used as a refusal**: a zero on an id nobody answers to
-    // is still a success here, exactly as it was before this line existed.
-    let facts = wish_facts(conn, id)?;
-    let change = write_wish_quantity(conn, id, quantity)?;
-    if let Some(facts) = facts {
-        if change.removed {
-            // **A stepper taken to zero is a `remove`**, not a change from 2 to 0 about a row
-            // the reader can no longer open — `collection::set_quantity`'s rule one table over.
-            record_wish_removal(conn, &facts)?;
-        } else {
-            crate::activity::record(
-                conn,
-                crate::activity::WISHLIST,
-                crate::activity::QUANTITY,
-                facts.card_id.as_deref(),
-                Some(&facts.name),
-                &serde_json::json!({ "from": facts.quantity, "to": quantity }),
-                quantity - facts.quantity,
-            )
-            .map_err(|e| e.to_string())?;
+    crate::db::in_savepoint(conn, "wish_set_quantity", || {
+        // Read before the write and **never used as a refusal**: a zero on an id nobody answers
+        // to is still a success here, exactly as it was before this line existed.
+        let facts = wish_facts(conn, id)?;
+        let change = write_wish_quantity(conn, id, quantity)?;
+        if let Some(facts) = facts {
+            if change.removed {
+                // **A stepper taken to zero is a `remove`**, not a change from 2 to 0 about a
+                // row the reader can no longer open — `collection::set_quantity`'s rule one
+                // table over.
+                record_wish_removal(conn, &facts)?;
+            } else {
+                crate::activity::record(
+                    conn,
+                    crate::activity::WISHLIST,
+                    crate::activity::QUANTITY,
+                    facts.card_id.as_deref(),
+                    Some(&facts.name),
+                    &serde_json::json!({ "from": facts.quantity, "to": quantity }),
+                    quantity - facts.quantity,
+                )
+                .map_err(|e| e.to_string())?;
+            }
         }
-    }
-    Ok(change)
+        Ok(change)
+    })
 }
 
 /// [`set_wish_quantity`] with no feed row — the statement and the zero rule, none of the history.
@@ -873,14 +887,17 @@ fn write_wish_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<Entr
 /// is a success: the caller wanted that row gone, and it is gone.
 ///
 /// **The reader's own delete, and the one that records it** — [`delete_wish`] is the statement
-/// without the feed row.
+/// without the feed row. The delete and that row are one savepoint, [`add_wish`]'s rule
+/// (issue #550).
 pub fn remove_wish(conn: &Connection, id: i64) -> Result<EntryChange, String> {
-    let facts = wish_facts(conn, id)?;
-    let change = delete_wish(conn, id)?;
-    if let Some(facts) = facts {
-        record_wish_removal(conn, &facts)?;
-    }
-    Ok(change)
+    crate::db::in_savepoint(conn, "wish_remove", || {
+        let facts = wish_facts(conn, id)?;
+        let change = delete_wish(conn, id)?;
+        if let Some(facts) = facts {
+            record_wish_removal(conn, &facts)?;
+        }
+        Ok(change)
+    })
 }
 
 /// [`remove_wish`] with no feed row — reached by [`write_wish_quantity`]'s zero and so by an
@@ -5512,5 +5529,98 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * Issue #550, from the wishlist's side: each door's write and its feed row are one
+     * savepoint, so a feed insert that fails takes the write back with it.
+     * ---------------------------------------------------------------------------------- */
+
+    /// Make every `activity` insert fail, as a full disk or a locked table would — a temp
+    /// trigger, so it lives on this connection only and [`allow_activity`] takes it away.
+    fn refuse_activity(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER refuse_activity BEFORE INSERT ON main.activity
+             BEGIN SELECT RAISE(ABORT, 'the feed is full'); END;",
+        )
+        .unwrap();
+    }
+
+    fn allow_activity(conn: &Connection) {
+        conn.execute_batch("DROP TRIGGER temp.refuse_activity")
+            .unwrap();
+    }
+
+    fn bolt_wish(quantity: i64) -> WishInput {
+        WishInput {
+            card_id: Some("bolt-lea".into()),
+            quantity,
+            ..Default::default()
+        }
+    }
+
+    /// The quantity on the one `bolt-lea` wish, or `None` when there is no such row.
+    fn bolt_wished(conn: &Connection) -> Option<i64> {
+        conn.query_row(
+            "SELECT quantity FROM wishlist_entries WHERE card_id = 'bolt-lea'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_wish_back_with_it() {
+        let conn = seeded();
+        add_wish(&conn, &bolt_wish(2)).unwrap();
+
+        refuse_activity(&conn);
+        assert!(add_wish(&conn, &bolt_wish(3)).is_err());
+        assert_eq!(
+            bolt_wished(&conn),
+            Some(2),
+            "the fold rolled back with the feed row"
+        );
+        assert!(conn.is_autocommit());
+
+        allow_activity(&conn);
+        add_wish(&conn, &bolt_wish(3)).unwrap();
+        assert_eq!(
+            bolt_wished(&conn),
+            Some(5),
+            "the retry counts the three copies once"
+        );
+        assert_eq!(feed(&conn).len(), 2);
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_wish_quantity_change_back_with_it() {
+        let conn = seeded();
+        let added = add_wish(&conn, &bolt_wish(4)).unwrap();
+
+        refuse_activity(&conn);
+        assert!(set_wish_quantity(&conn, added.id, 1).is_err());
+        assert_eq!(bolt_wished(&conn), Some(4), "the update rolled back");
+        assert!(set_wish_quantity(&conn, added.id, 0).is_err());
+        assert_eq!(bolt_wished(&conn), Some(4), "and so did the zero's delete");
+
+        allow_activity(&conn);
+        set_wish_quantity(&conn, added.id, 1).unwrap();
+        assert_eq!(bolt_wished(&conn), Some(1));
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_wish_removal_back_with_it() {
+        let conn = seeded();
+        let added = add_wish(&conn, &bolt_wish(4)).unwrap();
+
+        refuse_activity(&conn);
+        assert!(remove_wish(&conn, added.id).is_err());
+        assert_eq!(bolt_wished(&conn), Some(4));
+
+        allow_activity(&conn);
+        remove_wish(&conn, added.id).unwrap();
+        assert_eq!(bolt_wished(&conn), None);
     }
 }
