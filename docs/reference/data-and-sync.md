@@ -1225,12 +1225,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   because a rung is history while live code derives the list — so nothing `gone` answered the day
   before stops answering. ⚠️ **A delete applied from a peer before the upgrade is not recovered**:
   it ran behind the guard and recorded nothing anywhere. It owes its `USER_SCHEMA_SQL` lines and
-  **`UNDO_V54`**, for `UNDO_V37`'s loud reason (a bare `CREATE TABLE`), at the head of every
-  rewind chain, ahead of `UNDO_V53`. ⚠️ **`UNDO_V54` drops the table and leaves the `sync_gone_*`
-  triggers standing**, because they belong to the parent tables: a fixture that ran
-  `capture::install` and then rewinds finds a delete from any of those tables, and a `DROP COLUMN`
-  or `RENAME` on one, refused with `no such table: main.sync_gone` (measured against 3.53.0) — so
-  such a fixture may rewind v54 and nothing below it: `UNDO_V53` opens with a delete from
+  **`UNDO_V54`**, for `UNDO_V37`'s loud reason (a bare `CREATE TABLE`), in every rewind chain
+  ahead of `UNDO_V53` — at the head until v55's `UNDO_V55` landed above it. ⚠️ **`UNDO_V54` drops
+  the table and leaves the `sync_gone_*` triggers standing**, because they belong to the parent
+  tables: a fixture that ran `capture::install` and then rewinds finds a delete from any of those
+  tables, and a `DROP COLUMN` or `RENAME` on one, refused with `no such table: main.sync_gone`
+  (measured against 3.53.0) — which is why `UNDO_V55`'s `DROP COLUMN` on `wishlist_folders` runs
+  *before* it, while the table is still there — so such a fixture may rewind v55 and v54 and
+  nothing below them: `UNDO_V53` opens with a delete from
   `deck_categories`, refused over `sync_gone_deck_categories` even when it matches no row
   (measured against 3.53.0 on 2026-09-27). No production path drops the table. **It was written
   as v53**, the number token stacks PR 3 had planned for a new `collection_folders.kind` word —
@@ -1238,6 +1240,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   per-list piles (v53, above) had landed first. [sync.md](sync.md) *Held while it can resolve,
   skipped when it cannot* has what reads the table, and the folder delete that shipped beside it —
   one that would clear rows out of a folder waits for the page's retry and re-homes what is left.
+  **v55 adds `wishlist_folders.managed_tokens INTEGER NOT NULL DEFAULT 0`** (2026-09-27,
+  [managed tokens, improved](../superpowers/specs/2026-09-27-token-improvements-design.md) §3.8) —
+  the managed wishlist's **Tokens** subfolder, `1` on the child a theory deck's managed folder
+  files its token wishes in — and widens `idx_wishlist_folders_managed` to `(managed_deck_id,
+  managed_tokens)`, **dropping it first** so the widening is not the silent no-op an `IF NOT
+  EXISTS` would be on exactly the machines that climbed. A column and an index rebuilt under its own
+  name, so neither figure at the top of this page moves. Not synced, v48's column's reason. It owes
+  `UNDO_V55` — the index first, because SQLite refuses `DROP COLUMN` on a column an index names,
+  and v48's one-column index put back last — at the head of every chain. **Written as v54 and
+  renumbered at the merge** with the folder-deletes branch, which had `main`'s v53 and its own v54.
+  Two things the same build does are **not** rungs: an untouched token reads 0 rather than 1, which
+  writes nothing, and `deck_tokens::retire_hidden` retires every pre-v55 dismissal at launch, which
+  reads the corpus. [wishlist-folders.md](wishlist-folders.md) and [decks-storage.md](decks-storage.md)
+  have both.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

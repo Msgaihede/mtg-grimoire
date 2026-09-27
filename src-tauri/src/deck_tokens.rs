@@ -2009,7 +2009,11 @@ pub fn reconcile_in(
 /// fills from triggers on `deck_cards`, `deck_categories` and `decks` — read here and **never
 /// cleared**: `managed_wishlist::settle` is what empties it, which is why `with_write` runs this
 /// *before* the settle rather than after it, where the table would already be empty. A
-/// connection that was never armed has no table and nothing to reconcile.
+/// connection that was never armed has no table and nothing to reconcile. **The triggers user
+/// schema v55 added on `deck_token_printings` and `deck_tokens` mark a table of their own**,
+/// `managed_wishlist_token_dirty`, which the settle alone reads: a token write changes no card, so
+/// it gives this reconcile nothing to do, and marked here every stepper press would derive both
+/// of its deck's lists for nothing.
 ///
 /// One transaction per deck, so a deck that fails leaves every other deck reconciled; the first
 /// failure is the answer.

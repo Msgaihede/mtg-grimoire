@@ -439,6 +439,12 @@ custody it means.** A Collection button that behaved exactly like Managed would 
 lies about what it does. The column's `CHECK` carries all three words from v52, so PR 3 adds a
 button and a behaviour and no rung.
 
+**The control is gone since 2026-09-27** ([managed tokens, improved](2026-09-27-token-improvements-design.md)
+§3.9, user schema v55): PR 3 was dropped, and with every token at 0 until the reader counts it
+there was nothing left for Managed or Hide to decide. `TokenModeControl.tsx` was deleted from the
+band and from Deck settings, the pile draws on every deck, and `decks.token_mode` stays in the
+schema, on the `decks` capture spec and on `deck_undo::DECK_FIELDS` with nothing reading it.
+
 ### 4.6 Adding a printing
 
 - **The picker's grain is the printing and the finish.** A printing with two finishes is two
