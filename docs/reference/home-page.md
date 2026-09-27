@@ -745,17 +745,14 @@ would have reparented that panel to the widget box.
 > that first launch had no corpus. Nothing about the popover was wrong. `elementsFromPoint` — the
 > plural — is what tells "my thing is broken" from "something else is in front of it".
 
-**Phone width.** At **390 px** (`PHONE_PX`, so the rail is replaced by the bottom tab bar): widgets
-stack one per row at `x=20`, span-1 cards 352 px against `main`'s 375 px content box, and
-`main.scrollWidth === main.clientWidth === 375` — **no horizontal scroll**, in edit mode as well as
-at rest, with all six drag grips drawn and inside the box. The 352 px `min-w-[22rem]` clears 375 px
-by 23 px, which is the whole of the margin this layout has at the fold.
+**Phone width — removed 2026-09-27.** This pass also drove the grid at 390 px, where the bottom
+tab bar replaced the rail, and found no horizontal scroll; that layout went after the web and
+Android builds, and every width under `DESKTOP_FLOOR_PX`'s 1024 is now a window no reader can
+make.
 
-> ⚠️ **A first attempt measured at 400 px and read as a bug.** The rail was still drawn and `main`
-> was 192 px, so the 352 px cards overflowed it — but `PHONE_PX` is **390**, so 400 is *above* the
-> fold and the rail was correct to stay. The lesson is the ordinary one: a layout finding at a width
-> nobody ships is not a finding. The app's own `DESKTOP_FLOOR_PX` is 1024, so the band between them
-> is not a window a reader can make.
+> ⚠️ **The lesson its first attempt paid for outlives it.** Measured at 400 px, the rail was still
+> drawn and `main` was 192 px, so the 352 px `min-w-[22rem]` cards overflowed it — which read as a
+> bug and was only a width nobody ships. A layout finding at such a width is not a finding.
 
 **The launch flash — measured, fixed, and the fix backed out.** Sampled per `requestAnimationFrame`
 across a reload with `start_view` set to `search`: the ribbon read **Home at 224 ms** and **Search at
