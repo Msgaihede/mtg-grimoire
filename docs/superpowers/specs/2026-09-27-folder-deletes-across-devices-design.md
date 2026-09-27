@@ -203,6 +203,19 @@ one grain*):
 All of it runs inside `apply`'s `capture::suppressed`: every device derives the same re-homing
 from the same delete.
 
+- **Every decision that rests on `gone` is made on a retry pass** *(amended 2026-09-27 at Task C's
+  fix rounds)* — the moot arm and the `SET NULL` "written without that parent" arm alike. A
+  same-page add-wins resurrection of the parent lands on the first pass, so the retry resolves the
+  parent normally; decided on the first attempt, a held folder was deleted that a sparse move could
+  not rebuild, and a copy was filed at the root the sender kept in its binder. The first attempt
+  answers `Why::DecidedOnRetry` (the name `Occupied` had at approval), which the clearing-delete wait
+  shares.
+- **The retry is a bounded fixed-point loop** *(amended at the same review)*: groups still failing
+  are retried in page order while the previous pass made progress (a group written or decided moot),
+  capped at the group count, and only each group's last answer is classified. One pass met a folder
+  moved into a new folder created under a deleted parent before the new folder was decided, held it,
+  and dropped it at the bound.
+
 ### 3.4 Why not "apply deletes last"
 
 Moving every delete after every put would fix §1.1's ordering in one line, and it is wrong: a row
