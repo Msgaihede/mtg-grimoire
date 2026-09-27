@@ -5,7 +5,9 @@ protocol). **TS owns domain logic** (deck validation, import/export parsing). Ru
 _facts_; TypeScript draws _conclusions_. Keep that boundary.
 
 `cargo test` and `cargo clippy -D warnings` run from here; `npm run verify` at the root runs
-both plus the frontend.
+both, `cargo fmt --check` and the frontend. (It ran neither `clippy` nor `fmt` until 2026-09-27,
+while this line said it ran the first.) The toolchain is `rust-toolchain.toml`'s pin — rustup
+picks it up from any directory under the root.
 
 ## Hard rules — database
 

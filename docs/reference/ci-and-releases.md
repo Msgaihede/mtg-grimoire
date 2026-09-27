@@ -6,7 +6,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   card scanner's embedded assets and is recorded in [card-scanner.md](card-scanner.md) §10; this
   page covers the other two. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
   router (below), a `frontend`
-  job (`npm run build`/`lint`/`test:run`), a `rust` matrix over `windows-latest` +
+  matrix (below — one leg for `npm run build` and `lint`, four for `test:run --shard`), a
+  `storybook` job (`npm run build-storybook`), a `rust` matrix over `windows-latest` +
   `ubuntu-22.04` (`cargo fmt --check` on Linux only, `clippy -D warnings` and `cargo test`
   on both, everything `--locked`, **and since 2026-09-08 the `card-scanner` crate's own suite
   on the Linux leg** — `cargo test --locked --features cli --manifest-path
@@ -28,8 +29,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **`scripts/ci-route.mjs`** (moved out of an inline `case` on 2026-09-26, with `case`'s
   first-match-wins order and `*`-crosses-`/` matching kept), which routes each one:
   `src-tauri/**` → **`frontend`, `rust`, `wasm` and `android`**; `src/**`, `public/**`,
-  `index.html`, the lockfiles and the frontend's configs, plus **`scripts/` because `eslint .`
-  lints it** (its ignore list does not name it) → `frontend`;
+  `index.html`, **`.storybook/**`** (its own arm since 2026-09-27 — it used to fall to the
+  fail-safe and run the Rust matrix), the lockfiles and the frontend's configs → `frontend`
+  **and `storybook`**, plus **`scripts/` because `eslint .` lints it** (its ignore list does
+  not name it) → `frontend` alone;
+  **`rust-toolchain.toml` and `.github/actions/rust-toolchain/`** → `frontend`, `rust`, `wasm`
+  and `android`; **`release.yml` and `scanner-bundle.yml` → `frontend`**, because
+  `scripts/toolchain.test.mjs` reads every workflow (below); `.nvmrc` → every job that installs
+  Node;
   **`src/features/transfer/__golden__/**` and `src/lib/userTables.json` → `frontend` and
   `rust`**; `src/workers/**`, `src/web/**`, `src/lib/core/**`, `scripts/build-wasm.mjs` and
   `vite.web.config.ts` → `frontend` **and `wasm`**;
@@ -38,16 +45,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the fail-safe below was already doing for the `card-scanner` crate, whose `.rs` files
   `ipc.test.ts` reads as text and whose `scripts/*.mjs` `eslint .` lints);
   prose and editor/release bookkeeping → neither; and **anything unrecognised → every**
-  build job.
+  build job, `storybook` included.
   That last arm is the fail-safe that makes the lists safe to be wrong in the cheap
   direction — a new root config file or a new top-level directory gets full CI until someone
   narrows it deliberately. Only the "neither" arm can wrongly skip work, so it stays small.
 - **The `wasm` job compiles the crate for `wasm32-unknown-unknown`, and it exists because a
   fully green `npm run verify` can ship a broken web target.** The crate is one crate with two
   targets: a `use tauri::` added to a module on the wasm side of `lib.rs`'s module map compiles
-  on desktop, passes every test, and fails only there. That is the same shape as `cargo fmt`
-  and `clippy` already being outside `verify`, and it is why `src-tauri/*` routes here as well
-  as to `rust`.
+  on desktop, passes every test, and fails only there. That is the same shape `cargo fmt` and
+  `clippy` had until 2026-09-27, when `npm run verify` gained `lint:rust` — and it is why
+  `src-tauri/*` routes here as well as to `rust`.
   Linux-only, and not as a preference — this compiles SQLite's C amalgamation to wasm32 with
   clang, which is the same compiler on every host, so a Windows leg would prove the same thing
   more slowly. **No measured figure in this repo has ever come off a Linux build**; this job is
@@ -140,7 +147,35 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   is not routed to both `frontend` and `rust`. Reverting either half of the fix was run as a
   mutation and the derived census went red both times, not only the hand-written table. Cost
   measured on the runs before the change: `frontend` takes 8–12 min and `rust` 4–9, so a
-  Rust-only PR now waits on `frontend`'s clock instead of `rust`'s.
+  Rust-only PR now waits on `frontend`'s clock instead of `rust`'s — which is half of why
+  `frontend` was split into parallel legs the next day (below).
+- **`frontend` is five legs in parallel, and `build-storybook` is a job of its own** (issue
+  #559, 2026-09-27). It was one serial job — `npm run build`, `eslint .`, `vitest run`, then
+  `build-storybook` — at 8–12 minutes, with vitest alone 345–415 s for ~390 files; branch
+  protection is `strict: true`, so every merge into `main` re-queued every open PR behind that
+  whole path. Now one leg builds and lints, and four run `npm run test:run -- --shard=N/4`:
+  vitest divides the collected files deterministically, so a shard runs the same files on every
+  run. Nothing a test reads comes out of `npm run build` (the `dist/` mentions in test files are
+  comments), which is what lets the shards start with the build leg rather than behind it.
+  `ci-ok` reads `needs.frontend.result`, `failure` if any leg fails, so the matrix changes no
+  protected name; `fail-fast: false` keeps one red shard from cancelling the rest.
+  **`storybook` has its own `changes` output** because it reads less than `frontend` — nothing
+  under `src-tauri/`, `crates/` or `scripts/` — and it was added to all five lists a gated job
+  must be in. `ci-route.test.mjs` now checks the last two of those (`ci-ok`'s `needs` and its
+  loop) for every name in `JOBS`, where it used to check only the output and the `if:`.
+- **Rust is pinned by `rust-toolchain.toml`, and no workflow may install its own** (issue #559,
+  2026-09-27). Every workflow used `dtolnay/rust-toolchain@stable` with `clippy -D warnings`, so a
+  new stable's lints could turn every PR red with no code change, and a release binary was built
+  by whatever stable was current. The file pins **1.98.1** (the current stable on the day) with
+  `rustfmt` and `clippy`; `.github/actions/rust-toolchain` reads the channel with `sed` and hands
+  it to `dtolnay/rust-toolchain@master`, which does not read the file itself. Targets are not in
+  the file — the `wasm` and `android` jobs pass theirs to the action — so a local
+  `rustup target add` is needed after a pin moves. **`scripts/toolchain.test.mjs` is the fence**:
+  it globs every workflow and fails on a direct `dtolnay/rust-toolchain` use, a `rustup`
+  install, or a `node-version:` that is not `node-version-file: .nvmrc`, and on a channel that is
+  not an exact `x.y.z`. **Node is pinned the same way**: `.nvmrc` (24, the version the app is
+  developed on — CI ran 22 until this change) feeds every `setup-node`, and `package.json`'s
+  `engines` floor is `>=22.18`, the newest any script here needs (`scripts/golden.mjs`).
 - **A push to `main` gets a concurrency group of its own; PR runs still cancel each other.**
   Routing on a push diffs from `github.event.before`, so a cancelled `main` run's commits were
   never routed by the next one — and turning `cancel-in-progress` off alone would not have
