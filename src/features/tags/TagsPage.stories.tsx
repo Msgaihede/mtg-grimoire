@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
-import { ipc } from "@/lib/ipc";
+import { core } from "@/lib/core";
 import { HIDE_BACKGROUND_LABEL } from "./TagChips";
 import { TagsPage } from "./TagsPage";
 
@@ -273,6 +273,12 @@ export const ArtTagsMissing: Story = {
  * on every launch that is due one, and there is no button. Without that press the fault would be
  * unobservable here and the story would be a second copy of {@link Default}. The reason lands in
  * `error_log`, which is `Settings/ErrorLogPanel`'s subject and not this page's.
+ *
+ * **It presses through `core.call`, because `ipc` no longer offers the command.** The
+ * `ipc.artTagsRefresh` wrapper this play used to call had no other caller and was removed on
+ * 2026-09-27; `core.call` is the very seam that wrapper was a one-line forward to, so the
+ * request still crosses the faked `@tauri-apps/api/core` into `db.ts`'s `art_tags_refresh` by
+ * name, with the argument spelled as the Rust command declares it.
  */
 export const ArtTagsFetchError: Story = {
   parameters: { fake: { fault: "artTagsFetchError" } },
@@ -283,7 +289,9 @@ export const ArtTagsFetchError: Story = {
 
     // `force`, because the seed's watermark is inside the weekly window and a refresh that is
     // not due answers the status it already had and emits nothing.
-    await expect(ipc.artTagsRefresh(true)).rejects.toThrow(/could not be downloaded/);
+    await expect(core.call("art_tags_refresh", { force: true })).rejects.toThrow(
+      /could not be downloaded/,
+    );
 
     // The terminal `error` event reaches the page's listener, which refetches the status and
     // re-reads both tag lists. Everything comes back the same.
