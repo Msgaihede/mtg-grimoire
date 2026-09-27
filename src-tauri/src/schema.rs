@@ -5309,6 +5309,17 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     // Behind `capture::suppressed` and idempotent, so a `hidden` an older peer sends later is
     // retired at the next launch and every launch after costs one read that finds nothing.
     crate::deck_tokens::retire_hidden_logged(conn);
+    // **And then the dirty marks every pass since `settle_all` left, drained the way
+    // `sync::with_write` drains a write's — rule 7's backstop first, then the managed wishlist.**
+    // `settle_all` above armed this connection, so the conversion, the repair, the refile and the
+    // retire pass each marked the decks they wrote, and nothing read those marks until the first
+    // write of the session. Worse, `settle_all` ran *before* the retire pass: on the first v55
+    // launch a theory deck following `all` or `tokens` built its Tokens subfolder from a
+    // dismissed token's counts, which the pass then zeroed under it — a shopping list for tokens
+    // the reader had said they did not want (the final review's M2). Logged, for the reason
+    // every step here is.
+    crate::deck_tokens::reconcile_dirty_logged(conn);
+    crate::managed_wishlist::settle_logged(conn);
     Ok(())
 }
 

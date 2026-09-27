@@ -1263,6 +1263,24 @@ fn write_state(tx: &Connection, deck_id: i64, oracle_id: &str, state: &str) -> R
     .map_err(|e| e.to_string())
 }
 
+/// **A dismissal's legacy count, cleared**: `deck_tokens.quantity` becomes `NULL` where the row
+/// carries no pick and `0` where a v51 pick still waits for conversion — the reader's rule that a
+/// dismissed token comes back **at zero**, which [`write_state`] alone breaks by keeping a legacy
+/// count (a dismissed Treasure counted at 3 before v52 would come back at 3 in every list with no
+/// entries of it). [`retire_hidden`]'s step 2, and every write that settles a stale `hidden` sooner
+/// ([`settle_hidden`], [`add_printing_in`]) — so a dismissal comes back at zero whichever of them
+/// reaches it first. Inside the caller's [`journal_in`] where there is one, whose state row carries
+/// the quantity, so one Undo puts the count back with the word.
+fn clear_legacy_count(tx: &Connection, deck_id: i64, oracle_id: &str) -> Result<(), String> {
+    tx.execute(
+        "UPDATE deck_tokens SET quantity = CASE WHEN card_id IS NULL THEN NULL ELSE 0 END
+          WHERE deck_id = ?1 AND oracle_id = ?2",
+        params![deck_id, oracle_id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 /// Write one entry at an absolute quantity, on [`DECK_TOKEN_PRINTING_GRAIN`] — interpolated for
 /// [`write_state`]'s reason.
 fn put_entry(tx: &Connection, deck_id: i64, row: &TokenEntryRow) -> Result<(), String> {
@@ -1392,10 +1410,13 @@ fn named_entry(
 }
 
 /// **A stale `hidden`, settled by the write that touches the token** — `auto` where this list
-/// makes it, `manual` where it does not, the answer [`add_printing_in`] has always given. The word
-/// is a pre-v55 dismissal nothing draws any more ([`retire_hidden`] settles the rest at launch),
-/// and a step, a swap or a remove on the token is the reader using it; leaving the word behind
-/// would hand a later reconcile a hand-added token it thinks it may take.
+/// makes it, `manual` where it does not, the answer [`add_printing_in`] has always given, and **its
+/// legacy count cleared** ([`clear_legacy_count`]) the way [`retire_hidden`] clears it, so the
+/// other list's implicit entry comes back at zero rather than at the dismissal's old count (the
+/// final review's deferred 1). The word is a pre-v55 dismissal nothing draws any more
+/// ([`retire_hidden`] settles the rest at launch), and a step, a swap or a remove on the token is
+/// the reader using it; leaving the word behind would leave a row every reader has to remember
+/// means nothing.
 ///
 /// Called inside the write's own [`journal_in`], so the state change is captured with the write
 /// and rides its undo step: one Undo brings the count and the word back together. A token in any
@@ -1409,6 +1430,7 @@ fn settle_hidden(
     if state_of(tx, deck_id, oracle_id)?.state.as_deref() != Some(HIDDEN_STATE) {
         return Ok(());
     }
+    clear_legacy_count(tx, deck_id, oracle_id)?;
     let made = derived_printing(tx, deck_id, variant, oracle_id)?.is_some();
     let state = if made { AUTO_STATE } else { MANUAL_STATE };
     write_state(tx, deck_id, oracle_id, state)
@@ -1790,7 +1812,9 @@ pub fn add_printing(
 ///    deletes are the write's own, so one Undo restores them.
 /// 3. **A token the list derives nothing for becomes `manual`** — the reader's own, which no cut
 ///    can reconcile away. A derived token still `hidden` from a pre-v55 dismissal comes back to
-///    `auto`, as [`retire_hidden`] would have sent it at the next launch.
+///    `auto`, as [`retire_hidden`] would have sent it at the next launch — and **at zero**: its
+///    legacy count is cleared before step 1 ([`clear_legacy_count`]), so no implicit entry is
+///    materialised at the dismissal's old count.
 ///
 /// **The three callers** are this module's [`add_printing`] (one copy, from the band's picker),
 /// and the two writes every add of a card ends in — `deck::add_card` and
@@ -1819,6 +1843,15 @@ pub fn add_printing_in(
     journal_in(tx, deck_id, variant, &oracle_id, |tx| {
         let best = derived_printing(tx, deck_id, variant, &oracle_id)?;
         let derived = best.is_some();
+        // **A stale `hidden` comes back at zero, and before the implicit entry is written** (the
+        // final review's deferred 1): its legacy count is what the implicit entry would be
+        // materialised at, and a dismissal the reader is settling by using the token comes back
+        // at none — so the entry this press files stands alone, as `retire_hidden` would have left
+        // it, rather than beside the old count in this list and under it in the other.
+        let was_hidden = state_of(tx, deck_id, &oracle_id)?.state.as_deref() == Some(HIDDEN_STATE);
+        if was_hidden {
+            clear_legacy_count(tx, deck_id, &oracle_id)?;
+        }
         if entries_of(tx, deck_id, variant, &oracle_id)?.is_empty() {
             if let Some(implicit) = implicit_of(tx, deck_id, variant, &oracle_id, best)?
                 .filter(|implicit| implicit.quantity > 0)
@@ -1852,10 +1885,9 @@ pub fn add_printing_in(
         {
             drop_entry(tx, deck_id, &zero)?;
         }
-        let state = state_of(tx, deck_id, &oracle_id)?.state;
         if !derived {
             write_state(tx, deck_id, &oracle_id, MANUAL_STATE)?;
-        } else if state.as_deref() == Some(HIDDEN_STATE) {
+        } else if was_hidden {
             write_state(tx, deck_id, &oracle_id, AUTO_STATE)?;
         }
         Ok(Change::new("add", json!(held), json!(landed))
@@ -1924,7 +1956,7 @@ pub fn remove_entry(
 // ---------------------------------------------------------------------------------------
 
 /// **Rule 7**: delete every entry, in each of `variants`, of a token that list no longer derives
-/// and that is not `manual` — and answer the rows it deleted, so the caller's undo step can put
+/// and whose state is `auto` — and answer the rows it deleted, so the caller's undo step can put
 /// them back.
 ///
 /// **A reconcile after every write that changes a list's cards, never a rule applied at read
@@ -1937,13 +1969,19 @@ pub fn remove_entry(
 ///   three steps built without them — the theory switch, a pile switched off, a pile deleted.
 /// * **After every write, as a backstop** ([`reconcile_dirty`]), for the writes that file none.
 ///
-/// **A `manual` token is never touched** — no card made it, so no cut can unmake it — and a
-/// `hidden` one is: a dismissal is still a token the deck makes, and once it does not, it has
-/// nothing left to be dismissed from. Cutting the card and adding it back brings the token back
-/// as its implicit entry, which is what a reader who never picked a printing had anyway.
+/// **Only an `auto` token is the deck's to take** — the one [`deck_token_rows`]' hand-added tail
+/// does not draw once nothing makes it. **A `manual` token is never touched** — no card made it, so
+/// no cut can unmake it — **and nor, since the final review of user schema v55, is a `hidden`
+/// one**: that tail draws any state but `auto`, so a pre-v55 dismissal of a token nothing makes is
+/// on the wall like a `manual` one, and until [`retire_hidden`] settles it at the next launch it is
+/// as much the reader's. It said the opposite until then — *a dismissal is still a token the deck
+/// makes, and once it does not, it has nothing left to be dismissed from* — which was true while a
+/// dismissal was hidden, and took the entries of a token the wall was drawing, captured, and from
+/// the backstop on no undo step. Cutting a card and adding it back brings an `auto` token back as
+/// its implicit entry, which is what a reader who never picked a printing had anyway.
 ///
 /// **Three things keep it cheap and one keeps it safe.** The common case — a list with no
-/// non-`manual` entries at all — is one indexed read and no derivation. A list is only derived
+/// entries of an `auto` token at all — is one indexed read and no derivation. A list is only derived
 /// when there is something it could delete. The deletes are ordinary captured writes: every
 /// device derives the same answer, a delete that finds nothing is a no-op there, and a captured
 /// delete keeps an undo's captured restore meaningful on the other device. **And a list whose
@@ -1967,12 +2005,12 @@ pub fn reconcile_in(
                         AND NOT EXISTS (SELECT 1 FROM deck_tokens t
                                          WHERE t.deck_id = e.deck_id
                                            AND t.oracle_id = e.oracle_id
-                                           AND t.state = ?3)
+                                           AND t.state <> ?3)
                       ORDER BY e.oracle_id, e.card_id, e.finish",
                 )
                 .map_err(|e| e.to_string())?;
             let rows = stmt
-                .query_map(params![deck_id, variant, MANUAL_STATE], entry_row)
+                .query_map(params![deck_id, variant, AUTO_STATE], entry_row)
                 .map_err(|e| e.to_string())?;
             rows.collect::<rusqlite::Result<_>>()
                 .map_err(|e| e.to_string())?
@@ -2573,6 +2611,7 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
 ///    count — a dismissed Treasure counted at 3 before v52 would come back at 3 in every list with
 ///    no entries — and a paired device climbing from v51 runs this pass *before* the pull that
 ///    converts its picks, at `quantity ?? 1`; the `0` is what makes those entries arrive at zero.
+///    ([`clear_legacy_count`], which a write that settles a `hidden` sooner runs too.)
 /// 3. **Its state becomes `auto` where the deck still makes the token** — in either list,
 ///    because the state is shared by both — **or where it holds nothing**, and `manual` where it
 ///    holds an entry or a pick nothing makes, through [`write_state`]. A dismissed Treasure the
@@ -2582,8 +2621,11 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
 ///
 /// **A pass and not a rung**, because whether the deck still makes the token is [`derive`]'s
 /// answer, which reads `cards.raw`, and no rung reads the corpus — `migrate_user` runs before
-/// `migrate_corpus`. `schema::prepare_database` runs it straight after
-/// [`repair_entry_finishes`], logged and left owing like it ([`retire_hidden_logged`]).
+/// `migrate_corpus`. `schema::prepare_database` runs it after [`repair_entry_finishes`] and
+/// `deck_meta::refile_stray_theory_cards_at_launch`, logged and left owing like them
+/// ([`retire_hidden_logged`]), and then drains the marks every one of those passes left —
+/// [`reconcile_dirty_logged`] and the managed wishlist's settle — so the first v55 launch settles
+/// each theory deck's managed wishlist on the zeroed counts rather than before them.
 ///
 /// **Behind `capture::suppressed`**, `src-tauri/CLAUDE.md`'s rule for a write every device
 /// derives for itself: each device retires the same synced rows over the same corpus to the same
@@ -2674,12 +2716,7 @@ fn retire_one(
         params![deck_id, oracle_id],
     )
     .map_err(|e| e.to_string())?;
-    tx.execute(
-        "UPDATE deck_tokens SET quantity = CASE WHEN card_id IS NULL THEN NULL ELSE 0 END
-          WHERE deck_id = ?1 AND oracle_id = ?2",
-        params![deck_id, oracle_id],
-    )
-    .map_err(|e| e.to_string())?;
+    clear_legacy_count(tx, deck_id, oracle_id)?;
     // A pick still waiting for conversion counts as held: it becomes the token's entries.
     let held: bool = tx
         .query_row(
@@ -5641,6 +5678,37 @@ mod tests {
         );
     }
 
+    /// **A dismissed token nothing makes keeps its entries through a card write's reconcile**
+    /// (the final review's M1). A `hidden` row with entries in a list that derives nothing is drawn
+    /// like `manual` — `deck_token_rows`' hand-added tail reads any state but `auto` — and until the
+    /// next launch's [`retire_hidden`] settles it, it is the reader's as much as a `manual` one is.
+    /// A reconcile that took it would delete what the wall is drawing, capture the deletes for the
+    /// group, and — from the backstop — file them on no undo step. Only `auto` is the deck's to
+    /// take.
+    #[test]
+    fn a_reconcile_keeps_a_dismissed_token_nothing_makes() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
+        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 3);
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+
+        // The card write: the Tithe cut through a write that files a step, so its own
+        // transaction runs the reconcile.
+        crate::deck::set_card_quantity(&conn, deck, tithe().id, main, "live", None, 0).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![e("live", soldier().oracle_id, soldier().id, "nonfoil", 3)],
+            "the Treasure the Tithe made is gone; the dismissed Soldier nothing makes is not"
+        );
+        assert!(
+            reconcile_in(&conn, deck, &["live"]).unwrap().is_empty(),
+            "nor does a later reconcile take it"
+        );
+    }
+
     /// **A list whose makers cannot all be read deletes nothing.** A device paired before its
     /// first corpus download derives nothing from anything, and a reconcile there — its deletions
     /// captured and pushed — would wipe the reader's token printings on every device.
@@ -6113,6 +6181,115 @@ mod tests {
                 "the {variant} list draws the implicit Treasure at zero"
             );
         }
+    }
+
+    /// **A dismissal settled by a write comes back at zero in the other list too** (the final
+    /// review's deferred 1). A step on the live list settles the stale `hidden` there and then —
+    /// and until then [`write_state`] kept the legacy count, so the plan's implicit Treasure came
+    /// back at the old 3 while [`retire_hidden`] would have brought it back at 0. The count is
+    /// cleared with the word, inside the write's own step, so one Undo puts both back.
+    #[test]
+    fn a_write_that_settles_a_dismissal_clears_its_legacy_count() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        play(&conn, deck, main, &tithe(), "theory");
+        seed_state(&conn, deck, treasure().oracle_id, Some(3), "hidden");
+
+        set_quantity(&conn, deck, "live", treasure().oracle_id, None, 2).unwrap();
+
+        let plan = deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer).unwrap();
+        assert_eq!(
+            (plan.len(), plan[0].implicit, plan[0].quantity),
+            (1, true, 0),
+            "the plan's implicit Treasure at zero, not at the dismissal's old 3"
+        );
+        assert!(
+            stored(&conn, deck).is_empty(),
+            "no dismissal and no count left to carry, so no row: {:?}",
+            stored(&conn, deck)
+        );
+
+        let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
+        assert_eq!(
+            stored(&conn, deck),
+            vec![(
+                treasure().oracle_id.to_owned(),
+                None,
+                Some(3),
+                "hidden".to_owned()
+            )],
+            "one Undo brings the word and the count back together"
+        );
+    }
+
+    /// **And an added printing clears it before the implicit entry is written**, so the Treasure
+    /// the dismissal left at 3 is not materialised at 3 beside the new printing: the add files the
+    /// new printing alone, and the plan's implicit Treasure reads zero.
+    #[test]
+    fn an_add_that_settles_a_dismissal_clears_its_legacy_count_first() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        play(&conn, deck, main, &tithe(), "theory");
+        seed_state(&conn, deck, treasure().oracle_id, Some(3), "hidden");
+
+        add_printing(&conn, deck, "live", treasure_older().id, Some("foil")).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![e(
+                "live",
+                treasure().oracle_id,
+                treasure_older().id,
+                "foil",
+                1
+            )],
+            "the new printing alone — no implicit Treasure materialised at the old count"
+        );
+        let plan = deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer).unwrap();
+        assert_eq!((plan[0].implicit, plan[0].quantity), (true, 0));
+        assert!(stored(&conn, deck).is_empty(), "{:?}", stored(&conn, deck));
+    }
+
+    /// **The launch settles the managed wishlist after it retires the dismissals** (the final
+    /// review's M2). `prepare_database` ran `managed_wishlist::settle_all` ahead of the retire
+    /// pass, so on the first v55 launch a theory deck following `tokens` filed a wish for the
+    /// Treasure its plan counted at 3 — a count the pass then zeroed, with nothing left to settle
+    /// the folder again until the reader's first write. The launch drains the marks the passes
+    /// left, so the plan is short of nothing and the folder holds nothing.
+    #[test]
+    fn the_launch_files_no_managed_token_wish_for_a_dismissal_it_retires() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        conn.execute(
+            "UPDATE decks SET theory_enabled = 1, managed_wishlist_mode = 'tokens' WHERE id = ?1",
+            params![deck],
+        )
+        .unwrap();
+        play(&conn, deck, main, &tithe(), "theory");
+        seed_entry(&conn, deck, "theory", &treasure(), "nonfoil", 3);
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
+
+        crate::schema::prepare_database(&conn).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![e(
+                "theory",
+                treasure().oracle_id,
+                treasure().id,
+                "nonfoil",
+                0
+            )],
+            "the pass retired the dismissal at zero"
+        );
+        let wishes: i64 = conn
+            .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            wishes, 0,
+            "and the managed wishlist was settled after it, so it wants no Treasure"
+        );
     }
 
     /// **A dismissed pick a paired device has not converted yet comes back at zero as well.** On a
