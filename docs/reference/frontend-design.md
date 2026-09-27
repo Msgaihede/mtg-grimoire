@@ -642,9 +642,12 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   list — no count is written here, because a count is a fact about a tree and the constant already
   answers it): `search`, `tags`, `collection` and `wishlist`, the page-sized list walls;
   `deckSearch`, `collectionSearch` and `wishlistSearch`, the three **docked search columns**, each
-  of which is a second `CardGrid` on a page that already has one; `deck`, the editor's desk — **one
-  key for both deck views**, because Stacks and Grid are two drawings of the same pile and
-  switching between them must not resize the cards the reader just settled on; `deckGallery`, the
+  of which is a second `CardGrid` on a page that already has one; `deck`, the editor's Stacks desk,
+  and `deckGrid`, its Grid wall — **one key for both deck views until issue #567 (2026-09-27)**,
+  on the argument that the two are drawings of the same pile and a view switch should not be a
+  resize; the reader asked for them apart, because a wall of every card and a desk of piles are
+  sized for different jobs, and what keeps them looking alike is that the Grid tile's marks scale
+  off its width against a stacked card's (`deckCardScale`), not a shared number; `deckGallery`, the
   decks page's wall of deck tiles and folder cards; `home`, the dashboard, which is **not a wall of
   anything** and is spent differently from all of them (below); and `printings`, the modal's wall,
   which opens *over* a wall the reader has already sized. `useCardZoomGesture(ref, section)` names the section

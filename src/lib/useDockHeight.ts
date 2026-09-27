@@ -14,8 +14,11 @@ import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
  * against: `getComputedStyle` there answers `""` for a property no inline style set, and the
  * Tailwind class that makes a box a scroller is never parsed. So the suite proves the *wiring*
  * and the shipped window proves the number.
+ *
+ * Exported for `useScrollPerView`, which needs the same scroller for the same reason and is the
+ * same directory — so this is one copy shared, not a third.
  */
-function nearestScroller(from: HTMLElement): HTMLElement | null {
+export function nearestScroller(from: HTMLElement): HTMLElement | null {
   for (let el = from.parentElement; el; el = el.parentElement) {
     const { overflowY } = getComputedStyle(el);
     if (overflowY === "auto" || overflowY === "scroll") return el;

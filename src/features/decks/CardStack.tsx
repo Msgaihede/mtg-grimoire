@@ -185,6 +185,25 @@ export function stackCardWidth(zoom: number): number {
 }
 
 /**
+ * The scale a deck card drawn `width` wide publishes as `--mark-scale` — **its width against the
+ * stacked card's**, so everything on it is the stacked card's marks in proportion.
+ *
+ * Every length `DeckCardFace`, `CardChin` and the controls column draw is written for a
+ * {@link STACK_CARD_WIDTH} card at 1× — the 27px title bar, the 34px the quantity tag covers, the
+ * 28px chin, the stepper's squares. A stacked card's width *is* that card times the zoom, so the
+ * stack publishes the zoom and the two agree. **The Grid tile is 150px at 1×, and for as long as it
+ * published the zoom too, every mark on it was drawn for a card 1.4× its size** (issue #567): a
+ * 27px title-bar scrim over the ~19px bar the picture actually prints, a quantity tag and plan tick
+ * that overran it, and a stepper column that took half the card. Read off the width instead, a
+ * tile is a stacked card drawn smaller rather than a smaller card wearing a stacked card's marks.
+ *
+ * Off the **rounded** width the caller paints, for {@link stackImageHeight}'s reason.
+ */
+export function deckCardScale(width: number): number {
+  return width / STACK_CARD_WIDTH;
+}
+
+/**
  * The card face's height at this zoom: a Magic card's proportions applied to the width that is
  * actually drawn.
  *
