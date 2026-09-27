@@ -91,6 +91,76 @@ pub const LAST_ACKED: &str = "last_acked";
 /// When the last complete round trip finished, in unix seconds.
 pub const LAST_SYNC_AT: &str = "last_sync_at";
 
+/// Why [`PULL_CURSOR`] is being held, as `{"kind":"newer"|"waiting","since":<unix seconds>,
+/// "pulls":<n>}`; absent when it is not. [`pull`] writes it, and the Sync panel reads its kind
+/// (`RelayStatus::pull_held`). Spec 2026-09-27 §3.3.
+///
+/// **A hold costs the relay**, which is why each kind is bounded by what can still resolve it:
+/// the relay compacts nothing above this device's ack, the ack follows the cursor, and every pull
+/// re-downloads everything above it. `"newer"` — a device on a newer schema wrote something this
+/// build cannot apply — has no bound, because updating this device resolves it and the panel
+/// asks for exactly that. `"waiting"` — a parent a later page may still bring — is released at
+/// [`WAITING_PULLS`] pulls spanning [`WAITING_SECS`].
+pub const PULL_HOLD: &str = "pull_hold";
+
+/// A waiting hold is released once it has been seen on this many pulls...
+const WAITING_PULLS: i64 = 3;
+/// ...spanning at least this many seconds. A parent its sender owed — a first contact pushes a
+/// child ahead of the baseline that carries its parent — arrives on that sender's next trip,
+/// seconds later; one deleted on a third device never arrives.
+const WAITING_SECS: i64 = 600;
+
+/// A [`PULL_HOLD`] row.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct Hold {
+    /// `"newer"` or `"waiting"`.
+    pub(crate) kind: String,
+    /// When a hold of this kind began, in unix seconds. A pull that keeps it keeps this.
+    since: i64,
+    /// Pulls that have found it, this one included.
+    pulls: i64,
+}
+
+/// The hold [`PULL_HOLD`] records, or `None` when nothing is held — or when the row does not read
+/// as one, which only a hand-edited database can hold, and which the next pull rewrites.
+pub(crate) fn read_hold(conn: &Connection) -> Option<Hold> {
+    get_state(conn, PULL_HOLD).and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// Now, in unix seconds, **from SQLite** — `SystemTime::now()` panics on `wasm32-unknown-unknown`,
+/// and this module compiles for it.
+fn now_secs(conn: &Connection) -> Result<i64, String> {
+    conn.query_row("SELECT unixepoch()", [], |r| r.get(0))
+        .map_err(|e| e.to_string())
+}
+
+/// Record that this pull held for `kind`. **The same kind keeps `since` and counts the pull; a new
+/// kind starts over**, so a waiting hold that turns into a newer one does not inherit a span that
+/// was never the newer one's.
+fn note_hold(conn: &Connection, kind: &str) -> Result<Hold, String> {
+    let hold = match read_hold(conn) {
+        Some(h) if h.kind == kind => Hold {
+            pulls: h.pulls + 1,
+            ..h
+        },
+        _ => Hold {
+            kind: kind.to_owned(),
+            since: now_secs(conn)?,
+            pulls: 1,
+        },
+    };
+    let json = serde_json::to_string(&hold).map_err(|e| e.to_string())?;
+    set_state(conn, PULL_HOLD, &json).map_err(|e| e.to_string())?;
+    Ok(hold)
+}
+
+/// Nothing is held any more.
+fn clear_hold(conn: &Connection) -> Result<(), String> {
+    conn.execute("DELETE FROM sync_state WHERE key = ?1", [PULL_HOLD])
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// What one call to [`run_once`] did.
 ///
 /// **`Relay`-prefixed because `SyncOutcome` is taken**, by `crate::sync`'s card sync and by
@@ -101,7 +171,10 @@ pub const LAST_SYNC_AT: &str = "last_sync_at";
 pub struct RelayOutcome {
     /// Ops handed to the relay.
     pub pushed: usize,
-    /// Envelopes taken from it.
+    /// Ops this trip's pull **newly applied** — the same number as `applied`. Never the ops a
+    /// held cursor was handed again: those are `skipped` or held, and counting them would fire
+    /// `sync:applied` on every trip a hold lasts. (It read "envelopes taken", and counted every op
+    /// the page carried, until the cursor could be held.)
     pub pulled: usize,
     /// Envelopes that could not be opened — a device that has not caught up with a key
     /// rotation, or a blob from before one whose key this device does not hold.
@@ -110,7 +183,15 @@ pub struct RelayOutcome {
     pub resurrected: usize,
     pub cycles_broken: usize,
     pub skipped: usize,
+    /// Ops held for re-delivery — `held_newer` plus the ops waiting on a parent. Any at all, and
+    /// the cursor did not move.
     pub deferred: usize,
+    /// Of `deferred`, the ops a newer schema wrote and the ops held behind them. Only updating
+    /// this device resolves them.
+    pub held_newer: usize,
+    /// Ops that can never apply, skipped: each group is an `error_log` row, so the panel can point
+    /// there rather than promise them later.
+    pub dropped: usize,
     /// Ops sent as a first-contact baseline. Spec §13 — the panel names this separately,
     /// because a first exchange is larger than an ordinary sync and must not read as a hang.
     pub baseline_ops: usize,
@@ -127,6 +208,8 @@ impl RelayOutcome {
         self.cycles_broken += report.cycles_broken;
         self.skipped += report.skipped;
         self.deferred += report.deferred;
+        self.held_newer += report.held_newer;
+        self.dropped += report.dropped;
     }
 }
 
@@ -939,6 +1022,14 @@ pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<usize, S
 ///   and neither does a blob that fails the AEAD — **altered**. Refusing to advance past either
 ///   would stall the stream for the thirty days the relay keeps a tail, for nothing, so it is
 ///   counted, written to `error_log`, and stepped over.
+///
+/// **A third way is not unreadable at all, and holds** (spec 2026-09-27 §3.3): an envelope that
+/// opens and does not parse (`WireError::Malformed`). The AEAD passed, so a member of this group
+/// sealed it, and a batch this build cannot read — an op kind it has never heard of — can only
+/// come from a newer build. It is still counted and noted, and it holds the cursor as `"newer"`
+/// ([`PULL_HOLD`]) exactly as a newer schema's held group does, rather than being stepped over and
+/// lost — **and so do its sender's batches stamped after it in the page**, which would otherwise
+/// apply and carry that sender's watermark past the ops nobody here could read.
 pub async fn pull(
     conn: &Connection,
     base: &str,
@@ -990,9 +1081,11 @@ pub async fn pull(
         }
     };
 
-    let mut ops: Vec<Op> = Vec::new();
+    let mut opened: Vec<(&Envelope, Vec<Op>)> = Vec::new();
     let mut unreadable = 0usize;
     let mut behind = false;
+    // Sender → the stamp of its earliest batch in this page that opened and did not parse.
+    let mut unparsed: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
     for envelope in &page.envelopes {
         let held = if envelope.epoch < group.epoch {
             identity::group_at(conn, &group, envelope.epoch).map_err(|e| e.to_string())?
@@ -1000,11 +1093,21 @@ pub async fn pull(
             None
         };
         match wire::open_batch(held.as_ref().unwrap_or(&group), envelope) {
-            Ok(mut batch) => ops.append(&mut batch),
+            Ok(batch) => opened.push((envelope, batch)),
             Err(e) => {
                 unreadable += 1;
-                if matches!(e, WireError::WrongEpoch) && envelope.epoch > group.epoch {
-                    behind = true;
+                match e {
+                    WireError::WrongEpoch if envelope.epoch > group.epoch => behind = true,
+                    // Opened, so a member of the group sealed it — and a batch this build cannot
+                    // parse can only have come from a newer one. See the doc above.
+                    WireError::Malformed(_) => {
+                        let at = (envelope.hlc_ms, envelope.hlc_ctr);
+                        unparsed
+                            .entry(envelope.device.as_str())
+                            .and_modify(|first| *first = (*first).min(at))
+                            .or_insert(at);
+                    }
+                    _ => {}
                 }
                 note(
                     conn,
@@ -1016,16 +1119,83 @@ pub async fn pull(
             }
         }
     }
+    let malformed = !unparsed.is_empty();
 
-    let report = apply::apply(conn, &ops)?;
-    if !behind {
-        // ⚠️ **To the page head, whatever `apply` deferred — and that makes a deferral a loss.**
-        // The relay answers only rows above this cursor, and `apply` keeps no copy of what it
-        // held back, so a deferred op and every later op from its device in this page are never
-        // offered again; `sync_peers` holding below them only makes a re-delivery *safe*, and
-        // nothing re-delivers. Open until the sync-delivery fix — hold the cursor on a deferral
-        // a newer schema caused — which must land before any release that carries v52. Only
-        // `behind`, above, holds the cursor today. `apply`'s module doc has the whole record.
+    // **A sender's batches stamped at or after one that did not parse wait with the cursor**,
+    // or they would carry its watermark past the unparsed ops, which the re-delivery after an
+    // update would then skip as seen. By stamp, not page position; earlier ones are safe.
+    let mut ops: Vec<Op> = Vec::new();
+    let mut held_behind = 0usize;
+    for (envelope, mut batch) in opened {
+        let at = (envelope.hlc_ms, envelope.hlc_ctr);
+        if unparsed
+            .get(envelope.device.as_str())
+            .is_some_and(|first| at >= *first)
+        {
+            held_behind += batch.len();
+        } else {
+            ops.append(&mut batch);
+        }
+    }
+
+    let mut report = apply::apply_with(conn, &ops, apply::Waiting::Hold)?;
+    // Held behind a newer build's batch, which is what `held_newer` counts.
+    report.held_newer += held_behind;
+    report.deferred += held_behind;
+    // **The cursor moves to the page head only when nothing here can still apply** — the relay
+    // answers only rows above it, and `apply` keeps no copy of what it held, so stepping past a
+    // held op loses it and every later op of its device in this page for good. Holding is what
+    // makes the relay hand the page back, and `sync_peers` is what makes that re-delivery safe:
+    // what applied is skipped and what was held applies once, when it can. The ack follows the
+    // cursor, so the relay keeps the held rows. Spec 2026-09-27 §3.3, in order:
+    //
+    // 1. `behind` a key rotation — held, as it always was; the key is what resolves it.
+    // 2. A newer schema's held group, or a batch that opened and did not parse — held, with no
+    //    bound, until this device updates.
+    // 3. A group waiting on a parent — held until [`WAITING_PULLS`] pulls spanning
+    //    [`WAITING_SECS`] have found it, then released: the page is applied once more with
+    //    [`apply::Waiting::Release`], which drops and records the group and applies what sat
+    //    behind it, and the cursor moves.
+    // 4. Otherwise — every group applied, skipped, moot or dropped — the cursor moves and any
+    //    hold is cleared.
+    let advance = if behind {
+        false
+    } else if report.held_newer > 0 || malformed {
+        note_hold(conn, "newer")?;
+        false
+    } else if report.held_waiting > 0 {
+        let hold = note_hold(conn, "waiting")?;
+        if hold.pulls >= WAITING_PULLS && now_secs(conn)? - hold.since >= WAITING_SECS {
+            let released = apply::apply_with(conn, &ops, apply::Waiting::Release)?;
+            // What the first pass applied or consumed is below its watermark now and skipped
+            // here, so these add without counting anything twice.
+            report.applied += released.applied;
+            report.resurrected += released.resurrected;
+            report.cycles_broken += released.cycles_broken;
+            report.moot += released.moot;
+            report.dropped += released.dropped;
+            report.held_waiting = released.held_waiting;
+            report.held_newer = released.held_newer;
+            report.deferred = released.deferred;
+            // **A release can uncover a newer group.** Collateral takes its block's class, so
+            // a device that pushed a waiting child from an older build and then a newer
+            // build's op behind it reports the newer op as waiting until the release attempts
+            // it — and a release that then advanced would lose it.
+            if released.held_newer > 0 {
+                note_hold(conn, "newer")?;
+                false
+            } else {
+                clear_hold(conn)?;
+                true
+            }
+        } else {
+            false
+        }
+    } else {
+        clear_hold(conn)?;
+        true
+    };
+    if advance {
         set_state(conn, PULL_CURSOR, &page.cursor.to_string()).map_err(|e| e.to_string())?;
         // **User schema v52's art picks convert here on a paired device, and only behind a pull
         // that read everything.** A conversion before this device has heard its group can insert
@@ -1033,11 +1203,11 @@ pub async fn pull(
         // the edit on every device — `deck_tokens::convert_legacy_picks_at_launch` has the
         // scenario. So the launch pass leaves a paired device's picks alone until this has run
         // once, and this runs behind every pull after, which converts a v51 peer's pick on the
-        // pull that brings it. **Not behind a pull held at an epoch**: its unreadable envelopes
-        // may be exactly the peer's entries and clears the gate waits for. **Captured**, because
-        // `apply` has returned and `capture::suppressed` with it; and logged rather than
-        // returned, because the pull itself has landed and a pick left owing is retried behind
-        // the next one.
+        // pull that brings it. **Not behind a held pull**, whatever held it: an envelope held at
+        // an epoch, or a group held for a newer schema or a parent, may be exactly the peer's
+        // entries and clears the gate waits for. **Captured**, because `apply` has returned and
+        // `capture::suppressed` with it; and logged rather than returned, because the pull
+        // itself has landed and a pick left owing is retried behind the next one.
         if let Err(e) = crate::deck_tokens::convert_legacy_picks_after_pull(conn) {
             eprintln!(
                 "the decks' pre-v52 token art picks could not be converted after a pull: \
@@ -1245,7 +1415,10 @@ async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOu
     };
     let (unreadable, report) = pull(conn, &base, &token).await?;
     outcome.unreadable = unreadable;
-    outcome.pulled = report.applied + report.skipped + report.deferred;
+    // **What this trip applied, and nothing it was handed again.** A held cursor re-delivers the
+    // same page on every trip, and `pulled` is what fires `sync:applied` — counting the ops
+    // skipped or held again would refresh every screen on every trip for as long as a hold lasts.
+    outcome.pulled = report.applied;
     outcome.absorb(report);
     if baselines {
         let (ops, history) = emit_baselines(conn, &base, &token).await?;

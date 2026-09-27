@@ -219,6 +219,7 @@ pub fn build(conn: &Connection, device: &str) -> Result<Vec<Op>, String> {
                     },
                     baseline: true,
                     horizon: None,
+                    schema: None,
                 })
             })
             .map_err(|e| e.to_string())?;

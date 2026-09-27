@@ -895,7 +895,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   from the INSERT, so it falls to the DDL default and a deck built from an old peer's op arrives
   with both marks on. A `NOT NULL` column with no default would have failed that INSERT instead,
   and `insert_row`'s caller answers a failed insert with `ROLLBACK TO savepoint` and
-  `Outcome::Deferred` — the group would stall at that op for ever.
+  `Outcome::Deferred` — the group would stall at that op for ever. (Since 2026-09-27 an older
+  peer's row this build cannot build is skipped and recorded rather than held, so the deck would
+  never arrive at all; the default is as load-bearing as it was.)
   **v39 gives `decks` a third one, `theory_mark_unplanned`** (2026-09-08) — whether a Live row the
   plan does not ask for *at all* wears the red X the tier landed with. `INTEGER NOT NULL DEFAULT 1`,
   one rung after v38 and one day after it, and every sentence v38's paragraph above spends on the
@@ -1100,8 +1102,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     because `deck_tokens.quantity` is a synced field with no `CHECK`. Then every pick's
     `card_id` is cleared, and its `quantity` wherever an entry of its token exists (a quantity-only
     row is never touched — that number goes on meaning the implicit entry's count), **all after
-    the entries**, so each clear rides behind an entry op a v51 peer defers — and, while the client
-    drops a deferral ([sync.md](sync.md) *Deferred ops are dropped, not held*), loses with it.
+    the entries**, so each clear rides behind an entry op a v51 peer defers — and, because a v51
+    client drops a deferral where v52's holds it ([sync.md](sync.md) *Held while it can resolve,
+    skipped when it cannot*), loses with it.
     **One savepoint per pick**: a pick whose writes fail is rolled back alone, written to stderr and
     left set for the next pass, where one transaction over the file had let one bad pick block every
     conversion at every launch. Idempotent: every later pass scans the table and writes nothing, no
@@ -1118,10 +1121,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     or a delete made on A went the same way. So `deck_tokens::convert_legacy_picks_at_launch` runs
     it only on a device in no sync group or once the `sync_state` key `token_picks_ready` is set,
     and `sync_engine::client::pull` sets that key and converts, captured, behind every pull that
-    read everything (never one held at an epoch). By then B has applied A's entries and A's clear —
-    ⚠️ unless B *pulled* at v51 during the window, which today dropped them rather than holding
-    them, so that B reverts A the same way until the sync-delivery fix — so it has no pick left to
-    convert, and a pick it re-made since is a case-3 move of A's entry
+    read everything and advanced its cursor (never one held at an epoch, nor since 2026-09-27 one
+    held on a newer device's page). By then B has applied A's entries and A's clear — ⚠️ unless B <!-- verify-B -->
+    *pulled* at v51 during the window, whose v51 client dropped them rather than holding them, so
+    that B reverts A the same way; the delivery holds ship in v52 and cannot fetch that page back,
+    though they keep the gate's promise for every laggard on v52 or later — so it has no pick left
+    to convert, and a pick it re-made since is a case-3 move of A's entry
     rather than an insert over it. `a_laggards_conversion_never_reverts_an_edit_made_since` went red
     — 3 on both devices, not 5 — with the gate switched off. **The cost**: a paired device draws an
     unconverted token at its resolver's printing until its first pull at v52 lands, and a paired

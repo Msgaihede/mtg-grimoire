@@ -3217,10 +3217,12 @@ commands; `add_printing_in` calls it inside whatever transaction it was handed, 
   `every_token_write_is_one_deck_row_and_one_step`. The deck notes' `{ field: "note" }` precedent,
   for a sharper reason than the rebuild a tenth word costs: `deck_audit` is synced and
   append-only, so a word a paired device's `CHECK` does not know would be refused there, and its
-  applier defers the op — **which loses it, and the sender's later ops in that page, for good**:
-  the client advances its pull cursor past a deferral, so upgrading brings nothing back
-  ([sync.md](sync.md) *Deferred ops are dropped, not held*; this read "stalling that device's whole
-  stream until it upgrades"). `deck` is
+  applier defers the op. **On a v51 peer that loses it, and the sender's later ops in that page, for
+  good**: a v51 client advances its pull cursor past a deferral, so upgrading brings nothing back.
+  On v52 or later it **stalls that device's whole stream until it upgrades** — the delivery holds
+  keep the cursor on a newer sender's deferral, and the relay's log with it — which is what this
+  read before 2026-09-26 and is true again from v52 on, and is still a cost worth a sharper reason
+  than a rebuild ([sync.md](sync.md) *Held while it can resolve, skipped when it cannot*). `deck` is
   already the deck-level kind, so no reader takes a token for a deck card. `delta` is 0 — the day
   header's `+7 / −6` adds up cards — and the row names no card (`card_name` is `NULL`: a token is
   never a `deck_cards` row).
@@ -3422,15 +3424,19 @@ insert won every field last-writer-wins decides, so A's step — or a finish cha
 move, a delete — was reverted on **both** devices.
 `a_laggards_conversion_never_reverts_an_edit_made_since` is that scenario, and it went red (3 on
 both devices, not 5) with the gate switched off. Behind a pull, B has applied A's entries and A's
-clear first — ⚠️ **provided B did not pull at v51 during the window**: the client drops a deferred
-op rather than holding it, so a B that did still holds the pick after it climbs and reverts A the
-same way, until the sync-delivery fix ([sync.md](sync.md) *Deferred ops are dropped, not held*).
+clear first — ⚠️ **provided B did not pull at v51 during the window**: a v51 client steps past a
+deferred op rather than holding it, so a B that did still holds the pick after it climbs and
+reverts A the same way. The delivery holds that ship with v52 cannot reach back for that page; what
+they do is make the proviso hold for every laggard on v52 or later, whose held page comes back and
+applies before any advancing pull converts ([sync.md](sync.md) *Held while it can resolve, skipped
+when it cannot*). <!-- verify-B -->
 Otherwise the clear leaves no pick to convert, and a pick B re-made after it reaches case 3 below
 as a **move** of the entry A named — a sparse update — never as an insert over it. The key is the
 `sync_state` row `token_picks_ready` (`deck_tokens::PICKS_READY`), set by the pull half and never
 cleared; a pull held behind a key rotation neither sets it nor converts, because its unreadable
-envelopes may be exactly the entries and clears the gate waits for. The pull half runs behind
-**every** such pull, so a v51 peer's pick is converted on the pull that brings it rather than at the
+envelopes may be exactly the entries and clears the gate waits for — and since 2026-09-27 neither
+does a pull held on a newer device's page, for the same reason. <!-- verify-B -->
+The pull half runs behind **every** such pull, so a v51 peer's pick is converted on the pull that brings it rather than at the
 next launch. `a_paired_device_converts_nothing_at_launch_before_its_first_pull`,
 `an_unpaired_device_converts_at_launch`, and in `client`'s suite
 `a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_does_not`. **The cost**: a
@@ -3490,9 +3496,10 @@ exists — **all the entries first and the clears after**, so each clear rides b
 the device's stream. A v51 peer defers the first op for a table it does not know and leaves the
 sender's later ops in that page unapplied, so it never applies a clear ahead of its entry and goes
 on drawing its art. This read "until it upgrades — the accepted new-table stall"; ⚠️ it is a loss,
-not a stall: the client advances its cursor past the deferral, so the entries and clears are
-dropped and the art stays after the upgrade too ([sync.md](sync.md) *Deferred ops are dropped, not
-held*).
+not a stall: a v51 client advances its cursor past the deferral, so the entries and clears are
+dropped and the art stays after the upgrade too. The delivery holds that make a new table a stall
+again ship in v52 and run on the receiver, so they cannot help a v51 one ([sync.md](sync.md) *Held
+while it can resolve, skipped when it cannot*).
 (In a group of three or more it can lose that art early, cosmetically: a conversion finding every
 list already holding the pick — a third device's announced entries — writes no entry op, and with
 no other pick's entry ahead of it the clear reaches the v51 peer first.)
@@ -3511,7 +3518,8 @@ legacy columns. The two stalls are pinned end to end through `sync_engine::apply
 `an_art_reset_on_a_v51_device_after_the_conversion_leaves_nothing_deferred`.
 **Two losses are accepted**, both confined to a v51 device's last days: a reset made there after
 another device converted (argued as "the other device's entry reaches it after the upgrade, and
-the reset has nothing left to clear" — while a deferral is dropped, the entry never reaches it),
+the reset has nothing left to clear" — a v51 client drops a deferral rather than holding it, so
+the entry never reaches it),
 and a count stepped there on a pick another device had already cleared,
 which lands on the legacy column a converted token no longer reads.
 

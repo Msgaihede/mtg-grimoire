@@ -2358,3 +2358,705 @@ async fn a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_do
         "captured: the next push announces both entries"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// The cursor held for a reason, and for no longer than the reason lasts — spec 2026-09-27 §3.3
+// ---------------------------------------------------------------------------------------
+
+/// `ops` sealed exactly as given, schema stamps and all. [`wire::seal_batch`] stamps this build's
+/// schema on everything it seals, so a newer device's envelope has to be made this way.
+fn sealed_as_is(group: &Group, device: &str, ops: &[Op]) -> Envelope {
+    let last = ops.iter().map(|o| &o.at).max().unwrap();
+    wire::seal_plaintext(
+        group,
+        device,
+        &serde_json::to_vec(ops).unwrap(),
+        (last.ms, last.ctr),
+    )
+}
+
+/// `op` as a newer build's batch this one cannot parse — its `kind` is one this build has never
+/// heard of — sealed under the group key and `op`'s own stamp.
+fn unparseable(group: &Group, device: &str, op: &Op) -> Envelope {
+    let mut json = serde_json::to_value(op).unwrap();
+    json["kind"] = "merge".into();
+    let envelope = wire::seal_plaintext(
+        group,
+        device,
+        &serde_json::to_vec(&[json]).unwrap(),
+        (op.at.ms, op.at.ctr),
+    );
+    assert!(
+        matches!(
+            wire::open_batch(group, &envelope),
+            Err(WireError::Malformed(_))
+        ),
+        "the fixture has to open and then fail to parse"
+    );
+    envelope
+}
+
+/// A page from `dev-a` on a build one schema ahead of this one: an op on a table this build has
+/// never heard of, and a `+1` of `card` behind it.
+///
+/// **The first is a real captured op, relabelled**, so its stamp is one `dev-a`'s clock issued
+/// and sits ahead of the `+1`'s — which is what makes the `+1` collateral rather than a group of
+/// its own that happens to apply.
+fn a_newer_devices_page(card: &str) -> Envelope {
+    let a = paired("dev-a", 0);
+    a.execute(
+        "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Soon', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    add_copy(&a, card, 1);
+    let mut ops = outbox(&a);
+    assert_eq!(ops.len(), 2, "one folder insert and one +1: {ops:?}");
+    ops[0].table = "future_table".to_owned();
+    for op in &mut ops {
+        op.schema = Some(crate::schema::USER_SCHEMA_VERSION + 1);
+    }
+    sealed_as_is(&identity::group(&a).unwrap().unwrap(), "dev-a", &ops)
+}
+
+/// An ordinary page from `dev-c`, on this build: one `+1` of `card`.
+fn an_ordinary_page(card: &str) -> Envelope {
+    let c = paired("dev-c", 0);
+    add_copy(&c, card, 1);
+    wire::seal_batch(&identity::group(&c).unwrap().unwrap(), "dev-c", &outbox(&c)).unwrap()
+}
+
+/// `dev-a` files a deck in a folder and adds a copy behind it. Answers `(child, parent)`: the deck
+/// and the `+1`, and the folder insert the deck names — sealed apart, so a page can carry the
+/// child and leave the parent to a later one.
+fn a_child_and_the_parent_it_names(card: &str) -> (Envelope, Envelope) {
+    let a = paired("dev-a", 0);
+    a.execute(
+        "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Binder', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    a.execute(
+        "INSERT INTO decks (name, format_key, folder_id, created_at, updated_at)
+         VALUES ('A', 'commander', (SELECT id FROM deck_folders WHERE name = 'Binder'),
+                 unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    add_copy(&a, card, 1);
+    let ops = outbox(&a);
+    assert_eq!(ops.len(), 3, "a folder, a deck and a +1: {ops:?}");
+    let group = identity::group(&a).unwrap().unwrap();
+    (
+        wire::seal_batch(&group, "dev-a", &ops[1..]).unwrap(),
+        wire::seal_batch(&group, "dev-a", &ops[..1]).unwrap(),
+    )
+}
+
+/// The relay answering every pull with `envelopes` and `cursor`, whatever `since` it is asked
+/// from — which is what a relay does for a device whose cursor is held below them.
+fn serving<'a>(server: &'a MockServer, envelopes: &[&Envelope], cursor: i64) -> httpmock::Mock<'a> {
+    let envelopes: Vec<serde_json::Value> = envelopes
+        .iter()
+        .map(|e| serde_json::to_value(e).unwrap())
+        .collect();
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": envelopes, "cursor": cursor }));
+    })
+}
+
+/// `pull_hold` as the JSON it is stored as, or `None` when nothing is held.
+fn hold_of(conn: &Connection) -> Option<serde_json::Value> {
+    get_state(conn, PULL_HOLD).map(|s| serde_json::from_str(&s).unwrap())
+}
+
+/// Move the hold's `since` back by `secs` — time passing, injected through `sync_state`, which is
+/// the only clock `sync_engine` reads.
+fn rewind_hold(conn: &Connection, secs: i64) {
+    let mut hold = hold_of(conn).expect("a hold to rewind");
+    let since = hold["since"].as_i64().unwrap();
+    hold["since"] = (since - secs).into();
+    set_state(conn, PULL_HOLD, &hold.to_string()).unwrap();
+}
+
+/// `(rows, copies)` of `card`.
+fn quantity_of(conn: &Connection, card: &str) -> (i64, i64) {
+    conn.query_row(
+        "SELECT count(*), coalesce(sum(quantity), 0) FROM collection_entries WHERE card_id = ?1",
+        [card],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .unwrap()
+}
+
+/// **A newer device's held op keeps the cursor, and so the ack, where they were — on every pull,
+/// not only the first.** The relay compacts nothing above this device's ack, so the page comes
+/// back until this device updates and can apply it; stepping past it loses that device's change
+/// for good.
+///
+/// **What makes it red**: advancing `PULL_CURSOR` whatever `apply` held.
+#[tokio::test]
+async fn a_newer_hold_keeps_the_cursor_and_the_ack_on_every_pull() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    serving(&server, &[&a_newer_devices_page("n1")], 9);
+    let acked = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+    let b = paired("dev-b", 0);
+    set_state(&b, RELAY_URL, &server.base_url()).unwrap();
+    grant(&b);
+    // Caught up to 3, and the relay told so, before the newer device spoke.
+    set_state(&b, PULL_CURSOR, "3").unwrap();
+    set_state(&b, LAST_ACKED, "3").unwrap();
+
+    for trip in ["first", "second"] {
+        let outcome = run_once(&b).await.unwrap().unwrap();
+        assert_eq!(
+            (outcome.held_newer, outcome.applied, outcome.pulled),
+            (2, 0, 0),
+            "{trip}: the future table and the +1 behind it are held: {outcome:?}"
+        );
+        assert_eq!(
+            get_state(&b, PULL_CURSOR).as_deref(),
+            Some("3"),
+            "{trip}: the cursor stepped past a newer device's changes"
+        );
+        assert_eq!(get_state(&b, LAST_ACKED).as_deref(), Some("3"), "{trip}");
+        let hold = hold_of(&b).expect("no hold was written");
+        assert_eq!(hold["kind"], "newer", "{trip}: {hold}");
+    }
+    acked.assert_calls(0);
+    assert_eq!(copies_of(&b, "n1"), 0);
+
+    // The shape is the spec's, verbatim: the same kind twice keeps `since` and counts the pull.
+    let hold = hold_of(&b).unwrap();
+    let mut keys: Vec<&String> = hold.as_object().unwrap().keys().collect();
+    keys.sort();
+    assert_eq!(keys, ["kind", "pulls", "since"], "{hold}");
+    assert_eq!(hold["pulls"], 2, "{hold}");
+    assert!(hold["since"].as_i64().unwrap() > 0, "{hold}");
+    assert!(
+        error_rows(&b).is_empty(),
+        "a hold is the panel's to say: {:?}",
+        error_rows(&b)
+    );
+}
+
+/// ⚠ **Review focus 1: a held page that also carries an ordinary peer's op applies that op once,
+/// skips it on every re-delivery, and counts it once.** `pulled` is what fires `sync:applied`, and
+/// every screen refreshes on it; a held cursor re-delivers the same page on every trip, so a
+/// `pulled` that counted the re-delivered op again would refresh the whole app on every trip for
+/// as long as the hold lasts.
+///
+/// **What makes it red**: `pulled` counting `skipped` (or `deferred`) again, or `apply` not
+/// skipping the re-delivered `+1` (a quantity of 2).
+#[tokio::test]
+async fn a_held_page_applies_the_other_devices_once_and_counts_them_once() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    serving(
+        &server,
+        &[&a_newer_devices_page("n1"), &an_ordinary_page("c1")],
+        9,
+    );
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+    let b = paired("dev-b", 0);
+    set_state(&b, RELAY_URL, &server.base_url()).unwrap();
+    grant(&b);
+
+    let first = run_once(&b).await.unwrap().unwrap();
+    assert_eq!(first.held_newer, 2, "{first:?}");
+    assert_eq!(
+        (first.applied, first.pulled),
+        (1, 1),
+        "c's +1 applied and counted: {first:?}"
+    );
+    assert_eq!(quantity_of(&b, "c1"), (1, 1));
+
+    let second = run_once(&b).await.unwrap().unwrap();
+    assert_eq!(second.held_newer, 2, "{second:?}");
+    assert_eq!(
+        second.skipped, 1,
+        "c's +1 came back and was skipped: {second:?}"
+    );
+    assert_eq!(
+        (second.applied, second.pulled),
+        (0, 0),
+        "a re-delivered op was counted as news: {second:?}"
+    );
+    assert_eq!(
+        quantity_of(&b, "c1"),
+        (1, 1),
+        "c's +1 landed twice or never"
+    );
+    assert_eq!(get_state(&b, PULL_CURSOR), None);
+}
+
+/// ⚠ **Review focus 3: an envelope that opens under the group key and does not parse holds as
+/// newer.** The AEAD passed, so a member of this group wrote it, and a batch this build cannot
+/// read — an op `kind` it has never heard of — can only come from a build ahead of it. It is
+/// still counted unreadable and noted. **An envelope whose seal fails, at the same epoch, is
+/// stepped past as it always was**: nothing says a member wrote it, and holding on it would pin
+/// the relay's log for bytes nobody can ever read.
+///
+/// **What makes it red**: dropping `WireError::Malformed`'s arm, or advancing whatever was held.
+#[tokio::test]
+async fn an_authentic_batch_this_build_cannot_parse_holds_as_newer() {
+    let a = paired("dev-a", 0);
+    add_copy(&a, "m1", 1);
+    let group = identity::group(&a).unwrap().unwrap();
+    let malformed = unparseable(&group, "dev-a", &outbox(&a)[0]);
+
+    let server = MockServer::start_async().await;
+    serving(&server, &[&malformed], 9);
+    let b = paired("dev-b", 0);
+    set_state(&b, PULL_CURSOR, "3").unwrap();
+    let (unreadable, _) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(unreadable, 1, "still counted unreadable");
+    assert_eq!(
+        get_state(&b, PULL_CURSOR).as_deref(),
+        Some("3"),
+        "a batch only a newer build can read was stepped past"
+    );
+    assert_eq!(hold_of(&b).expect("no hold")["kind"], "newer");
+    let rows = error_rows(&b);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "pull", "still noted: {rows:?}");
+
+    // The contrast: the same epoch, a seal that fails.
+    let mut altered = wire::seal_batch(&group, "dev-a", &outbox(&a)).unwrap();
+    let middle = altered.sealed.len() / 2;
+    let flipped = if &altered.sealed[middle..=middle] == "A" {
+        "B"
+    } else {
+        "A"
+    };
+    altered.sealed.replace_range(middle..=middle, flipped);
+    assert_eq!(
+        wire::open_batch(&group, &altered),
+        Err(WireError::Unreadable)
+    );
+    let other = MockServer::start_async().await;
+    serving(&other, &[&altered], 9);
+    let c = paired("dev-c", 0);
+    set_state(&c, PULL_CURSOR, "3").unwrap();
+    let (unreadable, _) = pull(&c, &other.base_url(), "access-1").await.unwrap();
+    assert_eq!(unreadable, 1);
+    assert_eq!(
+        get_state(&c, PULL_CURSOR).as_deref(),
+        Some("9"),
+        "an altered envelope held the stream"
+    );
+    assert_eq!(hold_of(&c), None);
+}
+
+/// **A batch that does not parse holds its sender's later batches in the page too, and only
+/// those.** `apply` never sees the unparsed ops, so a later batch of the same device that did
+/// parse would apply and carry that device's `sync_peers` watermark past them — and once this
+/// device updates, the re-delivered batch parses, sits below the watermark, and is skipped as
+/// seen: lost behind a held cursor. So the sender's batches stamped at or after the unparsed one
+/// are left for the re-delivery, **by stamp and not by where the page puts them** (the later one
+/// comes first here); its earlier ones are below the block and apply, and another device's
+/// batches are untouched.
+///
+/// The update is played by the second page, where the same batch arrives parseable: it applies,
+/// and the `+1` behind it lands exactly once.
+///
+/// **What makes it red**: applying every batch that parsed (`x2` lands on the first pull and
+/// `x1` is skipped as seen on the second), or holding back by position in the page.
+#[tokio::test]
+async fn a_malformed_batch_holds_its_senders_later_batches_too() {
+    let a = paired("dev-a", 0);
+    for card in ["x0", "x1", "x2"] {
+        add_copy(&a, card, 1);
+    }
+    let ops = outbox(&a);
+    assert_eq!(ops.len(), 3, "{ops:?}");
+    let group = identity::group(&a).unwrap().unwrap();
+    let earlier = wire::seal_batch(&group, "dev-a", &ops[0..1]).unwrap();
+    let malformed = unparseable(&group, "dev-a", &ops[1]);
+    let later = wire::seal_batch(&group, "dev-a", &ops[2..3]).unwrap();
+    let other = an_ordinary_page("c1");
+
+    let server = MockServer::start_async().await;
+    let first = serving(&server, &[&later, &other, &malformed, &earlier], 9);
+    let b = paired("dev-b", 0);
+    set_state(&b, PULL_CURSOR, "3").unwrap();
+    let (unreadable, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(unreadable, 1, "{report:?}");
+    assert_eq!(
+        (report.held_newer, report.deferred),
+        (1, 1),
+        "x2 is held behind the unparsed batch, and counted there: {report:?}"
+    );
+    assert_eq!(
+        quantity_of(&b, "x2"),
+        (0, 0),
+        "a later batch of the sender applied past its unparsed one"
+    );
+    assert_eq!(
+        quantity_of(&b, "x0"),
+        (1, 1),
+        "an earlier batch was held back"
+    );
+    assert_eq!(
+        quantity_of(&b, "c1"),
+        (1, 1),
+        "another device's batch was held back"
+    );
+    assert_eq!(get_state(&b, PULL_CURSOR).as_deref(), Some("3"));
+    assert_eq!(hold_of(&b).expect("no hold")["kind"], "newer");
+    let (mark_ms, mark_ctr): (i64, i64) = b
+        .query_row(
+            "SELECT last_ms, last_ctr FROM sync_peers WHERE device_id = 'dev-a'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert!(
+        (mark_ms, mark_ctr) < (ops[1].at.ms, ops[1].at.ctr),
+        "dev-a's watermark passed the unparsed batch"
+    );
+
+    // This device updates, and the same batch now parses.
+    first.delete_async().await;
+    let parsed = wire::seal_batch(&group, "dev-a", &ops[1..2]).unwrap();
+    serving(&server, &[&later, &other, &parsed, &earlier], 9);
+    let (_, landed) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!((landed.applied, landed.deferred), (2, 0), "{landed:?}");
+    for card in ["x0", "x1", "x2", "c1"] {
+        assert_eq!(quantity_of(&b, card), (1, 1), "{card}");
+    }
+    assert_eq!(get_state(&b, PULL_CURSOR).as_deref(), Some("9"));
+    assert_eq!(hold_of(&b), None);
+}
+
+/// **A waiting hold is released once it has been seen on three pulls spanning ten minutes — and
+/// not before either.** A parent its sender owed arrives on that sender's next trip, seconds
+/// later; one deleted on a third device never arrives, and holding on it for ever would pin the
+/// relay's log. Released, the deck is dropped and recorded, and the `+1` behind it applies once.
+///
+/// **What makes it red**: releasing on the pull count alone (`early`'s third pull), on the span
+/// alone (`late`'s second), never releasing, or applying the collateral twice across the release
+/// and the re-delivery after it.
+#[tokio::test]
+async fn a_waiting_hold_releases_on_the_third_pull_after_ten_minutes() {
+    let (child, _never_sent) = a_child_and_the_parent_it_names("w1");
+    let server = MockServer::start_async().await;
+    serving(&server, &[&child], 9);
+    let base = server.base_url();
+
+    // Three pulls inside a minute: the count is met and the span is not.
+    let early = paired("dev-b", 0);
+    for n in 1..=3 {
+        let (_, report) = pull(&early, &base, "access-1").await.unwrap();
+        assert_eq!(report.held_waiting, 2, "pull {n}: {report:?}");
+        assert_eq!(
+            get_state(&early, PULL_CURSOR),
+            None,
+            "pull {n} released a wait inside ten minutes"
+        );
+        let hold = hold_of(&early).unwrap();
+        assert_eq!(
+            (hold["kind"].as_str(), hold["pulls"].as_i64()),
+            (Some("waiting"), Some(n)),
+            "{hold}"
+        );
+    }
+
+    // Ten minutes on the second pull: the span is met and the count is not.
+    let late = paired("dev-b", 0);
+    pull(&late, &base, "access-1").await.unwrap();
+    rewind_hold(&late, 601);
+    let (_, second) = pull(&late, &base, "access-1").await.unwrap();
+    assert_eq!(
+        second.held_waiting, 2,
+        "the second pull released a wait: {second:?}"
+    );
+    assert_eq!(get_state(&late, PULL_CURSOR), None);
+
+    // The third, past ten minutes: the deck is given up on and the +1 behind it applies.
+    let (_, third) = pull(&late, &base, "access-1").await.unwrap();
+    assert_eq!(
+        (
+            third.dropped,
+            third.applied,
+            third.held_waiting,
+            third.deferred
+        ),
+        (1, 1, 0, 0),
+        "{third:?}"
+    );
+    assert_eq!(get_state(&late, PULL_CURSOR).as_deref(), Some("9"));
+    assert_eq!(hold_of(&late), None, "a released hold was left behind");
+    assert_eq!(
+        error_rows(&late),
+        [("apply".to_owned(), "other".to_owned(), 1)],
+        "the release is recorded once"
+    );
+    assert_eq!(quantity_of(&late, "w1"), (1, 1));
+
+    // The page again, from a relay that has not heard the ack: nothing moves.
+    let (_, again) = pull(&late, &base, "access-1").await.unwrap();
+    assert_eq!((again.applied, again.dropped), (0, 0), "{again:?}");
+    assert_eq!(
+        quantity_of(&late, "w1"),
+        (1, 1),
+        "the collateral applied twice"
+    );
+    assert_eq!(error_rows(&late)[0].2, 1, "the release was recorded twice");
+    assert_eq!(hold_of(&late), None);
+}
+
+/// **A release that uncovers a newer op holds it as newer rather than advancing past it.**
+/// Collateral takes the class of the block it sits behind, so a device that pushed a waiting child
+/// from this build and then, updated, an op this build cannot apply reports both as *waiting* —
+/// the newer op is only classified once the release attempts it. The release drops the child as
+/// it should; a cursor that then moved would lose the newer op for good.
+///
+/// **What makes it red**: advancing after every release, whatever the release pass held.
+#[tokio::test]
+async fn a_release_that_uncovers_a_newer_op_holds_it_as_newer() {
+    let a = paired("dev-a", 0);
+    a.execute(
+        "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Binder', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    a.execute(
+        "INSERT INTO decks (name, format_key, folder_id, created_at, updated_at)
+         VALUES ('A', 'commander', (SELECT id FROM deck_folders WHERE name = 'Binder'),
+                 unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    a.execute(
+        "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Soon', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let ops = outbox(&a);
+    assert_eq!(ops.len(), 3, "{ops:?}");
+    let group = identity::group(&a).unwrap().unwrap();
+    // The deck, from this build; the folder never sent.
+    let child = wire::seal_batch(&group, "dev-a", &ops[1..2]).unwrap();
+    // Then dev-a updates, and its next op is on a table this build does not have.
+    let mut future = ops[2].clone();
+    future.table = "future_table".to_owned();
+    future.schema = Some(crate::schema::USER_SCHEMA_VERSION + 1);
+    let newer = sealed_as_is(&group, "dev-a", &[future]);
+
+    let server = MockServer::start_async().await;
+    serving(&server, &[&child, &newer], 9);
+    let b = paired("dev-b", 0);
+    for _ in 0..2 {
+        let (_, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+        assert_eq!(
+            (report.held_waiting, report.held_newer),
+            (2, 0),
+            "the fixture: the newer op waits behind the child: {report:?}"
+        );
+    }
+    rewind_hold(&b, 601);
+
+    let (_, released) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(
+        (released.dropped, released.held_newer, released.deferred),
+        (1, 1, 1),
+        "{released:?}"
+    );
+    assert_eq!(
+        get_state(&b, PULL_CURSOR),
+        None,
+        "the release stepped past the newer op it uncovered"
+    );
+    let hold = hold_of(&b).expect("no hold");
+    assert_eq!(
+        (hold["kind"].as_str(), hold["pulls"].as_i64()),
+        (Some("newer"), Some(1)),
+        "a newer hold starts over rather than inheriting the wait's span: {hold}"
+    );
+    assert_eq!(
+        error_rows(&b),
+        [("apply".to_owned(), "other".to_owned(), 1)]
+    );
+
+    // The next pull: the child is below its watermark now, and the newer op still holds.
+    let (_, again) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(
+        (again.skipped, again.held_newer, again.dropped),
+        (1, 1, 0),
+        "{again:?}"
+    );
+    assert_eq!(get_state(&b, PULL_CURSOR), None);
+    assert_eq!(hold_of(&b).unwrap()["pulls"], 2);
+    assert_eq!(
+        error_rows(&b)[0].2,
+        1,
+        "the dropped child was recorded twice"
+    );
+}
+
+/// ⚠ **Review focus 4: a waiting hold whose parent arrives on the next pull applies, clears
+/// `pull_hold`, advances, and records nothing.** This is the ordinary case the hold exists for —
+/// a first contact where the child is pushed ahead of the baseline that carries its parent.
+///
+/// **What makes it red**: advancing past the held child (the second page is asked for from the
+/// same `since`, so a moved cursor finds no mock), or a hold that outlives what it waited for.
+#[tokio::test]
+async fn a_waiting_hold_clears_when_the_parent_arrives() {
+    let (child, parent) = a_child_and_the_parent_it_names("w1");
+    let page = |envelopes: &[&Envelope], cursor: i64| {
+        let envelopes: Vec<serde_json::Value> = envelopes
+            .iter()
+            .map(|e| serde_json::to_value(e).unwrap())
+            .collect();
+        serde_json::json!({ "envelopes": envelopes, "cursor": cursor })
+    };
+    let server = MockServer::start_async().await;
+    let first = server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{GROUP}/pull"))
+            .query_param("since", "0");
+        then.status(200).json_body(page(&[&child], 5));
+    });
+    let b = paired("dev-b", 0);
+    let (_, held) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(held.held_waiting, 2, "{held:?}");
+    assert_eq!(hold_of(&b).expect("no hold")["kind"], "waiting");
+
+    // The sender's next trip: the log has grown by the parent, asked for from where b stood.
+    first.delete_async().await;
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{GROUP}/pull"))
+            .query_param("since", "0");
+        then.status(200).json_body(page(&[&child, &parent], 6));
+    });
+    let (_, landed) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(
+        (landed.applied, landed.dropped, landed.deferred),
+        (3, 0, 0),
+        "the folder, the deck and the +1: {landed:?}"
+    );
+    assert_eq!(get_state(&b, PULL_CURSOR).as_deref(), Some("6"));
+    assert_eq!(hold_of(&b), None);
+    assert!(error_rows(&b).is_empty(), "{:?}", error_rows(&b));
+    assert_eq!(quantity_of(&b, "w1"), (1, 1));
+    let filed: i64 = b
+        .query_row(
+            "SELECT count(*) FROM decks d JOIN deck_folders f ON f.id = d.folder_id
+              WHERE d.name = 'A' AND f.name = 'Binder'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(filed, 1, "the deck landed outside the folder it names");
+}
+
+/// ⚠ **Review focus 5: a newer hold has no bound.** Held across restarts — `pull_hold` is a
+/// `sync_state` row, so a restart is this row surviving — for nearly three hours and fifty pulls,
+/// far past the waiting bound, it still holds: only updating this device resolves it.
+///
+/// **What makes it red**: the waiting bound applied to either kind of hold, or a newer hold's
+/// `since` restarted by the pull that keeps it.
+#[tokio::test]
+async fn a_newer_hold_is_never_released_by_the_waiting_bound() {
+    let server = MockServer::start_async().await;
+    serving(&server, &[&a_newer_devices_page("n1")], 9);
+    let b = paired("dev-b", 0);
+    pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let since = hold_of(&b).unwrap()["since"].as_i64().unwrap() - 10_000;
+    set_state(
+        &b,
+        PULL_HOLD,
+        &serde_json::json!({ "kind": "newer", "since": since, "pulls": 50 }).to_string(),
+    )
+    .unwrap();
+
+    let (_, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(
+        (report.held_newer, report.dropped, report.applied),
+        (2, 0, 0),
+        "{report:?}"
+    );
+    assert_eq!(
+        get_state(&b, PULL_CURSOR),
+        None,
+        "a newer hold was released"
+    );
+    assert_eq!(
+        hold_of(&b).unwrap(),
+        serde_json::json!({ "kind": "newer", "since": since, "pulls": 51 })
+    );
+    assert!(error_rows(&b).is_empty(), "{:?}", error_rows(&b));
+}
+
+/// **An ordinary page advances and clears whatever hold was left** — a newer one this device's
+/// update has since resolved, or a waiting one whose parent came some other way. Either left
+/// behind would go on saying so: the panel draws `"newer"` as a sentence asking for an update.
+#[tokio::test]
+async fn an_ordinary_page_advances_and_clears_a_stale_hold() {
+    for kind in ["newer", "waiting"] {
+        let server = MockServer::start_async().await;
+        serving(&server, &[&an_ordinary_page("c1")], 4);
+        let b = paired("dev-b", 0);
+        set_state(
+            &b,
+            PULL_HOLD,
+            &serde_json::json!({ "kind": kind, "since": 1, "pulls": 2 }).to_string(),
+        )
+        .unwrap();
+
+        let (_, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+        assert_eq!(report.applied, 1, "{kind}: {report:?}");
+        assert_eq!(get_state(&b, PULL_CURSOR).as_deref(), Some("4"), "{kind}");
+        assert_eq!(hold_of(&b), None, "{kind}: a stale hold outlived the page");
+    }
+}
+
+/// **No legacy pick converts behind a held pull, even on a device whose gate is already open.** A
+/// held pull has not heard everything — the held page may be exactly the peer's entries and the
+/// clears the conversion must not outrank — which is the gate's own reason for waiting on a pull
+/// at all. The first pull that advances converts.
+#[tokio::test]
+async fn no_legacy_pick_conversion_runs_behind_a_held_pull() {
+    let b = paired("dev-b", 0);
+    let deck = crate::schema::tests::deck(&b, "Tokens");
+    b.execute(
+        "INSERT INTO deck_tokens
+             (deck_id, oracle_id, card_id, quantity, state, created_at, updated_at, sync_uid)
+         VALUES (?1, 'o-treasure', 'p-treasure', 2, 'auto', 0, 0, 'u-pick')",
+        [deck],
+    )
+    .unwrap();
+    set_state(&b, crate::deck_tokens::PICKS_READY, "1").unwrap();
+    let entries = |c: &Connection| -> i64 {
+        c.query_row("SELECT count(*) FROM deck_token_printings", [], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    };
+
+    let held = MockServer::start_async().await;
+    serving(&held, &[&a_newer_devices_page("n1")], 9);
+    pull(&b, &held.base_url(), "access-1").await.unwrap();
+    assert_eq!(entries(&b), 0, "a pull held for a newer device converted");
+    assert_eq!(get_state(&b, PULL_CURSOR), None, "the pull did not hold");
+
+    let server = MockServer::start_async().await;
+    serving(&server, &[], 3);
+    pull(&b, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(entries(&b), 2, "the pull that advanced did not convert");
+}

@@ -6495,6 +6495,15 @@ export interface RelayStatus {
   lastSyncAt: number | null;
   /** Rows carrying a `needs_review` sentence, across all six tables that can hold one. */
   reviewCount: number;
+  /**
+   * Whether a pull is stuck, and on what — the `sync_state` key `pull_hold` read back for the
+   * panel. `"newer"` is a peer running a build ahead of this one: it stamped an op with a
+   * `schema` this device's own `USER_SCHEMA_VERSION` cannot clear, so nothing releases it but an
+   * update, however many pulls or how much time pass. `"waiting"` is a peer's own ordinary
+   * ordering — an op arrived before the parent it names, which a later pull carrying that parent
+   * clears on its own — and `null` is the ordinary case, where nothing is held at all.
+   */
+  pullHeld: "newer" | "waiting" | null;
 }
 
 /**
@@ -6552,9 +6561,17 @@ export interface SupporterStatus {
  * What one round trip did.
  *
  * The five counts after `unreadable` are `ApplyReport`'s, so a page can invalidate the right
- * query keys once rather than per op. `deferred` is the one worth reading twice: it means a
- * peer's stream is **stalled** on an op whose parent has not arrived, which self-heals on a
- * later pull and is visible until it does.
+ * query keys once rather than per op. `deferred` is the one worth reading twice, and its meaning
+ * widened with the two holds below it: it is every op **held for re-delivery** — a newer-schema
+ * group's held ops and their collateral, plus an ordinary peer's ops still waiting on a parent
+ * that has not arrived — so `deferred - heldNewer` is the waiting half alone.
+ *
+ * `heldNewer` and `dropped` are new — a newer device's held ops named apart from `deferred`
+ * because they have **no bound**: a waiting hold self-heals once its parent's pull arrives, where
+ * a newer hold clears only when this device updates, however many pulls or how much time pass.
+ * `dropped` is neither: an op consumed because it can never apply (its group is recorded once in
+ * the error log, in the committed pass), which is a third and permanent outcome distinct from
+ * both a hold that might still clear and `unreadable`'s envelope that never opened.
  *
  * The last two are the **first-contact baseline** (baseline spec §13). They are not part of
  * `pushed`: a baseline is built in memory and posted without ever entering `sync_ops`, so the
@@ -6570,6 +6587,19 @@ export interface RelayOutcome {
   cyclesBroken: number;
   skipped: number;
   deferred: number;
+  /**
+   * Ops in groups held because a newer schema wrote them — this device cannot parse them yet.
+   * Counted separately from the rest of {@link RelayOutcome.deferred} because it has no bound:
+   * nothing releases it but updating this device, where the waiting half of `deferred` clears on
+   * its own once the parent it is missing arrives on a later pull.
+   */
+  heldNewer: number;
+  /**
+   * Ops consumed because they could never apply — moot children and the like, each group
+   * recorded once in the error log rather than silently discarded. Distinct from `unreadable`
+   * (an envelope that failed to open) and from a hold (which might still clear).
+   */
+  dropped: number;
   /**
    * Rows handed to a device that had not heard from this one before.
    *

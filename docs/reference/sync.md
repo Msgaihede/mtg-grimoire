@@ -978,7 +978,8 @@ no `Floor` in its `apply::Meta`. It carries a `Grain` restating `schema::DECK_TO
 nothing on the far device while an oracle id is Scryfall's — for `deck_labels`' reason: without it
 two devices that each picked an art for the same token in the same deck hold one row under two
 uids, and the far op is an insert that hits the unique index, rolls the group's savepoint back and
-defers itself for ever. `decks.tokens_open` joined the `decks` `Spec` in the same rung, beside
+never lands — deferred for ever when this was written, skipped and recorded since 2026-09-27.
+`decks.tokens_open` joined the `decks` `Spec` in the same rung, beside
 `separate_x_group` and the three `last_*` view columns: it is per-deck view state, and a reader
 who opened that area on one device meant it about the deck rather than about the machine.
 
@@ -1037,13 +1038,15 @@ contents" window closes behind the next pull rather than at the next swap. The c
 as well, and recorded
 **after** the entries, so a v51 peer — deferring the first op for a table it does not know, and
 the sender's later ops in the page with it — never applies a clear ahead of its entry, and keeps
-drawing its art. This read "until it upgrades": ⚠️ **it keeps drawing it after, too**, because the
-client drops a deferred op rather than holding it, and the entries and clears are not offered
-again (*Deferred ops are dropped, not held*, below). Two losses were accepted, both confined to a
-v51 device's last days: a reset made there in that window, and a count stepped there on a pick
-another device has already cleared, which lands on a legacy column a converted token no longer
-reads. The first was argued as "the other device's entry reaches it after the upgrade, with
-nothing left to clear" — and, while deferrals are dropped, the entry does not reach it at all.
+drawing its art. This read "until it upgrades": ⚠️ **it keeps drawing it after, too**, because a
+v51 client drops a deferred op rather than holding it, and the entries and clears are not offered
+again — the hold that would keep them is v52's own client, and it cannot reach back for a page a v51
+build already stepped past (*Held while it can resolve, skipped when it cannot*, below). Two losses
+were accepted, both confined to a v51 device's last days: a reset made there in that window, and a
+count stepped there on a pick another device has already cleared, which lands on a legacy column a
+converted token no longer reads. The first was argued as "the other device's entry reaches it after
+the upgrade, with nothing left to clear" — and a v51 client that pulled the entry dropped it, so it
+does not reach it at all.
 `a_pick_made_on_a_v51_device_after_the_climb_converges_with_nothing_deferred` and
 `an_art_reset_on_a_v51_device_after_the_conversion_leaves_nothing_deferred` drive both through
 `apply` with nothing deferred; the second went red, `deferred = 1`, against the rung-time
@@ -1071,21 +1074,30 @@ instead of 5, with the gate switched off; `client`'s
 `a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_does_not` drives the pull half
 through a mock relay. **What it costs**: a paired device draws each unconverted token at the
 resolver's printing until its first pull at v52 lands, and a paired device that never completes
-one — a group with no membership, a relay it cannot reach — goes on doing so. ⚠️ **The argument
-above rests on the re-delivery the client does not do yet**: "B defers A's batch" and "behind a
-pull, B applies A's entries and A's clear first" assume the page B deferred at v51 is offered
-again once B climbs. It is not — B dropped it — so a B that **pulled at v51 during the window**
-still holds the pick after it climbs, and the conversion behind its first pull at v52 is the late
-insert that reverts A's edits. The gate closes the reversion for a laggard that did not pull
-during the window, and for every laggard once the sync-delivery fix holds the cursor
-(*Deferred ops are dropped, not held*, below).
+one — a group with no membership, a relay it cannot reach — goes on doing so. **"Lands" means
+advances since 2026-09-27**: a pull that holds its cursor has not heard everything, which is the
+gate's own reason, so it neither converts nor sets `token_picks_ready`, and a device whose first
+v52 pulls hold on a newer device's page draws the resolver's printing until it updates. <!-- verify-B -->
+⚠️ **The argument above rests on a re-delivery, and a v51 client does not do one**: "B defers A's
+batch" and "behind a pull, B applies A's entries and A's clear first" assume the page B deferred at
+v51 is offered again once B climbs. It is not — B's v51 client stepped past it — so a B that
+**pulled at v51 during the window** still holds the pick after it climbs, and the conversion behind
+its first pull at v52 is the late insert that reverts A's edits; nothing at v52 can fetch a page
+back from below its own cursor. The gate closes the reversion for a v51 laggard that did not pull
+during the window — and, because the delivery holds ship with v52, **for every laggard on v52 or
+later**, whose client holds a newer device's page until it updates and converts behind an advancing
+pull only, so the page it held is re-delivered and applied before any conversion runs (*Held while
+it can resolve, skipped when it cannot*, below). <!-- verify-B -->
 
 **What a mixed group does across v52**, then: a v51 peer **drops** a v52 device's page from its
 first `deck_token_printings` op on — that device's later ops in the page with it, the clears
 among them — and upgrading does not bring them back. This read "defer on a v51 peer until it
-upgrades, which is the ordinary cost of a new table"; it is the ordinary cost, and it is a loss
-rather than a stall until the delivery fix lands, which is why every device in a group has to be
-updated before it syncs across v52. A v51 peer's `deck_tokens.card_id` / `quantity` ops land in
+upgrades, which is the ordinary cost of a new table"; it is the ordinary cost, and on a v51 peer it
+is a loss rather than a stall, because the fix that turns it into a stall — the delivery holds —
+ships in v52 and runs only on the receiving device. That is why every device in a group has to be
+updated before it syncs across v52, and why v52 is the last crossing that rule is owed for short
+of a rename (*A table's NAME is on the wire*, below): from v52 on, a receiver holds a newer
+sender's changes until it upgrades. A v51 peer's `deck_tokens.card_id` / `quantity` ops land in
 the legacy columns on a v52 device, where the pull that brings a picked art converts it and
 otherwise only an untouched token's implicit count is read. **"Two names, one entry"** — a pick still in flight between two devices
 under two uids when each converts it — now converges through the grain rule rather than stalling,
@@ -1117,20 +1129,25 @@ is a conversion racing a peer's: each is an announced fallback finish meeting a 
 repair that runs uncaptured, and a pull that lands first changes nothing about that.
 
 **Two generic gaps the conversion can widen, and neither is its own** (named in the same round
-and left for a follow-up). **A deck deleted during the window costs a stream its page**:
-`apply::resolve_parent` defers any child whose parent row is gone, with no tombstone check, so a
-peer's entry announcement for a deck this device deleted is deferred — and, since deferrals are
-dropped, lost together with that peer's later ops in the page — as every child op of a deleted
-parent already is. **`apply::find_row`'s uid rename is unchecked**: it renames the local
-row to the lower uid without asking whether another local row already holds it, and derived names
-make that reachable — a v51 device re-picks art Y2 while the other device holds Y2 as a separate
-entry, which case 1 declined to move — at which point the `UNIQUE(sync_uid)` error escapes the
-group's savepoint and fails the whole `apply` on every pull, about half the time by uid order. The
-conversion adds rows and names to both windows; it creates neither rule. **And one cosmetic loss
-in a group of three or more**: a conversion finding every list already holding the pick (a third
-device's announced entries) records its clear with no entry op ahead of it, so a v51 peer applies
-the clear and draws its default art — and, having dropped the third device's entries, goes on
-drawing it after it upgrades, until the delivery fix.
+and left for a follow-up — **both closed 2026-09-27** by the delivery holds). **A deck deleted
+during the window cost a stream its page**: `apply::resolve_parent` deferred any child whose parent
+row was gone, with no tombstone check, so a peer's entry announcement for a deck this device
+deleted was deferred — and dropped, together with that peer's later ops in the page — as every
+child op of a deleted parent was. It is **moot** now: a `del` for the deck in this device's own
+`sync_ops`, or in the page, makes the child consumed silently, since `deck_token_printings.deck_id`
+cascades and the delete would have taken it anyway; a deck deleted on a third device waits out the
+bound and is skipped, recorded. **`apply::find_row`'s uid rename was unchecked**: it renamed the
+local row to the lower uid without asking whether another local row already held it, and derived
+names make that reachable — a v51 device re-picks art Y2 while the other device holds Y2 as a
+separate entry, which case 1 declined to move — at which point the `UNIQUE(sync_uid)` error escaped
+the group's savepoint and failed the whole `apply` on every pull, about half the time by uid order.
+The rename is made inside the savepoint now, after a check that the uid is free, and a taken one is
+a row this database cannot build: that group is skipped and recorded, and the rest of the batch
+applies. The conversion adds rows and names to both windows; it created neither rule. **And one
+cosmetic loss in a group of three or more**: a conversion finding every list already holding the
+pick (a third device's announced entries) records its clear with no entry op ahead of it, so a v51
+peer applies the clear and draws its default art — and, its v51 client having dropped the third
+device's entries, goes on drawing it after it upgrades; nothing at v52 re-offers them.
 
 **And the registrations number twelve, not ten**, counted while landing it: the ten above, plus
 `src/lib/userTables.json` — which `changes.rs`' `the_json_both_suites_read_is_the_user_side_of_
@@ -1196,27 +1213,40 @@ same string, and it is what an op is addressed by. User schema **v33** renamed `
 never heard of, and the reverse. **This is the first rename any synced table has had**, and it is
 the reason to be sure the next one is worth what it costs.
 
-What it costs is more than the labels. `apply::write_group` answers `Deferred` for a table this
-build does not sync — deliberately, because a *newer* device's op is not an error and must not be
-dropped — and a deferred op holds that device's watermark, which is the section on it below. So
-the first label op the other build writes **stops that sender's stream in the page that carries
-it**, not just its label rows: everything it wrote after that op in the page is left unapplied.
+What it costs is more than the labels, and since 2026-09-27 it depends on **which side of the
+rename the sender is on** — `apply::write_group` answers `Deferred(Why::UnknownTable)` for a table
+this build does not sync, and only the op's `schema` says what that means
+(*Held while it can resolve, skipped when it cannot*, below):
+
+- **A newer sender's op on a table this build has not heard of is held.** The sender's stream to
+  this device stops at that op, not just its label rows — everything it wrote after it in the page
+  is left unapplied — and the client holds its cursor, so the page comes back on every pull until
+  this device upgrades and its stream drains from the block. That is what this section always
+  claimed, and it is true from v52 on; the relay's compaction floor stays at this device's ack for
+  as long as the hold lasts. <!-- verify-B -->
+- **An older sender's op on a table this build renamed away is skipped**, recorded in the error log,
+  and takes nothing of that sender's with it. Nothing can ever resolve it — the old name is gone from
+  this build's census for good — so a hold would pin the relay's log for good too. What it costs is
+  the rows themselves: **what an older device writes to a renamed table before it upgrades never
+  reaches a device past the rename.**
 
 ⚠️ **This section said the block was the right shape because "nothing is lost", and that was
 false** (corrected at token stacks PR 2's final review, 2026-09-26). It argued that the ops are
 never acked and so are re-delivered, and that the moment the older device updates its stream
-drains from the block. Neither happens: `client::pull` advances and acks `PULL_CURSOR` past the
-page whatever `apply` deferred, so the held ops are **dropped** — the sender's later ops in that
-page with them — and updating does not bring them back. *Deferred ops are dropped, not held*,
-below, is the mechanism and the planned fix. What still stands:
+drains from the block. Neither happened: `client::pull` advanced and acked `PULL_CURSOR` past the
+page whatever `apply` deferred, so the held ops were **dropped** — the sender's later ops in that
+page with them — and updating did not bring them back. **That is still what a receiver on v51 or
+earlier does**: its client is the one that advances, and nothing a newer build ships changes it.
+What still stands:
 
-- **Only the peers that disagree lose anything.** The block is per-device, so a group of four
-  where three have updated keeps syncing normally between those three.
+- **Only the peers that disagree hold or lose anything.** The block is per-device, so a group of
+  four where three have updated keeps syncing normally between those three.
 - **A device that has never worn a label never blocks at all**, since the block needs an op on
   that table to exist.
 
-The remedy is the ordinary one and there is no other: **update every device in the group — and,
-until the delivery fix lands, before any of them syncs across the change.** There is no alias
+The remedy is the ordinary one and there is no other: **update every device in the group, and do it
+before any of them syncs across a rename** — the older side's writes are lost on the newer side
+whatever the client does, and a receiver below v52 loses the newer side's too. There is no alias
 table and no version negotiation on the wire, by design — a wire that accepted two names for one
 table would have to keep accepting them for good.
 
@@ -1409,8 +1439,10 @@ rule on purpose:
   launch on a device in no group, and behind each pull on a device in one (*The seventeenth*,
   above, has the reversion a launch conversion caused there), and an entry derived on one device
   has to reach the peers
-  that never derived it, or their edits to it stall a stream; the rung that did this uncaptured
-  stalled one in each direction. What makes capturing a derived *insert* safe here is the name:
+  that never derived it, or their edits to it can never apply there — each a sparse update for a
+  row that peer cannot place, skipped and recorded since 2026-09-27 and dropped with its sender's
+  later ops in the page before that; the rung that did this uncaptured broke a stream in each
+  direction. What makes capturing a derived *insert* safe here is the name:
   every device converting one pick announces the same `<pick uid>-<list>`, so the second copy of a
   put merges on the uid instead of adding a row — and there is no counter on the table to double.
   **And the same content**: the finish is the printing's own `default_finish`, read from the
@@ -1503,8 +1535,12 @@ the row: the op log is also this device's memory of what it did.
 What it does *not* cover is a third device: B has no local ops for a row C edited, so A's
 tombstone and C's edit only meet if they arrive in one batch. The relay hands them over in
 hybrid-logical-clock order, so the common case orders itself; the residual is a sparse edit
-arriving after a tombstone, which is **deferred** — written here as "rather than lost", and lost
-after all while the client drops a deferral (*Deferred ops are dropped, not held*, below).
+arriving after a tombstone, which cannot rebuild the row it edits. It was **deferred** — written
+here as "rather than lost", and lost after all, with its sender's later ops in the page, while the
+client dropped a deferral. Since 2026-09-27 it is **skipped** as a row this database cannot build:
+recorded in the error log, and taking nothing else of its sender's with it. From a newer sender it
+is held until this device upgrades, and skipped then if it still cannot be built (*Held while it
+can resolve, skipped when it cannot*, below).
 
 ### ...and a resurrected row is rebuilt from it
 
@@ -1553,12 +1589,12 @@ last-writer-wins is decided by whose clock ran faster. `apply` ends by pulling `
 the batch's latest stamp — `hlc::Hlc::observe` spelled in SQL, because `SystemTime::now()`
 **panics on `wasm32-unknown-unknown`** and this module compiles for the web target.
 
-### A deferred op holds the watermark
+### A held op holds the watermark
 
-`sync_peers` is a *watermark*: everything at or below it has been applied. So an op that could
-not be applied cannot be counted and stepped over — advancing past it loses it for good, and not
-advancing replays the ops above it and **adds their counter deltas a second time**. Both are
-silent.
+`sync_peers` is a *watermark*: everything at or below it has been applied or given up on. So an
+op that may still apply cannot be counted and stepped over — advancing past it loses it for good,
+and not advancing replays the ops above it and **adds their counter deltas a second time**. Both
+are silent.
 
 **The whole of that device's stream stops at the block**, and that is stronger than it first
 looks: the ops after it in the same page are not applied either, even when nothing about them is
@@ -1566,77 +1602,236 @@ unresolvable. It has to be. Applying them while holding the watermark below mean
 applies them again — measured before the fix, one `+1` behind a blocked op became a quantity of 2
 on the second delivery of the same page.
 
-So a batch that defers anything is applied **twice**: once to find out which devices stall, then
+So a batch that holds anything is applied **twice**: once to find out which devices stall, then
 rolled back and applied again with the stalls known. The loop runs until no new device is found
-blocked, which is at most once per device and in practice once.
+blocked, which is at most once per device and in practice once. **Only a held group blocks** since
+2026-09-27: a group skipped or made moot is consumed in whichever round finds it, and the
+watermark passes it.
+
+**The round cap is where the two halves could part.** The loop stops at `min(groups, 8)` rounds,
+and at the cap the pass that commits has applied ops above blocks it found only in that round. The
+watermarks used to be advanced by those found blocks, which sat under ops the pass had just
+applied, so the next delivery of the page applied them again. They are advanced now from what the
+committed pass did — each device to the last op it wrote or consumed, every held group left out —
+and `the_round_cap_advances_watermarks_by_the_committed_passes_blocks` goes red on either the
+old rule ("a re-delivery added h's +1 a second time") or on a stamp filter that steps past a held
+op. ⚠️ **What the cap still costs**: a device first found held in the cap round, whose later op
+that round already applied, is advanced past its held op, because re-applying the later one would
+double it. It needs a batch whose blocks keep cascading past `min(groups, 8)` rounds.
 
 **That was designed as a stall** — visible in `ApplyReport::deferred`, self-healing when the
 missing parent arrived, and permanent only for a block that never becomes appliable, on the
 argument that holding is the one choice of three that neither loses an op nor doubles a counter.
-⚠️ **The watermark is only half of a hold, and the client does not supply the other half**, so
-what a deferral does today is lose the op. The next section is the record.
+⚠️ **The watermark is only half of a hold, and until 2026-09-27 the client did not supply the
+other half**, so what a deferral did was lose the op. It supplies it now, for the deferrals that
+can still resolve and for no others — the next section.
 
-### ⚠️ Deferred ops are dropped, not held (open)
+### Held while it can resolve, skipped when it cannot
 
-Verified by reading at token stacks PR 2's final review, 2026-09-26, and **older than that PR**.
+Built 2026-09-27 ([the delivery holds design](../superpowers/specs/2026-09-27-sync-delivery-holds-design.md)),
+to ship in the release that carries user schema v52 and ahead of token stacks PR 3's v53, whose new
+`collection_folders.kind` word a v52 device must hold rather than drop. This section was titled
+*Deferred ops are dropped, not held (open)* until then, and what it recorded is at its end.
 
-**The mechanism.** A hold needs the relay to offer the held op again, and three facts together
-mean it never does:
+**The client used to supply half a hold.** `apply` held the sender's watermark at the first op it could
+not write, which makes a re-delivery safe — and `client::pull` then set `PULL_CURSOR` to the page
+head whatever `apply` deferred. The relay's `since` (`relay/src/log.ts`) answers only rows with
+`seq > cursor`, in one unpaged body, and `apply` keeps no copy of what it did not write, so the
+deferred op, **and every later op from its device in that page**, was never applied and never
+offered again. The other half is the cursor, and the reason it is not "hold the cursor on every
+deferral" is the relay: `log.ts`'s `compact` drops a row only once its `seq` is at or below every
+device's ack **and** it is older than the thirty-day tail, and the ack follows `PULL_CURSOR`. A
+cursor held on something that can never resolve pins that group's log for good — metered storage —
+and downloads everything above it again on every pull. **So a deferral says why, and only a reason
+that something can still change holds.**
 
-- `client::pull` sets `PULL_CURSOR` to the page's `cursor` after `apply` returns, **whatever
-  `apply` deferred**, and `ack` hands that cursor to the relay. The one case that holds the cursor
-  is `behind` — an envelope at an epoch this device has not adopted yet — for the reason under
-  *One correction to the plan*, below.
-- The relay's `since` (`relay/src/log.ts`) answers only rows with `seq > cursor`, with no page
-  limit, so a page is everything above the cursor.
-- `apply` keeps no copy of a deferred op.
+**Every op says which schema sealed it.** `merge::Op::schema` is an optional wire field that
+`wire::seal_batch` stamps with `USER_SCHEMA_VERSION` on every op it seals — at sealing and never at
+capture, so an outbox an older build wrote is stamped by the build that pushes it, and the push and
+the baselines both pass through the one function. `op.schema > Some(USER_SCHEMA_VERSION)` is a
+**newer** sender; absent — every op a build before this one sealed — is not newer. An older
+receiver ignores the key, because nothing on the wire is `deny_unknown_fields`
+(`wire`'s `a_sealed_op_carries_this_builds_schema_and_an_old_op_reads_as_none`).
 
-So a deferred op, **and every later op from the same device in that page**, is dropped: never
-applied on this device and never offered to it again. The watermark still does its job — it makes
-a re-delivery safe, applying each counter delta once — but nothing re-delivers. The sender's ops in
-later pages apply normally, since they sit above the watermark, until the next page that carries
-another op this device defers. **What survives** is a deferral the same page resolves: the second
-attempt in `run_groups`, a parent from another device's stream further down the page. "Self-heals
-when the missing parent arrives" is true only for a parent in the same page.
+**`apply` classifies every group it could not write**, from why — `UnknownTable`,
+`UnknownParent { table, uid }`, or `Unbuildable` carrying the constraint's own words, which were
+once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in this order):
 
-**The consequence for any new synced table.** A peer on the older schema defers the first op for
-a table it does not know and **drops the sender's page from there on** — ops on tables it does know
-included — and upgrading does not bring any of them back. v33's `deck_labels` rename, `deck_notes`
-and `deck_note_cards` at v43, `sticky_notes` at v46 and `deck_token_printings` at v52 have all
-paid it. Every sentence in this record that says such a peer "stalls until it upgrades", or that a
-deferred op is "held" or "left for the next pull", described the hold the watermark was designed
-for rather than what the client does; where this page, `apply`'s docs or the token stacks spec and
-plan say an op or a stream "stalls" or "defers for good", read *dropped, with the sender's later
-ops in that page*.
+| The group | Class | Holds its device? | Recorded? |
+| --- | --- | --- | --- |
+| Names a parent deleted here — a `del` for its uid in this device's own `sync_ops`, served by `idx_sync_ops_row` — or deleted in this page, and the parent's foreign key **cascades** | **moot** | no | no — the convergent outcome |
+| The same, but the key is **`SET NULL`** (`collection_entries.folder_id`, `wishlist_entries.folder_id`, `decks.folder_id`, `deck_cards.label_id`) | **not deferred** — written without that parent | no | no |
+| Any reason, and an op in it was sealed by a **newer** schema | **held · newer** | yes, with no bound | no — the Sync panel says it |
+| An unknown parent, from a same or older schema | **held · waiting** | yes, until the client's bound | only when released |
+| An unknown table, or a row this database cannot build, from a same or older schema | **dropped** — skipped | no | yes |
+| Collateral: a later op of a held device | its block's class | — | — |
 
-**What it costs v52 in particular** (token stacks PR 2):
+- **Moot is asked first**, because a deleted parent is a fact about this device that no upgrade
+  changes: a newer device's child of a deck deleted here, held as newer, would wait for an upgrade
+  that cannot help it and pin the log until then
+  (`a_newer_devices_child_of_a_deleted_parent_is_moot_not_held`). **The page's delete set is built
+  from every op in it, the already-seen included**: a held cursor brings a page back with the
+  delete below its sender's watermark and the child perhaps attempted for the first time, and
+  asking only the fresh ops would call the parent merely missing and hold its sender again
+  (`a_redelivered_page_still_makes_a_child_of_its_delete_moot`).
+- **The `SET NULL` row is an amendment, and a measurement made it.** The design called every child
+  of a deleted parent moot, which holds only where the delete would have taken the child with it.
+  Where the key is `SET NULL` the delete left its children in place with the column cleared, and
+  the child's own device does the same when the delete reaches it — so consuming the child is a copy
+  one device holds and the other never will. On the moot-for-everything code the folder case failed
+  `b lost the copy: left (0, 0), right (1, 1)`; for `decks.folder_id` it would have been a whole
+  deck. `apply::cascades` reads `on_delete` off `pragma_foreign_key_list` on the live schema, so the
+  rule is never restated beside the key it describes
+  (`a_child_of_a_folder_this_device_deleted_lands_at_the_root_on_both`).
+- **Held · newer is a hold on a possibility.** A newer sender's group this build cannot write may be
+  one an upgrade can — a table it has not heard of, a `CHECK` word a rung will add — and nothing
+  here can tell which, so every newer deferral holds
+  (`a_newer_devices_op_that_defers_is_held_and_blocks_its_later_ops`). One that still cannot be
+  written after the upgrade is a same-version group by then, and is skipped.
+- **A skip is consumed, and it no longer takes company.** Moot and dropped groups do not block: the
+  ops after them apply and the watermark passes them, which is also what stops a re-delivery
+  recording the same skip twice. A dropped group is one `errors::record` under `Source::Relay`,
+  operation `apply` — "a change to {table} from another device could not be applied and was
+  skipped", the uid and the reason in the detail — folded on that message, so a table's repeats are
+  one row with a count. It is written only for the pass that committed, inside the apply's
+  transaction, so an apply that fails leaves no record of a skip it never made
+  (`a_same_version_unknown_table_is_dropped_recorded_and_does_not_block`).
+- **`ApplyReport` names each**: `held_newer`, `held_waiting`, `moot` and `dropped` beside the old
+  counts. `deferred` is `held_newer + held_waiting`, collateral included, and `applied` counts only
+  ops *this* call wrote. `apply(conn, ops)` is `apply_with(conn, ops, Waiting::Hold)`;
+  `Waiting::Release` is how a waiting hold ends — it becomes dropped and recorded, and its
+  collateral applies exactly once, while a newer group stays held either way
+  (`an_unknown_parent_waits_then_release_drops_it_and_applies_its_collateral_once`).
 
-- **A v51 peer drops a v52 device's page from its first `deck_token_printings` op on** — the
-  entries, the conversion's clears (recorded after them), a step made since, and the device's
-  unrelated later ops in that page alike — and after it upgrades it goes on holding the pick and
-  drawing its art, because the clears never arrive.
-- **The pull gate on `convert_legacy_picks` rests on the re-delivery.** *A paired device converts
-  behind a pull*, above, argues that the laggard's first pull at v52 brings the converter's entries
-  and clears, so there is nothing left to convert. A laggard that **pulled at v51 during the
-  window** dropped them instead: after it climbs it still holds the pick, its first pull at v52
-  does not bring them, and the conversion behind that pull is the late insert that reverts the
-  converter's edits. The gate holds for a laggard that did not pull during the window, and for
-  every laggard once the fix below lands.
-- **An entry a v51 peer never received** — announced during the window, or kept by one side after
-  a reset made there — turns every later edit to it into a sparse update that peer cannot place,
-  which defers and drops the sender's page from there on, with both devices at v52.
+**The client holds for the reason, and for no longer than the reason lasts.** After `apply` in
+`client::pull`, with the epoch rule (`behind`) unchanged and still first:
 
-**The fix is its own PR**, ruled at the same review: a sync-delivery change that must land
-**before any release that carries v52** — hold the cursor on a deferral a newer schema caused (the
-`behind` precedent, one cause over), resolve the child of a deleted parent rather than deferring it
-(`apply::resolve_parent` has no tombstone check), and check `apply::find_row`'s uid rename. It is
-not a line in PR 2 because no v52 code can save a v51 peer, and a cursor held on a block that never
-clears stops the relay compacting — metered storage — which needs a design of its own. Token stacks
-PR 3, a v53 kind change, depends on it.
+1. **`held_newer > 0`, or an envelope that opened and did not parse** → the cursor stays, and
+   `sync_state.pull_hold` says `newer`. **No bound**: an upgrade resolves it and nothing else does,
+   and releasing it would be the very loss this section used to record. <!-- verify-B -->
+2. **Else `held_waiting > 0`** → the cursor stays, and `pull_hold` says `waiting`. Once the hold has
+   been seen on **3 pulls spanning at least 600 seconds**, the same ops are applied again with
+   `Waiting::Release`, and the cursor advances — unless the release uncovers a newer group: a
+   newer build's op held as collateral behind the waiting one reports as waiting until the release
+   attempts it, and it then holds as `newer` rather than being stepped past. <!-- verify-B -->
+3. **Else** the cursor advances and `pull_hold` is deleted. <!-- verify-B -->
 
-**Until it lands: update every device in a group before it syncs across a schema change.** The
-loss needs an older device to *pull* a newer device's page; an older device updated before its
-next pull asks from a cursor below that page and applies all of it.
+**Why the waiting hold has both bounds.** Its ordinary cause is first contact: `round_trip` pushes
+before it emits baselines, so a peer can pull a child a moment before the baseline that carries its
+parent, which arrives on that same trip of its sender's, seconds later. **Ten minutes** is time for
+it to have come. **Three pulls** is evidence that this device has looked since: elapsed time says
+nothing about a device that slept through it, and its next page may be the one with the parent.
+What the bound ends is a parent that will never come — deleted on a third device, which leaves no
+trace here (below). A parent that does arrive clears the hold on that pull, advancing, with nothing
+recorded (`client`'s `a_waiting_hold_clears_when_the_parent_arrives`). <!-- verify-B -->
+
+**`pull_hold`** is `{"kind":"newer"|"waiting","since":<unix seconds>,"pulls":<n>}` in `sync_state`,
+and an absent key is not held. The same kind keeps `since` and counts the pull; a different kind
+starts over — so a page holding both kinds is a newer hold, and its waiting half starts counting
+only once an upgrade has cleared the newer one. `since` is SQL's `unixepoch()`, because
+`sync_engine` compiles for wasm and `SystemTime::now()` panics there. It is a `sync_state` key and
+no schema rung, it survives a restart, and a newer hold is never released by pull count or time
+(`a_newer_hold_is_never_released_by_the_waiting_bound`). `sync_relay_status` reads its kind into
+`RelayStatus.pullHeld` — `"newer" | "waiting" | null`. <!-- verify-B -->
+
+**The Malformed arm.** `wire::open_batch` answers `WireError::Malformed` only after the group, the
+epoch and the AEAD have all passed, so a member of the group sealed the batch — and a batch this
+build cannot parse as ops, one carrying an op `Kind` it has never heard of, can only have come from
+a newer build. It used to be counted unreadable and stepped over, which dropped it. It is still
+counted and noted, and it now holds the cursor as `newer`
+(`an_authentic_batch_this_build_cannot_parse_holds_as_newer`). An envelope whose AEAD fails at the
+same epoch is stepped over as it always was: nothing says a member wrote it, and holding on it would
+pin the log for bytes nobody can read (*One correction to the plan*, below). <!-- verify-B -->
+
+**The Malformed hold keeps the sender's later envelopes with the cursor.** `apply` never sees a
+batch that did not parse, so a later envelope from the same device in the page — sealed by the same
+newer build, with nothing in it this one cannot read — would apply and move that device's watermark
+past the unparsed ops, and when an upgrade let them parse, the page would come back with them below
+the watermark and they would be skipped as seen. So `pull` leaves out every envelope from that
+device stamped at or after its first one that did not parse — by the envelope's own stamp
+(`hlcMs`, `hlcCtr`), not by its place in the page — and they wait with the cursor, counted in
+`held_newer`. The device's earlier envelopes are below the block and apply, and other devices'
+envelopes are untouched (`a_malformed_batch_holds_its_senders_later_batches_too`, which puts the
+later envelope first in the page, then re-delivers it with the batch parseable and lands its `+1`
+exactly once). <!-- verify-B -->
+
+**What the relay pays for a hold.** A held cursor is a held ack — `ack` sends `PULL_CURSOR`, and
+sends nothing at all when it has not moved since the last one — so the group's compaction floor
+stays at this device's last ack for the length of the hold, and every pull downloads everything
+above the cursor again: the held page and whatever the group has written since, one body that only
+grows while `pull` has no page size (*What is still owed*). **For a newer hold that is until the
+reader updates**, which the Sync panel asks them to do; **for a waiting one, at least three pulls
+and ten minutes**, whichever comes later. The ops `apply` already wrote are skipped against their
+watermarks on every re-delivery and are not counted again: `RelayOutcome.pulled` counts newly
+applied ops only, so a held cursor does not fire `sync:applied` and refresh every screen on every
+trip (`a_held_page_applies_the_other_devices_once_and_counts_them_once`). <!-- verify-B -->
+
+**What the reader sees.** While `pullHeld` is `newer` the Sync panel draws "A device in your group
+runs a newer version of MTG Grimoire. Update this device to receive its changes." — a paragraph,
+not an alert — and a waiting hold, being transient, draws nothing. A sync's outcome line names the
+held-newer count ("… from a newer version wait until you update."), the waiting one ("… waiting for
+a change they build on."), and the dropped one ("… could not be applied and were skipped. The error
+log has the details."). Its old clause, "They land on a later sync.", was false for as long as
+nothing re-delivered, and is gone.
+
+**The legacy token-pick conversion runs behind an advancing pull only.** A held pull has not heard
+everything, which is the gate's own reason (*A paired device converts behind a pull*, above), so
+it neither converts nor sets `token_picks_ready`
+(`no_legacy_pick_conversion_runs_behind_a_held_pull`). <!-- verify-B -->
+
+⚠️ **A future page limit must page to the end before a hold is evaluated.** `pull` has none today,
+and one is planned (*What is still owed*). A limit that answered a page at a time, with the client
+holding its cursor on the first, would ask for that same page for ever and never reach the one that
+resolves it — the baseline carrying a waiting child's parent, or merely the page after a held one.
+The cursor-carrying loop the limit needs must walk to the head, and only then may a hold be decided.
+
+**What a hold cannot reach.**
+
+- **A v51 client still drops, and nothing here saves it.** The hold is the receiving client's, so a
+  v51 peer pulling a v52 device's page defers its first `deck_token_printings` op and steps past it
+  with the sender's later ops in the page — the entries, the conversion's clears recorded after
+  them, a step made since, unrelated ops alike — and after it climbs those ops are below its cursor
+  and never offered again. It goes on holding the pick and drawing its art, because the clears never
+  arrive, and **the pull gate on `convert_legacy_picks` still fails for a laggard that pulled at v51
+  during the window** (*A paired device converts behind a pull*, above). **So every device in a
+  group is updated before it syncs across v52** — the last crossing that rule is owed for, short of
+  a rename (*A table's NAME is on the wire*, above). The loss
+  needs an older device to *pull* a newer device's page; one updated before its next pull asks from
+  a cursor below that page and applies all of it. From v52 on, a receiver holds a newer sender's
+  changes until it upgrades, and the order devices update in costs time and the relay's floor rather
+  than data.
+- **An entry a v51 peer never received** — announced during the window, or kept by one side after a
+  reset made there — turns every later edit to it into a sparse update that peer cannot place, with
+  both devices at v52. It deferred and dropped the sender's page from there on; it is **skipped** now,
+  one `error_log` row per table, and the sender's later ops apply.
+- **A parent deleted on a third device, and applied here on an earlier pull, leaves no trace.**
+  `apply` runs inside `capture::suppressed` and there is no tombstone table, so `gone` cannot find the
+  delete: the child waits out the bound and is skipped, recorded. Where the key cascades that is
+  convergent — the child's own device loses it when the delete arrives there — at the price of an
+  `error_log` row that describes no fault. ⚠️ **Where the key is `SET NULL` it is not**, read off the
+  code and unmeasured: the child's device keeps it at the root when the third device's delete
+  reaches it, and this device skipped it — the divergence the `SET NULL` row closes for a delete
+  made here or in the page, left open for one made elsewhere. *A third device's tombstone* under
+  *What is still owed* is the same missing table.
+
+**The two neighbours the review found.** `apply::find_row` renamed a local row to the lower uid
+before the group's savepoint opened, without asking whether the uid was free, so a collision's
+`UNIQUE (sync_uid)` failure escaped and failed the whole `apply` on every pull. It now answers the
+rename it wants, and `write_group` makes it inside the savepoint after `SELECT 1 FROM {table} WHERE
+sync_uid = ?`; a taken uid is a row this database cannot build — skipped and recorded, the rest of
+the batch applied (`a_uid_rename_onto_a_taken_uid_drops_the_group_instead_of_failing_the_apply`).
+The round cap is the other, under *A held op holds the watermark* above.
+
+**What was dropped before this.** Found by reading at token stacks PR 2's final review, 2026-09-26,
+and older than that PR: every deferral since the relay was built lost its op and its sender's later
+ops in the page, save one the same page resolved — the second attempt in `run_groups`, a parent from
+another device's stream further down — which is why "self-heals when the missing parent arrives"
+was only ever true inside one page. v33's `deck_labels` rename, `deck_notes` and `deck_note_cards`
+at v43, `sticky_notes` at v46 and `deck_token_printings` at v52 each paid it on an older peer, and
+upgrading brought none of it back. **Reading older sentences**: where this record, `apply`'s docs,
+or the token stacks spec and plan say before 2026-09-27 that an op or a stream "stalls", "defers
+for good" or is "held" for the next pull, read *dropped, with the sender's later ops in that page* —
+which is still exactly what a v51 client does. From this build on, the table above decides.
 
 ### The two `CHECK`s differ and the applier knows it
 
@@ -2275,7 +2470,10 @@ of the two ways it happens:
   applied. Before the key history, the same lie only kept a stale roster row.
 - An old epoch whose key this device never held or has forgotten, or a failed AEAD — altered —
   opens nothing, so refusing to advance would stall the stream for the thirty days the relay keeps
-  a tail, for nothing. It is counted, written to `error_log` and stepped over.
+  a tail, for nothing. It is counted, written to `error_log` and stepped over. **An envelope that
+  opens and then does not parse is not in this bullet since 2026-09-27**: the AEAD passing says a
+  member sealed it, so it is a newer build's batch and holds the cursor as `newer` (*Held while it
+  can resolve, skipped when it cannot*, above). <!-- verify-B -->
 - **What the client cannot do on its own**, and three follow-ups, none built: a device that skips
   *N → N+2* never gets *N+1*'s key, because `/keys` answers only the newest manifest though the
   relay keeps eight — serving `/keys?epoch=` lifts it; a removal still costs the backlog behind it
@@ -2589,16 +2787,33 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   been stale for a while. The fix is a `LIMIT` on `pull` plus a cursor-carrying loop on the
   client — a change to the pull contract on both sides, with its own tests — and it is the next
   PR after this one; a live two-device pass must not import 50 000 rows against an offline peer
-  until it lands.
-- **A deferred op is dropped, not held** — `client::pull` advances `PULL_CURSOR` past whatever
-  `apply` deferred, so the op and its sender's later ops in that page are never applied and never
-  offered again. Found at token stacks PR 2's final review (2026-09-26), older than it; ruled a
-  sync-delivery PR of its own that must land **before any release carrying user schema v52**.
-  *Deferred ops are dropped, not held* above is the mechanism, what it costs and the fix; until
-  it lands, every device in a group is updated before it syncs across a schema change.
+  until it lands. ⚠️ **Since 2026-09-27 the loop has a second obligation: it must page to the end
+  before a hold is evaluated.** A client that held its cursor on the first page of a limited answer
+  would ask for that page for ever and never reach the one that resolves the hold (*Held while it
+  can resolve, skipped when it cannot*, above). A held cursor also makes this hazard easier to
+  reach, because the held page is re-sent on every trip and grows with everything the group writes
+  until the hold ends.
+- ~~**A deferred op is dropped, not held.**~~ **Built 2026-09-27**, in the release that carries
+  user schema v52 — *Held while it can resolve, skipped when it cannot* above. A newer sender's
+  change is held until this device upgrades, a parent that may still arrive for a bounded wait, and
+  a same-version change that can never apply is skipped, recorded, without its sender's later ops.
+  ⚠️ **What it cannot reach is a v51 client**, which still steps past a deferral: every device in a
+  group is updated before it syncs across v52.
+- **A removed device's ack pins the relay's compaction floor.** `group.ts` keeps one `acks` row per
+  device and deletes them only when the whole group's log is dropped at a membership's end; a
+  removal, a departure and a rotation leave the row. `log.ts`'s `compact` takes its floor as the
+  lowest ack of every device it has heard from, so a device that has left stays the slowest reader
+  the group has, and nothing above its last ack is compacted again. Found while designing the
+  delivery holds, whose own cost is the same pin for the length of a hold, and left as a relay
+  change — the holds deployed nothing. Lifting it means the Durable Object learning of a removal,
+  and nothing tells it one: `/rotate` is answered out of D1 ahead of the bearer gate and never
+  reaches the object — the gap the rewrap's fan-out bullet below records from the other side.
 - **A third device's tombstone against a third device's edit.** Add-wins reads this device's own
   history and the incoming batch; two *other* devices' ops only meet if they arrive together. A
-  tombstone table would close it and is not built.
+  tombstone table would close it and is not built. **The delivery holds meet the same gap from the
+  other side**: a parent deleted on a third device and applied here earlier leaves no trace, so its
+  child waits out the bound and is skipped — convergent where the key cascades, and ⚠️ a copy this
+  device never holds where it is `SET NULL` (read off the code, unmeasured).
 - ~~**A revoked device's rewrapped key over the relay.**~~ **Built and deployed 2026-08-30** —
   `/rotate` publishes it, `/keys` hands it over, and `client::check_keys` runs on every round trip
   before push and pull, so the pull cursor an envelope from a newer epoch was holding now advances

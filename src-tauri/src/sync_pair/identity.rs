@@ -1865,11 +1865,15 @@ mod tests {
         let (mut ma, mut mb) = (0, 0);
 
         // A builds the shared object, B takes it and adds to it, A takes B's half back.
+        // `deferred` and `dropped` both, because a row the peer cannot build is skipped rather
+        // than held, and a check on `deferred` alone passes over it.
         build_a_collection_a_deck_and_a_folder(&a);
-        assert_eq!(apply::apply(&b, &since(&a, &mut ma)).unwrap().deferred, 0);
+        let report = apply::apply(&b, &since(&a, &mut ma)).unwrap();
+        assert_eq!((report.deferred, report.dropped), (0, 0));
         let _ = since(&b, &mut mb);
         add_to_what_the_other_device_built(&b);
-        assert_eq!(apply::apply(&a, &since(&b, &mut mb)).unwrap().deferred, 0);
+        let report = apply::apply(&a, &since(&b, &mut mb)).unwrap();
+        assert_eq!((report.deferred, report.dropped), (0, 0));
 
         // **The fixture is checked before it is trusted.** A convergence that quietly deferred
         // everything would leave B holding nothing of A's, and the comparison below would then
@@ -2248,6 +2252,9 @@ mod tests {
             },
             baseline: false,
             horizon: None,
+            // Sealing stamps this build's schema on every op, and the assertion below compares
+            // what B opens against this literal.
+            schema: Some(crate::schema::USER_SCHEMA_VERSION),
         }];
         let envelope =
             wire::seal_batch(&group(&a).unwrap().unwrap(), &me_a.device_id, &ops).unwrap();

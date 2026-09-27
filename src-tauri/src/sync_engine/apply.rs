@@ -45,39 +45,50 @@
 //! What it does **not** cover is a third device: B has no local ops for a row C edited, so
 //! A's tombstone and C's edit only meet if they arrive in one batch. The relay hands them over
 //! in hybrid-logical-clock order, so the common case orders itself; the residual is a sparse
-//! edit arriving after a tombstone, which is **deferred** — and a deferral is currently a loss,
-//! which the next section is about.
+//! edit arriving after a tombstone, which cannot rebuild the row it edits and is **skipped** as
+//! a row this database cannot build — the next section's table.
 //!
-//! # A deferred op holds the watermark, and the client does not re-fetch it (open)
+//! # A deferral says why, and only what can still apply holds its device
 //!
-//! `sync_peers` is a *watermark*: everything at or below it has been applied. So an op that
-//! could not be applied cannot simply be counted and stepped over — advancing past it would
-//! lose it for good, and not advancing would replay the ops above it and **add their counter
-//! deltas a second time**. Both are silent. So the watermark is advanced only to the last op
-//! before the first unappliable one from that device, that device's later ops in the batch are
-//! left unapplied, and [`ApplyReport::deferred`] is what says it happened. **What the watermark
-//! buys is that a re-delivery is safe**: the ops at or below it are skipped, so a page handed
-//! over twice applies each counter delta once.
+//! `sync_peers` is a *watermark*: everything at or below it has been applied or given up on. So
+//! an op that may still apply cannot be counted and stepped over — advancing past it would lose
+//! it for good, and not advancing would replay the ops above it and **add their counter deltas
+//! a second time**. Both are silent. So the watermark stops at the last op before a device's
+//! first held one, that device's later ops in the page are left unapplied, and
+//! [`ApplyReport::deferred`] says so. **What the watermark buys is that a re-delivery is
+//! safe**: the ops at or below it are skipped, so a page handed over twice applies each counter
+//! delta once.
 //!
-//! ⚠️ **Nothing re-delivers, today, and so a deferral is a loss rather than a stall.**
-//! `client::pull` advances `PULL_CURSOR` to the page head after this returns, whatever was
-//! deferred; the relay answers only rows with `seq` above that cursor (`relay/src/log.ts`'s
-//! `since`); and this module keeps no copy of a deferred op. So a deferred op, **and every
-//! later op from the same device in that page**, is dropped — never applied here, never offered
-//! again. Only a deferral the same batch resolves (the second attempt in `run_groups`, a parent
-//! further down the page) is applied. This predates user schema v52: a v51 peer drops a v52
-//! device's page from its first `deck_token_printings` op on, exactly as a v42 peer dropped
-//! `deck_notes` at v43, and upgrading does not bring those ops back. The fix is a dedicated
-//! sync-delivery change — hold the cursor on a deferral a newer schema caused, and resolve the
-//! child of a deleted parent — which must land before any release that carries v52.
-//! [sync.md](../../../docs/reference/sync.md) *Deferred ops are dropped, not held* is the record.
+//! **Holding is not free, which is why only some deferrals hold.** The client holds its pull
+//! cursor while anything here is held, the relay compacts nothing above that cursor's ack, and a
+//! hold on something that can never resolve would pin the group's log for good. So every group
+//! `write_group` cannot write says why, and the reason and its sender decide what happens
+//! (spec 2026-09-27 §3.2):
+//!
+//! | The group | Class | Holds its device? | Recorded? |
+//! | --- | --- | --- | --- |
+//! | Names a parent deleted here — a `del` in this device's own `sync_ops` — or in this page, whose delete cascades to it | moot | no | no |
+//! | Any reason, and an op in it was sealed by a **newer** schema ([`Op::schema`]) | held · newer | yes, with no bound | no — the panel says it |
+//! | An unknown parent, from a same or older schema | held · waiting | yes, until [`Waiting::Release`] | when released |
+//! | An unknown table, or a row this database cannot build, from a same or older schema | dropped | no | yes |
+//! | Collateral: a later op of a held device | its block's | — | — |
+//!
+//! **Moot is asked first**, because a deleted parent is a fact about this device that no
+//! upgrade changes. **It is moot only where the delete would have taken the child with it**:
+//! a parent whose key is `SET NULL` — a binder, a deck folder, a label — is not a deferral at
+//! all when it is gone, and the child is written without it, which is what the child's own
+//! device does to it when the delete arrives there. A moot or dropped group is *consumed*: it
+//! holds nothing, the ops after it apply, and the watermark passes it. `client::pull` holds `PULL_CURSOR` while either held
+//! count is non-zero, so the relay hands the page back, and ends a waiting hold at its bound by
+//! applying the page once more with [`Waiting::Release`].
+//! [sync.md](../../../docs/reference/sync.md) is the record.
 
 use crate::sync_engine::capture::{self, Absent, Parent, Spec};
 use crate::sync_engine::hlc::Hlc;
 use crate::sync_engine::merge::{fold, Horizon, Kind, Op, Resolved};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// What a resurrected row is told to say.
 ///
@@ -93,7 +104,8 @@ pub const CYCLE_BROKEN: &str = "A folder move on another device would have put t
 /// What one call to [`apply`] did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ApplyReport {
-    /// Ops written into the reader's tables.
+    /// Ops written into the reader's tables **by this call**. A re-delivered op already below
+    /// its device's watermark is `skipped`, never counted here a second time.
     pub applied: usize,
     /// Rows a delete lost the race for — §7.4's first surfaced outcome, and an **event**
     /// rather than a state: a row that is *in* a resurrected condition is counted by the batch
@@ -104,11 +116,38 @@ pub struct ApplyReport {
     /// Ops at or below a peer's watermark, and ops this device wrote itself. Already applied,
     /// by definition.
     pub skipped: usize,
-    /// Ops whose parent has not arrived, or which do not describe a row this database can
-    /// build. **The device that wrote them is held at the first of them**: its watermark stays
-    /// below it and its later ops in this batch are left unapplied — and, because the client
-    /// advances its cursor past them, not offered again. See the module doc.
+    /// Ops held for re-delivery — `held_newer + held_waiting`, collateral included. **The device
+    /// that wrote them is held at the first of them**: its watermark stays below it and its
+    /// later ops in this batch are left unapplied, so the page the client's held cursor brings
+    /// back applies them exactly once. See the module doc.
     pub deferred: usize,
+    /// Of `deferred`, the ops in a group a newer schema sealed, and the ops held behind one.
+    /// Upgrading this device resolves them and nothing else does, so no bound releases them.
+    pub held_newer: usize,
+    /// Of `deferred`, the ops in a group whose parent a later page may still bring, and the ops
+    /// held behind one. [`Waiting::Release`] gives up on them.
+    pub held_waiting: usize,
+    /// Ops consumed because they name a parent deleted here or in this page whose delete
+    /// cascades to them. The convergent outcome — the delete would have taken the child with it
+    /// on any device that held both — and recorded nowhere.
+    pub moot: usize,
+    /// Ops consumed because nothing that can arrive will let them apply: a table this build does
+    /// not sync, a row it cannot build, or a released wait. Each group is an `error_log` row
+    /// under `Source::Relay`, folded on its table, and holds nothing behind it.
+    pub dropped: usize,
+}
+
+/// What [`apply_with`] does with a group whose parent has not arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Waiting {
+    /// Hold it, and every later op of its device, for re-delivery. The ordinary cause resolves
+    /// itself on the sender's next trip: a first contact pushes a child ahead of the baseline
+    /// that carries its parent.
+    Hold,
+    /// Give up on it — skip and record it as [`ApplyReport::dropped`], so the ops behind it
+    /// apply. The client decides when, by its bound; a group a newer schema sealed is held
+    /// either way, because an upgrade can still resolve it.
+    Release,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -371,8 +410,9 @@ const META: [Meta; 17] = [
         // unique index. Two devices that each filed a name for the same peer — which is what
         // pairing itself leaves behind — hold one row for it under two uids, so without this
         // grain the far op is not a row to update but a row to insert: it hits that primary key,
-        // the group's savepoint rolls back, and it is deferred for ever. Measured by emptying
-        // this list: both convergence tests go red and neither name moves.
+        // the group's savepoint rolls back, and the op is skipped as a row this database cannot
+        // build. Measured by emptying this list: both convergence tests go red and neither name
+        // moves.
         grains: &[Grain {
             predicate: "device_id = ?",
             sources: &[Source::Field("device_id")],
@@ -395,7 +435,7 @@ const META: [Meta; 17] = [
         // owed for `deck_labels`' reason: two devices that each picked an art for the same
         // token in the same deck hold one row under two uids, so without this the far op is not
         // a row to update but a row to insert — which hits the unique index, rolls the group's
-        // savepoint back, and defers that op for ever.
+        // savepoint back, and skips that op as a row this database cannot build.
         //
         // **`deck_id` comes from the parent and `oracle_id` from the field**, because a local
         // deck id means nothing on the far device while an oracle id is Scryfall's and means
@@ -476,7 +516,8 @@ const META: [Meta; 17] = [
         // predicate, and owed for `deck_tokens`' reason: two devices that each add the same
         // printing, in the same finish, to the same list hold one row under two uids, so without
         // this the far op is not a row to update but a row to insert — which hits the unique
-        // index, rolls the group's savepoint back and defers that op for ever.
+        // index, rolls the group's savepoint back and skips that op as a row this database
+        // cannot build.
         //
         // **`deck_id` from the parent and the other three from the fields**, because a local
         // deck id means nothing on the far device, while a list name, a Scryfall printing id and
@@ -545,9 +586,69 @@ fn sql_value(v: &serde_json::Value) -> Sql {
 /// What happened to one row's worth of ops.
 enum Outcome {
     Written,
-    /// A parent has not arrived, or the ops do not describe a row this database can build.
-    Deferred,
+    /// Not written, and why — which, with who sealed it, is what [`classify`] decides from.
+    Deferred(Why),
 }
+
+/// Why a group could not be written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Why {
+    /// A table this build does not sync. From a newer device it is a table an upgrade brings;
+    /// from a same or older one it is a table this build renamed or dropped (`deck_tags` at
+    /// v33), and nothing will ever resolve it. Only the sender's [`Op::schema`] tells them apart.
+    UnknownTable,
+    /// A non-soft parent this database has never seen, by the uid the op names it with.
+    UnknownParent { table: &'static str, uid: String },
+    /// The row could not be written: a `NOT NULL`, `CHECK` or `UNIQUE` failure, or a grain
+    /// match that would move a row onto a uid another row wears. The constraint's own words,
+    /// kept for the record, where they were once discarded.
+    Unbuildable(String),
+}
+
+impl Why {
+    /// What a skip's `error_log` detail says after the row's uid.
+    fn text(&self) -> String {
+        match self {
+            Why::UnknownTable => "this version does not sync that table".to_owned(),
+            Why::UnknownParent { table, uid } => {
+                format!("the {table} row {uid} it belongs to never arrived")
+            }
+            Why::Unbuildable(e) => e.clone(),
+        }
+    }
+}
+
+/// What a group a pass did not write becomes — the module doc's table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    /// Held, because a newer schema sealed it and upgrading this device can resolve it.
+    Newer,
+    /// Held, for a parent a later page may still bring.
+    Waiting,
+    /// Consumed silently: its parent was deleted, here or in this page, and the delete cascades.
+    Moot,
+    /// Consumed and recorded: nothing that can arrive will let it apply.
+    Dropped,
+}
+
+impl Class {
+    /// Whether the group holds its device — the two classes that go to [`blocks_of`] and keep
+    /// the watermark below them. The other two are consumed.
+    fn holds(self) -> bool {
+        matches!(self, Class::Newer | Class::Waiting)
+    }
+}
+
+/// A group a pass did not write, and what became of it.
+struct Deferral<'a> {
+    group: &'a Group<'a>,
+    class: Class,
+    /// `None` for collateral, which sits behind a block and is never attempted.
+    why: Option<Why>,
+}
+
+/// device → the stamp it is held at, and the class of the group that holds it there.
+type Blocks = BTreeMap<String, (Hlc, Class)>;
 
 /// One row's worth of incoming ops, folded, with the ops kept for the watermark.
 struct Group<'a> {
@@ -557,19 +658,27 @@ struct Group<'a> {
     resolved: Resolved,
 }
 
-/// Apply a batch of ops from other devices.
+/// Apply a batch of ops from other devices, holding every group whose parent has not arrived.
+///
+/// [`apply_with`] with [`Waiting::Hold`], which is every caller but the client's release.
+pub fn apply(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
+    apply_with(conn, ops, Waiting::Hold)
+}
+
+/// Apply a batch of ops from other devices, saying of each group it did not write why not.
 ///
 /// The whole batch is one transaction wrapped in [`capture::suppressed`], so nothing written
 /// here is captured back into `sync_ops` — without that guard two devices ping-pong an op
-/// forever.
-pub fn apply(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
+/// forever. A dropped group's `error_log` row is written inside the same transaction, so a
+/// batch that fails leaves no record of a skip it never made.
+pub fn apply_with(conn: &Connection, ops: &[Op], waiting: Waiting) -> Result<ApplyReport, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let report = capture::suppressed(&tx, || apply_in(&tx, ops))?;
+    let report = capture::suppressed(&tx, || apply_in(&tx, ops, waiting))?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(report)
 }
 
-fn apply_in(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
+fn apply_in(conn: &Connection, ops: &[Op], waiting: Waiting) -> Result<ApplyReport, String> {
     let mut report = ApplyReport::default();
     let me: Option<String> = conn
         .query_row(
@@ -626,6 +735,15 @@ fn apply_in(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
         )
     });
 
+    // Every row a delete in this page names, the ones already seen included: a re-delivered
+    // page still carries the delete that makes a child moot, even once the delete itself is
+    // below its sender's watermark.
+    let deleted: BTreeSet<(&str, &str)> = ops
+        .iter()
+        .filter(|op| op.kind == Kind::Del)
+        .map(|op| (op.table.as_str(), op.uid.as_str()))
+        .collect();
+
     // 3. Apply, discovering as it goes which devices stall — and then apply again with the
     //    stalls known.
     //
@@ -636,30 +754,31 @@ fn apply_in(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
     // applied twice is the collection growing by itself. Measured before the fix: one `+1` after
     // a blocked op became a quantity of 2 on the second delivery of the same page.
     //
-    // ⚠️ **But nothing re-delivers today.** `client::pull` advances `PULL_CURSOR` to the page
-    // head after this returns, whatever was deferred, and the relay answers only rows above the
-    // cursor — so the ops held here are dropped until the sync-delivery fix lands (the module
-    // doc's last section).
+    // **Only a held group blocks** (the module doc's table): a moot or dropped one is consumed
+    // in whichever round finds it and stops nothing behind it.
     //
     // The loop runs until no new device is found to be blocked, which is at most once per
     // device and in practice once. Each round rolls its own work back, so only the last one
     // commits.
-    let mut blocked: BTreeMap<String, Hlc> = BTreeMap::new();
-    let mut deferred_ops = 0usize;
-    for round in 0..=groups.len().min(8) {
+    let cap = groups.len().min(8);
+    let mut blocked: Blocks = BTreeMap::new();
+    let mut committed: Vec<Deferral> = Vec::new();
+    for round in 0..=cap {
         conn.execute_batch("SAVEPOINT sync_pass")
             .map_err(|e| e.to_string())?;
         let mut pass = ApplyReport::default();
-        let deferred = run_groups(conn, &groups, &blocked, &mut pass)?;
-        let found = blocks_of(&deferred, &blocked);
-        if found == blocked || round == groups.len().min(8) {
+        let deferrals = run_groups(conn, &groups, &blocked, &deleted, waiting, &mut pass)?;
+        let found = blocks_of(&deferrals, &blocked);
+        if found == blocked || round == cap {
+            // At the cap `found` names blocks this pass did not honour — it applied ops above
+            // them — so nothing after this reads `found`: the watermarks are advanced from what
+            // this pass did ([`advance_watermarks`]).
             conn.execute_batch("RELEASE sync_pass")
                 .map_err(|e| e.to_string())?;
             report.applied = pass.applied;
             report.resurrected = pass.resurrected;
             report.cycles_broken = pass.cycles_broken;
-            deferred_ops = deferred.iter().map(|g| g.ops.len()).sum();
-            blocked = found;
+            committed = deferrals;
             break;
         }
         conn.execute_batch("ROLLBACK TO sync_pass; RELEASE sync_pass")
@@ -667,54 +786,78 @@ fn apply_in(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
         blocked = found;
     }
 
-    report.deferred += deferred_ops;
-    advance_watermarks(conn, &groups, &blocked)?;
+    for d in &committed {
+        let n = d.group.ops.len();
+        match d.class {
+            Class::Newer => report.held_newer += n,
+            Class::Waiting => report.held_waiting += n,
+            Class::Moot => report.moot += n,
+            Class::Dropped => report.dropped += n,
+        }
+    }
+    report.deferred = report.held_newer + report.held_waiting;
+
+    // Recorded only for the pass that committed — a round rolled back skipped nothing — and
+    // after it settled, so each group is one row however many rounds met it.
+    for d in committed.iter().filter(|d| d.class == Class::Dropped) {
+        let why = d.why.as_ref().map_or_else(String::new, Why::text);
+        crate::errors::record(
+            conn,
+            crate::errors::Source::Relay,
+            "apply",
+            crate::errors::Kind::Other,
+            &format!(
+                "a change to {} from another device could not be applied and was skipped",
+                d.group.table
+            ),
+            Some(&format!("uid {} · {why}", d.group.ops[0].uid)),
+        );
+    }
+
+    advance_watermarks(conn, &groups, &committed)?;
     observe(conn, fresh.iter().map(|o| &o.at).max())?;
     Ok(report)
 }
 
 /// One attempt at a batch, with the devices already known to be stalled cut short.
 ///
-/// Answers the groups it could not apply. Everything else — the soft parent, the cycle-break -
-/// happens here too, because a round that is going to be rolled back must not leave any of it
-/// behind.
+/// Answers the groups it could not apply, each classified. Everything else — the soft parent,
+/// the cycle-break — happens here too, because a round that is going to be rolled back must not
+/// leave any of it behind.
 fn run_groups<'a>(
     conn: &Connection,
     groups: &'a [Group<'a>],
-    blocked: &BTreeMap<String, Hlc>,
+    blocked: &Blocks,
+    deleted: &BTreeSet<(&str, &str)>,
+    waiting: Waiting,
     report: &mut ApplyReport,
-) -> Result<Vec<&'a Group<'a>>, String> {
-    let held = |g: &Group| {
-        g.ops.iter().any(|op| {
-            blocked
-                .get(op.at.device.as_str())
-                .is_some_and(|b| op.at >= *b)
-        })
-    };
-
+) -> Result<Vec<Deferral<'a>>, String> {
     let mut soft: Vec<(&Group, String)> = Vec::new();
-    let mut deferred: Vec<&Group> = Vec::new();
+    let mut out: Vec<Deferral<'a>> = Vec::new();
+    let mut failed: Vec<&'a Group<'a>> = Vec::new();
     for g in groups {
-        if held(g) {
-            deferred.push(g);
+        if let Some(class) = held_by(g, blocked) {
+            out.push(Deferral {
+                group: g,
+                class,
+                why: None,
+            });
             continue;
         }
-        match write_group(conn, g, report, &mut soft)? {
-            Outcome::Written => {}
-            Outcome::Deferred => deferred.push(g),
+        if let Outcome::Deferred(_) = write_group(conn, g, report, &mut soft, deleted)? {
+            failed.push(g);
         }
     }
     // A second attempt, because a batch can carry a child before its parent even when one
     // device's own stream cannot: the relay hands over several devices' streams interleaved.
-    let retry = std::mem::take(&mut deferred);
-    for g in retry {
-        if held(g) {
-            deferred.push(g);
-            continue;
-        }
-        match write_group(conn, g, report, &mut soft)? {
-            Outcome::Written => {}
-            Outcome::Deferred => deferred.push(g),
+    // **Only the second attempt's reason is kept**, since it is the one the page settled on.
+    for g in failed {
+        if let Outcome::Deferred(why) = write_group(conn, g, report, &mut soft, deleted)? {
+            out.push(Deferral {
+                group: g,
+                class: classify(conn, g, &why, deleted, waiting)?,
+                why: Some(why),
+            });
         }
     }
 
@@ -729,22 +872,114 @@ fn run_groups<'a>(
     for m in META.iter().filter(|m| m.tree.is_some()) {
         report.cycles_broken += break_cycles(conn, m, groups)?;
     }
-    Ok(deferred)
+    Ok(out)
+}
+
+/// The hold a group sits behind, if any op of it is at or above its device's block.
+///
+/// **Newer wins where two holds meet**: collateral behind both clears only when both do, and
+/// only the newer one waits on something no bound releases.
+fn held_by(g: &Group, blocked: &Blocks) -> Option<Class> {
+    let mut held = None;
+    for op in &g.ops {
+        if let Some((at, class)) = blocked.get(op.at.device.as_str()) {
+            if op.at >= *at {
+                if *class == Class::Newer {
+                    return Some(Class::Newer);
+                }
+                held = Some(*class);
+            }
+        }
+    }
+    held
+}
+
+/// What an unwritten group becomes — the module doc's table, asked in its order.
+///
+/// **Moot before newer**: a newer device's child of a parent deleted here, held as newer, would
+/// wait for an upgrade that cannot help it, and pin the relay's log until then.
+fn classify(
+    conn: &Connection,
+    g: &Group,
+    why: &Why,
+    deleted: &BTreeSet<(&str, &str)>,
+    waiting: Waiting,
+) -> Result<Class, String> {
+    if let Why::UnknownParent { table, uid } = why {
+        if gone(conn, table, uid, deleted)? {
+            return Ok(Class::Moot);
+        }
+    }
+    // `>` on the `Option`, so an op a build before the field sealed — `None` — is never newer.
+    let newer = Some(crate::schema::USER_SCHEMA_VERSION);
+    if g.ops.iter().any(|op| op.schema > newer) {
+        return Ok(Class::Newer);
+    }
+    Ok(match (why, waiting) {
+        (Why::UnknownParent { .. }, Waiting::Hold) => Class::Waiting,
+        _ => Class::Dropped,
+    })
+}
+
+/// Whether a parent this database cannot find was deleted: here, by the reader — a `del` for
+/// its uid in this device's own `sync_ops`, served by `idx_sync_ops_row` — or by a delete in
+/// this page.
+///
+/// **A delete a peer made and this device applied on an earlier pull leaves no trace here**
+/// (`apply` runs inside `capture::suppressed`, and there is no tombstone table), so its child
+/// waits instead, and the client's bound ends it.
+fn gone(
+    conn: &Connection,
+    table: &str,
+    uid: &str,
+    deleted: &BTreeSet<(&str, &str)>,
+) -> Result<bool, String> {
+    if deleted.contains(&(table, uid)) {
+        return Ok(true);
+    }
+    conn.query_row(
+        "SELECT 1 FROM sync_ops WHERE tbl = ?1 AND uid = ?2 AND kind = 'del' LIMIT 1",
+        [table, uid],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|hit| hit.is_some())
+    .map_err(|e| e.to_string())
+}
+
+/// Whether deleting the row `p` names deletes the `table` row that names it — `ON DELETE
+/// CASCADE`, as against `SET NULL`.
+///
+/// **Read off the live schema and not restated on [`Parent`]**, so it cannot drift from the key
+/// it describes. It is asked only of a parent [`gone`] has already found deleted, which is rare,
+/// so the pragma costs nothing a pull would notice. A column with no foreign key answers no.
+fn cascades(conn: &Connection, table: &str, p: &Parent) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT on_delete FROM pragma_foreign_key_list(?1) WHERE \"from\" = ?2",
+        [table, p.col],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map(|action| action.as_deref() == Some("CASCADE"))
+    .map_err(|e| e.to_string())
 }
 
 /// The earliest stamp each device is stalled at, taking whatever was already known.
-fn blocks_of(deferred: &[&Group], known: &BTreeMap<String, Hlc>) -> BTreeMap<String, Hlc> {
+///
+/// **Only a group that holds blocks**; a moot or dropped one is consumed and stops nothing. A
+/// device inherits the class of the group whose op is its earliest, and collateral carries the
+/// class of the hold it sits behind, so a device dragged in behind a newer block is newer too.
+fn blocks_of(deferrals: &[Deferral], known: &Blocks) -> Blocks {
     let mut out = known.clone();
-    for g in deferred {
-        for op in &g.ops {
-            let e = out.entry(op.at.device.clone());
-            match e {
+    for d in deferrals.iter().filter(|d| d.class.holds()) {
+        for op in &d.group.ops {
+            match out.entry(op.at.device.clone()) {
                 std::collections::btree_map::Entry::Vacant(v) => {
-                    v.insert(op.at.clone());
+                    v.insert((op.at.clone(), d.class));
                 }
                 std::collections::btree_map::Entry::Occupied(mut o) => {
-                    if op.at < *o.get() {
-                        o.insert(op.at.clone());
+                    if op.at < o.get().0 {
+                        o.insert((op.at.clone(), d.class));
                     }
                 }
             }
@@ -838,8 +1073,8 @@ enum Resolution {
     Id(i64),
     /// The op says "nobody" — the root, or Auto.
     None,
-    /// The op names a uid this database has never seen.
-    Unknown,
+    /// The op names a uid this database has never seen — this one.
+    Unknown(String),
 }
 
 fn resolve_parent(
@@ -863,7 +1098,7 @@ fn resolve_parent(
         .map_err(|e| e.to_string())?;
     Ok(match id {
         Some(id) => Resolution::Id(id),
-        None => Resolution::Unknown,
+        None => Resolution::Unknown(uid.clone()),
     })
 }
 
@@ -874,12 +1109,18 @@ fn absent_value(p: &Parent) -> Sql {
     }
 }
 
-/// Find the local row this group is about: by grain, then by uid.
+/// Find the local row this group is about: by grain, then by uid. **It reads and never writes.**
 ///
 /// Where a grain match carries a different uid, **both devices set the row's uid to the lower of
 /// the two**. That converges with no alias table and no round trip: each side computes the same
 /// `min` from the same pair, so after one exchange they agree, and the next round finds the row
 /// by uid rather than by grain.
+///
+/// The rename is *answered* ([`Found::rename`]) and made by [`adopt_uid`], inside the group's
+/// savepoint. It used to run here, before that savepoint opened and with nothing asking whether
+/// the lower uid was free — so a grain match onto a uid another local row wore failed
+/// `idx_{table}_uid`, the `?` unwound the whole batch, and the same page failed the same way on
+/// every pull after it.
 fn find_row(
     conn: &Connection,
     meta: &Meta,
@@ -903,24 +1144,17 @@ fn find_row(
             if let Some(found) = found {
                 if found != op_uid {
                     let winner = found.clone().min(op_uid.clone());
-                    if winner != found {
-                        conn.execute(
-                            &format!(
-                                "UPDATE {} SET sync_uid = ?1 WHERE sync_uid = ?2",
-                                meta.table
-                            ),
-                            [&winner, &found],
-                        )
-                        .map_err(|e| e.to_string())?;
-                    }
+                    let rename = (winner != found).then(|| (found.clone(), winner.clone()));
                     return Ok(Found {
                         uid: Some(winner),
                         displaced: Some(found),
+                        rename,
                     });
                 }
                 return Ok(Found {
                     uid: Some(found),
                     displaced: None,
+                    rename: None,
                 });
             }
         }
@@ -936,6 +1170,7 @@ fn find_row(
     Ok(Found {
         uid: by_uid,
         displaced: None,
+        rename: None,
     })
 }
 
@@ -945,8 +1180,42 @@ fn find_row(
 /// the **old** uid: adopting `min` renames the row and cannot rename history that has already
 /// been pushed.
 struct Found {
+    /// The uid the row wears once [`adopt_uid`] has run.
     uid: Option<String>,
     displaced: Option<String>,
+    /// `(from, to)`: the uid the row wears now, and the lower one it is to adopt.
+    rename: Option<(String, String)>,
+}
+
+/// Give the found row the uid [`find_row`] decided on — **inside the group's savepoint, and only
+/// once nothing else here wears it.** Taken, the group is a row this database cannot build: two
+/// local rows each hold half of what the op describes, and no uid adoption reconciles that.
+fn adopt_uid(conn: &Connection, meta: &Meta, found: &Found) -> Result<(), Why> {
+    let Some((from, to)) = &found.rename else {
+        return Ok(());
+    };
+    let unbuildable = |e: rusqlite::Error| Why::Unbuildable(e.to_string());
+    let taken = conn
+        .query_row(
+            &format!("SELECT 1 FROM {} WHERE sync_uid = ?1", meta.table),
+            [to],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(unbuildable)?
+        .is_some();
+    if taken {
+        return Err(Why::Unbuildable("uid taken".to_owned()));
+    }
+    conn.execute(
+        &format!(
+            "UPDATE {} SET sync_uid = ?1 WHERE sync_uid = ?2",
+            meta.table
+        ),
+        [to, from],
+    )
+    .map(|_| ())
+    .map_err(unbuildable)
 }
 
 /// This device's own ops for a row, out of `sync_ops`.
@@ -1013,16 +1282,19 @@ fn write_group<'a>(
     g: &'a Group<'a>,
     report: &mut ApplyReport,
     soft: &mut Vec<(&'a Group<'a>, String)>,
+    deleted: &BTreeSet<(&str, &str)>,
 ) -> Result<Outcome, String> {
     let (Some(meta), Some(spec)) = (meta_of(g.table), spec_of(g.table)) else {
-        // A table this build does not sync. A newer device's op, and not an error: it is
-        // deferred rather than dropped, so the count says so.
-        return Ok(Outcome::Deferred);
+        // A table this build does not sync: a newer device's new one, which is held, or one
+        // this build renamed, which is skipped. Only the sender's schema says which, and
+        // [`classify`] is where it is read.
+        return Ok(Outcome::Deferred(Why::UnknownTable));
     };
 
     // Parents first, because both the grain lookup and the write need them.
     let mut parents: BTreeMap<&'static str, Sql> = BTreeMap::new();
     let mut soft_pending = false;
+    let mut missing: Option<Why> = None;
     for p in spec.parents {
         match resolve_parent(conn, p, &g.resolved)? {
             Resolution::Id(id) => {
@@ -1031,9 +1303,34 @@ fn write_group<'a>(
             Resolution::None => {
                 parents.insert(p.key, absent_value(p));
             }
-            Resolution::Unknown if p.soft => soft_pending = true,
-            Resolution::Unknown => return Ok(Outcome::Deferred),
+            Resolution::Unknown(_) if p.soft => soft_pending = true,
+            // **A deleted parent is answered the way its own foreign key answers a delete.**
+            // Where the delete cascades, the child would have gone with it: it is moot, and that
+            // decides the group however many other parents are merely missing, so it returns at
+            // once. Where the key is `SET NULL` — a binder, a deck folder, a label — the delete
+            // left every child it found in place with the column cleared, and that is what the
+            // child's own device does to it when the delete reaches it; consumed here instead, it
+            // would be a card one device holds and the other never will. So it is written
+            // absent, like a parent the op never named.
+            Resolution::Unknown(uid) if gone(conn, p.table, &uid, deleted)? => {
+                if cascades(conn, meta.table, p)? {
+                    return Ok(Outcome::Deferred(Why::UnknownParent {
+                        table: p.table,
+                        uid,
+                    }));
+                }
+                parents.insert(p.key, absent_value(p));
+            }
+            Resolution::Unknown(uid) => {
+                missing.get_or_insert(Why::UnknownParent {
+                    table: p.table,
+                    uid,
+                });
+            }
         }
+    }
+    if let Some(why) = missing {
+        return Ok(Outcome::Deferred(why));
     }
 
     let existing = find_row(conn, meta, g, &parents)?;
@@ -1054,6 +1351,21 @@ fn write_group<'a>(
     all.extend(local_history(conn, meta.table, &uids)?);
     let combined = fold(&all);
 
+    // **Every write from here is inside the group's savepoint, the uid adoption first** — the
+    // delete below addresses the row by the uid it adopts, so a delete ahead of the adoption
+    // would miss its row, or find the other row that already wears that uid.
+    let savepoint = "sync_apply_group";
+    conn.execute_batch(&format!("SAVEPOINT {savepoint}"))
+        .map_err(|e| e.to_string())?;
+    let rollback = || {
+        conn.execute_batch(&format!("ROLLBACK TO {savepoint}; RELEASE {savepoint}"))
+            .map_err(|e| e.to_string())
+    };
+    if let Err(why) = adopt_uid(conn, meta, &existing) {
+        rollback()?;
+        return Ok(Outcome::Deferred(why));
+    }
+
     if combined.deleted {
         if let Some(uid) = &existing.uid {
             conn.execute(
@@ -1062,13 +1374,12 @@ fn write_group<'a>(
             )
             .map_err(|e| e.to_string())?;
         }
+        conn.execute_batch(&format!("RELEASE {savepoint}"))
+            .map_err(|e| e.to_string())?;
         report.applied += g.ops.len();
         return Ok(Outcome::Written);
     }
 
-    let savepoint = "sync_apply_group";
-    conn.execute_batch(&format!("SAVEPOINT {savepoint}"))
-        .map_err(|e| e.to_string())?;
     let written = match &existing.uid {
         Some(uid) => update_row(conn, meta, spec, g, &combined, &parents, uid),
         None => {
@@ -1097,7 +1408,7 @@ fn write_group<'a>(
                     p.key,
                     match resolve_parent(conn, p, &combined)? {
                         Resolution::Id(id) => Sql::Integer(id),
-                        Resolution::None | Resolution::Unknown => absent_value(p),
+                        Resolution::None | Resolution::Unknown(_) => absent_value(p),
                     },
                 );
             }
@@ -1131,14 +1442,14 @@ fn write_group<'a>(
             report.applied += g.ops.len();
             Ok(Outcome::Written)
         }
-        Err(_) => {
-            // **A row this database cannot build is deferred, never fatal.** The likeliest
-            // cause is a compacted log whose insert op is gone, leaving an update that names
-            // no `NOT NULL` column; the batch's other rows are unaffected and the count says
-            // it happened.
-            conn.execute_batch(&format!("ROLLBACK TO {savepoint}; RELEASE {savepoint}"))
-                .map_err(|e| e.to_string())?;
-            Ok(Outcome::Deferred)
+        Err(e) => {
+            // **A row this database cannot build is never fatal.** The likeliest cause is a
+            // compacted log whose insert op is gone, leaving an update that names no `NOT NULL`
+            // column; the batch's other rows are unaffected. The error is kept, because it is
+            // the only account of the skip the reader will ever have — or, from a newer
+            // schema, of a `CHECK` word this build does not know yet.
+            rollback()?;
+            Ok(Outcome::Deferred(Why::Unbuildable(e)))
         }
     }
 }
@@ -1226,8 +1537,9 @@ fn insert_row(
     // §8.2's rule with `local_current` at zero, because the row does not exist here: the claim
     // can only RAISE the sum, never join it. **The no-claim arm is the sum untouched and not
     // `sum.max(0)`** — "where the fold contains no baseline, `next = local_current + Σ deltas`,
-    // exactly as today" — so a negative sum goes on failing its own `CHECK` and deferring the
-    // group rather than quietly becoming a row holding nothing.
+    // exactly as today" — so a negative sum goes on failing its own `CHECK`, and the group is
+    // skipped as unbuildable (or held, from a newer schema) rather than quietly becoming a row
+    // holding nothing.
     for (name, _) in meta.counters {
         let sum = combined.counters.get(*name).copied().unwrap_or(0);
         cols.push((*name).to_owned());
@@ -1368,7 +1680,7 @@ fn settle_soft_parents(conn: &Connection, g: &Group, uid: &str) -> Result<(), St
             Resolution::Id(id) => Sql::Integer(id),
             // Still unknown after the whole batch: the category is on a device this one has not
             // heard from. `Auto` is the honest answer and the one the column defaults to.
-            Resolution::None | Resolution::Unknown => absent_value(p),
+            Resolution::None | Resolution::Unknown(_) => absent_value(p),
         };
         conn.execute(
             &format!("UPDATE {} SET {} = ?1 WHERE sync_uid = ?2", g.table, p.col),
@@ -1510,27 +1822,37 @@ fn break_cycles(conn: &Connection, meta: &Meta, groups: &[Group]) -> Result<usiz
     Ok(broken)
 }
 
-/// Move each peer's watermark to the last op before the first one that could not be applied.
+/// Move each peer's watermark to the last op the committed pass wrote or consumed.
 ///
 /// **Below the block and never past it.** Everything at or above a device's block is left
 /// unapplied, which is why the pass above must not have applied any of it: the two halves are
 /// one rule, and getting either wrong would double a counter on a re-delivery or lose an op.
-/// (⚠️ The client does not re-deliver yet — it advances its cursor past a deferral, so the ops
-/// left here are dropped; see the module doc.)
+///
+/// **It is read off what the pass did, not re-derived from stamps**, and the round cap is why.
+/// A group is held exactly when an op of it is at or above its device's block, so the groups a
+/// pass wrote or consumed are all below the blocks it *ran under* — while at the cap the blocks
+/// its deferrals *found* are lower than those, and a watermark advanced by them sits under ops
+/// the pass applied, which the next delivery of the page then applies again. Leaving out every
+/// group that holds also keeps a device first found in the cap round from being stepped past
+/// its held op, unless the pass applied a later op of that device. A moot or dropped group is
+/// in: it is consumed, and the watermark passing it is what stops a re-delivery recording the
+/// same skip twice.
 fn advance_watermarks(
     conn: &Connection,
     groups: &[Group],
-    blocked: &BTreeMap<String, Hlc>,
+    committed: &[Deferral],
 ) -> Result<(), String> {
+    let holding: BTreeSet<(&str, &str)> = committed
+        .iter()
+        .filter(|d| d.class.holds())
+        .map(|d| (d.group.table, d.group.ops[0].uid.as_str()))
+        .collect();
     let mut high: BTreeMap<&str, Hlc> = BTreeMap::new();
     for g in groups {
+        if holding.contains(&(g.table, g.ops[0].uid.as_str())) {
+            continue;
+        }
         for op in &g.ops {
-            if blocked
-                .get(op.at.device.as_str())
-                .is_some_and(|b| op.at >= *b)
-            {
-                continue;
-            }
             let e = high.entry(op.at.device.as_str());
             match e {
                 std::collections::btree_map::Entry::Vacant(v) => {

@@ -4241,10 +4241,11 @@ already effective, and `viewOf` copies them.
   - **History is a `deck_audit` row of kind `deck` with `field: "token"`, never a tenth kind** —
     the deck notes' `{ field: "note" }` precedent, and a sync reason rather than a rebuild one:
     `deck_audit` is synced and append-only, so a word its `CHECK` does not know would be refused
-    by a paired device on an older build and its applier would defer the op — which, while the
-    sync client advances its cursor past a deferral, loses it and the sender's later ops in that
-    page for good (sync.md *Deferred ops are dropped, not held*; this read "stalling that device's
-    whole stream until it upgraded"). `auditText.ts`' `tokenLine` words the five actions —
+    by a paired device on an older build and its applier would defer the op — which on a v51
+    device loses it and the sender's later ops in that page for good, its client advancing past a
+    deferral, and on v52 or later stalls that device's whole stream until it upgrades, the relay's
+    log pinned meanwhile (sync.md *Held while it can resolve, skipped when it cannot*). A stall is
+    still a cost, which is why the rule stands. `auditText.ts`' `tokenLine` words the five actions —
     *Added 1 × Treasure (foil)*, *Treasure 1 → 3*, *Swapped Treasure's art* (with `TCMM #48 →
     TVOW #17 (foil)` in the detail, and *folded into one row* on a fold), *Dismissed Treasure* /
     *Restored Treasure*, *Reset Treasure's printings* — reading `journal_in`'s snake_case payload

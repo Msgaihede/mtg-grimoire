@@ -68,6 +68,11 @@ pub struct RelayStatus {
     pub last_sync_at: Option<i64>,
     /// Rows carrying a `needs_review` sentence, across all six tables that can.
     pub review_count: i64,
+    /// Why this device's pull cursor is held — `"newer"` or `"waiting"`, the kind of
+    /// [`client::PULL_HOLD`] — or `None` when it is not, **and always `None` in no group**: the
+    /// key outlives leaving one, and a device that has left is held on nothing. The panel draws a
+    /// sentence for `"newer"` only, asking for an update; a wait resolves itself.
+    pub pull_held: Option<String>,
 }
 
 /// One row asking to be looked at.
@@ -100,6 +105,7 @@ fn read_status(conn: &Connection) -> Result<RelayStatus, String> {
         pending,
         last_sync_at: client::get_state(conn, client::LAST_SYNC_AT).and_then(|v| v.parse().ok()),
         review_count: review_count(conn)?,
+        pull_held: client::read_hold(conn).filter(|_| paired).map(|h| h.kind),
     })
 }
 
@@ -620,6 +626,7 @@ mod tests {
             pending: 0,
             last_sync_at: None,
             review_count: 0,
+            pull_held: None,
         })
         .expect("serialise");
 
@@ -638,7 +645,55 @@ mod tests {
                 pending: 0,
                 last_sync_at: None,
                 review_count: 0,
+                pull_held: None,
             }
+        );
+    }
+
+    /// **The panel's one sentence about a held pull reads `pull_hold`'s kind, as `pullHeld`** —
+    /// `"newer"` draws *Update this device*, `"waiting"` draws nothing, and an unreadable row is
+    /// no hold at all. **A device in no group is held on nothing**: the key outlives a departure
+    /// (`identity::leave_group` clears the roster and the key, not `sync_state`'s cursor keys),
+    /// and a panel still asking for an update to hear a group this device has left would be
+    /// wrong in the way that sends a reader looking for a problem that is not there.
+    #[test]
+    fn relay_status_reports_the_hold() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+             VALUES (1, '0123456789abcdef', 0, zeroblob(32), 0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(read_status(&conn).unwrap().pull_held, None);
+
+        for kind in ["newer", "waiting"] {
+            client::set_state(
+                &conn,
+                client::PULL_HOLD,
+                &format!(r#"{{"kind":"{kind}","since":1,"pulls":1}}"#),
+            )
+            .unwrap();
+            let status = read_status(&conn).unwrap();
+            assert_eq!(status.pull_held.as_deref(), Some(kind));
+            let json = serde_json::to_string(&status).unwrap();
+            assert!(json.contains(&format!("\"pullHeld\":\"{kind}\"")), "{json}");
+        }
+
+        client::set_state(&conn, client::PULL_HOLD, "not json").unwrap();
+        assert_eq!(read_status(&conn).unwrap().pull_held, None);
+
+        client::set_state(
+            &conn,
+            client::PULL_HOLD,
+            r#"{"kind":"newer","since":1,"pulls":1}"#,
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_group", []).unwrap();
+        assert_eq!(
+            read_status(&conn).unwrap().pull_held,
+            None,
+            "a device in no group was told to update to hear it"
         );
     }
 

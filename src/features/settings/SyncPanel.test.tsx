@@ -128,14 +128,16 @@ const RELAY_OFF: RelayStatus = {
   pending: 0,
   lastSyncAt: null,
   reviewCount: 0,
+  pullHeld: null,
 };
 
-/** A group, four changes waiting, and one trip already finished. */
+/** A group, four changes waiting, and one trip already finished. Nothing held. */
 const RELAY_ON: RelayStatus = {
   paired: true,
   pending: 4,
   lastSyncAt: 1_700_000_000,
   reviewCount: 0,
+  pullHeld: null,
 };
 
 /**
@@ -229,6 +231,10 @@ const OUTCOME: RelayOutcome = {
   cyclesBroken: 0,
   skipped: 0,
   deferred: 0,
+  // Nothing held and nothing dropped on an ordinary trip — a device on the same schema as its
+  // whole group, and no group so broken it has a moot child to consume.
+  heldNewer: 0,
+  dropped: 0,
   // An ordinary trip, which is every trip but the first with a given device — so both baseline
   // counts are zero and the panel must say nothing at all about a first exchange.
   baselineOps: 0,
@@ -909,6 +915,93 @@ describe("the relay half", () => {
 });
 
 /**
+ * The delivery holds (2026-09-27) — a persistent notice keyed on `RelayStatus.pullHeld`, and
+ * three of `outcomeText`'s clauses that replaced the single "They land on a later sync." one.
+ *
+ * **The persistent notice is drawn only for `"newer"`**, because `"waiting"` self-heals on a
+ * later pull and is not this device's problem to announce — the old, single sentence used to
+ * promise every deferred row a "later sync" that a newer hold can never keep.
+ */
+describe("delivery holds", () => {
+  it("says a device in the group runs a newer version, verbatim, when a pull is held as newer", async () => {
+    syncRelayStatus.mockResolvedValue({ ...RELAY_ON, pullHeld: "newer" });
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(
+      await screen.findByText(
+        "A device in your group runs a newer version of MTG Grimoire. Update this device to " +
+          "receive its changes.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing when the hold is only a waiting one", async () => {
+    syncRelayStatus.mockResolvedValue({ ...RELAY_ON, pullHeld: "waiting" });
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await screen.findByText(/4 changes waiting to go/i);
+    expect(screen.queryByText(/runs a newer version/i)).not.toBeInTheDocument();
+  });
+
+  it("says nothing when nothing is held", async () => {
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await screen.findByText(/4 changes waiting to go/i);
+    expect(screen.queryByText(/runs a newer version/i)).not.toBeInTheDocument();
+  });
+
+  it("names a held-newer count, singular and plural", () => {
+    expect(outcomeText({ ...OUTCOME, heldNewer: 2 })).toBe(
+      "Sent 4 changes and received 9 changes. 2 changes from a newer version wait until you " +
+        "update.",
+    );
+    expect(outcomeText({ ...OUTCOME, heldNewer: 1 })).toBe(
+      "Sent 4 changes and received 9 changes. 1 change from a newer version waits until you " +
+        "update.",
+    );
+  });
+
+  it("names a waiting count that is deferred minus the held-newer share, singular and plural", () => {
+    expect(outcomeText({ ...OUTCOME, deferred: 3, heldNewer: 0 })).toBe(
+      "Sent 4 changes and received 9 changes. 3 changes are waiting for a change they build on.",
+    );
+    expect(outcomeText({ ...OUTCOME, deferred: 1, heldNewer: 0 })).toBe(
+      "Sent 4 changes and received 9 changes. 1 change is waiting for a change it builds on.",
+    );
+    // The held-newer share is not counted twice — a group entirely newer-held reads 0 waiting.
+    expect(outcomeText({ ...OUTCOME, deferred: 2, heldNewer: 2 })).not.toMatch(/waiting for a/);
+  });
+
+  it("names a dropped count, singular and plural", () => {
+    expect(outcomeText({ ...OUTCOME, dropped: 2 })).toBe(
+      "Sent 4 changes and received 9 changes. 2 changes could not be applied and were skipped. " +
+        "The error log has the details.",
+    );
+    expect(outcomeText({ ...OUTCOME, dropped: 1 })).toBe(
+      "Sent 4 changes and received 9 changes. 1 change could not be applied and was skipped. " +
+        "The error log has the details.",
+    );
+  });
+
+  it("never says the old sentence about landing on a later sync", async () => {
+    const user = userEvent.setup();
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    syncNow.mockResolvedValue({ ...OUTCOME, deferred: 3 });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /sync now/i }));
+
+    await screen.findByText(/3 changes are waiting for a change they build on/i);
+    expect(screen.queryByText(/land on a later sync/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
  * The supporter half — the block that replaced the address field.
  *
  * **Three sentences, and the whole value of this describe is that they cannot be swapped.** A
@@ -1344,7 +1437,9 @@ describe("outcomeText", () => {
     expect(text).toMatch(/Kept 1 row another device had deleted\./);
     expect(text).toMatch(/Moved 1 folder to the top level/);
     expect(text).toMatch(/Needs review, just below, says which\./);
-    expect(text).toMatch(/3 changes arrived before the change they build on/);
+    // The wording changed with the delivery holds (2026-09-27) — see the "delivery holds"
+    // describe below for the three sentences this one clause split into.
+    expect(text).toMatch(/3 changes are waiting for a change they build on/);
   });
 
   /**
