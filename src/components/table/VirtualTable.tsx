@@ -610,14 +610,26 @@ export function VirtualTable<Row>({
           `main` — so the column names stay readable while a hundred-row deck scrolls past,
           which is exactly what a reader comparing rows down a long list needs. The scrollbar
           argument above simply does not arise: with no local scroller the header and the rows
-          are the same width by construction. */}
+          are the same width by construction.
+
+          **Under `grow` its inset is `--sticky-top`, and `0px` wherever nothing sets it.** That
+          scroller can have something of its own pinned over its top edge — the deck editor's
+          floating header bar (issue #577) — and a header pinned at 0 would slide under it. So the
+          deck editor sets the variable on its own view box while the bar is drawn; nothing else
+          sets it, so everywhere else, and there whenever the bar is not, the fallback holds.
+          **Only under `grow`**, because a table that is its own scroller pins its header to its
+          own top edge, which nothing outside it covers — and a custom property inherits down the
+          DOM, so such a table mounted inside that box (a `Dialog` renders in place, not through a
+          portal) would otherwise float its header down its own list. Two literal classes rather
+          than one built from the flag: Tailwind scans source text, and an interpolated class
+          emits nothing. */}
       <div
         role="row"
         aria-rowindex={1}
         style={{ height: TABLE_HEADER_HEIGHT, gridTemplateColumns: template }}
         className={cn(
           "grid items-center gap-3 border-b border-border bg-surface px-3 text-xs text-dim",
-          "sticky top-0",
+          grow ? "sticky top-[var(--sticky-top,0px)]" : "sticky top-0",
           LAYER.header,
         )}
       >

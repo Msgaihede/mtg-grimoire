@@ -51,11 +51,22 @@ function setDockHeight(dock: HTMLElement, px: number): void {
  * visible height, less however much of the row still sits below its top", and that is arithmetic
  * over two measurements rather than a length.
  *
- * `sticky top-0` on the dock is the pinning and CSS does all of it. This is only the height.
+ * `sticky` on the dock is the pinning and CSS does all of it. This is only the height.
+ *
+ * **`top` is that `sticky` box's own inset, in px** — `0` for a dock drawn `top-0`, which is every
+ * caller that passes nothing, and for them the arithmetic is exactly what it was before the
+ * parameter. A dock pinned lower than the scroller's edge can never sit higher than its inset, so
+ * what comes off the scrollport is the larger of the inset and the row's own distance down it:
+ * pinned at 66px in a 600px scrollport, the dock is 534px however far the row has scrolled past.
+ * The deck editor is why it exists (issue #577): while its floating header bar is drawn over the
+ * top of the page, the docked search column pins below the bar rather than under it. **A new inset
+ * is measured in the commit that brings it**, because nothing else would report it — the bar
+ * appearing moves the dock without resizing either observed box, and no scroll has to follow.
  *
  * `dock` is the box being sized. `anchor` is the row the dock sits in — the thing whose top edge
- * says how much of the page is above it. Scrolled past, that term is zero and the dock is the full
- * height of the scrollport; at rest it is the scrollport under whatever header is still showing.
+ * says how much of the page is above it. Scrolled past, that term gives way to `top` and the dock
+ * is the whole scrollport below its inset; at rest it is the scrollport under whatever header is
+ * still showing.
  * Both ends exact, and no second scrollbar in either.
  *
  * **The scroller is found rather than passed**, which is the whole of what generalising
@@ -89,30 +100,47 @@ function setDockHeight(dock: HTMLElement, px: number): void {
  * observer — happens only when an element has actually changed. The teardown is therefore held in
  * a ref and run by hand rather than returned as the effect's cleanup, because a returned cleanup
  * runs on *every* render and would undo exactly the work this guard exists to keep.
+ *
+ * **`top` rides the same guard rather than an effect of its own.** It is held on the wiring ref,
+ * where the wired measurement reads it, and a render that brought a new inset and neither new box
+ * re-measures on the spot — one pass, no rewire, and before paint, so the dock is never drawn one
+ * frame at its old height below its new inset.
  */
 export function useDockHeight(
   dock: RefObject<HTMLElement | null>,
   anchor: RefObject<HTMLElement | null>,
+  top = 0,
 ): void {
   // What the effect below is currently wired to, and how to unwire it. `null` throughout is
   // "nothing is wired", which is the state before the first commit and after a scroller could
-  // not be found — both of which are ordinary rather than a failure.
+  // not be found — both of which are ordinary rather than a failure. `top` is the inset the last
+  // measurement used, and `measure` re-runs that measurement now, for an inset that moved alone.
   const wiring = useRef<{
     dock: HTMLElement | null;
     anchor: HTMLElement | null;
+    top: number;
     off: (() => void) | null;
-  }>({ dock: null, anchor: null, off: null });
+    measure: (() => void) | null;
+  }>({ dock: null, anchor: null, top, off: null, measure: null });
 
   useLayoutEffect(() => {
     const dockEl = dock.current;
     const anchorEl = anchor.current;
     const wired = wiring.current;
-    if (dockEl === wired.dock && anchorEl === wired.anchor) return;
+    if (dockEl === wired.dock && anchorEl === wired.anchor) {
+      if (top !== wired.top) {
+        wired.top = top;
+        wired.measure?.();
+      }
+      return;
+    }
 
     wired.off?.();
     wired.dock = dockEl;
     wired.anchor = anchorEl;
+    wired.top = top;
     wired.off = null;
+    wired.measure = null;
     if (!dockEl) return;
 
     const scroller = nearestScroller(dockEl);
@@ -130,7 +158,17 @@ export function useDockHeight(
       const below = anchorEl
         ? anchorEl.getBoundingClientRect().top - scroller.getBoundingClientRect().top
         : 0;
-      setDockHeight(dockEl, Math.max(0, visible - Math.max(0, below)));
+      // The dock sits at the row's top or at its own inset, whichever is lower — and **a sticky
+      // inset is measured from the scroller's content edge, not its top edge**, so the scroller's
+      // own `padding-top` is part of where a pinned dock stands. `AppShell`'s `main` is `p-5`:
+      // measured 2026-09-27 (debug build, 1280×800, the deck editor), a dock pinned at `top: 66`
+      // stood at 20 + 66 below the scroller's top while this sized it as though it stood at 66,
+      // and its bottom 20px hung past the window. The same arithmetic put a `top: 0` dock's
+      // bottom 20px past it too, on every page that docks a column in a padded `main`. A scroller
+      // with no padding reads `0` here and is sized exactly as before, which is also what every
+      // case in the suite reads.
+      const edge = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
+      setDockHeight(dockEl, Math.max(0, visible - Math.max(edge + wired.top, below)));
     };
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(size);
@@ -144,6 +182,12 @@ export function useDockHeight(
     // resizing, the page growing — reaches it through the scroller.
     if (anchorEl) observer.observe(anchorEl);
 
+    // Now rather than on the next frame, and any frame already owed is dropped: this pass
+    // answers everything it would have, so a burst stays one measurement per frame.
+    wired.measure = () => {
+      if (frame !== 0) cancelAnimationFrame(frame);
+      size();
+    };
     wired.off = () => {
       if (frame !== 0) cancelAnimationFrame(frame);
       scroller.removeEventListener("scroll", schedule);
@@ -159,6 +203,7 @@ export function useDockHeight(
     return () => {
       wired.off?.();
       wired.off = null;
+      wired.measure = null;
       wired.dock = null;
       wired.anchor = null;
     };
