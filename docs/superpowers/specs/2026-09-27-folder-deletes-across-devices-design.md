@@ -1,9 +1,11 @@
 # Folder deletes across devices: stall nothing, lose nothing — design
 
 **Date:** 2026-09-27 · **Status:** approved approach ("Local tombstones" + "Retry, then merge"),
-spec for review. **Lands before token stacks PR 3**, which deletes a deck's token folder on every
-exit from Collection mode and would make both bugs below an ordinary path rather than a rare one.
-Builds on the delivery holds (#572, #574).
+spec approved. Written to land before token stacks PR 3 (Collection tokens), which would have
+deleted a deck's token folder on every exit from Collection mode; **PR 3 was dropped the same day**
+(the reader's decision), and this stands on its own: today a deck deleted with a copy its group
+and the root both hold stops a paired device's sync for good. Builds on the delivery holds (#572,
+#574).
 
 ## 1. The problem
 
@@ -192,20 +194,20 @@ waits.
   loses the re-made row where its uid sorts higher.** The re-made row's put grain-matches the old
   row the waiting delete is about to take, keeps the old uid, and the retry deletes it. The one
   real case is a deck switched to Virtual and back between two pulls, with a copy in its group the
-  root also holds. Token folders cannot meet it: a token never sits at the root (PR 3).
+  root also holds.
 - **Provenance can differ after a concurrent merge.** The re-homing coalesces the survivor's price,
   date, source and notes over the source's; the sender's grain match takes each field by
   last-writer-wins. Counts and identity converge; a field both rows carried may not.
 - **A sparse edit under the losing uid, on a later page, is still skipped** — `find_row`'s
   existing behaviour after any grain merge, not new here.
 
-### 3.6 For PR 3
+### 3.6 For whatever files into a folder next
 
-- **PR 3 renumbers to v54** — this takes v53.
-- A deck's token folder deleted on a peer re-homes its leftover copies to the **root**, as
-  `SET NULL` does. PR 3's sweep that files tokens back into the pool must be a derived write
-  (behind `capture::suppressed`, like `reconcile`), or both devices sweep the same copy and the
-  pool counts it twice.
+PR 3 is dropped, so nothing renumbers. What it would have met is general and stays true for any
+future folder the app makes and deletes: a folder deleted on a peer re-homes its leftover copies
+to the **root**, as `SET NULL` does, and a sweep that files them somewhere else afterwards must be
+a derived write (behind `capture::suppressed`, like `reconcile`), or both devices sweep the same
+copy and the destination counts it twice.
 
 ### 3.7 Docs
 
@@ -215,7 +217,7 @@ record of the fix), *A parent deleted on a third device* (closed), *What is stil
 folder bullets removed, §3.5's residuals added). `src-tauri/CLAUDE.md`'s `sync_peers` bullet (the
 moot delete's "no capture spec names its table as a parent" clause) and the rung history.
 `data-and-sync.md`'s ladder. `apply.rs`'s module doc and `gone`'s doc. The token-stacks spec's
-v53 references get a one-line note that PR 3 takes v54.
+§5 gets a one-line note that PR 3 was dropped and v53 went to `sync_gone`.
 
 ## 4. Testing
 
