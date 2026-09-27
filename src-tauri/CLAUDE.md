@@ -74,9 +74,13 @@ both plus the frontend.
   (`PredicateField`, `PredicateOp`, a value and `negated`), and one match arm per field in
   `push_card_filters` is what reaches **all three** card searches — `search_cards`,
   `collection_list` and `wishlist_list` already call that one function with the same `"c"` alias,
-  so a predicate costs one edit rather than three. **Two of the twelve fields emit no SQL at
-  all**: `TypeLine` and `OracleText` ride the FTS `MATCH` string instead, because `LIKE` measured
-  82× and 277× slower on the two warm probes. Their arms are **explicit skips with a comment** —
+  so a predicate costs one edit rather than three. **Three of the thirteen fields emit no SQL at
+  all**: `Name`, `TypeLine` and `OracleText` ride the FTS `MATCH` string instead, because `LIKE`
+  measured 82× and 277× slower on the two warm probes. **`Name` has no keyword** — it is what a
+  `-` on free text becomes (`-bolt`, `-"lightning bolt"`, issue #571), an ordered phrase on the
+  `name` column alone, while the positive free text beside it still reads every column; and the
+  wishlist answers it with a `LIKE` over its own name, for its free text's orphan reason, rather
+  than through `cards_fts`. Their arms are **explicit skips with a comment** —
   a bare `_ => {}` would hide the next field somebody forgets, and a field handled by neither
   side is a filter that silently does nothing. **FTS5's `NOT` is binary**, so a purely negative
   text term cannot ride the `MATCH` at all and becomes `rowid NOT IN (SELECT … MATCH ?)`. An

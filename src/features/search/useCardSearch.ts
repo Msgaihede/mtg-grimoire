@@ -73,9 +73,11 @@ function bare({ field, op, value, negated }: PredicateToken): QueryPredicate {
  * **So a tag folds back into the free text as its own value.** `atag:dragon` on the collection
  * page is a name-and-rules search for `dragon` rather than no filter at all: narrower than the
  * reader asked for in kind, never wider in extent. A **negated** tag folds the same way, because
- * the alternatives are worse — free text has no `-`, so the choice is between the word and
- * nothing, and nothing is the silent widening this whole function exists to refuse. The reader
- * can see the word did not do what they meant; they cannot see a term that was never sent.
+ * the alternatives are worse — free text's only `-` excludes a card *by name*, which would keep
+ * every dragon not called one and so widen exactly what the reader asked to narrow, so the choice
+ * is between the word and nothing, and nothing is the silent widening this whole function exists
+ * to refuse. The reader can see the word did not do what they meant; they cannot see a term that
+ * was never sent.
  *
  * Absent rather than empty on both fields, which is the rule every other filter in this app
  * follows: a blank `text` and an empty `predicates` are read as unset at the far end, and
@@ -1178,9 +1180,11 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // wall that chip filters have to describe one corpus, and a facet request carrying the whole
     // box would be counting over an FTS query the search never ran.
     text: parsed.text || undefined,
-    // **The typed terms, and only two of the twelve fields actually narrow a count.**
+    // **The typed terms, and only two of the thirteen fields actually narrow a count.**
     // `typeLine` and `oracleText` ride the FTS bitset `run_facets` already folds, so they narrow
-    // the counts for free; the index carries no power, toughness, artist or card-colour
+    // the counts for free — when positive: `run_facets` discards every negated text term, and a
+    // `name` term is never anything else, so `-bolt` leaves the counts where they were. The
+    // index carries no power, toughness, artist or card-colour
     // dimension, so the other ten leave the counts **wider than the wall**. That is spec §7's
     // fail-open decision rather than a gap to close here: `facets.ts` greys only what would
     // change nothing, so a count that is too high offers an option that turns out empty, where
@@ -1329,7 +1333,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       rewrite(termsBehind(key).reduce((query, token) => removeToken(query, token), debouncedText)),
     /** Flip one typed predicate between include and exclude — a chip's press. Rewrites each term
      *  where it stands rather than re-appending it, so the reader's own sentence keeps its
-     *  order. */
+     *  order. A `-bolt` chip does not survive its own include press: `bolt` is free text, which
+     *  draws no chip — `queryLanguage.ts`' `excludedName` says why. */
     togglePredicateChipMode: (key: string) => {
       const picked = predicateChips.find((c) => c.key === key);
       if (!picked) return;

@@ -273,3 +273,86 @@ describe("parseQuery — partial and unparseable", () => {
     expect(parseQuery("itag:dragon").text).toBe("itag:dragon");
   });
 });
+
+describe("parseQuery — a negated name (issue #571)", () => {
+  // Until 2026-09-27 these fell through to free text and the `-` was tokenised away, so `-bolt`
+  // searched FOR bolt. Scryfall's `-bolt` is `-name:bolt`: measured live 2026-09-27, both answer
+  // 3,891 of `t:instant`'s 3,909.
+  it("reads a dash on a bare word as a name to exclude", () => {
+    expect(parseQuery("-bolt")).toEqual({
+      text: "",
+      tags: [],
+      predicates: [{ field: "name", op: "colon", value: "bolt", negated: true, start: 0, end: 5 }],
+    });
+  });
+
+  it("takes a quoted phrase whole, dash and quotes inside the span", () => {
+    const input = 'bolt -"lightning bolt" x';
+    const { text, predicates } = parseQuery(input);
+    expect(text).toBe("bolt x");
+    expect(predicates).toHaveLength(1);
+    expect(predicates[0]).toMatchObject({ field: "name", value: "lightning bolt", negated: true });
+    expect(input.slice(predicates[0].start, predicates[0].end)).toBe('-"lightning bolt"');
+    expect(parseQuery("-'lightning bolt'").predicates[0]).toMatchObject({ value: "lightning bolt" });
+  });
+
+  it("holds the phrase through the keystrokes before its closing quote", () => {
+    expect(parseQuery('-"lightning bol').predicates[0]).toMatchObject({ value: "lightning bol" });
+  });
+
+  it("leaves a positive bare word, quoted or not, as the free text it has always been", () => {
+    for (const input of ["bolt", '"lightning bolt"', "god-pharaoh"]) {
+      const parsed = parseQuery(input);
+      expect(parsed.text, input).toBe(input);
+      expect(parsed.predicates, input).toEqual([]);
+    }
+  });
+
+  it("sits beside free text and keyword terms, each keeping its own meaning", () => {
+    const { text, predicates } = parseQuery("lightning -bolt -t:creature");
+    expect(text).toBe("lightning");
+    expect(predicates.map((p) => [p.field, p.value, p.negated])).toEqual([
+      ["name", "bolt", true],
+      ["typeLine", "creature", true],
+    ]);
+  });
+
+  it("negates whatever would have been free text, an unparseable term included", () => {
+    // `cmc>=banana` and `itag:dragon` are words to FTS; negated, they are names that cannot
+    // contain them — Scryfall's reading of both.
+    expect(parseQuery("-cmc>=banana").predicates[0]).toMatchObject({
+      field: "name",
+      value: "cmc>=banana",
+    });
+    expect(parseQuery("-itag:dragon").predicates[0]).toMatchObject({
+      field: "name",
+      value: "itag:dragon",
+    });
+  });
+
+  it("is neither a term nor free text until there is a word to exclude", () => {
+    // Every keystroke on the way to `-bolt` or `-"lightning bolt"` passes through one of the
+    // first two, and a chip reading `not -` would narrow nothing — the FTS builder drops a value
+    // with no word in it.
+    for (const input of ["-", '-"', "--", "-!!!", "bolt -"]) {
+      const parsed = parseQuery(input);
+      expect(parsed.predicates, input).toEqual([]);
+      expect(parsed.text, input).toBe(input === "bolt -" ? "bolt" : "");
+    }
+  });
+
+  it("reads a word in any script", () => {
+    expect(parseQuery("-Молния").predicates[0]).toMatchObject({ field: "name", value: "Молния" });
+  });
+
+  it("becomes free text again when its chip is flipped to include", () => {
+    // There is no positive name to flip to: `bolt` is the ordinary free text, which draws no chip.
+    const input = "t:instant -bolt";
+    const [, name] = parseQuery(input).predicates;
+    const flipped = setTokenNegated(input, name, false);
+    expect(flipped).toBe("t:instant bolt");
+    expect(parseQuery(flipped).predicates.map((p) => p.field)).toEqual(["typeLine"]);
+    expect(parseQuery(flipped).text).toBe("bolt");
+    expect(removeToken(input, name)).toBe("t:instant");
+  });
+});

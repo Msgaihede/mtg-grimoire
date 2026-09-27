@@ -21,7 +21,7 @@ use crate::collection::{valid_quantity, EntryChange, ShelfCount};
 // which is the one drift a shared fence cannot prevent by itself.
 #[cfg(test)]
 use crate::deck_meta::FOLDER_GONE;
-use crate::filters::{escape_like, LIKE_ESCAPE};
+use crate::filters::{escape_like, PredicateField, QueryPredicate, LIKE_ESCAPE};
 use crate::schema::{FINISHES, WISHLIST_GRAIN};
 #[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
@@ -1259,15 +1259,40 @@ pub(crate) fn wishlist_scope(
             Box::new(escape_like(text)),
         );
     }
+    // A `-bolt` is a name term, and it is answered **here, from the same column as the free
+    // text above** rather than by `cards_fts`, for that text's reason: every wish carries its own
+    // name, and `NULL NOT IN (…)` over the LEFT JOIN would take an orphaned wish out of a list
+    // for not being called Bolt. The one place the wire's `name` field does not mean `cards.name`.
+    // Substring rather than FTS prefix, like the positive `LIKE` beside it, which is also
+    // Scryfall's own reading of a name.
+    let predicates = q.cards.predicates.as_deref().unwrap_or(&[]);
+    for pred in predicates
+        .iter()
+        .filter(|p| p.field == PredicateField::Name)
+    {
+        let value = pred.value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let not = if pred.negated { "NOT " } else { "" };
+        p.push(
+            format!("w.name {not}LIKE '%' || ? || '%' ESCAPE '{LIKE_ESCAPE}'"),
+            Box::new(escape_like(value)),
+        );
+    }
     // The typed `t:`/`o:` terms, and **only** those — [`crate::filters::fts_match`] is called
-    // with `None` text, never with `q.cards.text`, because the free text above is deliberately
-    // a `LIKE` over this table's own denormalised name: a wish may have no card row at all, and
-    // routing its name through `cards_fts` would hide exactly the orphan that column exists
-    // for. A `t:goblin` beside it is a claim only a card row can answer, so it narrows to rows
-    // that still have one — `push_card_filters`' documented orphan rule, and `NULL IN (…)` is
-    // NULL over this LEFT JOIN without a branch.
-    let (matched, negatives) =
-        crate::filters::fts_match(None, q.cards.predicates.as_deref().unwrap_or(&[]));
+    // with `None` text, never with `q.cards.text`, and with the name terms taken out, because
+    // both are deliberately a `LIKE` over this table's own denormalised name: a wish may have no
+    // card row at all, and routing its name through `cards_fts` would hide exactly the orphan
+    // that column exists for. A `t:goblin` beside it is a claim only a card row can answer, so
+    // it narrows to rows that still have one — `push_card_filters`' documented orphan rule, and
+    // `NULL IN (…)` is NULL over this LEFT JOIN without a branch.
+    let card_terms: Vec<QueryPredicate> = predicates
+        .iter()
+        .filter(|p| p.field != PredicateField::Name)
+        .cloned()
+        .collect();
+    let (matched, negatives) = crate::filters::fts_match(None, &card_terms);
     if let Some(query) = matched {
         p.push(
             "c.rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)".to_owned(),
@@ -2962,6 +2987,67 @@ mod tests {
             found("bolt"),
             ["Lightning Bolt"],
             "and ordinary text still works"
+        );
+    }
+
+    /// **`-bolt` reads the wish's own name, as the free text does — and so keeps an orphan.**
+    /// Issue #571.
+    ///
+    /// Sent through `cards_fts` like the search's, the term would be `c.rowid NOT IN (…)`, and
+    /// over this LEFT JOIN an orphaned wish's rowid is NULL — so `NULL NOT IN (…)` would take
+    /// *God-Pharaoh's Gift* off the list for not being called Bolt. That is the row the
+    /// denormalised name column exists for. The `_` line is the escaping's fence, borrowed from
+    /// the test above: unescaped, `god_pharaoh` would match the `-` and hide the Gift.
+    #[test]
+    fn a_negated_name_reads_the_wishs_own_name_and_keeps_an_orphan() {
+        let conn = seeded();
+        for (oracle_id, name) in [
+            ("o1", "Lightning Bolt"),
+            ("oracle-1", "Test Card"),
+            ("o-nowhere", "God-Pharaoh's Gift"),
+        ] {
+            add_wish(
+                &conn,
+                &WishInput {
+                    oracle_id: Some(oracle_id.to_owned()),
+                    name: Some(name.to_owned()),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        let kept = |excluded: &str| {
+            let mut names: Vec<String> = list_wishes(
+                &conn,
+                &WishlistQuery {
+                    cards: crate::filters::CardFilters {
+                        predicates: Some(vec![QueryPredicate {
+                            field: PredicateField::Name,
+                            op: crate::filters::PredicateOp::Colon,
+                            value: excluded.to_owned(),
+                            negated: true,
+                        }]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+            names.sort();
+            names
+        };
+
+        assert_eq!(kept("bolt"), ["God-Pharaoh's Gift", "Test Card"]);
+        assert_eq!(kept("God-Pharaoh"), ["Lightning Bolt", "Test Card"]);
+        assert_eq!(
+            kept("god_pharaoh"),
+            ["God-Pharaoh's Gift", "Lightning Bolt", "Test Card"],
+            "`_` is not `-`"
         );
     }
 

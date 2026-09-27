@@ -1117,13 +1117,18 @@ export interface CardFilters {
  * What one {@link QueryPredicate} is a statement about — `filters::PredicateField`, whose
  * variants carry `#[serde(rename_all = "camelCase")]`, so these strings are the wire.
  *
- * **`typeLine` and `oracleText` emit no SQL at all.** They travel in the same list as the other
- * ten and are folded into the FTS5 `MATCH` string instead, because `LIKE` over either column
- * measured 80× to 250× slower on the real corpus. Nothing on this side has to know that — it is
- * recorded because the two are the fields whose behaviour differs from their neighbours', and
- * the difference is invisible in the payload.
+ * **`name`, `typeLine` and `oracleText` emit no SQL at all.** They travel in the same list as
+ * the other ten and are folded into the FTS5 `MATCH` string instead, because `LIKE` over either
+ * text column measured 80× to 250× slower on the real corpus. Nothing on this side has to know
+ * that — it is recorded because the three are the fields whose behaviour differs from their
+ * neighbours', and the difference is invisible in the payload. (The wishlist is the exception
+ * for `name`: it answers one from its own denormalised name column, as it does its free text.)
+ *
+ * `name` has no keyword: `queryLanguage.ts` sends it only for a leading `-` on free text —
+ * `-bolt`, `-"lightning bolt"` — so on the wire it is always negated.
  */
 export type PredicateField =
+  | "name"
   | "typeLine"
   | "oracleText"
   | "keyword"

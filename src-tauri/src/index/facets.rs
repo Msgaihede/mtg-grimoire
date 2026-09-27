@@ -906,7 +906,8 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
     // all the way into [`compute`], and a tag term beside it does not fill the hole.
     //
     // ⚠️ **The negatives are DISCARDED and the counts therefore read high under a `-t:` or a
-    // `-o:` term.** This is the module note's rule applied deliberately rather than an
+    // `-o:` term — or a `-bolt`, since a name term is always negated and rides this same
+    // list.** This is the module note's rule applied deliberately rather than an
     // oversight: excluding them would need a bitset complement, [`BitSet`] has `and` and no
     // `and_not`, and growing the index is out of scope (spec §11). A count that is too high
     // leaves an option live that returns fewer cards than it advertised — one press wasted —

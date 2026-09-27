@@ -178,7 +178,7 @@ pub struct SearchRequest {
     pub collapse: Option<bool>,
     /// The Scryfall-syntax terms the box was parsed into — `t:goblin`, `cmc>=3`, `-a:rebecca`.
     ///
-    /// **Two of the twelve fields never become SQL and ride [`Self::text`]'s `MATCH` string
+    /// **Three of the thirteen fields never become SQL and ride [`Self::text`]'s `MATCH` string
     /// instead**, which is why they are read here by [`filters::fts_match`] rather than
     /// handed straight to `push_card_filters` with the rest. See
     /// [`crate::filters::PredicateField`].
@@ -225,8 +225,8 @@ impl SearchRequest {
             art_tags: self.art_tags.clone(),
             oracle_tags: self.oracle_tags.clone(),
             art_weight_floor: self.art_weight_floor.clone(),
-            // Carried whole, unlike `text`: ten of the twelve fields are SQL and come out of
-            // `push_card_filters` like every other filter. The two that are not are skipped
+            // Carried whole, unlike `text`: ten of the thirteen fields are SQL and come out of
+            // `push_card_filters` like every other filter. The three that are not are skipped
             // there by name — see [`crate::filters::PredicateField`].
             predicates: self.predicates.clone(),
         }
@@ -1413,6 +1413,94 @@ mod tests {
         .unwrap();
         assert_eq!(r.total, 1);
         assert_eq!(r.items[0].name, "Lightning Bolt");
+    }
+
+    /// **`-bolt` takes a card out by its name and by nothing else** — issue #571, where it
+    /// searched *for* bolt because the `-` fell through to the tokenizer as punctuation.
+    ///
+    /// The row that decides it is *Sparkmage Apprentice*, whose rules text says Lightning Bolt
+    /// and whose name does not: the positive free text `lightning` finds it and `-bolt` leaves
+    /// it standing. That is Scryfall's asymmetry (`-bolt` = `-name:bolt`, measured 2026-09-27)
+    /// and the reason the term is a column filter rather than a negated copy of the free text.
+    /// Driven through [`run_search`] rather than asserted as a string, so FTS5 has to accept
+    /// the phrase — the lesson of `two_positive_terms_join_with_an_explicit_and`.
+    #[test]
+    fn a_negated_name_excludes_by_name_alone() {
+        let conn = seeded();
+        for (id, name, text) in [
+            (
+                "20",
+                "Chain Lightning",
+                "Chain Lightning deals 3 damage to any target.",
+            ),
+            (
+                "21",
+                "Bolt Bend",
+                "Change the target of target spell with a single target.",
+            ),
+            (
+                "22",
+                "Sparkmage Apprentice",
+                "Whenever you cast Lightning Bolt, draw a card.",
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,search_text,raw)
+                 VALUES (?1,?2,'tst',?1,'en','normal',1,?3,'{}')",
+                rusqlite::params![id, name, text],
+            )
+            .unwrap();
+        }
+        conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+            .unwrap();
+        let names = |text: Option<&str>, excluded: &str| -> Vec<String> {
+            let r = run_search(
+                &conn,
+                &SearchRequest {
+                    text: text.map(str::to_owned),
+                    predicates: Some(vec![filters::QueryPredicate {
+                        field: filters::PredicateField::Name,
+                        op: filters::PredicateOp::Colon,
+                        value: excluded.to_owned(),
+                        negated: true,
+                    }]),
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut names: Vec<String> = r.items.into_iter().map(|c| c.name).collect();
+            names.sort();
+            names
+        };
+
+        // Alone, with no positive `MATCH` beside it and so no join: the `NOT IN` is the whole
+        // text side of the statement.
+        assert_eq!(
+            names(None, "bolt"),
+            ["Chain Lightning", "Lightning Helix", "Sparkmage Apprentice"]
+        );
+        // A phrase is ordered, as a quoted name is on Scryfall.
+        assert_eq!(
+            names(None, "lightning bolt"),
+            [
+                "Bolt Bend",
+                "Chain Lightning",
+                "Lightning Helix",
+                "Sparkmage Apprentice"
+            ]
+        );
+        assert_eq!(
+            names(None, "bolt lightning").len(),
+            5,
+            "the same two words the other way round name no card here"
+        );
+        // Beside free text: `lightning -bolt`. The free text reads the rules text and finds
+        // the Apprentice; the name term does not, and keeps it.
+        assert_eq!(
+            names(Some("lightning"), "bolt"),
+            ["Chain Lightning", "Lightning Helix", "Sparkmage Apprentice"]
+        );
     }
 
     /// Names carrying the punctuation real card names carry. Added per-test and

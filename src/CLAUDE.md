@@ -964,7 +964,10 @@ Every one of these has its measurement and its story in
   wall in the hook rather than at each call site, because `keepPreviousData` would otherwise leave
   the *previous* search's cards on screen under a query that asked something else, while a
   *predicate* must never gate, since a predicate that matches nothing is a search with no results
-  rather than a name nobody knows.
+  rather than a name nobody knows. **And a `-` on plain words excludes a *name*** (`-bolt`,
+  `-"lightning bolt"`, issue #571): a keywordless `name` predicate reading that column alone,
+  while the positive free text beside it reads every column — Scryfall's asymmetry, measured, and
+  the reason `-goblin` does not take every Goblin creature with it.
 - **Global actions (Refresh, sync status, settings) live in the top ribbon, not in views**, and a
   long job registers an `Activity` (`src/lib/activity.ts`) rather than wiring itself in.
   Registration is declarative: pass the job or `null` every render.
