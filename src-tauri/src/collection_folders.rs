@@ -360,29 +360,35 @@ pub fn create_folder(
     if let Some(parent) = parent_id {
         user_folder(conn, parent)?;
     }
-    // `IS`, not `=`: `parent_id` is nullable (root), and `=` never matches a bound NULL. And
-    // `kind = 'user'`, so the two folders the app owns are not part of the reader's counting —
-    // see the paragraph above.
-    let next_order: i64 = conn
-        .query_row(
-            "SELECT coalesce(max(sort_order), -1) + 1 FROM collection_folders
-              WHERE parent_id IS ?1 AND kind = ?2",
-            params![parent_id, USER_KIND],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    let id: i64 = conn
-        .query_row(
-            "INSERT INTO collection_folders
-                (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, NULL, ?4, unixepoch(), unixepoch())
-             RETURNING id",
-            params![parent_id, name, USER_KIND, next_order],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    record_folder(conn, "create", name, None)?;
-    read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+    // The insert and its feed row in one savepoint (issue #550): the command opens no
+    // transaction, so a feed insert that failed after an autocommitted insert answered an error
+    // over a folder that was there, and a second press made it twice. It nests, so a caller's
+    // own transaction still owns the write.
+    crate::db::in_savepoint(conn, "collection_folder_create", || {
+        // `IS`, not `=`: `parent_id` is nullable (root), and `=` never matches a bound NULL. And
+        // `kind = 'user'`, so the two folders the app owns are not part of the reader's counting —
+        // see the paragraph above.
+        let next_order: i64 = conn
+            .query_row(
+                "SELECT coalesce(max(sort_order), -1) + 1 FROM collection_folders
+                  WHERE parent_id IS ?1 AND kind = ?2",
+                params![parent_id, USER_KIND],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let id: i64 = conn
+            .query_row(
+                "INSERT INTO collection_folders
+                    (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4, unixepoch(), unixepoch())
+                 RETURNING id",
+                params![parent_id, name, USER_KIND, next_order],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        record_folder(conn, "create", name, None)?;
+        read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+    })
 }
 
 /// One `folder` line in the feed, for the three acts that change what drawers exist.
@@ -417,17 +423,20 @@ fn record_folder(
 /// removed-cards folder after what it is for, so neither is [`FOLDER_NOT_YOURS`] by accident.
 pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<CollectionFolder, String> {
     let name = valid_name(name)?;
-    // The fence already reads the row, so the previous name costs nothing — and it has to be
-    // taken from here rather than after the `UPDATE`, which is what makes the line say what the
-    // drawer used to be called.
-    let before = user_folder(conn, id)?;
-    conn.execute(
-        "UPDATE collection_folders SET name = ?2, updated_at = unixepoch() WHERE id = ?1",
-        params![id, name],
-    )
-    .map_err(|e| e.to_string())?;
-    record_folder(conn, "rename", name, Some(&before.name))?;
-    read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+    // The update and its feed row in one savepoint (issue #550), `create_folder`'s reason.
+    crate::db::in_savepoint(conn, "collection_folder_rename", || {
+        // The fence already reads the row, so the previous name costs nothing — and it has to be
+        // taken from here rather than after the `UPDATE`, which is what makes the line say what the
+        // drawer used to be called.
+        let before = user_folder(conn, id)?;
+        conn.execute(
+            "UPDATE collection_folders SET name = ?2, updated_at = unixepoch() WHERE id = ?1",
+            params![id, name],
+        )
+        .map_err(|e| e.to_string())?;
+        record_folder(conn, "rename", name, Some(&before.name))?;
+        read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+    })
 }
 
 /// Set a folder aside, or bring it back — [`rename_folder`]'s shape over one other scalar.
@@ -3117,5 +3126,62 @@ mod tests {
             tombstones, uids,
             "one tombstone per cleared entry, and no other"
         );
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * Issue #550: a folder write and its feed line are one savepoint.
+     * ---------------------------------------------------------------------------------- */
+
+    /// Make every `activity` insert fail, as a full disk or a locked table would — a temp
+    /// trigger, so it lives on this connection only and [`allow_activity`] takes it away.
+    fn refuse_activity(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER refuse_activity BEFORE INSERT ON main.activity
+             BEGIN SELECT RAISE(ABORT, 'the feed is full'); END;",
+        )
+        .unwrap();
+    }
+
+    fn allow_activity(conn: &Connection) {
+        conn.execute_batch("DROP TRIGGER temp.refuse_activity")
+            .unwrap();
+    }
+
+    fn user_folder_names(conn: &Connection) -> Vec<String> {
+        conn.prepare("SELECT name FROM collection_folders WHERE kind = 'user' ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_new_folder_back_with_it() {
+        let conn = open();
+        refuse_activity(&conn);
+        assert!(create_folder(&conn, None, "Binder A").is_err());
+        assert!(
+            user_folder_names(&conn).is_empty(),
+            "no folder without its line"
+        );
+
+        allow_activity(&conn);
+        create_folder(&conn, None, "Binder A").unwrap();
+        assert_eq!(
+            user_folder_names(&conn),
+            ["Binder A"],
+            "and the retry makes one, not two"
+        );
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_rename_back_with_it() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        refuse_activity(&conn);
+        assert!(rename_folder(&conn, shelf.id, "Trade box").is_err());
+        assert_eq!(user_folder_names(&conn), ["Shelf"]);
+        assert_eq!(feed(&conn).len(), 1, "the create's line, and no rename's");
     }
 }
