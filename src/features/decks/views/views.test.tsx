@@ -275,7 +275,10 @@ const BANNED: ValidationIssue = {
   cardIds: ["c-Sol Ring"],
 };
 
-const VIOLATIONS = new Map<string, ValidationIssue[]>([["c-Sol Ring", [BANNED]]]);
+/** Keyed by the Sol Ring row's slot, which is how `violationsBySlot` files a mark (issue #554). */
+const VIOLATIONS = new Map<string, ValidationIssue[]>([
+  [deckCardSlot(CARDS[0].categoryId, CARDS[0].cardId, CARDS[0].finish), [BANNED]],
+]);
 
 const GROUPS: CardGroup[] = buildGroups(
   CARDS,

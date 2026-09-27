@@ -114,7 +114,11 @@ Full record, with every measurement and the provenance of each rung:
   its `RULE BREAK` outline and badge, and the two answers are two functions in `engine.ts`:
   `validateDeck` is what the deck is — the header's check chip, the validation panel, the
   sentence a reader acts on — and `validateForMarks` is that plus what is wrong with each parked
-  card, which is what `DeckEditor` files through `violationsByCard` for the four views.
+  card, which is what `DeckEditor` files through `violationsBySlot` for the four views. **The marks
+  are filed by row slot, never by printing** (issue #554): `validateForMarks` stamps each finding
+  with the `rowIds` its own pass judged, so an active pile's singleton break names the parked Sol
+  Ring's printing and still leaves the parked row unmarked, and a ban on a card in both piles is
+  one sentence on each row rather than two on both.
   `ValidationPanel` calls the first and must go on calling it. **What a parked card is judged on
   is the card's own facts under this format and never a fact about a pile**: legality, the
   mana-value ceiling, and colour identity against the *active* command zone — each answerable
@@ -129,8 +133,14 @@ Full record, with every measurement and the provenance of each rung:
 - **`SIZE_KINDS` is `main`, `commander` and `maybe`** — the switch decides whether a pile counts
   at all; the kind decides only whether it is played _beside_ the deck or _in_ it, and only
   `side` and `companion` are beside it (CR 100.4a; EDH's companion is "effectively a 101st
-  card"). It is written in **three places that must stay one rule**: `engine.ts`'s constant,
-  `deck.rs`'s `DECK_SELECT` subquery behind `DeckRow.card_count`, and the Storybook fake's copy.
+  card"). It is written in **three places that must stay one rule**: the constant (in
+  `validation/kinds.ts` since issue #554, re-exported from `engine.ts`), `deck.rs`'s
+  `DECK_SELECT` subquery behind `DeckRow.card_count`, and the Storybook fake's copy. **Inside
+  `validation/` nothing spells it a second time**: the companion's starting deck *is* it, and the
+  identity pass is it less `commander` plus `side`. Both were hand-written lists that missed
+  `maybe`, so a switched-on Maybeboard counted toward 100 cards and was held to no identity and no
+  companion condition. It lives in a leaf module because `companions.ts` and `engine.ts` import
+  each other, and a top-level constant derived across that cycle is read before it exists.
 - **An add that names no category is filed by what the card _does_; an add that names one is
   untouched** — so every _drag_ overrides the rule by construction. The rule is `autoCategoryFor`,
   applied on **`useDeck.addCard`'s single definition**. Three steps, in this order: a front-face

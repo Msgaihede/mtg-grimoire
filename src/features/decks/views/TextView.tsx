@@ -37,7 +37,7 @@ import {
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
-import { ruleBreak } from "../violations";
+import { ruleBreak, violationsFor } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { packColumns, RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
@@ -409,7 +409,7 @@ function TextGroup({
             <TextRow
               key={card.id}
               card={card}
-              ruleBreakText={ruleBreak(violations?.get(card.cardId))}
+              ruleBreakText={ruleBreak(violationsFor(violations, card))}
               theoryMark={theoryMatchMark(theoryPlan, card)}
               noted={deckCardNoted(card, noted)}
               tracksCollection={tracksCollection}

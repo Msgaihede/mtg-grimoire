@@ -145,7 +145,7 @@ import { useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
 import { ValidationPanel } from "./ValidationPanel";
 import { validateForMarks } from "./validation/engine";
-import { violationsByCard } from "./violations";
+import { violationsBySlot } from "./violations";
 import { GridView } from "./views/GridView";
 import { StackView } from "./views/StackView";
 import { TableView } from "./views/TableView";
@@ -3736,7 +3736,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   usePublishCardWalk("the deck", deckWalk);
 
   /**
-   * Every finding, filed under each card it names, so a view can mark a card.
+   * Every finding, filed under each row it marks, so a view can mark a card — by the row's slot
+   * and never by its printing, so a parked copy does not wear the break its active twin is part
+   * of (issue #554).
    *
    * The second validation pass on this screen — `ValidationPanel` makes its own for the chip's
    * count — and that is the cheaper of the two arrangements rather than an oversight: the engine
@@ -3752,7 +3754,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * meant for the frames.
    */
   const violations = useMemo(
-    () => (spec ? violationsByCard(validateForMarks([...deck.cards], spec)) : undefined),
+    () =>
+      spec ? violationsBySlot(validateForMarks([...deck.cards], spec), deck.cards) : undefined,
     [deck.cards, spec],
   );
 
