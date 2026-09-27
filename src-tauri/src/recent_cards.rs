@@ -20,10 +20,9 @@
 //!   out rather than leaving two, so the list is a set ordered by recency — which is what a tile
 //!   row can draw without a key collision, and what a reader means by *recently*.
 //!
-//! **No clock in Rust.** `SystemTime::now()` panics on `wasm32-unknown-unknown` rather than
-//! erroring, and this module is on the every-target half of the map, so the time is SQLite's own
-//! `unixepoch()` — the clock every `created_at` in the schema is written from. [`record`] takes the
-//! time as an argument so a test can say when; [`record_now`] is what both targets' commands call.
+//! **No clock in Rust.** The time is SQLite's own `unixepoch()` — the clock every `created_at` in
+//! the schema is written from. [`record`] takes the time as an argument so a test can say when;
+//! [`record_now`] is what the command calls.
 //!
 //! **Not synced**, for [`crate::home`]'s reason: `app_meta` is in no `SYNCED_TABLES` entry, and
 //! which cards were open on *this* screen is a fact about the screen rather than the collection.
@@ -124,10 +123,7 @@ pub fn record(conn: &Connection, card_id: &str, now: i64) -> Result<(), String> 
         .map_err(|e| format!("could not remember the card you opened: {e}"))
 }
 
-/// [`record`] at SQLite's `unixepoch()` — the call both targets' commands make.
-///
-/// The clock is asked of the database rather than of the process because `SystemTime::now()`
-/// panics on wasm; see the module doc.
+/// [`record`] at SQLite's `unixepoch()` — the call the command makes. See the module doc.
 pub fn record_now(conn: &Connection, card_id: &str) -> Result<(), String> {
     let now: i64 = conn
         .query_row("SELECT unixepoch()", [], |r| r.get(0))

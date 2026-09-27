@@ -135,8 +135,7 @@ pub struct QuickAddWish {
     pub preferred_finish: Option<String>,
     /// The named printing's picture, front face, exactly as
     /// [`crate::search::CardSummary::image_uris`] — `None` for an any-printing wish or a printing
-    /// the corpus no longer holds. Carried for the web build, which cannot draw from the
-    /// `mtgimg:` cache.
+    /// the corpus no longer holds.
     pub image_uris: Option<BTreeMap<String, String>>,
 }
 

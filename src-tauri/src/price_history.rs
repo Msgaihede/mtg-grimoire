@@ -25,12 +25,12 @@
 //!   nothing while doubling the table — and, worse, would make the day the feed first arrives read
 //!   as the whole collection's value appearing in one price move. A missing day is a gap in that
 //!   marketplace's line and never a step, because a period is only ever made from rows.
-//! * **The day comes from SQLite's `date('now')`, UTC**, never `SystemTime::now()`, which panics on
-//!   the web target — read **once** per snapshot and bound into every statement it makes. A
-//!   calendar day is the key, and **a snapshot replaces its marketplace's whole day** — so the
-//!   day holds its last snapshot's prices and holding and nothing older: a printing sold between a
-//!   sync and a feed refresh on one afternoon has no row that day, where an insert-or-replace would
-//!   have left the morning's. **Replaced, not rewritten**: each marketplace deletes the rows of its
+//! * **The day comes from SQLite's `date('now')`, UTC** — read **once** per snapshot and bound
+//!   into every statement it makes. A calendar day is the key, and **a snapshot replaces its
+//!   marketplace's whole day** — so the day holds its last snapshot's prices and holding and
+//!   nothing older: a printing sold between a sync and a feed refresh on one afternoon has no row
+//!   that day, where an insert-or-replace would have left the morning's. **Replaced, not
+//!   rewritten**: each marketplace deletes the rows of its
 //!   day the new holding does not contain, then upserts the rest, and a row whose price and copies
 //!   already say the same is not touched. The rule was once kept by deleting the whole day and
 //!   inserting it again, which rewrote every row — a few thousand — on every launch, ingest and
@@ -46,8 +46,7 @@
 //!   that calls [`snapshot`] may fail because of it, and each caller logs or records the error and
 //!   carries on. Three callers: the launch (`maintenance::snapshot_prices`), a card ingest
 //!   (`sync.rs`, beside `last_ingest_at`) and a feed store (`marketplace_feed::store`, for that one
-//!   marketplace). The browser build gets the launch and the feed store — both go through
-//!   every-target code — and its card ingest's day is recorded by the next launch.
+//!   marketplace).
 //!
 //! # `WITHOUT ROWID`, and the fence it steps outside
 //!

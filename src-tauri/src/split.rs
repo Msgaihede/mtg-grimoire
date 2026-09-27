@@ -790,7 +790,7 @@ mod tests {
             crate::db::checkpoint_truncate(&conn).unwrap();
         }
 
-        // What an OPFS eviction, a half-written sync or a bad sector leaves behind.
+        // What a half-written sync or a bad sector leaves behind.
         std::fs::write(dir.join(crate::db::CORPUS_DB), b"not a database at all").unwrap();
         for suffix in ["-wal", "-shm"] {
             let _ = std::fs::remove_file(dir.join(format!("corpus.db{suffix}")));

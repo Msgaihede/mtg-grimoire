@@ -337,8 +337,8 @@ mod tests {
     }
 
     /// The wire: the two page names `ShelfFoldPage` spells, both always present, and a `null` in
-    /// the change set arriving as `None` — which is what Tauri's deserializer and `web::route`'s
-    /// `field` both hand `set_shelf_folds`.
+    /// the change set arriving as `None` — which is what Tauri's deserializer hands
+    /// `set_shelf_folds`.
     #[test]
     fn the_folds_cross_the_wire_under_the_names_the_page_uses() {
         let folds = ShelfFolds {

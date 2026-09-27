@@ -187,13 +187,7 @@ pub struct CardDetail {
     pub image_status: Option<String>,
     /// Empty for a single-faced card.
     pub faces: Vec<CardFace>,
-    /// Where this printing's picture is, per variant — **the web target's only way to draw
-    /// one**, and the reason it is on a DTO at all.
-    ///
-    /// `mtgimg://` is registered natively with the webview and wasm cannot register a URL
-    /// scheme with a browser, so a card pane in a browser can reach no picture the row did not
-    /// hand it. `src/lib/images.ts`'s `cardArtSrc` is the whole of that branch: it ignores this
-    /// on desktop, where the local cache is already the right bytes at the right size.
+    /// Where this printing's picture is on `cards.scryfall.io`, per variant.
     ///
     /// Built by [`crate::image_uri::front_face_selects`] and folded by `front_face_map`, which
     /// is where the face-first precedence and the `soon.jpg` fence live. A printing carrying
@@ -233,13 +227,7 @@ pub struct Printing {
     pub frame_effects: Option<String>,
     pub border_color: Option<String>,
     pub layout: String,
-    /// Where this printing's picture is, per variant — **the web target's only way to draw
-    /// one**, and the reason it is on a DTO at all.
-    ///
-    /// `mtgimg://` is registered natively with the webview and wasm cannot register a URL
-    /// scheme with a browser, so a card pane in a browser can reach no picture the row did not
-    /// hand it. `src/lib/images.ts`'s `cardArtSrc` is the whole of that branch: it ignores this
-    /// on desktop, where the local cache is already the right bytes at the right size.
+    /// Where this printing's picture is on `cards.scryfall.io`, per variant.
     ///
     /// Built by [`crate::image_uri::front_face_selects`] and folded by `front_face_map`, which
     /// is where the face-first precedence and the `soon.jpg` fence live. A printing carrying
@@ -532,9 +520,7 @@ pub async fn card_image_uri(
     .map_err(|e| format!("the image URL could not be read: {e}"))?
 }
 
-/// **`pub(crate)` since 2026-08-30**: `web::route` calls it directly, because the browser
-/// has no `mtgimg://` handler for the wrapper's answer to be fetched through and the page
-/// builds a `cards.scryfall.io` URL from the same two columns instead.
+/// [`card_image_uri`] on a connection the caller holds.
 pub(crate) fn card_image_uri_inner(
     conn: &Connection,
     card_id: &str,

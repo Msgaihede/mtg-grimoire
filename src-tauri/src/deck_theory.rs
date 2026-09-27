@@ -194,11 +194,6 @@ pub struct TheoryDiffRow {
     /// because [`crate::image_uri::LIST_VARIANTS`] emits the pair rather than because anything
     /// on this dialog wants it.
     ///
-    /// **Why it is on the wire**, [`crate::search::CardSummary::image_uris`]' argument in full:
-    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme with a
-    /// browser, so on web and on Android a row draws its own picture or draws none. On desktop
-    /// it is ignored — `src/lib/images.ts`'s `cardArtSrc` takes the local cache.
-    ///
     /// **`None` is the ordinary answer for an orphan**, whose printing has left `cards` and
     /// whose join therefore answers NULL in both columns — the same rows
     /// [`Self::held_as_other_printing`] is `0` for, and one of the three states the frame
@@ -1402,9 +1397,7 @@ mod tests {
         );
     }
 
-    /// **A diff row carries its printing's picture** — the dialog draws the `art` crop beside
-    /// each name, and on web and on Android that URL travels with the row or the frame stays
-    /// blank: `mtgimg://` is a Tauri custom protocol and wasm can register no scheme.
+    /// **A diff row carries its printing's picture.**
     ///
     /// **`bolt-m10` is shaped like a `meld` printing here** — all four variants in *both*
     /// columns, every one a different URL — because that is the only shape where each way of

@@ -628,11 +628,10 @@ pub const USER_SCHEMA_VERSION: i64 = 52;
 /// schema-qualified `ALTER TABLE {schema}.sets ADD COLUMN printed_size INTEGER`, **gated on
 /// `PRAGMA {schema}.table_info(sets)` and never on this number** for the reason the paragraph
 /// below spells out, no index and no backfill. **Its only writer is the `/sets` fetch**, which
-/// on desktop runs after an ingest and — since this rung — also whenever the table holds no
-/// printed size at all (`crate::sync`'s `sets_need_fetch`), so the gap between the rung and a
-/// filled column is one sync rather than one Scryfall bulk rotation. The browser build has never
-/// filled `sets`, so there it stays NULL, and `crate::set_completion` reads a NULL as *size
-/// unknown* rather than as zero on every target.
+/// runs after an ingest and — since this rung — also whenever the table holds no printed size
+/// at all (`crate::sync`'s `sets_need_fetch`), so the gap between the rung and a filled column
+/// is one sync rather than one Scryfall bulk rotation. `crate::set_completion` reads a NULL as
+/// *size unknown* rather than as zero.
 ///
 /// **3 (2026-09-10) is `cards.produced_mana`** — which colours of mana a printing can *make*,
 /// a field Scryfall has always published and this app parsed past. The deck editor's stats band
@@ -743,7 +742,7 @@ pub const TABLES: &[(&str, Side)] = &[
     ("deck_undo", Side::User),
     ("decks", Side::User),
     // A name is something a person typed, and nothing rebuilds it: no feed knows what the
-    // reader calls their phone. Synced (user schema v31) and the reader's are different
+    // reader calls their laptop. Synced (user schema v31) and the reader's are different
     // questions, and this list only answers the second — `SYNCED_TABLES` answers the first.
     ("device_names", Side::User),
     // Per-device and never synced, but nothing rebuilds it either — and it is the record of
@@ -5070,10 +5069,6 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     // reach no other device — silently, for as long as it is used. There is no message this
     // could degrade into that a reader would act on.
     //
-    // Here rather than in `db::open_write` because this is the one door all three targets go
-    // through: the browser's pair is opened by `db::open_pooled_pair` and migrated by
-    // `web::glue`, which calls exactly this function.
-    //
     // **The stale apply guard first, and fatal for the same reason**: a kill inside a
     // `capture::suppressed` window leaves `sync_state.applying` on disk, and every trigger
     // installed below reads it and records nothing.
@@ -5204,63 +5199,54 @@ fn says_nothing_about_the_file(e: &rusqlite::Error) -> bool {
 /// one at head in its place — `DETACH`, delete, `ATTACH`, migrate, which is the reason the user
 /// file is `main` (see [`crate::db::open_write`]).
 ///
-/// **Answers `failed` unchanged when there is no file to delete**: an in-memory corpus (the
-/// test pairs) and the web target, whose OPFS pool is not a filesystem `std::fs` can reach. Both
-/// stop the launch exactly as before this existed.
+/// **Answers `failed` unchanged when there is no file to delete** — an in-memory corpus (the
+/// test pairs) — which stops the launch exactly as before this existed.
 ///
 /// A delete that fails puts the corpus back and answers `failed` too, so the launch stops over
 /// the original error rather than over a half-replaced file — and the next launch tries again,
 /// since nothing was stamped.
 fn replace_attached_corpus(conn: &Connection, failed: rusqlite::Error) -> rusqlite::Result<()> {
-    #[cfg(target_family = "wasm")]
-    {
-        let _ = conn;
-        Err(failed)
+    let file: String = conn.query_row(
+        &format!("SELECT file FROM pragma_database_list WHERE name = '{CORPUS}'"),
+        [],
+        |r| r.get(0),
+    )?;
+    if file.is_empty() {
+        return Err(failed);
     }
-    {
-        let file: String = conn.query_row(
-            &format!("SELECT file FROM pragma_database_list WHERE name = '{CORPUS}'"),
-            [],
-            |r| r.get(0),
+    let path = std::path::PathBuf::from(file);
+    // A cached statement naming the corpus would hold it open and fail the `DETACH` with
+    // `database corpus is locked`.
+    conn.flush_prepared_statement_cache();
+    conn.execute_batch(&format!("DETACH DATABASE {CORPUS}"))?;
+    let deleted = remove_database_files(&path);
+    let attach = |conn: &Connection| -> rusqlite::Result<()> {
+        conn.execute(
+            &format!("ATTACH DATABASE ?1 AS {CORPUS}"),
+            [path.to_string_lossy().as_ref()],
         )?;
-        if file.is_empty() {
-            return Err(failed);
-        }
-        let path = std::path::PathBuf::from(file);
-        // A cached statement naming the corpus would hold it open and fail the `DETACH` with
-        // `database corpus is locked`.
-        conn.flush_prepared_statement_cache();
-        conn.execute_batch(&format!("DETACH DATABASE {CORPUS}"))?;
-        let deleted = remove_database_files(&path);
-        let attach = |conn: &Connection| -> rusqlite::Result<()> {
-            conn.execute(
-                &format!("ATTACH DATABASE ?1 AS {CORPUS}"),
-                [path.to_string_lossy().as_ref()],
-            )?;
-            crate::db::apply_pragmas(conn, Some(CORPUS)).map(|_| ())
-        };
-        if let Err(why) = deleted {
-            eprintln!(
-                "the card database could not be migrated ({failed}) and could not be deleted to                  be rebuilt: {why}"
-            );
-            attach(conn)?;
-            return Err(failed);
-        }
-        attach(conn)?;
-        migrate_corpus(conn)?;
+        crate::db::apply_pragmas(conn, Some(CORPUS))
+    };
+    if let Err(why) = deleted {
         eprintln!(
-            "the card database could not be migrated ({failed}) and has been replaced; the next              sync will rebuild it. Nothing in your collection, decks or wishlist was touched."
+            "the card database could not be migrated ({failed}) and could not be deleted to \
+             be rebuilt: {why}"
         );
-        Ok(())
+        attach(conn)?;
+        return Err(failed);
     }
+    attach(conn)?;
+    migrate_corpus(conn)?;
+    eprintln!(
+        "the card database could not be migrated ({failed}) and has been replaced; the next \
+         sync will rebuild it. Nothing in your collection, decks or wishlist was touched."
+    );
+    Ok(())
 }
 
 /// Delete a database file and its two journals, answering the first failure that was not "it
 /// was not there". **`NotFound` is success**: the file this was asked to remove is gone, which
 /// is the whole of what a caller wants to know.
-///
-/// **Not gated to the desktop**, though only the desktop has files to delete: [`prepare_data_dir`]
-/// compiles on every target and calls it.
 fn remove_database_files(path: &std::path::Path) -> std::io::Result<()> {
     let mut first = Ok(());
     for suffix in ["", "-wal", "-shm"] {
@@ -5296,8 +5282,7 @@ const USER_BACKUPS_KEPT: usize = 3;
 /// first attempt took — the older state, which is the one worth having. The oldest copies past
 /// [`USER_BACKUPS_KEPT`] are removed after a new one is written.
 ///
-/// An in-memory `main` (the tests) has no path and is skipped, and so is the web target, whose
-/// OPFS pool is not a filesystem this can make a folder in.
+/// An in-memory `main` (the tests) has no path and is skipped.
 pub(crate) fn back_up_user_file(
     conn: &Connection,
     from: i64,
@@ -5384,15 +5369,11 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         ));
     }
     // **A user file at 0 has no shape yet**, which is [`migrate_corpus`]'s `v < head` arm read
-    // for the other half — and it was found by running the web build rather than by reading.
-    // On desktop this never fires: `prepare_data_dir` runs `split::convert` before any
-    // connection the app keeps, and even a fresh install goes the long way round, building a
-    // whole legacy `mtg.db` at 26 and splitting it. **A browser has no `mtg.db` to take
-    // apart**, so before this the web target opened a pair whose corpus had a shape and whose
-    // user half had no tables at all. It failed where you would least look: the facet index
-    // reads `collection_entries` for its `owned` dimension, so the only symptom was
-    // `index build: no such table: collection_entries` in a Worker console, with the page
-    // otherwise working.
+    // for the other half. A launch does not reach it: `prepare_data_dir` runs `split::convert`
+    // before any connection the app keeps, and even a fresh install goes the long way round,
+    // building a whole legacy `mtg.db` at 26 and splitting it. A pair opened on an empty user
+    // file does, and without it would have no user tables at all — which fails where you would
+    // least look, since the facet index reads `collection_entries` for its `owned` dimension.
     //
     // `== 0` and not `< USER_SCHEMA_VERSION`, deliberately: this is the half whose rows exist
     // nowhere else, so "no shape yet" is the only state it may build from scratch. A rung
@@ -5809,7 +5790,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // trigger firing on `deck_labels` beside the `sync_ins_deck_labels` that
     // [`crate::sync_engine::capture::install`] then creates, and every insert would emit two ops.
     // Dropping them is free: `prepare_database` calls `install` immediately after this function,
-    // on every target, so the gap is closed before anything can write. The `deck_cards` three go
+    // so the gap is closed before anything can write. The `deck_cards` three go
     // for the narrower reason that `RENAME COLUMN` has to rewrite their `OF` lists and bodies,
     // and a rebuild that is happening anyway is cheaper to reason about than a rewrite that is.
     //
@@ -6010,7 +5991,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // **The capture triggers go down with the table and come straight back.** `DROP TABLE`
     // takes `sync_ins/upd/del_collection_entries` with it, and
     // [`crate::sync_engine::capture::install`] — which `prepare_database` calls on the very
-    // next line, on every target — puts the current set back before anything can write. That
+    // next line — puts the current set back before anything can write. That
     // ordering is also what makes the rebuild silent on the wire: the copy lands in a table
     // with no triggers on it, so a migration emits no ops, which is right, because moving a
     // reader's own rows between two shapes of one table is not an edit anybody made.
@@ -6711,7 +6692,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // triggers do both — but a rung that dropped only the triggers whose `OF` list named the
     // column would miss `sync_ins_decks`, which has no `OF` list at all.
     // Dropping them is free for v33's reason: `prepare_database` calls `install` immediately
-    // after this function, on every target, so the gap is closed before anything can write.
+    // after this function, so the gap is closed before anything can write.
     //
     // ⚠️ **`notes_open` is `DEFAULT 0` and not `1`, which is v37's answer rather than v42's.**
     // v42 gave `stats_open` a `1` because that band was already on screen for every deck on
@@ -7233,7 +7214,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     //
     // | how a user file comes to exist | seeded by |
     // | --- | --- |
-    // | fresh (`v == 0`, the browser's only path) | [`USER_SEED_SQL`] |
+    // | fresh (`v == 0`) | [`USER_SEED_SQL`] |
     // | already split, walked v27 → v29 | the rung above |
     // | **`split::convert` from a legacy `mtg.db`** | **neither** |
     //
@@ -7303,8 +7284,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// [`crate::index::fixtures::state_with_seeded_cards`] builds its database the way a fresh
 /// install is built — [`crate::split::convert`], which runs the frozen [`migrate_single_file`]
 /// ladder and stamps head — and then opened it without ever migrating. That is not a database
-/// any launch produces, because `prepare_database` is the door all three targets go through,
-/// and the gap was invisible until a corpus rung finally changed a table shape: the fixture
+/// any launch produces, because every launch goes through `prepare_database`, and the gap was invisible until a corpus rung finally changed a table shape: the fixture
 /// carried a v26-shaped `combos` under a header claiming head, which is precisely the state
 /// [`combos_are_at_head`] exists to repair.
 pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
@@ -7377,7 +7357,7 @@ pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
 /// user rungs already use — v24 and v29 both ask `pragma_table_info … WHERE name = ?` before
 /// they issue anything. The alternative was building the head table in a throwaway connection
 /// and diffing the two column lists, which cannot drift but adds a second SQLite handle to
-/// every launch on all three targets, one of which is a browser this branch cannot drive.
+/// every launch.
 ///
 /// **What a stale list costs is bounded, which is why the simpler thing is the right one.** The
 /// probe only has to be able to tell the two shapes apart, and any one of these four does that;
@@ -7817,9 +7797,8 @@ pub fn mark_corpus_damaged(data_dir: &std::path::Path, answer: &str) -> std::io:
 /// the DDL rather than from the ladder and would otherwise hand every test a database with
 /// no holding area — a state no converted database is ever in.
 ///
-/// **[`migrate_user`] is the second such caller**, and it is how the web target gets a
-/// user file at all: there is no `mtg.db` in a browser for [`crate::split::convert`] to
-/// take apart. A database without this row is one where no deck can ever release a card,
+/// **[`migrate_user`] is the second such caller**, for a user file at version 0 with no shape
+/// yet. A database without this row is one where no deck can ever release a card,
 /// permanently, because nothing at head ever runs a migration.
 /// **It mints its own `sync_uid`, because nothing else will.** The v29 rung backfills rows that
 /// were already there and the capture trigger mints for rows written later; this row is written
@@ -8641,12 +8620,10 @@ pub(crate) mod tests {
 
     /// **A pair whose user half is an empty file gets its shape from `prepare_database`.**
     ///
-    /// This is the web target's whole first run, and it has no desktop equivalent to lean on:
-    /// on Windows a fresh install builds a legacy `mtg.db` at 26 and `split::convert` takes it
-    /// apart, and in a browser there is no such file. Driving the real page on 2026-08-28 with
-    /// this arm missing produced a working-looking app whose Worker console said
-    /// `index build: no such table: collection_entries` - the facet index reads that table for
-    /// its `owned` dimension, and it was the only thing that noticed.
+    /// A launch never meets one — a fresh install builds a legacy `mtg.db` at 26 and
+    /// `split::convert` takes it apart — so this is the only thing that reaches the arm. Without
+    /// it the facet index is what would notice: it reads `collection_entries` for its `owned`
+    /// dimension.
     ///
     /// A bare `ATTACH ':memory:'` pair is the right fixture precisely because it is what an
     /// unshaped database looks like: two empty schemas at `user_version = 0`.

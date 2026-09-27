@@ -53,16 +53,6 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-
-// **Gated rather than deleted, because an unused import is a red build on the web target.**
-// CI runs `cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings`, and every one
-// of these is reachable only from [`clear_cache`] or from the `#[tauri::command]` block at
-// the foot of this file — all of which carry the same gate.
-//
-// **`fs` and `Path` joined this list on 2026-08-31**, and they are the tell for the whole of
-// what this file lost: they were the two the module could import unconditionally, because
-// `clear_decks` swept the covers directory and `clear_decks` compiles everywhere. With custom
-// deck covers gone, every path this module touches is `clear_cache`'s.
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -124,13 +114,6 @@ pub struct CacheCleared {
 }
 
 /// What a directory sweep did, accumulated across a walk.
-///
-/// **Gated with [`sweep_dir`] since 2026-08-31, and the gate is the module's own rule applied
-/// one level down.** `clear_decks` used to sweep the covers directory, which is what kept both
-/// of these alive on wasm even though `clear_cache` — the only other caller and the only one
-/// left — is desktop-only. Custom deck covers went, and a struct nothing constructs is a red
-/// `cargo clippy --target wasm32-unknown-unknown -- -D warnings`, the same build the imports
-/// above are gated for.
 #[derive(Debug, Clone, Copy, Default)]
 struct Swept {
     files: u64,
@@ -508,12 +491,6 @@ pub fn clear_decks(conn: &Connection) -> Result<DecksCleared, String> {
 /// *during* the walk can now also flush its row — the lock is free — and have its file swept
 /// a moment later: that is a row without its file, the first bullet's supported state, and it
 /// heals at the next request for that picture.
-///
-/// **The one thing in this file the web target does not get, and [`crate::images`] is the
-/// whole reason.** The `cache` parameter is that module's type; on web the byte cache is
-/// Cache Storage rather than a directory, which is a rewrite and not a port, and its own
-/// piece of work. Everything above this line is ordinary SQLite and compiles everywhere,
-/// which is why the other three clears are routed and this one is not.
 pub fn clear_cache(
     forget_rows: impl FnOnce() -> Result<i64, String>,
     images: &Path,
@@ -576,16 +553,7 @@ fn cache_clear_refusal(syncing: bool) -> Option<&'static str> {
     None
 }
 
-// ── The command wrappers, and only they, are the desktop's ───────────────────────────────
-//
-// **The gate is on this block rather than on the module**, which is the shape `search.rs`
-// has always had and the one PR 10a moved eleven other modules into. Everything above is
-// `&Connection` in and a DTO out; what cannot cross is `tauri::State` and the filesystem.
-// Three of the four commands are reachable from a browser through [`crate::web::route`]
-// instead — and the fourth, `cache_clear`, is not: see [`clear_cache`] above for why the image
-// cache is a separate piece of work rather than a missing arm. `tauri::AppHandle` was on that
-// list too, for `paths::covers_dir`; custom covers went on 2026-08-31 and `decks_clear` takes
-// no handle any more.
+// ── The command wrappers ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn collection_clear(

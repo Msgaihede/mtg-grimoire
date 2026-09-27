@@ -59,10 +59,9 @@ pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 /// everything above and below reaches [`super`] through it.
 /// Scryfall's name for this bulk entry, **and this dataset's `operation` in `error_log`**.
 ///
-/// It lives here rather than in [`crate::scryfall`] because it is read on every target: it is
-/// the key [`super::is_refreshing`] answers a status query from, so a browser needs it even
-/// though a browser never downloads the file it names. `scryfall` aliases this rather than
-/// holding its own, so the two cannot drift.
+/// It lives here rather than in [`crate::scryfall`] because it is this dataset's own name: it
+/// is the key [`super::is_refreshing`] answers a status query from. `scryfall` aliases this
+/// rather than holding its own, so the two cannot drift.
 pub const BULK_NAME: &str = "oracle_tags";
 
 pub const ORACLE: Dataset = Dataset {

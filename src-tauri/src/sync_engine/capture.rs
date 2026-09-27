@@ -8,8 +8,8 @@
 //! * `preupdate_hook` does give old and new values, but it fires *before commit*, so an
 //!   in-memory buffer is the only record of an op between the commit and the drain. **A crash
 //!   there loses an op silently, and a lost op is a device that has diverged for good.**
-//! * A trigger runs inside the caller's transaction, rolls back with it, cannot be forgotten by
-//!   a write site added next year, and is identical on native and on wasm. It is the rule
+//! * A trigger runs inside the caller's transaction, rolls back with it, and cannot be forgotten
+//!   by a write site added next year. It is the rule
 //!   [`crate::deck_audit`] already follows one table over: *written inside the caller's
 //!   transaction, where one is open.*
 //!
@@ -366,8 +366,8 @@ pub const TABLES: [Spec; 17] = [
             // reader-picked cover picture is gone: nothing in the crate writes this column any
             // more, the v32 rung flipped every `cover_kind` that said `'custom'` to
             // `'card_art'`, and every device already drew the card art anyway — the path was
-            // stored absolute, so a `D:\…\covers\7.webp` that reached a phone named nothing
-            // there.
+            // stored absolute, so a `D:\…\covers\7.webp` that reached another machine named
+            // nothing there.
             //
             // It stays here because what removing it buys today is one dead key out of a deck
             // op that is already sent. A later rung takes the column, this line and the `CHECK`
@@ -893,8 +893,8 @@ const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
 /// fraction of a millisecond. (This carried a count, and said thirty-seven while the array made
 /// forty-seven; the array is the count.)
 ///
-/// Called from [`crate::schema::prepare_database`], so it reaches the desktop, Android and the
-/// browser through the one door. **Not** on a read-only connection: it never writes, and a
+/// Called from [`crate::schema::prepare_database`], the one door every open goes through.
+/// **Not** on a read-only connection: it never writes, and a
 /// trigger there is an object nobody fires.
 pub fn install(conn: &Connection) -> rusqlite::Result<()> {
     for spec in &TABLES {
@@ -1017,8 +1017,7 @@ impl Drop for Suppressed<'_> {
 ///
 /// **Safe at open because the flag cannot be live then.** It belongs to the one write connection
 /// a process holds, and nothing writes before `prepare_database` returns: more windows share that
-/// process and its connection, a second launch opens a window in the running app, and the
-/// browser refuses a second tab.
+/// process and its connection, and a second launch opens a window in the running app.
 pub fn clear_stale_guard(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM sync_state WHERE key = ?1", [APPLYING])?;
     Ok(())

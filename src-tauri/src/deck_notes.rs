@@ -3,9 +3,7 @@
 //!
 //! Shaped like [`crate::deck_meta`] and [`crate::deck_tokens`]: pure functions over a
 //! `Connection`, testable without a Tauri app, wrapped in `async` commands that sit in one block
-//! at the bottom behind `#[cfg(not(target_family = "wasm"))]`. Nothing above that block names
-//! `tauri::` at all, which is what lets [`crate::web::route`] call the same functions the desktop
-//! wrappers call.
+//! at the bottom.
 //!
 //! # A card reference is a pointer the note holds, never a place the note lives
 //!

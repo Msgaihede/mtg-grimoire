@@ -245,8 +245,8 @@ pub struct WishRow {
     /// `0` on an orphan with no oracle id, and that is a fence rather than a coincidence —
     /// see the subquery's own comment in [`list_wishes`].
     pub elsewhere: i64,
-    /// The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser
-    /// can reach**, and `None` when there is none worth fetching.
+    /// The front face's picture on `cards.scryfall.io`, by variant, and `None` when there is none
+    /// worth fetching.
     ///
     /// **Of the printing this wish is *drawn as*, which is [`Self::art_card_id`]'s printing and
     /// not [`Self::card_id`]'s.** The same `LEFT JOIN` answers all three, which is the point: a
@@ -255,9 +255,7 @@ pub struct WishRow {
     ///
     /// [`crate::search::CardSummary::image_uris`] carries the rest of the argument — one
     /// variant, face 0, the face-first precedence and the `soon.jpg` fence, all of them
-    /// [`crate::image_uri::front_face_map`]'s. `wishlist_list` is routed on web and
-    /// `mtgimg://` is not reachable there, so without this the wishlist wall is named, artless
-    /// frames in a browser. Ignored on the desktop, where the local cache wins.
+    /// [`crate::image_uri::front_face_map`]'s.
     ///
     /// `None` on a genuine orphan — no pinned printing, no oracle match — which is exactly
     /// where [`Self::type_line`] and [`Self::legalities`] beside it are `None` too.
@@ -710,9 +708,6 @@ pub struct WishlistImportItem {
 ///
 /// `removed` is counted in the loop rather than derived, because a delete and an insert in one
 /// file would cancel out in a before/after row count and report neither.
-/// **`pub(crate)` since 2026-08-30**, one-PR `allow(dead_code)` gone: `web::route` is the
-/// second caller. As with the collection's, the *file read* stayed behind - this takes
-/// already-parsed items.
 pub(crate) fn commit_import(
     conn: &Connection,
     items: &[WishlistImportItem],

@@ -50,11 +50,9 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-// `PathBuf` is only in `temp_path`'s return type, and downloading is desktop-only.
 use std::path::PathBuf;
-use std::sync::Mutex;
-// `Arc` only appears in signatures the ingest owns, all of which are gated off the web target.
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
@@ -149,7 +147,7 @@ fn staging(live: &str) -> String {
 ///
 /// **The function moved to [`crate::slug`] and this is the same one**, re-exported so that
 /// every caller inside this module keeps its spelling. It moved because `schema` needs it
-/// and `schema` compiles for `wasm32-unknown-unknown`, which this module does not.
+/// too.
 pub use crate::slug::normalize;
 
 /// Scryfall's four tagging weights, **weakest first**. Their definitions, from `docs/api/tags`:
@@ -634,17 +632,12 @@ impl Accum {
 
 /// A tag ingest as an object the caller pushes bytes into, rather than a loop that pulls.
 ///
-/// **Why this shape.** [`ingest_gz`] reads a file, where a blocking `read()` is free; a
-/// browser has no such reader to offer — `reqwest::Response::bytes_stream()` yields a
-/// `Stream` whose `next()` must be awaited, and `wasm32-unknown-unknown` has no thread to
-/// block while it resolves. So the state the read loop kept in locals moved into [`Accum`],
-/// `ingest_gz` became a short driver, and `web::glue` writes the other one. One drain, two
-/// drivers — [`crate::ingest::StreamIngest`]'s arrangement, one feed over.
+/// [`ingest_gz`] is the driver: it reads the file a chunk at a time and pushes each one here,
+/// and the state a read loop would keep in locals lives in [`Accum`] —
+/// [`crate::ingest::StreamIngest`]'s arrangement, one feed over.
 ///
-/// **Gzipped or not is decided from the bytes.** `fetch` transparently decodes a
-/// `Content-Encoding: gzip` response and cannot be told not to, so the same Scryfall file
-/// arrives compressed on a desktop and plain in a browser; [`crate::feed::frame::Decoder`]
-/// sniffs the two magic bytes rather than trusting a header.
+/// **Gzipped or not is decided from the bytes** — [`crate::feed::frame::Decoder`] sniffs the
+/// two magic bytes rather than trusting a header.
 ///
 /// # The connection is taken a batch at a time
 ///
@@ -895,14 +888,14 @@ impl<'a> StreamTags<'a> {
     }
 }
 
-/// How much of the file is read at a time by the desktop driver. `crate::ingest::ingest_gz`'s
+/// How much of the file is read at a time by [`ingest_gz`]. `crate::ingest::ingest_gz`'s
 /// figure, so the two ingests behave the same way against the same disk.
 const READ_CHUNK: usize = 64 * 1024;
 
 /// Stream a gzipped tag file into `ds`'s staging tables, flatten the hierarchy, and swap the
 /// result into place.
 ///
-/// **The desktop driver over [`StreamTags`], and nothing about the ingest lives here.** It
+/// **The driver over [`StreamTags`], and nothing about the ingest lives here.** It
 /// reads the file [`READ_CHUNK`] bytes at a time and pushes; every rule the ingest follows —
 /// the batched connection, the staged write, the two refusals, the watermark in the swap's own
 /// transaction — is documented on the type.
@@ -1298,12 +1291,6 @@ pub(crate) fn status_of(ds: &Dataset, state: &AppState) -> TagStatus {
 
 /// Now, in unix seconds, **asked of SQLite rather than of the clock**.
 ///
-/// `SystemTime::now()` *panics* on `wasm32-unknown-unknown`, and [`status_of`] is on the read
-/// path that `web::route` answers `oracle_tags_status` and `art_tags_status` with — so the
-/// version below would not have returned an error there, it would have taken down the Worker.
-/// The rest of this module's uses of the clock are on the ingest path, which is gated off the
-/// target, so this is the one call that had to change.
-///
 /// `unwrap_or(0)` reads as "1970", which makes a taxonomy stale — the same answer
 /// [`unix_now`] gives for a clock before the epoch, and the safe direction: a stale taxonomy
 /// is re-checked, a fresh one is not. `sync_engine::entitlement::now` is the precedent.
@@ -1314,9 +1301,6 @@ pub(crate) fn now_from(conn: &Connection) -> i64 {
 
 /// Seconds since the Unix epoch. A clock before 1970 reads as 0, which makes a taxonomy
 /// stale — [`crate::sync`]'s choice, for its reason.
-///
-/// **Ingest-only, and gated because of it.** See [`now_from`] for the read path's answer and
-/// why the two are not one function.
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1764,9 +1748,8 @@ mod tests {
 
     // ---- the push-shaped ingest -------------------------------------------------------
     //
-    // `ingest_gz` is a driver over `StreamTags` now, and `web::glue` is the other one. What
-    // these hold is that the two drivers agree, because the browser's is compiled only for
-    // `wasm32-unknown-unknown` and no test on any host will ever run it.
+    // `ingest_gz` is a driver over `StreamTags`. What these hold is that pushing the same
+    // bytes straight into the sink, in chunks of any size, agrees with it.
 
     use crate::tags::testing::{gz_fixture, mem_db};
 
@@ -1827,7 +1810,7 @@ mod tests {
     /// The two drivers must not disagree, and the chunk size must not change the answer.
     ///
     /// Seven bytes at a time splits gzip members, JSON lines and multi-byte structure all in
-    /// the middle, which is the only shape a browser stream ever arrives in.
+    /// the middle.
     #[test]
     fn a_chunked_push_produces_exactly_what_the_file_driver_does() {
         let lines = [
@@ -1868,9 +1851,8 @@ mod tests {
         assert!(closure_rows(&by_stream).contains(&("oid-3".into(), "ramp".into())));
     }
 
-    /// The browser shape. `fetch` transparently decodes `Content-Encoding: gzip` and cannot
-    /// be told not to, so the same Scryfall file arrives as plain JSONL there — and the
-    /// decoder has to decide from the bytes rather than from a header.
+    /// Plain JSONL ingests exactly as the gzipped file does — the decoder decides from the
+    /// bytes rather than from a header.
     #[test]
     fn a_stream_that_arrives_already_decompressed_ingests_identically() {
         let lines = [

@@ -126,10 +126,6 @@ pub async fn set_marketplace(
 /// Only on success, and only where [`store`] accepted the id: a refusal changed nothing on disk
 /// and must not cost a full render. This is the shape
 /// [`crate::mirror::settings::set_root_now`] already has.
-/// **Desktop and Android only, because it marks the plain-text mirror.** `AppState` has no
-/// `mirror` field on wasm — there is no mirror there, by §6.3 — so this is gated while
-/// [`store`] and [`stored`] beside it are not: the *setting* is every target's, and telling a
-/// mirror about it is not. `deck_meta`'s readback quotes `stored` on the web the same way.
 pub fn set_marketplace_now(state: &AppState, id: &str) -> Result<(), String> {
     let saved = crate::sync::with_write(state, |conn| store(conn, id));
     if saved.is_ok() {

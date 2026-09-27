@@ -33,13 +33,8 @@
 //!   at a time and every image URL is dropped with the raw variant that carried it.
 //!   `from_str` on 639 MB is not available, and neither is `serde_json::Value`.
 //!
-//!   **The framing is push-shaped on purpose, and that is a change from what shipped.** This
-//!   module used to drive `serde_json::Deserializer::from_reader` with a [`DeserializeSeed`]
-//!   over the array, which is a *pull* parser: it calls `read()` when it wants more and blocks
-//!   until it gets it. A browser stream is push and async with no thread to block, so it could
-//!   not be driven from one at all. [`read_file`] and the seed below stay — they are still the
-//!   file-shaped entry point the tests use — but [`ingest_gz`] now goes through
-//!   [`read_stream`].
+//!   [`ingest_gz`] goes through [`read_stream`], which is push-shaped. [`read_file`] and the
+//!   [`DeserializeSeed`] over the array below are the file-shaped entry point the tests use.
 //! * **A size guard, against the declared length *and* the streamed total.** [`MAX_FEED_BYTES`]
 //!   is a bound on what a host that is not the one we think it is can make this process spend,
 //!   not a budget. A chunked response declares nothing, which is why the running total is
@@ -96,9 +91,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
-// `SystemTime::now()` **panics** on `wasm32-unknown-unknown`. Gating the import rather
-// than only its callers is the fence: on the web target the name is not in scope, so a
-// clock cannot be reached for by accident from a module the map says compiles there.
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
@@ -193,14 +185,6 @@ const YIELD_BETWEEN_BATCHES: Duration = Duration::from_millis(5);
 fn stand_aside() {
     std::thread::sleep(YIELD_BETWEEN_BATCHES);
 }
-
-/// **Nothing to stand aside for.** The web target runs the whole database in one dedicated
-/// Worker, so there is no second thread that could be holding a button down waiting for this
-/// connection — and `std::thread::sleep` has no meaning on `wasm32-unknown-unknown` anyway.
-/// [`store`] goes on calling this every batch, so the batching itself is one code path on
-/// both targets and only the pause between batches differs.
-#[cfg(target_family = "wasm")]
-fn stand_aside() {}
 
 /// The largest deck a combo check will accept in one call.
 ///
@@ -512,11 +496,8 @@ pub fn read_file(body: &mut dyn Read) -> Result<ComboFile, ComboError> {
     Ok(file)
 }
 
-/// Reading the `variants` array as an object the caller pushes into.
-///
-/// [`read_stream`]'s `Iterator` is the desktop shape; this is the shape a browser can
-/// drive, for [`crate::ingest::StreamIngest`]'s reason — an awaited `Stream` has no
-/// blocking `next()` to hand an iterator.
+/// Reading the `variants` array as an object the caller pushes into — the sink
+/// [`read_stream`] hands each chunk to.
 ///
 /// Peak memory is one element plus the reduced list, and [`StreamRead::peak_buffer`] is how
 /// a caller checks that claim. That is not diagnostics: the spike's first framer found
@@ -546,8 +527,8 @@ impl StreamRead {
 
     /// The largest the element framer's buffer has ever been, in bytes.
     ///
-    /// Measured at **2.01 MB against the real 610.2 MB document**, on both a desktop and a
-    /// OnePlus 12. Anything approaching the document's own size means the framer has
+    /// Measured at **2.01 MB against the real 610.2 MB document**, on a desktop. Anything
+    /// approaching the document's own size means the framer has
     /// desynchronised and is silently accumulating rather than draining.
     pub fn peak_buffer(&self) -> usize {
         self.elements.peak_buffer()
@@ -590,14 +571,10 @@ impl Default for StreamRead {
 
 /// Read `{ timestamp, version, variants: [ … ] }` from a stream of byte chunks.
 ///
-/// **Why this exists beside [`read_file`].** That one streams with
-/// `serde_json::Deserializer::from_reader` plus a `DeserializeSeed` - a *pull* parser,
-/// which calls `read()` when it wants more and blocks until it gets it. A browser stream
-/// is push and async with no thread to block, so `from_reader` cannot be driven from one
-/// at all. This frames each element by brace depth and hands it whole to `from_slice`,
-/// which keeps serde doing the part serde is good at.
+/// This frames each element by brace depth and hands it whole to `from_slice`, which keeps
+/// serde doing the part serde is good at.
 ///
-/// Peak memory is one element plus the reduced list, the same as `read_file`'s.
+/// Peak memory is one element plus the reduced list, the same as [`read_file`]'s.
 pub fn read_stream(
     chunks: impl Iterator<Item = std::io::Result<Vec<u8>>>,
 ) -> Result<ComboFile, ComboError> {
@@ -630,10 +607,6 @@ fn take_element(file: &mut ComboFile, el: &[u8]) {
 /// starts at the first `[`. `None` for a document that omits the key, which is what
 /// [`read_file`] also produces - `ComboFile::stamp` is `Option<String>` precisely because
 /// a file without one is a real state rather than an error.
-///
-/// **The scraper itself lives in [`crate::feed::frame`]**, because `marketplace_feed` wants
-/// exactly this for Card Kingdom's `meta.created_at` and two copies of a five-line parser
-/// are two chances to fix one of them.
 fn stamp_from_head(head: &[u8]) -> Option<String> {
     crate::feed::frame::scrape_string(head, "timestamp")
 }
@@ -993,18 +966,12 @@ pub fn clear_combos(conn: &Connection) -> rusqlite::Result<()> {
 
 /// Clear the combos and answer what is left, on a connection the caller already holds.
 ///
-/// **The shape both targets call**, so neither holds a second copy of what "clear the combos"
-/// means: `web::route` hands it to `crate::sync::with_write`, and [`combos_clear`] runs it on
-/// the blocking pool under the same lock. The work is [`clear_combos`] above; what this adds is
-/// the answer.
+/// [`combos_clear`] runs it on the blocking pool under the write lock. The work is
+/// [`clear_combos`] above; what this adds is the answer.
 ///
 /// It answers a [`ComboStatus`] rather than nothing because the page that pressed this would
 /// otherwise have to ask a second time to learn what it did — and the answer is always
 /// [`status_of`]'s never-ingested one: two zeros, three nulls and `stale: true`.
-///
-/// **Its clock comes off the connection**, [`status_of`]'s reason exactly: `SystemTime::now()`
-/// *panics* on `wasm32-unknown-unknown` rather than failing, and this function is on the
-/// Worker's path.
 pub fn clear(conn: &Connection) -> Result<ComboStatus, String> {
     clear_combos(conn).map_err(|e| format!("could not clear the combos: {e}"))?;
     let now = conn
@@ -1273,11 +1240,7 @@ pub fn read_status(conn: &Connection, now: i64) -> ComboStatus {
     }
 }
 
-/// **Ungated, and its clock comes off the connection.** `web::route` answers `combos_status`
-/// with this, and `SystemTime::now()` — which [`unix_now`] below uses — *panics* on
-/// `wasm32-unknown-unknown` rather than failing, so calling that here would take the Worker
-/// down instead of returning an error. `crate::tags::now_from` reached the same conclusion on
-/// the same day, for the same command shape.
+/// [`read_status`] over the read-only connection, with the clock read off that connection.
 pub(crate) fn status_of(state: &AppState) -> ComboStatus {
     let conn = crate::sync::lock_db_read(state);
     let now = conn
@@ -2368,8 +2331,7 @@ pub async fn combos_refresh(
 ///
 /// `async`, and answered on the blocking pool, for [`combos_status`]'s reason: a sync command
 /// body runs inline on the IPC thread, and this one takes the write lock. The body itself is
-/// [`clear`], which is also what `web::route` hands to `crate::sync::with_write` — this is that
-/// same function on a pool thread, and not a second answer to the same question.
+/// [`clear`].
 ///
 /// **A lock it could not have is reported rather than swallowed**, which is the difference
 /// between this and [`mark_checked`]. That one is a best-effort watermark nobody is waiting on;
@@ -2431,8 +2393,7 @@ pub async fn combos_for_cards(
 ///
 /// `async`, and answered on the blocking pool, for [`combos_status`]'s reason: a sync command
 /// body runs inline on the IPC thread and this one takes `db_read`'s mutex. The body is
-/// [`card_combos`], which is also what the web target's router calls — one answer to the
-/// question, reached two ways.
+/// [`card_combos`].
 #[tauri::command]
 pub async fn combos_for_card(
     state: tauri::State<'_, Arc<AppState>>,
@@ -3132,7 +3093,7 @@ mod tests {
             .unwrap();
         assert_eq!((combos, cards), (0, 0), "both tables, not just the parent");
 
-        // And the half both targets actually call answers that same status, rather than
+        // And `clear`, which the command calls, answers that same status, rather than
         // leaving the page to ask a second time what the press did.
         assert_eq!(
             clear(&conn).unwrap(),
@@ -4946,8 +4907,7 @@ mod tests {
 
     /// The regression the spike paid for: a framer that stops draining still returns rows
     /// for a while and then quietly holds the whole document. The row count cannot see it;
-    /// `peak_buffer` can, and the browser is where the real 610 MB document lives, so the
-    /// sink has to expose it.
+    /// `peak_buffer` can, so the sink has to expose it.
     #[test]
     fn the_combo_sink_exposes_a_peak_buffer_that_stays_small() {
         let doc = many_variants(2000);
@@ -5009,7 +4969,7 @@ mod tests {
         }
     }
 
-    /// The browser case: already-decompressed bytes must ingest like gzipped ones.
+    /// Already-decompressed bytes must ingest like gzipped ones.
     #[test]
     fn read_stream_accepts_plain_and_gzipped_alike() {
         use flate2::{write::GzEncoder, Compression};

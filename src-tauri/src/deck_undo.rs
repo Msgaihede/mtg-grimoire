@@ -2431,10 +2431,6 @@ fn record_reversal(
 /// error rolls back to it, so a constraint nobody foresaw (a label deleted since, a pile name
 /// taken since) cannot wedge the cursor either. A refused redo writes nothing and answers
 /// [`MOVED_ON`], or the write's own error.
-///
-/// **`pub(crate)` since 2026-08-29**, and the `allow(dead_code)` it carried for one PR is gone:
-/// `web::route` is the second caller, so the direction flag now has two callers on every
-/// target rather than two `#[tauri::command]`s on one.
 pub(crate) fn apply_reversal(
     conn: &Connection,
     deck_id: i64,
@@ -2542,11 +2538,6 @@ pub(crate) fn apply_reversal(
 /// answers what that id names so the button can be labelled, and refuses nothing: a `redo` that
 /// has stopped being redoable simply comes back `None`.
 /// The answer itself, over a connection the caller already holds.
-///
-/// **Lifted out of the wrapper on 2026-08-29 so `web::route` can reach it.** It was the one
-/// read in the deck cluster whose logic lived *inside* the `#[tauri::command]` rather than in
-/// a function the command called — three lookups and a filter — and a `match` arm that
-/// re-spelled it would have been a second copy of the redo rule to drift.
 pub fn undo_state(
     conn: &Connection,
     deck_id: i64,

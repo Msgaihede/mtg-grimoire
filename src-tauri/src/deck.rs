@@ -900,13 +900,6 @@ pub struct DeckRow {
     /// went — so `display` is here because [`crate::image_uri::LIST_VARIANTS`] emits the pair
     /// and not because anything on a gallery reads it.
     ///
-    /// **Why it is on the wire at all**, [`crate::search::CardSummary::image_uris`]' argument
-    /// in full: `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme
-    /// with a browser, so on web and on Android the URL travels with the row or the tile draws
-    /// nothing. That is what it was doing — every deck cover in a browser was a blank frame the
-    /// moment PR #327 made the card crop the only cover. On desktop this is ignored, because
-    /// `src/lib/images.ts`'s `cardArtSrc` takes the local cache.
-    ///
     /// `None` for a deck with no cover, for a cover whose printing has left `cards`, and for a
     /// printing with no fetchable image — three states the tile draws identically, because from
     /// the reader's side they are one: nothing to show yet. The first two heal on the next sync,
@@ -5064,18 +5057,13 @@ pub struct DeckCardRow {
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
     /// still holds — so a collection that shrank under a stored claim reads honestly.
     pub owned_quantity: i64,
-    /// The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser
-    /// can reach**, and `None` when this printing has none worth fetching.
+    /// The front face's picture on `cards.scryfall.io`, by variant, and `None` when this
+    /// printing has none worth fetching.
     ///
     /// [`crate::search::CardSummary::image_uris`] carries the argument in full: one variant
     /// ([`crate::image_uri::LIST_VARIANT`], which is what `DECK_CARD_VARIANT` is on the other
     /// side), face 0, the face-first precedence and the `soon.jpg` fence, every one of them
     /// [`crate::image_uri::front_face_map`]'s and none of them respelled here.
-    ///
-    /// **Two surfaces read it and both had to be wired**: `views/GridView` draws a
-    /// `components/CardArt`, which takes the URL as a prop, and `CardStack` builds its own
-    /// `<img>` src — so it is the one that has to put both candidates through `cardArtSrc`
-    /// itself. `deck_get` is routed on web and `mtgimg://` is not reachable there.
     ///
     /// `None` for an orphan, whose printing has left `cards` — the same answer as every other
     /// card fact on this row, and the state `CardArt` already draws "No card" for.
@@ -6368,8 +6356,8 @@ pub async fn deck_pip_costs(
 /// Everything the Commander bracket estimate is made of, for the decks named. **Read-only**
 /// connection, blocking pool.
 ///
-/// `deck_ids` reaches the wire as `deckIds`, which `web::route`'s arm and `src/lib/ipc.ts` both
-/// spell that way — `invoke` matches a command's parameters by name, so the two have to agree.
+/// `deck_ids` reaches the wire as `deckIds`, which `src/lib/ipc.ts` spells that way —
+/// `invoke` matches a command's parameters by name, so the two have to agree.
 #[tauri::command]
 pub async fn deck_bracket_reads(
     state: tauri::State<'_, Arc<AppState>>,
@@ -8835,8 +8823,7 @@ mod tests {
         assert_eq!(decks[1].card_count, 0);
     }
 
-    /// **A deck row carries the *cover printing's* picture** — the gallery tile's only way to
-    /// draw a cover on web or on the phone, where `mtgimg://` is a scheme no browser has.
+    /// **A deck row carries the *cover printing's* picture.**
     ///
     /// It is the one field on `DeckRow` that describes a different row, and the join it comes
     /// off is `LEFT JOIN cards c ON c.id = d.cover_card_id` — the same one `cover_artist` uses.
@@ -10522,9 +10509,8 @@ mod tests {
                 // be `undefined` — which `tokenRail.tsx` reads as *last*, so the pile would snap
                 // back on every open with no type error anywhere.
                 "tokenRailIndex": 2,
-                // The cover printing's picture, spelled out key by key: this is the deck
-                // gallery's only way to draw a cover on web and on the phone, and it is a map
-                // rather than a URL because `LIST_VARIANTS` decides what a row carries.
+                // The cover printing's picture, spelled out key by key: it is a map rather than
+                // a URL because `LIST_VARIANTS` decides what a row carries.
                 "imageUris": {
                     "art": "https://cards.scryfall.io/art/front/0/0/bolt.webp?17",
                     "display": "https://cards.scryfall.io/display/front/0/0/bolt.webp?17"
@@ -14736,11 +14722,7 @@ mod tests {
     // Undoing a game change is `deck_undo.rs`'s `deck_update (game)` case, driven there over
     // the same sweep every other deck-level column goes through.
 
-    /// **A deck card carries the front face's image URL** — what the editor's Grid and Stacks
-    /// views have no other way to draw a picture from in a browser.
-    ///
-    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register one with a browser, so
-    /// without this a deck opened on the web build is a wall of named, artless frames.
+    /// **A deck card carries the front face's image URL.**
     ///
     /// **`bolt-m10` is the row that makes the offset visible at all.** The pair starts directly
     /// after `c.promo_types`, and with only top-level pictures in the fixture a read one column

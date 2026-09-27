@@ -1,4 +1,4 @@
-//! The seven commands the Settings page calls.
+//! The commands the Settings page calls.
 //!
 //! **Five of them are the relay and the review queue; two more arrived with the entitlement**
 //! (spec §6.1 and §10) — a Connect press that answers a URL, and the claim code the reader
@@ -6,11 +6,6 @@
 //! service rather than one deployment per reader, so its address is
 //! [`entitlement::RELAY_BASE`] and stopped being a setting. `sync_state.relay_url` survives as
 //! a test/dev override with no UI, which is why nothing here writes it any more.
-//!
-//! **Desktop and Android only, like every other `#[tauri::command]` in the crate.** Everything
-//! they orchestrate — [`super::client`], [`super::apply`], [`super::wire`], [`entitlement`] —
-//! compiles for wasm; this file is the IPC surface, and the browser reaches the same functions
-//! through `web::route` when it grows a panel of its own.
 
 use crate::sync::{self, AppState};
 use crate::sync_engine::client::{self, RelayOutcome};
@@ -353,8 +348,7 @@ pub async fn sync_supporter_status(
 /// Where **Connect Patreon** sends the reader.
 ///
 /// It answers a URL and opens nothing: the page belongs to the `opener` plugin, which is
-/// TypeScript's, so this command needs no permission of its own and the browser build can reach
-/// the same string when it grows a panel.
+/// TypeScript's, so this command needs no permission of its own.
 #[tauri::command]
 pub async fn sync_patreon_begin(state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
     let state = state.inner().clone();
@@ -439,21 +433,6 @@ pub async fn sync_now(
         }
     }
     Ok(outcome)
-}
-
-/// Android tells the socket when the app is in front.
-///
-/// **Desktop never calls this.** An idle hibernated socket costs nothing, so there is no reason
-/// to drop one when the window is minimised. Android does, because Doze severs a background
-/// socket anyway and a phone that *looks* connected while being hours stale is worse than one
-/// that knows it is offline.
-#[tauri::command]
-pub fn sync_live_foreground(on: bool) {
-    if on {
-        live::resume();
-    } else {
-        live::pause();
-    }
 }
 
 /// The relay socket's state right now.

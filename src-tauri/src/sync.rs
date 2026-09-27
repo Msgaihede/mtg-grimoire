@@ -38,9 +38,6 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-// `SystemTime::now()` **panics** on `wasm32-unknown-unknown`. Gating the import rather
-// than only its callers is the fence: on the web target the name is not in scope, so a
-// clock cannot be reached for by accident from a module the map says compiles there.
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
@@ -90,17 +87,8 @@ const DOWNLOAD_EMIT_BYTES: u64 = 1_000_000;
 /// writer at all. See [`crate::db::open_read_only`].
 pub struct AppState {
     pub db: Mutex<Connection>,
-    /// **Desktop and Android only, and the reason is the VFS.** The browser's whole database
-    /// lives in one dedicated Worker, because `opfs-sahpool` can only obtain its exclusive
-    /// `FileSystemSyncAccessHandle`s off the main thread — so there is exactly one thread
-    /// there, and a second connection could never be *used* concurrently even though the pool
-    /// will happily hand one out (measured 2026-08-28: a second `Connection::open` on an
-    /// installed pool opens, attaches, reads and writes). What this field buys on desktop is a
-    /// search that does not queue behind an ingest running on another thread; with no other
-    /// thread there is no queue to jump, and under the rollback journal the pool forces
-    /// (`PRAGMA journal_mode = WAL` answers `delete`) a second connection would contend at the
-    /// file level instead of sailing past on a WAL snapshot. So [`lock_db_read`] answers with
-    /// the write connection there, and a search really does wait out an ingest.
+    /// The read-only connection: what it buys is a search that does not queue behind an
+    /// ingest running on another thread. Take it through [`lock_db_read`].
     pub db_read: Mutex<Connection>,
     pub data_dir: PathBuf,
     pub syncing: AtomicBool,
@@ -150,16 +138,6 @@ pub struct AppState {
     ///
     /// It holds the derived pair key, which is the other reason it is here and not in SQLite:
     /// nothing this side of a completed pairing has any business surviving a crash.
-    ///
-    /// **Desktop and Android only, and this one is temporary in a way the other gates on this
-    /// struct are not.** `db_read`, `client`, `images` and `mirror` are gated because the web
-    /// target genuinely does not have those things. This is gated because `sync_pair` is not
-    /// in `web::COMMANDS` yet — the browser has no pairing panel to drive it, and PR 4 carried
-    /// no sync. The spec's whole premise is one dataset across all three platforms, so when
-    /// the relay lands the web target needs this field and its module, and the honest fix then
-    /// is to compile `sync_pair` for wasm rather than to widen anything here. The crates it
-    /// needs (`x25519-dalek`, `chacha20poly1305`, `hkdf`, `getrandom`) all support wasm;
-    /// nothing about the protocol is desktop-shaped. Nobody has tried it.
     pub pairing: Mutex<Option<crate::sync_pair::pairing::Pending>>,
 }
 
@@ -430,12 +408,6 @@ fn unchanged(card_count: i64) -> SyncOutcome {
 /// refusing to lock ever again would brick every later sync and search for no gain.
 ///
 /// Shared with [`crate::search`] so that recovery rule lives in exactly one place.
-/// **Compiled for wasm with no caller there yet, and that is the point.** The web target
-/// routes four of the app's commands, so every write in the crate still reaches this
-/// only on desktop — but the wasm build type-checking the path is what proves
-/// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
-/// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists
-/// before the first web write rather than after it.
 pub(crate) fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
     lock_conn(&state.db)
 }
@@ -459,12 +431,6 @@ pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection>
 /// A one-line delegate for the same reason [`lock_conn`] is one: the recovery rule has
 /// exactly one definition, in [`crate::db::lock_plain`], and a second copy of
 /// `unwrap_or_else(|e| e.into_inner())` is a second place for it to drift.
-/// **Compiled for wasm with no caller there yet, and that is the point.** The web target
-/// routes four of the app's commands, so every write in the crate still reaches this
-/// only on desktop — but the wasm build type-checking the path is what proves
-/// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
-/// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists
-/// before the first web write rather than after it.
 pub(crate) fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     crate::db::lock_plain(mutex)
 }
@@ -475,16 +441,7 @@ pub(crate) fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// run of queries — one search, or the five reads [`status`] makes — and never across an
 /// `.await`, so waiting for it is bounded no matter what the writer is doing.
 pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
-    {
-        lock_conn(&state.db_read)
-    }
-    // One thread is all a Worker has, so the read path is the write path. See `AppState`'s
-    // own note: the pool would hand out a second connection, and there is nothing on the
-    // other side of it to run concurrently with.
-    #[cfg(target_family = "wasm")]
-    {
-        lock_conn(&state.db)
-    }
+    lock_conn(&state.db_read)
 }
 
 /// Run `f` with the write connection, or answer [`crate::db::BUSY`].
@@ -510,12 +467,6 @@ pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
 /// take a lock its own thread already holds, then answers [`crate::db::BUSY`] against itself.
 /// `do_sync`'s orphan-sweep arm is the site that has to remember: it passes its already-open
 /// connection down instead.
-/// **Compiled for wasm with no caller there yet, and that is the point.** The web target
-/// routes four of the app's commands, so every write in the crate still reaches this
-/// only on desktop — but the wasm build type-checking the path is what proves
-/// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
-/// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists
-/// before the first web write rather than after it.
 pub(crate) fn with_write<T>(
     state: &AppState,
     f: impl FnOnce(&Connection) -> Result<T, String>,
@@ -1340,11 +1291,6 @@ pub fn status(state: &AppState) -> SyncStatus {
         syncing: state.syncing.load(Ordering::SeqCst),
         // An atomic in memory, so this one is answered even when the read above was not.
         image_store_failures: state.images.store_failures(),
-        // No filesystem image cache on web — the browser's is Cache Storage, and it is not
-        // built yet. Zero is the honest answer for "failures writing a store that does not
-        // exist", and it is what the field means on a desktop that has had none.
-        #[cfg(target_family = "wasm")]
-        image_store_failures: 0,
     }
 }
 

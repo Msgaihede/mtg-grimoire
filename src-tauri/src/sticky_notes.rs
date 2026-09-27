@@ -2,9 +2,7 @@
 //! them. User schema v46, [issue #479](https://github.com/Msgaihede/mtg-grimoire/issues/479).
 //!
 //! [`crate::deck_notes`]'s file shape and almost none of its machinery: pure functions over a
-//! [`Connection`] first, the command wrappers in one `#[cfg(not(target_family = "wasm"))]` block
-//! at the foot. Nothing above that block names `tauri::` at all, which is what lets
-//! [`crate::web::route`] call the same functions the desktop wrappers call.
+//! [`Connection`] first, the command wrappers in one block at the foot.
 //!
 //! # A sticky note hangs off nothing
 //!

@@ -4,12 +4,6 @@
 //! `share::commands::share_create` is invoked as `"share_create"` — the rule the comment beside
 //! `collection_alloc::commands::collection_to_deck` in `desktop.rs` states, and the reason these
 //! functions carry the `share_` prefix inside a module already called `share`.
-//!
-//! **The module compiles on every target and the commands do not**, which is
-//! [`crate::collection_folders`]' shape rather than [`crate::sync_engine::commands`]'. The five
-//! wrappers are `#[cfg(not(target_family = "wasm"))]` because `tauri` is a desktop dependency;
-//! [`ShareRow`] is not, because [`crate::web::route`] answers `share_list` on the browser build
-//! and needs the type to say what it answered.
 
 use serde::Serialize;
 
@@ -25,9 +19,8 @@ use std::sync::Arc;
 ///
 /// **`url` is on it for the same kind of reason and one degree harder**: a share list with no
 /// links is not a share list, and this one has to be drawable with no network — so the link is a
-/// column of `collection_shares` rather than something rebuilt from `share::publish::SHARE_BASE`
-/// — spelled without a link, because that module does not exist on the browser build and this
-/// struct does. It is a placeholder until the Worker is deployed.
+/// column of `collection_shares` rather than something rebuilt from
+/// [`super::publish::SHARE_BASE`], which is a placeholder until the Worker is deployed.
 ///
 /// `published` is **this device's** stamp and the relay knows nothing about it: `None` means
 /// this device has never uploaded, which is what a second device in the group reads before it
@@ -113,8 +106,6 @@ async fn on_the_write_connection<T: Send + 'static>(
 /// could.** Spec §4.3 has a second device inherit the owner's name from the relay's list, and
 /// every other `share_*` command needs an id or a name that device does not yet have. A failure
 /// — or no membership at all — answers the cache, which is what the cache is for.
-///
-/// **The browser build routes the cache read alone**; see [`crate::web::route`].
 #[tauri::command]
 pub async fn share_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<ShareRow>, String> {
     let state = state.inner().clone();
