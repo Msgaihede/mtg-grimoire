@@ -47,12 +47,10 @@
 //! list. Nothing in this module or in `deck.rs` deletes a `theory` row except the ordinary card
 //! writes the user makes against it.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What is actually sleeved up — `DECK_VARIANTS[0]` by index, [`crate::deck`]'s discipline.
@@ -202,11 +200,6 @@ pub struct TheoryDiffRow {
     /// beside the name, at the arrangement the editor's zone rows use, so `display` rides along
     /// because [`crate::image_uri::LIST_VARIANTS`] emits the pair rather than because anything
     /// on this dialog wants it.
-    ///
-    /// **Why it is on the wire**, [`crate::search::CardSummary::image_uris`]' argument in full:
-    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme with a
-    /// browser, so on web and on Android a row draws its own picture or draws none. On desktop
-    /// it is ignored — `src/lib/images.ts`'s `cardArtSrc` takes the local cache.
     ///
     /// **`None` is the ordinary answer for an orphan**, whose printing has left `cards` and
     /// whose join therefore answers NULL in both columns — the same rows
@@ -1208,7 +1201,6 @@ pub(crate) fn wanted(
 }
 
 /// What a write here says when its worker thread died under it.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck could not be written: {e}")
 }
@@ -1316,7 +1308,6 @@ pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<TheorySlot>, 
 
 /// [`theory_slots`]'s command. **Read-only** connection, and no marketplace: nothing here is
 /// priced.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_slots(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1331,7 +1322,6 @@ pub async fn deck_theory_slots(
 }
 
 /// What the plan wants and the deck does not have. **Read-only** connection.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_diff(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1354,7 +1344,6 @@ pub async fn deck_theory_diff(
 /// every press had before the dialog could offer one, and the destination a caller that sends
 /// nothing still gets. A folder that is not there is refused by name before a single wish is
 /// written.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_missing_to_wishlist(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1753,9 +1742,7 @@ mod tests {
         );
     }
 
-    /// **A diff row carries its printing's picture** — the dialog draws the `art` crop beside
-    /// each name, and on web and on Android that URL travels with the row or the frame stays
-    /// blank: `mtgimg://` is a Tauri custom protocol and wasm can register no scheme.
+    /// **A diff row carries its printing's picture.**
     ///
     /// **`bolt-m10` is shaped like a `meld` printing here** — all four variants in *both*
     /// columns, every one a different URL — because that is the only shape where each way of

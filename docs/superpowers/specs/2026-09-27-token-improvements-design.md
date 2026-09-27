@@ -100,7 +100,9 @@ Mapped 2026-09-27 (read off the code):
 
 - The band loses the eye button, **Show dismissed**, the dismissed count and the "every token is
   dismissed" sentence; `useDeckTokens` loses `dismiss`, `restore` and `showDismissed`; `ipc.ts`,
-  `web::route` and the fake lose `deck_token_state`; the Rust command goes with them.
+  `web::route` and the fake lose `deck_token_state`; the Rust command goes with them. (The web
+  target, `web::route` with it, has since been removed from `main`; the desktop handler list and
+  the fake are what remain to lose it.)
 - **`'hidden'` stays in `deck_tokens.state`'s `CHECK`** — a peer on an older build can still write
   it, and an old undo step can restore it — and every reader treats it as not hidden.
 - **A launch pass retires it**: `deck_tokens::retire_hidden`, after the corpus is readable (the
@@ -151,7 +153,8 @@ Mapped 2026-09-27 (read off the code):
   answers yes for, as the `Printing` DTO the picker already renders (with `finishPrices`), plus each
   printing's `oracle_id`, name and the subtitle facts (colours, power, toughness, oracle text).
   One statement over `cards` with the token predicate in SQL; no index is added (it runs on a press,
-  not per keystroke). Routed on the web target (`web::route`) and answered by the fake.
+  not per keystroke). Routed on the web target (`web::route`) and answered by the fake. (The web
+  target has since been removed from `main`, so the route went with it.)
 - The picker's header gains an **All tokens** `ToggleChip`, off by default. Off, it is today's
   picker over the deck's own tokens. On, it lists **every** token, grouped by token under its name
   and subtitle, every printing and finish as a tile; the search box narrows by token name or set

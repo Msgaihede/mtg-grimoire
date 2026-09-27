@@ -3,8 +3,8 @@ import {
   GROUP_ORDER,
   GROUPS,
   matches,
+  PANEL_ORDER,
   PANELS,
-  panelsOn,
   searching,
   visiblePanels,
   type GroupId,
@@ -76,8 +76,7 @@ function sweep(): { ids: Set<string>; dynamic: string[] } {
     for (const tag of withoutComments(source).match(OPENING_TAG) ?? []) {
       const id = ID_ATTR.exec(tag)?.[1];
       if (id === undefined) dynamic.push(`${path}: ${tag}`);
-      // A Set, because one panel may draw its heading at more than one site: `BackupPanel` has
-      // two `id="backup"` returns, the folder variant and the archive variant, and they are one
+      // A Set, because one panel may draw its heading at more than one site, and that is one
       // panel rather than two.
       else ids.add(id);
     }
@@ -103,14 +102,14 @@ const RAIL: GroupId[] = [
   "errors",
 ];
 
-/** Which panels each rail entry holds, in the order the pane draws them, on a **web** build. */
+/** Which panels each rail entry holds, in the order the pane draws them. */
 const UNDER: Record<GroupId, PanelId[]> = {
   updates: ["updates"],
   carddata: ["prices"],
   sync: ["sync", "review"],
   tags: ["hidden-tags"],
   appearance: ["start-view", "theory-marks", "labels"],
-  storage: ["data-folder", "backup", "cache", "web-storage", "danger"],
+  storage: ["data-folder", "backup", "cache", "danger"],
   errors: ["errors"],
 };
 
@@ -147,7 +146,7 @@ describe("the settings rail", () => {
 
   it("files every panel under an entry, and leaves no entry empty", () => {
     const under: Partial<Record<GroupId, PanelId[]>> = {};
-    for (const id of panelsOn(true)) {
+    for (const id of PANEL_ORDER) {
       (under[PANELS[id].group] ??= []).push(id);
     }
 
@@ -158,9 +157,9 @@ describe("the settings rail", () => {
   });
 });
 
-describe("panelsOn", () => {
-  it("leaves the browser panel out of a desktop build, in declaration order", () => {
-    expect(panelsOn(false)).toEqual([
+describe("PANEL_ORDER", () => {
+  it("lists every panel, in declaration order", () => {
+    expect(PANEL_ORDER).toEqual([
       "updates",
       "prices",
       "sync",
@@ -172,25 +171,6 @@ describe("panelsOn", () => {
       "data-folder",
       "backup",
       "cache",
-      "errors",
-      "danger",
-    ]);
-  });
-
-  it("puts it back on a web build, in the same order", () => {
-    expect(panelsOn(true)).toEqual([
-      "updates",
-      "prices",
-      "sync",
-      "review",
-      "hidden-tags",
-      "start-view",
-      "theory-marks",
-      "labels",
-      "data-folder",
-      "backup",
-      "cache",
-      "web-storage",
       "errors",
       "danger",
     ]);
@@ -244,7 +224,7 @@ describe("matches", () => {
   });
 
   it("finds nothing for a word that is nowhere", () => {
-    expect(panelsOn(true).filter((id) => matches(id, "kubernetes"))).toEqual([]);
+    expect(PANEL_ORDER.filter((id) => matches(id, "kubernetes"))).toEqual([]);
   });
 });
 
@@ -264,12 +244,12 @@ describe("searching", () => {
 describe("visiblePanels", () => {
   it("draws exactly the group's panels when there is no query", () => {
     for (const group of RAIL) {
-      expect(visiblePanels(group, "", true)).toEqual(UNDER[group]);
+      expect(visiblePanels(group, "")).toEqual(UNDER[group]);
     }
   });
 
   it("still draws the group's panels when the box holds only spaces", () => {
-    expect(visiblePanels("carddata", "   ", true)).toEqual(["prices"]);
+    expect(visiblePanels("carddata", "   ")).toEqual(["prices"]);
   });
 
   /**
@@ -279,19 +259,19 @@ describe("visiblePanels", () => {
    */
   it("answers past the selected group when there is a query", () => {
     // Standing on `Updates`, which holds no panel that matches: the answer comes from `storage`.
-    expect(visiblePanels("updates", "dropbox", false)).toEqual(["backup"]);
-    // Standing on `storage`, whose other four panels do not match and are therefore gone.
-    expect(visiblePanels("storage", "dropbox", false)).toEqual(["backup"]);
+    expect(visiblePanels("updates", "dropbox")).toEqual(["backup"]);
+    // Standing on `storage`, whose other three panels do not match and are therefore gone.
+    expect(visiblePanels("storage", "dropbox")).toEqual(["backup"]);
   });
 
   it("keeps the search's answers in declaration order, across groups", () => {
     // "clear" is in `Local cache`'s line, in `Errors`', and in `Clear data`'s — three panels from
     // two groups, and `errors` comes between `cache` and `danger` in the page's own order.
-    expect(visiblePanels("updates", "clear", false)).toEqual(["cache", "errors", "danger"]);
+    expect(visiblePanels("updates", "clear")).toEqual(["cache", "errors", "danger"]);
   });
 
   it("answers nothing rather than falling back to the group", () => {
-    expect(visiblePanels("storage", "kubernetes", false)).toEqual([]);
+    expect(visiblePanels("storage", "kubernetes")).toEqual([]);
   });
 
   /**
@@ -301,7 +281,7 @@ describe("visiblePanels", () => {
    * thing this repo's vocabulary rule forbids.
    */
   it("draws every appearance panel under their own group", () => {
-    expect(visiblePanels("appearance", "", false)).toEqual([
+    expect(visiblePanels("appearance", "")).toEqual([
       "start-view",
       "theory-marks",
       "labels",
@@ -320,9 +300,9 @@ describe("visiblePanels", () => {
    */
   it("finds the opening view by the words a reader would type", () => {
     for (const query of ["landing", "launch", "opening view", "first screen", "home page"]) {
-      expect(visiblePanels("updates", query, false)).toContain("start-view");
+      expect(visiblePanels("updates", query)).toContain("start-view");
     }
-    expect(visiblePanels("updates", "landing", false)).toEqual(["start-view"]);
+    expect(visiblePanels("updates", "landing")).toEqual(["start-view"]);
   });
 
   /**
@@ -333,7 +313,7 @@ describe("visiblePanels", () => {
    */
   it("finds the colours by the words a reader would type", () => {
     for (const query of ["colour", "color", "green", "checkmark", "theory mark", "customize", "red", "cross"]) {
-      expect(visiblePanels("updates", query, false)).toContain("theory-marks");
+      expect(visiblePanels("updates", query)).toContain("theory-marks");
     }
   });
 
@@ -344,27 +324,6 @@ describe("visiblePanels", () => {
    * would actually notice, which is why the panel is not filed there.
    */
   it("finds the labels without finding the tag panels", () => {
-    expect(visiblePanels("updates", "label", false)).toEqual(["labels"]);
-  });
-
-  it("gates the browser panel on the build, with a query and without one", () => {
-    expect(visiblePanels("storage", "", false)).toEqual([
-      "data-folder",
-      "backup",
-      "cache",
-      "danger",
-    ]);
-    expect(visiblePanels("storage", "", true)).toEqual([
-      "data-folder",
-      "backup",
-      "cache",
-      "web-storage",
-      "danger",
-    ]);
-
-    // "opfs" is the browser panel's word and nothing else's, so the desktop answer is empty
-    // rather than merely shorter.
-    expect(visiblePanels("storage", "opfs", false)).toEqual([]);
-    expect(visiblePanels("storage", "opfs", true)).toEqual(["web-storage"]);
+    expect(visiblePanels("updates", "label")).toEqual(["labels"]);
   });
 });

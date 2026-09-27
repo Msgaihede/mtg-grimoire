@@ -14,7 +14,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FINISH_LABEL, parseFinishes, soleFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { CARD_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
+import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import type { CardDetail, DeckFinish, MeldRelation } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
@@ -260,19 +260,11 @@ export function CardModalArt({
   const meldResult = meldResultOf(meld.relations);
   const meldParts = meldPartsOf(meld.relations);
 
-  // **Through `cardArtSrc`, which is the whole of what makes this frame draw in a browser.** An
-  // `mtgimg://` URL is registered natively with the webview and wasm cannot register a scheme, so
-  // handing one to a browser `<img>` paints a *broken* image where a card belongs — worse than
-  // the named empty frame a `null` gives.
-  //
   // **A meld view replaces the card's own art with a counterpart's** — a different printing, so a
-  // different id, and always its only side. That counterpart has no supplied URL and therefore
-  // answers `null` on the web target: `card_meld_parts` carries no image columns, which is a
-  // known gap rather than an oversight, and it costs the meld view its picture in a browser while
-  // every other card in the panel still draws.
+  // different id, and always its only side.
   const src = meld.melded
-    ? cardArtSrc(cardImageUrl(meld.melded.id, 0, "display"), null)
-    : cardArtSrc(cardImageUrl(card.id, face, "display"), card.imageUris?.display);
+    ? cardImageUrl(meld.melded.id, 0, "display")
+    : cardImageUrl(card.id, face, "display");
   const pictured = meld.melded?.name || card.faces[face]?.name || card.name;
 
   // What the sheen is asked for. `soleFinish` is the *statement* — this printing is foil — and
@@ -460,7 +452,7 @@ export function CardModalArt({
               transform: angle === 0 ? undefined : `rotate(${angle}deg)`,
             }}
           >
-            {src === null || broken === src ? (
+            {broken === src ? (
               // A rate-limited image is a 503 the `<img>` cannot read, so this says what is known
               // rather than guessing: the card is still identified, and the way back is stated.
               <div
@@ -471,12 +463,7 @@ export function CardModalArt({
               >
                 <span className="text-sm">{pictured}</span>
                 <span className="text-xs text-dim">
-                  {src === null
-                    ? // The row carried no picture at all, which on the web target is the honest
-                      // end of the road rather than a delay — there is no local cache to fill and
-                      // no second place to look.
-                      "No image for this printing."
-                    : "No image yet — it may still be downloading. Reopen the card to try again."}
+                  No image yet — it may still be downloading. Reopen the card to try again.
                 </span>
               </div>
             ) : (

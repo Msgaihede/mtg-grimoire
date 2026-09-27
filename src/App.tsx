@@ -28,7 +28,6 @@ import { WishlistPage } from "@/features/wishlist/WishlistPage";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 import { useUpdate, type Update } from "@/lib/useUpdate";
-import { FeedDownloadProvider } from "@/pwa/FeedDownloadProvider";
 
 function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
@@ -124,150 +123,137 @@ export default function App() {
   // and the Settings panel. One hook means one `update:progress` listener — two would be two
   // subscriptions racing to describe the same download.
   const update = useUpdate();
-  // The browser's update is NOT here, and that is a fix rather than an oversight: `PwaShell` in
-  // `main.tsx` owns it, because on the web target this component is mounted only once a corpus
-  // exists and the shell has to be registered long before that. That file has the measurement.
 
   return (
     <MotionConfig reducedMotion="user">
       <QueryClientProvider client={queryClient}>
-        {/* **Inside `QueryClientProvider` and outside `ContextMenuProvider`**, which is
-            `CardToDeckProvider`'s placement argument verbatim: that provider draws its panel as
-            a *sibling* of `children`, so a context mounted inside it would be around every view
-            and around none of the menu's own rows. Inside the query client because the three
-            downloads it guards are all mutations against it.
+        {/* **The provider wraps the shell; the menu it renders is a sibling of it**, for exactly
+          the reason `CardZoomIndicator` below is one. A menu takes `LAYER.popup`, a z-index
+          competes only inside its own stacking context, and every card surface in this app draws
+          rows that are `position: absolute` and transformed — so a menu mounted where it was
+          opened is capped at that row's `LAYER.raised` and painted under the table header above
+          it. Mounted here, drawn at the pointer. Nothing between here and the root transforms.
 
-            Inert on desktop: the guard is a synchronous pass-through and the dialog is never
-            constructed. */}
-        <FeedDownloadProvider>
-          {/* **The provider wraps the shell; the menu it renders is a sibling of it**, for exactly
-            the reason `CardZoomIndicator` below is one. A menu takes `LAYER.popup`, a z-index
-            competes only inside its own stacking context, and every card surface in this app draws
-            rows that are `position: absolute` and transformed — so a menu mounted where it was
-            opened is capped at that row's `LAYER.raised` and painted under the table header above
-            it. Mounted here, drawn at the pointer. Nothing between here and the root transforms.
+          Inside `QueryClientProvider` rather than outside it, because a menu's rows are built
+          from the cache the view beside them reads: a lazy submenu's `Content` runs `useDecks()`
+          when the reader expands it, and a chosen action writes through the same client the
+          surface it was opened over would have. */}
+        {/* **Above `ContextMenuProvider`, and that placement is the whole of what this line is
+          about.** The provider below draws its panel as a **sibling** of `children`, so
+          "inside `AppShell`" and "inside the menu" are two different places: this mounted
+          around the shell would be around every *view* and around none of the menu's *rows*,
+          and `useAddCardToDeck` would throw the moment a reader expanded "Add to → Deck" — on
+          every card surface at once, not on one of them. It shipped that way for one commit.
+          Anything a menu's rows
+          need goes here, outside the menu provider, not inside the shell it renders.
 
-            Inside `QueryClientProvider` rather than outside it, because a menu's rows are built
-            from the cache the view beside them reads: a lazy submenu's `Content` runs `useDecks()`
-            when the reader expands it, and a chosen action writes through the same client the
-            surface it was opened over would have. */}
-          {/* **Above `ContextMenuProvider`, and that placement is the whole of what this line is
-            about.** The provider below draws its panel as a **sibling** of `children`, so
-            "inside `AppShell`" and "inside the menu" are two different places: this mounted
-            around the shell would be around every *view* and around none of the menu's *rows*,
-            and `useAddCardToDeck` would throw the moment a reader expanded "Add to → Deck" — on
-            every card surface at once, not on one of them. It shipped that way for one commit.
-            Anything a menu's rows
-            need goes here, outside the menu provider, not inside the shell it renders.
+          Inside `QueryClientProvider` because it mounts `useDeck`, which is a query. */}
+        {/* **Above `ContextMenuProvider` for the reason `CardToDeckProvider` is**: that provider
+          draws its panel as a *sibling* of `children`, so a context mounted inside it would be
+          around every view and around none of the menu's own rows — and a menu row binding a
+          tooltip would silently get the no-op API. Inside `QueryClientProvider`, because a
+          caller's tooltip `content` is rendered here and may be a component that reads the
+          cache. Nothing between here and the root transforms, which is what lets the panel be
+          `fixed` against the window rather than against a virtualised row. */}
+        <TooltipProvider>
+          <CardToDeckProvider>
+            <ContextMenuProvider>
+              <AppShell update={update}>
+                {/* No flank column beside the view any more: the card is a centred modal
+                    mounted below, so nothing here reserves width for it. */}
+                <ActiveView update={update} />
+              </AppShell>
+              {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
+            `LAYER.popup`, and a z-index only competes inside its own stacking context — so
+            mounting it inside a view would cap it at whatever that view's transformed or
+            positioned ancestors allow, which is exactly the bug `layers.ts` was written about.
+            Nothing between here and the root transforms.
 
-            Inside `QueryClientProvider` because it mounts `useDeck`, which is a query. */}
-          {/* **Above `ContextMenuProvider` for the reason `CardToDeckProvider` is**: that provider
-            draws its panel as a *sibling* of `children`, so a context mounted inside it would be
-            around every view and around none of the menu's own rows — and a menu row binding a
-            tooltip would silently get the no-op API. Inside `QueryClientProvider`, because a
-            caller's tooltip `content` is rendered here and may be a component that reads the
-            cache. Nothing between here and the root transforms, which is what lets the panel be
-            `fixed` against the window rather than against a virtualised row. */}
-          <TooltipProvider>
-            <CardToDeckProvider>
-              <ContextMenuProvider>
-                <AppShell update={update}>
-                  {/* No flank column beside the view any more: the card is a centred modal
-                      mounted below, so nothing here reserves width for it. */}
-                  <ActiveView update={update} />
-                </AppShell>
-                {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
-              `LAYER.popup`, and a z-index only competes inside its own stacking context — so
-              mounting it inside a view would cap it at whatever that view's transformed or
-              positioned ancestors allow, which is exactly the bug `layers.ts` was written about.
-              Nothing between here and the root transforms.
+            One instance for the whole app, because a reader makes one gesture at a time. Each
+            card section now keeps its **own** zoom — the search and collection walls, the deck
+            editor's docked search column, and its desk — so the figure is never about "the
+            zoom"; it is about the one section the last ctrl+wheel landed in, and it is drawn in
+            that section's top-right corner (`zoomSection` names it, `anchorFor` measures it).
+            That is what makes a single badge right rather than a compromise: four badges would
+            be three of them describing a gesture nobody just made, and the one that mattered
+            would be no easier to find. It is mounted *here* and drawn *there*, which is the
+            whole trick — the corner comes from a measurement, not from where this line sits. */}
+              <CardZoomIndicator />
+              {/* **Every printing of one card, over whatever the reader is already looking at.**
+            A sibling of the shell for the badge's reason one line up: the panel is `fixed` at
+            `LAYER.overlay`, a z-index competes only inside its own stacking context, and every
+            card surface in this app draws rows that are positioned and transformed — so mounted
+            where it was opened it would be capped by that row's layer. Nothing between here and
+            the root transforms.
 
-              One instance for the whole app, because a reader makes one gesture at a time. Each
-              card section now keeps its **own** zoom — the search and collection walls, the deck
-              editor's docked search column, and its desk — so the figure is never about "the
-              zoom"; it is about the one section the last ctrl+wheel landed in, and it is drawn in
-              that section's top-right corner (`zoomSection` names it, `anchorFor` measures it).
-              That is what makes a single badge right rather than a compromise: four badges would
-              be three of them describing a gesture nobody just made, and the one that mattered
-              would be no easier to find. It is mounted *here* and drawn *there*, which is the
-              whole trick — the corner comes from a measurement, not from where this line sits. */}
-                <CardZoomIndicator />
-                {/* **Every printing of one card, over whatever the reader is already looking at.**
-              A sibling of the shell for the badge's reason one line up: the panel is `fixed` at
-              `LAYER.overlay`, a z-index competes only inside its own stacking context, and every
-              card surface in this app draws rows that are positioned and transformed — so mounted
-              where it was opened it would be capped by that row's layer. Nothing between here and
-              the root transforms.
+            **One instance, and that is what the whole change is for.** `View all printings` is on
+            the card menu of twelve surfaces, and it used to answer by *moving* the reader: to the
+            Search view from the collection and the wishlist, into the 384px card pane inside the
+            deck editor. Both destinations closed something to show a list. A dialog mounted here
+            is drawn over all twelve without any of them knowing it exists, so asking the question
+            costs the reader nothing — the deck stays open behind the scrim, and closing the modal
+            puts them back exactly where they were.
 
-              **One instance, and that is what the whole change is for.** `View all printings` is on
-              the card menu of twelve surfaces, and it used to answer by *moving* the reader: to the
-              Search view from the collection and the wishlist, into the 384px card pane inside the
-              deck editor. Both destinations closed something to show a list. A dialog mounted here
-              is drawn over all twelve without any of them knowing it exists, so asking the question
-              costs the reader nothing — the deck stays open behind the scrim, and closing the modal
-              puts them back exactly where they were.
+            Inside `CardToDeckProvider` and `ContextMenuProvider` because its tiles carry the same
+            card menu every other wall in the app draws, lazy deck picker included; inside
+            `QueryClientProvider` because it reads `card_printings` and writes through
+            `deck_swap_printing`. */}
+              <AllPrintingsDialog />
 
-              Inside `CardToDeckProvider` and `ContextMenuProvider` because its tiles carry the same
-              card menu every other wall in the app draws, lazy deck picker included; inside
-              `QueryClientProvider` because it reads `card_printings` and writes through
-              `deck_swap_printing`. */}
-                <AllPrintingsDialog />
+              {/* **The Price movers widget's popup, mounted out here rather than in the row that
+            opens it.** The home grid spends the reader's zoom as a CSS `zoom` on its box, and
+            zoom is inherited down the DOM tree whatever a descendant's `position` — so a dialog
+            drawn in a widget row would be drawn at the dashboard's scale, where a dialog is
+            chrome and belongs at the app's, as the tooltip already is (`home-page.md` §4).
+            Whether a `zoom` also traps a `fixed inset-0` scrim the way layout containment does is
+            recorded there as still open; mounted here, nothing has to find out. The page has no
+            `@container` today, deliberately and for `src/CLAUDE.md`'s rule, and this placement
+            keeps a future one from reparenting this scrim too. The row writes `priceHistory` in
+            the store and this reads it.
 
-                {/* **The Price movers widget's popup, mounted out here rather than in the row that
-              opens it.** The home grid spends the reader's zoom as a CSS `zoom` on its box, and
-              zoom is inherited down the DOM tree whatever a descendant's `position` — so a dialog
-              drawn in a widget row would be drawn at the dashboard's scale, where a dialog is
-              chrome and belongs at the app's, as the tooltip already is (`home-page.md` §4).
-              Whether a `zoom` also traps a `fixed inset-0` scrim the way layout containment does is
-              recorded there as still open; mounted here, nothing has to find out. The page has no
-              `@container` today, deliberately and for `src/CLAUDE.md`'s rule, and this placement
-              keeps a future one from reparenting this scrim too. The row writes `priceHistory` in
-              the store and this reads it.
+            **Above `CardDetailModal`, and here the order *is* load-bearing**, unlike the seven
+            below: both take `LAYER.overlay`, so document order breaks the tie, and the popup's
+            `Open card details` closes this one and opens that one in the same press. Mounted
+            after it, this scrim would paint over the arriving card for the length of its fade. */}
+              <PriceHistoryDialog />
 
-              **Above `CardDetailModal`, and here the order *is* load-bearing**, unlike the seven
-              below: both take `LAYER.overlay`, so document order breaks the tie, and the popup's
-              `Open card details` closes this one and opens that one in the same press. Mounted
-              after it, this scrim would paint over the arriving card for the length of its fade. */}
-                <PriceHistoryDialog />
+              {/* **The card itself, and the five overlays its rail opens — seven siblings of
+            the shell, and not one of them may be a child of another.**
 
-                {/* **The card itself, and the five overlays its rail opens — seven siblings of
-              the shell, and not one of them may be a child of another.**
+            `AllPrintingsDialog` above and these six are all `fixed` scrims, and a `fixed` box
+            is laid out against the window only while nothing between it and the root is a
+            containing block for it. `CardDetailModal` asks `Dialog` for `container`, which puts
+            `@container/card` on its panel — and `container-type` implies **layout
+            containment**, which makes that panel the containing block for every `fixed`
+            descendant under it. A legality grid rendered *inside* the card modal would
+            therefore have its `fixed inset-0` scrim resolve against the panel: it would cover
+            the card and nothing else, with no scrim over the app and no way to tell from the
+            DOM that anything was wrong. `src/CLAUDE.md` states the same rule from the other
+            end — a modal may never be mounted inside a container box — and `FilterBar` had to
+            become a fragment for it. Here the rule is met by placement: the modal draws no
+            overlay, it writes `cardOverlay` in the store, and each of these five reads that
+            field from out here. `CombosDialog` is the fourth (issue #359) and `NotesOverlay`
+            the fifth (issue #447), and neither needed a new argument: each is another reader of
+            that one field, so the only thing their mounts had to get right is being *here*
+            rather than under the panel that opens them.
 
-              `AllPrintingsDialog` above and these six are all `fixed` scrims, and a `fixed` box
-              is laid out against the window only while nothing between it and the root is a
-              containing block for it. `CardDetailModal` asks `Dialog` for `container`, which puts
-              `@container/card` on its panel — and `container-type` implies **layout
-              containment**, which makes that panel the containing block for every `fixed`
-              descendant under it. A legality grid rendered *inside* the card modal would
-              therefore have its `fixed inset-0` scrim resolve against the panel: it would cover
-              the card and nothing else, with no scrim over the app and no way to tell from the
-              DOM that anything was wrong. `src/CLAUDE.md` states the same rule from the other
-              end — a modal may never be mounted inside a container box — and `FilterBar` had to
-              become a fragment for it. Here the rule is met by placement: the modal draws no
-              overlay, it writes `cardOverlay` in the store, and each of these five reads that
-              field from out here. `CombosDialog` is the fourth (issue #359) and `NotesOverlay`
-              the fifth (issue #447), and neither needed a new argument: each is another reader of
-              that one field, so the only thing their mounts had to get right is being *here*
-              rather than under the panel that opens them.
+            **`CardDetailModal` must be inside `CardToDeckProvider`**, which every mount in this
+            block is: its action row's `Add to deck` picker calls `useOptionalAddCardToDeck()`, and
+            that hook answers `null` outside the provider — so a mount above it would draw the
+            control permanently disabled, with nothing going red.
 
-              **`CardDetailModal` must be inside `CardToDeckProvider`**, which every mount in this
-              block is: its action row's `Add to deck` picker calls `useOptionalAddCardToDeck()`, and
-              that hook answers `null` outside the provider — so a mount above it would draw the
-              control permanently disabled, with nothing going red.
-
-              Order among the seven is not load-bearing: they are ranked by `LAYER.overlay` and
-              `LAYER.overlayStacked` rather than by document order, which is the whole reason that
-              rung was split. */}
-                <CardDetailModal />
-                <LegalityDialog />
-                <OracleTagsDialog />
-                <CardTextDialog />
-                <CombosDialog />
-                <NotesOverlay />
-              </ContextMenuProvider>
-            </CardToDeckProvider>
-          </TooltipProvider>
-        </FeedDownloadProvider>
+            Order among the seven is not load-bearing: they are ranked by `LAYER.overlay` and
+            `LAYER.overlayStacked` rather than by document order, which is the whole reason that
+            rung was split. */}
+              <CardDetailModal />
+              <LegalityDialog />
+              <OracleTagsDialog />
+              <CardTextDialog />
+              <CombosDialog />
+              <NotesOverlay />
+            </ContextMenuProvider>
+          </CardToDeckProvider>
+        </TooltipProvider>
       </QueryClientProvider>
     </MotionConfig>
   );

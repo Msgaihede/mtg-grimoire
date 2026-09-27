@@ -16,30 +16,18 @@
 //! statement about rows rather than about Magic, an apply has to be transactional with the
 //! writes it makes, and [`crate::reconcile`] already merges two versions of the reader's own
 //! rows and writes `needs_review` sentences from Rust.
-//!
-//! **Every module here compiles for `wasm32-unknown-unknown`**, which is the third of those
-//! arguments stated as a constraint: the web target's core is this same crate, so a layer that
-//! did not compile there would be a second implementation of the conflict rules waiting to be
-//! written. `hlc` and `merge` need nothing but `serde`; `capture` and `apply` need `rusqlite`,
-//! which the wasm build already has; `wire` needs [`crate::sync_pair::crypto`], which is why
-//! that module's five crates moved into `Cargo.toml`'s every-target block.
 
 pub mod apply;
 pub mod baseline;
 pub mod capture;
 pub mod client;
-/// The IPC surface, and the one module here that is not every-target: a `#[tauri::command]`
-/// does not exist in a browser. Everything it orchestrates does.
-#[cfg(not(target_family = "wasm"))]
+/// The IPC surface.
 pub mod commands;
 /// The entitlement grant — the tokens that let this device talk to the relay at all, and the
-/// supporter status the relay last reported. Every-target: a browser needs the same grant.
+/// supporter status the relay last reported.
 pub mod entitlement;
 pub mod hlc;
-/// The relay socket and the task that acts on it. Not every-target, and for the same shape of
-/// reason [`commands`] is not: `tokio-tungstenite` does not build for `wasm32`, and a browser
-/// could not set the bearer header the upgrade needs anyway.
-#[cfg(not(target_family = "wasm"))]
+/// The relay socket and the task that acts on it.
 pub mod live;
 pub mod merge;
 pub mod schedule;

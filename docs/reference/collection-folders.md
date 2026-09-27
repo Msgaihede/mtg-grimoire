@@ -313,6 +313,16 @@ folder in the grain, **every** edit that moves a row into an occupied folder hit
 the message became unreachable — and it was deleted with the branch rather than left standing,
 because a message for an impossible state is the half-deleted rule this repo warns about.
 
+**`set_entry_printing` is the third side of the same fact** (issue #564, 2026-09-27) — the one
+write that reaches `card_id` after a row exists, behind the card modal's `Edit` on the collection
+surface. A copy moved onto a printing the same folder already holds at the same finish and
+condition folds into that row through `fold_entry`, and the answer names the survivor, which the
+modal follows. It refuses a printing of a *different* card, and it does not check the target's
+`finishes` — `add_entry` does not either — so the modal refuses a foil copy onto a printing with no
+foil before it writes. The modal opens read-only and stays that way until `Edit` is pressed, because
+a foil toggle or a printing row that wrote on its first press would change what the reader owns
+while they were only looking.
+
 `refile_entry` is the write itself, with no fence and no transaction of its own. Four details are
 each a decision:
 

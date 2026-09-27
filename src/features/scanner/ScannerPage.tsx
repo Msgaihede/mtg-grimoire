@@ -3,10 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import type { CollectionFolder, CollectionImportItem } from "@/lib/ipc";
 import { ipc, ipcError } from "@/lib/ipc";
-import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
-import { useNarrowWindow } from "@/lib/useNarrowWindow";
-import { isWebTarget } from "@/pwa/target";
+import { invalidateOwnedWrite } from "@/lib/searchMarks";
 import { Overlay } from "./Overlay";
 import { TiersPanel } from "./panels/TiersPanel";
 import { statusLine, type LastAdded } from "./reader/readerText";
@@ -21,14 +19,14 @@ import { useScanLoop } from "./useScanLoop";
 import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS, useScannerElsewhere } from "./useScannerElsewhere";
 import { useScannerPrefs } from "./useScannerPrefs";
 import { useTray } from "./useTray";
-import { bundleSentence, modelsSentence, SCANNER_OPEN_ELSEWHERE, WEB_SENTENCE } from "./verdictText";
+import { bundleSentence, modelsSentence, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
 /**
  * How long a row that just landed stays marked as the one to flash.
  *
  * `TrayPanel`'s wash holds for one `slow` tier and fades over the next, so the flash itself is over
  * in about half a second; the key is cleared a while after that so a panel that remounts — a
- * Developer switch that moves the column, a phone rotating — does not replay it.
+ * Developer switch that moves the column — does not replay it.
  */
 const FLASH_MS = 1200;
 
@@ -76,46 +74,19 @@ function withoutCommitted(
  * The Scanner view: the reader's bar across the top, the camera and one line saying what it is
  * doing, and the review tray beside it — with today's developer panels one switch away.
  *
- * **Dispatched above the hooks, and gated below the dispatch.** On the web target there is no
- * detector, so the whole view is one sentence and nothing below this line runs: no camera is asked
- * for, no command is called, and no `useQuery` is conditional — `BackupPanel`'s shape, for
- * `BackupPanel`'s reason. On the desktop {@link ScannerGate} stands between that dispatch and the
- * live view, because one window scans at a time and whether another holds the scanner has to be
- * answered *before* the camera is asked for — the live view's own hooks open it as they mount. So
- * the question is a component of its own with one query in it, and the live view mounts only once
- * the answer is "free".
+ * **Gated above the live view.** One window scans at a time (spec §5.3): the scanner is a lease
+ * the window using it keeps renewing, and whether another holds it has to be answered *before* the
+ * camera is asked for — the live view's own hooks open it as they mount. So this component asks
+ * that one question with one query, and `LiveScanner` mounts only once the answer is "free", so a
+ * second window never opens a camera only to be refused. A failed ask is treated as "free" — the
+ * live view's heartbeat is the real gate and asks again the moment it is refused.
  *
  * **The camera and the panels are two halves on purpose.** `useCamera` and `useScanLoop` own
  * the stream and the pump; `ScanBar`, `TrayPanel` and `ScannerPanels` are pure and take what
  * they draw as props, so each is tested from fixtures and storied without a camera, and a change
  * to a panel never touches the loop.
- *
- * **A reader of `useNarrowWindow`, not a second viewport branch.** A phone holds the camera above
- * the tray rather than beside it, and what that asks is whether the app is in its phone shape —
- * an answer the shell has already decided. `viewports.ts` demands a reason at the site of any
- * branch on width; the reason here is that there is no new branch, and the hook's own doc names
- * this view.
  */
 export function ScannerPage(): JSX.Element {
-  return isWebTarget() ? <WebSentence /> : <ScannerGate />;
-}
-
-function WebSentence() {
-  return (
-    <section className="flex h-full flex-col gap-3">
-      <h2 className="sr-only">Scanner</h2>
-      <p className="text-dim">{WEB_SENTENCE}</p>
-    </section>
-  );
-}
-
-/**
- * One window scans at a time (spec §5.3): the scanner is a lease the window using it keeps
- * renewing. Asked before `LiveScanner` mounts, so a second window never opens a camera only to be
- * refused. A failed ask is treated as "free" — the live view's heartbeat is the real gate and asks
- * again the moment it is refused.
- */
-function ScannerGate() {
   const elsewhere = useScannerElsewhere();
   if (elsewhere.data === true) return <ElsewhereSentence />;
   if (elsewhere.isPending) {
@@ -161,7 +132,6 @@ function LiveScanner() {
     queryFn: ipc.scannerStatus,
     staleTime: Infinity,
   });
-  const narrow = useNarrowWindow();
 
   /**
    * **The heartbeat: this view holds the scanner from its first render, whatever its camera is
@@ -366,7 +336,7 @@ function LiveScanner() {
         await tray.commit(items, target, (latest) => withoutCommitted(latest, snapshot));
         // The import's own set, for the import's reason: these are copies the collection did not
         // hold a moment ago, and every surface that reads "what is owned" moves with them.
-        for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
+        invalidateOwnedWrite(queryClient);
       } catch (e) {
         setCommitError(ipcError(e));
       } finally {
@@ -433,40 +403,12 @@ function LiveScanner() {
         onDeveloper={(developer) => update({ developer })}
       />
 
-      <div
-        className={
-          narrow
-            ? "relative flex min-h-0 flex-1 flex-col gap-4 overflow-auto"
-            : "flex min-h-0 flex-1 gap-4"
-        }
-      >
+      <div className="flex min-h-0 flex-1 gap-4">
         {/* The camera's column: the picture, then the one line that says what it is doing. */}
-        <div className={narrow ? "flex w-full shrink-0 flex-col gap-2" : "flex min-w-0 flex-1 flex-col gap-2"}>
-          {/* **The two arms size the video box by opposite mechanisms, and the narrow one has to.**
-              Wide, the row is the height and the box takes what the `w-80` column and the status
-              line leave. Narrow, the row is a *scrolling column*: a zero-basis `flex-1` under a
-              scrolling parent yields all of its free space to a `shrink-0` sibling, so a tray or
-              an opened developer panel whose intrinsic height reached the container's would
-              collapse the camera to ~0px. So on a phone the box is `w-full shrink-0` at the
-              camera's own aspect ratio — the picture's real shape, at full width — and the tray
-              follows it down the page. */}
-          <div
-            className={
-              narrow
-                ? "relative w-full shrink-0 overflow-hidden rounded-lg bg-black"
-                : "relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black"
-            }
-            style={
-              narrow
-                ? {
-                    // 4:3 until the stream reports its own size: a starting or refused camera has
-                    // no shape to honour, and an unset ratio here is the collapse again.
-                    aspectRatio:
-                      camera.kind === "live" ? `${camera.width} / ${camera.height}` : "4 / 3",
-                  }
-                : undefined
-            }
-          >
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          {/* The row is the height, and the video box takes what the `w-80` column beside it and
+              the status line under it leave. */}
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
             <video ref={videoRef} muted playsInline className="h-full w-full object-contain" />
             <Overlay videoRef={videoRef} verdict={loop.verdict} />
             {camera.kind === "error" && (
@@ -508,26 +450,21 @@ function LiveScanner() {
           )}
         </div>
 
-        {/* Narrow: the tray follows the camera down the page and the whole column scrolls as one,
-            which is why the scroller above is on the row rather than here. Wide: a fixed column.
-            With the developer panels off it is the tray alone, and the tray is the column's
-            height — its rows scroll and its Add button stays put. With them on the column scrolls
-            by itself, so opening a panel never moves the video, and the tray is capped rather than
-            shrunk: a `min-h-0` item in a scroller hands its height to the panels beside it. */}
+        {/* A fixed column. With the developer panels off it is the tray alone, and the tray is the
+            column's height — its rows scroll and its Add button stays put. With them on the column
+            scrolls by itself, so opening a panel never moves the video, and the tray is capped
+            rather than shrunk: a `min-h-0` item in a scroller hands its height to the panels
+            beside it. */}
         <div
           className={
-            narrow
-              ? "flex shrink-0 flex-col gap-4"
-              : prefs.developer
-                ? "relative flex w-80 shrink-0 flex-col gap-4 overflow-auto"
-                : "flex w-80 shrink-0 flex-col"
+            prefs.developer
+              ? "relative flex w-80 shrink-0 flex-col gap-4 overflow-auto"
+              : "flex w-80 shrink-0 flex-col"
           }
         >
           <div
             className={
-              !narrow && !prefs.developer
-                ? "flex min-h-0 flex-col"
-                : "flex max-h-[70vh] shrink-0 flex-col"
+              prefs.developer ? "flex max-h-[70vh] shrink-0 flex-col" : "flex min-h-0 flex-col"
             }
           >
             <TrayPanel

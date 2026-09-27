@@ -176,31 +176,18 @@ export interface DeckTokenView {
   /** {@link tokenSubtitle}'s line, or `null` where there is nothing to say. */
   subtitle: string | null;
   /**
-   * The one URL the band's tile needs, or `null` for the no-art frame.
+   * The row's `cards.scryfall.io` picture at {@link WALL_CARD_VARIANT}, or `null` where it carries
+   * none.
    *
-   * **Resolved here for the band**, so its wall does no lookup and cannot pick a different
-   * variant from the walls beside it: {@link WALL_CARD_VARIANT} is what every wall of card faces
-   * in this app draws, and a second call site choosing for itself is the pairing failure
-   * `images.ts` records — each variant is its own URL and its own cache directory, so a surface
-   * asking for one nothing pre-warms fetches cold for ever with nothing on screen to say so.
-   *
-   * **It is the whole of what this module concludes about the picture.** `CardArt` ignores it
-   * on the desktop, where `mtgimg://` reaches the local cache; on the web target and on
-   * Android it is the picture. `null` is the honest answer for a printing the backend refused
-   * a URI for, and never a reason for a caller to build one. The token *pile* is the one
-   * surface that does not read it — see {@link DeckTokenView.imageUris}.
+   * **Nothing draws it**: every token tile and the pile's face draw the local cache over
+   * `mtgimg://`. `null` is the honest answer for a printing the backend refused a URI for, and
+   * never a reason for a caller to build one.
    */
   imageUrl: string | null;
   /**
-   * The row's whole picture map, passed through beside {@link DeckTokenView.imageUrl} and
-   * **not a second conclusion about it**.
-   *
-   * The token pile draws the deck's own `DeckCardFace`, and that component picks its own
-   * variant — `DECK_CARD_VARIANT`, the whole printed card the stacked view draws — off the map,
-   * which is what keeps a token and a deck card in one pile on one variant and one pre-warm.
-   * Narrowing to {@link WALL_CARD_VARIANT} here would hand it the wrong picture; choosing
-   * `DECK_CARD_VARIANT` here would be this module deciding a view's variant. `null` for a row
-   * with none, and for a row from a build that predates the field.
+   * The row's whole picture map, passed through beside {@link DeckTokenView.imageUrl} and, like
+   * it, drawn by nothing. `null` for a row with none, and for a row from a build that predates the
+   * field.
    */
   imageUris: Partial<Record<ImageVariant, string>> | null;
   /**

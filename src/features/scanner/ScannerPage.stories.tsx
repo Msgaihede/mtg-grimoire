@@ -179,12 +179,3 @@ export const OpenInAnotherWindow: Story = {
     await expect(canvas.queryByRole("region", { name: "Scanned cards" })).not.toBeInTheDocument();
   },
 };
-
-// **No `WebBuild` story.** `isWebTarget()` is `__CORE__ === "web"`, a define this workbench's
-// Vite config folds to `"tauri"` exactly as `vite.config.ts` does for `stories.test.tsx` — so
-// the web build's one-sentence view is compiled clean out of every bundle this file can run
-// against, and there is no per-story hook here to override a `define` the way `parameters.fake`
-// overrides the backend. Reaching it needs `vi.mock("@/pwa/target", …)`, which is `stories.test.tsx`'s
-// own tool and not the workbench's — no module-mock addon is installed, so a story cannot
-// declare one. `ScannerPage.test.tsx`'s "says the web build has no detector and asks for no
-// camera" is where that state is proven, and it stays there.

@@ -43,10 +43,10 @@
 //! the Tokens subfolder — to its `deck_token_printings` and `deck_tokens`, because a token stepper
 //! writes nothing a card trigger watches. **The token marks go to a table of their own**, which
 //! only [`settle`] reads: the card marks are also `deck_tokens::reconcile_dirty`'s input, and a
-//! token write gives that reconcile nothing to do. Every
-//! user-facing write goes through `with_write` — sync's `run_once` and the web target's routes
-//! included — so [`settle`] runs after each one and rewrites only the decks it touched. A sweep
-//! of every theory deck after every write would put a diff per deck behind a zoom press.
+//! token write gives that reconcile nothing to do. Every user-facing write goes through
+//! `with_write` — sync's `run_once` included — so [`settle`] runs after each one and rewrites only
+//! the decks it touched. A sweep of every theory deck after every write would put a diff per deck
+//! behind a zoom press.
 //!
 //! Triggers rather than a call at each deck command because there are dozens of those, in
 //! several modules, and a new one would have to remember; a trigger cannot forget.

@@ -6,7 +6,6 @@ import {
   matchesShortcut,
   SHORTCUTS,
   shortcut,
-  shownOn,
   type Shortcut,
 } from "./shortcuts";
 
@@ -265,26 +264,6 @@ describe("newWindow", () => {
     expect(matchesShortcut(row, press("n", { ctrl: true, shift: true }))).toBe(true);
     expect(matchesShortcut(row, press("N", { ctrl: true, shift: true }))).toBe(true);
     expect(matchesShortcut(row, press("n", { ctrl: true }))).toBe(false);
-  });
-
-  // A phone runs one task per app and a browser tab is its own app, so there the row would be a
-  // chord nothing binds. `keyMap` is the control: an unflagged row is drawn everywhere.
-  it("is listed on the desktop and nowhere else", () => {
-    const row = shortcut("global", "newWindow");
-    expect(shownOn(row, true)).toBe(true);
-    expect(shownOn(row, false)).toBe(false);
-    expect(shownOn(shortcut("global", "keyMap"), false)).toBe(true);
-  });
-
-  // Both directions, for `range`'s reason below: the flag on any other row would take that row
-  // out of the web and phone maps and unbind it there, and asserting `newWindow` alone would pass
-  // over exactly that.
-  it("is the one row the desktop keeps to itself", () => {
-    for (const [scope, rows] of Object.entries(SHORTCUTS)) {
-      for (const row of rows) {
-        expect(row.desktopOnly === true, `${scope}/${row.id}`).toBe(row.id === "newWindow");
-      }
-    }
   });
 });
 

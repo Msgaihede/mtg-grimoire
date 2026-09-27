@@ -81,8 +81,10 @@ import {
   ipc,
   ipcError,
   type CardDetail,
+  type CollectionRow,
   type DeckFinish,
   type DeckVariant,
+  type EntryChange,
   type LabelColor,
   type MeldRelation,
 } from "@/lib/ipc";
@@ -92,7 +94,9 @@ import { pricesAsOf } from "@/lib/prices";
 import { useAppStore, type CardWalkStop } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { refreshCardSearches } from "@/lib/searchMarks";
 import { ACTION, ACTION_PRIMARY } from "./actionButtons";
+import { copyFinish, copyOption, finishRefusal } from "./copyEdit";
 import { ownsArrowKeys } from "./arrowKeys";
 import { useOptionalAddCardToDeck } from "./cardMenu";
 import { cardDetailKey } from "./cardDetailKey";
@@ -240,15 +244,15 @@ const PANEL_SIZE =
  * the decision has to be made in JavaScript before the panel exists. It is the same subject
  * {@link PANEL_SIZE} argues for one paragraph up: how much glass is either side of the panel.
  *
- * **Passing `flanks` unconditionally would be wrong at the phone rung, not merely wasteful.** The
- * scrim's columns are 3.5rem each, and at 390px that is 112px taken off a panel spec §2.1 draws
- * full-bleed. The chevrons would also be *outside* the window, which is the failure
- * `DialogProps.flanks` documents at its own site.
+ * **Passing `flanks` unconditionally would be wrong below that width, not merely wasteful.** The
+ * scrim's columns are 3.5rem each — 112px taken off the glass either side of a panel that is
+ * already asking for most of it — and the chevrons would be *outside* the window, which is the
+ * failure `DialogProps.flanks` documents at its own site.
  *
- * `useSyncExternalStore` and a fresh `matchMedia` per read, which is `useNarrowWindow`'s shape
- * and for its two reasons: `src/CLAUDE.md` forbids `setState` inside an effect, and a
- * module-level `MediaQueryList` would be built against whatever `matchMedia` was at import time —
- * which under jsdom is before any test has stated a width.
+ * `useSyncExternalStore` and a fresh `matchMedia` per read, for two reasons: `src/CLAUDE.md`
+ * forbids `setState` inside an effect, and a module-level `MediaQueryList` would be built against
+ * whatever `matchMedia` was at import time — which under jsdom is before any test has stated a
+ * width.
  */
 const FLANK_ROOM = "(min-width: 900px)";
 
@@ -737,6 +741,10 @@ function Body({
    */
   const hasControls = scope.quantity !== null || scope.deckControls;
   const viewPrinting = useAppStore((s) => s.viewPrinting);
+  /** `Edit` and `Done` on the collection surface, and the re-anchor after each copy write — see
+   *  `PaneCopy` for why a collection card is read-only until the first of them is pressed. */
+  const editCopy = useAppStore((s) => s.editCopy);
+  const stopEditingCopy = useAppStore((s) => s.stopEditingCopy);
   /**
    * How the meld controls under the art re-point the modal at the melded card.
    *
@@ -1055,6 +1063,41 @@ function Body({
   );
 
   /**
+   * The rows `Edit` can be pressed on — **this printing, at the finish the tile named**.
+   *
+   * A foil tile and a regular tile of one printing are two tiles on the wall, so a press on the
+   * foil one is about the foil copies and must not offer to edit the regular ones. A card opened
+   * from the table names no finish (`paneFinish` is `null`), and then every row of the printing
+   * is a candidate. More than one is common rather than rare — the folder is part of the grain,
+   * so the same printing in two drawers is two rows — which is why `Edit` becomes a picker then
+   * rather than choosing for the reader.
+   */
+  const editableRows = useMemo(
+    () => ownedRows.filter((row) => paneFinish === null || row.finish === paneFinish),
+    [ownedRows, paneFinish],
+  );
+  /**
+   * The row being edited, or `null` — looked up by id alone and not among {@link ownedRows}, so a
+   * refetch still holding the printing the copy has just left does not make it vanish for a frame.
+   */
+  const copyRow = useMemo(() => {
+    const id = scope.copy?.entryId;
+    if (id === undefined) return null;
+    return (owned.data?.items ?? []).find((row) => row.id === id) ?? null;
+  }, [owned.data, scope.copy]);
+  /**
+   * The copy as `CardModalArt` reads a row — which is what turns its `View as …` into `Set as …`.
+   *
+   * **Off `paneFinish` rather than off {@link copyRow}**, because `editCopy` writes the copy's
+   * finish there on every press and every follow, so the control is right on the frame the write
+   * lands rather than on the frame the list re-reads.
+   */
+  const copyAsRow: { finish: DeckFinish } | null =
+    scope.copy === null
+      ? null
+      : { finish: paneFinish === "foil" || paneFinish === "etched" ? paneFinish : null };
+
+  /**
    * The block's four figures — three from Rust and the fourth from the deck already in hand.
    *
    * **Zero is a real answer and `undefined` is the only absence**, so the fallback is what the
@@ -1090,7 +1133,7 @@ function Body({
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    void refreshCardSearches(queryClient);
   };
   const setOwned = useMutation({
     mutationFn: ({ id, quantity }: { id: number | null; quantity: number }) =>
@@ -1120,9 +1163,39 @@ function Body({
     // collection figure and no deck's arithmetic.
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
     onError: (e) => setRefusal(`Could not change your wishlist — ${ipcError(e)}`),
+  });
+
+  /**
+   * The two writes `Edit` unlocks — a copy's **finish** and its **printing** (issue #564).
+   *
+   * **Both follow the copy, and only while the reader is still editing it.** Either write can fold
+   * the row into one already holding the grain it lands on, so the answer's `id` is the row to go
+   * on editing and the one sent is not. The check against the store is what keeps a write the
+   * reader walked away from — Escape, a chevron, `Done` — from reopening the modal on its answer:
+   * a `useMutation`-level `onSuccess` outlives the panel that pressed it, which is exactly the
+   * property the invalidations in {@link settle} need and the follow must not have.
+   */
+  const followCopy = (sent: number, cardId: string, finish: Finish | null, change: EntryChange) => {
+    settle();
+    if (useAppStore.getState().paneCopy?.entryId !== sent) return;
+    editCopy(cardId, finish, change.id);
+  };
+  const setCopyFinish = useMutation({
+    mutationFn: ({ id, finish }: { id: number; cardId: string; finish: Finish }) =>
+      ipc.collectionUpdate(id, { finish }),
+    onMutate: () => setRefusal(null),
+    onSuccess: (change, { id, cardId, finish }) => followCopy(id, cardId, finish, change),
+    onError: (e) => setRefusal(`Could not change this copy's finish — ${ipcError(e)}`),
+  });
+  const moveCopy = useMutation({
+    mutationFn: ({ id, cardId }: { id: number; cardId: string; finish: Finish | null }) =>
+      ipc.collectionSetPrinting(id, cardId),
+    onMutate: () => setRefusal(null),
+    onSuccess: (change, { id, cardId, finish }) => followCopy(id, cardId, finish, change),
+    onError: (e) => setRefusal(`Could not change this copy's printing — ${ipcError(e)}`),
   });
 
   /**
@@ -1318,6 +1391,21 @@ function Body({
    */
   const pickPrinting = (printingId: string) => {
     const slot = scope.deck;
+    // **A copy being edited moves** — the collection's half of this file's header argument, and
+    // only after `Edit`: until then a collection card browses like every other wall.
+    if (slot === null && scope.copy !== null) {
+      if (printingId === cardId || moveCopy.isPending) return;
+      const finish = copyRow === null ? paneFinish : copyFinish(copyRow);
+      const printing = printings.data?.items.find((p) => p.id === printingId);
+      const refused =
+        finish === null || printing === undefined ? null : finishRefusal(finish, printing);
+      if (refused !== null) {
+        setRefusal(refused);
+        return;
+      }
+      moveCopy.mutate({ id: scope.copy.entryId, cardId: printingId, finish });
+      return;
+    }
     if (slot === null) {
       viewPrinting(printingId);
       return;
@@ -1480,6 +1568,45 @@ function Body({
     }));
   }, [decks, deckFolders]);
 
+  /**
+   * `Edit` — start editing one row, on the card and the finish that row already is.
+   *
+   * The reader's own `View as …` goes with the read-only view it was a part of: from here the
+   * foil control says what the copy *is*, and a view left standing would put the rail's shop link
+   * on a finish the copy does not have.
+   */
+  const startEdit = (row: CollectionRow) => {
+    setRefusal(null);
+    setViewedFinish(null);
+    editCopy(cardId, copyFinish(row), row.id);
+  };
+  /** The picker `Edit` becomes when more than one row holds this printing — see
+   *  {@link editableRows}. Sorted by drawer first, since that is what tells two rows apart. */
+  const copyOptions: DropdownOption[] = useMemo(
+    () =>
+      sortOptions(editableRows, (row) => {
+        const { label, hint } = copyOption(row);
+        return `${hint} ${label}`;
+      }).map((row) => ({ value: String(row.id), ...copyOption(row) })),
+    [editableRows],
+  );
+  /**
+   * **The caret goes back to the edit slot whenever the slot's control is replaced under it.**
+   * `Edit` becomes `Done` and `Done` becomes `Edit` (or the picker), and each swap unmounts the
+   * element that had focus — so without this a keyboard reader's next Tab starts from `<body>`.
+   * Only when focus really was lost: a reader who has since moved it somewhere keeps it there.
+   */
+  const editSlot = useRef<HTMLSpanElement>(null);
+  const editing = scope.copy !== null;
+  const wasEditing = useRef(editing);
+  useEffect(() => {
+    if (wasEditing.current === editing) return;
+    wasEditing.current = editing;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    editSlot.current?.querySelector<HTMLElement>("button")?.focus();
+  }, [editing]);
+
   const artist = card === null ? null : artistOf(card, face, melded);
 
   /**
@@ -1515,6 +1642,24 @@ function Body({
           under `max-h-full`, which is what `min-h-0` beside it is for. */}
       <div ref={panelRef} className="flex min-h-0 flex-auto flex-col">
         <CardMenuRefusal error={refusal ?? menuFailure} className="mx-5 mt-3 shrink-0" />
+
+        {/* **What `Edit` turned on, said where the reader is looking** — the controls it changed
+            look almost exactly as they did (`View as foil` became `Set as foil`, a printing row
+            that browsed now writes), so the mode has to be named rather than inferred. */}
+        {scope.copy !== null && (
+          <p
+            className={cn(
+              "mx-5 mt-3 shrink-0 rounded-md border border-accent/40 px-3 py-2",
+              "text-xs text-dim",
+            )}
+          >
+            <span className="text-accent">Editing</span>{" "}
+            {copyRow === null
+              ? "this copy"
+              : `${copyOption(copyRow).label} in ${copyOption(copyRow).hint}`}
+            {" — the finish and the printing change as you pick them."}
+          </p>
+        )}
 
         {error !== null && (
           <p role="alert" className="mx-5 mt-3 text-sm text-destructive">
@@ -1577,7 +1722,7 @@ function Body({
               <CardModalArt
                 // Keyed on the card, so a step throws the column's own state — the broken-image
                 // note and the foil view — out with it rather than carrying it to the next card.
-                key={cardId}
+                key={scope.copy === null ? cardId : `${cardId}:copy`}
                 card={card}
                 face={face}
                 onFlip={() => setFace((f) => (f === 0 ? 1 : 0))}
@@ -1587,7 +1732,7 @@ function Body({
                 // playing a regular copy" — which is exactly what the button's `Set as …` /
                 // `View as …` label turns on. A `PaneDeckContext` satisfies the shape
                 // structurally, so it goes through unchanged.
-                deckRow={scope.deck}
+                deckRow={scope.deck ?? copyAsRow}
                 // The other half of that seed, and the half a deck row cannot supply: a
                 // collection tile that *is* a foil, or the deck editor's search panel, writes
                 // `paneFinish` when it opens the card. Without it a foil tile opened plain.
@@ -1603,6 +1748,19 @@ function Body({
                   // `null` here is the *regular* copy — see `viewedFinish` for why that word is
                   // spelled out rather than passed along as an absence.
                   setViewedFinish(next ?? "nonfoil");
+                  if (scope.deck === null && scope.copy !== null) {
+                    // `Set as …` on a copy being edited: the row's own finish, through the same
+                    // `collection_update` the table's editor writes — which folds onto a row
+                    // already holding that finish rather than refusing.
+                    const finish: Finish = next ?? "nonfoil";
+                    const refused = finishRefusal(finish, card);
+                    if (refused !== null) {
+                      setRefusal(refused);
+                      return;
+                    }
+                    setCopyFinish.mutate({ id: scope.copy.entryId, cardId, finish });
+                    return;
+                  }
                   if (scope.deck === null) return;
                   deck.setCardFinish.mutate({
                     cardId: scope.deck.cardId,
@@ -1739,7 +1897,7 @@ function Body({
                 marketplace={marketplace}
                 // One write at a time: every row sends the same `from` printing, and the write
                 // in flight is in the middle of moving it.
-                busy={deck.swapPrinting.isPending}
+                busy={deck.swapPrinting.isPending || moveCopy.isPending}
                 // **The same callback the combobox had, unchanged** — and its meaning is the
                 // load-bearing part: with a deck row behind the modal this *swaps the deck's
                 // printing* (`useDeck.swapPrinting`), with no deck row it browses
@@ -1756,6 +1914,14 @@ function Body({
                     // `PrintingsRequest.wish`, where the field is required so that every caller
                     // has to say which it means.
                     wish: null,
+                    // …unless `Edit` is on, when a press on the wall moves this copy instead.
+                    copy:
+                      scope.copy === null
+                        ? undefined
+                        : {
+                            id: scope.copy.entryId,
+                            finish: copyRow === null ? paneFinish : copyFinish(copyRow),
+                          },
                   });
                 }}
               />
@@ -1864,6 +2030,48 @@ function Body({
                   {@link useFlankRoom} decides which, because the room they need is the scrim's
                   and the scrim is the window. */}
               {chevrons}
+              {/* **`Edit`, on the collection's own surface and nowhere else** (issue #564). A
+                  collection card opens read-only, the way it always has; this is the one press
+                  that makes its foil control and its printing rows write to the copy. Drawn only
+                  where there is a copy of this printing to edit, and as a picker where there is
+                  more than one — the modal will not choose a row for the reader. */}
+              {scope.surface === "collection" && (
+                <span ref={editSlot} className="contents">
+                  {scope.copy !== null ? (
+                    <button
+                      type="button"
+                      aria-label="Done editing"
+                      onClick={stopEditingCopy}
+                      className={cn(ACTION_PRIMARY, PRESS, FOCUS)}
+                    >
+                      Done
+                    </button>
+                  ) : editableRows.length === 1 ? (
+                    <button
+                      type="button"
+                      aria-label="Edit this copy"
+                      onClick={() => editableRows[0] && startEdit(editableRows[0])}
+                      className={cn(ACTION, PRESS, FOCUS)}
+                    >
+                      Edit
+                    </button>
+                  ) : editableRows.length > 1 ? (
+                    <Dropdown
+                      // An action rather than a setting, like `Add to deck` beside it: the
+                      // placeholder is what it always reads.
+                      value=""
+                      onChange={(id) => {
+                        const row = editableRows.find((r) => String(r.id) === id);
+                        if (row !== undefined) startEdit(row);
+                      }}
+                      options={copyOptions}
+                      placeholder="Edit"
+                      label="Edit which copy"
+                      className={ACTION}
+                    />
+                  ) : null}
+                </span>
+              )}
               <button
                 type="button"
                 // **The name is the long form at every rung and the visible words shorten**, so a

@@ -24,12 +24,10 @@
 //! that names no finish is priced through the `nonfoil → foil → etched` chain rather than at the
 //! nonfoil rate.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use crate::wishlist::{set_printing_inner, wishlist_scope, WishlistQuery, WISH_PREFERRED_FINISH};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// One printing in a plan — the one a wish is pinned to now, or the one the sweep would move
@@ -424,7 +422,6 @@ pub fn apply(
 
 /// The preview. **Read-only** connection, blocking pool — `wishlist_list`'s shape, because it is
 /// the same question asked about the same rows.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_optimize_plan(
     state: tauri::State<'_, Arc<AppState>>,
@@ -438,7 +435,6 @@ pub async fn wishlist_optimize_plan(
 
 /// The press. `wishlist_set_printing`'s shape — plain [`with_write`], because a wish is
 /// something the reader does *not* have and nothing here changes what is owned.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_optimize_apply(
     state: tauri::State<'_, Arc<AppState>>,

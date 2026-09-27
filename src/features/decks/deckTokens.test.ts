@@ -185,15 +185,8 @@ describe("deckTokenViews", () => {
   });
 
   /**
-   * **The web target's and the phone's only picture**, folded to the one URL the tile draws.
-   *
-   * Neither has the `mtgimg://` protocol to ask, so `cardArtSrc` falls through to whatever the
-   * row carried and a tile with nothing draws the no-art frame — which is what every token tile
-   * did in a browser before `DeckTokenRow` grew this field. Nothing in jsdom can see a picture,
-   * so the fold is the only part of it a test can hold.
-   *
-   * The variant is read from {@link WALL_CARD_VARIANT} rather than spelled `"display"`: a
-   * literal here would pass against the exact defect of picking a variant no wall pre-warms.
+   * The row's picture map, folded to one URL. The variant is read from {@link WALL_CARD_VARIANT}
+   * rather than spelled `"display"`, so the case follows the constant.
    */
   it("folds the wall's variant out of the row's picture map", () => {
     const uris: Partial<Record<ImageVariant, string>> = {
@@ -253,10 +246,8 @@ describe("deckTokenViews", () => {
   });
 
   /**
-   * **The whole map travels beside the resolved `imageUrl`**, because the token pile draws the
-   * deck's own card face and `DeckCardFace` picks its own variant (`DECK_CARD_VARIANT`) off the
-   * map — a variant this file does not choose and must not narrow to. The absent key folds to
-   * `null` for `imageUrl`'s reason: a DTO from a build that predates the field has no picture,
+   * **The whole map travels beside the resolved `imageUrl`**, not narrowed. The absent key folds
+   * to `null` for `imageUrl`'s reason: a DTO from a build that predates the field has no picture,
    * and `undefined` is a third state nothing downstream should have to spell.
    */
   it("passes the row's picture map through beside the resolved URL", () => {

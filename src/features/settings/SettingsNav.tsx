@@ -11,9 +11,14 @@ import { GROUPS, GROUP_ORDER, searching, type BadgeId, type GroupId } from "./na
  * The list, in both of its shapes.
  *
  * A column of full-width rows beside the pane; a horizontally scrolling strip of chips when the
- * rail has wrapped above it, which in practice means a phone. The strip is the shape a reader
- * already has for "pick one of six" at that width — the app's own bottom tab bar — and a column
- * of six full-width rows above the pane would push every panel a screen and a half down.
+ * rail has wrapped above it, because a column of six full-width rows above the pane would push
+ * every panel a screen and a half down. **The wrapped shape is a guard rather than a layout a
+ * reader is expected to meet**: by the page's own numbers below, one line needs 744px (the rail's
+ * 232, the pane's 480 and the page's 32px gap), and the app's 1024px window floor leaves the page
+ * 776 once the 208px sidebar and `main`'s 40px of padding are taken off — less a scrollbar, still
+ * enough. That is arithmetic on the classes, not a measurement. It is kept because the question
+ * it answers is the page's, and a change to those bases or to the app sidebar beside them would
+ * reach it without anyone touching this file.
  *
  * **The threshold is a question about this box and not about the window, and the arithmetic
  * behind it is the page's own layout.** `SettingsPage` lays the rail and the pane out as a
@@ -86,10 +91,11 @@ const ENTRY = cn(
  * the `Updates` group one. Clearing the query is the page's, not this component's: `onGroup`
  * fires and nothing else, so the two states can never both apply and neither can be lost.
  *
- * ## Why a container query, and not `useNarrowWindow()` or a `sm:` branch
+ * ## Why a container query, and not a `sm:` branch
  *
- * `src/lib/viewports.ts` forbids a viewport branch outside `AppShell`, and it is right to: the
- * question here is not how wide the *window* is but whether this rail has the pane beside it.
+ * `src/lib/viewports.ts` refuses a window-width branch that cannot say why the *window* is what
+ * it asks about, and this one could not: the question here is not how wide the window is but
+ * whether this rail has the pane beside it.
  * The rail's own inline size answers that exactly — see {@link LIST} for the arithmetic —
  * and a window-width branch would answer a different question that happens to agree today and
  * would stop agreeing the moment the page's `flex` bases move.
@@ -105,9 +111,9 @@ const ENTRY = cn(
  * container box wrapped around the page would size every settings scrim and every settings
  * dialog to the *page box* instead of to the window: a scrim covering the panel it came out of,
  * and a panel clamped to a column.
- * `FilterBar.tsx:1287` is the same trap found from the other end — its root is a fragment so
- * that the phone's filter sheet is the container box's **sibling**. Nothing in jsdom can see any
- * of this: it applies no stylesheet and computes no containment. What a test can pin is the
+ * `FilterBar`'s root states the same trap from the other end — it is an `@container/fb` box, so
+ * nothing that has to cover the window may be mounted inside it. Nothing in jsdom can see any of
+ * this: it applies no stylesheet and computes no containment. What a test can pin is the
  * structure, which is that the container is this element and the panels are not inside it.
  */
 export function SettingsNav({
@@ -152,8 +158,8 @@ export function SettingsNav({
         // the rung named for exactly this pairing — something sticky, over the content passing
         // beneath it — and it stays below `popup`, so a panel's dropdown still opens over it.
         //
-        // Not corrected for `main`'s own 20px of padding (`FilterBar`'s `-mt-5 pt-5`), and that
-        // is deliberate: the rail is not the first thing in `main` on this page, so the bleed
+        // Not corrected for `main`'s own 20px of padding (a `-mt-5 pt-5` bleed), and that is
+        // deliberate: the rail is not the first thing in `main` on this page, so the bleed
         // would take a bite out of whatever is above it at rest to fix a gutter only a scrolled
         // page shows.
         "bg-bg",

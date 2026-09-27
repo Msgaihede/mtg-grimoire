@@ -33,6 +33,11 @@ function slotOf(deckId: number, cardId: string) {
   return db.deckCategories.find((c) => c.id === row?.categoryId) ?? null;
 }
 
+/** The seed's collection row for a printing — the copy `Edit` is pressed on, read not assumed. */
+function copyOf(cardId: string) {
+  return seed("starter").collectionEntries.find((e) => e.cardId === cardId) ?? null;
+}
+
 /**
  * The modal, opened the way the app opens it — through the store, never through a prop.
  *
@@ -45,11 +50,26 @@ function slotOf(deckId: number, cardId: string) {
  * answer and for its reason: an effect runs after the first paint, so the story would draw one
  * frame of a closed dialog before it opened.
  */
-function Modal({ cardId, deckId }: { cardId: string; deckId: number | null }) {
+function Modal({
+  cardId,
+  deckId,
+  editCopy,
+}: {
+  cardId: string;
+  deckId: number | null;
+  editCopy: boolean;
+}) {
   useState(() => {
     const store = useAppStore.getState();
     const slot = deckId === null ? null : slotOf(deckId, cardId);
-    if (deckId === null || slot === null) store.setSelectedCardId(cardId);
+    const copy = editCopy ? copyOf(cardId) : null;
+    if (copy !== null) {
+      // The collection's own wall, with `Edit` already pressed — which is `editCopy`, the same
+      // action the modal's button calls. Without the view the scope answers `search` and the
+      // copy is ignored, which is the second fence `useCardModalScope` documents.
+      store.setActiveView("collection");
+      store.editCopy(cardId, copy.finish, copy.id);
+    } else if (deckId === null || slot === null) store.setSelectedCardId(cardId);
     else {
       store.setActiveView("decks");
       store.openCardFromDeck({
@@ -85,14 +105,14 @@ function Modal({ cardId, deckId }: { cardId: string; deckId: number | null }) {
  *
  * **`transform: translateZ(0)` is the whole trick, and it is the same one every dialog story here
  * uses**: `position: fixed` resolves against the nearest *transformed* ancestor rather than the
- * viewport, so one line turns a window-covering modal into a story-sized one and lets four rungs
+ * viewport, so one line turns a window-covering modal into a story-sized one and lets every rung
  * sit on one docs page.
  *
  * It is also what makes these stories exercise the real folds. The panel *asks* for its size with
  * viewport queries — see `PANEL_SIZE`, where the circular-container argument is written out — but
  * `Dialog`'s `max-w-full` clamps that request to this box, and the container queries inside then
- * measure the **panel's actual width**. So a 390px frame draws the phone layout whatever the
- * browser window is doing, which is the property that makes a workbench of four rungs possible at
+ * measure the **panel's actual width**. So a 764px frame draws the two-column layout whatever the
+ * browser window is doing, which is the property that makes a workbench of three rungs possible at
  * all.
  */
 function Frame({
@@ -102,6 +122,7 @@ function Frame({
 }: {
   cardId: string;
   deckId: number | null;
+  editCopy: boolean;
   width: number;
   height: number;
 }) {
@@ -119,11 +140,13 @@ const meta = {
   title: "Card/Detail modal",
   component: Frame,
   tags: ["autodocs"],
-  args: { cardId: BOLT, deckId: null, width: 1400, height: 820 },
+  args: { cardId: BOLT, deckId: null, editCopy: false, width: 1400, height: 820 },
   // Keyed on everything the initializer reads, so changing the card or the opener in Controls
   // mounts a fresh host and runs it again rather than writing to a store the mounted modal is
   // already subscribed to.
-  render: (args) => <Frame key={`${args.cardId}:${args.deckId}:${args.width}`} {...args} />,
+  render: (args) => (
+    <Frame key={`${args.cardId}:${args.deckId}:${args.editCopy}:${args.width}`} {...args} />
+  ),
   parameters: {
     docs: {
       /**
@@ -139,14 +162,14 @@ const meta = {
           "One centred modal, replacing the three mounts of the docked card pane.\n\n" +
           "**The folds are container queries on the panel, not viewport branches** — the panel " +
           "carries `@container/card` and every column inside it asks about *that* box, because " +
-          "the same panel is drawn in a 390px phone frame and a 1400px window and the window " +
+          "the same panel is drawn in a 764px story frame and a 1400px window and the window " +
           "answers about the wrong thing. The one exception is the panel's **own** size, which " +
           "cannot be a container query about itself: it asks the window and is then clamped by " +
           "`Dialog`'s `max-w-full`, so what the columns fold on is the width the panel really " +
           "got.\n\n" +
           "**The grimoire counts are drawn twice and exactly one is visible.** " +
           "`CardModalRail` keeps them in the rail at `@min-[1200px]/card` and up; below that " +
-          "they are an inline row in the centre column. All four artboards show them — at the " +
+          "they are an inline row in the centre column. Every story here shows them — at the " +
           "narrower rungs they *move* rather than vanish.\n\n" +
           "**The step chevrons are one pair in two places.** Above 900px of window they are " +
           "`Dialog`'s `flanks`, hung off the panel's edges in columns the scrim reserves; below " +
@@ -166,18 +189,6 @@ const meta = {
 
 export default meta;
 type Story = StoryObj<typeof meta>;
-
-/**
- * The phone rung, below `@min-[640px]/card`: **full-bleed, one column, one scroller.**
- *
- * No columns at all — the picture, the controls, the counts and the rail's options are stacked in
- * a single thumb-driven scroll, and every control in the panel is at its 44px height. `Add to
- * deck` takes the whole action row and the other two sit under it, because a right-aligned row of
- * three at this width is three cramped targets.
- */
-export const Phone: Story = {
-  args: { width: 390, height: 844 },
-};
 
 /**
  * `@min-[640px]/card`: **two columns, `[18.75rem_1fr]`.**
@@ -211,4 +222,17 @@ export const Desktop: Story = {
  */
 export const Wide: Story = {
   args: { width: 1400, height: 840, cardId: SOL_RING_C21, deckId: SEEDED_DECK },
+};
+
+/**
+ * **A collection copy with `Edit` pressed** (issue #564) — the seed's Heavily Played Alpha Bolt,
+ * filed in `Binder`.
+ *
+ * Opened from the collection the modal is read-only, exactly as `Desktop` draws it; this is the
+ * other state. The banner names the copy, the foil control reads `Set as …` where the printing
+ * has a foil to set, every printing row is `Change this copy to …`, and `Edit` in the action row
+ * has become `Done`.
+ */
+export const CollectionEditing: Story = {
+  args: { width: 1400, height: 840, editCopy: true },
 };

@@ -3,10 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionFolder, ScannerPrefs, ScannerVerdict } from "@/lib/ipc";
-import { SCANNER_OPEN_ELSEWHERE, WEB_SENTENCE } from "./verdictText";
+import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import { DEFAULT_SCANNER_PREFS, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
 
-vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 vi.mock("@/lib/ipc", async (orig) => {
   const real = await orig<typeof import("@/lib/ipc")>();
   const { DEFAULT_SCANNER_PREFS: prefs } = await import("./fixtures");
@@ -41,7 +40,6 @@ vi.mock("@/lib/ipc", async (orig) => {
     },
   };
 });
-import { isWebTarget } from "@/pwa/target";
 import { ipc } from "@/lib/ipc";
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
@@ -155,27 +153,14 @@ function frames(...verdicts: ScannerVerdict[]) {
   });
 }
 
-/** `useNarrowWindow`'s answer, at read time — the hook keeps no `MediaQueryList`. */
-function windowIsNarrow(narrow: boolean) {
-  vi.spyOn(window, "matchMedia").mockImplementation(
-    (media: string) =>
-      ({
-        matches: narrow,
-        media,
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      }) as unknown as MediaQueryList,
-  );
-}
-
-/** The video box — the one the two layout arms size differently. */
+/** The video box — the camera's picture, with the detector's strip laid over it. */
 function videoBox(container: HTMLElement): HTMLElement {
   const box = container.querySelector("video")?.parentElement;
   if (!box) throw new Error("no video box");
   return box;
 }
 
-/** The layout row: the camera's column and the tray's, side by side or stacked. */
+/** The layout row: the camera's column and the tray's, side by side. */
 function row(container: HTMLElement): HTMLElement {
   const found = videoBox(container).parentElement?.parentElement;
   if (!found) throw new Error("no layout row around the camera");
@@ -243,17 +228,6 @@ afterEach(() => {
 });
 
 describe("ScannerPage", () => {
-  it("says the web build has no detector and asks for no camera", () => {
-    vi.mocked(isWebTarget).mockReturnValueOnce(true);
-    const getUserMedia = vi.fn();
-    mediaDevices(getUserMedia);
-    mount();
-    expect(screen.getByText(WEB_SENTENCE)).toBeInTheDocument();
-    expect(getUserMedia).not.toHaveBeenCalled();
-    expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
-    expect(vi.mocked(ipc.scannerStatus)).not.toHaveBeenCalled();
-  });
-
   it("shows the refused camera's sentence in place of the video, and the missing bundle under it", async () => {
     refused();
     mount();
@@ -315,42 +289,14 @@ describe("ScannerPage", () => {
     }
   });
 
-  it("stacks the camera above the tray on a phone and puts it beside the camera otherwise", async () => {
+  it("puts the tray beside the camera, the video box taking what the row leaves", async () => {
     refused();
-    windowIsNarrow(true);
-    const narrow = mount();
+    const { container } = mount();
     await screen.findByRole("status", { name: "Scanner status" });
-    expect(row(narrow.container)).toHaveClass("flex-col");
-    // The video box is sized by its own aspect ratio here rather than by what is left over. A
-    // zero-basis `flex-1` under this scrolling column yields its free space to the `shrink-0`
-    // tray beside it, so `flex-1` on a phone is a camera that collapses to nothing the moment
-    // the tray grows — which is why the class must be absent and not merely outranked.
-    expect(videoBox(narrow.container)).toHaveClass("shrink-0");
-    expect(videoBox(narrow.container).classList.contains("flex-1")).toBe(false);
-    expect(videoBox(narrow.container).style.aspectRatio).not.toBe("");
-    narrow.unmount();
-
-    windowIsNarrow(false);
-    const wide = mount();
-    await screen.findByRole("status", { name: "Scanner status" });
-    expect(row(wide.container).classList.contains("flex-col")).toBe(false);
-    expect(videoBox(wide.container)).toHaveClass("flex-1");
-    expect(videoBox(wide.container).classList.contains("shrink-0")).toBe(false);
-    expect(videoBox(wide.container).style.aspectRatio).toBe("");
-  });
-
-  it("gives the phone's video box the camera's own shape once the stream reports one", async () => {
-    const restore = shimVideo();
-    opens();
-    windowIsNarrow(true);
-    vi.mocked(ipc.scannerFrame).mockReturnValue(new Promise(() => {}));
-    try {
-      const { container } = mount();
-      // 4:3 is the placeholder a starting or refused camera gets; 1280×720 is `shimVideo`'s.
-      await waitFor(() => expect(videoBox(container).style.aspectRatio).toBe("1280 / 720"));
-    } finally {
-      restore();
-    }
+    expect(row(container).classList.contains("flex-col")).toBe(false);
+    expect(videoBox(container)).toHaveClass("flex-1");
+    expect(videoBox(container).classList.contains("shrink-0")).toBe(false);
+    expect(videoBox(container).style.aspectRatio).toBe("");
   });
 
   it("shows the Match panel behind the Developer switch, and hides it again", async () => {

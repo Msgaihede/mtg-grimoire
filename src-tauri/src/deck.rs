@@ -36,13 +36,11 @@
 
 use crate::collection::{valid_quantity, EntryChange, ZERO_ADD};
 use crate::deck_meta::{DeckCategoryRow, DeckLabelRow};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The variant this module means when it says "the deck": what is actually sleeved up.
@@ -906,13 +904,6 @@ pub struct DeckRow {
     /// went — so `display` is here because [`crate::image_uri::LIST_VARIANTS`] emits the pair
     /// and not because anything on a gallery reads it.
     ///
-    /// **Why it is on the wire at all**, [`crate::search::CardSummary::image_uris`]' argument
-    /// in full: `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme
-    /// with a browser, so on web and on Android the URL travels with the row or the tile draws
-    /// nothing. That is what it was doing — every deck cover in a browser was a blank frame the
-    /// moment PR #327 made the card crop the only cover. On desktop this is ignored, because
-    /// `src/lib/images.ts`'s `cardArtSrc` takes the local cache.
-    ///
     /// `None` for a deck with no cover, for a cover whose printing has left `cards`, and for a
     /// printing with no fetchable image — three states the tile draws identically, because from
     /// the reader's side they are one: nothing to show yet. The first two heal on the next sync,
@@ -1019,7 +1010,11 @@ fn printing_row(conn: &Connection, card_id: &str) -> Result<Option<Printing>, St
 /// all 116 k of them, but the column is), and a null is as uncomparable as a missing row —
 /// folding it into the SQL rather than into a `match` is what keeps a caller from reading
 /// `Some(null)` as an oracle two printings could share.
-fn oracle_of(conn: &Connection, card_id: &str) -> Result<Option<String>, String> {
+///
+/// **`pub(crate)` for `collection::set_entry_printing`**, which asks [`swap_printing`]'s question
+/// of a collection row and must get the same answer to it — a second spelling of "can these two
+/// be compared" is the one that forgets the NULL.
+pub(crate) fn oracle_of(conn: &Connection, card_id: &str) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT oracle_id FROM cards WHERE id = ?1 AND oracle_id IS NOT NULL",
         params![card_id],
@@ -5142,18 +5137,13 @@ pub struct DeckCardRow {
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
     /// still holds — so a collection that shrank under a stored claim reads honestly.
     pub owned_quantity: i64,
-    /// The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser
-    /// can reach**, and `None` when this printing has none worth fetching.
+    /// The front face's picture on `cards.scryfall.io`, by variant, and `None` when this
+    /// printing has none worth fetching.
     ///
     /// [`crate::search::CardSummary::image_uris`] carries the argument in full: one variant
     /// ([`crate::image_uri::LIST_VARIANT`], which is what `DECK_CARD_VARIANT` is on the other
     /// side), face 0, the face-first precedence and the `soon.jpg` fence, every one of them
     /// [`crate::image_uri::front_face_map`]'s and none of them respelled here.
-    ///
-    /// **Two surfaces read it and both had to be wired**: `views/GridView` draws a
-    /// `components/CardArt`, which takes the URL as a prop, and `CardStack` builds its own
-    /// `<img>` src — so it is the one that has to put both candidates through `cardArtSrc`
-    /// itself. `deck_get` is routed on web and `mtgimg://` is not reachable there.
     ///
     /// `None` for an orphan, whose printing has left `cards` — the same answer as every other
     /// card fact on this row, and the state `CardArt` already draws "No card" for.
@@ -6311,12 +6301,10 @@ pub fn decks_playing(conn: &Connection, keys: &[String]) -> Result<Vec<i64>, Str
 
 /// What a deck write says when its worker thread died under it. Never a user's problem —
 /// the write itself answers [`crate::db::BUSY`] when the database is busy.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck could not be written: {e}")
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6328,7 +6316,6 @@ pub async fn deck_create(
         .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6351,7 +6338,6 @@ pub async fn deck_update(
 /// **No `AppHandle`, where every other wrapper in this pair has one**: this took one solely to
 /// resolve the covers directory so the deck's `<id>.webp` could go with it, and custom covers
 /// went on 2026-08-31.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_delete(state: tauri::State<'_, Arc<AppState>>, id: i64) -> Result<(), String> {
     let state = state.inner().clone();
@@ -6372,7 +6358,6 @@ pub async fn deck_delete(state: tauri::State<'_, Arc<AppState>>, id: i64) -> Res
 ///
 /// **No `AppHandle`, for [`deck_delete`]'s reason**: it carried one only to resolve the covers
 /// directory the copy's own `<id>.webp` was written into.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_duplicate(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6391,7 +6376,6 @@ pub async fn deck_duplicate(
 
 /// File a deck under a folder, or with `folderId: null` back at the root of the tree — the one
 /// thing [`DeckPatch`] cannot express. See [`set_folder`].
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_set_folder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6413,7 +6397,6 @@ pub async fn deck_set_folder(
 /// would read, because every other write changes something a gallery draws. This changes one
 /// thing the *editor* will read on its next open, and a caller that re-rendered a deck tile over
 /// it would be redrawing for a scroll position.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_set_view_state(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6430,7 +6413,6 @@ pub async fn deck_set_view_state(
 
 /// The deck gallery. **Read-only** connection, blocking pool — as every read in this app
 /// is, so a gallery never queues behind a sync.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<DeckRow>, String> {
     let state = state.inner().clone();
@@ -6441,7 +6423,6 @@ pub async fn deck_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Dec
 
 /// Every deck's printed mana costs, for the gallery's colour bars. **Read-only** connection,
 /// blocking pool, and no arguments — see [`pip_costs`] for why the whole wall is one read.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_pip_costs(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6455,9 +6436,8 @@ pub async fn deck_pip_costs(
 /// Everything the Commander bracket estimate is made of, for the decks named. **Read-only**
 /// connection, blocking pool.
 ///
-/// `deck_ids` reaches the wire as `deckIds`, which `web::route`'s arm and `src/lib/ipc.ts` both
-/// spell that way — `invoke` matches a command's parameters by name, so the two have to agree.
-#[cfg(not(target_family = "wasm"))]
+/// `deck_ids` reaches the wire as `deckIds`, which `src/lib/ipc.ts` spells that way —
+/// `invoke` matches a command's parameters by name, so the two have to agree.
 #[tauri::command]
 pub async fn deck_bracket_reads(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6473,7 +6453,6 @@ pub async fn deck_bracket_reads(
 
 /// One deck, one variant's cards, every category and label, every fact the validator needs.
 /// **Read-only** connection.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_get(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6502,7 +6481,6 @@ pub async fn deck_get(
 /// a page makes of them — greying a destination, refusing a drop, explaining why — is
 /// TypeScript's, this crate's boundary as usual. A deck with an empty live list and a deck id
 /// with no deck both answer `[]`; [`deck_get`] is where "is there a deck" is asked.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_played_keys(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6521,7 +6499,6 @@ pub async fn deck_played_keys(
 /// [`deck_played_keys`] read from the collection's end, and the one the copies page wants: it
 /// holds a row and asks which decks that row may be filed into. `AND` and not `OR` — see
 /// [`decks_playing`] — and an empty `keys` answers `[]`, because nobody plays nothing.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_ids_playing(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6536,7 +6513,6 @@ pub async fn deck_ids_playing(
 }
 
 /// The format rules as data, for the picker and the validation engine. **Read-only.**
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn format_specs_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6556,7 +6532,6 @@ pub async fn format_specs_list(
 /// the picker no longer offers; see [`last_deck_format`]. The `Result` is `spawn_blocking`'s
 /// join and nothing else, because the read itself has no failure mode: `get_app_meta` reads an
 /// unreadable row as `None`.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_last_format(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6575,7 +6550,6 @@ pub async fn deck_last_format(
 /// every press had before the button could offer one, and the destination a caller that sends
 /// nothing still gets. A folder that is not there is refused by name before a single wish is
 /// written, including for a deck that turns out to be short of nothing.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_missing_to_wishlist(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6595,7 +6569,6 @@ pub async fn deck_missing_to_wishlist(
 
 /// Put copies into a category. **`categoryId` or `categoryName`, and at least one** — see
 /// [`add_card`] for which wins when both arrive.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn deck_add_card(
@@ -6630,7 +6603,6 @@ pub async fn deck_add_card(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_set_card_quantity(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6664,7 +6636,6 @@ pub async fn deck_set_card_quantity(
 
 /// Answers the copies it removed, so the caller can say what happened without re-reading the
 /// deck to work it out.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_clear(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6691,7 +6662,6 @@ pub async fn deck_category_clear(
 
 /// Answers the copies it removed, so the caller can say what happened without re-reading the
 /// deck to work it out.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_clear(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6716,7 +6686,6 @@ pub async fn deck_clear(
 /// target, which is [`add_card`]'s arrangement and is documented on [`move_card`]. Answers the
 /// category the copies are now in, because the name arm's caller has no other way to learn what
 /// was found or made.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn deck_move_card(
@@ -6753,7 +6722,6 @@ pub async fn deck_move_card(
 
 /// The card pane's "Use this printing". `deckId` like every other card write's, because
 /// `decks.id` is an integer everywhere it is written.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_swap_printing(
     state: tauri::State<'_, Arc<AppState>>,
@@ -6788,7 +6756,6 @@ pub async fn deck_swap_printing(
 /// The deck card menu's `Set as foil` and the card pane's own button. `fromFinish` is the row
 /// being addressed and `toFinish` what it should become — both `null` for the regular copy,
 /// which is the only spelling of it that reaches the column.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn deck_set_card_finish(
@@ -6924,7 +6891,6 @@ pub fn deck_values_for(
 /// anything the app does not recognise is TCGplayer — [`crate::sorting::Marketplace::from_opt`]'s
 /// rule for every list query, so a marketplace this build has never heard of costs a fallback
 /// rather than a failed page.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_values(
     state: tauri::State<'_, Arc<AppState>>,
@@ -8999,8 +8965,7 @@ mod tests {
         assert_eq!(decks[1].card_count, 0);
     }
 
-    /// **A deck row carries the *cover printing's* picture** — the gallery tile's only way to
-    /// draw a cover on web or on the phone, where `mtgimg://` is a scheme no browser has.
+    /// **A deck row carries the *cover printing's* picture.**
     ///
     /// It is the one field on `DeckRow` that describes a different row, and the join it comes
     /// off is `LEFT JOIN cards c ON c.id = d.cover_card_id` — the same one `cover_artist` uses.
@@ -10699,9 +10664,8 @@ mod tests {
                 // be `undefined` — which `tokenRail.tsx` reads as *last*, so the pile would snap
                 // back on every open with no type error anywhere.
                 "tokenRailIndex": 2,
-                // The cover printing's picture, spelled out key by key: this is the deck
-                // gallery's only way to draw a cover on web and on the phone, and it is a map
-                // rather than a URL because `LIST_VARIANTS` decides what a row carries.
+                // The cover printing's picture, spelled out key by key: it is a map rather than
+                // a URL because `LIST_VARIANTS` decides what a row carries.
                 "imageUris": {
                     "art": "https://cards.scryfall.io/art/front/0/0/bolt.webp?17",
                     "display": "https://cards.scryfall.io/display/front/0/0/bolt.webp?17"
@@ -14922,11 +14886,7 @@ mod tests {
     // Undoing a game change is `deck_undo.rs`'s `deck_update (game)` case, driven there over
     // the same sweep every other deck-level column goes through.
 
-    /// **A deck card carries the front face's image URL** — what the editor's Grid and Stacks
-    /// views have no other way to draw a picture from in a browser.
-    ///
-    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register one with a browser, so
-    /// without this a deck opened on the web build is a wall of named, artless frames.
+    /// **A deck card carries the front face's image URL.**
     ///
     /// **`bolt-m10` is the row that makes the offset visible at all.** The pair starts directly
     /// after `c.promo_types`, and with only top-level pictures in the fixture a read one column

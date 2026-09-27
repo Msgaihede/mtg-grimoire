@@ -6,7 +6,7 @@
  *
  * `card-hashes.bin`, `text-detection.rten` and `text-recognition.rten`, from the GitHub release
  * `scanner-bundle-v<FORMAT_VERSION>` — which `.github/workflows/scanner-bundle.yml` publishes —
- * so a developer, the Android build and `release.yml` all fetch them the same way. `build.rs`
+ * so a developer and `release.yml` fetch them the same way. `build.rs`
  * embeds them once all three are there.
  *
  * **The version is read from the crate's source, not typed here.** The tag carries the bundle's

@@ -30,7 +30,7 @@ import { plural } from "@/lib/counts";
 import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import { openExternal } from "@/lib/externalLinks";
 import { FOCUS } from "@/lib/focus";
-import { cardArtSrc, cardImageUrl } from "@/lib/images";
+import { cardImageUrl } from "@/lib/images";
 import type { DeckNote, DeckNoteCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { noteTitle } from "./deckNotes";
@@ -374,10 +374,7 @@ function NoteThumb({
 }): JSX.Element {
   // `cardId: null` is the orphan — a card the corpus no longer has a row for. It draws the empty
   // frame rather than a broken image, which is `DeckNoteCard`'s own rule stated at the type.
-  const art =
-    card.cardId === null
-      ? null
-      : cardArtSrc(cardImageUrl(card.cardId, 0, "art"), card.imageUris?.art);
+  const art = card.cardId === null ? null : cardImageUrl(card.cardId, 0, "art");
 
   const picture = art === null ? null : (
     <CardImage

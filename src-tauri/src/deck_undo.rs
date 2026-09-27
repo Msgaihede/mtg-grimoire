@@ -71,7 +71,6 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What an apply says when the id it was handed is not the deck's cursor (or, for a redo, not
@@ -2470,7 +2469,6 @@ pub struct DeckUndoState {
     pub redo: Option<crate::deck_audit::DeckAuditEntry>,
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// The `deck` payload an undo or a redo records, and the whole of what makes the pair legible.
 ///
 /// `of` is the history row being reversed, which is what lets `auditText.ts` render the undone
@@ -2479,7 +2477,6 @@ fn reversal_payload(field: &str, of: i64) -> Value {
     json!({ "field": field, "of": of })
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// One history row for the reversal itself.
 ///
 /// **`delta` is negated on an undo and carried straight on a redo**, so the day header's
@@ -2520,10 +2517,6 @@ fn record_reversal(
 /// error rolls back to it, so a constraint nobody foresaw (a label deleted since, a pile name
 /// taken since) cannot wedge the cursor either. A refused redo writes nothing and answers
 /// [`MOVED_ON`], or the write's own error.
-///
-/// **`pub(crate)` since 2026-08-29**, and the `allow(dead_code)` it carried for one PR is gone:
-/// `web::route` is the second caller, so the direction flag now has two callers on every
-/// target rather than two `#[tauri::command]`s on one.
 pub(crate) fn apply_reversal(
     conn: &Connection,
     deck_id: i64,
@@ -2631,11 +2624,6 @@ pub(crate) fn apply_reversal(
 /// answers what that id names so the button can be labelled, and refuses nothing: a `redo` that
 /// has stopped being redoable simply comes back `None`.
 /// The answer itself, over a connection the caller already holds.
-///
-/// **Lifted out of the wrapper on 2026-08-29 so `web::route` can reach it.** It was the one
-/// read in the deck cluster whose logic lived *inside* the `#[tauri::command]` rather than in
-/// a function the command called — three lookups and a filter — and a `match` arm that
-/// re-spelled it would have been a second copy of the redo rule to drift.
 pub fn undo_state(
     conn: &Connection,
     deck_id: i64,
@@ -2656,7 +2644,6 @@ pub fn undo_state(
     Ok(DeckUndoState { undo, redo })
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_undo_state(
     state: tauri::State<'_, Arc<crate::sync::AppState>>,
@@ -2672,7 +2659,6 @@ pub async fn deck_undo_state(
 }
 
 /// Undo the named change. The id is the cursor's or the call is refused in words.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_undo_apply(
     state: tauri::State<'_, Arc<crate::sync::AppState>>,
@@ -2691,7 +2677,6 @@ pub async fn deck_undo_apply(
 }
 
 /// Put back a change that was undone.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_redo_apply(
     state: tauri::State<'_, Arc<crate::sync::AppState>>,

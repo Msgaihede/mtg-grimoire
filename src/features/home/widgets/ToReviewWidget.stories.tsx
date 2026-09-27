@@ -20,17 +20,8 @@ function review(w: number, h: number, config: unknown = null): HomeWidget {
   return { id: "toReview", kind: "toReview", x: 0, y: 0, w, h, config };
 }
 
-/** The body inside the real card. `web` is the one prop the page never passes — see the story
- *  that sets it. */
-function Framed({
-  widget,
-  still = false,
-  web,
-}: {
-  widget: HomeWidget;
-  still?: boolean;
-  web?: boolean;
-}) {
+/** The body inside the real card. */
+function Framed({ widget, still = false }: { widget: HomeWidget; still?: boolean }) {
   const widthPx = spanPx(widget.w, CELL);
   const heightPx = spanPx(widget.h, CELL);
   const fit = makeFit({ w: widget.w, h: widget.h, widthPx, heightPx, density: widgetDensity(widget) });
@@ -52,7 +43,6 @@ function Framed({
             editing={false}
             still={still}
             onConfig={onConfig}
-            web={web}
           />
         </WidgetCard>
       </div>
@@ -99,9 +89,7 @@ const meta = {
           "always in that order.\n\n" +
           "A press is a view change and, where the page does not open in the right state by " +
           "itself, a one-shot hand-off after it — the binder and the wishlist open filtered to " +
-          "Needs review, the deck cards open Settings with the Needs review panel in view.\n\n" +
-          "**The browser build** has no scanner, so there is no tray row, and no Needs review list " +
-          "to open, so the deck cards row is drawn without a press.",
+          "Needs review, the deck cards open Settings with the Needs review panel in view.",
       },
     },
   },
@@ -152,31 +140,6 @@ export const Tile: Story = {
     const card = within(await canvas.findByRole("region", { name: "To review" }, LANDED));
     await expect(await card.findAllByText("1 flagged", {}, LANDED)).toHaveLength(3);
     await expect(card.getByRole("button", { name: "Binder entries · 1 flagged" })).toBeInTheDocument();
-  },
-};
-
-/**
- * **The browser build's face**, with the same rows staged: no scanner row even with a tray full of
- * cards, and the deck cards drawn without a press. `web` is passed because `isWebTarget()` is a
- * build-time define this workbench folds to the desktop answer — the page never passes it.
- */
-export const BrowserBuild: Story = {
-  args: { widget: review(3, 4), web: true },
-  parameters: { fake: { seed: "needsReview" } },
-  render: (args) => (
-    <Staged>
-      <Framed {...args} />
-    </Staged>
-  ),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    const card = within(await canvas.findByRole("region", { name: "To review" }, LANDED));
-    await expect(
-      await card.findByRole("button", { name: /^Binder entries · / }, LANDED),
-    ).toBeInTheDocument();
-    await expect(card.queryByText("Scanned cards")).not.toBeInTheDocument();
-    await expect(card.getByText("Deck cards")).toBeInTheDocument();
-    await expect(card.queryByRole("button", { name: /^Deck cards/ })).not.toBeInTheDocument();
   },
 };
 

@@ -49,8 +49,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `data/covers/` is an orphan by construction — including one left by the seam `set_cover_image`
   documented, a commit that failed after the bytes landed. The sweep ran **after the commit**,
   because the other order costs a deck whose cover vanished for a transaction that rolled back.
-  **That step went on 2026-08-31 with the custom deck cover**, so this command is rows again on
-  every target: no `covers` parameter, no `sweep_dir`, and `DecksCleared` carries `decks` and
+  **That step went on 2026-08-31 with the custom deck cover**, so this command is rows again: no
+  `covers` parameter, no `sweep_dir`, and `DecksCleared` carries `decks` and
   `folders` and no longer a `covers` file count. `data/covers/` is left standing on an install
   that has one and nothing ever opens it again — see [image-cache.md](image-cache.md) for why
   that is a decision rather than an omission. It is also why the argument for the post-commit
@@ -621,8 +621,8 @@ preferred_finish`'s nullability one table over.
   Two thin reads over the same expression serve the surfaces that say it early —
   **`deck_played_keys(deckId)`**, every key a deck's live list plays, and
   **`deck_ids_playing(keys)`**, every deck that plays *every* key given (`GROUP BY … HAVING
-  count(DISTINCT …)`, an empty list answering nothing rather than everything). Both are routed to
-  the web target; neither takes a marketplace or a variant, because the answer is priced by nothing
+  count(DISTINCT …)`, an empty list answering nothing rather than everything). Neither takes a
+  marketplace or a variant, because the answer is priced by nothing
   and scoped to one list by definition. `collection-folders.md` carries the placement argument and
   what the two greyed surfaces do with it.
 
@@ -2834,14 +2834,7 @@ the row is **stored and answered verbatim** and TypeScript's `parseDeckSort` is 
   that opened already narrowed, with no memory of having asked for it, is a gallery that looks
   like it has lost decks.
 
-### Routing and the command count
-
-All four commands are registered in `desktop.rs` and routed in `web/route.rs` — **including the
-write.** A read-only sort on the web build would be the setting *not existing* rather than being
-read-only, and the row is `app_meta` like every other preference the web target already keeps.
-`COMMANDS.len()`'s assertion moved by four, and the new figure was **read off the assertion's own
-failure rather than reached by arithmetic** — which is the only way that number has ever been got
-right, and the reason no count of commands is written on this page.
+All four commands are registered in `desktop.rs`.
 
 ## Tokens and emblems: derived on every open, deviations stored
 
@@ -3273,12 +3266,11 @@ Bolt"* — neither suite caught it, because both names were **correct** and mere
 caller at all (measured 2026-09-26). **Retired at v55: `deck_token_state`** (dismiss, restore,
 keep — shared by both lists, so it named no variant) **and `deck_token_reset`** (every entry of a
 token in one list, back to the implicit one): the dismiss went with the eye button, and one Remove
-per printing covers what Reset did. `desktop.rs`' handler list and `web/route.rs`' `COMMANDS` both
-dropped all five, and `the_token_commands_are_both_routed_and_advertised` asserts each answers
-`RouteError::Unknown`. The rule the first one needed — *the page sends the whole triple, because
-the row is defined by what it carries* — went with it: no write is a triple now.
+per printing covers what Reset did. `desktop.rs`' handler list dropped all five. The rule the first
+one needed — *the page sends the whole triple, because the row is defined by what it carries* —
+went with it: no write is a triple now.
 
-- **The wire key for the state word was `state`, and the desktop wrapper named its managed
+- **The wire key for the state word was `state`, and the Tauri wrapper named its managed
   `AppState` `app` instead** — Tauri injects a `tauri::State` by its type and never by its name,
   which freed the name for the argument the page sent. Until v52 it was the other way round
   (`tokenState` on the wire, `token_state` in Rust, and `src/lib/ipc.ts` the one place that knew
@@ -3328,8 +3320,8 @@ name), then newest printing first by `list_printings`' tail; a row with no `orac
   and SQLite's own plan walked `idx_cards_name` to skip the sort at a table lookup per corpus row,
   which a plain scan with a sort of the matches beat in both paired runs that day. The figures are
   in the function's doc, on a machine busy enough that only their order is worth quoting.
-- **Routed on the web target** and answered by the Storybook fake, on the read connection
-  (`lock_db_read`, `spawn_blocking`) on the desktop.
+- **A read on the read connection** (`lock_db_read`, `spawn_blocking`), registered in
+  `desktop.rs`' handler list and answered by the Storybook fake.
 
 ### Every token write is a deck write: one history row, one undo step (v52)
 
@@ -3832,9 +3824,7 @@ six:
 - **`DeckTokenRow` is `PartialEq` and no longer `Eq`**, because `unit_price` is an `f64`.
 - **`src/lib/ipc.ts` mirrors all six and `ipc.test.ts`'s struct table holds `DeckTokenRow`**, so
   the two sides cannot drift field for field, and its `deck_tokens` case pins the three argument
-  names. **The web target's `deck_tokens` arm in `web/route.rs` takes `marketplace` the same way**,
-  and it is not optional work: `web` is compiled on every target, so an arm left calling
-  `deck_token_rows` with three arguments is a crate that does not build.
+  names.
 - **The page puts the marketplace in the query key** (`["decks", "tokens", deckId, variant,
   marketplace]`), which reverses the *no marketplace in the key, nothing this answers is priced*
   that `features/decks/CLAUDE.md` carried — that file has the argument.
@@ -4235,11 +4225,11 @@ figure into another's statement is a read that answers real URLs for the wrong p
 
 ⚠️ **`deck_note_reorder` has no caller, and that is a stated gap rather than an oversight**
 (2026-09-10). The command is complete on every layer the rest of them reach — the Rust write, its
-history row, its undo step, the `COMMANDS` entry and both routes, the `ipc.ts` wrapper and the
+history row, its undo step, its registration in `desktop.rs`, the `ipc.ts` wrapper and the
 Storybook fake — and **no surface presses it**: the band draws its notes in `sort_order` and offers
 no way to change that order. The issue asked for notes that can be added, managed and deleted
 independently, and reordering was this plan's own addition rather than a request. It is left in
-because deleting a working capability across seven layers to remove one unpressed button is the
+because deleting a working capability across six layers to remove one unpressed button is the
 worse trade, and it is written down here because an unwired command is exactly the kind of thing a
 green build never mentions. **What wiring it would take moved with the band's redesign**: this
 said *two `RowAction`s in `DeckNotesPanel`, on `CategoryRow`'s up/down arrangement*, which was an

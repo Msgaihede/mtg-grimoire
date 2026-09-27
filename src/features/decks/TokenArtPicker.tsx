@@ -850,8 +850,6 @@ function PrintingTile({
             // carries the illustrator credit Scryfall's image policy asks for wherever a bare crop
             // would have owed one.
             variant={WALL_CARD_VARIANT}
-            // The web build's only picture; ignored on desktop, where the local cache wins.
-            imageUrl={printing.imageUris?.[WALL_CARD_VARIANT]}
             // The finish this tile **is**. `nonfoil` is not a mark: `CardArt` gates its chip on a
             // non-null finish and `FinishMark` draws nothing for a plain copy, so handing the
             // word through would paint the chip's felt with nothing in it — the collection page's

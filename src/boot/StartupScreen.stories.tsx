@@ -3,7 +3,7 @@ import { expect, within } from "storybook/test";
 import { STARTUP_LOADING_LABEL, StartupScreen } from "./StartupScreen";
 
 /**
- * What the desktop and Android window draws while the native side opens the data folder, and
+ * What the window draws while the native side opens the data folder, and
  * what it draws if that never happens. Pure — `DesktopBoot` owns the asking — so no fake backend
  * is involved; the caption reaches only the workbench's fake window.
  */

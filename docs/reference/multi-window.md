@@ -86,13 +86,12 @@ found it.
   focus, else any. `focus_existing_window` is **deleted**. It works during startup too: a window
   needs no `AppState` to exist, and its page waits on `startup_status` like the first one.
 - **Ctrl+Shift+N** — a `newWindow` row in `src/lib/shortcuts.ts`'s `global` group, which puts it in
-  the F1 key map with no further work, and `desktopOnly: true`, so the web and Android builds
-  neither bind it nor list it. See [keyboard-shortcuts.md](keyboard-shortcuts.md).
+  the F1 key map with no further work. See [keyboard-shortcuts.md](keyboard-shortcuts.md).
 
 **Permissions are a glob.** `capabilities/desktop.json` is `"windows": ["main", "window-*"]` —
 capability labels accept them — so every label `open_new` mints is granted what `main` is. Without
 it a second window gets no `core:` at all, which means `listen` rejects and `core/tauri.ts` swallows
-the rejection: a window that draws and hears nothing. `mobile.json` is untouched.
+the rejection: a window that draws and hears nothing.
 
 **Closing needed one edit and it was a doc comment.** Tauri's default already is the decision:
 closing a window destroys it, and `RunEvent::ExitRequested` arrives only when the last one goes — so
@@ -104,8 +103,7 @@ now.
 `app.webview_windows().len()`; its one reader is the Update panel's hint, a panel a reader has open
 for seconds, so `useWindowCount()` polls every two seconds while mounted rather than the app growing
 a `windows:changed` event and two emit sites to keep in step with it. The refresh gate asks
-`app.webview_windows().len()` directly. The web build does not route the command, so the hook
-answers `1` without asking.
+`app.webview_windows().len()` directly.
 
 ## 3. The change mask and the emitter
 
@@ -163,7 +161,7 @@ with nothing going red anywhere.
 a command's explicit mark rings itself, because the commit hook saw no bit for it. `notify_one`
 stores at most one permit, so a commit storm is one wake.
 
-**The emitter** is a task spawned in `start()`, desktop only. It awaits the ring, sleeps `COALESCE`
+**The emitter** is a task spawned in `start()`. It awaits the ring, sleeps `COALESCE`
 (50 ms) so a burst is one event, takes the bits, and emits `db:changed { tables }` if
 `should_emit` — the bits are non-zero **and** two or more windows are open.
 
@@ -536,5 +534,3 @@ Scanner without there being a second window — see [`.storybook/CLAUDE.md`](../
 - **Two processes on one data folder**, and **two worktrees' dev apps at once**. §1 is why the first
   stays refused; the second stays behind the one-app lock by choice.
 - **A caption-bar button** for a new window.
-- **Android and the web target.** Android runs one task per application, and a second browser tab is
-  still "first tab wins".

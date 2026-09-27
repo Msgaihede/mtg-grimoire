@@ -32,13 +32,8 @@ export default tseslint.config(
   {
     ignores: [
       "dist/",
-      // The web target's two generated directories. `web/public/` is written in FULL by
-      // `scripts/build-wasm.mjs` - the wasm-bindgen glue is a 42 KB machine-written module
-      // that trips `no-undef` on `self` and `no-unused-expressions` on its own idioms - and
-      // `dist-web/` is its bundle. Both are gitignored, so this only bites on a machine that
-      // has actually run the wasm build: measured 2026-08-28, `npm run lint` went red with
-      // four errors in `mtg_grimoire_lib.js` and none of them a defect. CI's `frontend` job
-      // never runs `build:wasm`, which is exactly why this had to be found by hand.
+      // Output of the web build, removed on 2026-09-27, which a checkout that ran it still holds
+      // on disk (gitignored): the wasm-bindgen glue is machine-written and fails `no-undef`.
       "web/public/",
       "dist-web/",
       // The public share viewer's bundle. Generated output like `dist/` above, and on disk on

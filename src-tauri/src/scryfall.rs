@@ -217,8 +217,8 @@ pub const BULK_DEFAULT_CARDS: &str = "default_cards";
 /// publishes `jsonl_download_uri` and `compressed_size` and neither of the pre-2026-07-20
 /// `download_uri`/`size` fields — which is why one [`BulkInfo`] describes both.
 /// **Aliases [`crate::tags::oracle::BULK_NAME`] rather than holding its own copy**, because
-/// that name is read on every target - it is the key a status query answers from - and this
-/// module is desktop-only. One definition, so the two cannot disagree.
+/// that name is also the key a status query answers from. One definition, so the two cannot
+/// disagree.
 pub const BULK_ORACLE_TAGS: &str = crate::tags::oracle::BULK_NAME;
 
 /// Scryfall's Art Tags: 11 531 tag objects, ~12.5 MB gzipped, each carrying its own

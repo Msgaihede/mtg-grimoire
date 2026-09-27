@@ -8,11 +8,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-
-// Same reason as `SharePage.test.tsx`: vitest inherits `vite.config.ts`'s `__CORE__: "tauri"`
-// while this bundle is built with `"web"`, and `cardArtSrc` branches on exactly that.
-vi.mock("@/pwa/target", () => ({ isWebTarget: () => true }));
-
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { SNAPSHOT_TOO_NEW, SNAPSHOT_UNREADABLE } from "@/lib/shareSnapshot";
 import golden from "../src-tauri/src/share/__golden__/snapshot.json?raw";

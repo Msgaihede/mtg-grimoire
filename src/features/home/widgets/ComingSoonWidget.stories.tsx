@@ -106,7 +106,8 @@ const meta = {
       description: {
         component:
           "Sets with previewed cards that have not released yet, soonest first — read from " +
-          "`cards` rather than `sets`, which the browser build never fills. Two count figures " +
+          "`cards` rather than `sets`, so a corpus that has not fetched `/sets` still answers. " +
+          "Two count figures " +
           "(body ink, not gold) and a row per set whose caption is its code, how far off it is " +
           "in UTC days from the read's own date, how many of its cards are out and — only when " +
           "there are some — how many your decks already play. A press shows the set in the " +

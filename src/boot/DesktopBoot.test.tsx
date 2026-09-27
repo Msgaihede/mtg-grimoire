@@ -16,7 +16,7 @@ vi.mock("@tauri-apps/api/event", () => import("../../.storybook/fake/event"));
 // it does in `TitleBar.test.tsx`.
 vi.mock("@tauri-apps/api/window", () => import("../../.storybook/fake/window"));
 // The real App mounts the whole product and fires its queries. What this suite is about is
-// *whether* it is mounted, so it stands in for itself — `WebBoot.test.tsx`'s arrangement.
+// *whether* it is mounted, so it stands in for itself.
 vi.mock("@/App", () => ({ default: () => <div>the app</div> }));
 
 import { DesktopBoot, STARTUP_POLL_MS } from "@/boot/DesktopBoot";

@@ -21,17 +21,6 @@ export function useReleaseHistory(lastCheckAt: string | null) {
   const query = useQuery({
     queryKey: ["releaseHistory", lastCheckAt],
     queryFn: () => ipc.updateHistory(),
-    // **No target gate any more**, and its removal is the point rather than a tidy-up.
-    // `update_history` is routed by `web::route` since 2026-08-31 and answers on every
-    // target: two `app_meta` reads and no network, which is what its Rust doc has always
-    // said. In a browser it answers `[]` — only `update_check` ever writes that row, and
-    // `app_meta` is not one of the synced tables — which is the same "never fetched" state
-    // the Tagger models, and `UpdatePanel` draws no history section there anyway.
-    //
-    // This hook read `enabled: !isWebTarget()` until then, added by PR #315 because the call
-    // was printing `unknown command` on the Settings page. A build-time constant standing in
-    // for an answer the backend could not give is exactly what that PR's own write-up named
-    // as the general lesson; the backend gives it now.
     // The list a reader is looking at stays on screen while the next one is read. Without
     // this a moving key is `isPending` again, so pressing Check now — or merely the first
     // status landing after the panel mounts — would replace the history with "Reading the

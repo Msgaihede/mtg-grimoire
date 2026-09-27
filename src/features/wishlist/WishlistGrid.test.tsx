@@ -1,12 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
-import { isWebTarget } from "@/pwa/target";
-
-// The build flag `cardArtSrc` branches on. `false` is what `__CORE__` already answers under
-// vitest, so this changes nothing here until a case below asks for a browser.
-vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NOT_A_DRAG, readDragData } from "@/features/decks/dnd";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import type { FolderNode } from "@/lib/folderTree";
@@ -15,9 +10,7 @@ import { MARKETPLACES } from "@/lib/marketplace";
 import type { Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
-import { stubNarrowWindow } from "@/test-viewport";
 import { QUANTITY_STEPPER_CARD_BOX } from "@/components/QuantityStepper";
-import { PHONE_TILE_WIDTH } from "@/features/search/CardGrid";
 import { WishlistGrid } from "./WishlistGrid";
 import { WishlistTable } from "./WishlistTable";
 import { readWishDrag } from "./wishDrag";
@@ -860,75 +853,25 @@ describe("the printing line", () => {
 });
 
 /**
- * **G1 — the tile a phone is handed, and the proof this wall is wired to ask for it.**
- *
- * A 390px window with the bottom tab bar instead of the rail leaves this wall **324px** once
- * `main`'s `p-5` and the scroller's own `border` + `p-3` are off it, and at the standard 170 that
- * is a single column with 90px of margin either side. `PHONE_TILE_WIDTH` and the arithmetic that
- * chose it live in `CardGrid.tsx`; what is asserted here is only that this call site asks the
- * question at all — a width that is right in a constant and never passed is the failure mode.
- *
- * **The prop, not a pixel.** jsdom lays nothing out, so the wall measures itself at 0 and
- * `tileWidthFor` answers a zero-width wall with the size it was asked for — which is what makes
- * the tile's own inline width a faithful reading of the prop and nothing else.
- */
-describe("the tile the wishlist's wall is given at the phone width", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  /** The tile's root — the box the width is set on, not the art button that takes the caret. */
-  const tileOf = (container: HTMLElement) => container.querySelector("[data-grid-index]");
-
-  it("hands the wall the phone's narrower tile below the phone width", () => {
-    stubNarrowWindow(true);
-    const { container } = wall([BOLT]);
-
-    expect(tileOf(container)).toHaveStyle({ width: `${PHONE_TILE_WIDTH}px` });
-  });
-
-  it("leaves the wall's own default standing at every other width", () => {
-    stubNarrowWindow(false);
-    const { container } = wall([BOLT]);
-
-    // 170 is `CardGrid`'s `TILE_BASE_WIDTH`, module-private and pinned by that component's own
-    // suite. Spelled here because what this case is about is that the prop is *absent* — a wall
-    // passing 144 unconditionally would pass the case above.
-    expect(tileOf(container)).toHaveStyle({ width: "170px" });
-  });
-});
-
-/**
- * **The wishlist wall in a browser** — the same failure, and the same fix, as the collection's:
- * `wishlist_list` is routed on web and `mtgimg://` cannot be reached there, so a row that
- * carries no URL is a named, artless frame.
- *
- * The second case is this wall's own question rather than a copy of the collection's. A wish for
- * *any* printing has no `cardId` at all; it is drawn as whichever printing the backend's join
+ * **A wish's art**, and this wall's own question rather than a copy of the collection's. A wish
+ * for *any* printing has no `cardId` at all; it is drawn as whichever printing the backend's join
  * chose, which is what `artCardId` names — so the picture has to follow that id, and a tile
  * reading `cardId` would draw nothing on exactly the rows a wishlist is mostly made of.
  */
 describe("a wish's art", () => {
   const SCRYFALL = { display: "https://cards.scryfall.io/display/front/c/1/c1.webp?1706230661" };
 
-  afterEach(() => {
-    vi.mocked(isWebTarget).mockReturnValue(false);
-  });
-
-  it("draws the pinned printing's own picture in a browser", () => {
-    vi.mocked(isWebTarget).mockReturnValue(true);
-    wall([{ ...BOLT, imageUris: SCRYFALL }]);
-
-    expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute("src", SCRYFALL.display);
-  });
-
   it("draws an any-printing wish as the printing the backend chose for it", () => {
-    vi.mocked(isWebTarget).mockReturnValue(true);
-    wall([{ ...ANY, imageUris: SCRYFALL }]);
+    wall([ANY]);
 
-    expect(screen.getByAltText("Ancestral Recall")).toHaveAttribute("src", SCRYFALL.display);
+    expect(screen.getByAltText("Ancestral Recall")).toHaveAttribute(
+      "src",
+      expect.stringContaining("/c-recall/0"),
+    );
   });
 
-  /** The local cache still wins on the desktop; the field rides on both builds. */
-  it("keeps drawing the cached protocol picture on desktop", () => {
+  /** The local cache still wins for a row that carries a Scryfall URL of its own. */
+  it("keeps drawing the cached protocol picture for a row that carries a URL", () => {
     wall([{ ...BOLT, imageUris: SCRYFALL }]);
 
     const src = screen.getByAltText("Lightning Bolt").getAttribute("src");

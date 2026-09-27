@@ -252,7 +252,6 @@ describe("tokenFaceFacts", () => {
     expect(tokenFaceFacts(token({ quantity: 3, printingId: "p-gold" }))).toEqual({
       cardId: "p-gold",
       needsReview: null,
-      imageUris: null,
       // "Not said": `playedFinish` then falls to the printing's sole finish, as for a deck card.
       finish: null,
       finishes: '["nonfoil"]',
