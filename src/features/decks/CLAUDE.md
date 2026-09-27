@@ -2376,9 +2376,9 @@ layer.
   this one did, because it is the one place the number was **written down** rather than read. A
   prose-only edit routes to neither CI job, so nothing went red for the nineteen days between.
   **Since 2026-09-08 there is one place the picture is asked for rather than two.** `CardStack` and
-  `views/GridView` both draw `DeckCardFace`, which makes the `cardArtSrc(cardImageUrl(…),
-  imageUris[…])` call once — so the two card views cannot come to name two variants, and the
-  pre-warm has one constant to agree with instead of two call sites.
+  `views/GridView` both draw `DeckCardFace`, which makes the `cardImageUrl(…, DECK_CARD_VARIANT)`
+  call once — so the two card views cannot come to name two variants, and the pre-warm has one
+  constant to agree with instead of two call sites.
 - **`Grid`'s tile is `DeckCardFace` — the _stack's_ own card — and only the box around it is this
   view's** (changed 2026-09-08). One component draws the card: the printed frame under the picture,
   the `CardImage`, `FoilOverlay … mark={false}`, the marks strip (`QuantityTag` — **crowned** where

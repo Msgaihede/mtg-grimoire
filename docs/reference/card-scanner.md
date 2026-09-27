@@ -41,8 +41,7 @@ it.
 **Pure Rust throughout, and verified rather than assumed.** `image` + `imageproc` for the
 geometry, `ocrs` on `rten` for the text, hand-written descriptors. The full transitive
 dependency closure of every candidate crate was walked for `cc`, `cmake`, `bindgen`,
-`pkg-config` and `*-sys` and has none of them (spec §3.1, verified 2026-09-01) — so this
-cross-compiles for `aarch64-linux-android` the way the main crate already does. No OpenCV, no
+`pkg-config` and `*-sys` and has none of them (spec §3.1, verified 2026-09-01). No OpenCV, no
 Tesseract.
 
 ### The tools, each behind its own feature
@@ -837,7 +836,7 @@ truncated `%` escape, which is kept verbatim rather than swallowing the rest of 
 **`getUserMedia` needs a secure context. `http://localhost` qualifies; `http://192.168.x.x` does
 not**, so browsing to this server from a phone over the LAN fails silently — the camera simply
 never starts. `adb reverse tcp:7777 tcp:7777` makes the desktop server *be* localhost on the
-handset. No certificate, no tunnel, and this repo already drives the phone over `adb`.
+handset. No certificate, no tunnel.
 
 ### Driving it with no camera at all
 
@@ -959,9 +958,7 @@ cycle with the card never leaving the lens**.
    art-window extractor, and even then it cannot identify a printing — half of all artworks
    appear on two or more, averaging 2.3.
 8. **The fourth AI tier is an interface and nothing else**, by design.
-9. **Nobody has run any of this on Linux, on a Mac, or in a release Android build.** The phone
-   path has been reasoned about (the dependency closure is native-free, and `adb reverse` is the
-   documented route) and not driven.
+9. **Nobody has run any of this on Linux or on a Mac.**
 10. **The crate is not `cargo fmt`-clean and carries four clippy warnings**, which is why CI's
     `rust` job runs its **tests only** — `cargo test --locked --features cli --manifest-path
     crates/card-scanner/Cargo.toml`, and since 2026-09-15 `cargo test --locked --features builder
@@ -1074,7 +1071,7 @@ commands added since, the assets are no longer files only, the view's panels sit
 tray, "nothing is stored in either database" gave way to two `app_meta` rows, and the Storybook
 handler and story counts are the earlier tree's.
 
-### The dependency, and why it is not in the wasm block
+### The dependency
 
 ```toml
 card-scanner = { path = "../crates/card-scanner", features = ["corpus", "ocr"] }
@@ -1084,10 +1081,6 @@ A plain path dependency across two standalone packages, which is what §1 antici
 workspace is created, and the three tools keep building into `crates/card-scanner/target/`.
 `corpus` is the join back to `corpus.db` for labels and unifies with `src-tauri`'s own
 `rusqlite = "0.40"`; `ocr` is the two readers.
-
-**It sits in the non-wasm target block only.** The web build has no detector to compile —
-`web::route`'s command table is a `match` over JSON arguments with no camera-frame arm — so the
-crate never reaches the wasm clippy job, and the page says so where a reader would press Scan.
 
 **The `[profile.dev.package.*]` overrides are repeated in `src-tauri/Cargo.toml`.** §1 already
 says a profile override in a *dependency* is ignored; cargo reads `[profile.*]` from the build
@@ -1151,8 +1144,8 @@ canary for the whole scrape.
 ### `src-tauri/src/scanner.rs` — the first four commands
 
 `ScannerState` is `app.manage`d beside `AppState` in `.setup()`, not a field on it: the scanner
-is optional, desktop/Android only, and the only thing it shares with the rest of the app is the
-data directory and one read of `corpus.db`.
+is optional, and the only thing it shares with the rest of the app is the data directory and one
+read of `corpus.db`.
 
 **Assets were files in `data/scanner/` and nothing downloaded them — until 2026-09-15.** A
 release build now carries all three inside the binary, and a file here *overrides* the embedded
@@ -1218,17 +1211,11 @@ and tray pair with the tray's commit (§10), and the lease's two (below). **Do n
 this page**: `grep '#\[tauri::command\]' src-tauri/src/scanner.rs` answers it, and a count is a
 fact about a tree that every open branch disagrees about.
 
-**Two body shapes for one command, and Tauri's own doc is the reason.**
-`tauri::ipc::Request`'s documentation says raw bytes are accepted "on all platforms except
-Android", and Android's WebView hands a scheme handler no POST body either — so on the phone a
-frame can only travel as text.
-
-| Leg | `scanner_frame` | `scanner_capture` |
-| --- | --- | --- |
-| Desktop | the JPEG as `InvokeBody::Raw`, `FrameOptions` as JSON in an `x-scanner-options` header | the JPEG raw, the sidecar as JSON in an `x-scanner-capture` header |
-| Android | `{ jpeg: "<base64>", options }` as ordinary named arguments | `{ jpeg: "<base64>", sidecar }` |
-
-Both land in one payload function per command, which is the whole of the difference.
+**One body shape: the JPEG raw, and what travels with it in a header.** `scanner_frame` takes
+the JPEG as `InvokeBody::Raw` with `FrameOptions` as JSON in an `x-scanner-options` header;
+`scanner_capture` takes the JPEG raw with the sidecar as JSON in an `x-scanner-capture` header.
+Each is read by one payload function per command, and a JSON body is refused there with a
+sentence. The base64 JSON leg existed for the Android build and went with it on 2026-09-27.
 
 **The two headers fail differently, and the asymmetry is the point.** A malformed or absent
 `x-scanner-options` falls back to `FrameOptions::default()` — a defaulted slider costs one frame
@@ -1267,8 +1254,6 @@ if it stopped being. That is why the rule is written out in
 [`src/CLAUDE.md`](../../src/CLAUDE.md) and
 [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) as well as here: the tests prove the capture
 header at each end, and the prose is what carries the rule to the next header somebody adds.
-
-The Android leg needs none of it: a JSON body is UTF-8.
 
 `scanner_capture` writes `live-<epoch>.jpg` and its `.json` sidecar into `data/scanner/scans/`,
 the same names and fields the debug server writes into `docs/scanner/scans/`, so a frame
@@ -1350,10 +1335,7 @@ renderer never sees a hidden page at all.
 
 `Core.call` widened to `call(command, args?: CallArgs, options?: CallOptions)`, where
 `CallArgs` is `Record<string, unknown> | Uint8Array` and `CallOptions` carries `headers`. The
-Tauri core passes both through to `invoke`; **the browser core rejects a `Uint8Array` with
-`RAW_CALL_UNAVAILABLE` before touching the Worker**, and that string is the same sentence the
-web build's Scanner view draws — the page imports the core's refusal rather than writing a
-second copy of it.
+Tauri core passes both through to `invoke`.
 
 `ipc.ts`'s scanner types keep the **Rust field names, snake case**, because the header JSON is
 deserialised straight into `FrameOptions` and the verdict is what the debug page already reads.
@@ -1386,13 +1368,11 @@ the next generated write is one editor away.
 
 ### The view
 
-`src/features/scanner/`. `ScannerPage` dispatches **above its hooks** on `isWebTarget()`, so on
-the web target no camera is asked for, no command is called and no `useQuery` is conditional —
-`BackupPanel`'s shape, for `BackupPanel`'s reason.
+`src/features/scanner/`.
 
 | File | Owns |
 | --- | --- |
-| `ScannerPage.tsx` | The view: the web sentence, or the camera and the panel column |
+| `ScannerPage.tsx` | The view: the camera and the panel column |
 | `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints, one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives |
 | `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture (**with a `catch` of its own** — a throwing `drawImage`/`toBlob` outside one rejects `pump()` and freezes the loop with `error` still `null`), and the two **kept reads** below |
 | `Overlay.tsx` | The canvas over the video — the smoothed quad, the raw one behind it |
@@ -1467,18 +1447,13 @@ where a desk stands them side by side, and what that asks is whether the app is 
 shape — an answer the shell has already decided. `viewports.ts` demands a reason at the site of
 any branch on width; the reason here is that there is no new branch.
 
-### Navigation, and the web
+### Navigation
 
 `ViewId` gained `"scanner"`; `NAV` gained it **between `wishlist` and `settings`** so Settings
 stays the last row; `switchView`'s chords are a run bound **by index** into `NAV`, so Scanner is
 `Ctrl+6` and Settings moved to `Ctrl+7`.
 [keyboard-shortcuts.md](keyboard-shortcuts.md) carries that row and what the move cost a reader
 whose hands knew the old chord.
-
-On the web target the whole view is one sentence — *The scanner needs the desktop or Android
-app — this build has no detector.* The four commands are `#[cfg(not(target_family = "wasm"))]`
-and unrouted, so they are absent from `web::route`'s census by construction; the browser core's
-refusal of a `Uint8Array` is the fence behind that, not the path a reader sees.
 
 ### Storybook
 
@@ -1492,11 +1467,6 @@ absent with its path.
 `navigator.mediaDevices` from a `useState` initializer (an effect runs after the first paint, and
 `useCamera`'s own effect has to see the stub before it fires) so the refusal is the *specific*
 `NotAllowedError` rather than whichever one an environment throws first, and `AssetsMissing`.
-**There is no `WebBuild` story**: `isWebTarget()` is `__CORE__ === "web"`, a define the
-workbench's Vite config folds to `"tauri"` exactly as `vite.config.ts` does for
-`stories.test.tsx`, so that view is compiled clean out of every bundle a story can run against,
-and reaching it needs `vi.mock`, which is `stories.test.tsx`'s tool and not the workbench's.
-`ScannerPage.test.tsx` is where that state is proven.
 
 ### Measured in the app
 
@@ -1512,7 +1482,6 @@ one it did not know it owed.
 | … with `card-scanner`, `ocrs` and the eleven `rten*` crates overridden too | debug | decode 117 · rectify 48 · transport 257 · round trip 443 ms, 2.5 frames/s; a title read 361 ms |
 | … with `zune-jpeg`/`zune-core` overridden as well (the seventeen the manifest carries) | debug | decode **1.8** · resize 1.3 · mask 17.8 · contour 5.8 · rectify 58.3 · transport 203.4 · round trip **288 ms**, 3.6 frames/s |
 | The first `scanner_status` on a fresh process — bundle parse, 117 630 labels, both models | release / debug | **798 ms** / 929 ms; the second call 1 ms in both |
-| The phone | — | **not driven on a phone this pass** — no device was on `adb` |
 
 **What the transport row says.** "Transport" is the page's own remainder — the round trip less the
 five detector stages — so it holds the hash, the search, the readers when they run, the verdict's
@@ -1618,8 +1587,8 @@ release that silently cannot scan is a regression nobody would see until a reade
 **So the first release after this lands fails on every leg unless `scanner-bundle` has been
 dispatched once on `main`** — and a dispatch button exists only once the workflow file is on `main`.
 
-**`scripts/scanner-assets.mjs`** fetches the three into `src-tauri/scanner-assets/`, which a developer,
-the Android build and the release job all do the same way. A download lands as `<name>.part` and is
+**`scripts/scanner-assets.mjs`** fetches the three into `src-tauri/scanner-assets/`, which a developer
+and the release job both do the same way. A download lands as `<name>.part` and is
 renamed only once whole, because `build.rs` embeds whatever is present and a truncated file would
 ship. A file whose size already equals the response's `content-length` is kept. **It sets
 `process.exitCode` rather than calling `process.exit()`**: on Node 24.16 / Windows, exiting while
@@ -1628,14 +1597,13 @@ and exit **127**, burying the sentence that said what was wrong. The download is
 the repository is public.
 
 **`build.rs` sets `cfg(scanner_assets)` only when all three files are on disk.** A bundle embedded
-without its models, or the reverse, is a half-shipped scanner. `cargo:rustc-check-cfg` is declared
-**before** the wasm early return, so no target meets the name as an unknown cfg — `desktop` and
-`mobile` are the same lesson. `rerun-if-changed` names the directory and each file present, and
-**never a path that does not exist**, which would rerun the script on every build; the tracked
-`src-tauri/scanner-assets/README.md` is what keeps the directory there (`.gitignore` takes
-`src-tauri/scanner-assets/*` and re-includes the README). Proven by running the script through four
-cases with `tauri_build::build()` stubbed: none, two of three (no cfg), all three, and a wasm
-`TARGET`. `scanner.rs` then `include_bytes!`s the three under the cfg.
+without its models, or the reverse, is a half-shipped scanner. `cargo:rustc-check-cfg` declares
+the name, so no build meets it as an unknown cfg. `rerun-if-changed` names the directory and each
+file present, and **never a path that does not exist**, which would rerun the script on every
+build; the tracked `src-tauri/scanner-assets/README.md` is what keeps the directory there
+(`.gitignore` takes `src-tauri/scanner-assets/*` and re-includes the README). Proven by running the
+script with `tauri_build::build()` stubbed through none, two of three (no cfg) and all three.
+`scanner.rs` then `include_bytes!`s the three under the cfg.
 
 **Load order, per asset, first hit wins: a file in `data/scanner/`, then the embedded copy, then
 absent.** `Asset` gained `source: "file" | "embedded" | "absent"`. An embedded asset reports
