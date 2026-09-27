@@ -5,7 +5,6 @@ import type { CollectionFolder, CollectionImportItem } from "@/lib/ipc";
 import { ipc, ipcError } from "@/lib/ipc";
 import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
-import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { Overlay } from "./Overlay";
 import { TiersPanel } from "./panels/TiersPanel";
 import { statusLine, type LastAdded } from "./reader/readerText";
@@ -27,7 +26,7 @@ import { bundleSentence, modelsSentence, SCANNER_OPEN_ELSEWHERE } from "./verdic
  *
  * `TrayPanel`'s wash holds for one `slow` tier and fades over the next, so the flash itself is over
  * in about half a second; the key is cleared a while after that so a panel that remounts — a
- * Developer switch that moves the column, a phone rotating — does not replay it.
+ * Developer switch that moves the column — does not replay it.
  */
 const FLASH_MS = 1200;
 
@@ -86,12 +85,6 @@ function withoutCommitted(
  * the stream and the pump; `ScanBar`, `TrayPanel` and `ScannerPanels` are pure and take what
  * they draw as props, so each is tested from fixtures and storied without a camera, and a change
  * to a panel never touches the loop.
- *
- * **A reader of `useNarrowWindow`, not a second viewport branch.** A phone holds the camera above
- * the tray rather than beside it, and what that asks is whether the app is in its phone shape —
- * an answer the shell has already decided. `viewports.ts` demands a reason at the site of any
- * branch on width; the reason here is that there is no new branch, and the hook's own doc names
- * this view.
  */
 export function ScannerPage(): JSX.Element {
   const elsewhere = useScannerElsewhere();
@@ -139,7 +132,6 @@ function LiveScanner() {
     queryFn: ipc.scannerStatus,
     staleTime: Infinity,
   });
-  const narrow = useNarrowWindow();
 
   /**
    * **The heartbeat: this view holds the scanner from its first render, whatever its camera is
@@ -411,40 +403,12 @@ function LiveScanner() {
         onDeveloper={(developer) => update({ developer })}
       />
 
-      <div
-        className={
-          narrow
-            ? "relative flex min-h-0 flex-1 flex-col gap-4 overflow-auto"
-            : "flex min-h-0 flex-1 gap-4"
-        }
-      >
+      <div className="flex min-h-0 flex-1 gap-4">
         {/* The camera's column: the picture, then the one line that says what it is doing. */}
-        <div className={narrow ? "flex w-full shrink-0 flex-col gap-2" : "flex min-w-0 flex-1 flex-col gap-2"}>
-          {/* **The two arms size the video box by opposite mechanisms, and the narrow one has to.**
-              Wide, the row is the height and the box takes what the `w-80` column and the status
-              line leave. Narrow, the row is a *scrolling column*: a zero-basis `flex-1` under a
-              scrolling parent yields all of its free space to a `shrink-0` sibling, so a tray or
-              an opened developer panel whose intrinsic height reached the container's would
-              collapse the camera to ~0px. So on a phone the box is `w-full shrink-0` at the
-              camera's own aspect ratio — the picture's real shape, at full width — and the tray
-              follows it down the page. */}
-          <div
-            className={
-              narrow
-                ? "relative w-full shrink-0 overflow-hidden rounded-lg bg-black"
-                : "relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black"
-            }
-            style={
-              narrow
-                ? {
-                    // 4:3 until the stream reports its own size: a starting or refused camera has
-                    // no shape to honour, and an unset ratio here is the collapse again.
-                    aspectRatio:
-                      camera.kind === "live" ? `${camera.width} / ${camera.height}` : "4 / 3",
-                  }
-                : undefined
-            }
-          >
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          {/* The row is the height, and the video box takes what the `w-80` column beside it and
+              the status line under it leave. */}
+          <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
             <video ref={videoRef} muted playsInline className="h-full w-full object-contain" />
             <Overlay videoRef={videoRef} verdict={loop.verdict} />
             {camera.kind === "error" && (
@@ -486,26 +450,21 @@ function LiveScanner() {
           )}
         </div>
 
-        {/* Narrow: the tray follows the camera down the page and the whole column scrolls as one,
-            which is why the scroller above is on the row rather than here. Wide: a fixed column.
-            With the developer panels off it is the tray alone, and the tray is the column's
-            height — its rows scroll and its Add button stays put. With them on the column scrolls
-            by itself, so opening a panel never moves the video, and the tray is capped rather than
-            shrunk: a `min-h-0` item in a scroller hands its height to the panels beside it. */}
+        {/* A fixed column. With the developer panels off it is the tray alone, and the tray is the
+            column's height — its rows scroll and its Add button stays put. With them on the column
+            scrolls by itself, so opening a panel never moves the video, and the tray is capped
+            rather than shrunk: a `min-h-0` item in a scroller hands its height to the panels
+            beside it. */}
         <div
           className={
-            narrow
-              ? "flex shrink-0 flex-col gap-4"
-              : prefs.developer
-                ? "relative flex w-80 shrink-0 flex-col gap-4 overflow-auto"
-                : "flex w-80 shrink-0 flex-col"
+            prefs.developer
+              ? "relative flex w-80 shrink-0 flex-col gap-4 overflow-auto"
+              : "flex w-80 shrink-0 flex-col"
           }
         >
           <div
             className={
-              !narrow && !prefs.developer
-                ? "flex min-h-0 flex-col"
-                : "flex max-h-[70vh] shrink-0 flex-col"
+              prefs.developer ? "flex max-h-[70vh] shrink-0 flex-col" : "flex min-h-0 flex-col"
             }
           >
             <TrayPanel

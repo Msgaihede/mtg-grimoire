@@ -85,14 +85,14 @@ function Modal({ cardId, deckId }: { cardId: string; deckId: number | null }) {
  *
  * **`transform: translateZ(0)` is the whole trick, and it is the same one every dialog story here
  * uses**: `position: fixed` resolves against the nearest *transformed* ancestor rather than the
- * viewport, so one line turns a window-covering modal into a story-sized one and lets four rungs
+ * viewport, so one line turns a window-covering modal into a story-sized one and lets every rung
  * sit on one docs page.
  *
  * It is also what makes these stories exercise the real folds. The panel *asks* for its size with
  * viewport queries — see `PANEL_SIZE`, where the circular-container argument is written out — but
  * `Dialog`'s `max-w-full` clamps that request to this box, and the container queries inside then
- * measure the **panel's actual width**. So a 390px frame draws the phone layout whatever the
- * browser window is doing, which is the property that makes a workbench of four rungs possible at
+ * measure the **panel's actual width**. So a 764px frame draws the two-column layout whatever the
+ * browser window is doing, which is the property that makes a workbench of three rungs possible at
  * all.
  */
 function Frame({
@@ -139,14 +139,14 @@ const meta = {
           "One centred modal, replacing the three mounts of the docked card pane.\n\n" +
           "**The folds are container queries on the panel, not viewport branches** — the panel " +
           "carries `@container/card` and every column inside it asks about *that* box, because " +
-          "the same panel is drawn in a 390px phone frame and a 1400px window and the window " +
+          "the same panel is drawn in a 764px story frame and a 1400px window and the window " +
           "answers about the wrong thing. The one exception is the panel's **own** size, which " +
           "cannot be a container query about itself: it asks the window and is then clamped by " +
           "`Dialog`'s `max-w-full`, so what the columns fold on is the width the panel really " +
           "got.\n\n" +
           "**The grimoire counts are drawn twice and exactly one is visible.** " +
           "`CardModalRail` keeps them in the rail at `@min-[1200px]/card` and up; below that " +
-          "they are an inline row in the centre column. All four artboards show them — at the " +
+          "they are an inline row in the centre column. Every story here shows them — at the " +
           "narrower rungs they *move* rather than vanish.\n\n" +
           "**The step chevrons are one pair in two places.** Above 900px of window they are " +
           "`Dialog`'s `flanks`, hung off the panel's edges in columns the scrim reserves; below " +
@@ -166,18 +166,6 @@ const meta = {
 
 export default meta;
 type Story = StoryObj<typeof meta>;
-
-/**
- * The phone rung, below `@min-[640px]/card`: **full-bleed, one column, one scroller.**
- *
- * No columns at all — the picture, the controls, the counts and the rail's options are stacked in
- * a single thumb-driven scroll, and every control in the panel is at its 44px height. `Add to
- * deck` takes the whole action row and the other two sit under it, because a right-aligned row of
- * three at this width is three cramped targets.
- */
-export const Phone: Story = {
-  args: { width: 390, height: 844 },
-};
 
 /**
  * `@min-[640px]/card`: **two columns, `[18.75rem_1fr]`.**

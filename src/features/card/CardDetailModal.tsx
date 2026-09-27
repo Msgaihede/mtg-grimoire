@@ -240,15 +240,15 @@ const PANEL_SIZE =
  * the decision has to be made in JavaScript before the panel exists. It is the same subject
  * {@link PANEL_SIZE} argues for one paragraph up: how much glass is either side of the panel.
  *
- * **Passing `flanks` unconditionally would be wrong at the phone rung, not merely wasteful.** The
- * scrim's columns are 3.5rem each, and at 390px that is 112px taken off a panel spec §2.1 draws
- * full-bleed. The chevrons would also be *outside* the window, which is the failure
- * `DialogProps.flanks` documents at its own site.
+ * **Passing `flanks` unconditionally would be wrong below that width, not merely wasteful.** The
+ * scrim's columns are 3.5rem each — 112px taken off the glass either side of a panel that is
+ * already asking for most of it — and the chevrons would be *outside* the window, which is the
+ * failure `DialogProps.flanks` documents at its own site.
  *
- * `useSyncExternalStore` and a fresh `matchMedia` per read, which is `useNarrowWindow`'s shape
- * and for its two reasons: `src/CLAUDE.md` forbids `setState` inside an effect, and a
- * module-level `MediaQueryList` would be built against whatever `matchMedia` was at import time —
- * which under jsdom is before any test has stated a width.
+ * `useSyncExternalStore` and a fresh `matchMedia` per read, for two reasons: `src/CLAUDE.md`
+ * forbids `setState` inside an effect, and a module-level `MediaQueryList` would be built against
+ * whatever `matchMedia` was at import time — which under jsdom is before any test has stated a
+ * width.
  */
 const FLANK_ROOM = "(min-width: 900px)";
 
