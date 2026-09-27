@@ -293,7 +293,7 @@ import type {
 // The app's own `{X}` test, borrowed rather than re-spelled: the fake answers what Rust
 // answers, and a second reading of "does this cost name X" would let the workbench and the
 // window disagree about which cards are X while both looked right.
-import { FINISHES as FINISH_WORDS, parseFinishes, type Finish } from "@/lib/finish";
+import { FINISHES as FINISH_WORDS, parseFinishes, playedFinish, type Finish } from "@/lib/finish";
 import { BORDERS, type Border } from "@/lib/border";
 import { hasVariableCost } from "@/lib/mana";
 // The token view's own rules, borrowed rather than re-spelled: `DEFAULT_TOKEN_QUANTITY` is the
@@ -10811,7 +10811,7 @@ export function readHandlers(db: FakeDb) {
         ) {
           continue;
         }
-        const key = `${dc.cardId}|${dc.finish ?? ""}`;
+        const key = theoryKey(db, dc);
         const held = wanted.get(key);
         if (held) held.quantity += dc.quantity;
         else wanted.set(key, { nameKey: cardById(db, dc.cardId)?.name ?? null, quantity: dc.quantity });
@@ -12626,6 +12626,8 @@ const BUSY = "The card database is busy finishing a sync. Try that again in a mo
 const CACHE_SYNCING = "a card update is running — clear the cache once it has finished";
 /** `collection::GONE` — what an *adjustment* says when the row it names is not there. */
 const ENTRY_GONE = "That collection entry is not there any more.";
+/** `collection::NO_PRINTING` — what a printing change says when it was handed no printing. */
+const NO_PRINTING = "Changing a printing needs the printing to change it to.";
 /** `wishlist::set_wish_quantity`'s twin of {@link ENTRY_GONE}. */
 const WISH_GONE = "That wishlist entry is not there any more.";
 /** `deck::GONE`. */
@@ -15161,6 +15163,25 @@ interface GroupedDiff {
 }
 
 /**
+ * `deck_theory::played_finish` — the finish a deck row plays: its own, or the printing's sole
+ * finish where it stored none (issue #563). The app's own `playedFinish`, borrowed for the reason
+ * the `{X}` test above is: a foil-only Surge Foil stored unsaid in one list and `foil` in the other
+ * is one card to Rust, and a fake that spelled it two ways would draw it on the Compare dialog in
+ * a story while the window did not.
+ */
+function theoryFinish(db: FakeDb, dc: FakeDeckCard): FakeDeckCard["finish"] {
+  const played = playedFinish(dc.finish, cardById(db, dc.cardId)?.finishes ?? null);
+  // Unreachable — `soleFinish` answers `null` rather than `nonfoil` — and spelled anyway, because
+  // a deck's regular copy is `null` and the type says so.
+  return played === "nonfoil" ? null : played;
+}
+
+/** `deck_theory::group_key` over {@link theoryFinish} — the key both theory handlers spell. */
+function theoryKey(db: FakeDb, dc: FakeDeckCard): string {
+  return `${dc.cardId}|${theoryFinish(db, dc) ?? ""}`;
+}
+
+/**
  * `deck_theory::grouped_diff` — cards the **theory** list holds that **live** does not.
  *
  * **One direction only**, which is the design rather than an omission: what live has and theory
@@ -15205,7 +15226,7 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
     const card = cardById(db, dc.cardId);
     // `deck_theory::group_key` — the exact card, in the exact object played. Not the category:
     // where a card sits is placement, not possession.
-    const key = `${dc.cardId}|${dc.finish ?? ""}`;
+    const key = theoryKey(db, dc);
     if (dc.variant !== "theory") {
       held.set(key, (held.get(key) ?? 0) + dc.quantity);
       // An orphan contributes nothing: there is no oracle card to file it under, so a printing
@@ -15230,7 +15251,9 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
           unitPrice: deckPriceAt(db, card, mp),
           setCode: dc.setCode,
           collectorNumber: dc.collectorNumber,
-          finish: dc.finish,
+          // The finish played rather than stored — the half of the key the line reports, and
+          // what `ownedSpare` and a wish are asked about.
+          finish: theoryFinish(db, dc),
           ownedSpare: 0,
           // Filled by the second pass below, once every exact match is known. Zero is already
           // the right answer for an orphan and for a card the deck plays no other copy of.
@@ -15873,6 +15896,65 @@ export function writeHandlers(db: FakeDb) {
         return foldEntry(db, target, row);
       }
       Object.assign(row, next);
+      return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /**
+     * `collection::set_entry_printing` — which printing a collection entry *is*, and the one
+     * write that reaches `cardId` after the row exists (issue #564). {@link collection_update}'s
+     * patch deliberately names neither `cardId` nor `lang`, so until this the way to correct a
+     * Bolt filed under the wrong set was to delete it and add it again, and lose what the reader
+     * paid and when.
+     *
+     * **All four printing columns move together and three come from the card**, not the caller —
+     * `setCode`, `collectorNumber` and `lang` off {@link requireCard}, whose refusal is
+     * `collection_add`'s sentence for the same fact. A blank id is refused in words of its own,
+     * and the printing the row already holds is answered as it stands, writing nothing.
+     *
+     * **Another printing of the same card, never another card** — `deck_swap_printing`'s fence and
+     * not `wishlist_set_printing`'s, because a row here is cardboard: repointing four Bolts at a
+     * Black Lotus would be a collection claiming four Lotuses. Both sides must resolve for there
+     * to be a comparison, so a row whose printing has left `cards` is let through; repointing it
+     * is the cure its `needsReview` asks for.
+     *
+     * **The finish is not re-checked against the new printing's `finishes`**, because
+     * `collection_add` does not check it either — a second, stricter rule here would refuse a row
+     * the table already holds.
+     *
+     * **A repoint onto a taken grain folds** through {@link foldEntry}, on every term of
+     * {@link collectionGrain} — the folder included, so a matching row in another binder is not
+     * the row in the way — and answers the **survivor's** id. `needsReview` is cleared on the
+     * path that keeps the row, because choosing a printing *is* the review; on the folding path
+     * the survivor's flag is its own and is left alone.
+     */
+    collection_set_printing: (args: { id: number; cardId: string }): EntryChange => {
+      refuseIfBusy(db);
+      const cardId = nonblank(args.cardId);
+      if (cardId === null) throw refuse(NO_PRINTING);
+      const row = db.collectionEntries.find((e) => e.id === args.id);
+      if (!row) throw refuse(ENTRY_GONE);
+      if (row.cardId === cardId) return { id: row.id, quantity: row.quantity, removed: false };
+      const card = requireCard(db, cardId);
+      const from = cardById(db, row.cardId);
+      if (from !== null && from.oracleId !== card.oracleId) {
+        throw refuse(
+          `\`${card.name}\` is not another printing of \`${from.name}\`. Changing a printing ` +
+            `changes which printing these copies are, never which card they are.`,
+        );
+      }
+      const next: FakeEntry = {
+        ...row,
+        cardId,
+        setCode: card.setCode,
+        collectorNumber: card.collectorNumber,
+        lang: card.lang,
+      };
+      const key = collectionGrain(next);
+      const target = db.collectionEntries.find(
+        (e) => e.id !== row.id && collectionGrain(e) === key,
+      );
+      if (target) return foldEntry(db, target, row);
+      Object.assign(row, next, { needsReview: null, updatedAt: stamp(db) });
       return { id: row.id, quantity: row.quantity, removed: false };
     },
 

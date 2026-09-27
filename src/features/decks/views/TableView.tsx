@@ -65,7 +65,7 @@ import {
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
-import { ruleBreak } from "../violations";
+import { ruleBreak, violationsFor } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
@@ -235,7 +235,7 @@ export function TableView({
         key: `c-${group.key}-${card.id}`,
         group,
         card,
-        ruleBreakText: ruleBreak(violations?.get(card.cardId)),
+        ruleBreakText: ruleBreak(violationsFor(violations, card)),
         theoryMark: theoryMatchMark(theoryPlan, card),
         noted: deckCardNoted(card, noted),
       })),

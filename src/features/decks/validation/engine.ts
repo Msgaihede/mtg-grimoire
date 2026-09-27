@@ -37,42 +37,26 @@ import type { CardFacts, ValidationIssue } from "./types";
 import { copyException, isBasicLand, unreadableCopyCount } from "./singleton";
 import { colorIdentityIssues, commanderIdentity, validateCommanderZone } from "./commanders";
 import { companionIssues } from "./companions";
+import { SIZE_KINDS } from "./kinds";
+
+export { SIZE_KINDS } from "./kinds";
 
 /**
- * The category kinds `deckMin`/`deckMax` count together — "exactly 100 **incl cmdr**",
- * "exactly 60 incl Oathbreaker + signature spell" (both of those live in a `commander`
- * category).
+ * The kinds the deck-wide colour-identity pass holds to the commander: every kind the deck is
+ * sized over ({@link SIZE_KINDS}) and the sideboard beside it, less the command zone.
  *
- * **The rule, in one sentence: the switch decides whether a pile counts at all; the kind
- * decides only whether the pile is played *beside* the deck or *in* it — and only `side` and
- * `companion` are beside it.** So `deck.filter((c) => c.categoryActive)` has already dropped
- * everything switched off before this list is consulted, and this list drops the two kinds
- * that are played beside the deck: the sideboard (CR 100.4a) and the companion, which EDH
- * calls "effectively a 101st card" — exactly the card a "100-card deck" figure must not add.
- * Everything else that is switched on is in the deck.
- *
- * **That is why `maybe` is here**, which reads odd until the alternative is written out.
- * Leaving it off put an *active* Maybeboard inside the format's card pool and inside the
- * binder's reservations but outside the deck's size — so a second Sol Ring in one raised a
- * singleton error under a size figure that still read 100, which is two answers to one
- * question. Kind `maybe` now exists for exactly one reason, to name the predefined Maybeboard
- * and seed it inactive, and that is honest: being switched off is the whole of what the
- * Maybeboard is.
- *
- * Kinds and not categories, because a deck may own any number of `main` categories — the user
- * names and orders them — and a size rule that had to be told about each one would be a rule
- * the user could break by making a pile. What a card is *for* is the kind; what it is *called*
- * is theirs. A **sixth** kind added to the schema therefore has to be placed here deliberately;
- * it will not fall in by accident, which is the trade this positive list buys over spelling the
- * rule as `!== "side" && !== "companion"`.
- *
- * Exported because the deck editor's stats strip prints the same total beside this file's
- * sentence about it: "Modern decks need at least 60 cards; you have 59" under a headline
- * figure counting the sideboard too is two numbers for one question. Reading one query is not
- * enough to make two surfaces agree — they have to read one definition. `DeckRow.cardCount` is
- * the third reader and is these three words again, in SQL (`deck.rs`'s `DECK_SELECT`).
+ * Derived rather than spelled, because it was spelled once — as `main | side` — and fell out of
+ * step the day `maybe` joined {@link SIZE_KINDS}: a switched-on Maybeboard counted toward 100
+ * cards and was held to no identity at all (issue #554). Two kinds are out, each because another
+ * pass owns it. The command zone judges itself (Oathbreaker's signature spell against its
+ * oathbreaker, partners inside their own union by construction), and the `companion` kind is
+ * `companions.ts`'s, which holds it to the same identity — it is in neither list here, so it
+ * cannot be judged twice.
  */
-export const SIZE_KINDS: readonly CategoryKind[] = ["main", "commander", "maybe"];
+const IDENTITY_KINDS: readonly CategoryKind[] = [
+  ...SIZE_KINDS.filter((kind) => kind !== "commander"),
+  "side",
+];
 
 /**
  * Everything wrong with this deck under this format, worst-first by rule rather than by
@@ -123,7 +107,37 @@ export function validateDeck(cards: CardFacts[], spec: FormatSpec): ValidationIs
  * judged on, and that list is the whole of the difference.
  */
 export function validateForMarks(cards: CardFacts[], spec: FormatSpec): ValidationIssue[] {
-  return [...validateDeck(cards, spec), ...inactiveCardIssues(cards, spec)];
+  return [
+    ...onRows(
+      validateDeck(cards, spec),
+      cards.filter((card) => card.categoryActive),
+    ),
+    ...onRows(
+      inactiveCardIssues(cards, spec),
+      cards.filter((card) => !card.categoryActive),
+    ),
+  ];
+}
+
+/**
+ * Each finding with the rows it marks: the rows **this pass judged** whose printing it names.
+ *
+ * That is the whole of what keeps a mark about a row rather than a printing (issue #554). A
+ * singleton break from the deck's pass names Sol Ring's printing, and a parked Sol Ring shares
+ * it — but the deck's pass never judged the parked row, so it is not among `rows` and wears
+ * nothing. A ban from both passes lands once on each row rather than twice on both.
+ *
+ * A finding about the deck itself carries no `cardIds` and gains no rows.
+ */
+function onRows(issues: ValidationIssue[], rows: CardFacts[]): ValidationIssue[] {
+  return issues.map((issue) => {
+    const named = issue.cardIds;
+    if (!named) return issue;
+    return {
+      ...issue,
+      rowIds: rows.filter((row) => named.includes(row.cardId)).map((row) => row.id),
+    };
+  });
 }
 
 /**
@@ -146,8 +160,9 @@ export function validateForMarks(cards: CardFacts[], spec: FormatSpec): Validati
  * one, and accusing it would be exactly the false alarm this function exists to avoid.
  *
  * Collapsed on its own rather than together with the deck's findings, so one banned card sitting
- * in both an active pile and a parked one keeps two marks — two cards on the screen, each of
- * which has to draw its own frame.
+ * in both an active pile and a parked one keeps two findings — two cards on the screen, each of
+ * which has to draw its own frame. {@link validateForMarks} files each under the rows its own
+ * pass judged, so each frame carries its sentence once.
  */
 function inactiveCardIssues(cards: CardFacts[], spec: FormatSpec): ValidationIssue[] {
   const parked = cards.filter((card) => !card.categoryActive);
@@ -405,6 +420,14 @@ function copyIssues(
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   for (const group of groupCopies(deck)) {
+    // A group made only of orphans has no facts to count against: no type line to say "basic
+    // land", no oracle text to print an exception. The limit it would be judged by is the
+    // format's bare `maxCopies`, which is how twenty orphaned Islands read as "up to 4 copies of
+    // Island" beside the orphan warning's own "was not checked" (issue #554). `cardIssues` says
+    // the one true thing about them; this pass says nothing. A group with one live row still
+    // counts — the live row's facts speak for the card, `printedException`'s reason.
+    if (group.rows.every(isOrphan)) continue;
+
     // TRAP A: `restricted` is one copy only where the format says that is what it means.
     // Where it means *banned as a commander* (duel, tlr) the main deck hears nothing —
     // Task 9 judges the commander zone. Any printing saying so speaks for the card.
@@ -626,20 +649,15 @@ function outsidePoolIssues(card: CardFacts, spec: FormatSpec): ValidationIssue[]
  * answer (a colourless commander admits only colourless cards), so the two cannot be
  * conflated.
  *
- * Two kinds are deliberately left out of the identity pass. The command zone judges itself
- * (Oathbreaker's signature spell is measured against its oathbreaker, and partners are inside
- * their own union by construction), and the `companion` kind is `companions.ts`'s — it holds
- * the companion to the same identity there, and checking it here would report the same card
- * twice.
+ * Which kinds the identity pass judges is {@link IDENTITY_KINDS}, and its doc says why the
+ * command zone and the companion are the two left out.
  */
 function commanderIssues(deck: CardFacts[], spec: FormatSpec): ValidationIssue[] {
   const zone = deck.filter((card) => card.categoryKind === "commander");
   const issues = validateCommanderZone(zone, spec);
   const identity = spec.commanderRule === null ? null : commanderIdentity(zone, spec);
   if (identity === null) return issues;
-  const judged = deck.filter(
-    (card) => card.categoryKind === "main" || card.categoryKind === "side",
-  );
+  const judged = deck.filter((card) => IDENTITY_KINDS.includes(card.categoryKind));
   return [...issues, ...colorIdentityIssues(judged, identity)];
 }
 

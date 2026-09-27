@@ -118,6 +118,27 @@ export interface PaneDeckContext {
 }
 
 /**
+ * The collection row the open card is being **edited** as, or nothing — issue #564.
+ *
+ * **The collection's modal is read-only until the reader asks otherwise, and this field is the
+ * asking.** A deck row reaches the modal already writable because the reader pressed a card in a
+ * deck they are building; a collection tile is pressed to *look*, and a foil toggle or a printing
+ * row that rewrote the copy on that press would change what the reader owns while they were only
+ * reading about it. So the modal opens the way it always has — `View as foil`, printings that
+ * browse — and `Edit` in its action row writes this field, which turns both into writes against
+ * one row.
+ *
+ * **A row id, where {@link PaneDeckContext} is a grain, and the difference is the table's.** A
+ * deck write is addressed by its slot because the editor rewrites slots under the pane; a
+ * collection write is addressed by `collection_entries.id` — `collection_update` and
+ * `collection_set_printing` both take one — and a write that folds answers the id that survived,
+ * which {@link AppState.editCopy} is handed.
+ */
+export interface PaneCopy {
+  entryId: number;
+}
+
+/**
  * The folding developer panels on the Scanner view. `match` is never folded.
  *
  * A closed union rather than {@link CardSelection}'s open string, and for the opposite reason:
@@ -612,6 +633,33 @@ interface AppState {
    */
   viewPrinting: (cardId: string) => void;
   /**
+   * The collection row the modal is editing, or `null` — see {@link PaneCopy}, where the reason
+   * this is a field at all is written out.
+   *
+   * **Cleared by every opener**, {@link paneDeckContext}'s rule read a second time and for a
+   * sharper version of its reason: a stale deck context offers a write the reader can see is
+   * about another row, while a stale copy would silently turn the *next* card's foil toggle into
+   * a write against this one. `viewPrinting` clears it too, unlike the deck context — browsing to
+   * another printing is looking at a printing the row does not hold.
+   */
+  paneCopy: PaneCopy | null;
+  /**
+   * Edit a collection row — the modal's `Edit` press, **and** the re-anchor after every write it
+   * makes, which is {@link openCardFromDeck}'s design for the collection: one action both starts
+   * the edit and follows the copy onto the printing it now names, the finish it now is and the id
+   * that survived a fold, so the modal is never left on the printing the copy has left.
+   *
+   * `finish` is written to {@link paneFinish} beside the card, because in edit mode the finish the
+   * modal draws is the copy's rather than the tile's — and it is how the foil control reads the
+   * copy's finish without waiting for the list to re-read.
+   *
+   * **Not an opener**: it leaves `cardOverlay` and the return stack alone, for `viewPrinting`'s
+   * reason — the reader has not gone anywhere, the thing they were editing has.
+   */
+  editCopy: (cardId: string, finish: Finish | null, entryId: number) => void;
+  /** The modal's `Done` — back to reading, on the card and finish the edit left it on. */
+  stopEditingCopy: () => void;
+  /**
    * The deck the editor is open on, or `null` when Decks is showing its gallery.
    *
    * The one navigation fact decks need, and it is here for the same reason the whole store
@@ -1079,6 +1127,16 @@ export interface PrintingsRequest {
    */
   wish: { id: number } | null;
   /**
+   * The collection row a press *moves* onto the printing pressed, or absent — issue #564, and
+   * only ever set by the card modal while its `Edit` is on.
+   *
+   * **Optional, where `wish` is required**, and `pick`'s reason: it is built at exactly one site,
+   * and a `CardWalkStop` carries none, so a step inside the wall drops it — a copy the reader was
+   * editing on card A must not be moved after arrowing to card B. `finish` is the copy's, for the
+   * one refusal the wall makes before writing (a printing never made in that finish).
+   */
+  copy?: { id: number; finish: Finish | null };
+  /**
    * The scanner tray's hand-back; when present a tile press hands the printing back and closes,
    * and neither the deck nor the wish branch runs.
    *
@@ -1234,6 +1292,7 @@ export const useAppStore = create<AppState>((set) => ({
         priceHistory: null,
         cardSelection: null,
         paneDeckContext: null,
+        paneCopy: null,
         // Every navigation spends the return stack — see {@link AppState.paneReturns}.
         paneReturns: EMPTY_RETURNS,
         paneFromDeckSearch: false,
@@ -1429,6 +1488,7 @@ export const useAppStore = create<AppState>((set) => ({
       selectedCardId,
       cardOverlay: null,
       paneDeckContext: null,
+      paneCopy: null,
       // Every navigation spends the return stack — see {@link AppState.paneReturns}.
       paneReturns: EMPTY_RETURNS,
       paneFromDeckSearch: false,
@@ -1448,6 +1508,7 @@ export const useAppStore = create<AppState>((set) => ({
     set({
       selectedCardId: paneDeckContext.cardId,
       paneDeckContext,
+      paneCopy: null,
       // A different card is a different question — see `setSelectedCardId`.
       cardOverlay: null,
       // The two openers exclude each other in one `set` apiece, which is what makes "the pane
@@ -1468,6 +1529,7 @@ export const useAppStore = create<AppState>((set) => ({
       selectedCardId,
       cardOverlay: null,
       paneDeckContext: null,
+      paneCopy: null,
       // Every navigation spends the return stack — see {@link AppState.paneReturns}.
       paneReturns: EMPTY_RETURNS,
       paneFromDeckSearch: true,
@@ -1480,6 +1542,7 @@ export const useAppStore = create<AppState>((set) => ({
       paneFinish,
       cardOverlay: null,
       paneDeckContext: null,
+      paneCopy: null,
       // Every navigation spends the return stack — see {@link AppState.paneReturns}.
       paneReturns: EMPTY_RETURNS,
       paneFromDeckSearch: false,
@@ -1493,7 +1556,11 @@ export const useAppStore = create<AppState>((set) => ({
   // every printing of one card. The newest of them makes that structural rather than merely true:
   // `cardCombosKey` keys on the **oracle** id, so stepping between printings cannot even miss the
   // cache. Clearing here would shut a popup for a change it does not see.
-  viewPrinting: (selectedCardId) => set({ selectedCardId }),
+  viewPrinting: (selectedCardId) => set({ selectedCardId, paneCopy: null }),
+  paneCopy: null,
+  editCopy: (selectedCardId, paneFinish, entryId) =>
+    set({ selectedCardId, paneFinish, paneCopy: { entryId } }),
+  stopEditingCopy: () => set({ paneCopy: null }),
   // Decks opens on the gallery: a deck is something the reader picks, and reopening the last
   // one would be a decision made for them by the previous session.
   openDeckId: null,
@@ -1511,6 +1578,7 @@ export const useAppStore = create<AppState>((set) => ({
       // the deck they were picked in.
       cardSelection: null,
       paneDeckContext: null,
+      paneCopy: null,
       // Every navigation spends the return stack — see {@link AppState.paneReturns}.
       paneReturns: EMPTY_RETURNS,
       // Beside the context and for a sharper version of its reason: the flag is about a column
@@ -1601,6 +1669,8 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => ({
       selectedCardId: to === null ? leaving.cardId : to.cardId,
       paneDeckContext: to?.deck ?? null,
+      // The copy was on the card being left, which is the whole of why the reader is leaving it.
+      paneCopy: null,
       cardOverlay: null,
       paneFromDeckSearch: false,
       paneFinish: null,
@@ -1614,6 +1684,7 @@ export const useAppStore = create<AppState>((set) => ({
       return {
         selectedCardId: back.cardId,
         paneDeckContext: back.deck,
+        paneCopy: null,
         cardOverlay: null,
         paneFromDeckSearch: false,
         paneFinish: null,

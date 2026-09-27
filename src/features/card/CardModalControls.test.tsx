@@ -26,6 +26,7 @@ const deckScope: CardModalScope = {
   deck: deckRow,
   quantity: "deck",
   deckControls: true,
+  copy: null,
 };
 
 const searchScope: CardModalScope = {
@@ -33,6 +34,7 @@ const searchScope: CardModalScope = {
   deck: null,
   quantity: null,
   deckControls: false,
+  copy: null,
 };
 
 const card = {
