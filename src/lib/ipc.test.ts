@@ -50,6 +50,7 @@ import shareRs from "../../src-tauri/src/share/commands.rs?raw";
 import startupRs from "../../src-tauri/src/startup.rs?raw";
 import startviewRs from "../../src-tauri/src/startview.rs?raw";
 import stickyNotesRs from "../../src-tauri/src/sticky_notes.rs?raw";
+import syncClientRs from "../../src-tauri/src/sync_engine/client.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import upcomingSetsRs from "../../src-tauri/src/upcoming_sets.rs?raw";
@@ -3584,6 +3585,8 @@ it("subscribes to sync:applied and hands the payload through unwrapped", async (
     cyclesBroken: 0,
     skipped: 0,
     deferred: 0,
+    heldNewer: 0,
+    dropped: 0,
     baselineOps: 0,
     baselineHistory: 0,
   };
@@ -5136,6 +5139,20 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // `finish` only at the moment a reader presses a stepper. Two fields, so the smallest row on
     // this table, and the only one whose drift would refuse every token write at once.
     ["TokenEntryKey", deckTokensRs, "TokenEntryKey"],
+    // **The Sync panel's two, added with the delivery holds** (2026-09-27) — the pair this file
+    // had never fenced by name, standing on the `sync:applied` payload literal above instead.
+    // That literal catches a rename in an *event*, and says nothing about a field renamed or
+    // dropped on the command answers this same shape rides on, `sync_relay_status` and
+    // `sync_now`. Here rather than on `mirrors` above for `DecksCleared`'s reason: neither draws
+    // a picture and neither reaches ten fields.
+    //
+    // **`RelayStatus.pullHeld`, `RelayOutcome.heldNewer` and `RelayOutcome.dropped` are read out
+    // of the Rust source and do not exist there yet** — they land with the hold itself, so this
+    // row is expected to be red until then, and that is the fence doing its job rather than a
+    // mistake in this table: a struct that grew three fields on the Rust side and none here would
+    // otherwise pass in silence exactly the way `DecksCleared::covers` did.
+    ["RelayStatus", syncCommandsRs, "RelayStatus"],
+    ["RelayOutcome", syncClientRs, "RelayOutcome"],
   ];
 
   it.each(plainMirrors)(

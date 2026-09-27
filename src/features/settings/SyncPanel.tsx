@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import { Heart, Link2, LogOut, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState, type JSX } from "react";
-import { count, plural } from "@/lib/counts";
+import { count, plural, verb } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { openExternal } from "@/lib/externalLinks";
 import {
@@ -460,13 +460,19 @@ export function liveNote(state: LiveState): string | null {
  * that explains itself and one that looks broken.
  *
  * The rest is `RelayOutcome`'s counts, and only the ones that are true of this trip: a sentence
- * per non-zero clause rather than a table of eight numbers, because seven of the eight are zero
- * on almost every sync. **`resurrected` and `cyclesBroken` are §7.4's two surfaced outcomes**,
+ * per non-zero clause rather than a table of numbers, because almost all of them are zero on
+ * almost every sync. **`resurrected` and `cyclesBroken` are §7.4's two surfaced outcomes**,
  * so their clause points at the panel that lists them rather than describing each row twice.
  *
- * `deferred` is the one worth reading twice: a peer's stream is stalled on an op whose parent
- * has not arrived, which self-heals on a later pull. Saying "waiting" rather than "failed" is
- * the difference between a reader pressing again in a minute and one filing a bug.
+ * **`deferred` used to be one clause and is now three, because a hold's own bound is the fact a
+ * reader needs and "waiting" no longer covers every case.** `heldNewer` is asked first and is the
+ * one clause here with no self-heal: a peer running a newer build wrote something this device
+ * cannot parse yet, and no amount of waiting clears that — only an update does, which is why its
+ * sentence says so rather than "later". The **waiting** clause is `deferred - heldNewer`, the
+ * ordinary case this used to be the whole of: an op arrived before the parent it names, which a
+ * later pull carrying that parent clears on its own. `dropped` is the third and says the opposite
+ * of both — not "still to come" but "will never come", so it points at the log rather than at a
+ * later sync the way the old, single sentence used to promise every deferred row.
  *
  * **The baseline clause is the one that has to explain a number rather than report it** (baseline
  * spec §13). A first exchange moves every row this device holds — 1 069 on the measured pair,
@@ -516,10 +522,23 @@ export function outcomeText(outcome: RelayOutcome | null): string {
       );
     }
   }
-  if (outcome.deferred > 0) {
+  if (outcome.heldNewer > 0) {
     parts.push(
-      `${plural(outcome.deferred, "change")} arrived before the change they build on. They ` +
-        "land on a later sync.",
+      `${plural(outcome.heldNewer, "change")} from a newer version ` +
+        `${verb(outcome.heldNewer, "waits", "wait")} until you update.`,
+    );
+  }
+  const waiting = outcome.deferred - outcome.heldNewer;
+  if (waiting > 0) {
+    parts.push(
+      `${plural(waiting, "change")} ${verb(waiting, "is", "are")} waiting for a change ` +
+        `${verb(waiting, "it builds", "they build")} on.`,
+    );
+  }
+  if (outcome.dropped > 0) {
+    parts.push(
+      `${plural(outcome.dropped, "change")} could not be applied and ` +
+        `${verb(outcome.dropped, "was", "were")} skipped. The error log has the details.`,
     );
   }
   if (outcome.unreadable > 0) {
@@ -652,6 +671,22 @@ const RECLAIM_WARNING =
   "of devices, claiming it here moves it — and the devices left in that group stop syncing with " +
   "each other, because the relay drops what it was holding for them. Their own collections are " +
   "untouched, but they have no way back until they pair again.";
+
+/**
+ * The one line drawn from `RelayStatus.pullHeld === "newer"`, and the reason it is a paragraph
+ * beside the status line rather than a `PanelAlert`: this is not a failure this window suffered,
+ * it is news about a peer, and the fix is a press this reader makes on a *different* device.
+ *
+ * **Persistent because the hold itself is.** A peer running a newer build stamped an op with a
+ * schema this device's own build cannot clear — "newer" has no bound, unlike an ordinary peer's
+ * op merely waiting on a parent that has not arrived yet, which a later pull clears on its own.
+ * So this sentence has to survive however many pulls or how much time pass; only updating this
+ * device does. `"waiting"` and `null` say nothing here on purpose: a wait that self-heals is not
+ * this device's problem to fix, and the ordinary case is silence.
+ */
+export const PULL_HELD_NEWER_NOTICE =
+  "A device in your group runs a newer version of MTG Grimoire. Update this device to receive " +
+  "its changes.";
 
 /**
  * The membership, the relay it pays for, and the one press that makes a round trip.
@@ -903,6 +938,15 @@ function SupporterSection({ live }: { live: LiveState }): JSX.Element {
               ? "Nothing is waiting to go."
               : `${plural(status.pending, "change")} waiting to go.`}
         </p>
+      )}
+
+      {/* **Beside the status line rather than folded into `relayNote`'s ladder.** `relayNote` is
+          one sentence per settled state and this is orthogonal to all seven of them — a device
+          can be `synced` from its last round trip and still be holding a newer peer's change at
+          once, exactly as `liveNote`'s socket line is. A plain paragraph, not a `PanelAlert`: it
+          is news about a peer's build rather than a failure this window suffered. */}
+      {on && status?.pullHeld === "newer" && (
+        <p className="text-sm">{PULL_HELD_NEWER_NOTICE}</p>
       )}
 
       {/* **`liveText !== null` on top of `on`, not `on` alone.** `liveNote` says nothing for

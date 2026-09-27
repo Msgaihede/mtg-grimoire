@@ -21430,6 +21430,11 @@ export function writeHandlers(db: FakeDb) {
         cyclesBroken: 0,
         skipped: 0,
         deferred: 0,
+        // Never held or dropped here, `relayStatus`'s `pullHeld: null` comment's reason exactly:
+        // both need a peer on a different schema or a moot child this single in-memory world has
+        // no second build or second device to produce.
+        heldNewer: 0,
+        dropped: 0,
         baselineOps: first
           ? db.collectionEntries.length +
             db.collectionFolders.length +
@@ -22042,6 +22047,11 @@ function relayStatus(db: FakeDb): RelayStatus {
     pending: db.relay.pending,
     lastSyncAt: db.relay.lastSyncAt,
     reviewCount: reviewRows(db).length,
+    // **Never held here, and that is the honest floor rather than a gap.** A hold is a fact
+    // about a *peer* — a different build's schema, or an op still waiting on one — and this
+    // single in-memory world has no second build and no second device to disagree with itself
+    // about either, so every world it can produce is the ordinary, unheld one.
+    pullHeld: null,
   };
 }
 

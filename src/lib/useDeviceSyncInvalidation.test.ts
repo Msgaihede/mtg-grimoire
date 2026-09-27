@@ -26,6 +26,8 @@ const outcome = (over: Partial<RelayOutcome> = {}): RelayOutcome => ({
   cyclesBroken: 0,
   skipped: 0,
   deferred: 0,
+  heldNewer: 0,
+  dropped: 0,
   baselineOps: 0,
   baselineHistory: 0,
   ...over,
