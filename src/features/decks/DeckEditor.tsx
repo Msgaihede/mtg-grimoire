@@ -113,7 +113,7 @@ import { RenameField } from "./metaRows";
 import { AddLabelDialog } from "./AddLabelDialog";
 import { AddMissingToCollectionDialog } from "./AddMissingToCollectionDialog";
 import { PriceStrip } from "./PriceStrip";
-import { pullKey } from "./pullPlan";
+import { deckCardPullKey, pullKey } from "./pullPlan";
 import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
 // **`quickCollection` and not `quickAdd`**, which is a Windows filename hazard rather than a
 // naming preference: `QuickAdd.tsx` — the toolbar's quick-add field — already sits in this
@@ -709,8 +709,8 @@ type Layer =
    * reads the live list, because a plan holds no cardboard for a pull to move copies into), so
    * there was nothing for an arm to hold that the editor did not already know. That is still true of the *read*: a
    * deck card's `Collection ▸ Pull …` (issue #350) fetches the same plan under the same key and
-   * this arm narrows only what the dialog is handed — the rows whose {@link pullKey} matches
-   * this card, and that card's name for the subtitle.
+   * this arm narrows only what the dialog is handed — the rows whose key matches this card's
+   * {@link deckCardPullKey}, and that card's name for the subtitle.
    *
    * **So the payload is what the dialog draws, never what is read**, which is why the query's
    * gate below asks `layer?.kind === "pull"` and not {@link layerMatches}: both shapes want the
@@ -866,12 +866,14 @@ export function layerMatches(open: Layer, target: NonNullable<Layer>): boolean {
     // that card, so a bare kind test would have the band's button claim to be open while a
     // per-card dialog was up. Two *cards* can never be open at once — there is one slot — so the
     // comparison below is a courtesy rather than a case anything reaches, and it is by
-    // {@link pullKey} rather than by object identity because a `DeckCard` is a fresh object on
-    // every `deck_get`.
+    // {@link deckCardPullKey} rather than by object identity because a `DeckCard` is a fresh
+    // object on every `deck_get`. The played-finish key rather than the stored one because it is
+    // the key the dialog is narrowed by (`pulledRows`): two cards it cannot tell apart open the
+    // same rows, which is the question this asks.
     if (open.cards === undefined || target.cards === undefined) {
       return open.cards === undefined && target.cards === undefined;
     }
-    const keys = (cards: readonly DeckCard[]) => cards.map(pullKey).join("\n");
+    const keys = (cards: readonly DeckCard[]) => cards.map(deckCardPullKey).join("\n");
     return keys(open.cards) === keys(target.cards);
   }
   return true;
@@ -2315,15 +2317,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * than frozen into the layer, so a pull made from the dialog re-reads the plan and the rows
    * under the reader's eyes are the rows a second press would write.
    *
-   * `pullKey` is `(cardId, finish)`, which is the grain the plan is folded to — the same card
-   * short in two piles is one row of it — so a deck card's key matches at most one row and the
-   * filter is a lookup rather than a subset — once per picked card.
+   * The key is `(cardId, played finish)`, which is the grain the plan is folded to — the same
+   * card short in two piles is one row of it — so a deck card's key matches at most one row and
+   * the filter is a lookup rather than a subset — once per picked card. **The card side is
+   * {@link deckCardPullKey} and the row side {@link pullKey}**, because a row carries the finish
+   * the card _plays_ (its stored finish, else the printing's sole finish): keyed on the stored
+   * column, a foil-only printing added from the search — no finish stored — looked for `id|`
+   * against a plan row `id|foil`, and the dialog opened on *Nothing to pull.* over copies the
+   * reader owns (issue #563's follow-up).
    */
   const pulledRows = useMemo(() => {
     const rows = pullPlan.data;
     if (rows === undefined) return null;
     if (pulledCards === null) return rows;
-    const wanted = new Set(pulledCards.map(pullKey));
+    const wanted = new Set(pulledCards.map(deckCardPullKey));
     return rows.filter((planRow) => wanted.has(pullKey(planRow)));
   }, [pullPlan.data, pulledCards]);
 

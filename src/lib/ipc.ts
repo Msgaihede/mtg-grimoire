@@ -2644,8 +2644,15 @@ export interface DeckPullRow {
   setCode: string;
   collectorNumber: string;
   /**
-   * The deck row's finish, where `null` is nonfoil — `deck::normalise_finish`'s translation, so
-   * this reads exactly as {@link DeckCard.finish} does.
+   * The finish the folded deck rows **play**, where `null` is nonfoil — `deck::normalise_finish`'s
+   * spelling, so this reads as {@link DeckCard.finish} does.
+   *
+   * **Played, not stored**: a row's stored finish, else the printing's sole finish — `playedFinish`
+   * on this side. The two differ only for a printing sold in one non-regular finish, where an
+   * unsaid row can be no other object: an unsaid row of a foil-only printing is a `"foil"` row
+   * here, and one held once unsaid and once as `"foil"` is **one** row. So a {@link DeckCard} is
+   * matched to a row by `pullPlan.ts`' `deckCardPullKey` and never by its stored finish, which
+   * would look for `null` and find nothing.
    *
    * **Candidates match it exactly, and that is the deliberate narrowing this feature took**
    * (2026-09-03). A deck's owned count is attributed at the *oracle* grain — a LEA Bolt filed in
@@ -2821,9 +2828,14 @@ export interface DeckMissingRow {
   setCode: string;
   collectorNumber: string;
   /**
-   * The deck row's finish, where `null` is nonfoil — `deck::normalise_finish`'s translation, so
-   * this reads exactly as {@link DeckCard.finish} does. The word the copies are filed under is
-   * the collection's own `nonfoil`, and the backend does that translation.
+   * The finish the folded deck rows **play**, where `null` is nonfoil — `deck::normalise_finish`'s
+   * spelling, so this reads as {@link DeckCard.finish} does. The word the copies are filed under
+   * is the collection's own `nonfoil`, and the backend does that translation.
+   *
+   * **Played, not stored** — {@link DeckPullRow.finish}'s rule, off the same walk: a row's stored
+   * finish, else the printing's sole finish. An unsaid row of a foil-only printing is a `"foil"`
+   * row here, and the same printing held once unsaid and once as `"foil"` is one row, so a
+   * {@link DeckCard} is matched to it by `pullPlan.ts`' `deckCardPullKey`.
    *
    * **It is the other half of the address, and that is the one structural difference from the
    * pull**: a {@link DeckPullPick} points at a `collection_entries` row that exists, where a
@@ -2870,7 +2882,15 @@ export interface DeckMissingRow {
  */
 export interface DeckMissingPick {
   cardId: string;
-  /** The deck row's finish, `null` for nonfoil — {@link DeckMissingRow.finish}'s spelling. */
+  /**
+   * The finish the deck row **plays**, `null` for nonfoil — {@link DeckMissingRow.finish}'s
+   * spelling and its reading, so a pick names the address the plan row it answers carries.
+   *
+   * **A `null` on a printing sold in one non-regular finish is resolved by the backend to that
+   * finish**, so `null` and `"foil"` on a foil-only printing are one pick either way. The frontend
+   * sends the played finish anyway (`pullPlan.ts`' `deckCardPlanFinish`), so the pick says what
+   * the plan says rather than relying on the other side to translate it.
+   */
   finish: DeckFinish;
   /** At least one, and never more than the deck is still short of at that address. */
   quantity: number;

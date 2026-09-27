@@ -14,7 +14,7 @@
  * The deck-wide press in the stats band was the only one until 2026-09-03; a deck card's
  * right-click now has `Collection ▸ Pull N from your collection`, which is the same dialog over
  * **one row of the plan** (issue #350). The narrowing is entirely the caller's — it filters the
- * plan to that card's {@link pullKey} and passes a `cardName` for the sentence — so nothing in
+ * plan to that card's `deckCardPullKey` and passes a `cardName` for the sentence — so nothing in
  * this file knows the difference beyond one line of prose, and the per-card press reads the same
  * cached `deck_pull_plan` the deck-wide one does.
  *
@@ -330,7 +330,8 @@ export interface PullFromCollectionDialogProps {
    * The plan, or `null` while the read has not answered.
    *
    * **Filtered by the caller, never here.** The per-card entrance (a deck card's
-   * `Collection ▸ Pull …`) hands over the rows whose {@link pullKey} matches that card, and the
+   * `Collection ▸ Pull …`) hands over the rows whose key matches that card's `deckCardPullKey` —
+   * the finish the card _plays_, which is the finish the plan folded the row on — and the
    * deck-wide one hands over the whole plan. Keeping the narrowing at the caller is what stops
    * this component growing a notion of a `PullKey` — and it is the same rows either way, out of
    * the same cached `deck_pull_plan`, so the two entrances can never draw a different plan for
