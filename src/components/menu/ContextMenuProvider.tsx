@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence } from "motion/react";
 import { ContextMenu } from "./ContextMenu";
-import { ContextMenuContext, isTextField, type ContextMenuApi } from "./useContextMenu";
+import {
+  ContextMenuContext,
+  isTextField,
+  MenuOpenerContext,
+  type ContextMenuApi,
+} from "./useContextMenu";
 import type { MenuItem, MenuPosition } from "./types";
 
 /** The one menu that is open, if any. */
@@ -70,7 +75,7 @@ export function ContextMenuProvider({ children }: { children: ReactNode }) {
 
   return (
     <ContextMenuContext.Provider value={api}>
-      {children}
+      <MenuOpenerContext.Provider value={open?.opener ?? null}>{children}</MenuOpenerContext.Provider>
       {/* A constant key, so a second right-click moves this panel rather than cross-fading one
           menu into another — and so there is structurally never a moment with two of them in the
           document. What has to reset per open resets inside, keyed on `openId`. */}

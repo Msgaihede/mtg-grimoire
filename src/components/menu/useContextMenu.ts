@@ -50,6 +50,26 @@ const NO_MENU: ContextMenuApi = { openMenu: () => {}, closeMenu: () => {} };
 
 export const ContextMenuContext = createContext<ContextMenuApi>(NO_MENU);
 
+/**
+ * The element the open menu was opened from, or `null` while no menu is open.
+ *
+ * **A context of its own rather than a field on {@link ContextMenuApi}**, because the two change
+ * at different rates: the api is stable for the life of the app and every surface that offers a
+ * right-click reads it, while this changes on every open and close. Folded together, each
+ * right-click would re-render every card on every wall.
+ *
+ * It exists for a surface whose own state is driven by the pointer and has to hold still while
+ * the reader is in a menu it opened — the deck stack is the one today (issue #569). The menu is
+ * drawn at the app root, so moving onto it is a `pointerleave` from whatever was right-clicked,
+ * and a stack reading only the pointer collapses the card the menu is about.
+ */
+export const MenuOpenerContext = createContext<HTMLElement | null>(null);
+
+/** The element the open menu was opened from — see {@link MenuOpenerContext}. */
+export function useMenuOpener(): HTMLElement | null {
+  return useContext(MenuOpenerContext);
+}
+
 /** What {@link useContextMenu} hands back. */
 export interface ContextMenuHandles extends ContextMenuApi {
   /** Attach to any element: `onContextMenu={menu(() => buildItems(target))}` */
