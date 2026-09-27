@@ -540,7 +540,7 @@ pub struct DeckPatch {
     /// Which Compare view this deck's **managed wishlist** follows — one of
     /// [`crate::managed_wishlist::MODES`], `off` for none. See [`DeckRow::managed_wishlist`].
     ///
-    /// **Refused by name outside the four words** ([`crate::managed_wishlist::BAD_MODE`]), where
+    /// **Refused by name outside the five words** ([`crate::managed_wishlist::BAD_MODE`]), where
     /// a read is lenient: a stored word this build does not know came from a newer peer and reads
     /// as `off`, but a *patch* naming one is this build's own mistake.
     pub managed_wishlist: Option<String>,
@@ -825,15 +825,17 @@ pub struct DeckRow {
     /// See [`DeckPatch::token_rail_index`] for why it has a history row where v47's
     /// `token_stack` had none.
     pub token_rail_index: i64,
-    /// Which of the Compare dialog's three views this deck's **managed wishlist** follows —
-    /// `all`, `missing` or `other` (Different printing) — or `off` for no folder at all
-    /// (`decks.managed_wishlist_mode`, schema v49, `DEFAULT 'off'`; issue #512). The folder is
-    /// rewritten by [`crate::managed_wishlist`] after every write that changes the deck.
+    /// Which of the Compare dialog's four views this deck's **managed wishlist** follows —
+    /// `all`, `missing`, `other` (Different printing) or `tokens` — or `off` for no folder at all
+    /// (`decks.managed_wishlist_mode`, schema v49, `DEFAULT 'off'`; issue #512; `tokens` since the
+    /// token-improvements spec §3.8, whose **All** and **Tokens** also fill a **Tokens** subfolder).
+    /// The folder is rewritten by [`crate::managed_wishlist`] after every write that changes the
+    /// deck.
     ///
     /// **Only a theory deck acts on it.** A regular deck has no plan to be short of and a
     /// virtual one owns no cardboard, so the column is stored for both and ignored — switching a
     /// deck to either kind takes its folder away, and switching it back brings it back, because
-    /// the folder is derived rather than remembered. Always one of the four words: a stored value
+    /// the folder is derived rather than remembered. Always one of the five words: a stored value
     /// this build does not know reads as `off` ([`crate::managed_wishlist::read_mode`]).
     pub managed_wishlist: String,
     /// Which of this deck's categories an add that names none lands in — schema v16, and `0`

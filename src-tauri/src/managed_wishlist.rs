@@ -2,11 +2,28 @@
 //! [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512).
 //!
 //! A deck whose kind is `Theory + Actual` and whose `decks.managed_wishlist_mode` names one of the
-//! Compare dialog's three views — `all`, `missing` or `other` (Different printing) — keeps one
-//! wishlist folder, named after the deck, holding that view: [`crate::deck_theory::wanted`].
-//! `off`, the default since v49, is no folder. The folder is the **deck's**, not the reader's:
-//! this module is the only thing that writes to it, and every other write is refused in words
-//! ([`MANAGED`]).
+//! Compare dialog's four views — `all`, `missing`, `other` (Different printing) or `tokens` —
+//! keeps one wishlist folder, named after the deck, holding that view:
+//! [`crate::deck_theory::wanted`]. `off`, the default since v49, is no folder. The folder is the
+//! **deck's**, not the reader's: this module is the only thing that writes to it, and every other
+//! write is refused in words ([`MANAGED`]).
+//!
+//! ## The Tokens subfolder
+//!
+//! **Since user schema v54 a deck can own a second folder, inside the first** (the
+//! token-improvements spec §3.8): a child named **Tokens** holding the view's token rows. **All**
+//! and **Tokens** are the views with any — the first puts its cards in the deck's folder and its
+//! tokens in the child, the second puts nothing in the deck's folder at all — and **Missing** and
+//! **Different printing** are card rows only, so they have no child. The child exists only while
+//! there is a token to want.
+//!
+//! **Its identity is `wishlist_folders.managed_tokens = 1`, never its name**, and it carries the
+//! deck's `managed_deck_id` as well — which is what lets the guard, [`settle_all`]'s sweep and the
+//! frontend's `isManaged` cover it without a word about it. The cost is on the other side: a
+//! lookup of *the deck's* folder by `managed_deck_id` alone now answers either row, so every such
+//! lookup names `managed_tokens = 0` ([`managed_folder`]). A lookup that means *any managed
+//! folder* — the guard, `reset::clear_wishlist`, the optimize preview, quick add — reads
+//! `managed_deck_id IS NOT NULL` and is right to cover both.
 //!
 //! ## Derived per device, never synced
 //!
@@ -21,8 +38,10 @@
 //!
 //! **Per-connection `TEMP` triggers**, installed by [`arm`] on the write connection the first
 //! time [`crate::sync::with_write`] hands it out. They mark a deck dirty on any write to its
-//! `deck_cards`, to the `decks` columns that decide eligibility or the folder's name, and to a
-//! category's switch (an inactive pile counts toward nothing, so it changes the diff). Every
+//! `deck_cards`, to the `decks` columns that decide eligibility or the folder's name, to a
+//! category's switch (an inactive pile counts toward nothing, so it changes the diff), and — since
+//! the Tokens subfolder — to its `deck_token_printings` and `deck_tokens`, because a token stepper
+//! writes nothing a card trigger watches. Every
 //! user-facing write goes through `with_write` — sync's `run_once` and the web target's routes
 //! included — so [`settle`] runs after each one and rewrites only the decks it touched. A sweep
 //! of every theory deck after every write would put a diff per deck behind a zoom press.
@@ -48,16 +67,25 @@ use std::collections::HashMap;
 /// carries the same sentence.
 pub const MANAGED: &str = "A managed wishlist follows its deck, so it can't be edited by hand.";
 
-/// The four words `decks.managed_wishlist_mode` holds, `off` first — the frontend's
-/// `MANAGED_WISHLIST_MODES`, and the Compare dialog's `DiffView` words for the other three.
-pub const MODES: [&str; 4] = [OFF, "all", "missing", "other"];
+/// The five words `decks.managed_wishlist_mode` holds, `off` first — the frontend's
+/// `MANAGED_WISHLIST_MODES`, and the Compare dialog's `DiffView` words for the other four.
+///
+/// **`tokens` is the token-improvements spec's (§3.8)**, the Compare dialog's fourth view. A
+/// peer on an older build reads it as [`OFF`] through [`read_mode`], which is the standing rule
+/// that every device is updated before it syncs across a token-model change.
+pub const MODES: [&str; 5] = [OFF, "all", "missing", "other", "tokens"];
 
 /// No managed wishlist — the column's default since v49.
 pub const OFF: &str = "off";
 
 /// What a patch naming a word outside [`MODES`] is told.
 pub const BAD_MODE: &str =
-    "A managed wishlist follows All, Missing, Different printing or nothing.";
+    "A managed wishlist follows All, Missing, Different printing, Tokens or nothing.";
+
+/// The name of the deck's **Tokens** subfolder. **Its identity is `managed_tokens = 1`, never
+/// this name**: a reader's own folder called `Tokens`, or a deck called `Tokens`, must never be
+/// taken for it (user schema v54).
+const TOKENS_FOLDER: &str = "Tokens";
 
 /// A stored mode, read **leniently**: a word this build does not know came from a newer peer
 /// (the column carries no CHECK, because it syncs) and reads as [`OFF`] — a folder this build
@@ -86,6 +114,7 @@ fn view_of(mode: &str) -> Option<crate::deck_theory::DiffView> {
         "all" => Some(DiffView::All),
         "missing" => Some(DiffView::Missing),
         "other" => Some(DiffView::Other),
+        "tokens" => Some(DiffView::Tokens),
         _ => None,
     }
 }
@@ -136,6 +165,33 @@ fn arm_sql() -> String {
              INSERT INTO temp.managed_wishlist_dirty VALUES (OLD.id);
          END;
 
+         -- The two token tables (the token-improvements spec §3.8): a stepper, a swap, an add
+         -- or a remove writes `deck_token_printings` and nothing a card trigger watches, and a
+         -- token's legacy count on `deck_tokens` is an implicit entry's quantity.
+         CREATE TEMP TRIGGER IF NOT EXISTS mw_entry_ins AFTER INSERT ON main.deck_token_printings
+         BEGIN
+             INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.deck_id);
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS mw_entry_upd AFTER UPDATE ON main.deck_token_printings
+         BEGIN
+             INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.deck_id);
+             INSERT INTO temp.managed_wishlist_dirty VALUES (OLD.deck_id);
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS mw_entry_del AFTER DELETE ON main.deck_token_printings
+         BEGIN
+             INSERT INTO temp.managed_wishlist_dirty VALUES (OLD.deck_id);
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS mw_token_ins AFTER INSERT ON main.deck_tokens BEGIN
+             INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.deck_id);
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS mw_token_upd AFTER UPDATE ON main.deck_tokens BEGIN
+             INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.deck_id);
+             INSERT INTO temp.managed_wishlist_dirty VALUES (OLD.deck_id);
+         END;
+         CREATE TEMP TRIGGER IF NOT EXISTS mw_token_del AFTER DELETE ON main.deck_tokens BEGIN
+             INSERT INTO temp.managed_wishlist_dirty VALUES (OLD.deck_id);
+         END;
+
          CREATE TEMP TRIGGER IF NOT EXISTS mw_guard_wish_ins
              BEFORE INSERT ON main.wishlist_entries
              WHEN {free} AND NEW.folder_id IN {managed}
@@ -154,8 +210,10 @@ fn arm_sql() -> String {
              BEFORE INSERT ON main.wishlist_folders
              WHEN {free} AND (NEW.managed_deck_id IS NOT NULL OR NEW.parent_id IN {managed})
          BEGIN {refuse} END;
+         -- `managed_tokens` is identity, not bookkeeping: it is what tells the deck's folder
+         -- from its Tokens child, so a hand-made write to it is refused like one to the deck id.
          CREATE TEMP TRIGGER IF NOT EXISTS mw_guard_folder_upd
-             BEFORE UPDATE OF parent_id, name, sort_order, managed_deck_id
+             BEFORE UPDATE OF parent_id, name, sort_order, managed_deck_id, managed_tokens
              ON main.wishlist_folders
              WHEN {free} AND (OLD.managed_deck_id IS NOT NULL
                               OR NEW.managed_deck_id IS NOT NULL
@@ -290,30 +348,68 @@ type Key = (String, String, Option<String>);
 /// One wish already in a managed folder: id, oracle card, printing, finish, copies.
 type Held = (i64, Option<String>, Option<String>, Option<String>, i64);
 
-/// Bring one deck's folder to what the deck says, in one transaction.
+/// One of a deck's two managed folders, by `managed_tokens`: `(id, name)`.
+///
+/// **Every lookup of a deck's managed folder names the column**, since user schema v54 gave a deck
+/// a second managed row: `managed_deck_id = ?` alone answers either folder, and `query_row` would
+/// hand back whichever SQLite found first. `0` is the deck's own folder and `1` its **Tokens**
+/// child.
+fn managed_folder(
+    conn: &Connection,
+    deck_id: i64,
+    tokens: bool,
+) -> Result<Option<(i64, String)>, String> {
+    conn.query_row(
+        "SELECT id, name FROM wishlist_folders
+          WHERE managed_deck_id = ?1 AND managed_tokens = ?2",
+        params![deck_id, i64::from(tokens)],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// Delete one managed folder, **its wishes first**, so `wishlist_entries.folder_id`'s SET NULL
+/// has nothing to surface at the root.
+fn drop_folder(tx: &Connection, folder_id: i64) -> Result<(), String> {
+    tx.execute(
+        "DELETE FROM wishlist_entries WHERE folder_id = ?1",
+        params![folder_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM wishlist_folders WHERE id = ?1",
+        params![folder_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Bring one deck's folders to what the deck says, in one transaction.
+///
+/// **Two folders since user schema v54** (the token-improvements spec §3.8): the deck's own, named
+/// after it, holding the card rows of its Compare view, and inside it a child named **Tokens**
+/// holding the token rows — for **All** and **Tokens**, the two views that have any. The child is
+/// made when there is a token to want and deleted when there is none, so a deck that wants no
+/// token has no empty drawer; **Tokens** mode leaves the deck's own folder standing and empty,
+/// because the child has to hang somewhere and the deck's folder is where the reader looks.
+///
+/// **The child goes before the parent, always**, and each folder's wishes before the folder:
+/// `wishlist_folders.parent_id` CASCADEs, so a parent deleted first would take the child with it
+/// and the child's wishes — `ON DELETE SET NULL` — would surface at the root.
 fn settle_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
     let _open = Open::begin(conn)?;
     crate::sync_engine::capture::suppressed(conn, || {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        let folder: Option<(i64, String)> = tx
-            .query_row(
-                "SELECT id, name FROM wishlist_folders WHERE managed_deck_id = ?1",
-                params![deck_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
+        let folder = managed_folder(&tx, deck_id, false)?;
+        let tokens_folder = managed_folder(&tx, deck_id, true)?.map(|(id, _)| id);
         let Some((name, view)) = eligible(&tx, deck_id)? else {
-            // Gone, `off`, or no longer a theory deck: the wishes first, so
-            // `wishlist_entries.folder_id`'s SET NULL has nothing to surface at the root.
+            // Gone, `off`, or no longer a theory deck: the child, then the parent.
+            if let Some(id) = tokens_folder {
+                drop_folder(&tx, id)?;
+            }
             if let Some((id, _)) = folder {
-                tx.execute(
-                    "DELETE FROM wishlist_entries WHERE folder_id = ?1",
-                    params![id],
-                )
-                .map_err(|e| e.to_string())?;
-                tx.execute("DELETE FROM wishlist_folders WHERE id = ?1", params![id])
-                    .map_err(|e| e.to_string())?;
+                drop_folder(&tx, id)?;
             }
             return tx.commit().map_err(|e| e.to_string());
         };
@@ -344,67 +440,107 @@ fn settle_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
                 .map_err(|e| e.to_string())?,
         };
 
-        let mut want: HashMap<Key, crate::deck_theory::Wanted> = HashMap::new();
-        for w in crate::deck_theory::wanted(&tx, deck_id, view)? {
-            want.insert(
-                (w.oracle_id.clone(), w.card_id.clone(), w.finish.clone()),
-                w,
-            );
-        }
-        let have: Vec<Held> = {
-            let mut stmt = tx
-                .prepare(
-                    "SELECT id, oracle_id, card_id, preferred_finish, quantity
-                       FROM wishlist_entries WHERE folder_id = ?1",
-                )
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map(params![folder_id], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-                })
-                .map_err(|e| e.to_string())?;
-            rows.collect::<rusqlite::Result<_>>()
-                .map_err(|e| e.to_string())?
-        };
-        for (id, oracle_id, card_id, finish, quantity) in have {
-            let key = oracle_id.zip(card_id).map(|(o, c)| (o, c, finish));
-            match key.and_then(|k| want.remove(&k)) {
-                Some(w) if w.quantity == quantity => {}
-                Some(w) => {
-                    tx.execute(
-                        "UPDATE wishlist_entries SET quantity = ?2, updated_at = unixepoch()
-                          WHERE id = ?1",
-                        params![id, w.quantity],
+        // One read of the view, split by kind: the cards to the deck's folder, the tokens to its
+        // child. `Tokens` has no card rows and `Missing` and `Different printing` no token rows,
+        // so each folder gets exactly its half of the view.
+        let (tokens, cards): (Vec<_>, Vec<_>) = crate::deck_theory::wanted(&tx, deck_id, view)?
+            .into_iter()
+            .partition(|w| w.is_token);
+        fill(&tx, folder_id, cards)?;
+        match (tokens_folder, tokens.is_empty()) {
+            (Some(id), true) => drop_folder(&tx, id)?,
+            (None, true) => {}
+            (Some(id), false) => fill(&tx, id, tokens)?,
+            (None, false) => {
+                let id = tx
+                    .query_row(
+                        "INSERT INTO wishlist_folders
+                             (parent_id, name, sort_order, created_at, updated_at,
+                              managed_deck_id, managed_tokens)
+                         VALUES (?1, ?2,
+                                 (SELECT coalesce(max(sort_order), -1) + 1 FROM wishlist_folders
+                                   WHERE parent_id = ?1),
+                                 unixepoch(), unixepoch(), ?3, 1)
+                         RETURNING id",
+                        params![folder_id, TOKENS_FOLDER, deck_id],
+                        |r| r.get(0),
                     )
                     .map_err(|e| e.to_string())?;
-                }
-                None => {
-                    tx.execute("DELETE FROM wishlist_entries WHERE id = ?1", params![id])
-                        .map_err(|e| e.to_string())?;
-                }
+                fill(&tx, id, tokens)?;
             }
-        }
-        // What is left is new. Through the wishlist's own quiet door, so the grain, the
-        // canonicalisation and the denormalised columns are that module's — and no feed line,
-        // because nobody pressed anything.
-        let mut fresh: Vec<_> = want.into_values().collect();
-        fresh.sort_by(|a, b| a.name.cmp(&b.name).then(a.card_id.cmp(&b.card_id)));
-        for w in fresh {
-            crate::wishlist::add_wish_silent(
-                &tx,
-                &crate::wishlist::WishInput {
-                    oracle_id: Some(w.oracle_id),
-                    card_id: Some(w.card_id),
-                    name: Some(w.name),
-                    quantity: w.quantity,
-                    preferred_finish: w.finish,
-                    folder_id: Some(folder_id),
-                    ..Default::default()
-                },
-            )?;
         }
         tx.commit().map_err(|e| e.to_string())
     })
+}
+
+/// Bring one managed folder's wishes to `wants`: a wish on the same `(oracle card, printing,
+/// finish)` keeps its row and takes the new count, one no longer wanted goes, and what is left is
+/// added.
+fn fill(
+    tx: &Connection,
+    folder_id: i64,
+    wants: Vec<crate::deck_theory::Wanted>,
+) -> Result<(), String> {
+    let mut want: HashMap<Key, crate::deck_theory::Wanted> = HashMap::new();
+    for w in wants {
+        want.insert(
+            (w.oracle_id.clone(), w.card_id.clone(), w.finish.clone()),
+            w,
+        );
+    }
+    let have: Vec<Held> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT id, oracle_id, card_id, preferred_finish, quantity
+                   FROM wishlist_entries WHERE folder_id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![folder_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(|e| e.to_string())?
+    };
+    for (id, oracle_id, card_id, finish, quantity) in have {
+        let key = oracle_id.zip(card_id).map(|(o, c)| (o, c, finish));
+        match key.and_then(|k| want.remove(&k)) {
+            Some(w) if w.quantity == quantity => {}
+            Some(w) => {
+                tx.execute(
+                    "UPDATE wishlist_entries SET quantity = ?2, updated_at = unixepoch()
+                      WHERE id = ?1",
+                    params![id, w.quantity],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            None => {
+                tx.execute("DELETE FROM wishlist_entries WHERE id = ?1", params![id])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    // What is left is new. Through the wishlist's own quiet door, so the grain, the
+    // canonicalisation and the denormalised columns are that module's — and no feed line,
+    // because nobody pressed anything.
+    let mut fresh: Vec<_> = want.into_values().collect();
+    fresh.sort_by(|a, b| a.name.cmp(&b.name).then(a.card_id.cmp(&b.card_id)));
+    for w in fresh {
+        crate::wishlist::add_wish_silent(
+            tx,
+            &crate::wishlist::WishInput {
+                oracle_id: Some(w.oracle_id),
+                card_id: Some(w.card_id),
+                name: Some(w.name),
+                quantity: w.quantity,
+                preferred_finish: w.finish,
+                folder_id: Some(folder_id),
+                ..Default::default()
+            },
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -488,14 +624,325 @@ mod tests {
         crate::deck::add_card(conn, deck_id, card, Some(cat), None, variant, None, qty).unwrap();
     }
 
+    /// The deck's own folder — `managed_tokens = 0`, since v54 gave a deck a second managed row.
     fn folder(conn: &Connection, deck_id: i64) -> Option<(i64, String)> {
         conn.query_row(
-            "SELECT id, name FROM wishlist_folders WHERE managed_deck_id = ?1",
+            "SELECT id, name FROM wishlist_folders
+              WHERE managed_deck_id = ?1 AND managed_tokens = 0",
             params![deck_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .unwrap()
+    }
+
+    /// The deck's **Tokens** subfolder, as `(id, parent, name)` — found by its column, never by
+    /// its name.
+    fn tokens_folder(conn: &Connection, deck_id: i64) -> Option<(i64, Option<i64>, String)> {
+        conn.query_row(
+            "SELECT id, parent_id, name FROM wishlist_folders
+              WHERE managed_deck_id = ?1 AND managed_tokens = 1",
+            params![deck_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    /// A card that makes a Treasure, and the Treasure, `all_parts` and all — a token want is
+    /// derived from the deck's cards, and every card [`db`] seeds carries `raw = '{}'` and so
+    /// makes nothing.
+    fn with_treasure(conn: &Connection) {
+        let tithe = serde_json::json!({
+            "id": "tithe",
+            "name": "Smothering Tithe",
+            "all_parts": [{
+                "object": "related_card", "id": "treasure", "component": "token",
+                "name": "Treasure"
+            }],
+        });
+        conn.execute(
+            "INSERT INTO corpus.cards (id, oracle_id, name, set_code, collector_number, lang,
+                                       layout, type_line, raw)
+             VALUES ('tithe', 'o-tithe', 'Smothering Tithe', 'cmm', '693', 'en', 'normal',
+                     'Enchantment', ?1)",
+            params![crate::card_row::gzip_raw(&tithe.to_string())],
+        )
+        .unwrap();
+        conn.execute_batch(
+            r#"INSERT INTO corpus.cards (id, oracle_id, name, set_code, collector_number, lang,
+                                         layout, type_line, finishes, raw)
+               VALUES ('treasure', 'o-treasure', 'Treasure', 'tmom', '12', 'en', 'token',
+                       'Token Artifact — Treasure', '["nonfoil"]', '{}');"#,
+        )
+        .unwrap();
+    }
+
+    /// A theory deck that plans a Tithe, two Bolts and three Treasures and sleeves a Tithe and
+    /// one Treasure — short of two Bolts and two Treasures — in `mode`.
+    fn tithe_deck(conn: &Connection, mode_word: &str) -> i64 {
+        let d = deck(conn, "Tithe", true);
+        mode(conn, d, mode_word);
+        put(conn, d, "theory", "tithe", 1);
+        put(conn, d, "live", "tithe", 1);
+        put(conn, d, "theory", "bolt", 2);
+        // A token printing handed to `add_card` is filed as a token entry of that list.
+        put(conn, d, "theory", "treasure", 3);
+        put(conn, d, "live", "treasure", 1);
+        d
+    }
+
+    /// A folder's wishes as `(printing, finish, copies)`.
+    fn pinned(conn: &Connection, folder_id: i64) -> Vec<(String, Option<String>, i64)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT card_id, preferred_finish, quantity FROM wishlist_entries
+                  WHERE folder_id = ?1 ORDER BY card_id",
+            )
+            .unwrap();
+        stmt.query_map(params![folder_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    /// Every wish for a Treasure, anywhere — the root included, where a folder deleted ahead of
+    /// its wishes would surface them.
+    fn treasure_wishes(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM wishlist_entries WHERE oracle_id = 'o-treasure'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **All** is every Compare row, tokens included, so it fills two folders: the deck's own
+    /// with the cards and a child called **Tokens** with the tokens — never a token among the
+    /// cards.
+    #[test]
+    fn all_fills_a_tokens_subfolder_with_the_plans_missing_tokens() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = tithe_deck(&conn, "all");
+        settle(&conn).unwrap();
+
+        let (parent, _) = folder(&conn, d).expect("the deck's own folder");
+        assert_eq!(wishes(&conn, parent), vec![("bolt".to_owned(), 2)]);
+        let (child, parent_id, name) = tokens_folder(&conn, d).expect("a Tokens subfolder");
+        assert_eq!((parent_id, name.as_str()), (Some(parent), "Tokens"));
+        assert_eq!(
+            pinned(&conn, child),
+            vec![("treasure".to_owned(), Some("nonfoil".to_owned()), 2)],
+            "three planned, one sleeved — pinned to the printing and its finish"
+        );
+    }
+
+    /// **Tokens** is the token rows alone: the subfolder fills and the deck's own folder holds
+    /// nothing of its own.
+    #[test]
+    fn tokens_mode_fills_only_the_subfolder() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = tithe_deck(&conn, "tokens");
+        settle(&conn).unwrap();
+
+        let (parent, _) = folder(&conn, d).expect("the deck's own folder still stands");
+        assert_eq!(wishes(&conn, parent), vec![], "no card wish in Tokens mode");
+        let (child, parent_id, _) = tokens_folder(&conn, d).expect("a Tokens subfolder");
+        assert_eq!(parent_id, Some(parent));
+        assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 2)]);
+    }
+
+    /// **Missing** and **Different printing** are card rows only, so neither makes the child.
+    #[test]
+    fn missing_mode_has_no_tokens_subfolder() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = tithe_deck(&conn, "missing");
+        settle(&conn).unwrap();
+        let (parent, _) = folder(&conn, d).unwrap();
+        assert_eq!(wishes(&conn, parent), vec![("bolt".to_owned(), 2)]);
+        assert!(tokens_folder(&conn, d).is_none());
+
+        mode(&conn, d, "other");
+        settle(&conn).unwrap();
+        assert!(tokens_folder(&conn, d).is_none());
+        assert_eq!(treasure_wishes(&conn), 0);
+    }
+
+    /// Review Focus 5: **All to Missing takes the Tokens subfolder and its wishes away and keeps
+    /// the card wishes** — in the same folder, not a rebuilt one, and with no Treasure left over
+    /// at the root, which is where the child's wishes would land if the child went first.
+    #[test]
+    fn switching_from_all_to_missing_removes_the_subfolder_and_keeps_the_card_wishes() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = tithe_deck(&conn, "all");
+        settle(&conn).unwrap();
+        let (parent, _) = folder(&conn, d).unwrap();
+        assert!(
+            tokens_folder(&conn, d).is_some(),
+            "the premise: All made it"
+        );
+
+        mode(&conn, d, "missing");
+        settle(&conn).unwrap();
+
+        assert!(tokens_folder(&conn, d).is_none());
+        assert_eq!(treasure_wishes(&conn), 0, "the child's wishes went with it");
+        assert_eq!(folder(&conn, d).map(|f| f.0), Some(parent));
+        assert_eq!(wishes(&conn, parent), vec![("bolt".to_owned(), 2)]);
+    }
+
+    /// **A step on a token re-settles the wishlist**, like a step on a card: the dirty triggers
+    /// watch `deck_token_printings` — where a stepper writes, and nothing else does — and
+    /// `deck_tokens`, where a token's legacy count lives.
+    #[test]
+    fn a_token_step_re_settles_the_wishlist() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = tithe_deck(&conn, "all");
+        settle(&conn).unwrap();
+        let (child, _, _) = tokens_folder(&conn, d).unwrap();
+        assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 2)]);
+
+        let sleeved = |quantity: i64| {
+            crate::deck_tokens::set_quantity(
+                &conn,
+                d,
+                "live",
+                "o-treasure",
+                Some(&crate::deck_tokens::TokenEntryKey {
+                    card_id: "treasure".to_owned(),
+                    finish: "nonfoil".to_owned(),
+                }),
+                quantity,
+            )
+            .unwrap();
+        };
+        sleeved(2);
+        settle(&conn).unwrap();
+        assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 1)]);
+        sleeved(3);
+        settle(&conn).unwrap();
+        assert!(
+            tokens_folder(&conn, d).is_none(),
+            "every planned Treasure is sleeved"
+        );
+
+        // `deck_tokens`: a plan that makes a Treasure and counts none, until a legacy count
+        // arrives on the token's own row — what a pull from a peer on an older build can write.
+        let other = deck(&conn, "Other", true);
+        mode(&conn, other, "all");
+        put(&conn, other, "theory", "tithe", 1);
+        settle(&conn).unwrap();
+        assert!(tokens_folder(&conn, other).is_none());
+        conn.execute(
+            "INSERT INTO deck_tokens (deck_id, oracle_id, quantity, state, created_at, updated_at)
+             VALUES (?1, 'o-treasure', 2, 'auto', 0, 0)",
+            params![other],
+        )
+        .unwrap();
+        settle(&conn).unwrap();
+        let (child, _, _) = tokens_folder(&conn, other).expect("the count made a want");
+        assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 2)]);
+    }
+
+    /// **No token want, no subfolder** — not an empty one. A plan that makes a Treasure counts
+    /// none until the reader steps it, and a plan whose every token is sleeved wants none.
+    #[test]
+    fn no_token_want_no_subfolder() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = deck(&conn, "Tithe", true);
+        mode(&conn, d, "all");
+        put(&conn, d, "theory", "tithe", 1);
+        put(&conn, d, "theory", "bolt", 1);
+        settle(&conn).unwrap();
+        assert!(folder(&conn, d).is_some());
+        assert!(
+            tokens_folder(&conn, d).is_none(),
+            "an untouched token counts 0"
+        );
+
+        put(&conn, d, "theory", "treasure", 2);
+        settle(&conn).unwrap();
+        assert!(
+            tokens_folder(&conn, d).is_some(),
+            "the premise: a want makes it"
+        );
+        put(&conn, d, "live", "treasure", 2);
+        settle(&conn).unwrap();
+        assert!(tokens_folder(&conn, d).is_none(), "and none takes it away");
+        assert_eq!(treasure_wishes(&conn), 0);
+    }
+
+    /// Switching off and deleting the deck take the child as well as the parent — the child's
+    /// wishes, the child, then the parent's wishes and the parent — and leave nothing behind.
+    #[test]
+    fn off_and_a_deleted_deck_take_the_tokens_subfolder_with_the_folder() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = tithe_deck(&conn, "all");
+        settle(&conn).unwrap();
+        assert!(tokens_folder(&conn, d).is_some());
+        let left = |conn: &Connection| -> i64 {
+            conn.query_row(
+                "SELECT (SELECT count(*) FROM wishlist_folders)
+                      + (SELECT count(*) FROM wishlist_entries)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+
+        mode(&conn, d, "off");
+        settle(&conn).unwrap();
+        assert_eq!(left(&conn), 0);
+
+        mode(&conn, d, "all");
+        settle(&conn).unwrap();
+        assert!(
+            tokens_folder(&conn, d).is_some(),
+            "switching back rebuilds both"
+        );
+        conn.execute("DELETE FROM decks WHERE id = ?1", params![d])
+            .unwrap();
+        settle(&conn).unwrap();
+        assert_eq!(left(&conn), 0);
+    }
+
+    /// The guard covers the child because it carries the deck's `managed_deck_id` — and its
+    /// `UPDATE` guard names `managed_tokens`, the column that says which folder is which, so a
+    /// hand-made write cannot turn the deck's folder into its Tokens child or back.
+    #[test]
+    fn the_tokens_subfolder_is_refused_to_a_hand_made_edit() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = tithe_deck(&conn, "all");
+        settle(&conn).unwrap();
+        let (parent, _) = folder(&conn, d).unwrap();
+        let (child, _, _) = tokens_folder(&conn, d).unwrap();
+
+        for sql in [
+            format!("UPDATE wishlist_entries SET quantity = 9 WHERE folder_id = {child}"),
+            format!("DELETE FROM wishlist_entries WHERE folder_id = {child}"),
+            format!("UPDATE wishlist_folders SET name = 'x' WHERE id = {child}"),
+            format!("DELETE FROM wishlist_folders WHERE id = {child}"),
+            format!("UPDATE wishlist_folders SET managed_tokens = 2 WHERE id = {child}"),
+            format!("UPDATE wishlist_folders SET managed_tokens = 2 WHERE id = {parent}"),
+            format!(
+                "INSERT INTO wishlist_folders (parent_id, name, sort_order, created_at,
+                                               updated_at)
+                 VALUES ({child}, 'inside', 0, 0, 0)"
+            ),
+        ] {
+            let err = conn.execute(&sql, []).unwrap_err().to_string();
+            assert!(err.contains(MANAGED), "{sql}: {err}");
+        }
     }
 
     fn wishes(conn: &Connection, folder_id: i64) -> Vec<(String, i64)> {
@@ -593,7 +1040,7 @@ mod tests {
         );
     }
 
-    /// `off` is the default, and a word outside the four is refused by a patch but read as `off`
+    /// `off` is the default, and a word outside the five is refused by a patch but read as `off`
     /// off the row, where it would have come from a newer peer.
     #[test]
     fn off_is_the_default_and_an_unknown_mode_is_refused_or_read_as_off() {
