@@ -12858,6 +12858,44 @@ describe("categories, labels, folders, history and the plan", () => {
     ]);
   });
 
+  /** `finish` is the grain's fifth term, and the fold matched on the other four until
+   *  2026-09-27 — so a moved foil summed into the target's regular row and the deck lost it. */
+  it("folds a moved card only into a row of its own finish", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, categoryId: 99, finish: "foil", quantity: 1 }),
+        deckCard({ id: 3, categoryId: 99, finish: "etched", quantity: 4 }),
+      ],
+      deckCategories: [
+        ...categoriesOf([deck({ id: 1 })]),
+        {
+          id: 99,
+          deckId: 1,
+          name: "Doomed",
+          kind: "main",
+          isActive: true,
+          sortOrder: 9,
+          origin: "user",
+        },
+      ],
+    });
+
+    writeHandlers(db).deck_category_delete({
+      id: 99,
+      moveToCategoryId: categoryId(1, "main"),
+    });
+
+    expect(
+      db.deckCards.map((dc) => [dc.finish ?? "", dc.quantity]).sort((a, b) => cmpRow(a, b)),
+    ).toEqual([
+      ["", 2],
+      ["etched", 4],
+      ["foil", 1],
+    ]);
+  });
+
   it("unlabels a deleted label's cards rather than deleting them", () => {
     const { db, w } = testbed();
     const label = db.deckLabels.find((l) => l.name === "Cut candidate")!;

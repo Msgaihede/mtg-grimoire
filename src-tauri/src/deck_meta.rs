@@ -991,12 +991,17 @@ pub fn delete_category(
         // instead of zones. The `DO UPDATE` touches only `quantity`/`updated_at`: a row the
         // target already holds keeps its own `label_id` and `needs_review`, never the moved
         // row's — the same "the existing row wins a fold" rule `move_card`'s comment names.
+        //
+        // **Every column the row owns except the two this move rewrites** (`id`, which the
+        // INSERT mints, and `category_id`). `finish` is a `DECK_CARD_GRAIN` term, and until
+        // 2026-09-27 it was the one left out: the moved row took the column's NULL, so a foil
+        // became the regular copy and folded into the target's nonfoil row of that printing.
         let sql = format!(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                 name, label_id, quantity, needs_review, created_at, updated_at)
+                 name, label_id, finish, quantity, needs_review, created_at, updated_at)
              SELECT deck_id, ?2, variant, card_id, set_code, collector_number, lang, name,
-                    label_id, quantity, needs_review, unixepoch(), unixepoch()
+                    label_id, finish, quantity, needs_review, unixepoch(), unixepoch()
                FROM deck_cards WHERE category_id = ?1
              ON CONFLICT({grain}) DO UPDATE SET
                 quantity = deck_cards.quantity + excluded.quantity,
@@ -3134,6 +3139,54 @@ mod tests {
         assert_eq!(
             theory_qty, 5,
             "the theory copy moved on its own, never folded into live"
+        );
+    }
+
+    /// **`finish` is a grain term, so the move has to carry it or it moves a different card.**
+    /// The INSERT … SELECT used to name every column but this one, which wrote the moved row
+    /// with the column's NULL — the regular copy — and let `DECK_CARD_GRAIN` fold a foil into
+    /// the target's own nonfoil row of the same printing. The deck kept its count and lost its
+    /// foils, with nothing to say so.
+    #[test]
+    fn deck_category_delete_with_a_move_target_keeps_each_row_on_its_own_finish() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let from = category(&conn, deck_id, "main", "Creatures");
+        let to = category(&conn, deck_id, "main", "Main deck");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        deck_card(&conn, deck_id, "bolt-lea", to, 2);
+        foil_deck_card(&conn, deck_id, "bolt-lea", from);
+        let etched = deck_card(&conn, deck_id, "bolt-lea", from, 4);
+        conn.execute(
+            "UPDATE deck_cards SET finish = 'etched', needs_review = 'printing' WHERE id = ?1",
+            params![etched],
+        )
+        .unwrap();
+
+        delete_category(&conn, from, Some(to)).unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT finish, quantity, needs_review FROM deck_cards
+                  WHERE deck_id = ?1 AND category_id = ?2 AND variant = 'live'
+                  ORDER BY coalesce(finish, '')",
+            )
+            .unwrap();
+        let rows: Vec<(Option<String>, i64, Option<String>)> = stmt
+            .query_map(params![deck_id, to], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (None, 2, None),
+                (Some("etched".to_owned()), 4, Some("printing".to_owned())),
+                (Some("foil".to_owned()), 1, None),
+            ],
+            "the regular row is untouched and each moved row keeps its finish"
         );
     }
 
