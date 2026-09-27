@@ -381,6 +381,28 @@ review rounds the same day — the conversion as built.)*
   schema change.** [sync.md](../../reference/sync.md) *Deferred ops are dropped, not held* has the
   mechanism.
 
+*(Amended 2026-09-27 — the ruling is built: [the delivery holds design](2026-09-27-sync-delivery-holds-design.md),
+in the release that carries v52. sync.md's section is *Held while it can resolve, skipped when it
+cannot* now.)*
+- **Nothing above changes for a v51 peer.** The hold is the *receiving* client's and it ships in
+  v52, so a v51 peer still drops a v52 device's page from its first `deck_token_printings` op on,
+  and upgrading still does not bring it back. **Every device in a group is still updated before it
+  syncs across v52.**
+- **What it changes is every crossing after v52.** A receiver on v52 or later holds a newer
+  sender's deferral — the op stamped with its sender's schema at sealing, and newer than this
+  build's — until it upgrades, so that sender's later ops wait rather than drop, and PR 3's v53
+  `collection_folders.kind` word is held on a v52 device rather than lost. A same-version change
+  that can never apply is skipped and recorded, without its sender's later ops.
+- **The pull gate holds for every laggard on v52 or later**, whose held page is re-delivered and
+  applied before an advancing pull converts; a held pull neither converts nor sets
+  `token_picks_ready`. For a laggard that pulled at v51 during the window, the reversion above
+  stands. <!-- verify-B -->
+- **The two generic gaps are closed.** The child of a parent deleted here or in the page is moot
+  where the delete cascades — so a deck deleted during the window no longer costs a stream its
+  page — and written without the parent where the key is `SET NULL`; `apply::find_row`'s uid rename
+  runs inside the group's savepoint after a check that the uid is free, and a taken one skips that
+  group rather than failing the apply.
+
 ### 4.4 Commands
 
 The four token commands keep their names and gain a `variant` where a write targets a list:
@@ -476,7 +498,11 @@ nothing". A token write is a deck write, so it goes where every deck write goes:
   it upgrades — the cost every new synced table has paid.)* *(Amended again at the final review,
   2026-09-26: not "until it upgrades". A deferred op is dropped, with its sender's later ops in the
   page, and upgrading does not bring it back — §4.3's last amendment. A new kind would have cost
-  the same loss for good, which is why the rule stands.)*
+  the same loss for good, which is why the rule stands.)* *(Amended 2026-09-27: on a v51 peer
+  still a loss; on a peer on v52 or later "until it upgrades" is true again, because the delivery
+  holds keep a newer sender's deferral — §4.3's 2026-09-27 amendment. A stall still costs every
+  older device that sender's changes and the relay its compaction floor for as long as it lasts, so
+  the rule stands.)*
 - **The undo button's label** is the audit row's text, as for every step, so the button reads
   *"Undo — Treasure 1 → 3"*.
 - `every_deck_write_leaves_exactly_one_audit_row` gains the token commands, and the fake's
